@@ -1,17 +1,30 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { ComponentType, ReactNode } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
   Ban,
+  Banknote,
+  Building2,
+  Calculator,
   CheckCircle2,
+  ClipboardList,
+  Coins,
   Download,
   FileDown,
+  FileText,
   Flame,
+  Gauge,
   Info,
+  ListChecks,
   Loader2,
+  Percent,
+  PiggyBank,
   Sparkles,
+  TrendingUp,
+  Wallet,
   X
 } from "lucide-react";
 
@@ -162,13 +175,277 @@ const COLUMNS: Array<{
 
 const TYPOLOGY_KEYS = ["1.5", "2.5", "3.5", "4.5", "5.5", "6.5", "7.5", "8.5"];
 
-function fmtMoney(n: number | null): string {
-  if (n == null) return "—";
+// ─── Onglets internes de la fiche ────────────────────────────────
+
+type TabKey = "infos" | "analyse" | "resultats" | "details";
+
+const TABS: Array<{
+  key: TabKey;
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+}> = [
+  { key: "infos", label: "Infos", icon: ClipboardList },
+  { key: "analyse", label: "Analyse", icon: Calculator },
+  { key: "resultats", label: "Résultats", icon: TrendingUp },
+  { key: "details", label: "Détails des calculs", icon: ListChecks }
+];
+
+/**
+ * Formatage monétaire unique de la fiche (style « 12 345 $ »). Source de
+ * vérité unifiée : les anciens helpers `_formatMoneyExcel` et
+ * `_fmtMoneyDetail` (logique identique) délèguent désormais ici.
+ */
+function fmtMoney(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
   const rounded = Math.round(n);
   const sign = rounded < 0 ? "-" : "";
   const abs = Math.abs(rounded).toString();
   const withSep = abs.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
   return `${sign}${withSep} $`;
+}
+
+// ─── Briques UI réutilisables (look 2026) ────────────────────────
+
+type SectionTone = "neutral" | "accent" | "emerald" | "amber";
+
+const SECTION_TONE: Record<
+  SectionTone,
+  { tile: string; border: string }
+> = {
+  neutral: {
+    tile: "bg-white/[0.06] text-white/70",
+    border: "border-brand-800 bg-brand-900"
+  },
+  accent: {
+    tile: "bg-accent-500/15 text-accent-500",
+    border: "border-accent-500/30 bg-accent-500/[0.06]"
+  },
+  emerald: {
+    tile: "bg-emerald-500/15 text-emerald-400",
+    border: "border-emerald-500/30 bg-emerald-500/[0.06]"
+  },
+  amber: {
+    tile: "bg-amber-500/15 text-amber-400",
+    border: "border-amber-500/30 bg-amber-500/[0.06]"
+  }
+};
+
+/**
+ * Carte de section « standard 2026 » : conteneur arrondi + en-tête à
+ * tuile-icône colorée, titre `text-base font-bold`, sous-titre discret.
+ * Imite `prospection/parametres/page.tsx`.
+ */
+function SectionCard({
+  icon: Icon,
+  title,
+  subtitle,
+  tone = "neutral",
+  action,
+  children,
+  className = ""
+}: {
+  icon: ComponentType<{ className?: string }>;
+  title: string;
+  subtitle?: ReactNode;
+  tone?: SectionTone;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  const t = SECTION_TONE[tone];
+  return (
+    <section
+      className={`rounded-2xl border p-5 ${t.border} ${className}`}
+    >
+      <header className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span
+            className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ${t.tile}`}
+          >
+            <Icon className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-base font-bold text-white">{title}</h3>
+            {subtitle ? (
+              <p className="mt-0.5 text-xs text-white/60">{subtitle}</p>
+            ) : null}
+          </div>
+        </div>
+        {action ? <div className="flex-shrink-0">{action}</div> : null}
+      </header>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+/**
+ * Sous-carte thématique pour regrouper des inputs (ex. « Financement »,
+ * « Frais & projet »). Micro-titre lisible + grille de champs.
+ */
+function SubCard({
+  icon: Icon,
+  title,
+  children,
+  cols = 3
+}: {
+  icon?: ComponentType<{ className?: string }>;
+  title: string;
+  children: ReactNode;
+  cols?: 2 | 3 | 4;
+}) {
+  const gridCls =
+    cols === 4
+      ? "sm:grid-cols-4"
+      : cols === 2
+      ? "sm:grid-cols-2"
+      : "sm:grid-cols-3";
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-950/40 p-3.5">
+      <div className="flex items-center gap-2">
+        {Icon ? <Icon className="h-3.5 w-3.5 text-accent-500" /> : null}
+        <p className="text-xs font-semibold text-white/80">{title}</p>
+      </div>
+      <div className={`mt-3 grid gap-3 ${gridCls}`}>{children}</div>
+    </div>
+  );
+}
+
+/**
+ * Tuile de statistique pour la bande « hero metrics ». Signal couleur
+ * emerald (bon) / rose (négatif) / neutre. Pattern compact inspiré de
+ * `lead-analysis-summary.tsx`.
+ */
+function StatTile({
+  icon: Icon,
+  label,
+  value,
+  hint,
+  tone = "neutral"
+}: {
+  icon: ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "neutral" | "emerald" | "rose" | "amber" | "accent";
+}) {
+  const toneCls =
+    tone === "emerald"
+      ? "text-emerald-300"
+      : tone === "rose"
+      ? "text-rose-300"
+      : tone === "amber"
+      ? "text-amber-200"
+      : tone === "accent"
+      ? "text-accent-500"
+      : "text-white";
+  const iconCls =
+    tone === "emerald"
+      ? "bg-emerald-500/15 text-emerald-400"
+      : tone === "rose"
+      ? "bg-rose-500/15 text-rose-400"
+      : tone === "amber"
+      ? "bg-amber-500/15 text-amber-400"
+      : tone === "accent"
+      ? "bg-accent-500/15 text-accent-500"
+      : "bg-white/[0.06] text-white/60";
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900 p-3">
+      <div className="flex items-center gap-2">
+        <span
+          className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg ${iconCls}`}
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+        <p className="truncate text-[10px] uppercase tracking-wider text-white/50">
+          {label}
+        </p>
+      </div>
+      <p
+        className={`mt-1.5 truncate font-mono text-base font-bold tabular-nums ${toneCls}`}
+        title={value}
+      >
+        {value}
+      </p>
+      {hint ? (
+        <p className="mt-0.5 truncate text-[10px] text-white/40" title={hint}>
+          {hint}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Hook de feedback de sauvegarde réutilisable. Affiche brièvement
+ * « Enregistré ✓ » après chaque sauvegarde au blur (la sauvegarde était
+ * jusqu'ici silencieuse). `markSaved()` à appeler après un patch réussi ;
+ * `markError()` en cas d'échec.
+ */
+function useSaveFeedback() {
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">(
+    "idle"
+  );
+  useEffect(() => {
+    if (state !== "saved") return;
+    const t = setTimeout(() => setState("idle"), 2200);
+    return () => clearTimeout(t);
+  }, [state]);
+  return {
+    state,
+    markSaving: () => setState("saving"),
+    markSaved: () => setState("saved"),
+    markError: () => setState("error"),
+    reset: () => setState("idle")
+  };
+}
+
+/** Petit badge inline « Enregistré ✓ » piloté par `useSaveFeedback`. */
+function SaveIndicator({
+  state
+}: {
+  state: "idle" | "saving" | "saved" | "error";
+}) {
+  if (state === "idle") return null;
+  if (state === "saving") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-white/60">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Enregistrement…
+      </span>
+    );
+  }
+  if (state === "error") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[10px] font-medium text-rose-300">
+        <AlertTriangle className="h-3 w-3" />
+        Échec de l&apos;enregistrement
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
+      <CheckCircle2 className="h-3 w-3" />
+      Enregistré
+    </span>
+  );
+}
+
+/** Encart vide pour un onglet sans données (Résultats / Détails). */
+function EmptyTabHint({
+  icon: Icon,
+  message
+}: {
+  icon: ComponentType<{ className?: string }>;
+  message: string;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-12 text-center">
+      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.04] text-white/40">
+        <Icon className="h-6 w-6" />
+      </span>
+      <p className="max-w-sm text-sm text-white/50">{message}</p>
+    </div>
+  );
 }
 
 // ─── Composant principal ──────────────────────────────────────────
@@ -192,6 +469,8 @@ export function LeadAnalysisDetailModal({
   const [data, setData] = useState<LeadDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<TabKey>("infos");
+  const save = useSaveFeedback();
 
   useEffect(() => {
     if (!open) return;
@@ -225,14 +504,18 @@ export function LeadAnalysisDetailModal({
   async function patchField(field: string, value: unknown) {
     if (!data) return;
     setData({ ...data, [field]: value } as LeadDetail);
+    save.markSaving();
     try {
-      await authedFetch(`/api/v1/lead-analyses/${analysisId}`, {
+      const r = await authedFetch(`/api/v1/lead-analyses/${analysisId}`, {
         method: "PATCH",
         body: JSON.stringify({ [field]: value })
       });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      save.markSaved();
       onAfterUpdate?.();
     } catch {
-      /* silent — local state retained */
+      /* local state retained — surface a discreet error */
+      save.markError();
     }
   }
 
@@ -440,6 +723,48 @@ export function LeadAnalysisDetailModal({
     }
   }
 
+  // ── Hero metrics : chiffres clés dérivés du dernier calcul ──────
+  const hero = useMemo(() => {
+    if (!data) return null;
+    let results: AnalysisResults | null = null;
+    try {
+      results = data.analysis_results_json
+        ? (JSON.parse(data.analysis_results_json) as AnalysisResults)
+        : null;
+    } catch {
+      results = null;
+    }
+    // Best refi : on retient le scénario gagnant (= best_refi) et on
+    // récupère cashflow / équité du scénario correspondant si dispo.
+    const scen = results?.scenarios;
+    const bestProgram = results?.best_refi.program ?? data.best_refi_program;
+    let winner: ScenarioResult | null = null;
+    if (scen && bestProgram) {
+      const all: Array<ScenarioResult | null> = [
+        scen.refi_aph_100,
+        scen.refi_aph_50,
+        scen.refi_schl,
+        scen.achat
+      ];
+      winner =
+        all.find((s) => s && s.label === bestProgram) ||
+        all.find((s) => s && s.name === bestProgram) ||
+        scen.refi_aph_100 ||
+        scen.refi_aph_50 ||
+        scen.refi_schl ||
+        null;
+    }
+    return {
+      askingPrice: data.asking_price,
+      bestRefiAmount: results?.best_refi.amount ?? data.best_refi_amount,
+      bestRefiProgram: bestProgram ?? null,
+      mdf: results?.mdf_preteur_b ?? data.mdf_preteur_b,
+      cashflow: winner?.cashflow_annuel ?? null,
+      equite: winner?.equite_a_la_fin ?? null,
+      hasResults: !!results
+    };
+  }, [data]);
+
   if (!open) return null;
 
   return (
@@ -448,15 +773,18 @@ export function LeadAnalysisDetailModal({
       onClick={onClose}
     >
       <div
-        className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-950"
+        className="flex max-h-[calc(100vh-2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-950"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex flex-shrink-0 items-start justify-between gap-3 border-b border-brand-800 px-5 py-4">
           <div className="min-w-0 flex-1">
-            <p className="text-[10px] uppercase tracking-wider text-accent-500">
-              Fiche d&apos;analyse
-            </p>
-            <h2 className="mt-0.5 truncate text-base font-bold text-white">
+            <div className="flex items-center gap-2">
+              <p className="text-[10px] uppercase tracking-wider text-accent-500">
+                Fiche d&apos;analyse
+              </p>
+              <SaveIndicator state={save.state} />
+            </div>
+            <h2 className="mt-0.5 truncate text-lg font-bold text-white">
               {data?.address || `Lead #${analysisId}`}
             </h2>
             {data ? <ExtractionBadgeInline modelUsed={data.model_used} /> : null}
@@ -534,49 +862,128 @@ export function LeadAnalysisDetailModal({
           </div>
         ) : null}
 
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          {loading ? (
+        {loading ? (
+          <div className="flex-1 overflow-y-auto px-5 py-4">
             <p className="py-12 text-center text-sm text-white/40">
               <Loader2 className="mr-2 inline h-4 w-4 animate-spin" />
               Chargement…
             </p>
-          ) : error ? (
+          </div>
+        ) : error ? (
+          <div className="flex-1 overflow-y-auto px-5 py-4">
             <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
               {error}
             </p>
-          ) : !data ? null : (
-            <div className="space-y-5">
-              <section className="rounded-xl border border-brand-800 bg-brand-900 p-4">
-                <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-                  Statut du lead
-                </h3>
-                <p className="mt-1 text-[10px] text-white/50">
-                  Change la colonne du kanban depuis ici aussi.
+          </div>
+        ) : !data ? null : (
+          <>
+            {/* ── Zone fixe : Statut + hero metrics + onglets ─────── */}
+            <div className="flex-shrink-0 border-b border-brand-800 bg-brand-950 px-5 pt-4">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+                  Statut
                 </p>
-                <div className="mt-2">
-                  <PillPicker
-                    options={COLUMNS.map((c) => ({
-                      value: c.key,
-                      label: c.label,
-                      dot: c.dot,
-                      cls: c.dot
-                    }))}
-                    value={data.status}
-                    onChange={(v) => patchField("status", v)}
-                    ariaLabel="Statut du lead"
+                <PillPicker
+                  options={COLUMNS.map((c) => ({
+                    value: c.key,
+                    label: c.label,
+                    dot: c.dot,
+                    cls: c.dot
+                  }))}
+                  value={data.status}
+                  onChange={(v) => patchField("status", v)}
+                  ariaLabel="Statut du lead"
+                />
+              </div>
+
+              {/* Bande de hero metrics */}
+              {hero ? (
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+                  <StatTile
+                    icon={Banknote}
+                    label="Prix demandé"
+                    value={fmtMoney(hero.askingPrice)}
+                    tone="accent"
+                  />
+                  <StatTile
+                    icon={TrendingUp}
+                    label="Best refi"
+                    value={fmtMoney(hero.bestRefiAmount)}
+                    hint={hero.bestRefiProgram || undefined}
+                    tone={
+                      hero.bestRefiAmount != null && hero.bestRefiAmount >= 0
+                        ? "emerald"
+                        : "rose"
+                    }
+                  />
+                  <StatTile
+                    icon={Wallet}
+                    label="MDF prêteur B"
+                    value={fmtMoney(hero.mdf)}
+                    tone="amber"
+                  />
+                  <StatTile
+                    icon={Coins}
+                    label="Cashflow / an"
+                    value={hero.cashflow != null ? fmtMoney(hero.cashflow) : "—"}
+                    tone={
+                      hero.cashflow == null
+                        ? "neutral"
+                        : hero.cashflow >= 0
+                        ? "emerald"
+                        : "rose"
+                    }
+                  />
+                  <StatTile
+                    icon={PiggyBank}
+                    label="Équité à la fin"
+                    value={hero.equite != null ? fmtMoney(hero.equite) : "—"}
+                    tone={
+                      hero.equite == null
+                        ? "neutral"
+                        : hero.equite >= 0
+                        ? "emerald"
+                        : "rose"
+                    }
                   />
                 </div>
-              </section>
+              ) : null}
 
-              <section>
-                <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-                  Infos extraites
-                </h3>
-                <p className="mt-0.5 text-[11px] text-white/40">
-                  Champs pré-remplis par l&apos;IA — clique pour corriger.
-                  Les champs vides sont à compléter manuellement.
-                </p>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {/* Barre d'onglets */}
+              <div className="mt-3 flex gap-1 overflow-x-auto">
+                {TABS.map((t) => {
+                  const active = tab === t.key;
+                  const Icon = t.icon;
+                  return (
+                    <button
+                      key={t.key}
+                      type="button"
+                      onClick={() => setTab(t.key)}
+                      className={`inline-flex flex-shrink-0 items-center gap-1.5 rounded-t-lg border-b-2 px-3 py-2 text-xs font-semibold transition ${
+                        active
+                          ? "border-accent-500 text-white"
+                          : "border-transparent text-white/50 hover:text-white/80"
+                      }`}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* ── Zone scrollable : contenu de l'onglet actif ────── */}
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {tab === "infos" ? (
+                <div className="space-y-5">
+              <SectionCard
+                icon={Building2}
+                title="Infos extraites"
+                tone="neutral"
+                subtitle="Champs pré-remplis par l'IA — clique pour corriger. Les champs vides sont à compléter manuellement."
+              >
+                <div className="grid gap-3 sm:grid-cols-2">
                   <FieldText
                     label="Adresse"
                     value={data.address}
@@ -711,8 +1118,8 @@ export function LeadAnalysisDetailModal({
                   </p>
                 ) : null}
 
-                <div className="mt-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                <div className="mt-4 rounded-xl border border-brand-800 bg-brand-950/40 p-3.5">
+                  <p className="text-xs font-semibold text-white/80">
                     Typologie des logements
                   </p>
                   <p className="mt-0.5 text-[10px] text-white/40">
@@ -727,10 +1134,8 @@ export function LeadAnalysisDetailModal({
                   />
                 </div>
 
-                <div className="mt-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
-                    Description
-                  </p>
+                <div className="mt-4">
+                  <label className="label !text-xs">Description</label>
                   <textarea
                     rows={3}
                     value={data.description || ""}
@@ -739,18 +1144,18 @@ export function LeadAnalysisDetailModal({
                     }
                     onBlur={(e) => patchField("description", e.target.value)}
                     placeholder="Description / notes du courtier"
-                    className="input mt-1 text-xs"
+                    className="input text-xs"
                   />
                 </div>
-              </section>
+              </SectionCard>
 
               {/* Sources originales */}
               {data.source_urls || data.source_text || data.attachments?.length ? (
-                <section>
-                  <div className="flex items-center justify-between gap-2">
-                    <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-                      Sources originales
-                    </h3>
+                <SectionCard
+                  icon={FileText}
+                  title="Sources originales"
+                  tone="neutral"
+                  action={
                     <ReExtractButtons
                       id={analysisId}
                       hasSources={
@@ -768,9 +1173,10 @@ export function LeadAnalysisDetailModal({
                         onAfterUpdate?.();
                       }}
                     />
-                  </div>
+                  }
+                >
                   {data.source_urls ? (
-                    <div className="mt-2 space-y-1">
+                    <div className="space-y-1">
                       {data.source_urls
                         .split("\n")
                         .filter((u) => u.trim())
@@ -808,58 +1214,19 @@ export function LeadAnalysisDetailModal({
                       </pre>
                     </details>
                   ) : null}
-                </section>
+                </SectionCard>
               ) : null}
 
               {/* Phase A3 — Panneau "Validation de l'extraction" */}
               <ValidationPanel warnings={data.validation_warnings} />
 
-              {/* Section Analyse financière — inputs manuels + bouton */}
-              <ManualAnalysisSection
-                data={data}
-                onPatch={patchField}
-                onRefresh={async () => {
-                  const r = await authedFetch(
-                    `/api/v1/lead-analyses/${analysisId}`
-                  );
-                  if (r.ok) setData((await r.json()) as LeadDetail);
-                  onAfterUpdate?.();
-                }}
-              />
-
-              {/* Résultats si analyse exécutée */}
-              {data.analysis_results_json ? (
-                <AnalysisResultsTable
-                  resultsJson={data.analysis_results_json}
-                  overridesJson={data.frais_demarrage_overrides_json}
-                  financablesJson={data.frais_demarrage_financables_json}
-                  mdfPct={data.mdf_preteur_b_pct ?? 25}
-                  prixAchat={data.asking_price ?? 0}
-                  fraisDemarrageTotalDb={null}
-                  mdfPreteurBDb={data.mdf_preteur_b ?? null}
-                  onPatchOverrides={(j) =>
-                    patchField("frais_demarrage_overrides_json", j)
-                  }
-                  onPatchFinancables={(j) =>
-                    patchField("frais_demarrage_financables_json", j)
-                  }
-                />
-              ) : null}
-
-              {/* Détail granulaire des calculs (style Excel) */}
-              {data.analysis_results_json ? (
-                <CalculationDetailsSection
-                  resultsJson={data.analysis_results_json}
-                  overridesJson={data.frais_demarrage_overrides_json}
-                  lead={data}
-                />
-              ) : null}
-
               {/* Notes internes */}
-              <section>
-                <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-                  Notes internes
-                </h3>
+              <SectionCard
+                icon={FileText}
+                title="Notes internes"
+                tone="neutral"
+                subtitle="Tes notes privées sur ce lead — visibles uniquement dans la fiche."
+              >
                 <textarea
                   rows={3}
                   value={data.notes || ""}
@@ -868,13 +1235,75 @@ export function LeadAnalysisDetailModal({
                   }
                   onBlur={(e) => patchField("notes", e.target.value)}
                   placeholder="Tes notes privées sur ce lead"
-                  className="input mt-2 text-xs"
+                  className="input text-xs"
                 />
-              </section>
+              </SectionCard>
+                </div>
+              ) : null}
 
+              {tab === "analyse" ? (
+                <div className="space-y-5">
+                  {/* Section Analyse financière — inputs manuels + bouton */}
+                  <ManualAnalysisSection
+                    data={data}
+                    onPatch={patchField}
+                    onRefresh={async () => {
+                      const r = await authedFetch(
+                        `/api/v1/lead-analyses/${analysisId}`
+                      );
+                      if (r.ok) setData((await r.json()) as LeadDetail);
+                      onAfterUpdate?.();
+                    }}
+                  />
+                </div>
+              ) : null}
+
+              {tab === "resultats" ? (
+                <div className="space-y-5">
+                  {data.analysis_results_json ? (
+                    <AnalysisResultsTable
+                      resultsJson={data.analysis_results_json}
+                      overridesJson={data.frais_demarrage_overrides_json}
+                      financablesJson={data.frais_demarrage_financables_json}
+                      mdfPct={data.mdf_preteur_b_pct ?? 25}
+                      prixAchat={data.asking_price ?? 0}
+                      fraisDemarrageTotalDb={null}
+                      mdfPreteurBDb={data.mdf_preteur_b ?? null}
+                      onPatchOverrides={(j) =>
+                        patchField("frais_demarrage_overrides_json", j)
+                      }
+                      onPatchFinancables={(j) =>
+                        patchField("frais_demarrage_financables_json", j)
+                      }
+                    />
+                  ) : (
+                    <EmptyTabHint
+                      icon={TrendingUp}
+                      message="Aucun résultat pour le moment. Renseigne les inputs dans l'onglet « Analyse » puis lance le calcul."
+                    />
+                  )}
+                </div>
+              ) : null}
+
+              {tab === "details" ? (
+                <div className="space-y-5">
+                  {data.analysis_results_json ? (
+                    <CalculationDetailsSection
+                      resultsJson={data.analysis_results_json}
+                      overridesJson={data.frais_demarrage_overrides_json}
+                      lead={data}
+                    />
+                  ) : (
+                    <EmptyTabHint
+                      icon={ListChecks}
+                      message="Le détail granulaire des calculs apparaîtra ici une fois l'analyse lancée."
+                    />
+                  )}
+                </div>
+              ) : null}
             </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
       <OffreInvestissementWizard
         open={offreWizardOpen}
@@ -1067,13 +1496,9 @@ function FieldText({
   );
 }
 
+/** Alias historique — délègue au formatage monétaire unifié. */
 function _formatMoneyExcel(n: number): string {
-  const sign = n < 0 ? "-" : "";
-  const rounded = Math.round(Math.abs(n));
-  const withSep = rounded
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-  return `${sign}${withSep} $`;
+  return fmtMoney(n);
 }
 
 function _formatPercentExcel(n: number): string {
@@ -2374,13 +2799,9 @@ function CalculationDetailsSection({
   );
 }
 
+/** Alias historique — délègue au formatage monétaire unifié. */
 function _fmtMoneyDetail(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  const rounded = Math.round(n);
-  const sign = rounded < 0 ? "-" : "";
-  const abs = Math.abs(rounded).toString();
-  const withSep = abs.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-  return `${sign}${withSep} $`;
+  return fmtMoney(n);
 }
 
 function _fmtPctDetail(n: number | null | undefined): string {
