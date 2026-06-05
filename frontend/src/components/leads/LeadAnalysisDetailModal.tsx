@@ -2041,9 +2041,11 @@ function FieldYesNo({
   // un fort contraste sur l'option active.
   return (
     <div>
-      <label className="text-[10px] uppercase tracking-wider text-white/50">
-        {label}
-      </label>
+      <div className="flex items-baseline justify-between gap-2">
+        <label className="text-[10px] uppercase tracking-wider text-white/50">
+          {label}
+        </label>
+      </div>
       <div
         role="radiogroup"
         aria-label={label}
@@ -2347,14 +2349,14 @@ function AnalysisResultsTable({
         </div>
       ) : null}
 
-      {/* Tableau desktop avec en-tête sticky. Plus de scroll horizontal :
-          les 4 colonnes tiennent dans la largeur du modal (max-w-5xl), on
-          ne garde que le scroll vertical pour l'en-tête sticky. */}
-      <div className="hidden max-h-[460px] overflow-y-auto rounded-xl border border-brand-800 sm:block">
+      {/* Tableau desktop affiché en entier : aucun scroll (ni vertical ni
+          horizontal). Les 4 colonnes tiennent dans la largeur du modal
+          (max-w-5xl) et toutes les lignes sont visibles d'un coup. */}
+      <div className="hidden rounded-xl border border-brand-800 sm:block">
         <table className="w-full table-fixed border-collapse text-[11px]">
-          <thead className="sticky top-0 z-10">
+          <thead>
             <tr className="bg-brand-900 align-bottom text-white/50">
-              <th className="sticky left-0 z-20 w-[28%] bg-brand-900 px-2.5 py-2.5 text-left text-[9px] font-semibold uppercase tracking-wider text-white/40">
+              <th className="w-[28%] bg-brand-900 px-2.5 py-2.5 text-left text-[9px] font-semibold uppercase tracking-wider text-white/40">
                 Métrique
               </th>
               {cols.map(([label, s], i) => {
@@ -2690,7 +2692,7 @@ function FraisDemarrageBreakdownPanel({
       <div className="mt-3 overflow-hidden rounded-lg border border-brand-800">
         <table className="w-full border-collapse text-[11px]">
           <thead>
-            <tr className="bg-brand-900/70 text-[9px] font-semibold uppercase tracking-wider text-white/45">
+            <tr className="bg-brand-900 text-[9px] font-semibold uppercase tracking-wider text-white/40">
               <th className="px-3 py-2 text-left">Poste</th>
               <th className="px-3 py-2 text-right">Valeur</th>
               <th
@@ -2708,7 +2710,7 @@ function FraisDemarrageBreakdownPanel({
               <td className="px-3 py-2 font-semibold text-amber-200" colSpan={3}>
                 {_fmtPctShort(mdfPctNumeric)} du prix d&apos;achat
                 {prixFinal > 0 ? (
-                  <span className="ml-1 font-normal text-white/45">
+                  <span className="ml-1 font-normal text-white/50">
                     ({_fmtPctShort(mdfPctNumeric)} × {fmtMoney(prixFinal)})
                   </span>
                 ) : null}
@@ -2719,7 +2721,7 @@ function FraisDemarrageBreakdownPanel({
             </tr>
             <tr>
               <td
-                className="px-3 pt-2.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/35"
+                className="px-3 pt-2.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/40"
                 colSpan={4}
               >
                 Frais de démarrage
@@ -2743,7 +2745,7 @@ function FraisDemarrageBreakdownPanel({
                     idx % 2 === 1 ? "bg-white/[0.015]" : ""
                   }`}
                 >
-                  <td className="px-3 py-1.5 pl-5 text-white/65">
+                  <td className="px-3 py-1.5 pl-5 text-white/55">
                     {label}
                     {overridden ? (
                       <button
@@ -2956,7 +2958,7 @@ function ResultRow({
   return (
     <tr className={rowCls}>
       <td
-        className={`sticky left-0 z-10 bg-inherit px-2.5 py-2 ${
+        className={`bg-inherit px-2.5 py-2 ${
           keyRow ? "font-semibold text-white/80" : "text-white/55"
         }`}
       >
