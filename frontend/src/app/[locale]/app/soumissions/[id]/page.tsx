@@ -10,6 +10,7 @@ import {
   EyeOff,
   FileText,
   Users,
+  ChevronDown,
   Loader2,
   Mail,
   PenTool,
@@ -1741,6 +1742,21 @@ function ItemRow({
   const [costPerUnit, setCostPerUnit] = useState(
     String(item.cost_per_unit ?? 0)
   );
+  // Panneau d'édition pleine largeur (surtout utile sur mobile, où les
+  // cellules du tableau sont étroites et tronquent le texte). S'ouvre au
+  // focus d'une cellule ou via le chevron, pour voir/écrire en grand.
+  const [expanded, setExpanded] = useState(false);
+  // Sur mobile, cliquer dans une cellule (étroite) ouvre le panneau
+  // pleine largeur pour voir/écrire en grand. Sur desktop, l'édition
+  // inline reste pratique → on n'ouvre qu'au clic du chevron.
+  const openIfMobile = () => {
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(max-width: 768px)").matches
+    ) {
+      setExpanded(true);
+    }
+  };
 
   useEffect(() => {
     setDescription(item.description);
@@ -1786,12 +1802,14 @@ function ItemRow({
   }
 
   return (
+    <>
     <tr className="align-top">
       <td className="px-5 py-3">
         <textarea
           rows={1}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
+          onFocus={openIfMobile}
           onBlur={() => commit("description")}
           className="w-full resize-none rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-white focus:border-brand-700 focus:outline-none"
         />
@@ -1803,6 +1821,7 @@ function ItemRow({
           min="0"
           value={quantity}
           onChange={(e) => setQuantity(e.target.value)}
+          onFocus={openIfMobile}
           onBlur={() => commit("quantity")}
           className="w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-right text-sm text-white focus:border-brand-700 focus:outline-none"
         />
@@ -1825,6 +1844,7 @@ function ItemRow({
           step="0.01"
           value={costPerUnit}
           onChange={(e) => setCostPerUnit(e.target.value)}
+          onFocus={openIfMobile}
           onBlur={() => commit("cost_per_unit")}
           className="w-full rounded-md border-2 border-amber-500/60 bg-amber-500/15 px-2 py-1.5 text-right text-sm font-semibold text-amber-500 placeholder:text-amber-500/40 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
           aria-label="Coût par unité (interne)"
@@ -1836,6 +1856,7 @@ function ItemRow({
           step="0.01"
           value={unitPrice}
           onChange={(e) => setUnitPrice(e.target.value)}
+          onFocus={openIfMobile}
           onBlur={() => commit("unit_price")}
           className="w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-right text-sm text-white focus:border-brand-700 focus:outline-none"
         />
@@ -1883,21 +1904,142 @@ function ItemRow({
           </span>
         ) : null}
       </td>
-      <td className="px-3 py-3 w-10 text-right">
-        {busy ? (
-          <Loader2 className="ml-auto h-4 w-4 animate-spin text-accent-500" />
-        ) : (
+      <td className="px-3 py-3 w-16 text-right">
+        <div className="flex items-center justify-end gap-1">
           <button
             type="button"
-            onClick={onDelete}
-            aria-label="Supprimer l'item"
-            className="rounded-md p-1.5 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-400"
+            onClick={() => setExpanded((v) => !v)}
+            aria-label={expanded ? "Replier l'item" : "Éditer l'item en grand"}
+            aria-expanded={expanded}
+            className="rounded-md p-1.5 text-white/40 transition hover:bg-white/10 hover:text-white"
           >
-            <Trash2 className="h-4 w-4" />
+            <ChevronDown
+              className={`h-4 w-4 transition-transform ${
+                expanded ? "rotate-180" : ""
+              }`}
+            />
           </button>
-        )}
+          {busy ? (
+            <Loader2 className="h-4 w-4 animate-spin text-accent-500" />
+          ) : (
+            <button
+              type="button"
+              onClick={onDelete}
+              aria-label="Supprimer l'item"
+              className="rounded-md p-1.5 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-400"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </td>
     </tr>
+    {expanded ? (
+      <tr className="bg-brand-900/40">
+        <td colSpan={9} className="px-4 pb-5 pt-1">
+          {/* Édition pleine largeur — lisible sur mobile. Mêmes états +
+              commit que les cellules compactes, donc tout reste synchro. */}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className="label">Item / description</label>
+              <textarea
+                rows={4}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                onBlur={() => commit("description")}
+                className="input w-full resize-y"
+                placeholder="Décris l'item…"
+              />
+            </div>
+            <div>
+              <label className="label">Quantité</label>
+              <input
+                type="number"
+                step="0.001"
+                min="0"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                onBlur={() => commit("quantity")}
+                className="input w-full"
+              />
+            </div>
+            <div>
+              <label className="label">Unité</label>
+              <input
+                type="text"
+                list="soumission-units"
+                value={unit}
+                onChange={(e) => setUnit(e.target.value)}
+                onBlur={() => commit("unit")}
+                placeholder="—"
+                className="input w-full"
+              />
+            </div>
+            <div>
+              <label className="label text-amber-500">
+                Prix coûtant $/u 🔒 (interne)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={costPerUnit}
+                onChange={(e) => setCostPerUnit(e.target.value)}
+                onBlur={() => commit("cost_per_unit")}
+                className="input w-full border-amber-500/60 bg-amber-500/10 font-semibold text-amber-500 focus:border-amber-500 focus:ring-amber-500/30"
+              />
+            </div>
+            <div>
+              <label className="label">Prix client $/u</label>
+              <input
+                type="number"
+                step="0.01"
+                value={unitPrice}
+                onChange={(e) => setUnitPrice(e.target.value)}
+                onBlur={() => commit("unit_price")}
+                className="input w-full"
+              />
+              {computedMargin !== null && Number(costPerUnit) > 0 ? (
+                <p
+                  className={`mt-1 text-[11px] ${
+                    computedMargin >= 0 ? "text-emerald-300" : "text-rose-300"
+                  }`}
+                >
+                  Marge {computedMargin}%
+                </p>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-5 sm:col-span-2">
+              <label className="flex items-center gap-2 text-sm text-white/80">
+                <input
+                  type="checkbox"
+                  checked={item.tps_applicable}
+                  onChange={(e) =>
+                    onPatch({ tps_applicable: e.target.checked })
+                  }
+                  className="h-4 w-4 accent-accent-500"
+                />
+                TPS applicable
+              </label>
+              <label className="flex items-center gap-2 text-sm text-white/80">
+                <input
+                  type="checkbox"
+                  checked={item.tvq_applicable}
+                  onChange={(e) =>
+                    onPatch({ tvq_applicable: e.target.checked })
+                  }
+                  className="h-4 w-4 accent-accent-500"
+                />
+                TVQ applicable
+              </label>
+              <span className="ml-auto text-sm font-semibold text-white">
+                Total {fmtMoney(computedTotal)}
+              </span>
+            </div>
+          </div>
+        </td>
+      </tr>
+    ) : null}
+    </>
   );
 }
 
