@@ -12,7 +12,8 @@ import {
   DepensesNormaliseesSection,
   InputsManuelsSection,
   MdfFraisSection,
-  ScenariosFinancementSection
+  ScenariosFinancementSection,
+  TriDefautsSection
 } from "./_analyse-sections";
 
 /**
@@ -29,6 +30,7 @@ import {
  *   3. Barèmes fiscaux              — baremes_fiscaux
  *   4. Valeurs par défaut analyses  — inputs_manuels
  *   5. Frais de démarrage (MDF)     — mdf_frais + frais-custom
+ *   6. Défauts TRI                  — tri_defaults
  *
  * Accès réservé admin/owner (le backend renvoie 403 sinon).
  */
@@ -74,6 +76,7 @@ export default function ProspectionAnalysePage() {
             <BaremesFiscauxSection />
             <InputsManuelsSection />
             <MdfFraisSection />
+            <TriDefautsSection />
           </div>
         )}
       </div>
