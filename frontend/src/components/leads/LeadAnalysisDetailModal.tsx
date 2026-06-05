@@ -2670,18 +2670,16 @@ function FraisDemarrageBreakdownPanel({
   if (!frais) return null;
 
   return (
-    <section className="mt-4 rounded-xl border border-amber-400/30 bg-amber-500/5 p-4">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2.5">
-          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-400">
-            <Wallet className="h-4 w-4" />
-          </span>
-          <h4 className="text-sm font-bold text-white">
-            Composition de la MDF avec prêteur B
-          </h4>
-        </div>
+    <section className="mt-4 rounded-xl border border-brand-800 bg-brand-950/40 p-4">
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-300">
+          <Wallet className="h-4 w-4" />
+        </span>
+        <h4 className="text-sm font-bold text-white">
+          Composition de la MDF avec prêteur B
+        </h4>
       </div>
-      <p className="mt-2 text-[10px] text-white/50">
+      <p className="mt-2 text-[10px] leading-relaxed text-white/50">
         Total à sortir en cash = {_fmtPctShort(mdfPctNumeric)} du prix
         d&apos;achat + frais non finançables + {_fmtPctShort(mdfPctNumeric)}
         {" "}des frais finançables. Coche un poste pour le rendre
@@ -2689,132 +2687,185 @@ function FraisDemarrageBreakdownPanel({
         frais développement, travaux).
       </p>
 
-      <table className="mt-3 w-full text-[11px]">
-        <thead>
-          <tr className="text-[9px] uppercase tracking-wider text-white/40">
-            <th className="px-2 py-1 text-left">Poste</th>
-            <th className="px-2 py-1 text-right">Valeur</th>
-            <th className="w-16 px-2 py-1 text-center" title="Coché = ce poste est financé par le prêteur B, tu ne paies que le pct en cash">
-              Finançable
-            </th>
-            <th className="px-2 py-1 text-right">Cash à sortir</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr className="border-t border-amber-400/20">
-            <td className="px-2 py-1 font-semibold text-amber-200" colSpan={3}>
-              {_fmtPctShort(mdfPctNumeric)} du prix d&apos;achat
-              {prixFinal > 0 ? (
-                <span className="ml-1 text-white/50">
-                  ({_fmtPctShort(mdfPctNumeric)} × {fmtMoney(prixFinal)})
-                </span>
-              ) : null}
-            </td>
-            <td className="px-2 py-1 text-right font-mono tabular-nums font-semibold text-amber-200">
-              {fmtMoney(mdfPctValue)}
-            </td>
-          </tr>
-          <tr className="border-t border-amber-400/20">
-            <td className="px-2 py-1 text-white/50" colSpan={4}>
-              <span className="text-[10px] uppercase tracking-wider">
-                Frais de démarrage
-              </span>
-            </td>
-          </tr>
-          {fraisLabels.map(([key, label]) => {
-            const computed = Number(frais[key] || 0);
-            const overridden = overrides[key] != null;
-            const displayVal = overridden
-              ? Number(overrides[key])
-              : computed;
-            if (!overridden && !computed) return null;
-            const isFinancable = financables.has(key);
-            const cashForRow = isFinancable
-              ? displayVal * mdfPctNumeric
-              : displayVal;
-            return (
-              <tr key={key} className="border-t border-brand-800/60">
-                <td className="px-2 py-1 pl-4 text-white/60">
-                  {label}
-                  {overridden ? (
-                    <button
-                      type="button"
-                      onClick={() => setOverride(key, null)}
-                      className="ml-1 rounded bg-amber-500/20 px-1 py-0 text-[9px] text-amber-200 hover:bg-amber-500/30"
-                      title="Réinitialiser à la valeur calculée"
-                    >
-                      override · réinit
-                    </button>
-                  ) : null}
-                </td>
-                <td className="px-2 py-1 text-right">
-                  <EditableMoney
-                    value={displayVal}
-                    computed={computed}
-                    overridden={overridden}
-                    onSave={(v) =>
-                      setOverride(key, v === computed ? null : v)
-                    }
-                  />
-                </td>
-                <td className="px-2 py-1 text-center">
-                  <input
-                    type="checkbox"
-                    checked={isFinancable}
-                    onChange={() => toggleFinancable(key)}
-                    className="h-3.5 w-3.5 cursor-pointer accent-amber-400"
-                    title={
-                      isFinancable
-                        ? `Finançable — payé seulement à ${_fmtPctShort(mdfPctNumeric)} en cash`
-                        : "Non finançable — payé 100 % en cash"
-                    }
-                  />
-                </td>
-                <td
-                  className={`px-2 py-1 text-right font-mono tabular-nums ${
-                    isFinancable ? "text-emerald-300" : "text-white/80"
-                  }`}
-                >
-                  {fmtMoney(cashForRow)}
-                </td>
-              </tr>
-            );
-          })}
-          <tr className="border-t border-amber-400/40 bg-amber-500/5">
-            <td className="px-2 py-1 pl-4 text-amber-200" colSpan={3}>
-              Sous-total frais de démarrage (cash)
-            </td>
-            <td className="px-2 py-1 text-right font-mono tabular-nums font-semibold text-amber-200">
-              {fmtMoney(subTotalCash)}
-            </td>
-          </tr>
-          {subTotalFinanced > 0.5 ? (
-            <tr className="bg-emerald-500/5">
-              <td className="px-2 py-1 pl-4 text-[10px] text-emerald-300" colSpan={3}>
-                dont financé par prêteur B
+      <div className="mt-3 overflow-hidden rounded-lg border border-brand-800">
+        <table className="w-full border-collapse text-[11px]">
+          <thead>
+            <tr className="bg-brand-900/70 text-[9px] font-semibold uppercase tracking-wider text-white/45">
+              <th className="px-3 py-2 text-left">Poste</th>
+              <th className="px-3 py-2 text-right">Valeur</th>
+              <th
+                className="w-20 px-3 py-2 text-center"
+                title="Activé = ce poste est financé par le prêteur B, tu ne paies que le pct en cash"
+              >
+                Finançable
+              </th>
+              <th className="px-3 py-2 text-right">Cash à sortir</th>
+            </tr>
+          </thead>
+          <tbody>
+            {/* Ligne de base : assise de la MDF, mise en évidence (ambre) */}
+            <tr className="border-y border-amber-400/30 bg-amber-500/10">
+              <td className="px-3 py-2 font-semibold text-amber-200" colSpan={3}>
+                {_fmtPctShort(mdfPctNumeric)} du prix d&apos;achat
+                {prixFinal > 0 ? (
+                  <span className="ml-1 font-normal text-white/45">
+                    ({_fmtPctShort(mdfPctNumeric)} × {fmtMoney(prixFinal)})
+                  </span>
+                ) : null}
               </td>
-              <td className="px-2 py-1 text-right font-mono tabular-nums text-[10px] text-emerald-300">
-                +{fmtMoney(subTotalFinanced)}
+              <td className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-amber-200">
+                {fmtMoney(mdfPctValue)}
               </td>
             </tr>
-          ) : null}
-          <tr className="border-t-2 border-amber-400/60 bg-amber-500/10">
-            <td className="px-2 py-1.5 font-bold text-amber-200" colSpan={3}>
-              Total — MDF avec prêteur B
-              {mdfTotalStored != null &&
-              Math.abs((mdfTotalStored || 0) - totalMdfLocal) > 1 ? (
-                <span className="ml-2 rounded bg-amber-500/30 px-1 py-0 text-[9px] font-normal text-amber-100">
-                  recalcul requis
-                </span>
-              ) : null}
-            </td>
-            <td className="px-2 py-1.5 text-right font-mono tabular-nums font-bold text-amber-200">
-              {fmtMoney(totalMdfLocal)}
-            </td>
-          </tr>
-        </tbody>
-      </table>
+            <tr>
+              <td
+                className="px-3 pt-2.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/35"
+                colSpan={4}
+              >
+                Frais de démarrage
+              </td>
+            </tr>
+            {fraisLabels.map(([key, label], idx) => {
+              const computed = Number(frais[key] || 0);
+              const overridden = overrides[key] != null;
+              const displayVal = overridden
+                ? Number(overrides[key])
+                : computed;
+              if (!overridden && !computed) return null;
+              const isFinancable = financables.has(key);
+              const cashForRow = isFinancable
+                ? displayVal * mdfPctNumeric
+                : displayVal;
+              return (
+                <tr
+                  key={key}
+                  className={`border-t border-brand-800/50 ${
+                    idx % 2 === 1 ? "bg-white/[0.015]" : ""
+                  }`}
+                >
+                  <td className="px-3 py-1.5 pl-5 text-white/65">
+                    {label}
+                    {overridden ? (
+                      <button
+                        type="button"
+                        onClick={() => setOverride(key, null)}
+                        className="ml-1.5 rounded bg-amber-500/20 px-1.5 py-0 text-[9px] font-medium text-amber-200 hover:bg-amber-500/30"
+                        title="Réinitialiser à la valeur calculée"
+                      >
+                        override · réinit
+                      </button>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-1.5 text-right">
+                    <EditableMoney
+                      value={displayVal}
+                      computed={computed}
+                      overridden={overridden}
+                      onSave={(v) =>
+                        setOverride(key, v === computed ? null : v)
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-1.5 text-center">
+                    <FinancableToggle
+                      checked={isFinancable}
+                      onToggle={() => toggleFinancable(key)}
+                      title={
+                        isFinancable
+                          ? `Finançable — payé seulement à ${_fmtPctShort(mdfPctNumeric)} en cash`
+                          : "Non finançable — payé 100 % en cash"
+                      }
+                    />
+                  </td>
+                  <td
+                    className={`px-3 py-1.5 text-right font-mono tabular-nums ${
+                      isFinancable ? "text-emerald-300" : "text-white/80"
+                    }`}
+                  >
+                    {fmtMoney(cashForRow)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            {/* Les 3 lignes de total, démarquées et color-codées. */}
+            <tr className="border-t border-amber-400/40 bg-amber-500/[0.07]">
+              <td className="px-3 py-2 font-semibold text-amber-200" colSpan={3}>
+                Sous-total frais de démarrage (cash)
+              </td>
+              <td className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-amber-200">
+                {fmtMoney(subTotalCash)}
+              </td>
+            </tr>
+            {subTotalFinanced > 0.5 ? (
+              <tr className="bg-emerald-500/[0.07]">
+                <td
+                  className="px-3 py-1.5 pl-5 text-[10px] text-emerald-300"
+                  colSpan={3}
+                >
+                  dont financé par prêteur B
+                </td>
+                <td className="px-3 py-1.5 text-right font-mono text-[10px] tabular-nums text-emerald-300">
+                  +{fmtMoney(subTotalFinanced)}
+                </td>
+              </tr>
+            ) : null}
+            <tr className="border-t-2 border-accent-500/50 bg-accent-500/10">
+              <td className="px-3 py-2.5 font-bold text-white" colSpan={3}>
+                Total — MDF avec prêteur B
+                {mdfTotalStored != null &&
+                Math.abs((mdfTotalStored || 0) - totalMdfLocal) > 1 ? (
+                  <span className="ml-2 rounded bg-amber-500/30 px-1.5 py-0 text-[9px] font-normal text-amber-100">
+                    recalcul requis
+                  </span>
+                ) : null}
+              </td>
+              <td className="px-3 py-2.5 text-right font-mono text-sm font-bold tabular-nums text-accent-500">
+                {fmtMoney(totalMdfLocal)}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
     </section>
+  );
+}
+
+/**
+ * Toggle custom « finançable » pour les postes de frais — remplace la
+ * checkbox HTML brute par un switch propre et lisible (accent emerald
+ * quand actif = financé par le prêteur B). Purement visuel : déclenche
+ * `onToggle` exactement comme la checkbox d'origine.
+ */
+function FinancableToggle({
+  checked,
+  onToggle,
+  title
+}: {
+  checked: boolean;
+  onToggle: () => void;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={onToggle}
+      title={title}
+      className={`relative inline-flex h-4 w-7 flex-shrink-0 items-center rounded-full border transition-colors ${
+        checked
+          ? "border-emerald-400/60 bg-emerald-500/80"
+          : "border-brand-600 bg-brand-800"
+      }`}
+    >
+      <span
+        className={`inline-block h-3 w-3 transform rounded-full bg-white shadow-sm transition-transform ${
+          checked ? "translate-x-3.5" : "translate-x-0.5"
+        }`}
+      />
+    </button>
   );
 }
 
