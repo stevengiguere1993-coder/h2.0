@@ -2936,5 +2936,242 @@ async def check_ocr_health(user: CurrentUser) -> dict:
     return _ocr_health_payload()
 
 
+# ── TRI investisseur ───────────────────────────────────────────────
+#
+# Calculateur de rendement (taux de rendement interne) pour la fiche
+# d'analyse. 12 intrants : 8 dérivés de l'analyse financière Kratos
+# (éditables côté front) + 4 manuels (capital, % parts, croissances)
+# persistés sur la fiche. Voir `app.services.lead_tri_calc`.
 
 
+# Mapping AUTO retenu (champ de `analysis_results_json` → intrant TRI) :
+#   prix        = prix_achat
+#   rpv_achat   = 1 − mdf_preteur_b_pct           (ex. MDF 20 % → 0.80)
+#   pret_constr = Σ frais_financables × (1 − mdf_pct)   (« dont financé
+#                 par prêteur B » de la composition MDF)
+#   mdf         = mdf_preteur_b                    (« Total — MDF prêteur B »)
+#   loyers2     = best_refi.revenus_totaux
+#   dep2        = best_refi.depenses_total
+#   valeur2     = best_refi.valeur_retenue
+#   rpv_refi    = best_refi.ltv
+
+
+# Défauts des 4 intrants manuels si la fiche n'a rien de persisté.
+_TRI_DEFAULTS = {
+    "capital": None,
+    "pct": 0.5,
+    "cr_loyers": 0.03,
+    "cr_dep": 0.03,
+}
+
+
+class TriInputs(BaseModel):
+    """Les 12 intrants du calculateur de TRI."""
+
+    prix: float = 0.0
+    rpv_achat: float = 0.0
+    pret_constr: float = 0.0
+    mdf: float = 0.0
+    capital: float = 0.0
+    pct: float = 0.0
+    loyers2: float = 0.0
+    dep2: float = 0.0
+    valeur2: float = 0.0
+    rpv_refi: float = 0.0
+    cr_loyers: float = 0.0
+    cr_dep: float = 0.0
+
+
+class TriInputsResponse(BaseModel):
+    """Réponse de GET /tri-inputs : 8 intrants auto pré-remplis +
+    4 manuels (persistés ou défauts). ``analysis_ready`` est False si
+    l'analyse financière n'a pas encore tourné (auto à 0, l'utilisateur
+    doit lancer l'analyse ou saisir à la main)."""
+
+    inputs: TriInputs
+    analysis_ready: bool
+    auto_fields: List[str]
+    manual_fields: List[str]
+
+
+def _best_refi_scenario(results: dict) -> Optional[dict]:
+    """Retrouve le scénario refi gagnant dans ``analysis_results_json``.
+
+    On matche d'abord par ``best_refi.program`` (= ``label`` du scénario
+    gagnant) ; à défaut, on prend le scénario refi avec la plus grande
+    ``equite_a_la_fin``. Retourne ``None`` si aucun scénario exploitable."""
+    scenarios = (results or {}).get("scenarios") or {}
+    refis = [
+        s
+        for k, s in scenarios.items()
+        if k.startswith("refi_") and isinstance(s, dict)
+    ]
+    if not refis:
+        return None
+    best = (results.get("best_refi") or {}).get("program")
+    if best:
+        for s in refis:
+            if s.get("label") == best:
+                return s
+    # Fallback : meilleure équité à la fin.
+    return max(refis, key=lambda s: s.get("equite_a_la_fin") or 0.0)
+
+
+def _derive_tri_auto_inputs(results: dict) -> dict:
+    """Dérive les 8 intrants AUTO depuis ``analysis_results_json``.
+
+    Cf. mapping documenté en tête de section. Retourne un dict des 8
+    clés auto (les 4 manuelles sont gérées à part)."""
+    prix = float(results.get("prix_achat") or 0)
+    mdf_pct = float(results.get("mdf_preteur_b_pct") or 0)
+    mdf = float(results.get("mdf_preteur_b") or 0)
+
+    # pret_constr = portion des frais finançables prise en charge par le
+    # prêteur B = Σ frais[k] × (1 − mdf_pct) sur les postes finançables.
+    frais = results.get("frais_demarrage") or {}
+    financables = set(results.get("frais_demarrage_financables") or [])
+    pret_constr = 0.0
+    for k, v in frais.items():
+        if k in financables:
+            try:
+                pret_constr += float(v or 0) * (1.0 - mdf_pct)
+            except (TypeError, ValueError):
+                continue
+
+    best = _best_refi_scenario(results) or {}
+    return {
+        "prix": prix,
+        # rpv_achat ≈ 1 − % mise de fonds de base du prêteur B.
+        "rpv_achat": max(0.0, 1.0 - mdf_pct),
+        "pret_constr": pret_constr,
+        "mdf": mdf,
+        "loyers2": float(best.get("revenus_totaux") or 0),
+        "dep2": float(best.get("depenses_total") or 0),
+        "valeur2": float(best.get("valeur_retenue") or 0),
+        "rpv_refi": float(best.get("ltv") or 0),
+    }
+
+
+def _persisted_manual_inputs(rec: LeadAnalysis) -> dict:
+    """Lit les 4 intrants manuels persistés sur la fiche, ou défauts."""
+    cap = (
+        float(rec.tri_capital_injecte)
+        if rec.tri_capital_injecte is not None
+        else _TRI_DEFAULTS["capital"]
+    )
+    pct = (
+        float(rec.tri_pct_investisseur)
+        if rec.tri_pct_investisseur is not None
+        else _TRI_DEFAULTS["pct"]
+    )
+    cr_l = (
+        float(rec.tri_croissance_loyers)
+        if rec.tri_croissance_loyers is not None
+        else _TRI_DEFAULTS["cr_loyers"]
+    )
+    cr_d = (
+        float(rec.tri_croissance_depenses)
+        if rec.tri_croissance_depenses is not None
+        else _TRI_DEFAULTS["cr_dep"]
+    )
+    return {"capital": cap, "pct": pct, "cr_loyers": cr_l, "cr_dep": cr_d}
+
+
+@router.get(
+    "/{analysis_id}/tri-inputs",
+    response_model=TriInputsResponse,
+    summary="Intrants pré-remplis du calculateur de TRI investisseur.",
+)
+async def get_tri_inputs(
+    analysis_id: int, db: DBSession, user: CurrentUser
+) -> TriInputsResponse:
+    """Renvoie les 8 intrants AUTO dérivés de l'analyse financière
+    (éditables côté front) + les 4 intrants MANUELS persistés sur la
+    fiche (ou défauts : pct=0.5, croissances=0.03, capital=null).
+
+    Si l'analyse financière n'a pas encore tourné
+    (``analysis_results_json`` absent), les 8 auto valent 0 et
+    ``analysis_ready`` est False (l'utilisateur lance l'analyse d'abord,
+    ou saisit les intrants à la main)."""
+    _require_prospection(user)
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+
+    auto = {
+        "prix": 0.0, "rpv_achat": 0.0, "pret_constr": 0.0, "mdf": 0.0,
+        "loyers2": 0.0, "dep2": 0.0, "valeur2": 0.0, "rpv_refi": 0.0,
+    }
+    analysis_ready = False
+    if rec.analysis_results_json:
+        try:
+            results = json.loads(rec.analysis_results_json) or {}
+            auto = _derive_tri_auto_inputs(results)
+            analysis_ready = True
+        except Exception:  # noqa: BLE001
+            analysis_ready = False
+
+    manual = _persisted_manual_inputs(rec)
+    inputs = TriInputs(
+        **auto,
+        capital=manual["capital"] or 0.0,
+        pct=manual["pct"],
+        cr_loyers=manual["cr_loyers"],
+        cr_dep=manual["cr_dep"],
+    )
+    return TriInputsResponse(
+        inputs=inputs,
+        analysis_ready=analysis_ready,
+        auto_fields=[
+            "prix", "rpv_achat", "pret_constr", "mdf",
+            "loyers2", "dep2", "valeur2", "rpv_refi",
+        ],
+        manual_fields=["capital", "pct", "cr_loyers", "cr_dep"],
+    )
+
+
+@router.post(
+    "/{analysis_id}/tri",
+    summary="Calcule le TRI investisseur (12 intrants → dict riche).",
+)
+async def compute_tri_endpoint(
+    analysis_id: int, payload: TriInputs, db: DBSession, user: CurrentUser
+) -> dict:
+    """Calcule le TRI investisseur à partir des 12 intrants fournis
+    (8 auto possiblement édités + 4 manuels), **persiste les 4 intrants
+    manuels** sur la fiche, et renvoie le dict riche complet du moteur.
+
+    Le calcul est purement fonctionnel : il n'utilise que les 12 valeurs
+    du body (les auto peuvent avoir été ajustés côté front)."""
+    _require_prospection(user)
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+
+    from app.services.lead_tri_calc import compute_tri
+
+    result = compute_tri(
+        prix=payload.prix,
+        rpv_achat=payload.rpv_achat,
+        pret_constr=payload.pret_constr,
+        mdf=payload.mdf,
+        capital=payload.capital,
+        pct=payload.pct,
+        loyers2=payload.loyers2,
+        dep2=payload.dep2,
+        valeur2=payload.valeur2,
+        rpv_refi=payload.rpv_refi,
+        cr_loyers=payload.cr_loyers,
+        cr_dep=payload.cr_dep,
+    )
+
+    # Persiste les 4 intrants MANUELS sur la fiche (les 8 auto sont
+    # dérivés à la volée, on ne les stocke pas).
+    rec.tri_capital_injecte = payload.capital
+    rec.tri_pct_investisseur = payload.pct
+    rec.tri_croissance_loyers = payload.cr_loyers
+    rec.tri_croissance_depenses = payload.cr_dep
+    rec.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return result
