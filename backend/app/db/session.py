@@ -975,6 +975,15 @@ async def init_db() -> None:
             # prospection:tasks:create). NULL sur les clés existantes =>
             # rétrocompat : lecture de TOUS les pôles (aucune écriture).
             ("api_keys", "scopes_json", "TEXT"),
+            # TRI investisseur (juin 2026) : 4 intrants MANUELS du
+            # calculateur de rendement (lead_tri_calc) persistes sur la
+            # fiche d'analyse. Les 8 autres intrants sont derives a la
+            # volee depuis l'analyse financiere (non persistes). NULL =>
+            # l'endpoint /tri-inputs renvoie des defauts raisonnables.
+            ("lead_analyses", "tri_capital_injecte", "NUMERIC(14, 2)"),
+            ("lead_analyses", "tri_pct_investisseur", "NUMERIC(6, 4)"),
+            ("lead_analyses", "tri_croissance_loyers", "NUMERIC(6, 4)"),
+            ("lead_analyses", "tri_croissance_depenses", "NUMERIC(6, 4)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
