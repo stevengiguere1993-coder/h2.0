@@ -1,9 +1,12 @@
-"""Activité du compte (auth par clé d'API) + création de tâche par pôle.
+"""Activité du compte (auth par clé d'API) + écriture de tâches par pôle.
 
-  GET  /api/v1/activity/me?date=YYYY-MM-DD
-  GET  /api/v1/activity/me?from=YYYY-MM-DD&to=YYYY-MM-DD
-  GET  /api/v1/activity/me/summary?date=...
-  POST /api/v1/activity/tasks            (écriture : créer une tâche d'un pôle)
+  GET   /api/v1/activity/me?date=YYYY-MM-DD
+  GET   /api/v1/activity/me?from=YYYY-MM-DD&to=YYYY-MM-DD
+  GET   /api/v1/activity/me/summary?date=...
+  GET   /api/v1/activity/members          (membres assignables)
+  POST  /api/v1/activity/tasks            (créer une tâche d'un pôle)
+  PATCH /api/v1/activity/tasks/{type}/{id}        (modifier une tâche)
+  POST  /api/v1/activity/tasks/{type}/{id}/move   (déplacer une tâche)
 
 LECTURE : retourne l'activité de l'utilisateur PROPRIÉTAIRE DE LA CLÉ sur
 une période (par défaut : aujourd'hui, fuseau America/Toronto). Scope
@@ -12,8 +15,12 @@ n'est renvoyée QUE pour les pôles dont la clé porte ``<pole>:activity:read``
 (rétrocompat : clé sans scopes = tous les pôles).
 
 ÉCRITURE : ``POST /activity/tasks`` crée une tâche dans un pôle donné, à
-condition que la clé porte ``<pole>:tasks:create``. La tâche est créée
-par / assignée à l'utilisateur de la clé. Audité (mention « via clé API »).
+condition que la clé porte ``<pole>:tasks:create``. La tâche peut être
+assignée à N'IMPORTE QUEL membre de l'équipe (paramètre ``assignee`` ;
+défaut = propriétaire de la clé). ``PATCH /activity/tasks/{type}/{id}``
+modifie N'IMPORTE QUELLE tâche (``<pole>:tasks:update``) ; ``POST
+.../move`` la déplace d'une colonne kanban à l'autre (``<pole>:tasks:move``).
+Tout est audité (mention « via clé API »).
 
 Agrégé en lecture :
   - tasks  : tâches complétées / créées / modifiées (pôles autorisés).
@@ -23,8 +30,8 @@ Agrégé en lecture :
 
 from __future__ import annotations
 
-from datetime import date as date_cls, datetime, time, timedelta
-from typing import List, Optional
+from datetime import date as date_cls, datetime, time, timedelta, timezone
+from typing import Any, List, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
@@ -176,6 +183,17 @@ class TaskCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=500)
     description: Optional[str] = None
     due_date: Optional[date_cls] = None
+    # Assigné OPTIONNEL : courriel, nom affiché ou id d'un membre QUELCONQUE
+    # de l'équipe (pas seulement le propriétaire de la clé). Défaut = le
+    # propriétaire de la clé (rétrocompat). Pour le pôle construction, le
+    # membre est résolu sur une fiche Employe ; sinon sur un User.
+    assignee: Optional[str] = Field(
+        default=None,
+        description=(
+            "Membre à qui assigner la tâche : courriel, nom affiché ou id. "
+            "Défaut = propriétaire de la clé."
+        ),
+    )
 
 
 class TaskCreated(BaseModel):
@@ -184,6 +202,63 @@ class TaskCreated(BaseModel):
     entity_id: int
     title: str
     status: str
+
+
+class TaskUpdate(BaseModel):
+    """Modification PARTIELLE d'une tâche (tous champs optionnels). Seuls
+    les champs FOURNIS (non absents) sont appliqués."""
+
+    title: Optional[str] = Field(default=None, max_length=500)
+    description: Optional[str] = None
+    status: Optional[str] = Field(
+        default=None,
+        description="Nouveau statut / colonne kanban (vocabulaire du pôle).",
+    )
+    priority: Optional[str] = None
+    due_date: Optional[date_cls] = None
+    # Assigné : membre quelconque (courriel / nom / id). Chaîne vide ou
+    # « null » explicite → on désassigne.
+    assignee: Optional[str] = Field(
+        default=None,
+        description=(
+            "Nouvel assigné : courriel, nom affiché ou id d'un membre "
+            "quelconque. Chaîne vide pour désassigner."
+        ),
+    )
+
+    model_config = {"extra": "ignore"}
+
+
+class TaskMove(BaseModel):
+    """Déplacement d'une tâche : nouveau statut/colonne (+ position)."""
+
+    status: str = Field(
+        ..., description="Statut / colonne cible (vocabulaire du pôle)."
+    )
+    position: Optional[int] = Field(
+        default=None,
+        description="Position dans la colonne (si le modèle la supporte).",
+    )
+
+
+class TaskWriteResult(BaseModel):
+    """Résultat d'une modification / déplacement de tâche."""
+
+    pole: str
+    entity_type: str
+    entity_id: int
+    title: Optional[str] = None
+    status: str
+    entity: Optional[dict] = None
+
+
+class MemberOut(BaseModel):
+    """Membre assignable (pour aider l'IA à choisir un assigné)."""
+
+    kind: str                 # "user" ou "employe"
+    id: int
+    name: str
+    email: Optional[str] = None
 
 
 # ── Fenêtre temporelle (America/Toronto) ───────────────────────────
@@ -605,6 +680,146 @@ def _build_summary(
     return f"{prefix} : " + ", ".join(parts) + "."
 
 
+# ── Résolution d'un membre assignable (User ou Employe) ────────────
+#
+# L'assigné fourni par l'appelant est une chaîne souple : un id numérique,
+# un courriel exact, ou un nom affiché. On résout vers l'id de l'entité
+# d'assignation propre au pôle (User pour devlog/entreprise/prospection,
+# Employe pour construction). Une correspondance ambiguë (plusieurs membres
+# au même nom) lève ValueError pour éviter d'assigner au mauvais membre.
+
+
+def _norm(s: Optional[str]) -> str:
+    return (s or "").strip()
+
+
+async def _resolve_user(db, raw: str) -> User:
+    """Résout un membre (User actif) à partir d'un id / courriel / nom.
+    Lève ValueError si introuvable ou ambigu."""
+    token = _norm(raw)
+    if not token:
+        raise ValueError("Assigné vide.")
+
+    # 1) id numérique.
+    if token.isdigit():
+        u = await db.get(User, int(token))
+        if u is None or not u.is_active:
+            raise ValueError(f"Utilisateur #{token} introuvable ou inactif.")
+        return u
+
+    # 2) courriel exact (insensible à la casse).
+    if "@" in token:
+        u = (
+            await db.execute(
+                select(User).where(
+                    User.email.ilike(token), User.is_active.is_(True)
+                )
+            )
+        ).scalars().first()
+        if u is None:
+            raise ValueError(f"Aucun membre actif avec le courriel « {token} ».")
+        return u
+
+    # 3) nom affiché (prénom + nom). On charge les users actifs et compare
+    #    sur display_name / prénom / nom (insensible à la casse).
+    users = (
+        await db.execute(select(User).where(User.is_active.is_(True)))
+    ).scalars().all()
+    low = token.lower()
+    matches = [
+        u for u in users
+        if low == _norm(u.display_name).lower()
+        or low == _norm(u.email).split("@", 1)[0].lower()
+    ]
+    if not matches:
+        # Repli : correspondance partielle (contient).
+        matches = [u for u in users if low in _norm(u.display_name).lower()]
+    if not matches:
+        raise ValueError(f"Aucun membre ne correspond à « {token} ».")
+    if len(matches) > 1:
+        raise ValueError(
+            f"« {token} » correspond à plusieurs membres ; précise un "
+            "courriel ou un id."
+        )
+    return matches[0]
+
+
+async def _resolve_employe(db, raw: str) -> Employe:
+    """Résout un membre (Employe actif) à partir d'un id / courriel / nom.
+    Lève ValueError si introuvable ou ambigu."""
+    token = _norm(raw)
+    if not token:
+        raise ValueError("Assigné vide.")
+
+    if token.isdigit():
+        e = await db.get(Employe, int(token))
+        if e is None or not e.active:
+            raise ValueError(f"Employé #{token} introuvable ou inactif.")
+        return e
+
+    if "@" in token:
+        e = (
+            await db.execute(
+                select(Employe).where(
+                    Employe.email.ilike(token), Employe.active.is_(True)
+                )
+            )
+        ).scalars().first()
+        if e is None:
+            raise ValueError(f"Aucun employé actif avec le courriel « {token} ».")
+        return e
+
+    emps = (
+        await db.execute(
+            select(Employe).where(Employe.active.is_(True))
+        )
+    ).scalars().all()
+    low = token.lower()
+    matches = [e for e in emps if low == _norm(e.full_name).lower()]
+    if not matches:
+        matches = [e for e in emps if low in _norm(e.full_name).lower()]
+    if not matches:
+        raise ValueError(f"Aucun employé ne correspond à « {token} ».")
+    if len(matches) > 1:
+        raise ValueError(
+            f"« {token} » correspond à plusieurs employés ; précise un "
+            "courriel ou un id."
+        )
+    return matches[0]
+
+
+async def list_members(db) -> List[MemberOut]:
+    """Liste des membres assignables : Users actifs + Employés actifs. Sert
+    à l'IA pour choisir un assigné (REST + MCP). Lecture seule."""
+    out: List[MemberOut] = []
+    users = (
+        await db.execute(select(User).where(User.is_active.is_(True)))
+    ).scalars().all()
+    for u in users:
+        out.append(
+            MemberOut(
+                kind="user",
+                id=u.id,
+                name=u.display_name,
+                email=u.email,
+            )
+        )
+    emps = (
+        await db.execute(select(Employe).where(Employe.active.is_(True)))
+    ).scalars().all()
+    for e in emps:
+        out.append(
+            MemberOut(
+                kind="employe",
+                id=e.id,
+                name=e.full_name,
+                email=e.email,
+            )
+        )
+    out.sort(key=lambda m: (m.kind, m.name.lower()))
+    return out
+
+
 # ── Création de tâche par pôle (réutilisé par l'endpoint + le MCP) ──
 
 
@@ -617,29 +832,38 @@ async def create_task_for_pole(
     title: str,
     description: Optional[str] = None,
     due_date: Optional[date_cls] = None,
+    assignee: Optional[str] = None,
     via: str = "api_key",
 ) -> TaskCreated:
     """Crée une tâche dans le pôle ``pole`` (slug du catalogue), rattachée
-    à ``parent_id``, assignée à ``user``. Audité.
+    à ``parent_id``. Par défaut assignée à ``user`` (propriétaire de la
+    clé) ; si ``assignee`` est fourni, la tâche est assignée à CE membre
+    quelconque (résolu par courriel / nom / id). Audité.
 
     Lève ValueError (→ 4xx côté appelant) si le pôle ne supporte pas la
-    création de tâche ou si l'entité parente est introuvable. L'appelant
-    DOIT déjà avoir vérifié la capacité ``<pole>:tasks:create``."""
+    création de tâche, si l'entité parente est introuvable, ou si l'assigné
+    est introuvable / ambigu. L'appelant DOIT déjà avoir vérifié la
+    capacité ``<pole>:tasks:create``."""
     title = (title or "").strip()
     if not title:
         raise ValueError("Le titre de la tâche est requis.")
 
     pole = (pole or "").strip().lower()
+    assignee_raw = _norm(assignee)
 
     if pole == "devlog":
         parent = await db.get(DevlogProject, parent_id)
         if parent is None:
             raise ValueError(f"Projet devlog #{parent_id} introuvable.")
+        if assignee_raw:
+            assignee_user_id = (await _resolve_user(db, assignee_raw)).id
+        else:
+            assignee_user_id = user.id
         task = DevlogProjectTask(
             project_id=parent_id,
             title=title,
             description=description or None,
-            assignee_user_id=user.id,
+            assignee_user_id=assignee_user_id,
             status="a_faire",
             priority="moyenne",
             due_date=due_date,
@@ -652,11 +876,15 @@ async def create_task_for_pole(
         parent = await db.get(Entreprise, parent_id)
         if parent is None:
             raise ValueError(f"Entreprise #{parent_id} introuvable.")
+        if assignee_raw:
+            assignee_user_id = (await _resolve_user(db, assignee_raw)).id
+        else:
+            assignee_user_id = user.id
         task = EntrepriseTache(
             entreprise_id=parent_id,
             title=title,
             description=description or None,
-            assignee_user_id=user.id,
+            assignee_user_id=assignee_user_id,
             status="a_faire",
             due_date=due_date,
         )
@@ -668,11 +896,15 @@ async def create_task_for_pole(
         parent = await db.get(ProspectionDeal, parent_id)
         if parent is None:
             raise ValueError(f"Deal de prospection #{parent_id} introuvable.")
+        if assignee_raw:
+            assignee_user_id = (await _resolve_user(db, assignee_raw)).id
+        else:
+            assignee_user_id = user.id
         task = ProspectionDealTask(
             deal_id=parent_id,
             name=title,
             notes=description or None,
-            assignee_user_id=user.id,
+            assignee_user_id=assignee_user_id,
             status="a_faire",
             due_date=due_date,
         )
@@ -684,14 +916,19 @@ async def create_task_for_pole(
         parent = await db.get(Project, parent_id)
         if parent is None:
             raise ValueError(f"Projet (chantier) #{parent_id} introuvable.")
-        # Le pôle Construction assigne via employe_id : on relie
-        # l'utilisateur à sa fiche Employe (par courriel) si elle existe.
-        emp_ids = await _employe_ids_for_user(db, user)
+        # Le pôle Construction assigne via employe_id : on résout sur une
+        # fiche Employe. Si un assigné est fourni, on l'utilise ; sinon on
+        # relie l'utilisateur à sa propre fiche Employe (par courriel).
+        if assignee_raw:
+            assignee_emp_id = (await _resolve_employe(db, assignee_raw)).id
+        else:
+            emp_ids = await _employe_ids_for_user(db, user)
+            assignee_emp_id = emp_ids[0] if emp_ids else None
         task = ProjectTask(
             project_id=parent_id,
             title=title,
             description=description or None,
-            assignee_id=emp_ids[0] if emp_ids else None,
+            assignee_id=assignee_emp_id,
             due_date=due_date,
             done=False,
         )
@@ -714,6 +951,7 @@ async def create_task_for_pole(
             "pole": pole,
             "parent_id": parent_id,
             "title": title,
+            "assignee": assignee_raw or None,
             "via": via,
         },
     )
@@ -724,6 +962,317 @@ async def create_task_for_pole(
         entity_id=entity_id,
         title=title,
         status=st,
+    )
+
+
+# ── Registre d'ÉCRITURE par type de tâche (update / move) ──────────
+#
+# Pour chaque type de tâche on déclare comment écrire ses champs, sans
+# réinventer la cascade métier : modèle ORM, slug de pôle (gouverne le
+# scope), attribut titre, mode de statut (chaîne libre vs booléen done),
+# statuts valides (kanban) et tokens de statut « terminé ». On réutilise
+# exactement les vocabulaires des modèles (cf. TASK_STATUSES de chacun).
+
+
+#: Tokens (insensibles à la casse) interprétés comme « terminé » pour les
+#: modèles à statut BOOLÉEN (done). Tout le reste = non terminé.
+_DONE_TOKENS = {"done", "termine", "terminé", "complete", "completed", "fait", "true", "1"}
+_NOTDONE_TOKENS = {"open", "todo", "a_faire", "ouvert", "non_fait", "false", "0", "reopen", "rouvrir"}
+
+
+class _TaskWriteSpec:
+    """Description d'écriture d'un type de tâche.
+
+    - model        : classe ORM.
+    - pole         : slug du pôle (scope).
+    - entity_type  : clé de sérialisation (entity_serializers).
+    - title_attr   : nom du champ titre.
+    - status_mode  : "string" (champ status chaîne) ou "bool" (done/done_at).
+    - statuses     : tuple des statuts valides (mode string), sinon ().
+    - assignee     : "user" | "employe" | None (pas d'assignation supportée).
+    - assignee_attr: nom de la colonne d'assignation (si assignee user/employe).
+    - has_priority : True si un champ priority existe.
+    - has_position : True si un champ position existe.
+    - completed_at_attr : colonne timestamp de complétion (mode bool/string), ou None.
+    """
+
+    __slots__ = (
+        "model", "pole", "entity_type", "title_attr", "status_mode",
+        "statuses", "assignee", "assignee_attr", "has_priority",
+        "has_position", "completed_at_attr",
+    )
+
+    def __init__(
+        self, *, model, pole, entity_type, title_attr, status_mode,
+        statuses, assignee, assignee_attr, has_priority, has_position,
+        completed_at_attr,
+    ):
+        self.model = model
+        self.pole = pole
+        self.entity_type = entity_type
+        self.title_attr = title_attr
+        self.status_mode = status_mode
+        self.statuses = statuses
+        self.assignee = assignee
+        self.assignee_attr = assignee_attr
+        self.has_priority = has_priority
+        self.has_position = has_position
+        self.completed_at_attr = completed_at_attr
+
+
+_TASK_WRITE_ENTITIES: dict[str, _TaskWriteSpec] = {
+    "devlog_project_task": _TaskWriteSpec(
+        model=DevlogProjectTask, pole="devlog",
+        entity_type="devlog_project_task", title_attr="title",
+        status_mode="string",
+        statuses=("a_faire", "en_cours", "termine"),
+        assignee="user", assignee_attr="assignee_user_id",
+        has_priority=True, has_position=False, completed_at_attr=None,
+    ),
+    "entreprise_tache": _TaskWriteSpec(
+        model=EntrepriseTache, pole="entreprise",
+        entity_type="entreprise_tache", title_attr="title",
+        status_mode="string",
+        statuses=("backlog", "todo", "a_faire", "in_progress", "waiting", "done"),
+        assignee="user", assignee_attr="assignee_user_id",
+        has_priority=True, has_position=True, completed_at_attr="completed_at",
+    ),
+    "prospection_deal_task": _TaskWriteSpec(
+        model=ProspectionDealTask, pole="prospection",
+        entity_type="prospection_deal_task", title_attr="name",
+        status_mode="string",
+        statuses=("todo", "a_faire", "in_progress", "waiting", "done"),
+        assignee="user", assignee_attr="assignee_user_id",
+        has_priority=True, has_position=True, completed_at_attr=None,
+    ),
+    "project_task": _TaskWriteSpec(
+        model=ProjectTask, pole="construction",
+        entity_type="project_task", title_attr="title",
+        status_mode="bool",
+        statuses=(),
+        assignee="employe", assignee_attr="assignee_id",
+        has_priority=False, has_position=True, completed_at_attr="done_at",
+    ),
+    "sales_task": _TaskWriteSpec(
+        model=SalesTask, pole="prospection",
+        entity_type="sales_task", title_attr="title",
+        status_mode="bool",
+        statuses=(),
+        assignee=None, assignee_attr=None,
+        has_priority=False, has_position=False, completed_at_attr="done_at",
+    ),
+}
+
+
+def _apply_status(spec: _TaskWriteSpec, obj: Any, new_status: str) -> str:
+    """Applique un nouveau statut/colonne à ``obj`` selon son mode. Retourne
+    le statut effectif (lisible). Lève ValueError si le statut est invalide
+    pour un modèle à statut chaîne."""
+    token = _norm(new_status)
+    if not token:
+        raise ValueError("Le statut cible est requis.")
+
+    if spec.status_mode == "string":
+        low = token.lower()
+        if low not in spec.statuses:
+            raise ValueError(
+                f"Statut « {new_status} » invalide pour {spec.entity_type}. "
+                f"Valeurs acceptées : {', '.join(spec.statuses)}."
+            )
+        obj.status = low
+        # Timestamp de complétion si la colonne existe.
+        if spec.completed_at_attr:
+            if low == "done":
+                if getattr(obj, spec.completed_at_attr, None) is None:
+                    setattr(obj, spec.completed_at_attr, datetime.now(timezone.utc))
+            else:
+                setattr(obj, spec.completed_at_attr, None)
+        return low
+
+    # Mode booléen (done/done_at).
+    low = token.lower()
+    if low in _DONE_TOKENS:
+        done = True
+    elif low in _NOTDONE_TOKENS:
+        done = False
+    else:
+        raise ValueError(
+            f"Statut « {new_status} » invalide pour {spec.entity_type}. "
+            "Valeurs acceptées : done / termine (ou open / a_faire)."
+        )
+    obj.done = done
+    if spec.completed_at_attr:
+        if done:
+            if getattr(obj, spec.completed_at_attr, None) is None:
+                setattr(obj, spec.completed_at_attr, datetime.now(timezone.utc))
+        else:
+            setattr(obj, spec.completed_at_attr, None)
+    return "done" if done else "open"
+
+
+def _effective_status(spec: _TaskWriteSpec, obj: Any) -> str:
+    if spec.status_mode == "string":
+        return _norm(getattr(obj, "status", None)) or "?"
+    return "done" if getattr(obj, "done", False) else "open"
+
+
+async def _resolve_assignee_id(db, spec: _TaskWriteSpec, raw: str) -> Optional[int]:
+    """Résout l'id d'assignation selon le mode du pôle, ou None pour
+    désassigner (chaîne vide / « null »)."""
+    token = _norm(raw)
+    if token == "" or token.lower() in ("null", "none", "aucun", "unassign", "désassigner", "desassigner"):
+        return None
+    if spec.assignee == "user":
+        return (await _resolve_user(db, token)).id
+    if spec.assignee == "employe":
+        return (await _resolve_employe(db, token)).id
+    raise ValueError(
+        f"L'assignation n'est pas supportée pour {spec.entity_type}."
+    )
+
+
+async def update_task_for_type(
+    db,
+    user: User,
+    *,
+    entity_type: str,
+    entity_id: int,
+    fields: dict[str, Any],
+    via: str = "api_key",
+) -> TaskWriteResult:
+    """Modifie une tâche (N'IMPORTE laquelle, pas seulement celles du
+    propriétaire). ``fields`` ne contient QUE les champs fournis par
+    l'appelant (titre, description, status, priority, due_date, assignee).
+    Audité.
+
+    Lève ValueError (type/champ invalide, assigné introuvable) ou
+    LookupError (tâche introuvable). L'appelant DOIT avoir vérifié
+    ``<pole>:tasks:update``."""
+    spec = _TASK_WRITE_ENTITIES.get(entity_type)
+    if spec is None:
+        raise ValueError(f"Type de tâche inconnu : « {entity_type} ».")
+
+    obj = await db.get(spec.model, entity_id)
+    if obj is None:
+        raise LookupError(f"{entity_type} #{entity_id} introuvable.")
+
+    changed: list[str] = []
+
+    if "title" in fields and fields["title"] is not None:
+        new_title = _norm(fields["title"])
+        if not new_title:
+            raise ValueError("Le titre ne peut pas être vide.")
+        setattr(obj, spec.title_attr, new_title)
+        changed.append("title")
+
+    if "description" in fields:
+        val = fields["description"]
+        # Les tâches prospection portent la description dans « notes ».
+        desc_attr = "notes" if hasattr(obj, "notes") and not hasattr(obj, "description") else "description"
+        if hasattr(obj, desc_attr):
+            setattr(obj, desc_attr, (_norm(val) or None) if val is not None else None)
+            changed.append("description")
+
+    if "status" in fields and fields["status"] is not None:
+        _apply_status(spec, obj, str(fields["status"]))
+        changed.append("status")
+
+    if "priority" in fields and fields["priority"] is not None:
+        if spec.has_priority and hasattr(obj, "priority"):
+            obj.priority = _norm(fields["priority"]) or obj.priority
+            changed.append("priority")
+        # Sinon (modèle sans priorité) : on ignore silencieusement.
+
+    if "due_date" in fields:
+        val = fields["due_date"]
+        if hasattr(obj, "due_date"):
+            obj.due_date = val  # date_cls ou None
+            changed.append("due_date")
+
+    if "assignee" in fields and fields["assignee"] is not None:
+        if spec.assignee is None or not spec.assignee_attr:
+            raise ValueError(
+                f"L'assignation n'est pas supportée pour {entity_type}."
+            )
+        new_id = await _resolve_assignee_id(db, spec, str(fields["assignee"]))
+        setattr(obj, spec.assignee_attr, new_id)
+        changed.append("assignee")
+
+    await db.flush()
+
+    await log_action(
+        db,
+        user=user,
+        action="task.updated",
+        entity_type=spec.entity_type,
+        entity_id=entity_id,
+        details={"pole": spec.pole, "changed": changed, "via": via},
+    )
+
+    return TaskWriteResult(
+        pole=spec.pole,
+        entity_type=spec.entity_type,
+        entity_id=entity_id,
+        title=_norm(getattr(obj, spec.title_attr, None)) or None,
+        status=_effective_status(spec, obj),
+        entity=serialize_entity(spec.entity_type, obj, level="full"),
+    )
+
+
+async def move_task_for_type(
+    db,
+    user: User,
+    *,
+    entity_type: str,
+    entity_id: int,
+    new_status: str,
+    position: Optional[int] = None,
+    via: str = "api_key",
+) -> TaskWriteResult:
+    """Déplace une tâche : change son statut / colonne kanban (+ position
+    si le modèle la supporte). Audité.
+
+    Lève ValueError (type/statut invalide) ou LookupError (introuvable).
+    L'appelant DOIT avoir vérifié ``<pole>:tasks:move``."""
+    spec = _TASK_WRITE_ENTITIES.get(entity_type)
+    if spec is None:
+        raise ValueError(f"Type de tâche inconnu : « {entity_type} ».")
+
+    obj = await db.get(spec.model, entity_id)
+    if obj is None:
+        raise LookupError(f"{entity_type} #{entity_id} introuvable.")
+
+    effective = _apply_status(spec, obj, new_status)
+
+    if position is not None and spec.has_position and hasattr(obj, "position"):
+        try:
+            obj.position = int(position)
+        except (TypeError, ValueError):
+            raise ValueError("`position` doit être un entier.")
+
+    await db.flush()
+
+    await log_action(
+        db,
+        user=user,
+        action="task.moved",
+        entity_type=spec.entity_type,
+        entity_id=entity_id,
+        details={
+            "pole": spec.pole,
+            "status": effective,
+            "position": position,
+            "via": via,
+        },
+    )
+
+    return TaskWriteResult(
+        pole=spec.pole,
+        entity_type=spec.entity_type,
+        entity_id=entity_id,
+        title=_norm(getattr(obj, spec.title_attr, None)) or None,
+        status=effective,
+        entity=serialize_entity(spec.entity_type, obj, level="full"),
     )
 
 
@@ -792,6 +1341,28 @@ async def my_activity_summary(
     )
 
 
+@router.get(
+    "/members",
+    response_model=List[MemberOut],
+    summary="Membres assignables (clé d'API)",
+)
+async def get_members(
+    ctx: ApiKeyContext,
+    db: DBSession,
+) -> List[MemberOut]:
+    """Liste les membres assignables (Users + Employés actifs) pour aider à
+    choisir un assigné lors d'une création / modification de tâche.
+
+    Accessible à toute clé qui peut lire au moins un pôle (rétrocompat : clé
+    sans scopes lit tous les pôles)."""
+    if not readable_poles(ctx.scopes):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cette clé d'API ne peut lire aucun pôle.",
+        )
+    return await list_members(db)
+
+
 @router.post(
     "/tasks",
     response_model=TaskCreated,
@@ -804,8 +1375,9 @@ async def create_task(
     db: DBSession,
 ) -> TaskCreated:
     """Crée une tâche dans le pôle ``payload.pole``. Requiert la capacité
-    ``<pole>:tasks:create`` sur la clé d'API (sinon 403). La tâche est
-    assignée au propriétaire de la clé et auditée.
+    ``<pole>:tasks:create`` sur la clé d'API (sinon 403). La tâche peut être
+    assignée à n'importe quel membre (``payload.assignee``) ; par défaut au
+    propriétaire de la clé. Auditée.
 
     La capacité requise dépend du pôle (issu du corps de la requête), donc
     on ne peut pas l'exprimer comme dépendance statique : on vérifie
@@ -836,12 +1408,117 @@ async def create_task(
             title=payload.title,
             description=payload.description,
             due_date=payload.due_date,
+            assignee=payload.assignee,
             via="api_key",
         )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
+        )
+
+
+def _require_task_scope(ctx, entity_type: str, action: str) -> _TaskWriteSpec:
+    """Récupère le spec d'écriture d'un type de tâche et vérifie la capacité
+    ``<pole>:tasks:<action>``. 404 si le type est inconnu, 403 si la
+    capacité manque. Retourne le spec en cas de succès."""
+    spec = _TASK_WRITE_ENTITIES.get(entity_type)
+    if spec is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Type de tâche inconnu : « {entity_type} ».",
+        )
+    required = f"{spec.pole}:tasks:{action}"
+    if not ctx.has_scope(required):
+        label = "Modifier une tâche" if action == "update" else "Déplacer une tâche"
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Capacité « {label} » non activée pour le pôle "
+                f"« {POLE_LABELS.get(spec.pole, spec.pole)} » sur cette clé d'API."
+            ),
+        )
+    return spec
+
+
+@router.patch(
+    "/tasks/{entity_type}/{entity_id}",
+    response_model=TaskWriteResult,
+    summary="Modifier une tâche (clé d'API, capacité requise)",
+)
+async def update_task(
+    payload: TaskUpdate,
+    ctx: ApiKeyContext,
+    db: DBSession,
+    entity_type: str = Path(
+        ...,
+        description=(
+            "Type de tâche : devlog_project_task, entreprise_tache, "
+            "prospection_deal_task, project_task, sales_task."
+        ),
+    ),
+    entity_id: int = Path(..., description="Id de la tâche."),
+) -> TaskWriteResult:
+    """Modifie N'IMPORTE QUELLE tâche du type donné (pas seulement celles du
+    propriétaire). Requiert ``<pole>:tasks:update``. Seuls les champs
+    fournis sont appliqués."""
+    _require_task_scope(ctx, entity_type, "update")
+    # On ne transmet QUE les champs explicitement fournis (model_fields_set)
+    # pour distinguer « absent » de « mis à None » (ex. due_date à effacer).
+    fields = {k: getattr(payload, k) for k in payload.model_fields_set}
+    if not fields:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Aucun champ à modifier n'a été fourni.",
+        )
+    try:
+        return await update_task_for_type(
+            db,
+            ctx.user,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            fields=fields,
+            via="api_key",
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
+
+
+@router.post(
+    "/tasks/{entity_type}/{entity_id}/move",
+    response_model=TaskWriteResult,
+    summary="Déplacer une tâche (clé d'API, capacité requise)",
+)
+async def move_task(
+    payload: TaskMove,
+    ctx: ApiKeyContext,
+    db: DBSession,
+    entity_type: str = Path(..., description="Type de tâche."),
+    entity_id: int = Path(..., description="Id de la tâche."),
+) -> TaskWriteResult:
+    """Déplace N'IMPORTE QUELLE tâche du type donné dans une nouvelle
+    colonne / étape kanban (+ position si applicable). Requiert
+    ``<pole>:tasks:move``."""
+    _require_task_scope(ctx, entity_type, "move")
+    try:
+        return await move_task_for_type(
+            db,
+            ctx.user,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            new_status=payload.status,
+            position=payload.position,
+            via="api_key",
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         )
 
 
