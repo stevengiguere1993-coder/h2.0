@@ -751,6 +751,74 @@ async def _load_frais_mdf_overrides(db) -> tuple[dict, dict, Optional[float]]:
     return frais_fixes, pct_courtiers, frais_dossier_preteur_pct
 
 
+# Types de montant valides pour un poste de frais personnalisé.
+_FRAIS_CUSTOM_TYPES: set[str] = {
+    "fixe",
+    "pct_prix_achat",
+    "pct_financement",
+}
+
+
+def _sanitize_frais_custom_defs(value_json) -> list[dict]:
+    """Normalise/valide la liste des frais de démarrage personnalisés
+    lue depuis le ``value_json`` de la clé ``frais_mdf_custom``.
+
+    Retourne une liste d'items propres ``{id, label_fr, type_montant,
+    valeur, financable_par_defaut}``. Les items invalides (pas un dict,
+    type_montant inconnu, valeur non numérique) sont ignorés
+    silencieusement. ``None`` / liste vide → ``[]`` (aucun poste → calcul
+    inchangé)."""
+    if not value_json or not isinstance(value_json, list):
+        return []
+    out: list[dict] = []
+    for item in value_json:
+        if not isinstance(item, dict):
+            continue
+        type_montant = item.get("type_montant", "fixe")
+        if type_montant not in _FRAIS_CUSTOM_TYPES:
+            continue
+        try:
+            valeur = float(item.get("valeur", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        item_id = str(item.get("id", "") or "").strip()
+        if not item_id:
+            continue
+        out.append(
+            {
+                "id": item_id,
+                "label_fr": str(item.get("label_fr", "") or ""),
+                "type_montant": type_montant,
+                "valeur": valeur,
+                "financable_par_defaut": bool(
+                    item.get("financable_par_defaut", False)
+                ),
+            }
+        )
+    return out
+
+
+async def _load_frais_custom_defs(db) -> list[dict]:
+    """Charge la LISTE des frais de démarrage personnalisés (clé
+    ``frais_mdf_custom``, groupe ``mdf_frais``, ``value_json``).
+
+    Retourne une liste d'items ``{id, label_fr, type_montant, valeur,
+    financable_par_defaut}`` prête à passer à
+    ``FinanceInputs.frais_custom_defs``. Liste vide si la clé est
+    absente / vide → le moteur n'ajoute aucun poste personnalisé
+    (résultat identique à avant)."""
+    try:
+        rows = (
+            await db.execute(select(ProspectionAnalysisDefault))
+        ).scalars().all()
+        for row in rows:
+            if row.key == "frais_mdf_custom":
+                return _sanitize_frais_custom_defs(row.value_json)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to load frais_mdf_custom from DB: %s", exc)
+    return []
+
+
 @router.post(
     "/extract",
     response_model=ExtractResult,
@@ -1620,6 +1688,11 @@ async def run_financial_analysis(
         await _load_frais_mdf_overrides(db)
     )
 
+    # Juin 2026 : frais de démarrage PERSONNALISÉS (dynamiques, groupe
+    # ``mdf_frais``, clé ``frais_mdf_custom``). Liste vide → aucun poste
+    # personnalisé (calcul inchangé).
+    frais_custom_defs_global = await _load_frais_custom_defs(db)
+
     # Juin 2026 : overrides du barème des dépenses normalisées SCHL
     # (groupe ``depenses_normalisees``), seuil de bascule petit/grand
     # immeuble, et taux d'inoccupation (fix : était seedé mais jamais
@@ -1678,6 +1751,10 @@ async def run_financial_analysis(
         ),
         frais_fixes_overrides=frais_fixes_overrides,
         pct_courtiers_overrides=pct_courtiers_overrides,
+        # Juin 2026 : frais de démarrage personnalisés (groupe
+        # ``mdf_frais``, clé ``frais_mdf_custom``). Liste vide →
+        # aucun poste personnalisé (calcul inchangé).
+        frais_custom_defs=frais_custom_defs_global,
         # Juin 2026 : barème dépenses normalisées SCHL (groupe
         # ``depenses_normalisees``). Dict vide → fallback ``BAREME``.
         bareme_overrides=bareme_overrides_global,
@@ -2857,7 +2934,6 @@ async def check_ocr_health(user: CurrentUser) -> dict:
     installé tesseract/poppler."""
     _require_prospection(user)
     return _ocr_health_payload()
-
 
 
 
