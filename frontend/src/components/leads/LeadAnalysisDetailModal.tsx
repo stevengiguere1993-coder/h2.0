@@ -2033,23 +2033,45 @@ function FieldYesNo({
       <label className="text-[10px] uppercase tracking-wider text-white/50">
         {label}
       </label>
-      <div className="mt-1 inline-flex rounded-md border border-brand-700 bg-brand-950 p-0.5">
+      <div
+        role="radiogroup"
+        aria-label={label}
+        className="mt-1 inline-flex items-center gap-0.5 rounded-full border border-brand-700 bg-brand-950 p-0.5"
+      >
         <button
           type="button"
+          role="radio"
+          aria-checked={value}
           onClick={() => onSave(true)}
-          className={`rounded px-3 py-1 text-[11px] font-semibold ${
-            value ? "bg-emerald-500 text-brand-950" : "text-white/60"
+          className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors ${
+            value
+              ? "bg-emerald-500/90 text-brand-950 shadow-sm"
+              : "text-white/55 hover:text-white/80"
           }`}
         >
+          <span
+            className={`h-1.5 w-1.5 rounded-full transition-colors ${
+              value ? "bg-brand-950" : "bg-white/30"
+            }`}
+          />
           Oui
         </button>
         <button
           type="button"
+          role="radio"
+          aria-checked={!value}
           onClick={() => onSave(false)}
-          className={`rounded px-3 py-1 text-[11px] font-semibold ${
-            !value ? "bg-rose-500 text-white" : "text-white/60"
+          className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors ${
+            !value
+              ? "bg-white/10 text-white"
+              : "text-white/55 hover:text-white/80"
           }`}
         >
+          <span
+            className={`h-1.5 w-1.5 rounded-full transition-colors ${
+              !value ? "bg-white/70" : "bg-white/30"
+            }`}
+          />
           Non
         </button>
       </div>
