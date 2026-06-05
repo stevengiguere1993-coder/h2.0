@@ -109,8 +109,10 @@ function Toggle({
       disabled={disabled || busy}
       onClick={onClick}
       className={
-        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors " +
-        (on ? "bg-accent-500/80" : "bg-white/15") +
+        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors " +
+        (on
+          ? "border-accent-500 bg-accent-500"
+          : "border-slate-400/60 bg-slate-300") +
         (disabled ? " cursor-not-allowed opacity-40" : " hover:opacity-90")
       }
     >
