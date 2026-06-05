@@ -46,11 +46,13 @@ from fastapi.responses import JSONResponse
 
 from app.api.api_key_deps import API_KEY_PREFIX, hash_api_key
 from app.api.v1.endpoints.activity import (
+    _DETAIL_ENTITIES,
     _build_summary,
     _collect_audit,
     _collect_tasks,
     _resolve_window,
     create_task_for_pole,
+    load_entity_full,
 )
 from app.db.session import AsyncSessionLocal
 from app.models.api_key import ApiKey
@@ -63,6 +65,20 @@ from app.services.api_capabilities import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _ScopeCtx:
+    """Adaptateur minimal exposant ``has_scope`` à partir d'une liste de
+    scopes brute, pour réutiliser ``load_entity_full`` (qui attend un objet
+    de contexte) côté MCP, où l'on ne manipule que les scopes."""
+
+    __slots__ = ("scopes",)
+
+    def __init__(self, scopes: Optional[list[str]]):
+        self.scopes = scopes
+
+    def has_scope(self, scope: str) -> bool:
+        return key_has_scope(self.scopes, scope)
 
 
 # Version du protocole MCP annoncée au handshake. claude.ai (connecteurs
@@ -200,6 +216,152 @@ def _create_task_tool(creatable_poles: list[str]) -> dict[str, Any]:
     }
 
 
+# ── Outils de lecture détail (JSON full d'une entité par id) ───────
+#
+# Chaque outil prend un id, vérifie le scope du pôle (via load_entity_full)
+# et renvoie le JSON « full » de l'entité. Présents seulement si le pôle
+# correspondant est lisible par la clé.
+
+_GET_SOUMISSION_TOOL = "kratos_get_soumission"
+_GET_TASK_TOOL = "kratos_get_task"
+_GET_DEAL_TOOL = "kratos_get_deal"
+_GET_ENTREPRISE_TOOL = "kratos_get_entreprise"
+
+#: Pôle gouvernant le scope de chaque outil get (pour décider de l'afficher).
+_GET_TOOL_POLE: dict[str, str] = {
+    _GET_SOUMISSION_TOOL: "devlog",
+    _GET_TASK_TOOL: "_any_task",   # plusieurs pôles possibles
+    _GET_DEAL_TOOL: "prospection",
+    _GET_ENTREPRISE_TOOL: "entreprise",
+}
+
+#: Types de tâche reconnus par kratos_get_task → entity_type de détail.
+_TASK_TYPE_CHOICES = (
+    "devlog_project_task",
+    "entreprise_tache",
+    "prospection_deal_task",
+    "sales_task",
+    "project_task",
+)
+
+
+def _get_detail_tools() -> list[dict[str, Any]]:
+    """Définitions statiques des 4 outils de lecture détail."""
+    return [
+        {
+            "name": _GET_SOUMISSION_TOOL,
+            "description": (
+                "Renvoie le JSON DÉTAILLÉ d'une soumission (devis) du pôle "
+                "Développement logiciel par son `id` : client/lead, statut, "
+                "modules + fonctionnalités + tâches du chargé de projet, "
+                "montants (HT, TPS, TVQ, TTC), taux, dates, lien public. "
+                "Lecture seule."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "description": "Id de la soumission devlog.",
+                    }
+                },
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": _GET_TASK_TOOL,
+            "description": (
+                "Renvoie le JSON DÉTAILLÉ d'une tâche par son `id` et son "
+                "`type` (description, statut, assigné, échéance, priorité, "
+                "pôle, dates). `type` est l'un des modèles de tâche : "
+                f"{', '.join(_TASK_TYPE_CHOICES)}. Lecture seule."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "description": "Id de la tâche.",
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": list(_TASK_TYPE_CHOICES),
+                        "description": "Modèle de tâche (entity_type).",
+                    },
+                },
+                "required": ["id", "type"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": _GET_DEAL_TOOL,
+            "description": (
+                "Renvoie le JSON DÉTAILLÉ d'un deal du Pipeline Prospection "
+                "par son `id` : adresse, étape pipeline, et données clés de "
+                "l'analyse financière liée si disponibles. Lecture seule."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "description": "Id du deal de prospection.",
+                    }
+                },
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": _GET_ENTREPRISE_TOOL,
+            "description": (
+                "Renvoie le JSON DÉTAILLÉ d'une entreprise du pôle Gestion "
+                "d'entreprises par son `id` : nom, type, NEQ, partenaires, "
+                "description, statut. Lecture seule."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "description": "Id de l'entreprise.",
+                    }
+                },
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+        },
+    ]
+
+
+def _can_read_pole(scopes: Optional[list[str]], pole: str) -> bool:
+    """La clé peut-elle lire (détail ou activité) ce pôle ? Couvre la
+    rétrocompat (clé sans scopes → tous les pôles via readable_poles)."""
+    return pole in readable_poles(scopes)
+
+
+def _get_tools_for_scopes(scopes: Optional[list[str]]) -> list[dict[str, Any]]:
+    """Sous-ensemble des 4 outils get exposés selon les pôles lisibles."""
+    tools: list[dict[str, Any]] = []
+    for tool in _get_detail_tools():
+        name = tool["name"]
+        if name == _GET_TASK_TOOL:
+            # Disponible si au moins un pôle portant des tâches est lisible.
+            poles = {
+                _DETAIL_ENTITIES[t][1]
+                for t in _TASK_TYPE_CHOICES
+                if t in _DETAIL_ENTITIES
+            }
+            if any(_can_read_pole(scopes, p) for p in poles):
+                tools.append(tool)
+        else:
+            pole = _GET_TOOL_POLE[name]
+            if _can_read_pole(scopes, pole):
+                tools.append(tool)
+    return tools
+
+
 def _tools_for_scopes(scopes: Optional[list[str]]) -> list[dict[str, Any]]:
     """Liste des outils exposés à cette clé, selon ses scopes. Les outils de
     lecture apparaissent si au moins un pôle est lisible ; l'outil de
@@ -207,6 +369,7 @@ def _tools_for_scopes(scopes: Optional[list[str]]) -> list[dict[str, Any]]:
     tools: list[dict[str, Any]] = []
     if readable_poles(scopes):
         tools.extend(_READ_TOOLS)
+        tools.extend(_get_tools_for_scopes(scopes))
     creatable = [
         slug for slug in POLE_SLUGS
         if key_has_scope(scopes, f"{slug}:tasks:create")
@@ -324,6 +487,57 @@ async def _activity_payload(
     }
 
 
+async def _get_entity_detail(
+    db,
+    scopes: Optional[list[str]],
+    name: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Charge le JSON « full » d'une entité pour les outils kratos_get_*.
+
+    Détermine l'``entity_type`` à partir du nom de l'outil (et du `type`
+    fourni pour les tâches), valide l'`id`, délègue à ``load_entity_full``
+    (qui vérifie le scope de pôle). Lève ValueError pour un argument
+    invalide, un type de tâche inconnu, un scope manquant ou une entité
+    introuvable (l'appelant transforme ValueError en réponse `isError`)."""
+    raw_id = arguments.get("id")
+    if raw_id is None:
+        raise ValueError("`id` (identifiant de l'entité) est requis.")
+    try:
+        entity_id = int(raw_id)
+    except (TypeError, ValueError):
+        raise ValueError("`id` doit être un entier.")
+
+    if name == _GET_SOUMISSION_TOOL:
+        entity_type = "devlog_soumission"
+    elif name == _GET_DEAL_TOOL:
+        entity_type = "prospection_deal"
+    elif name == _GET_ENTREPRISE_TOOL:
+        entity_type = "entreprise"
+    elif name == _GET_TASK_TOOL:
+        entity_type = str(arguments.get("type") or "").strip()
+        if entity_type not in _TASK_TYPE_CHOICES:
+            raise ValueError(
+                "`type` doit être l'un de : "
+                + ", ".join(_TASK_TYPE_CHOICES)
+                + "."
+            )
+    else:  # pragma: no cover - garde-fou
+        raise KeyError(name)
+
+    ctx = _ScopeCtx(scopes)
+    try:
+        return await load_entity_full(db, ctx, entity_type, entity_id)
+    except PermissionError as exc:
+        raise ValueError(str(exc))
+    except LookupError as exc:
+        raise ValueError(str(exc))
+    except ValueError:
+        # « unknown » remonté par load_entity_full — ne devrait pas arriver
+        # ici (types contrôlés ci-dessus), mais on reste robuste.
+        raise ValueError(f"Type d'entité inconnu : « {entity_type} ».")
+
+
 async def _call_tool(
     db,
     user: User,
@@ -354,6 +568,15 @@ async def _call_tool(
         return await _activity_payload(
             db, user, allowed, date_from=date_from, date_to=date_to
         )
+
+    # ── Outils de lecture détail (JSON full d'une entité par id) ──
+    if name in (
+        _GET_SOUMISSION_TOOL,
+        _GET_TASK_TOOL,
+        _GET_DEAL_TOOL,
+        _GET_ENTREPRISE_TOOL,
+    ):
+        return await _get_entity_detail(db, scopes, name, arguments)
     if name == _CREATE_TASK_TOOL_NAME:
         pole = str(arguments.get("pole") or "").strip().lower()
         if pole not in POLE_LABELS:
