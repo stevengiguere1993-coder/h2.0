@@ -299,6 +299,32 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
         Text, nullable=True
     )
 
+    # ── TRI investisseur (juin 2026) ──────────────────────────────
+    #
+    # Les 4 intrants MANUELS du calculateur de rendement
+    # (`app.services.lead_tri_calc.compute_tri`) sont persistés ici.
+    # Les 8 autres intrants sont dérivés à la volée depuis l'analyse
+    # financière (cf. endpoint GET /lead-analyses/{id}/tri-inputs) et
+    # ne sont donc pas stockés. NULL => l'endpoint renvoie des défauts
+    # raisonnables (pct=0.5, croissances=0.03, capital=null).
+
+    # Capital total injecté par l'investisseur (base du TRI), en CAD.
+    tri_capital_injecte: Mapped[Optional[float]] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
+    # Fraction des parts détenues par l'investisseur (0.5 = 50 %).
+    tri_pct_investisseur: Mapped[Optional[float]] = mapped_column(
+        Numeric(6, 4), nullable=True
+    )
+    # Croissance annuelle des loyers (0.03 = 3 %).
+    tri_croissance_loyers: Mapped[Optional[float]] = mapped_column(
+        Numeric(6, 4), nullable=True
+    )
+    # Croissance annuelle des dépenses (0.03 = 3 %).
+    tri_croissance_depenses: Mapped[Optional[float]] = mapped_column(
+        Numeric(6, 4), nullable=True
+    )
+
     # Notes internes (champ libre admin).
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
