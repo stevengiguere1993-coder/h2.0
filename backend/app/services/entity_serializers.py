@@ -537,6 +537,171 @@ def _deal_analysis(analysis: Any) -> Optional[dict]:
     return out if len(out) > 1 else None
 
 
+#: Statuts kanban d'une analyse de lead considérés « actifs / en cours »
+#: (la fiche est encore en cours d'analyse / de décision, pas encore
+#: classée intéressante ni abandonnée). Aligné sur ``LeadAnalysisStatus``.
+_LEAD_ANALYSIS_ACTIVE_STATUSES = ("a_analyser", "decision_en_attente")
+_LEAD_ANALYSIS_STATUS_LABELS = {
+    "a_analyser": "À analyser",
+    "decision_en_attente": "Décision en attente",
+    "interessant": "Intéressant",
+    "abandonne": "Abandonné",
+}
+
+
+def _lead_analysis_is_active(obj: Any) -> bool:
+    """Une analyse est « en cours » si elle n'est pas abandonnée ET pas
+    encore convertie en deal / lead du pipeline officiel. Best-effort."""
+    status = (_str(_get(obj, "status")) or "").lower()
+    if status == "abandonne":
+        return False
+    if _get(obj, "converted_to_deal_id") is not None:
+        return False
+    if _get(obj, "converted_to_lead_id") is not None:
+        return False
+    return True
+
+
+def serialize_lead_analysis(obj: Any, level: str = "summary") -> dict:
+    """Analyse de lead (fiche d'analyse financière d'un immeuble) — pôle
+    Prospection.
+
+    ``summary`` : adresse (label), étape kanban + libellé FR, flag « en
+    cours », et quelques chiffres clés (prix demandé, logements, mise de
+    fonds prêteur B, montant de refinancement) pour situer la fiche en un
+    coup d'œil. ``full`` : tout le détail financier de l'analyse (revenus,
+    dépenses, paramètres refi, résultats), les liens de conversion et les
+    dates. Lecture défensive — aucun champ supposé présent."""
+    status = _str(_get(obj, "status"))
+    is_active = _lead_analysis_is_active(obj)
+    data: dict[str, Any] = {
+        "entity_type": "lead_analysis",
+        "id": getattr(obj, "id", None),
+        "label": _str(_get(obj, "address")) or f"Analyse #{getattr(obj, 'id', '?')}",
+        "address": _str(_get(obj, "address")),
+        "city": _str(_get(obj, "city")),
+        "pole": "prospection",
+        # Étape kanban = statut de la fiche d'analyse.
+        "status": status,
+        "status_label": _LEAD_ANALYSIS_STATUS_LABELS.get(
+            (status or "").lower()
+        ),
+        # « En cours d'analyse » : ni abandonnée ni convertie.
+        "is_active": is_active,
+        # Chiffres clés pour situer la fiche dès le résumé.
+        "asking_price": _num(_get(obj, "asking_price")),
+        "nb_logements": _get(obj, "nb_logements"),
+        "mdf_preteur_b": _num(_get(obj, "mdf_preteur_b")),
+        "best_refi_amount": _num(_get(obj, "best_refi_amount")),
+    }
+    if level == "full":
+        data.update(
+            {
+                "postal_code": _str(_get(obj, "postal_code")),
+                "province": _str(_get(obj, "province")),
+                "type_batiment": _str(_get(obj, "type_batiment")),
+                "annee_construction": _get(obj, "annee_construction"),
+                "nb_stationnements": _get(obj, "nb_stationnements"),
+                "superficie_terrain": _num(_get(obj, "superficie_terrain")),
+                "superficie_batiment": _num(_get(obj, "superficie_batiment")),
+                "evaluation_municipale": _num(
+                    _get(obj, "evaluation_municipale")
+                ),
+                "description": _str(_get(obj, "description")),
+                "courtier_nom": _str(_get(obj, "courtier_nom")),
+                "courtier_contact": _str(_get(obj, "courtier_contact")),
+                # Revenus & dépenses (analyse financière).
+                "revenus_bruts": _num(_get(obj, "revenus_bruts")),
+                "taxes_municipales": _num(_get(obj, "taxes_municipales")),
+                "taxes_scolaires": _num(_get(obj, "taxes_scolaires")),
+                "assurances": _num(_get(obj, "assurances")),
+                "energie": _num(_get(obj, "energie")),
+                "depenses_autres": _num(_get(obj, "depenses_autres")),
+                "travaux_estimes": _num(_get(obj, "travaux_estimes")),
+                # Paramètres / résultats de refinancement (SCHL prêteur B).
+                "best_refi_program": _str(_get(obj, "best_refi_program")),
+                "mdf_preteur_b_pct": _num(_get(obj, "mdf_preteur_b_pct")),
+                "tga_pct": _num(_get(obj, "tga_pct")),
+                "taux_interet_achat_pct": _num(
+                    _get(obj, "taux_interet_achat_pct")
+                ),
+                "taux_interet_refi_pct": _num(
+                    _get(obj, "taux_interet_refi_pct")
+                ),
+                "duree_projet_annees": _get(obj, "duree_projet_annees"),
+                # Liens de conversion vers le pipeline officiel.
+                "converted_to_deal_id": _get(obj, "converted_to_deal_id"),
+                "converted_to_lead_id": _get(obj, "converted_to_lead_id"),
+                "model_used": _str(_get(obj, "model_used")),
+                "notes": _str(_get(obj, "notes")),
+                "created_at": _iso(_get(obj, "created_at")),
+                "updated_at": _iso(_get(obj, "updated_at")),
+            }
+        )
+    return _drop_none(data)
+
+
+def serialize_devlog_project(obj: Any, level: str = "summary") -> dict:
+    """Projet de développement (pôle Développement logiciel).
+
+    Champs métier : nom (label), statut, échéance, client/soumission liés.
+    Sert surtout la vue de LISTE des projets du pôle."""
+    data: dict[str, Any] = {
+        "entity_type": "devlog_project",
+        "id": getattr(obj, "id", None),
+        "label": _str(_get(obj, "name")),
+        "name": _str(_get(obj, "name")),
+        "pole": "devlog",
+        "status": _str(_get(obj, "status")),
+        "due_date": _iso(_get(obj, "due_date")),
+        "client_id": _get(obj, "client_id"),
+    }
+    if level == "full":
+        data.update(
+            {
+                "description": _str(_get(obj, "description")),
+                "soumission_id": _get(obj, "soumission_id"),
+                "start_date": _iso(_get(obj, "start_date")),
+                "started_at": _iso(_get(obj, "started_at")),
+                "delivered_at": _iso(_get(obj, "delivered_at")),
+                "created_at": _iso(_get(obj, "created_at")),
+                "updated_at": _iso(_get(obj, "updated_at")),
+            }
+        )
+    return _drop_none(data)
+
+
+def serialize_project(obj: Any, level: str = "summary") -> dict:
+    """Projet / chantier (pôle Construction).
+
+    Champs métier : nom (label), adresse, statut, budget. Sert surtout la
+    vue de LISTE des chantiers du pôle."""
+    data: dict[str, Any] = {
+        "entity_type": "project",
+        "id": getattr(obj, "id", None),
+        "label": _str(_get(obj, "name")),
+        "name": _str(_get(obj, "name")),
+        "pole": "construction",
+        "status": _str(_get(obj, "status")),
+        "address": _str(_get(obj, "address")),
+    }
+    if level == "full":
+        data.update(
+            {
+                "description": _str(_get(obj, "description")),
+                "notes": _str(_get(obj, "notes")),
+                "budget": _num(_get(obj, "budget")),
+                "client_id": _get(obj, "client_id"),
+                "soumission_id": _get(obj, "soumission_id"),
+                "start_date": _iso(_get(obj, "start_date")),
+                "end_date": _iso(_get(obj, "end_date")),
+                "created_at": _iso(_get(obj, "created_at")),
+                "updated_at": _iso(_get(obj, "updated_at")),
+            }
+        )
+    return _drop_none(data)
+
+
 def serialize_entreprise(obj: Any, level: str = "summary") -> dict:
     """Entreprise (entité d'affaire du pôle Gestion d'entreprises).
 
@@ -649,6 +814,9 @@ SERIALIZERS: dict[str, Callable[..., dict]] = {
     "sales_task": serialize_sales_task,
     "project_task": serialize_project_task,
     "prospection_deal": serialize_prospection_deal,
+    "lead_analysis": serialize_lead_analysis,
+    "devlog_project": serialize_devlog_project,
+    "project": serialize_project,
     "entreprise": serialize_entreprise,
 }
 
