@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Landmark,
   Loader2,
+  Percent,
   Plus,
   Save,
   SlidersHorizontal,
@@ -920,6 +921,34 @@ export function MdfFraisSection() {
         ))}
       </div>
       <FraisCustomList />
+    </SectionShell>
+  );
+}
+
+// ── 6. Défauts TRI (tri_defaults) ──────────────────────────────────
+
+export function TriDefautsSection() {
+  const { defaults, setDefaults, loading, error } =
+    useGroupDefaults("tri_defaults");
+
+  function patch(next: AnalysisDefault) {
+    setDefaults((prev) => prev.map((d) => (d.key === next.key ? next : d)));
+  }
+
+  return (
+    <SectionShell
+      icon={Percent}
+      iconClass="bg-emerald-500/15 text-emerald-400"
+      title="Défauts TRI (taux de rendement interne)"
+      subtitle="Valeurs pré-remplies de l'onglet TRI : % des parts de l'investisseur, croissance des loyers et des dépenses."
+      loading={loading}
+      error={error}
+    >
+      <div className="grid gap-2.5 sm:grid-cols-2">
+        {defaults.map((def) => (
+          <ScalarDefaultRow key={def.key} def={def} onUpdated={patch} />
+        ))}
+      </div>
     </SectionShell>
   );
 }
