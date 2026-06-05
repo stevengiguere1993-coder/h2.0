@@ -734,21 +734,34 @@ export function LeadAnalysisDetailModal({
     } catch {
       results = null;
     }
-    // Best refi : on retient le scénario gagnant (= best_refi) et on
-    // récupère cashflow / équité du scénario correspondant si dispo.
+    // Best refi : on retient le scénario gagnant pour afficher son
+    // cashflow / son équité dans la bande hero. On l'identifie par son
+    // équité finale (= best_refi.amount, cf. « Montant (équité finale) »),
+    // avec repli sur le libellé puis sur le meilleur refi disponible.
+    // NB : purement indicatif — les chiffres faisant foi restent le
+    // tableau de résultats, intact.
     const scen = results?.scenarios;
     const bestProgram = results?.best_refi.program ?? data.best_refi_program;
+    const bestAmount = results?.best_refi.amount ?? null;
     let winner: ScenarioResult | null = null;
-    if (scen && bestProgram) {
-      const all: Array<ScenarioResult | null> = [
+    if (scen) {
+      const refis: Array<ScenarioResult | null> = [
         scen.refi_aph_100,
         scen.refi_aph_50,
-        scen.refi_schl,
-        scen.achat
+        scen.refi_schl
       ];
       winner =
-        all.find((s) => s && s.label === bestProgram) ||
-        all.find((s) => s && s.name === bestProgram) ||
+        (bestAmount != null
+          ? refis.find(
+              (s) =>
+                s &&
+                s.equite_a_la_fin != null &&
+                Math.abs(s.equite_a_la_fin - bestAmount) < 1
+            )
+          : null) ||
+        (bestProgram
+          ? refis.find((s) => s && (s.label === bestProgram || s.name === bestProgram))
+          : null) ||
         scen.refi_aph_100 ||
         scen.refi_aph_50 ||
         scen.refi_schl ||
@@ -2575,14 +2588,19 @@ function FraisDemarrageBreakdownPanel({
   if (!frais) return null;
 
   return (
-    <section className="mt-4 rounded-lg border border-amber-400/30 bg-amber-500/5 p-4">
+    <section className="mt-4 rounded-xl border border-amber-400/30 bg-amber-500/5 p-4">
       <div className="flex items-center justify-between gap-2">
-        <h4 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
-          Composition de la MDF avec prêteur B
-        </h4>
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-400">
+            <Wallet className="h-4 w-4" />
+          </span>
+          <h4 className="text-sm font-bold text-white">
+            Composition de la MDF avec prêteur B
+          </h4>
+        </div>
         <DefaultsGearButton group="mdf_frais" title="Modifier les défauts des frais MDF (Évaluateur, Inspection, Notaire, Avocat, Rapport efficacité, % courtiers)" />
       </div>
-      <p className="mt-0.5 text-[10px] text-white/50">
+      <p className="mt-2 text-[10px] text-white/50">
         Total à sortir en cash = {_fmtPctShort(mdfPctNumeric)} du prix
         d&apos;achat + frais non finançables + {_fmtPctShort(mdfPctNumeric)}
         {" "}des frais finançables. Coche un poste pour le rendre
@@ -3386,24 +3404,26 @@ function ValidationPanel({
 
   if (list.length === 0) {
     return (
-      <section>
-        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-          Validation de l&apos;extraction
-        </h3>
-        <div className="mt-2 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+      <SectionCard
+        icon={CheckCircle2}
+        title="Validation de l'extraction"
+        tone="emerald"
+      >
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
           <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
           <span>Aucune anomalie détectée sur les champs extraits.</span>
         </div>
-      </section>
+      </SectionCard>
     );
   }
 
   return (
-    <section>
-      <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-        Validation de l&apos;extraction ({list.length})
-      </h3>
-      <ul className="mt-2 space-y-2">
+    <SectionCard
+      icon={AlertTriangle}
+      title={`Validation de l'extraction (${list.length})`}
+      tone="amber"
+    >
+      <ul className="space-y-2">
         {list.map((w, i) => {
           const sevCls =
             w.severity === "error"
@@ -3472,7 +3492,7 @@ function ValidationPanel({
           );
         })}
       </ul>
-    </section>
+    </SectionCard>
   );
 }
 
