@@ -1661,6 +1661,21 @@ async def init_db() -> None:
         #   - 'mdf'  → 'inputs_manuels' (mdf_preteur_b_pct est un
         #              input manuel, pas un frais)
         #   - nouveaux frais MDF → groupe 'mdf_frais'
+        #
+        # Juin 2026 — Dé-hardcodage du moteur d'analyse de lead
+        # (PR « prospection-config-dehardcode-1a »). On externalise vers
+        # cette table les constantes encore codées en dur dans
+        # ``lead_analysis_finance`` via 3 nouveaux groupes :
+        #   - 'depenses_normalisees' : barème SCHL (concierge, entretien,
+        #     gestion, wifi, internet, thermopompe, seuil 12 log).
+        #   - 'scenarios_financement' : LTV / amortissement / RCD des 4
+        #     scénarios (achat, SCHL std, APH 50, APH 100).
+        #   - 'baremes_fiscaux' : ratio abordabilité APH (0.40) + barème
+        #     progressif des taxes de bienvenue de Montréal (value_json).
+        # Les valeurs seedées = EXACTEMENT les constantes actuelles ; le
+        # moteur lit la config si présente, sinon retombe sur la
+        # constante (fallback ultime). Résultat identique au centime
+        # tant que personne ne modifie rien.
         try:
             await conn.execute(
                 text(
