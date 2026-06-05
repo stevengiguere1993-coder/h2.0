@@ -455,6 +455,199 @@ _DB_KEY_TO_FINANCABLE_KEY: dict[str, str] = {
 }
 
 
+# ── Juin 2026 : Dé-hardcodage du barème des dépenses normalisées ──────
+#
+# Mapping clé BD (groupe ``depenses_normalisees``) → clé interne de
+# ``lead_analysis_finance.BAREME``. Les valeurs sont chargées au runtime
+# de ``run-financial-analysis`` pour overrider le barème hardcoded. Les
+# clés ``*_pct`` (pourcentages de gestion) sont stockées en BD en pct
+# (4.25 = 4.25 %) et converties en fraction (÷100) pour matcher la
+# convention interne de ``BAREME`` (gestion_lt12 = 0.0425). Les autres
+# postes ($/log, $/mois) sont passés tels quels.
+_DB_KEY_TO_BAREME: dict[str, str] = {
+    "conciergerie_moins_12_log": "concierge_lt12",
+    "conciergerie_12_log_plus": "concierge_gte12",
+    "entretien_par_log": "entretien",
+    "gestion_moins_12_pct": "gestion_lt12",
+    "gestion_12_log_plus_pct": "gestion_gte12",
+    "wifi_par_log_mois": "wifi_par_log",
+    "internet_batiment_mois": "internet_fixe",
+    "entretien_thermopompe_an": "thermopompe",
+}
+
+# Clés du barème stockées en BD en pourcentage → fraction (÷100) avant
+# de passer au moteur (qui attend des fractions pour la gestion).
+_DB_BAREME_PCT_KEYS: set[str] = {
+    "gestion_moins_12_pct",
+    "gestion_12_log_plus_pct",
+}
+
+
+async def _load_bareme_overrides(
+    db,
+) -> tuple[dict, Optional[int], Optional[float]]:
+    """Charge les overrides du barème des dépenses normalisées SCHL +
+    le taux d'inoccupation.
+
+    Retourne ``(bareme_overrides, seuil_bascule_bareme_log,
+    taux_inoccupation_fraction)`` prêt à passer à ``FinanceInputs``.
+
+    - ``bareme_overrides`` : valeurs BD du groupe ``depenses_normalisees``
+      qui écrasent ``lead_analysis_finance.BAREME`` poste par poste ;
+      les % de gestion sont convertis pct → fraction.
+    - ``seuil_bascule_bareme_log`` (clé ``seuil_bascule_bareme_log``) :
+      seuil petit/grand immeuble (12 par défaut). ``None`` si absent →
+      le moteur retombe sur ``SEUIL_BASCULE_BAREME_LOG``.
+    - ``taux_inoccupation_fraction`` (clé ``taux_inoccupation_pct``,
+      groupe ``inputs_manuels``) : stocké en BD en pct (3.0 = 3 %),
+      converti en fraction (0.03). ``None`` si absent → le moteur
+      retombe sur ``FinanceInputs.taux_inoccupation_pct`` (0.03).
+      Juin 2026 : ce défaut était seedé mais JAMAIS relu — fix branché
+      ici (cf. PR « prospection-config-dehardcode-1a »).
+
+    Si la table est vide/absente, retourne ``({}, None, None)`` →
+    fallback constantes hardcoded.
+    """
+    bareme: dict[str, float] = {}
+    seuil: Optional[int] = None
+    inoccupation: Optional[float] = None
+    try:
+        rows = (
+            await db.execute(select(ProspectionAnalysisDefault))
+        ).scalars().all()
+        for row in rows:
+            if row.value_float is None:
+                continue
+            v = float(row.value_float)
+            internal = _DB_KEY_TO_BAREME.get(row.key)
+            if internal is not None:
+                if row.key in _DB_BAREME_PCT_KEYS:
+                    v = v / 100.0
+                bareme[internal] = v
+            elif row.key == "seuil_bascule_bareme_log":
+                seuil = int(v)
+            elif row.key == "taux_inoccupation_pct":
+                # BD en pct (3.0 = 3 %), moteur en fraction (0.03).
+                inoccupation = v / 100.0
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to load barème overrides from DB: %s", exc)
+    return bareme, seuil, inoccupation
+
+
+# ── Juin 2026 : Dé-hardcodage des scénarios de financement ───────────
+#
+# Mapping clé BD (groupe ``scenarios_financement``) → (slug interne,
+# attribut). Les 12 clés couvrent les 4 scénarios × LTV / amortissement
+# / RCD. LTV et RCD sont stockés en BD en décimal (0.75, 1.20), comme
+# dans ``lead_analysis_finance.SCENARIO_*`` — aucune conversion. Amort
+# est un entier (années). Les valeurs écrasent les dataclasses
+# ``SCENARIO_*`` poste par poste ; champ absent → fallback hardcoded.
+_DB_KEY_TO_SCENARIO: dict[str, tuple[str, str]] = {
+    "scenario_achat_ltv": ("achat", "ltv"),
+    "scenario_achat_amort": ("achat", "amort"),
+    "scenario_achat_rcd": ("achat", "rcd"),
+    "scenario_schl_std_ltv": ("schl_std", "ltv"),
+    "scenario_schl_std_amort": ("schl_std", "amort"),
+    "scenario_schl_std_rcd": ("schl_std", "rcd"),
+    "scenario_aph50_ltv": ("aph50", "ltv"),
+    "scenario_aph50_amort": ("aph50", "amort"),
+    "scenario_aph50_rcd": ("aph50", "rcd"),
+    "scenario_aph100_ltv": ("aph100", "ltv"),
+    "scenario_aph100_amort": ("aph100", "amort"),
+    "scenario_aph100_rcd": ("aph100", "rcd"),
+}
+
+
+async def _load_scenario_overrides(db) -> dict:
+    """Charge les overrides des scénarios de financement (groupe
+    ``scenarios_financement``).
+
+    Retourne un dict imbriqué ``{ slug: {"ltv":.., "amort":..,
+    "rcd":..} }`` prêt à passer à ``FinanceInputs.scenario_overrides``.
+    Les clés/attributs absents en BD → le moteur retombe sur les
+    constantes hardcoded ``SCENARIO_*``. Dict vide si table absente.
+    """
+    overrides: dict[str, dict[str, float]] = {}
+    try:
+        rows = (
+            await db.execute(select(ProspectionAnalysisDefault))
+        ).scalars().all()
+        for row in rows:
+            if row.value_float is None:
+                continue
+            mapped = _DB_KEY_TO_SCENARIO.get(row.key)
+            if mapped is None:
+                continue
+            slug, attr = mapped
+            overrides.setdefault(slug, {})[attr] = float(row.value_float)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to load scenario overrides from DB: %s", exc)
+    return overrides
+
+
+# ── Juin 2026 : Dé-hardcodage des barèmes fiscaux ────────────────────
+
+
+def _parse_taxes_bienvenue_brackets(value_json) -> Optional[list]:
+    """Convertit le ``value_json`` de la clé ``taxes_bienvenue_mtl`` en
+    liste de tuples ``(seuil_haut, taux_fraction)`` attendue par le
+    moteur.
+
+    Format BD attendu : ``[{"seuil": <float|null>, "taux_pct": <float>},
+    ...]`` trié par seuil croissant, le dernier palier ayant ``seuil``
+    null (palier ouvert → ``inf``). ``taux_pct`` est en pourcentage
+    (0.5 = 0.5 %), converti en fraction (÷100). Retourne ``None`` si le
+    JSON est absent ou invalide → le moteur retombe sur le barème
+    hardcoded ``TAXES_BIENVENUE_MTL_BRACKETS``.
+    """
+    if not value_json:
+        return None
+    try:
+        brackets: list = []
+        for tier in value_json:
+            raw_seuil = tier.get("seuil")
+            seuil = float("inf") if raw_seuil is None else float(raw_seuil)
+            taux = float(tier["taux_pct"]) / 100.0
+            brackets.append((seuil, taux))
+        return brackets or None
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Invalid taxes_bienvenue_mtl value_json: %s", exc)
+        return None
+
+
+async def _load_fiscal_overrides(db) -> tuple[Optional[float], Optional[list]]:
+    """Charge les overrides des barèmes fiscaux (groupe
+    ``baremes_fiscaux``).
+
+    Retourne ``(ratio_abordabilite_aph, taxes_bienvenue_brackets)`` :
+    - ``ratio_abordabilite_aph`` (clé ``ratio_abordabilite_aph``) :
+      stocké en décimal (0.40), passé tel quel. ``None`` si absent.
+    - ``taxes_bienvenue_brackets`` (clé ``taxes_bienvenue_mtl``,
+      ``value_json``) : liste de tuples ``(seuil, taux_fraction)``.
+      ``None`` si absent/invalide.
+
+    Champs absents → le moteur retombe sur ``RATIO_ABORDABILITE_APH`` /
+    ``TAXES_BIENVENUE_MTL_BRACKETS`` hardcoded.
+    """
+    ratio: Optional[float] = None
+    taxes_brackets: Optional[list] = None
+    try:
+        rows = (
+            await db.execute(select(ProspectionAnalysisDefault))
+        ).scalars().all()
+        for row in rows:
+            if row.key == "ratio_abordabilite_aph":
+                if row.value_float is not None:
+                    ratio = float(row.value_float)
+            elif row.key == "taxes_bienvenue_mtl":
+                taxes_brackets = _parse_taxes_bienvenue_brackets(
+                    row.value_json
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to load fiscal overrides from DB: %s", exc)
+    return ratio, taxes_brackets
+
+
 async def _load_defaults_for_new_analysis(db) -> dict:
     """Charge les défauts depuis la BD et fusionne avec les fallbacks.
 
@@ -1427,6 +1620,24 @@ async def run_financial_analysis(
         await _load_frais_mdf_overrides(db)
     )
 
+    # Juin 2026 : overrides du barème des dépenses normalisées SCHL
+    # (groupe ``depenses_normalisees``), seuil de bascule petit/grand
+    # immeuble, et taux d'inoccupation (fix : était seedé mais jamais
+    # relu). Si absents en BD, le moteur retombe sur les constantes.
+    bareme_overrides_global, seuil_bascule_global, taux_inoccupation_global = (
+        await _load_bareme_overrides(db)
+    )
+
+    # Juin 2026 : overrides des scénarios de financement (LTV / amort /
+    # RCD des 4 scénarios). Si absents en BD, fallback ``SCENARIO_*``.
+    scenario_overrides_global = await _load_scenario_overrides(db)
+
+    # Juin 2026 : overrides des barèmes fiscaux (ratio abordabilité APH
+    # + taxes de bienvenue de Montréal). Si absents, fallback constantes.
+    ratio_abordabilite_global, taxes_bienvenue_brackets_global = (
+        await _load_fiscal_overrides(db)
+    )
+
     inputs = FinanceInputs(
         adresse=rec.address or "",
         prix_achat=float(rec.asking_price or 0),
@@ -1467,6 +1678,15 @@ async def run_financial_analysis(
         ),
         frais_fixes_overrides=frais_fixes_overrides,
         pct_courtiers_overrides=pct_courtiers_overrides,
+        # Juin 2026 : barème dépenses normalisées SCHL (groupe
+        # ``depenses_normalisees``). Dict vide → fallback ``BAREME``.
+        bareme_overrides=bareme_overrides_global,
+        # Juin 2026 : scénarios de financement (groupe
+        # ``scenarios_financement``). Dict vide → fallback ``SCENARIO_*``.
+        scenario_overrides=scenario_overrides_global,
+        # Juin 2026 : barèmes fiscaux (groupe ``baremes_fiscaux``).
+        # ``None`` → fallback ``TAXES_BIENVENUE_MTL_BRACKETS``.
+        taxes_bienvenue_brackets=taxes_bienvenue_brackets_global,
         # Mai 2026 : nouveau frais MDF, surchargé globalement via le
         # défaut ``frais_dossier_preteur_pct``. Si la BD n'a pas (encore)
         # de ligne pour cette clé, on laisse ``FinanceInputs`` retomber
@@ -1474,6 +1694,26 @@ async def run_financial_analysis(
         **(
             {"frais_dossier_preteur_pct": frais_dossier_preteur_pct_global}
             if frais_dossier_preteur_pct_global is not None
+            else {}
+        ),
+        # Juin 2026 : seuil de bascule du barème (12 par défaut).
+        **(
+            {"seuil_bascule_bareme_log": seuil_bascule_global}
+            if seuil_bascule_global is not None
+            else {}
+        ),
+        # Juin 2026 — FIX : taux d'inoccupation, seedé mais jamais relu
+        # auparavant. Brancher la config si présente (sinon défaut 3 %).
+        **(
+            {"taux_inoccupation_pct": taux_inoccupation_global}
+            if taux_inoccupation_global is not None
+            else {}
+        ),
+        # Juin 2026 : ratio d'abordabilité APH (groupe ``baremes_fiscaux``).
+        # Présent → override ; absent → défaut ``RATIO_ABORDABILITE_APH``.
+        **(
+            {"ratio_abordabilite_aph": ratio_abordabilite_global}
+            if ratio_abordabilite_global is not None
             else {}
         ),
     )

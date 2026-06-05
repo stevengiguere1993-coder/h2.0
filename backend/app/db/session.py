@@ -7,6 +7,7 @@ Provides:
 - Dependency injection for FastAPI
 """
 
+import json
 from collections.abc import AsyncGenerator
 from typing import Optional
 
@@ -1661,6 +1662,21 @@ async def init_db() -> None:
         #   - 'mdf'  → 'inputs_manuels' (mdf_preteur_b_pct est un
         #              input manuel, pas un frais)
         #   - nouveaux frais MDF → groupe 'mdf_frais'
+        #
+        # Juin 2026 — Dé-hardcodage du moteur d'analyse de lead
+        # (PR « prospection-config-dehardcode-1a »). On externalise vers
+        # cette table les constantes encore codées en dur dans
+        # ``lead_analysis_finance`` via 3 nouveaux groupes :
+        #   - 'depenses_normalisees' : barème SCHL (concierge, entretien,
+        #     gestion, wifi, internet, thermopompe, seuil 12 log).
+        #   - 'scenarios_financement' : LTV / amortissement / RCD des 4
+        #     scénarios (achat, SCHL std, APH 50, APH 100).
+        #   - 'baremes_fiscaux' : ratio abordabilité APH (0.40) + barème
+        #     progressif des taxes de bienvenue de Montréal (value_json).
+        # Les valeurs seedées = EXACTEMENT les constantes actuelles ; le
+        # moteur lit la config si présente, sinon retombe sur la
+        # constante (fallback ultime). Résultat identique au centime
+        # tant que personne ne modifie rien.
         try:
             await conn.execute(
                 text(
@@ -1913,6 +1929,266 @@ async def init_db() -> None:
                     0.05,
                     "mdf_frais",
                 ),
+                # ── Groupe : Dépenses normalisées SCHL (juin 2026) ───
+                # Barème ``lead_analysis_finance.BAREME`` externalisé.
+                # Valeurs = EXACTEMENT les constantes hardcoded. Les % de
+                # gestion sont seedés en pct (4.25, 5.0) et reconvertis en
+                # fraction (÷100) au runtime côté loader.
+                (
+                    "conciergerie_moins_12_log",
+                    215.0,
+                    "Conciergerie — moins de 12 log ($/log/an)",
+                    "Frais de conciergerie normalisés par logement et par "
+                    "an pour un immeuble de moins de 12 logements.",
+                    0.0,
+                    5000.0,
+                    5.0,
+                    "depenses_normalisees",
+                ),
+                (
+                    "conciergerie_12_log_plus",
+                    365.0,
+                    "Conciergerie — 12 log et plus ($/log/an)",
+                    "Frais de conciergerie normalisés par logement et par "
+                    "an pour un immeuble de 12 logements ou plus.",
+                    0.0,
+                    5000.0,
+                    5.0,
+                    "depenses_normalisees",
+                ),
+                (
+                    "entretien_par_log",
+                    610.0,
+                    "Entretien ($/log/an)",
+                    "Frais d'entretien normalisés par logement et par an.",
+                    0.0,
+                    10000.0,
+                    10.0,
+                    "depenses_normalisees",
+                ),
+                (
+                    "gestion_moins_12_pct",
+                    4.25,
+                    "Gestion — moins de 12 log (% des revenus)",
+                    "Pourcentage des revenus alloué à la gestion pour un "
+                    "immeuble de moins de 12 logements.",
+                    0.0,
+                    20.0,
+                    0.05,
+                    "depenses_normalisees",
+                ),
+                (
+                    "gestion_12_log_plus_pct",
+                    5.0,
+                    "Gestion — 12 log et plus (% des revenus)",
+                    "Pourcentage des revenus alloué à la gestion pour un "
+                    "immeuble de 12 logements ou plus.",
+                    0.0,
+                    20.0,
+                    0.05,
+                    "depenses_normalisees",
+                ),
+                (
+                    "wifi_par_log_mois",
+                    5.0,
+                    "WIFI ($/log/mois)",
+                    "Coût WIFI normalisé par logement et par mois (ajouté "
+                    "seulement aux scénarios refi si l'option WIFI est "
+                    "activée).",
+                    0.0,
+                    100.0,
+                    0.5,
+                    "depenses_normalisees",
+                ),
+                (
+                    "internet_batiment_mois",
+                    120.0,
+                    "Internet du bâtiment ($/mois)",
+                    "Coût fixe de la connexion internet du bâtiment par "
+                    "mois (ajouté seulement aux scénarios refi si l'option "
+                    "WIFI est activée).",
+                    0.0,
+                    2000.0,
+                    5.0,
+                    "depenses_normalisees",
+                ),
+                (
+                    "entretien_thermopompe_an",
+                    190.0,
+                    "Entretien thermopompe ($/thermopompe/an)",
+                    "Coût d'entretien annuel par thermopompe ajoutée "
+                    "(scénarios APH — efficacité énergétique uniquement).",
+                    0.0,
+                    5000.0,
+                    5.0,
+                    "depenses_normalisees",
+                ),
+                (
+                    "seuil_bascule_bareme_log",
+                    12.0,
+                    "Seuil de bascule du barème (nb log)",
+                    "Nombre de logements à partir duquel on bascule des "
+                    "tarifs « petit immeuble » (conciergerie/gestion) vers "
+                    "les tarifs « grand immeuble ». Défaut 12.",
+                    1.0,
+                    100.0,
+                    1.0,
+                    "depenses_normalisees",
+                ),
+                # ── Groupe : Scénarios de financement (juin 2026) ────
+                # LTV / amortissement / RCD des 4 scénarios. Valeurs =
+                # EXACTEMENT les dataclasses ``SCENARIO_*`` hardcoded.
+                # LTV et RCD en décimal (0.75, 1.20) ; amort en années.
+                (
+                    "scenario_achat_ltv",
+                    0.75,
+                    "Achat — LTV (ratio prêt/valeur)",
+                    "Ratio prêt/valeur du scénario d'achat conventionnel "
+                    "(prêteur B). Défaut 0.75 (75 %).",
+                    0.0,
+                    1.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_achat_amort",
+                    25.0,
+                    "Achat — Amortissement (années)",
+                    "Période d'amortissement du scénario d'achat "
+                    "conventionnel. Défaut 25 ans.",
+                    1.0,
+                    50.0,
+                    1.0,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_achat_rcd",
+                    1.20,
+                    "Achat — RCD (ratio couverture de dette)",
+                    "Ratio de couverture de dette du scénario d'achat "
+                    "conventionnel. Défaut 1.20.",
+                    1.0,
+                    3.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_schl_std_ltv",
+                    0.85,
+                    "SCHL standard — LTV (ratio prêt/valeur)",
+                    "Ratio prêt/valeur du scénario refi SCHL standard. "
+                    "Défaut 0.85 (85 %).",
+                    0.0,
+                    1.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_schl_std_amort",
+                    35.0,
+                    "SCHL standard — Amortissement (années)",
+                    "Période d'amortissement du scénario refi SCHL "
+                    "standard. Défaut 35 ans.",
+                    1.0,
+                    50.0,
+                    1.0,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_schl_std_rcd",
+                    1.30,
+                    "SCHL standard — RCD (ratio couverture de dette)",
+                    "Ratio de couverture de dette du scénario refi SCHL "
+                    "standard. Défaut 1.30.",
+                    1.0,
+                    3.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_aph50_ltv",
+                    0.85,
+                    "APH 50 pts — LTV (ratio prêt/valeur)",
+                    "Ratio prêt/valeur du scénario refi SCHL Efficacité "
+                    "énergétique (50 pts). Défaut 0.85 (85 %).",
+                    0.0,
+                    1.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_aph50_amort",
+                    40.0,
+                    "APH 50 pts — Amortissement (années)",
+                    "Période d'amortissement du scénario refi APH 50 pts. "
+                    "Défaut 40 ans.",
+                    1.0,
+                    50.0,
+                    1.0,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_aph50_rcd",
+                    1.10,
+                    "APH 50 pts — RCD (ratio couverture de dette)",
+                    "Ratio de couverture de dette du scénario refi APH 50 "
+                    "pts. Défaut 1.10.",
+                    1.0,
+                    3.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_aph100_ltv",
+                    0.95,
+                    "APH 100 pts — LTV (ratio prêt/valeur)",
+                    "Ratio prêt/valeur du scénario refi SCHL Abordabilité "
+                    "+ Efficacité (100 pts). Défaut 0.95 (95 %).",
+                    0.0,
+                    1.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_aph100_amort",
+                    50.0,
+                    "APH 100 pts — Amortissement (années)",
+                    "Période d'amortissement du scénario refi APH 100 pts. "
+                    "Défaut 50 ans.",
+                    1.0,
+                    50.0,
+                    1.0,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_aph100_rcd",
+                    1.10,
+                    "APH 100 pts — RCD (ratio couverture de dette)",
+                    "Ratio de couverture de dette du scénario refi APH 100 "
+                    "pts. Défaut 1.10.",
+                    1.0,
+                    3.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                # ── Groupe : Barèmes fiscaux (juin 2026) ─────────────
+                # Ratio d'abordabilité APH SELECT. Valeur = EXACTEMENT la
+                # constante hardcoded ``RATIO_ABORDABILITE_APH`` (0.40).
+                # Stocké en décimal (0.40), passé tel quel au moteur.
+                # (Le barème des taxes de bienvenue est seedé à part car
+                # il utilise ``value_json`` — voir bloc dédié plus bas.)
+                (
+                    "ratio_abordabilite_aph",
+                    0.40,
+                    "Ratio d'abordabilité APH (proportion de logements)",
+                    "Proportion des logements qui doivent être abordables "
+                    "dans le scénario APH 100 pts (nb_abordables = "
+                    "plafond(ratio × nb_total)). Défaut 0.40 (40 %).",
+                    0.0,
+                    1.0,
+                    0.01,
+                    "baremes_fiscaux",
+                ),
         ):
             try:
                 # UPSERT : on insère si la clé n'existe pas, sinon on
@@ -1952,6 +2228,61 @@ async def init_db() -> None:
                 # Table absente au tout premier boot (create_all n'a
                 # pas encore tourné) — retentera au prochain démarrage.
                 pass
+
+        # ── Seed du barème des taxes de bienvenue (juin 2026) ────────
+        # Défaut à valeur structurée (``value_json``) : barème progressif
+        # des taxes de bienvenue de Montréal. Valeur = EXACTEMENT les 7
+        # paliers hardcoded dans ``lead_analysis_finance`` (seuils
+        # 61500/307800/552300/1104700/2136500/3113000 ; taux
+        # 0.5/1.0/1.5/2.0/2.5/3.5/4.0 %). Le dernier palier a ``seuil``
+        # null (palier ouvert → inf). ``taux_pct`` en pourcentage,
+        # reconverti en fraction (÷100) au runtime côté loader.
+        #
+        # UPSERT idempotent : INSERT avec ``value_json`` si la clé est
+        # absente ; sur conflit on ne met à jour QUE les métadonnées
+        # (label/desc/group) — pas ``value_json`` (préserve un barème
+        # déjà modifié par l'utilisateur via le PATCH).
+        taxes_bienvenue_json = json.dumps([
+            {"seuil": 61500, "taux_pct": 0.5},
+            {"seuil": 307800, "taux_pct": 1.0},
+            {"seuil": 552300, "taux_pct": 1.5},
+            {"seuil": 1104700, "taux_pct": 2.0},
+            {"seuil": 2136500, "taux_pct": 2.5},
+            {"seuil": 3113000, "taux_pct": 3.5},
+            {"seuil": None, "taux_pct": 4.0},
+        ])
+        try:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO prospection_analysis_defaults
+                      (key, value_json, label_fr, description_fr,
+                       step, group_name, updated_at)
+                    VALUES (:key, CAST(:value_json AS JSONB), :label_fr,
+                            :description_fr, :step, :group, NOW())
+                    ON CONFLICT (key) DO UPDATE SET
+                        label_fr       = EXCLUDED.label_fr,
+                        description_fr = EXCLUDED.description_fr,
+                        group_name     = EXCLUDED.group_name
+                    """
+                ),
+                {
+                    "key": "taxes_bienvenue_mtl",
+                    "value_json": taxes_bienvenue_json,
+                    "label_fr": "Taxes de bienvenue — Montréal (paliers)",
+                    "description_fr": (
+                        "Barème progressif des taxes de bienvenue de "
+                        "Montréal. Liste de paliers {seuil, taux_pct} ; "
+                        "le dernier palier (seuil null) couvre tout au-"
+                        "dessus du dernier seuil. taux_pct en pourcentage."
+                    ),
+                    "step": 0.01,
+                    "group": "baremes_fiscaux",
+                },
+            )
+        except Exception:
+            # Table absente au tout premier boot — retentera plus tard.
+            pass
 
         # ── Backfill `financable_par_defaut` (mai 2026) ──────────────
         # On ne TOUCHE PAS aux items pour lesquels Phil a déjà

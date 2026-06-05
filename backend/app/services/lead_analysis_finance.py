@@ -42,6 +42,43 @@ BAREME: Dict[str, float] = {
     "thermopompe":     190.0,
 }
 
+# Seuil de bascule du barème des dépenses normalisées (concierge +
+# gestion). En-dessous de ce nombre de logements on applique les tarifs
+# « petit immeuble » (concierge_lt12, gestion_lt12), au-dessus ou égal
+# les tarifs « grand immeuble ». Cf. R39/R41 dans l'Excel.
+#
+# Juin 2026 : externalisé via le défaut global ``seuil_bascule_bareme_log``
+# (groupe ``depenses_normalisees``). Le moteur lit la config si présente,
+# sinon retombe sur cette constante (fallback ultime).
+SEUIL_BASCULE_BAREME_LOG: int = 12
+
+
+# ─── Barèmes fiscaux ───────────────────────────────────────────────
+#
+# Juin 2026 : externalisés via le groupe BD ``baremes_fiscaux``. Le
+# moteur lit la config si présente, sinon retombe sur ces constantes.
+
+# Ratio d'abordabilité APH SELECT : proportion des logements qui doivent
+# être abordables (nb_abordables = ceil(ratio × nb_total)). Défaut 0.40
+# (40 %). Externalisé via le défaut global ``ratio_abordabilite_aph``.
+RATIO_ABORDABILITE_APH: float = 0.40
+
+# Barème progressif des taxes de bienvenue de Montréal (2024-2025).
+# Liste de tuples ``(seuil_haut, taux_fraction)`` ; le dernier palier
+# (``math.inf``) couvre tout au-dessus du dernier seuil. Externalisé via
+# le défaut global ``taxes_bienvenue_mtl`` (stocké en ``value_json`` sous
+# forme ``[{"seuil": .., "taux_pct": ..}]``, ``seuil`` null = palier
+# ouvert). Cf. L6 dans l'Excel.
+TAXES_BIENVENUE_MTL_BRACKETS: List[tuple] = [
+    (61_500,    0.005),
+    (307_800,   0.010),
+    (552_300,   0.015),
+    (1_104_700, 0.020),
+    (2_136_500, 0.025),
+    (3_113_000, 0.035),
+    (math.inf,  0.040),
+]
+
 
 # ─── Frais fixes (L7..L13) ─────────────────────────────────────────
 #
@@ -123,24 +160,62 @@ REFI_SCENARIOS: List[ScenarioConfig] = [
     SCENARIO_REFI_SCHL, SCENARIO_REFI_APH_50, SCENARIO_REFI_APH_100,
 ]
 
+# Slugs internes des 4 scénarios → instance ``ScenarioConfig`` de
+# référence (valeurs hardcoded). Utilisé pour appliquer les overrides
+# globaux du groupe BD ``scenarios_financement`` (juin 2026).
+SCENARIO_BASES: Dict[str, ScenarioConfig] = {
+    "achat": SCENARIO_ACHAT,
+    "schl_std": SCENARIO_REFI_SCHL,
+    "aph50": SCENARIO_REFI_APH_50,
+    "aph100": SCENARIO_REFI_APH_100,
+}
+
+
+def resolve_scenario(
+    slug: str,
+    overrides: Optional[Dict[str, Dict[str, float]]] = None,
+) -> ScenarioConfig:
+    """Retourne le ``ScenarioConfig`` d'un scénario en appliquant les
+    overrides globaux (groupe BD ``scenarios_financement``) par-dessus
+    les constantes hardcoded.
+
+    ``overrides`` : dict imbriqué ``{ slug: {"ltv":.., "amort":..,
+    "rcd":..} }`` (clés partielles autorisées). Champ absent → on garde
+    la valeur de la dataclass hardcoded (fallback ultime). ``name`` et
+    ``label`` ne sont jamais externalisés.
+    """
+    base = SCENARIO_BASES[slug]
+    ov = (overrides or {}).get(slug) or {}
+    ltv = ov.get("ltv")
+    amort = ov.get("amort")
+    rcd = ov.get("rcd")
+    return ScenarioConfig(
+        name=base.name,
+        label=base.label,
+        ltv=float(ltv) if ltv is not None else base.ltv,
+        amort_annees=int(amort) if amort is not None else base.amort_annees,
+        rcd=float(rcd) if rcd is not None else base.rcd,
+    )
+
 
 # ─── Helpers ───────────────────────────────────────────────────────
 
 
-def taxes_bienvenue_mtl(prix_achat: float) -> float:
+def taxes_bienvenue_mtl(
+    prix_achat: float,
+    brackets: Optional[List[tuple]] = None,
+) -> float:
     """Taxes de bienvenue de Montréal (tiers progressifs 2024-2025).
-    Cf. L6 dans l'Excel."""
+    Cf. L6 dans l'Excel.
+
+    ``brackets`` (optionnel) : liste de tuples ``(seuil_haut,
+    taux_fraction)`` triée par seuil croissant, le dernier palier ayant
+    un ``seuil_haut`` ``math.inf`` (palier ouvert). Provient du défaut
+    global ``taxes_bienvenue_mtl`` (groupe ``baremes_fiscaux``). Si
+    ``None`` → fallback ``TAXES_BIENVENUE_MTL_BRACKETS`` (hardcoded)."""
     if prix_achat <= 0:
         return 0.0
-    brackets = [
-        (61_500,    0.005),
-        (307_800,   0.010),
-        (552_300,   0.015),
-        (1_104_700, 0.020),
-        (2_136_500, 0.025),
-        (3_113_000, 0.035),
-        (math.inf,  0.040),
-    ]
+    brackets = brackets if brackets else TAXES_BIENVENUE_MTL_BRACKETS
     taxe = 0.0
     seuil_bas = 0.0
     for seuil_haut, taux in brackets:
@@ -208,12 +283,17 @@ def compute_typology_aggregates(
     typologie: Dict[str, int],
     typologie_prix: Dict[str, float],
     nb_total: int,
+    ratio_abordabilite: float = RATIO_ABORDABILITE_APH,
 ) -> TypologyAggregates:
     """Calcule H13, nb_abordables, nouveau_loyer_moyen_pdm.
 
     `typologie` = { "2.5": 0, "3.5": 4, "4.5": 4, ... }
     `typologie_prix` = { "3.5": 1400, "4.5": 1600, ... } (uniquement
     pour les types avec quantité > 0).
+
+    ``ratio_abordabilite`` : proportion des logements abordables (APH
+    SELECT). Défaut ``RATIO_ABORDABILITE_APH`` (0.40). Externalisé via
+    le défaut global ``ratio_abordabilite_aph``.
     """
     if nb_total <= 0:
         return TypologyAggregates(0.0, 0, 0, 0.0)
@@ -239,7 +319,7 @@ def compute_typology_aggregates(
     )
 
     # APH SELECT : nombre abordables = ceil(40 % × total)
-    nb_abordables = math.ceil(0.40 * nb_total)
+    nb_abordables = math.ceil(ratio_abordabilite * nb_total)
     nb_pdm = nb_total - nb_abordables
 
     # Loyer moyen PDM : on prend les unités les plus chères en
@@ -317,6 +397,8 @@ def compute_depenses_for_scenario(
     wifi_ajoute: bool,
     nb_thermopompes_ajoutees: int,
     taux_inoccupation_pct: float,
+    bareme_overrides: Optional[Dict[str, float]] = None,
+    seuil_bascule_log: int = SEUIL_BASCULE_BAREME_LOG,
 ) -> DepensesBreakdown:
     """Calcule R35..R45 pour un scénario donné.
 
@@ -331,29 +413,46 @@ def compute_depenses_for_scenario(
       - Thermopompes : **uniquement en APH** (efficacité énergétique).
         Dans l'Excel R44 col C (SCHL) = D5×J43 avec J43 vide → 0.
         R44 col D (APH 50) = D5×K43 avec K43 = 190 $/thermopompe.
+
+    ``bareme_overrides`` (dict, optionnel) écrase poste par poste les
+    valeurs hardcoded de ``BAREME``. Provient des défauts globaux
+    ``ProspectionAnalysisDefault`` (groupe ``depenses_normalisees``).
+    ``seuil_bascule_log`` : seuil de bascule petit/grand immeuble
+    (défaut ``SEUIL_BASCULE_BAREME_LOG`` = 12).
     """
+    bareme = dict(BAREME)
+    if bareme_overrides:
+        for k, v in bareme_overrides.items():
+            if v is None:
+                continue
+            bareme[k] = float(v)
+
     inoccupation = taux_inoccupation_pct * revenus_totaux
 
     concierge_par_log = (
-        BAREME["concierge_lt12"] if nb_log < 12 else BAREME["concierge_gte12"]
+        bareme["concierge_lt12"]
+        if nb_log < seuil_bascule_log
+        else bareme["concierge_gte12"]
     )
     concierge = concierge_par_log * nb_log
-    entretien = nb_log * BAREME["entretien"]
+    entretien = nb_log * bareme["entretien"]
     gestion_pct = (
-        BAREME["gestion_lt12"] if nb_log < 12 else BAREME["gestion_gte12"]
+        bareme["gestion_lt12"]
+        if nb_log < seuil_bascule_log
+        else bareme["gestion_gte12"]
     )
     gestion = gestion_pct * revenus_totaux
 
     if is_refi:
         energie = energie_base * (1.0 - reduction_energie_pct)
         wifi = (
-            BAREME["wifi_par_log"] * nb_log * 12 + BAREME["internet_fixe"] * 12
+            bareme["wifi_par_log"] * nb_log * 12 + bareme["internet_fixe"] * 12
             if wifi_ajoute
             else 0.0
         )
         # Thermopompes UNIQUEMENT en APH (pas SCHL standard).
         thermopompes = (
-            nb_thermopompes_ajoutees * BAREME["thermopompe"]
+            nb_thermopompes_ajoutees * bareme["thermopompe"]
             if is_aph
             else 0.0
         )
@@ -550,6 +649,7 @@ def compute_frais_demarrage(
     ltv_achat_preteur_b: float = LTV_ACHAT_PRETEUR_B,
     frais_fixes_overrides: Optional[Dict[str, float]] = None,
     pct_courtiers_overrides: Optional[Dict[str, float]] = None,
+    taxes_bienvenue_brackets: Optional[List[tuple]] = None,
 ) -> FraisDemarrage:
     """Calcule L4..L19. `financement_aph_100` est utilisé pour le
     courtier hyp. 2 (1 % du financement APH 100 pts, le plus généreux).
@@ -585,7 +685,9 @@ def compute_frais_demarrage(
     return FraisDemarrage(
         courtier_hypothecaire_1=pc["courtier_hypothecaire_1"] * prix_achat,
         courtier_hypothecaire_2=pc["courtier_hypothecaire_2"] * financement_aph_100,
-        taxes_bienvenue=taxes_bienvenue_mtl(prix_achat),
+        taxes_bienvenue=taxes_bienvenue_mtl(
+            prix_achat, taxes_bienvenue_brackets
+        ),
         evaluateur=ff["evaluateur"],
         evaluateur_2=ff["evaluateur_2"],
         inspection=ff["inspection"],
@@ -689,6 +791,45 @@ class FinanceInputs:
     # (L4 et L5). Clés : ``courtier_hypothecaire_1`` / ``_2``. Valeurs
     # en fraction (0.01 = 1 %).
     pct_courtiers_overrides: Dict[str, float] = field(default_factory=dict)
+
+    # Juin 2026 — Dé-hardcodage du barème des dépenses normalisées SCHL.
+    # Overrides GLOBAUX du barème ``BAREME`` (groupe BD
+    # ``depenses_normalisees``). Clés = celles de ``BAREME``
+    # (concierge_lt12, concierge_gte12, entretien, gestion_lt12,
+    # gestion_gte12, wifi_par_log, internet_fixe, thermopompe). Valeurs
+    # déjà converties dans l'unité interne attendue par le moteur (les %
+    # de gestion en fraction, ex. 0.0425). Vide → fallback ``BAREME``.
+    bareme_overrides: Dict[str, float] = field(default_factory=dict)
+
+    # Seuil de bascule du barème petit/grand immeuble (concierge +
+    # gestion). Défaut ``SEUIL_BASCULE_BAREME_LOG`` (12). Externalisé via
+    # le défaut global ``seuil_bascule_bareme_log``.
+    seuil_bascule_bareme_log: int = SEUIL_BASCULE_BAREME_LOG
+
+    # Juin 2026 — Dé-hardcodage des scénarios de financement. Overrides
+    # GLOBAUX des ratios LTV / amortissement / RCD des 4 scénarios
+    # (groupe BD ``scenarios_financement``). Dict imbriqué
+    # ``{ slug: {"ltv":.., "amort":.., "rcd":..} }`` avec slug ∈
+    # {achat, schl_std, aph50, aph100}. Champ absent → fallback
+    # constante hardcoded (``SCENARIO_*``).
+    scenario_overrides: Dict[str, Dict[str, float]] = field(
+        default_factory=dict
+    )
+
+    # Juin 2026 — Dé-hardcodage des barèmes fiscaux (groupe BD
+    # ``baremes_fiscaux``).
+    #
+    # Ratio d'abordabilité APH SELECT (proportion de logements
+    # abordables). Défaut ``RATIO_ABORDABILITE_APH`` (0.40). Externalisé
+    # via le défaut global ``ratio_abordabilite_aph``.
+    ratio_abordabilite_aph: float = RATIO_ABORDABILITE_APH
+
+    # Barème progressif des taxes de bienvenue de Montréal. Liste de
+    # tuples ``(seuil_haut, taux_fraction)`` (dernier palier =
+    # ``math.inf``). ``None`` → fallback ``TAXES_BIENVENUE_MTL_BRACKETS``.
+    # Externalisé via le défaut global ``taxes_bienvenue_mtl``
+    # (``value_json``).
+    taxes_bienvenue_brackets: Optional[List[tuple]] = None
 
 
 @dataclass
@@ -810,8 +951,20 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
       6. MDF achat / équité refi
       7. Best refi
     """
+    # Juin 2026 : configs des scénarios résolues depuis les overrides
+    # globaux (groupe ``scenarios_financement``), avec fallback sur les
+    # constantes hardcoded ``SCENARIO_*`` poste par poste.
+    sc_ov = inputs.scenario_overrides
+    cfg_achat = resolve_scenario("achat", sc_ov)
+    cfg_schl = resolve_scenario("schl_std", sc_ov)
+    cfg_aph50 = resolve_scenario("aph50", sc_ov)
+    cfg_aph100 = resolve_scenario("aph100", sc_ov)
+
     typo = compute_typology_aggregates(
-        inputs.typologie, inputs.typologie_prix, inputs.nombre_logements
+        inputs.typologie,
+        inputs.typologie_prix,
+        inputs.nombre_logements,
+        ratio_abordabilite=inputs.ratio_abordabilite_aph,
     )
 
     # ── Étape 1 : Scénario Achat ─────────────────────────────────
@@ -835,9 +988,11 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         wifi_ajoute=inputs.wifi_ajoute,
         nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
         taux_inoccupation_pct=inputs.taux_inoccupation_pct,
+        bareme_overrides=inputs.bareme_overrides,
+        seuil_bascule_log=inputs.seuil_bascule_bareme_log,
     )
     achat = compute_scenario(
-        config=SCENARIO_ACHAT,
+        config=cfg_achat,
         nb_log=nb_log_achat,
         loyer_mois=loyer_mois_achat,
         revenus_totaux=inputs.revenus_annuels,
@@ -873,6 +1028,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         wifi_ajoute=inputs.wifi_ajoute,
         nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
         taux_inoccupation_pct=inputs.taux_inoccupation_pct,
+        bareme_overrides=inputs.bareme_overrides,
+        seuil_bascule_log=inputs.seuil_bascule_bareme_log,
     )
     # Dépenses APH 50 : avec thermopompes (is_aph=True).
     depenses_aph_50 = compute_depenses_for_scenario(
@@ -889,9 +1046,11 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         wifi_ajoute=inputs.wifi_ajoute,
         nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
         taux_inoccupation_pct=inputs.taux_inoccupation_pct,
+        bareme_overrides=inputs.bareme_overrides,
+        seuil_bascule_log=inputs.seuil_bascule_bareme_log,
     )
     refi_schl = compute_scenario(
-        config=SCENARIO_REFI_SCHL,
+        config=cfg_schl,
         nb_log=nb_log_refi,
         loyer_mois=loyer_mois_refi_std,
         revenus_totaux=revenus_refi_std,
@@ -901,7 +1060,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         valeur_marchande=None,
     )
     refi_aph_50 = compute_scenario(
-        config=SCENARIO_REFI_APH_50,
+        config=cfg_aph50,
         nb_log=nb_log_refi,
         loyer_mois=loyer_mois_refi_std,
         revenus_totaux=revenus_refi_std,
@@ -934,9 +1093,11 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             wifi_ajoute=inputs.wifi_ajoute,
             nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
             taux_inoccupation_pct=inputs.taux_inoccupation_pct,
+            bareme_overrides=inputs.bareme_overrides,
+            seuil_bascule_log=inputs.seuil_bascule_bareme_log,
         )
         refi_aph_100 = compute_scenario(
-            config=SCENARIO_REFI_APH_100,
+            config=cfg_aph100,
             nb_log=nb_log_refi,
             loyer_mois=loyer_mois_aph_100,
             revenus_totaux=revenus_aph_100,
@@ -970,9 +1131,10 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         frais_negociations=inputs.frais_negociations,
         frais_travaux=inputs.frais_travaux,
         frais_dossier_preteur_pct=inputs.frais_dossier_preteur_pct,
-        ltv_achat_preteur_b=SCENARIO_ACHAT.ltv,
+        ltv_achat_preteur_b=cfg_achat.ltv,
         frais_fixes_overrides=inputs.frais_fixes_overrides,
         pct_courtiers_overrides=inputs.pct_courtiers_overrides,
+        taxes_bienvenue_brackets=inputs.taxes_bienvenue_brackets,
     )
     # Overrides manuels : pour chaque clé fournie par l'utilisateur,
     # on remplace la valeur calculée par sa saisie. Permet d'ajuster
