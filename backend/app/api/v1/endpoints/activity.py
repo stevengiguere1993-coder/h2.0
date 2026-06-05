@@ -30,6 +30,7 @@ Agrégé en lecture :
 
 from __future__ import annotations
 
+import logging
 from datetime import date as date_cls, datetime, time, timedelta, timezone
 from typing import Any, List, Optional
 from zoneinfo import ZoneInfo
@@ -64,9 +65,12 @@ from app.models.devlog_soumission_module import DevlogSoumissionModule
 from app.models.devlog_soumission_item import DevlogSoumissionItem
 from app.models.devlog_client import DevlogClient
 from app.models.devlog_lead import DevlogLead
+from app.models.lead_analysis import LeadAnalysis
 
 
 TORONTO = ZoneInfo("America/Toronto")
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/activity", tags=["activity"])
@@ -1557,6 +1561,10 @@ _DETAIL_ENTITIES: dict[str, tuple] = {
     "entreprise": (
         Entreprise, "entreprise", "entreprise", "entreprise:read",
     ),
+    "lead_analysis": (
+        LeadAnalysis, "prospection", "lead_analysis",
+        "prospection:analyses:read",
+    ),
     # Tâches : chaque modèle a son slug de pôle et sa capacité <pole>:tasks:read.
     "devlog_project_task": (
         DevlogProjectTask, "devlog", "devlog_project_task",
@@ -1756,3 +1764,296 @@ async def get_entreprise_detail(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+@router.get(
+    "/entities/lead_analysis/{entity_id}",
+    summary="Détail d'une analyse de lead (clé d'API)",
+)
+async def get_lead_analysis_detail(
+    ctx: ApiKeyContext, db: DBSession,
+    entity_id: int = Path(..., description="Id de l'analyse de lead."),
+) -> dict:
+    """Renvoie le JSON « full » d'une analyse de lead (fiche d'analyse
+    financière) du pôle Prospection. Respecte le scope de pôle."""
+    try:
+        return await load_entity_full(db, ctx, "lead_analysis", entity_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+# ── Lecture d'ENSEMBLE (liste) d'une entité d'un pôle ──────────────
+#
+# Renvoie une LISTE paginée (résumés) de toutes les entités d'un type,
+# pour donner au connecteur une vue d'ensemble d'un pôle (deals du
+# pipeline, analyses de leads en cours, soumissions, projets, entreprises)
+# plutôt qu'une seule entité par id. Lecture seule, scope de pôle respecté
+# (mêmes règles que la lecture détail : capacité de liste dédiée OU
+# ``<pole>:activity:read`` → couvre la rétrocompat).
+#
+# Pagination simple : ``limit`` (défaut 50, plafond 100) + ``offset``. La
+# réponse indique ``truncated=True`` quand d'autres résultats existent
+# au-delà de la page renvoyée, pour ne pas faire croire à une liste
+# complète. Filtre optionnel par étape / statut (``stage``), et filtre
+# « actives uniquement » pour les analyses (``active_only``).
+
+#: Limite par défaut et plafond d'une page de liste.
+_LIST_DEFAULT_LIMIT = 50
+_LIST_MAX_LIMIT = 100
+
+
+class _ListSpec:
+    """Description de la lecture en liste d'un type d'entité.
+
+    - model       : classe ORM.
+    - pole        : slug du pôle (gouverne le scope).
+    - entity_type : clé de sérialisation (entity_serializers).
+    - list_cap    : capacité de liste dédiée (<pole>:...:list).
+    - order_attr  : colonne de tri (décroissant) — id si None.
+    - stage_attr  : colonne filtrable par « étape / statut » (ou None).
+    - supports_active : True si le type supporte le filtre « en cours »
+                        (réservé aux analyses de leads).
+    """
+
+    __slots__ = (
+        "model", "pole", "entity_type", "list_cap", "order_attr",
+        "stage_attr", "supports_active",
+    )
+
+    def __init__(
+        self, *, model, pole, entity_type, list_cap, order_attr,
+        stage_attr, supports_active,
+    ):
+        self.model = model
+        self.pole = pole
+        self.entity_type = entity_type
+        self.list_cap = list_cap
+        self.order_attr = order_attr
+        self.stage_attr = stage_attr
+        self.supports_active = supports_active
+
+
+#: Type de liste (clé d'URL / d'outil MCP) → spec. Plusieurs alias pointent
+#: vers le même spec (ex. « deals » et « prospection_deal »).
+_LIST_ENTITIES: dict[str, _ListSpec] = {
+    "deals": _ListSpec(
+        model=ProspectionDeal, pole="prospection",
+        entity_type="prospection_deal", list_cap="prospection:deals:list",
+        order_attr="position", stage_attr="priority", supports_active=False,
+    ),
+    "analyses": _ListSpec(
+        model=LeadAnalysis, pole="prospection",
+        entity_type="lead_analysis", list_cap="prospection:analyses:list",
+        order_attr="updated_at", stage_attr="status", supports_active=True,
+    ),
+    "soumissions": _ListSpec(
+        model=DevlogSoumission, pole="devlog",
+        entity_type="devlog_soumission", list_cap="devlog:soumissions:list",
+        order_attr="id", stage_attr="status", supports_active=False,
+    ),
+    "devlog_projects": _ListSpec(
+        model=DevlogProject, pole="devlog",
+        entity_type="devlog_project", list_cap="devlog:projects:list",
+        order_attr="updated_at", stage_attr="status", supports_active=False,
+    ),
+    "entreprises": _ListSpec(
+        model=Entreprise, pole="entreprise",
+        entity_type="entreprise", list_cap="entreprise:list",
+        order_attr="position", stage_attr=None, supports_active=False,
+    ),
+    "projects": _ListSpec(
+        model=Project, pole="construction",
+        entity_type="project", list_cap="construction:projects:list",
+        order_attr="updated_at", stage_attr="status", supports_active=False,
+    ),
+}
+
+#: Alias supplémentaires (noms « complets ») vers les mêmes specs, pour que
+#: l'API accepte aussi bien « deals » que « prospection_deal ».
+_LIST_ALIASES: dict[str, str] = {
+    "prospection_deal": "deals",
+    "prospection_deals": "deals",
+    "lead_analysis": "analyses",
+    "lead_analyses": "analyses",
+    "devlog_soumission": "soumissions",
+    "devlog_project": "devlog_projects",
+    "entreprise": "entreprises",
+    "project": "projects",
+    "construction_projects": "projects",
+}
+
+
+def _resolve_list_spec(list_type: str) -> Optional[_ListSpec]:
+    key = (list_type or "").strip().lower()
+    if key in _LIST_ENTITIES:
+        return _LIST_ENTITIES[key]
+    alias = _LIST_ALIASES.get(key)
+    if alias is not None:
+        return _LIST_ENTITIES.get(alias)
+    return None
+
+
+def _can_list_entity(ctx, spec: _ListSpec) -> bool:
+    """La clé peut-elle lister ce type ? Capacité de liste dédiée OU lecture
+    d'activité du pôle (couvre la rétrocompat clé sans scopes)."""
+    return ctx.has_scope(spec.list_cap) or ctx.has_scope(
+        f"{spec.pole}:activity:read"
+    )
+
+
+async def list_entities(
+    db,
+    ctx,
+    list_type: str,
+    *,
+    stage: Optional[str] = None,
+    active_only: bool = False,
+    limit: int = _LIST_DEFAULT_LIMIT,
+    offset: int = 0,
+) -> dict:
+    """Liste paginée (résumés) des entités d'un type, scope de pôle
+    respecté. Réutilisé par REST et MCP.
+
+    Lève :
+      - ValueError("unknown") si ``list_type`` n'est pas reconnu ;
+      - PermissionError(message) si la clé n'a pas le scope requis.
+
+    Retourne ``{entity_type, pole, items, count, limit, offset, truncated}``.
+    ``truncated`` est True s'il reste des résultats au-delà de la page.
+    """
+    spec = _resolve_list_spec(list_type)
+    if spec is None:
+        raise ValueError("unknown")
+
+    if not _can_list_entity(ctx, spec):
+        raise PermissionError(
+            f"Lecture de liste non autorisée pour le pôle "
+            f"« {POLE_LABELS.get(spec.pole, spec.pole)} » sur cette clé d'API."
+        )
+
+    # Borne la pagination (sécurité : on ne renvoie jamais > _LIST_MAX_LIMIT).
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = _LIST_DEFAULT_LIMIT
+    try:
+        offset = int(offset)
+    except (TypeError, ValueError):
+        offset = 0
+    limit = max(1, min(limit, _LIST_MAX_LIMIT))
+    offset = max(0, offset)
+
+    stmt = select(spec.model)
+
+    # Filtre par étape / statut (sur la colonne déclarée).
+    stage_token = _norm(stage)
+    if stage_token and spec.stage_attr:
+        col = getattr(spec.model, spec.stage_attr, None)
+        if col is not None:
+            stmt = stmt.where(col == stage_token)
+
+    # Filtre « en cours » (analyses uniquement) : ni abandonnée ni convertie.
+    if active_only and spec.supports_active:
+        status_col = getattr(spec.model, "status", None)
+        if status_col is not None:
+            stmt = stmt.where(status_col != "abandonne")
+        for fk in ("converted_to_deal_id", "converted_to_lead_id"):
+            fk_col = getattr(spec.model, fk, None)
+            if fk_col is not None:
+                stmt = stmt.where(fk_col.is_(None))
+
+    # Tri décroissant sur la colonne déclarée (id en repli).
+    order_col = getattr(spec.model, spec.order_attr or "id", None)
+    if order_col is None:
+        order_col = getattr(spec.model, "id")
+    stmt = stmt.order_by(order_col.desc())
+
+    # On lit une ligne de plus que `limit` pour détecter la troncature
+    # sans COUNT séparé.
+    rows = (
+        await db.execute(stmt.offset(offset).limit(limit + 1))
+    ).scalars().all()
+    truncated = len(rows) > limit
+    page = rows[:limit]
+
+    items = [
+        serialize_entity(spec.entity_type, obj, level="summary")
+        for obj in page
+    ]
+
+    return {
+        "entity_type": spec.entity_type,
+        "pole": spec.pole,
+        "items": items,
+        "count": len(items),
+        "limit": limit,
+        "offset": offset,
+        "truncated": truncated,
+    }
+
+
+@router.get(
+    "/entities/{list_type}",
+    summary="Lister les entités d'un pôle (vue d'ensemble, clé d'API)",
+)
+async def list_entities_endpoint(
+    ctx: ApiKeyContext,
+    db: DBSession,
+    list_type: str = Path(
+        ...,
+        description=(
+            "Type de liste : deals, analyses, soumissions, devlog_projects, "
+            "entreprises, projects (alias acceptés : prospection_deal, "
+            "lead_analysis, devlog_project, project…)."
+        ),
+    ),
+    stage: Optional[str] = Query(
+        default=None,
+        description=(
+            "Filtre optionnel par étape / statut (étape pipeline pour les "
+            "deals, statut kanban pour les analyses / soumissions / projets)."
+        ),
+    ),
+    active_only: bool = Query(
+        default=False,
+        description=(
+            "Analyses uniquement : ne renvoyer que les fiches « en cours » "
+            "(ni abandonnées ni converties)."
+        ),
+    ),
+    limit: int = Query(
+        default=_LIST_DEFAULT_LIMIT,
+        ge=1,
+        le=_LIST_MAX_LIMIT,
+        description="Taille de page (1..100, défaut 50).",
+    ),
+    offset: int = Query(default=0, ge=0, description="Décalage de pagination."),
+) -> dict:
+    """Renvoie une LISTE paginée (résumés) des entités d'un type pour un
+    pôle, en respectant le scope de pôle de la clé. ``truncated=True``
+    quand d'autres résultats existent au-delà de la page renvoyée.
+
+    404 si le type est inconnu ; 403 si la clé ne peut pas lire ce pôle."""
+    try:
+        result = await list_entities(
+            db, ctx, list_type,
+            stage=stage, active_only=active_only,
+            limit=limit, offset=offset,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Type de liste inconnu : « {list_type} ».",
+        )
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        )
+    if result.get("truncated"):
+        logger.info(
+            "list_entities %s tronquée (limit=%s offset=%s) pour clé API",
+            list_type, result.get("limit"), result.get("offset"),
+        )
+    return result
