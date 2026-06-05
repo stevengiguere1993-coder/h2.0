@@ -7,6 +7,13 @@ import { hasMinRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useProspectionLayout } from "../../layout";
 import { ParametresTabs } from "../_tabs";
+import {
+  BaremesFiscauxSection,
+  DepensesNormaliseesSection,
+  InputsManuelsSection,
+  MdfFraisSection,
+  ScenariosFinancementSection
+} from "./_analyse-sections";
 
 /**
  * Page « Calculateur » des Paramètres Prospection.
@@ -62,7 +69,11 @@ export default function ProspectionAnalysePage() {
           </p>
         ) : (
           <div className="mt-6 space-y-6">
-            {/* Sections ajoutées commit par commit. */}
+            <DepensesNormaliseesSection />
+            <ScenariosFinancementSection />
+            <BaremesFiscauxSection />
+            <InputsManuelsSection />
+            <MdfFraisSection />
           </div>
         )}
       </div>
