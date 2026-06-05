@@ -34,6 +34,9 @@ Outils exposés :
   - kratos_my_summary    : résumé en français de l'activité d'un jour.
   - kratos_activity_range: activité agrégée sur une plage from/to.
   - kratos_get_*         : JSON détaillé d'une entité par id (lecture).
+  - kratos_list_deals    : deals du pipeline Prospection (vue d'ensemble).
+  - kratos_list_analyses : analyses de leads (filtre « en cours » optionnel).
+  - kratos_list_entities : liste générique de l'entité d'un pôle (résumés).
   - kratos_list_members  : membres assignables (Users + Employés).
   - kratos_create_task   : crée une tâche dans un pôle (assignable, capacité requise).
   - kratos_update_task   : modifie une tâche (capacité requise).
@@ -52,12 +55,15 @@ from fastapi.responses import JSONResponse
 from app.api.api_key_deps import API_KEY_PREFIX, hash_api_key
 from app.api.v1.endpoints.activity import (
     _DETAIL_ENTITIES,
+    _LIST_ENTITIES,
     _TASK_WRITE_ENTITIES,
     _build_summary,
     _collect_audit,
     _collect_tasks,
+    _resolve_list_spec,
     _resolve_window,
     create_task_for_pole,
+    list_entities,
     list_members,
     load_entity_full,
     move_task_for_type,
@@ -97,7 +103,7 @@ DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 
 # Métadonnées du serveur renvoyées à l'`initialize`.
 SERVER_NAME = "kratos-activity"
-SERVER_VERSION = "1.2.0"
+SERVER_VERSION = "1.3.0"
 
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
@@ -358,6 +364,7 @@ _GET_SOUMISSION_TOOL = "kratos_get_soumission"
 _GET_TASK_TOOL = "kratos_get_task"
 _GET_DEAL_TOOL = "kratos_get_deal"
 _GET_ENTREPRISE_TOOL = "kratos_get_entreprise"
+_GET_ANALYSIS_TOOL = "kratos_get_analysis"
 
 #: Pôle gouvernant le scope de chaque outil get (pour décider de l'afficher).
 _GET_TOOL_POLE: dict[str, str] = {
@@ -365,6 +372,7 @@ _GET_TOOL_POLE: dict[str, str] = {
     _GET_TASK_TOOL: "_any_task",   # plusieurs pôles possibles
     _GET_DEAL_TOOL: "prospection",
     _GET_ENTREPRISE_TOOL: "entreprise",
+    _GET_ANALYSIS_TOOL: "prospection",
 }
 
 #: Types de tâche reconnus par kratos_get_task → entity_type de détail.
@@ -446,6 +454,27 @@ def _get_detail_tools() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": _GET_ANALYSIS_TOOL,
+            "description": (
+                "Renvoie le JSON DÉTAILLÉ d'une analyse de lead (fiche "
+                "d'analyse financière) du pôle Prospection par son `id` : "
+                "adresse, étape kanban, statut (en cours / converti), chiffres "
+                "clés (prix demandé, logements, revenus, dépenses, mise de "
+                "fonds prêteur B, refinancement…), dates. Lecture seule."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "description": "Id de l'analyse de lead.",
+                    }
+                },
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": _GET_ENTREPRISE_TOOL,
             "description": (
                 "Renvoie le JSON DÉTAILLÉ d'une entreprise du pôle Gestion "
@@ -465,6 +494,193 @@ def _get_detail_tools() -> list[dict[str, Any]]:
             },
         },
     ]
+
+
+# ── Outils de LISTE d'ensemble (résumés paginés d'un type d'entité) ─
+#
+# Donnent une vue de liste d'un pôle (deals du pipeline, analyses de leads
+# en cours, soumissions, projets, entreprises) plutôt qu'une entité par id.
+# Deux outils dédiés Prospection (`kratos_list_deals`, `kratos_list_analyses`)
+# et un outil GÉNÉRIQUE (`kratos_list_entities`) pour les autres types. Tous
+# scope-gated par pôle et plafonnés (limite 100, flag `truncated`).
+
+_LIST_DEALS_TOOL = "kratos_list_deals"
+_LIST_ANALYSES_TOOL = "kratos_list_analyses"
+_LIST_ENTITIES_TOOL = "kratos_list_entities"
+_LIST_TOOL_NAMES = (_LIST_DEALS_TOOL, _LIST_ANALYSES_TOOL, _LIST_ENTITIES_TOOL)
+
+#: Types acceptés par l'outil générique kratos_list_entities → (pole, label).
+#: On expose les types « génériques » (les deals/analyses ont leurs outils
+#: dédiés mais restent acceptés ici aussi pour la souplesse).
+_LIST_GENERIC_CHOICES = (
+    "deals",
+    "analyses",
+    "soumissions",
+    "devlog_projects",
+    "entreprises",
+    "projects",
+)
+
+_LIMIT_PROP = {
+    "type": "integer",
+    "description": "Taille de page (1 à 100, défaut 50).",
+}
+_OFFSET_PROP = {
+    "type": "integer",
+    "description": "Décalage de pagination (défaut 0).",
+}
+
+
+def _list_deals_tool() -> dict[str, Any]:
+    return {
+        "name": _LIST_DEALS_TOOL,
+        "description": (
+            "Liste les deals du Pipeline Prospection (vue d'ensemble) : "
+            "adresse, étape pipeline, et chiffres clés de l'analyse liée. "
+            "Filtre optionnel `stage` (étape pipeline : urgent, eleve, "
+            "moyenne, a_venir, termine, abandonne). Résumés paginés "
+            "(`limit`/`offset`) ; `truncated=true` s'il reste des résultats. "
+            "Lecture seule."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "stage": {
+                    "type": "string",
+                    "description": "Étape pipeline à filtrer (optionnel).",
+                },
+                "limit": _LIMIT_PROP,
+                "offset": _OFFSET_PROP,
+            },
+            "additionalProperties": False,
+        },
+    }
+
+
+def _list_analyses_tool() -> dict[str, Any]:
+    return {
+        "name": _LIST_ANALYSES_TOOL,
+        "description": (
+            "Liste les analyses de leads du pôle Prospection (fiches "
+            "d'analyse financière, vue d'ensemble), avec leur étape kanban et "
+            "leurs chiffres clés. Mets `active_only=true` pour ne garder que "
+            "les analyses EN COURS (ni abandonnées ni converties). Filtre "
+            "optionnel `stage` (statut kanban : a_analyser, "
+            "decision_en_attente, interessant, abandonne). Résumés paginés ; "
+            "`truncated=true` s'il reste des résultats. Lecture seule."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "active_only": {
+                    "type": "boolean",
+                    "description": (
+                        "Ne renvoyer que les analyses en cours (défaut false)."
+                    ),
+                },
+                "stage": {
+                    "type": "string",
+                    "description": "Statut kanban à filtrer (optionnel).",
+                },
+                "limit": _LIMIT_PROP,
+                "offset": _OFFSET_PROP,
+            },
+            "additionalProperties": False,
+        },
+    }
+
+
+def _list_entities_tool_def() -> dict[str, Any]:
+    return {
+        "name": _LIST_ENTITIES_TOOL,
+        "description": (
+            "Liste GÉNÉRIQUE des entités principales d'un pôle (vue "
+            "d'ensemble, résumés paginés). Fournis `entity_type` parmi : "
+            f"{', '.join(_LIST_GENERIC_CHOICES)}. Filtre optionnel `stage` "
+            "(étape / statut selon le type) et `active_only` (analyses "
+            "uniquement). `truncated=true` s'il reste des résultats au-delà "
+            "de la page. N'affiche que les types des pôles lisibles par la "
+            "clé. Lecture seule."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "entity_type": {
+                    "type": "string",
+                    "enum": list(_LIST_GENERIC_CHOICES),
+                    "description": "Type d'entité à lister.",
+                },
+                "stage": {
+                    "type": "string",
+                    "description": "Étape / statut à filtrer (optionnel).",
+                },
+                "active_only": {
+                    "type": "boolean",
+                    "description": "Analyses uniquement : en cours seulement.",
+                },
+                "limit": _LIMIT_PROP,
+                "offset": _OFFSET_PROP,
+            },
+            "required": ["entity_type"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _list_tools_for_scopes(scopes: Optional[list[str]]) -> list[dict[str, Any]]:
+    """Outils de liste exposés selon les pôles lisibles. Les outils dédiés
+    Prospection apparaissent si le pôle prospection est lisible ; l'outil
+    générique apparaît dès qu'AU MOINS un type listable est lisible."""
+    tools: list[dict[str, Any]] = []
+    if _can_read_pole(scopes, "prospection"):
+        tools.append(_list_deals_tool())
+        tools.append(_list_analyses_tool())
+    # Générique : visible si au moins un pôle d'un type listable est lisible.
+    listable_poles = {spec.pole for spec in _LIST_ENTITIES.values()}
+    if any(_can_read_pole(scopes, p) for p in listable_poles):
+        tools.append(_list_entities_tool_def())
+    return tools
+
+
+async def _list_entities_tool(
+    db,
+    scopes: Optional[list[str]],
+    name: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Exécute un outil de liste (deals / analyses / générique) en déléguant
+    à ``list_entities`` (scope par pôle, pagination, troncature). Lève
+    ValueError (type inconnu, scope manquant) — transformée en réponse
+    `isError` par l'appelant."""
+    if name == _LIST_DEALS_TOOL:
+        list_type = "deals"
+    elif name == _LIST_ANALYSES_TOOL:
+        list_type = "analyses"
+    else:  # _LIST_ENTITIES_TOOL
+        list_type = str(arguments.get("entity_type") or "").strip()
+        if not list_type or _resolve_list_spec(list_type) is None:
+            raise ValueError(
+                "`entity_type` doit être l'un de : "
+                + ", ".join(_LIST_GENERIC_CHOICES)
+                + "."
+            )
+
+    stage = arguments.get("stage")
+    active_only = bool(arguments.get("active_only", False))
+    limit = arguments.get("limit", 50)
+    offset = arguments.get("offset", 0)
+
+    ctx = _ScopeCtx(scopes)
+    try:
+        return await list_entities(
+            db, ctx, list_type,
+            stage=stage, active_only=active_only,
+            limit=limit, offset=offset,
+        )
+    except PermissionError as exc:
+        raise ValueError(str(exc))
+    except ValueError:
+        raise ValueError(f"Type de liste inconnu : « {list_type} ».")
 
 
 def _can_read_pole(scopes: Optional[list[str]], pole: str) -> bool:
@@ -512,6 +728,9 @@ def _tools_for_scopes(scopes: Optional[list[str]]) -> list[dict[str, Any]]:
     if readable_poles(scopes):
         tools.extend(_READ_TOOLS)
         tools.extend(_get_tools_for_scopes(scopes))
+        # Outils de liste d'ensemble (deals / analyses / générique), selon
+        # les pôles lisibles.
+        tools.extend(_list_tools_for_scopes(scopes))
         # kratos_list_members : utile dès qu'on peut lire un pôle (aide à
         # choisir un assigné).
         tools.append(_LIST_MEMBERS_TOOL)
@@ -663,6 +882,8 @@ async def _get_entity_detail(
         entity_type = "devlog_soumission"
     elif name == _GET_DEAL_TOOL:
         entity_type = "prospection_deal"
+    elif name == _GET_ANALYSIS_TOOL:
+        entity_type = "lead_analysis"
     elif name == _GET_ENTREPRISE_TOOL:
         entity_type = "entreprise"
     elif name == _GET_TASK_TOOL:
@@ -764,8 +985,13 @@ async def _call_tool(
         _GET_TASK_TOOL,
         _GET_DEAL_TOOL,
         _GET_ENTREPRISE_TOOL,
+        _GET_ANALYSIS_TOOL,
     ):
         return await _get_entity_detail(db, scopes, name, arguments)
+
+    # ── Outils de liste d'ensemble (résumés paginés) ──
+    if name in _LIST_TOOL_NAMES:
+        return await _list_entities_tool(db, scopes, name, arguments)
     if name == _CREATE_TASK_TOOL_NAME:
         pole = str(arguments.get("pole") or "").strip().lower()
         if pole not in POLE_LABELS:
