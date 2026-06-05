@@ -3038,6 +3038,13 @@ def _derive_tri_auto_inputs(results: dict) -> dict:
             except (TypeError, ValueError):
                 continue
 
+    # Scénario refi GAGNANT (best refi) — matché par
+    # ``best_refi.program == scenario.label``. Les revenus, dépenses,
+    # valeur et LTV des intrants TRI proviennent TOUS de ce même
+    # scénario : les scénarios APH (50/100) ont des revenus/dépenses
+    # différents (thermopompes, split abordable/PDM), donc on ne doit
+    # PAS prendre un scénario générique. Cohérent avec ``valeur2`` et
+    # ``rpv_refi`` (déjà issus du best refi).
     best = _best_refi_scenario(results) or {}
     return {
         "prix": prix,
@@ -3045,6 +3052,8 @@ def _derive_tri_auto_inputs(results: dict) -> dict:
         "rpv_achat": max(0.0, 1.0 - mdf_pct),
         "pret_constr": pret_constr,
         "mdf": mdf,
+        # loyers2 / dep2 = revenus & dépenses d'opération DU best refi
+        # (mêmes que valeur2 / rpv_refi ci-dessous → cohérence garantie).
         "loyers2": float(best.get("revenus_totaux") or 0),
         "dep2": float(best.get("depenses_total") or 0),
         "valeur2": float(best.get("valeur_retenue") or 0),
