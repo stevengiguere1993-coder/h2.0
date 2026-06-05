@@ -2041,9 +2041,11 @@ function FieldYesNo({
   // un fort contraste sur l'option active.
   return (
     <div>
-      <label className="text-[10px] uppercase tracking-wider text-white/50">
-        {label}
-      </label>
+      <div className="flex items-baseline justify-between gap-2">
+        <label className="text-[10px] uppercase tracking-wider text-white/50">
+          {label}
+        </label>
+      </div>
       <div
         role="radiogroup"
         aria-label={label}
