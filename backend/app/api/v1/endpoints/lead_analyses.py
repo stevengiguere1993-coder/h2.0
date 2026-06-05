@@ -585,6 +585,69 @@ async def _load_scenario_overrides(db) -> dict:
     return overrides
 
 
+# ── Juin 2026 : Dé-hardcodage des barèmes fiscaux ────────────────────
+
+
+def _parse_taxes_bienvenue_brackets(value_json) -> Optional[list]:
+    """Convertit le ``value_json`` de la clé ``taxes_bienvenue_mtl`` en
+    liste de tuples ``(seuil_haut, taux_fraction)`` attendue par le
+    moteur.
+
+    Format BD attendu : ``[{"seuil": <float|null>, "taux_pct": <float>},
+    ...]`` trié par seuil croissant, le dernier palier ayant ``seuil``
+    null (palier ouvert → ``inf``). ``taux_pct`` est en pourcentage
+    (0.5 = 0.5 %), converti en fraction (÷100). Retourne ``None`` si le
+    JSON est absent ou invalide → le moteur retombe sur le barème
+    hardcoded ``TAXES_BIENVENUE_MTL_BRACKETS``.
+    """
+    if not value_json:
+        return None
+    try:
+        brackets: list = []
+        for tier in value_json:
+            raw_seuil = tier.get("seuil")
+            seuil = float("inf") if raw_seuil is None else float(raw_seuil)
+            taux = float(tier["taux_pct"]) / 100.0
+            brackets.append((seuil, taux))
+        return brackets or None
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Invalid taxes_bienvenue_mtl value_json: %s", exc)
+        return None
+
+
+async def _load_fiscal_overrides(db) -> tuple[Optional[float], Optional[list]]:
+    """Charge les overrides des barèmes fiscaux (groupe
+    ``baremes_fiscaux``).
+
+    Retourne ``(ratio_abordabilite_aph, taxes_bienvenue_brackets)`` :
+    - ``ratio_abordabilite_aph`` (clé ``ratio_abordabilite_aph``) :
+      stocké en décimal (0.40), passé tel quel. ``None`` si absent.
+    - ``taxes_bienvenue_brackets`` (clé ``taxes_bienvenue_mtl``,
+      ``value_json``) : liste de tuples ``(seuil, taux_fraction)``.
+      ``None`` si absent/invalide.
+
+    Champs absents → le moteur retombe sur ``RATIO_ABORDABILITE_APH`` /
+    ``TAXES_BIENVENUE_MTL_BRACKETS`` hardcoded.
+    """
+    ratio: Optional[float] = None
+    taxes_brackets: Optional[list] = None
+    try:
+        rows = (
+            await db.execute(select(ProspectionAnalysisDefault))
+        ).scalars().all()
+        for row in rows:
+            if row.key == "ratio_abordabilite_aph":
+                if row.value_float is not None:
+                    ratio = float(row.value_float)
+            elif row.key == "taxes_bienvenue_mtl":
+                taxes_brackets = _parse_taxes_bienvenue_brackets(
+                    row.value_json
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to load fiscal overrides from DB: %s", exc)
+    return ratio, taxes_brackets
+
+
 async def _load_defaults_for_new_analysis(db) -> dict:
     """Charge les défauts depuis la BD et fusionne avec les fallbacks.
 
@@ -1569,6 +1632,12 @@ async def run_financial_analysis(
     # RCD des 4 scénarios). Si absents en BD, fallback ``SCENARIO_*``.
     scenario_overrides_global = await _load_scenario_overrides(db)
 
+    # Juin 2026 : overrides des barèmes fiscaux (ratio abordabilité APH
+    # + taxes de bienvenue de Montréal). Si absents, fallback constantes.
+    ratio_abordabilite_global, taxes_bienvenue_brackets_global = (
+        await _load_fiscal_overrides(db)
+    )
+
     inputs = FinanceInputs(
         adresse=rec.address or "",
         prix_achat=float(rec.asking_price or 0),
@@ -1615,6 +1684,9 @@ async def run_financial_analysis(
         # Juin 2026 : scénarios de financement (groupe
         # ``scenarios_financement``). Dict vide → fallback ``SCENARIO_*``.
         scenario_overrides=scenario_overrides_global,
+        # Juin 2026 : barèmes fiscaux (groupe ``baremes_fiscaux``).
+        # ``None`` → fallback ``TAXES_BIENVENUE_MTL_BRACKETS``.
+        taxes_bienvenue_brackets=taxes_bienvenue_brackets_global,
         # Mai 2026 : nouveau frais MDF, surchargé globalement via le
         # défaut ``frais_dossier_preteur_pct``. Si la BD n'a pas (encore)
         # de ligne pour cette clé, on laisse ``FinanceInputs`` retomber
@@ -1635,6 +1707,13 @@ async def run_financial_analysis(
         **(
             {"taux_inoccupation_pct": taux_inoccupation_global}
             if taux_inoccupation_global is not None
+            else {}
+        ),
+        # Juin 2026 : ratio d'abordabilité APH (groupe ``baremes_fiscaux``).
+        # Présent → override ; absent → défaut ``RATIO_ABORDABILITE_APH``.
+        **(
+            {"ratio_abordabilite_aph": ratio_abordabilite_global}
+            if ratio_abordabilite_global is not None
             else {}
         ),
     )

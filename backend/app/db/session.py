@@ -7,6 +7,7 @@ Provides:
 - Dependency injection for FastAPI
 """
 
+import json
 from collections.abc import AsyncGenerator
 from typing import Optional
 
@@ -2170,6 +2171,24 @@ async def init_db() -> None:
                     0.01,
                     "scenarios_financement",
                 ),
+                # ── Groupe : Barèmes fiscaux (juin 2026) ─────────────
+                # Ratio d'abordabilité APH SELECT. Valeur = EXACTEMENT la
+                # constante hardcoded ``RATIO_ABORDABILITE_APH`` (0.40).
+                # Stocké en décimal (0.40), passé tel quel au moteur.
+                # (Le barème des taxes de bienvenue est seedé à part car
+                # il utilise ``value_json`` — voir bloc dédié plus bas.)
+                (
+                    "ratio_abordabilite_aph",
+                    0.40,
+                    "Ratio d'abordabilité APH (proportion de logements)",
+                    "Proportion des logements qui doivent être abordables "
+                    "dans le scénario APH 100 pts (nb_abordables = "
+                    "plafond(ratio × nb_total)). Défaut 0.40 (40 %).",
+                    0.0,
+                    1.0,
+                    0.01,
+                    "baremes_fiscaux",
+                ),
         ):
             try:
                 # UPSERT : on insère si la clé n'existe pas, sinon on
@@ -2209,6 +2228,61 @@ async def init_db() -> None:
                 # Table absente au tout premier boot (create_all n'a
                 # pas encore tourné) — retentera au prochain démarrage.
                 pass
+
+        # ── Seed du barème des taxes de bienvenue (juin 2026) ────────
+        # Défaut à valeur structurée (``value_json``) : barème progressif
+        # des taxes de bienvenue de Montréal. Valeur = EXACTEMENT les 7
+        # paliers hardcoded dans ``lead_analysis_finance`` (seuils
+        # 61500/307800/552300/1104700/2136500/3113000 ; taux
+        # 0.5/1.0/1.5/2.0/2.5/3.5/4.0 %). Le dernier palier a ``seuil``
+        # null (palier ouvert → inf). ``taux_pct`` en pourcentage,
+        # reconverti en fraction (÷100) au runtime côté loader.
+        #
+        # UPSERT idempotent : INSERT avec ``value_json`` si la clé est
+        # absente ; sur conflit on ne met à jour QUE les métadonnées
+        # (label/desc/group) — pas ``value_json`` (préserve un barème
+        # déjà modifié par l'utilisateur via le PATCH).
+        taxes_bienvenue_json = json.dumps([
+            {"seuil": 61500, "taux_pct": 0.5},
+            {"seuil": 307800, "taux_pct": 1.0},
+            {"seuil": 552300, "taux_pct": 1.5},
+            {"seuil": 1104700, "taux_pct": 2.0},
+            {"seuil": 2136500, "taux_pct": 2.5},
+            {"seuil": 3113000, "taux_pct": 3.5},
+            {"seuil": None, "taux_pct": 4.0},
+        ])
+        try:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO prospection_analysis_defaults
+                      (key, value_json, label_fr, description_fr,
+                       step, group_name, updated_at)
+                    VALUES (:key, CAST(:value_json AS JSONB), :label_fr,
+                            :description_fr, :step, :group, NOW())
+                    ON CONFLICT (key) DO UPDATE SET
+                        label_fr       = EXCLUDED.label_fr,
+                        description_fr = EXCLUDED.description_fr,
+                        group_name     = EXCLUDED.group_name
+                    """
+                ),
+                {
+                    "key": "taxes_bienvenue_mtl",
+                    "value_json": taxes_bienvenue_json,
+                    "label_fr": "Taxes de bienvenue — Montréal (paliers)",
+                    "description_fr": (
+                        "Barème progressif des taxes de bienvenue de "
+                        "Montréal. Liste de paliers {seuil, taux_pct} ; "
+                        "le dernier palier (seuil null) couvre tout au-"
+                        "dessus du dernier seuil. taux_pct en pourcentage."
+                    ),
+                    "step": 0.01,
+                    "group": "baremes_fiscaux",
+                },
+            )
+        except Exception:
+            # Table absente au tout premier boot — retentera plus tard.
+            pass
 
         # ── Backfill `financable_par_defaut` (mai 2026) ──────────────
         # On ne TOUCHE PAS aux items pour lesquels Phil a déjà

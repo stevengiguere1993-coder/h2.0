@@ -53,6 +53,33 @@ BAREME: Dict[str, float] = {
 SEUIL_BASCULE_BAREME_LOG: int = 12
 
 
+# ─── Barèmes fiscaux ───────────────────────────────────────────────
+#
+# Juin 2026 : externalisés via le groupe BD ``baremes_fiscaux``. Le
+# moteur lit la config si présente, sinon retombe sur ces constantes.
+
+# Ratio d'abordabilité APH SELECT : proportion des logements qui doivent
+# être abordables (nb_abordables = ceil(ratio × nb_total)). Défaut 0.40
+# (40 %). Externalisé via le défaut global ``ratio_abordabilite_aph``.
+RATIO_ABORDABILITE_APH: float = 0.40
+
+# Barème progressif des taxes de bienvenue de Montréal (2024-2025).
+# Liste de tuples ``(seuil_haut, taux_fraction)`` ; le dernier palier
+# (``math.inf``) couvre tout au-dessus du dernier seuil. Externalisé via
+# le défaut global ``taxes_bienvenue_mtl`` (stocké en ``value_json`` sous
+# forme ``[{"seuil": .., "taux_pct": ..}]``, ``seuil`` null = palier
+# ouvert). Cf. L6 dans l'Excel.
+TAXES_BIENVENUE_MTL_BRACKETS: List[tuple] = [
+    (61_500,    0.005),
+    (307_800,   0.010),
+    (552_300,   0.015),
+    (1_104_700, 0.020),
+    (2_136_500, 0.025),
+    (3_113_000, 0.035),
+    (math.inf,  0.040),
+]
+
+
 # ─── Frais fixes (L7..L13) ─────────────────────────────────────────
 #
 # Valeurs par défaut « historiques » (hardcoded). Depuis la PR
@@ -174,20 +201,21 @@ def resolve_scenario(
 # ─── Helpers ───────────────────────────────────────────────────────
 
 
-def taxes_bienvenue_mtl(prix_achat: float) -> float:
+def taxes_bienvenue_mtl(
+    prix_achat: float,
+    brackets: Optional[List[tuple]] = None,
+) -> float:
     """Taxes de bienvenue de Montréal (tiers progressifs 2024-2025).
-    Cf. L6 dans l'Excel."""
+    Cf. L6 dans l'Excel.
+
+    ``brackets`` (optionnel) : liste de tuples ``(seuil_haut,
+    taux_fraction)`` triée par seuil croissant, le dernier palier ayant
+    un ``seuil_haut`` ``math.inf`` (palier ouvert). Provient du défaut
+    global ``taxes_bienvenue_mtl`` (groupe ``baremes_fiscaux``). Si
+    ``None`` → fallback ``TAXES_BIENVENUE_MTL_BRACKETS`` (hardcoded)."""
     if prix_achat <= 0:
         return 0.0
-    brackets = [
-        (61_500,    0.005),
-        (307_800,   0.010),
-        (552_300,   0.015),
-        (1_104_700, 0.020),
-        (2_136_500, 0.025),
-        (3_113_000, 0.035),
-        (math.inf,  0.040),
-    ]
+    brackets = brackets if brackets else TAXES_BIENVENUE_MTL_BRACKETS
     taxe = 0.0
     seuil_bas = 0.0
     for seuil_haut, taux in brackets:
@@ -255,12 +283,17 @@ def compute_typology_aggregates(
     typologie: Dict[str, int],
     typologie_prix: Dict[str, float],
     nb_total: int,
+    ratio_abordabilite: float = RATIO_ABORDABILITE_APH,
 ) -> TypologyAggregates:
     """Calcule H13, nb_abordables, nouveau_loyer_moyen_pdm.
 
     `typologie` = { "2.5": 0, "3.5": 4, "4.5": 4, ... }
     `typologie_prix` = { "3.5": 1400, "4.5": 1600, ... } (uniquement
     pour les types avec quantité > 0).
+
+    ``ratio_abordabilite`` : proportion des logements abordables (APH
+    SELECT). Défaut ``RATIO_ABORDABILITE_APH`` (0.40). Externalisé via
+    le défaut global ``ratio_abordabilite_aph``.
     """
     if nb_total <= 0:
         return TypologyAggregates(0.0, 0, 0, 0.0)
@@ -286,7 +319,7 @@ def compute_typology_aggregates(
     )
 
     # APH SELECT : nombre abordables = ceil(40 % × total)
-    nb_abordables = math.ceil(0.40 * nb_total)
+    nb_abordables = math.ceil(ratio_abordabilite * nb_total)
     nb_pdm = nb_total - nb_abordables
 
     # Loyer moyen PDM : on prend les unités les plus chères en
@@ -616,6 +649,7 @@ def compute_frais_demarrage(
     ltv_achat_preteur_b: float = LTV_ACHAT_PRETEUR_B,
     frais_fixes_overrides: Optional[Dict[str, float]] = None,
     pct_courtiers_overrides: Optional[Dict[str, float]] = None,
+    taxes_bienvenue_brackets: Optional[List[tuple]] = None,
 ) -> FraisDemarrage:
     """Calcule L4..L19. `financement_aph_100` est utilisé pour le
     courtier hyp. 2 (1 % du financement APH 100 pts, le plus généreux).
@@ -651,7 +685,9 @@ def compute_frais_demarrage(
     return FraisDemarrage(
         courtier_hypothecaire_1=pc["courtier_hypothecaire_1"] * prix_achat,
         courtier_hypothecaire_2=pc["courtier_hypothecaire_2"] * financement_aph_100,
-        taxes_bienvenue=taxes_bienvenue_mtl(prix_achat),
+        taxes_bienvenue=taxes_bienvenue_mtl(
+            prix_achat, taxes_bienvenue_brackets
+        ),
         evaluateur=ff["evaluateur"],
         evaluateur_2=ff["evaluateur_2"],
         inspection=ff["inspection"],
@@ -779,6 +815,21 @@ class FinanceInputs:
     scenario_overrides: Dict[str, Dict[str, float]] = field(
         default_factory=dict
     )
+
+    # Juin 2026 — Dé-hardcodage des barèmes fiscaux (groupe BD
+    # ``baremes_fiscaux``).
+    #
+    # Ratio d'abordabilité APH SELECT (proportion de logements
+    # abordables). Défaut ``RATIO_ABORDABILITE_APH`` (0.40). Externalisé
+    # via le défaut global ``ratio_abordabilite_aph``.
+    ratio_abordabilite_aph: float = RATIO_ABORDABILITE_APH
+
+    # Barème progressif des taxes de bienvenue de Montréal. Liste de
+    # tuples ``(seuil_haut, taux_fraction)`` (dernier palier =
+    # ``math.inf``). ``None`` → fallback ``TAXES_BIENVENUE_MTL_BRACKETS``.
+    # Externalisé via le défaut global ``taxes_bienvenue_mtl``
+    # (``value_json``).
+    taxes_bienvenue_brackets: Optional[List[tuple]] = None
 
 
 @dataclass
@@ -910,7 +961,10 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
     cfg_aph100 = resolve_scenario("aph100", sc_ov)
 
     typo = compute_typology_aggregates(
-        inputs.typologie, inputs.typologie_prix, inputs.nombre_logements
+        inputs.typologie,
+        inputs.typologie_prix,
+        inputs.nombre_logements,
+        ratio_abordabilite=inputs.ratio_abordabilite_aph,
     )
 
     # ── Étape 1 : Scénario Achat ─────────────────────────────────
@@ -1080,6 +1134,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         ltv_achat_preteur_b=cfg_achat.ltv,
         frais_fixes_overrides=inputs.frais_fixes_overrides,
         pct_courtiers_overrides=inputs.pct_courtiers_overrides,
+        taxes_bienvenue_brackets=inputs.taxes_bienvenue_brackets,
     )
     # Overrides manuels : pour chaque clé fournie par l'utilisateur,
     # on remplace la valeur calculée par sa saisie. Permet d'ajuster
