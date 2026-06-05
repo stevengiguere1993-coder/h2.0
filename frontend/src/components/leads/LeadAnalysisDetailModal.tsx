@@ -767,7 +767,11 @@ export function LeadAnalysisDetailModal({
     }
     return {
       askingPrice: data.asking_price,
-      bestRefiAmount: results?.best_refi.amount ?? data.best_refi_amount,
+      // Montant de prêt accordé du scénario gagnant (champ `financement`,
+      // = métrique « Prêt accordé »). C'est cette valeur — et non l'équité
+      // finale — qu'affiche désormais la tuile « Best refi », pour ne plus
+      // faire doublon avec la tuile « Équité à la fin ».
+      bestRefiFinancement: winner?.financement ?? null,
       bestRefiProgram: bestProgram ?? null,
       mdf: results?.mdf_preteur_b ?? data.mdf_preteur_b,
       cashflow: winner?.cashflow_annuel ?? null,
@@ -919,10 +923,12 @@ export function LeadAnalysisDetailModal({
                   <StatTile
                     icon={TrendingUp}
                     label="Best refi"
-                    value={fmtMoney(hero.bestRefiAmount)}
+                    value={fmtMoney(hero.bestRefiFinancement)}
                     hint={hero.bestRefiProgram || undefined}
                     tone={
-                      hero.bestRefiAmount != null && hero.bestRefiAmount >= 0
+                      hero.bestRefiFinancement == null
+                        ? "neutral"
+                        : hero.bestRefiFinancement >= 0
                         ? "emerald"
                         : "rose"
                     }
