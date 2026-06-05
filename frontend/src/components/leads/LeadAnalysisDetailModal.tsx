@@ -1472,7 +1472,7 @@ function FieldText({
           missingRequired
             ? "text-rose-400 font-semibold"
             : necessaryForCalc
-            ? "text-amber-600 dark:text-amber-300/80"
+            ? "text-amber-300/80"
             : "text-white/50"
         }`}
       >
@@ -1562,7 +1562,7 @@ function FieldNumber({
             missingRequired
               ? "text-rose-400 font-semibold"
               : necessaryForCalc
-              ? "text-amber-600 dark:text-amber-300/80"
+              ? "text-amber-300/80"
               : "text-white/50"
           }`}
         >
@@ -1843,24 +1843,27 @@ function ManualAnalysisSection({
     }
   }
 
-  return (
-    <section className="rounded-xl border border-accent-500/30 bg-accent-500/5 p-4">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-accent-500" />
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-accent-500">
-            Analyse financière — inputs manuels
-          </h3>
-        </div>
-        <DefaultsGearButton group="inputs_manuels" title="Modifier les défauts des inputs manuels (taux refi, MDF %, taux prêteur B, TGA, durée projet, etc.)" />
-      </div>
+  const loyersTypoKeys = TYPOLOGY_KEYS.filter((k) => (typology[k] || 0) > 0);
 
+  return (
+    <SectionCard
+      icon={Calculator}
+      title="Analyse financière — inputs manuels"
+      tone="accent"
+      subtitle="Paramètres du calcul. Les valeurs par défaut sont pré-remplies ; ajuste au besoin puis lance l'analyse."
+      action={
+        <DefaultsGearButton
+          group="inputs_manuels"
+          title="Modifier les défauts des inputs manuels (taux refi, MDF %, taux prêteur B, TGA, durée projet, etc.)"
+        />
+      }
+    >
       {missingRequired.length > 0 ? (
-        <div className="mt-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px]">
+        <div className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px]">
           <p className="text-rose-300">
             ⚠ Obligatoires manquants :{" "}
             <strong>{missingRequired.join(", ")}</strong>. Complète-les
-            dans la section ci-dessus avant de lancer l&apos;analyse.
+            dans l&apos;onglet « Infos » avant de lancer l&apos;analyse.
           </p>
           {missingEstimable.length > 0 ? (
             <div className="mt-1.5 flex items-center gap-2">
@@ -1884,7 +1887,7 @@ function ManualAnalysisSection({
       ) : null}
 
       {missingRequired.length === 0 && missingRecommended.length > 0 ? (
-        <p className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/60">
+        <p className="mb-4 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/60">
           ℹ Informations recommandées non saisies (l&apos;analyse peut
           quand même se lancer) :{" "}
           <strong className="text-white/80">
@@ -1894,100 +1897,103 @@ function ManualAnalysisSection({
         </p>
       ) : null}
 
-      {/* Inputs avec défaut */}
-      <div className="mt-3 grid gap-3 sm:grid-cols-4">
-        <FieldNumber
-          label="TGA (%)"
-          value={data.tga_pct ?? 4}
-          onSave={(v) => onPatch("tga_pct", v ?? 4)}
-          format="percent"
-        />
-        <FieldNumber
-          label="Taux intérêt achat (%)"
-          value={data.taux_interet_achat_pct ?? 4}
-          onSave={(v) => onPatch("taux_interet_achat_pct", v ?? 4)}
-          format="percent"
-        />
-        <FieldNumber
-          label="MDF prêteur B (%)"
-          value={data.mdf_preteur_b_pct ?? 25}
-          onSave={(v) => onPatch("mdf_preteur_b_pct", v ?? 25)}
-          format="percent"
-        />
-        <FieldYesNo
-          label="Wifi inclus refi"
-          value={data.ajout_wifi ?? true}
-          onSave={(v) => onPatch("ajout_wifi", v)}
-        />
-      </div>
+      <div className="space-y-3">
+        {/* Financement & taux */}
+        <SubCard icon={Percent} title="Financement & taux" cols={3}>
+          <FieldNumber
+            label="TGA (%)"
+            value={data.tga_pct ?? 4}
+            onSave={(v) => onPatch("tga_pct", v ?? 4)}
+            format="percent"
+          />
+          <FieldNumber
+            label="Taux intérêt achat (%)"
+            value={data.taux_interet_achat_pct ?? 4}
+            onSave={(v) => onPatch("taux_interet_achat_pct", v ?? 4)}
+            format="percent"
+          />
+          <FieldNumber
+            label="Taux d'intérêt refi (%)"
+            value={data.taux_interet_refi_pct}
+            onSave={(v) => onPatch("taux_interet_refi_pct", v)}
+            format="percent"
+          />
+          <FieldNumber
+            label="MDF prêteur B (%)"
+            value={data.mdf_preteur_b_pct ?? 25}
+            onSave={(v) => onPatch("mdf_preteur_b_pct", v ?? 25)}
+            format="percent"
+          />
+          <FieldNumber
+            label="Taux d'intérêt prêteur B (%)"
+            value={data.taux_interet_preteur_b_projet_pct ?? 8}
+            onSave={(v) =>
+              onPatch("taux_interet_preteur_b_projet_pct", v ?? 8)
+            }
+            format="percent"
+          />
+          <FieldNumber
+            label="Durée projet (années)"
+            value={data.duree_projet_annees}
+            onSave={(v) => onPatch("duree_projet_annees", v)}
+          />
+        </SubCard>
 
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <FieldNumber
-          label="Logements ajoutés refi"
-          value={data.nb_logements_ajoutes}
-          onSave={(v) => onPatch("nb_logements_ajoutes", v)}
-        />
-        <FieldNumber
-          label="Thermopompes ajoutées"
-          value={data.nb_thermopompes_ajoutees}
-          onSave={(v) => onPatch("nb_thermopompes_ajoutees", v)}
-        />
-        <FieldNumber
-          label="% réduction énergie"
-          value={data.reduction_energie_pct}
-          onSave={(v) => onPatch("reduction_energie_pct", v)}
-          format="percent"
-        />
-        <FieldNumber
-          label="Taux d'intérêt refi (%)"
-          value={data.taux_interet_refi_pct}
-          onSave={(v) => onPatch("taux_interet_refi_pct", v)}
-          format="percent"
-        />
-        <FieldNumber
-          label="Taux d'intérêt prêteur B (%)"
-          value={data.taux_interet_preteur_b_projet_pct ?? 8}
-          onSave={(v) =>
-            onPatch("taux_interet_preteur_b_projet_pct", v ?? 8)
-          }
-          format="percent"
-        />
-        <FieldNumber
-          label="Durée projet (années)"
-          value={data.duree_projet_annees}
-          onSave={(v) => onPatch("duree_projet_annees", v)}
-        />
-        <FieldNumber
-          label="Frais développement ($)"
-          value={data.frais_developpement}
-          onSave={(v) => onPatch("frais_developpement", v)}
-          format="money"
-        />
-        <FieldNumber
-          label="Frais négociations ($)"
-          value={data.frais_negociations}
-          onSave={(v) => onPatch("frais_negociations", v)}
-          format="money"
-        />
-        <FieldNumber
-          label="Frais travaux ($)"
-          value={data.travaux_estimes}
-          onSave={(v) => onPatch("travaux_estimes", v)}
-          format="money"
-        />
-        <FieldNumber
-          label="Loyer abordable (APH SELECT)"
-          value={loyerAbord ? Number(loyerAbord) : null}
-          onSave={(v) => setLoyerAbordable(v == null ? "" : String(v))}
-        />
-      </div>
+        {/* Optimisation refi */}
+        <SubCard icon={Gauge} title="Optimisation refi" cols={4}>
+          <FieldNumber
+            label="Logements ajoutés refi"
+            value={data.nb_logements_ajoutes}
+            onSave={(v) => onPatch("nb_logements_ajoutes", v)}
+          />
+          <FieldNumber
+            label="Thermopompes ajoutées"
+            value={data.nb_thermopompes_ajoutees}
+            onSave={(v) => onPatch("nb_thermopompes_ajoutees", v)}
+          />
+          <FieldNumber
+            label="% réduction énergie"
+            value={data.reduction_energie_pct}
+            onSave={(v) => onPatch("reduction_energie_pct", v)}
+            format="percent"
+          />
+          <FieldYesNo
+            label="Wifi inclus refi"
+            value={data.ajout_wifi ?? true}
+            onSave={(v) => onPatch("ajout_wifi", v)}
+          />
+        </SubCard>
 
-      <div className="mt-3">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
-          Loyers projetés par typologie (uniquement où la quantité &gt; 0)
-        </p>
-        <div className="mt-1 grid gap-2 sm:grid-cols-3">
-          {TYPOLOGY_KEYS.filter((k) => (typology[k] || 0) > 0).map((k) => (
+        {/* Frais & projet */}
+        <SubCard icon={Banknote} title="Frais & projet" cols={4}>
+          <FieldNumber
+            label="Frais développement ($)"
+            value={data.frais_developpement}
+            onSave={(v) => onPatch("frais_developpement", v)}
+            format="money"
+          />
+          <FieldNumber
+            label="Frais négociations ($)"
+            value={data.frais_negociations}
+            onSave={(v) => onPatch("frais_negociations", v)}
+            format="money"
+          />
+          <FieldNumber
+            label="Frais travaux ($)"
+            value={data.travaux_estimes}
+            onSave={(v) => onPatch("travaux_estimes", v)}
+            format="money"
+          />
+          <FieldNumber
+            label="Loyer abordable (APH SELECT)"
+            value={loyerAbord ? Number(loyerAbord) : null}
+            onSave={(v) => setLoyerAbordable(v == null ? "" : String(v))}
+          />
+        </SubCard>
+
+        {/* Loyers projetés par typologie */}
+        <SubCard icon={Coins} title="Loyers projetés par typologie" cols={3}>
+          {loyersTypoKeys.map((k) => (
             <div key={k}>
               <label className="text-[10px] uppercase tracking-wider text-white/50">
                 {k} ({typology[k]} log.) — $/mois
@@ -1997,22 +2003,22 @@ function ManualAnalysisSection({
                 step="any"
                 value={prixLoyers[k] ?? ""}
                 onChange={(e) => setPrixLoyer(k, e.target.value)}
-                className="input font-mono text-xs"
+                className="input mt-1 font-mono text-xs"
                 placeholder="ex. 1400"
               />
             </div>
           ))}
-          {TYPOLOGY_KEYS.filter((k) => (typology[k] || 0) > 0).length === 0 ? (
-            <p className="col-span-3 text-[11px] text-white/40">
-              Renseigne d&apos;abord la typologie dans les infos extraites
-              ci-dessus.
+          {loyersTypoKeys.length === 0 ? (
+            <p className="col-span-full text-[11px] text-white/40">
+              Renseigne d&apos;abord la typologie dans l&apos;onglet
+              « Infos ».
             </p>
           ) : null}
-        </div>
+        </SubCard>
       </div>
 
       {err ? (
-        <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-300">
+        <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-300">
           {err}
         </p>
       ) : null}
@@ -2037,7 +2043,7 @@ function ManualAnalysisSection({
           )}
         </button>
       </div>
-    </section>
+    </SectionCard>
   );
 }
 
@@ -2215,30 +2221,66 @@ function AnalysisResultsTable({
   const inputsChanged =
     jsonPctPercent != null && Math.abs(jsonPctPercent - livePct) > 0.01;
 
+  const metricRows: Array<{
+    label: string;
+    pick: (s: ScenarioResult) => number | null | undefined;
+    bold?: boolean;
+    fallback?: string;
+    colorEquite?: boolean;
+  }> = [
+    { label: "Loyer moyen ($/mois)", pick: (s) => s.loyer_mois },
+    { label: "Revenus totaux ($/an)", pick: (s) => s.revenus_totaux },
+    { label: "Dépenses totales", pick: (s) => s.depenses_total },
+    { label: "Revenus net", pick: (s) => s.revenus_net },
+    { label: "Valeur éco RDC", pick: (s) => s.valeur_eco_rcd },
+    { label: "Valeur éco TGA", pick: (s) => s.valeur_eco_tga },
+    { label: "Valeur marchande", pick: (s) => s.valeur_marchande, fallback: "—" },
+    { label: "Valeur retenue", pick: (s) => s.valeur_retenue, bold: true },
+    { label: "Prêt accordé", pick: (s) => s.financement, bold: true },
+    { label: "MDF nécessaire", pick: (s) => s.mdf_necessaire, fallback: "N/A" },
+    {
+      label: "Cashflow annuel",
+      pick: (s) => s.cashflow_annuel,
+      fallback: "N/A",
+      colorEquite: true
+    },
+    {
+      label: "Équité à la fin",
+      pick: (s) => s.equite_a_la_fin,
+      fallback: "N/A",
+      colorEquite: true
+    }
+  ];
+
   return (
-    <section className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
-          ✓ Résultats de l&apos;analyse financière
-        </h3>
-        <div className="text-[11px] text-white/70">
-          <strong className="text-emerald-300">Best refi</strong> :{" "}
-          {fmtMoney(data.best_refi.amount)} —{" "}
-          <span className="text-white/60">{data.best_refi.program}</span>
+    <SectionCard
+      icon={TrendingUp}
+      title="Résultats de l'analyse financière"
+      tone="emerald"
+      subtitle={
+        <>
+          Frais démarrage : {fmtMoney(data.frais_demarrage_total)} · Prix
+          acquisition : {fmtMoney(data.prix_acquisition)} · Loyer pondéré
+          H13 : {fmtMoney(data.typology.h13_loyer_pondere)} /mois
+          {data.typology.nb_abordables > 0
+            ? ` · ${data.typology.nb_abordables} abord / ${data.typology.nb_pdm} PDM`
+            : ""}
+        </>
+      }
+      action={
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-right">
+          <p className="text-[9px] uppercase tracking-wider text-emerald-300/80">
+            Best refi
+          </p>
+          <p className="font-mono text-sm font-bold tabular-nums text-emerald-300">
+            {fmtMoney(data.best_refi.amount)}
+          </p>
+          <p className="text-[10px] text-white/50">{data.best_refi.program}</p>
         </div>
-      </div>
-
-      <p className="mt-1 text-[10px] text-white/40">
-        Frais démarrage : {fmtMoney(data.frais_demarrage_total)} · Prix
-        acquisition : {fmtMoney(data.prix_acquisition)} · Loyer pondéré H13 :{" "}
-        {fmtMoney(data.typology.h13_loyer_pondere)} /mois
-        {data.typology.nb_abordables > 0
-          ? ` · ${data.typology.nb_abordables} abord / ${data.typology.nb_pdm} PDM`
-          : ""}
-      </p>
-
+      }
+    >
       {inputsChanged ? (
-        <div className="mt-2 rounded-lg border border-amber-400/60 bg-amber-500/15 px-3 py-2 text-[11px] text-amber-200">
+        <div className="mb-3 rounded-lg border border-amber-400/60 bg-amber-500/15 px-3 py-2 text-[11px] text-amber-200">
           ⚠ Les inputs ont changé depuis la dernière analyse
           (ex. MDF prêteur B : {jsonPctPercent}% → {livePct}%).{" "}
           <strong>Relance l&apos;analyse</strong> pour mettre à jour
@@ -2247,11 +2289,11 @@ function AnalysisResultsTable({
       ) : null}
 
       {data.mdf_preteur_b != null ? (
-        <div className="mt-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
+        <div className="mb-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
           <p className="text-[10px] uppercase tracking-wider text-amber-300">
             MDF avec prêteur B
           </p>
-          <p className="mt-0.5 text-sm font-bold text-amber-200">
+          <p className="mt-0.5 text-base font-bold text-amber-200">
             {fmtMoney(data.mdf_preteur_b)}
           </p>
           <p className="text-[10px] text-white/50">
@@ -2267,18 +2309,21 @@ function AnalysisResultsTable({
         </div>
       ) : null}
 
-      <div className="mt-3 overflow-x-auto">
-        <table className="w-full min-w-[640px] text-[11px]">
-          <thead>
-            <tr className="text-white/40">
-              <th className="px-2 py-1 text-left">Métrique</th>
+      {/* Tableau desktop avec en-tête sticky */}
+      <div className="hidden max-h-[460px] overflow-auto rounded-xl border border-brand-800 sm:block">
+        <table className="w-full min-w-[640px] border-collapse text-[11px]">
+          <thead className="sticky top-0 z-10">
+            <tr className="bg-brand-900 text-white/50">
+              <th className="sticky left-0 z-20 bg-brand-900 px-3 py-2 text-left font-semibold">
+                Métrique
+              </th>
               {cols.map(([label, s]) => (
-                <th key={label} className="px-2 py-1 text-right">
-                  {label}
+                <th key={label} className="px-3 py-2 text-right font-semibold">
+                  <span className="text-white/80">{label}</span>
                   {s ? (
-                    <span className="ml-1 text-white/30">
-                      ({(s.ltv * 100).toFixed(0)}% · {s.amort_annees}ans · RCD{" "}
-                      {s.rcd.toFixed(2)})
+                    <span className="ml-1 block text-[9px] font-normal text-white/30">
+                      {(s.ltv * 100).toFixed(0)}% · {s.amort_annees} ans · RCD{" "}
+                      {s.rcd.toFixed(2)}
                     </span>
                   ) : null}
                 </th>
@@ -2286,20 +2331,73 @@ function AnalysisResultsTable({
             </tr>
           </thead>
           <tbody>
-            <ResultRow label="Loyer moyen ($/mois)" cols={cols} pick={(s) => s.loyer_mois} />
-            <ResultRow label="Revenus totaux ($/an)" cols={cols} pick={(s) => s.revenus_totaux} />
-            <ResultRow label="Dépenses totales" cols={cols} pick={(s) => s.depenses_total} />
-            <ResultRow label="Revenus net" cols={cols} pick={(s) => s.revenus_net} />
-            <ResultRow label="Valeur éco RDC" cols={cols} pick={(s) => s.valeur_eco_rcd} />
-            <ResultRow label="Valeur éco TGA" cols={cols} pick={(s) => s.valeur_eco_tga} />
-            <ResultRow label="Valeur marchande" cols={cols} pick={(s) => s.valeur_marchande} fallback="—" />
-            <ResultRow label="Valeur retenue" cols={cols} pick={(s) => s.valeur_retenue} bold />
-            <ResultRow label="Prêt accordé" cols={cols} pick={(s) => s.financement} bold />
-            <ResultRow label="MDF nécessaire" cols={cols} pick={(s) => s.mdf_necessaire} fallback="N/A" />
-            <ResultRow label="Cashflow annuel" cols={cols} pick={(s) => s.cashflow_annuel} fallback="N/A" colorEquite />
-            <ResultRow label="Équité à la fin" cols={cols} pick={(s) => s.equite_a_la_fin} fallback="N/A" colorEquite />
+            {metricRows.map((r) => (
+              <ResultRow
+                key={r.label}
+                label={r.label}
+                cols={cols}
+                pick={r.pick}
+                bold={r.bold}
+                fallback={r.fallback}
+                colorEquite={r.colorEquite}
+              />
+            ))}
           </tbody>
         </table>
+      </div>
+
+      {/* Fallback mobile : une carte par scénario */}
+      <div className="space-y-3 sm:hidden">
+        {cols.map(([label, s]) => (
+          <div
+            key={label}
+            className="rounded-xl border border-brand-800 bg-brand-950/40 p-3"
+          >
+            <p className="text-xs font-semibold text-white">{label}</p>
+            {s ? (
+              <>
+                <p className="mt-0.5 text-[10px] text-white/40">
+                  {(s.ltv * 100).toFixed(0)}% · {s.amort_annees} ans · RCD{" "}
+                  {s.rcd.toFixed(2)}
+                </p>
+                <dl className="mt-2 space-y-1">
+                  {metricRows.map((r) => {
+                    const val = r.pick(s);
+                    const display =
+                      val == null ? r.fallback || "—" : fmtMoney(val);
+                    const tone =
+                      r.colorEquite && val != null
+                        ? val >= 0
+                          ? "text-emerald-300"
+                          : "text-rose-300"
+                        : r.bold
+                        ? "text-white"
+                        : "text-white/80";
+                    return (
+                      <div
+                        key={r.label}
+                        className="flex items-center justify-between gap-2 border-t border-brand-800/60 pt-1 text-[11px]"
+                      >
+                        <dt className="text-white/50">{r.label}</dt>
+                        <dd
+                          className={`font-mono tabular-nums ${tone} ${
+                            r.bold ? "font-bold" : ""
+                          }`}
+                        >
+                          {display}
+                        </dd>
+                      </div>
+                    );
+                  })}
+                </dl>
+              </>
+            ) : (
+              <p className="mt-1 text-[11px] text-white/30">
+                Scénario non applicable.
+              </p>
+            )}
+          </div>
+        ))}
       </div>
 
       <FraisDemarrageBreakdownPanel
@@ -2312,7 +2410,7 @@ function AnalysisResultsTable({
         onPatchOverrides={onPatchOverrides}
         onPatchFinancables={onPatchFinancables}
       />
-    </section>
+    </SectionCard>
   );
 }
 
@@ -2699,15 +2797,17 @@ function ResultRow({
   colorEquite?: boolean;
 }) {
   return (
-    <tr className="border-t border-brand-800/60">
-      <td className="px-2 py-1 text-white/60">{label}</td>
+    <tr className="border-t border-brand-800/60 odd:bg-white/[0.015]">
+      <td className="sticky left-0 z-10 bg-inherit px-3 py-1.5 text-white/60">
+        {label}
+      </td>
       {cols.map(([k, s]) => {
         if (!s) return (
-          <td key={k} className="px-2 py-1 text-right text-white/30">—</td>
+          <td key={k} className="px-3 py-1.5 text-right text-white/30">—</td>
         );
         const val = pick(s);
         if (val == null) return (
-          <td key={k} className="px-2 py-1 text-right text-white/30">
+          <td key={k} className="px-3 py-1.5 text-right text-white/30">
             {fallback || "—"}
           </td>
         );
@@ -2722,7 +2822,7 @@ function ResultRow({
         return (
           <td
             key={k}
-            className={`px-2 py-1 text-right font-mono tabular-nums ${tone} ${bold ? "font-bold" : ""}`}
+            className={`px-3 py-1.5 text-right font-mono tabular-nums ${tone} ${bold ? "font-bold" : ""}`}
           >
             {txt}
           </td>
@@ -2743,7 +2843,9 @@ function CalculationDetailsSection({
   overridesJson?: string | null;
   lead: LeadDetail;
 }) {
-  const [open, setOpen] = useState(false);
+  // Détails ouverts par défaut : la section occupe désormais son propre
+  // onglet. Le repli reste disponible pour alléger la lecture.
+  const [open, setOpen] = useState(true);
 
   const data = useMemo<AnalysisResults | null>(() => {
     try {
@@ -2767,22 +2869,23 @@ function CalculationDetailsSection({
   if (!data) return null;
 
   return (
-    <section className="mt-3">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="text-xs text-emerald-300 underline-offset-2 hover:underline"
-      >
-        {open ? "▾" : "▸"} Voir détails des calculs
-      </button>
-
+    <SectionCard
+      icon={ListChecks}
+      title="Détails des calculs"
+      tone="neutral"
+      subtitle="Reproduit la granularité du fichier Excel d'origine. Toutes les valeurs sont issues du dernier calcul persisté."
+      action={
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-white/60 hover:bg-white/10 hover:text-white"
+        >
+          {open ? "Replier" : "Déplier"}
+        </button>
+      }
+    >
       {open ? (
-        <div className="mt-2 max-h-[600px] overflow-y-auto rounded-xl border border-brand-800 bg-brand-950/40 p-4 text-[11px] text-white/80">
-          <p className="text-[10px] text-white/40">
-            Reproduit la granularité du fichier Excel d&apos;origine. Toutes
-            les valeurs sont issues du dernier calcul d&apos;analyse persisté.
-          </p>
-
+        <div className="text-[11px] text-white/80">
           <HypothesesSubsection lead={lead} data={data} />
           <TypologieSubsection data={data} />
           <FraisDemarrageDetailSubsection
@@ -2795,7 +2898,7 @@ function CalculationDetailsSection({
           <BestRefiSubsection data={data} />
         </div>
       ) : null}
-    </section>
+    </SectionCard>
   );
 }
 
