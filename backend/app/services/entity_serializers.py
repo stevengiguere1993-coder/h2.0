@@ -127,6 +127,36 @@ def serialize_devlog_soumission(obj: Any, level: str = "summary") -> dict:
             {
                 "is_devis_dev": bool(getattr(obj, "is_devis_dev", False)),
                 "summary": _str(_get(obj, "summary")),
+                "notes": _str(_get(obj, "notes")),
+                "client_recurring_description": _str(
+                    _get(obj, "client_recurring_description")
+                ),
+                # Cible détaillée (lead + client), best-effort sans I/O.
+                "lead": _related_party(getattr(obj, "lead", None)),
+                "client": _related_party(getattr(obj, "client", None)),
+                # Montants détaillés (HT / TPS / TVQ / TTC). Le modèle ne
+                # stocke qu'``amount`` (TTC client) : on dérive le détail
+                # fiscal Québec (TPS 5 % + TVQ 9.975 %) à titre indicatif.
+                "amounts": _devlog_amounts(obj),
+                # Taux & paramètres « devis_dev ».
+                "marge_recurrente_pct": _num(_get(obj, "marge_recurrente_pct")),
+                "marge_initiale_pct": _num(_get(obj, "marge_initiale_pct")),
+                "commission_closer_pct": _num(
+                    _get(obj, "commission_closer_pct")
+                ),
+                "taux_dev_horaire": _num(_get(obj, "taux_dev_horaire")),
+                "taux_manager_horaire": _num(_get(obj, "taux_manager_horaire")),
+                "heures_manager": _num(_get(obj, "heures_manager")),
+                # Modules + fonctionnalités + tâches du chargé de projet,
+                # si les relations ont été préchargées (best-effort).
+                "modules": _devlog_modules(obj),
+                "items": _devlog_items(obj),
+                # Lien public de signature (si un jeton existe).
+                "public_url": _devlog_public_url(obj),
+                "has_signed_pdf": getattr(obj, "signed_pdf_blob", None)
+                is not None,
+                # Pipeline d'envoi / signature.
+                "pricing_kind": _str(_get(obj, "pricing_kind")),
                 "sent_at": _iso(_get(obj, "sent_at")),
                 "signed_at": _iso(_get(obj, "signed_at")),
                 "signed_name": _str(_get(obj, "signed_name")),
@@ -135,6 +165,119 @@ def serialize_devlog_soumission(obj: Any, level: str = "summary") -> dict:
             }
         )
     return _drop_none(data)
+
+
+#: Constantes fiscales Québec pour dériver le détail TPS/TVQ d'un montant
+#: TTC (le modèle ``DevlogSoumission`` ne stocke que le total ``amount``).
+_TPS_RATE = 0.05
+_TVQ_RATE = 0.09975
+
+
+def _devlog_amounts(obj: Any) -> Optional[dict]:
+    """Détail des montants d'une soumission devlog. Le modèle ne stocke
+    qu'``amount`` (TTC client) ; on dérive HT/TPS/TVQ à titre indicatif
+    (taxes Québec). Aucun arrondi métier garanti : champ ``derived`` à True
+    pour signaler que c'est calculé, pas faisant foi. None si pas de montant."""
+    ttc = _num(_get(obj, "amount"))
+    if ttc is None:
+        return None
+    try:
+        ht = ttc / (1.0 + _TPS_RATE + _TVQ_RATE)
+        tps = ht * _TPS_RATE
+        tvq = ht * _TVQ_RATE
+        return {
+            "ttc": round(ttc, 2),
+            "ht": round(ht, 2),
+            "tps": round(tps, 2),
+            "tvq": round(tvq, 2),
+            "tps_rate": _TPS_RATE,
+            "tvq_rate": _TVQ_RATE,
+            "currency": "CAD",
+            "derived": True,
+        }
+    except Exception:
+        return {"ttc": ttc, "currency": "CAD", "derived": False}
+
+
+def _devlog_public_url(obj: Any) -> Optional[str]:
+    """Chemin relatif de la page publique de signature, si un jeton existe.
+    On ne connaît pas l'hôte ici : on renvoie le chemin canonique."""
+    token = _str(_get(obj, "signature_token"))
+    if not token:
+        return None
+    return f"/devlog/sign-soumission/{token}"
+
+
+def _devlog_modules(obj: Any) -> Optional[list]:
+    """Modules d'une soumission devis_dev, si la relation ``modules`` est
+    préchargée (best-effort, aucune I/O). Chaque module liste son nom, sa
+    sélection et, si ses items sont accessibles, ses fonctionnalités."""
+    modules = getattr(obj, "modules", None)
+    if not modules:
+        return None
+    out: list[dict] = []
+    try:
+        for m in modules:
+            entry: dict[str, Any] = {
+                "id": getattr(m, "id", None),
+                "name": _str(_get(m, "name")),
+                "position": _get(m, "position"),
+                "selected": bool(getattr(m, "selected", True)),
+                "description": _str(_get(m, "description")),
+            }
+            out.append({k: v for k, v in entry.items() if v is not None
+                        or k in ("id", "name")})
+    except Exception:
+        return None
+    return out or None
+
+
+def _devlog_items(obj: Any) -> Optional[list]:
+    """Lignes (fonctionnalités, tâches de chargé de projet, coûts) d'une
+    soumission, si la relation ``items`` est préchargée. On expose le
+    libellé, le type (``item_kind``), les heures et le total par item."""
+    items = getattr(obj, "items", None)
+    if not items:
+        return None
+    out: list[dict] = []
+    try:
+        for it in items:
+            entry: dict[str, Any] = {
+                "id": getattr(it, "id", None),
+                "description": _str(_get(it, "description")),
+                "item_kind": _str(_get(it, "item_kind")),
+                "module_id": _get(it, "module_id"),
+                "heures": _num(_get(it, "heures")),
+                "quantity": _num(_get(it, "quantity")),
+                "unit": _str(_get(it, "unit")),
+                "total": _num(_get(it, "total")),
+            }
+            out.append({k: v for k, v in entry.items() if v is not None
+                        or k in ("id",)})
+    except Exception:
+        return None
+    return out or None
+
+
+def _related_party(target: Any) -> Optional[dict]:
+    """Représentation minimale d'un lead / client lié (best-effort, sans
+    I/O) : id + nom + entreprise + courriel + téléphone quand dispo."""
+    if target is None:
+        return None
+    out: dict[str, Any] = {"id": getattr(target, "id", None)}
+    name = _get(target, "name", "full_name", "nom", "title")
+    if name is not None:
+        out["name"] = _str(name)
+    for src, dst in (
+        ("company", "company"),
+        ("email", "email"),
+        ("phone", "phone"),
+        ("status", "status"),
+    ):
+        val = _get(target, src)
+        if val is not None:
+            out[dst] = _str(val)
+    return out if len(out) > 1 else None
 
 
 def _client_name(obj: Any) -> Optional[str]:
@@ -184,8 +327,22 @@ def _serialize_task_common(
             {
                 "description": _str(_get(obj, "description", "notes")),
                 "priority": _str(_get(obj, "priority")),
+                "departement": _str(_get(obj, "departement")),
                 "created_at": _iso(_get(obj, "created_at")),
                 "completed_at": _iso(_get(obj, "completed_at", "done_at")),
+                # Identifiants des entités parentes (selon le modèle) —
+                # toujours best-effort, None si la colonne n'existe pas.
+                "project_id": _get(obj, "project_id"),
+                "phase_id": _get(obj, "phase_id"),
+                "entreprise_id": _get(obj, "entreprise_id"),
+                "deal_id": _get(obj, "deal_id"),
+                # Scoring ICE (tâches entreprise / prospection), si présent.
+                "impact": _get(obj, "impact"),
+                "confidence": _get(obj, "confidence"),
+                "effort": _get(obj, "effort"),
+                "recurrence": _str(_get(obj, "recurrence")),
+                # Assignation par employé (pôles construction / sales).
+                "assignee_employe_id": _get(obj, "assignee_id"),
             }
         )
     return _drop_none(data)
@@ -337,13 +494,47 @@ def serialize_prospection_deal(obj: Any, level: str = "summary") -> dict:
     if level == "full":
         data.update(
             {
+                "position": _get(obj, "position"),
                 "drive_folder_url": _str(_get(obj, "drive_folder_url")),
                 "lead_analysis_id": _get(obj, "lead_analysis_id"),
                 "created_at": _iso(_get(obj, "created_at")),
                 "updated_at": _iso(_get(obj, "updated_at")),
+                # Données d'analyse financière clés, si la fiche liée est
+                # disponible (relation ``lead_analysis``, lazy=selectin).
+                "analysis": _deal_analysis(analysis),
             }
         )
     return _drop_none(data)
+
+
+def _deal_analysis(analysis: Any) -> Optional[dict]:
+    """Champs clés d'une fiche ``LeadAnalysis`` liée à un deal (best-effort,
+    aucune I/O). On expose adresse complète, prix, logements, revenus/
+    dépenses et les résultats financiers résumés s'ils existent."""
+    if analysis is None:
+        return None
+    out: dict[str, Any] = {"id": getattr(analysis, "id", None)}
+    # Texte / identité.
+    for src in ("status", "address", "city", "postal_code", "province",
+                "type_batiment", "courtier_nom", "courtier_contact",
+                "best_refi_program"):
+        val = _str(_get(analysis, src))
+        if val is not None:
+            out[src] = val
+    # Numériques (montants / compteurs / années).
+    for src in ("asking_price", "revenus_bruts", "taxes_municipales",
+                "taxes_scolaires", "assurances", "energie",
+                "depenses_autres", "evaluation_municipale",
+                "travaux_estimes", "best_refi_amount", "mdf_preteur_b",
+                "superficie_terrain", "superficie_batiment"):
+        val = _num(_get(analysis, src))
+        if val is not None:
+            out[src] = val
+    for src in ("nb_logements", "annee_construction", "nb_stationnements"):
+        val = _get(analysis, src)
+        if val is not None:
+            out[src] = val
+    return out if len(out) > 1 else None
 
 
 def serialize_entreprise(obj: Any, level: str = "summary") -> dict:
@@ -373,12 +564,42 @@ def serialize_entreprise(obj: Any, level: str = "summary") -> dict:
                 "is_parent_company": bool(
                     getattr(obj, "is_parent_company", False)
                 ),
+                "color_accent": _str(_get(obj, "color_accent")),
+                "position": _get(obj, "position"),
+                "monday_board_id": _str(_get(obj, "monday_board_id")),
+                "monday_board_name": _str(_get(obj, "monday_board_name")),
                 "drive_folder_url": _str(_get(obj, "drive_folder_url")),
+                # Liste complète des partenaires si ``partners`` préchargé.
+                "partners": _entreprise_partners(obj),
                 "created_at": _iso(_get(obj, "created_at")),
                 "updated_at": _iso(_get(obj, "updated_at")),
             }
         )
     return _drop_none(data)
+
+
+def _entreprise_partners(obj: Any) -> Optional[list]:
+    """Liste des partenaires d'une entreprise si ``partners`` est préchargé
+    (best-effort, aucune I/O) : nom, courriel, rôle, % d'ownership."""
+    partners = getattr(obj, "partners", None)
+    if not partners:
+        return None
+    out: list[dict] = []
+    try:
+        for p in partners:
+            entry: dict[str, Any] = {
+                "id": getattr(p, "id", None),
+                "name": _str(_get(p, "partner_name", "full_name", "name")),
+                "email": _str(_get(p, "partner_email", "email")),
+                "role": _str(_get(p, "role")),
+                "ownership_pct": _num(_get(p, "ownership_pct")),
+                "user_id": _get(p, "user_id"),
+            }
+            out.append({k: v for k, v in entry.items() if v is not None
+                        or k in ("id",)})
+    except Exception:
+        return None
+    return out or None
 
 
 def _primary_contact(obj: Any) -> Optional[dict]:
