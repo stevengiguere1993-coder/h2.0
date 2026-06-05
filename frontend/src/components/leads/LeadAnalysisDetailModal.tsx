@@ -2215,6 +2215,34 @@ function AnalysisResultsTable({
     ["SCHL Abord+Eff (100 pts)", data.scenarios.refi_aph_100]
   ];
 
+  // Identifie la colonne du scénario gagnant (= « Best refi ») pour la
+  // mettre en valeur. Logique alignée sur la bande hero : on cherche
+  // parmi les scénarios refi (indices 1→3) celui dont l'équité finale
+  // correspond au montant best_refi, avec repli sur le libellé/nom du
+  // programme. Purement visuel — n'altère aucun chiffre.
+  const winnerIndex = (() => {
+    const bestAmount = data.best_refi.amount;
+    const bestProgram = data.best_refi.program;
+    for (let i = 1; i < cols.length; i++) {
+      const s = cols[i][1];
+      if (
+        s &&
+        bestAmount != null &&
+        s.equite_a_la_fin != null &&
+        Math.abs(s.equite_a_la_fin - bestAmount) < 1
+      ) {
+        return i;
+      }
+    }
+    if (bestProgram) {
+      for (let i = 1; i < cols.length; i++) {
+        const s = cols[i][1];
+        if (s && (s.label === bestProgram || s.name === bestProgram)) return i;
+      }
+    }
+    return -1;
+  })();
+
   const jsonPct = data.mdf_preteur_b_pct;
   const jsonPctPercent = jsonPct != null && jsonPct < 1 ? jsonPct * 100 : jsonPct;
   const livePct = mdfPct ?? 25;
@@ -2227,6 +2255,7 @@ function AnalysisResultsTable({
     bold?: boolean;
     fallback?: string;
     colorEquite?: boolean;
+    keyRow?: boolean;
   }> = [
     { label: "Loyer moyen ($/mois)", pick: (s) => s.loyer_mois },
     { label: "Revenus totaux ($/an)", pick: (s) => s.revenus_totaux },
@@ -2235,20 +2264,34 @@ function AnalysisResultsTable({
     { label: "Valeur éco RDC", pick: (s) => s.valeur_eco_rcd },
     { label: "Valeur éco TGA", pick: (s) => s.valeur_eco_tga },
     { label: "Valeur marchande", pick: (s) => s.valeur_marchande, fallback: "—" },
-    { label: "Valeur retenue", pick: (s) => s.valeur_retenue, bold: true },
-    { label: "Prêt accordé", pick: (s) => s.financement, bold: true },
+    {
+      label: "Valeur retenue",
+      pick: (s) => s.valeur_retenue,
+      bold: true,
+      keyRow: true
+    },
+    {
+      label: "Prêt accordé",
+      pick: (s) => s.financement,
+      bold: true,
+      keyRow: true
+    },
     { label: "MDF nécessaire", pick: (s) => s.mdf_necessaire, fallback: "N/A" },
     {
       label: "Cashflow annuel",
       pick: (s) => s.cashflow_annuel,
       fallback: "N/A",
-      colorEquite: true
+      colorEquite: true,
+      bold: true,
+      keyRow: true
     },
     {
       label: "Équité à la fin",
       pick: (s) => s.equite_a_la_fin,
       fallback: "N/A",
-      colorEquite: true
+      colorEquite: true,
+      bold: true,
+      keyRow: true
     }
   ];
 
@@ -2313,21 +2356,42 @@ function AnalysisResultsTable({
       <div className="hidden max-h-[460px] overflow-auto rounded-xl border border-brand-800 sm:block">
         <table className="w-full min-w-[640px] border-collapse text-[11px]">
           <thead className="sticky top-0 z-10">
-            <tr className="bg-brand-900 text-white/50">
-              <th className="sticky left-0 z-20 bg-brand-900 px-3 py-2 text-left font-semibold">
+            <tr className="bg-brand-900 align-bottom text-white/50">
+              <th className="sticky left-0 z-20 bg-brand-900 px-3 py-2.5 text-left text-[9px] font-semibold uppercase tracking-wider text-white/40">
                 Métrique
               </th>
-              {cols.map(([label, s]) => (
-                <th key={label} className="px-3 py-2 text-right font-semibold">
-                  <span className="text-white/80">{label}</span>
-                  {s ? (
-                    <span className="ml-1 block text-[9px] font-normal text-white/30">
-                      {(s.ltv * 100).toFixed(0)}% · {s.amort_annees} ans · RCD{" "}
-                      {s.rcd.toFixed(2)}
+              {cols.map(([label, s], i) => {
+                const isWinner = i === winnerIndex;
+                return (
+                  <th
+                    key={label}
+                    className={`px-3 py-2.5 text-right align-bottom font-semibold ${
+                      isWinner
+                        ? "bg-emerald-500/10"
+                        : "bg-brand-900"
+                    }`}
+                  >
+                    {isWinner ? (
+                      <span className="mb-1 inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider text-emerald-300">
+                        ★ Best
+                      </span>
+                    ) : null}
+                    <span
+                      className={`block text-[11px] ${
+                        isWinner ? "text-emerald-200" : "text-white/80"
+                      }`}
+                    >
+                      {label}
                     </span>
-                  ) : null}
-                </th>
-              ))}
+                    {s ? (
+                      <span className="mt-0.5 block text-[9px] font-normal text-white/30">
+                        {(s.ltv * 100).toFixed(0)}% · {s.amort_annees} ans · RCD{" "}
+                        {s.rcd.toFixed(2)}
+                      </span>
+                    ) : null}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -2340,6 +2404,8 @@ function AnalysisResultsTable({
                 bold={r.bold}
                 fallback={r.fallback}
                 colorEquite={r.colorEquite}
+                keyRow={r.keyRow}
+                winnerIndex={winnerIndex}
               />
             ))}
           </tbody>
@@ -2348,56 +2414,88 @@ function AnalysisResultsTable({
 
       {/* Fallback mobile : une carte par scénario */}
       <div className="space-y-3 sm:hidden">
-        {cols.map(([label, s]) => (
-          <div
-            key={label}
-            className="rounded-xl border border-brand-800 bg-brand-950/40 p-3"
-          >
-            <p className="text-xs font-semibold text-white">{label}</p>
-            {s ? (
-              <>
-                <p className="mt-0.5 text-[10px] text-white/40">
-                  {(s.ltv * 100).toFixed(0)}% · {s.amort_annees} ans · RCD{" "}
-                  {s.rcd.toFixed(2)}
+        {cols.map(([label, s], i) => {
+          const isWinner = i === winnerIndex;
+          return (
+            <div
+              key={label}
+              className={`rounded-xl border p-3 ${
+                isWinner
+                  ? "border-emerald-500/40 bg-emerald-500/[0.07]"
+                  : "border-brand-800 bg-brand-950/40"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <p
+                  className={`text-xs font-semibold ${
+                    isWinner ? "text-emerald-200" : "text-white"
+                  }`}
+                >
+                  {label}
                 </p>
-                <dl className="mt-2 space-y-1">
-                  {metricRows.map((r) => {
-                    const val = r.pick(s);
-                    const display =
-                      val == null ? r.fallback || "—" : fmtMoney(val);
-                    const tone =
-                      r.colorEquite && val != null
-                        ? val >= 0
-                          ? "text-emerald-300"
-                          : "text-rose-300"
-                        : r.bold
-                        ? "text-white"
-                        : "text-white/80";
-                    return (
-                      <div
-                        key={r.label}
-                        className="flex items-center justify-between gap-2 border-t border-brand-800/60 pt-1 text-[11px]"
-                      >
-                        <dt className="text-white/50">{r.label}</dt>
-                        <dd
-                          className={`font-mono tabular-nums ${tone} ${
-                            r.bold ? "font-bold" : ""
+                {isWinner ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[8px] font-bold uppercase tracking-wider text-emerald-300">
+                    ★ Best
+                  </span>
+                ) : null}
+              </div>
+              {s ? (
+                <>
+                  <p className="mt-0.5 text-[10px] text-white/40">
+                    {(s.ltv * 100).toFixed(0)}% · {s.amort_annees} ans · RCD{" "}
+                    {s.rcd.toFixed(2)}
+                  </p>
+                  <dl className="mt-2 space-y-1">
+                    {metricRows.map((r) => {
+                      const val = r.pick(s);
+                      const display =
+                        val == null ? r.fallback || "—" : fmtMoney(val);
+                      const tone =
+                        r.colorEquite && val != null
+                          ? val >= 0
+                            ? "text-emerald-300"
+                            : "text-rose-300"
+                          : r.bold
+                          ? "text-white"
+                          : "text-white/80";
+                      return (
+                        <div
+                          key={r.label}
+                          className={`flex items-center justify-between gap-2 border-t pt-1 text-[11px] ${
+                            r.keyRow
+                              ? "border-brand-700"
+                              : "border-brand-800/60"
                           }`}
                         >
-                          {display}
-                        </dd>
-                      </div>
-                    );
-                  })}
-                </dl>
-              </>
-            ) : (
-              <p className="mt-1 text-[11px] text-white/30">
-                Scénario non applicable.
-              </p>
-            )}
-          </div>
-        ))}
+                          <dt
+                            className={
+                              r.keyRow
+                                ? "font-semibold text-white/70"
+                                : "text-white/50"
+                            }
+                          >
+                            {r.label}
+                          </dt>
+                          <dd
+                            className={`font-mono tabular-nums ${tone} ${
+                              r.bold ? "font-bold" : ""
+                            }`}
+                          >
+                            {display}
+                          </dd>
+                        </div>
+                      );
+                    })}
+                  </dl>
+                </>
+              ) : (
+                <p className="mt-1 text-[11px] text-white/30">
+                  Scénario non applicable.
+                </p>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       <FraisDemarrageBreakdownPanel
@@ -2791,7 +2889,9 @@ function ResultRow({
   pick,
   bold,
   fallback,
-  colorEquite
+  colorEquite,
+  keyRow,
+  winnerIndex = -1
 }: {
   label: string;
   cols: Array<[string, ScenarioResult | null]>;
@@ -2799,34 +2899,60 @@ function ResultRow({
   bold?: boolean;
   fallback?: string;
   colorEquite?: boolean;
+  keyRow?: boolean;
+  winnerIndex?: number;
 }) {
+  const rowCls = keyRow
+    ? "border-t border-brand-700 bg-white/[0.025]"
+    : "border-t border-brand-800/50";
   return (
-    <tr className="border-t border-brand-800/60 odd:bg-white/[0.015]">
-      <td className="sticky left-0 z-10 bg-inherit px-3 py-1.5 text-white/60">
+    <tr className={rowCls}>
+      <td
+        className={`sticky left-0 z-10 bg-inherit px-3 py-2 ${
+          keyRow ? "font-semibold text-white/80" : "text-white/55"
+        }`}
+      >
         {label}
       </td>
-      {cols.map(([k, s]) => {
+      {cols.map(([k, s], i) => {
+        const isWinner = i === winnerIndex;
+        const winnerBg = isWinner ? "bg-emerald-500/[0.07]" : "";
         if (!s) return (
-          <td key={k} className="px-3 py-1.5 text-right text-white/30">—</td>
+          <td
+            key={k}
+            className={`px-3 py-2 text-right text-white/30 ${winnerBg}`}
+          >
+            —
+          </td>
         );
         const val = pick(s);
         if (val == null) return (
-          <td key={k} className="px-3 py-1.5 text-right text-white/30">
+          <td
+            key={k}
+            className={`px-3 py-2 text-right text-white/30 ${winnerBg}`}
+          >
             {fallback || "—"}
           </td>
         );
         const txt = fmtMoney(val);
+        // Couleur de la valeur. Les lignes color-codées (cashflow / équité)
+        // gardent leur signal emerald/rose même dans la colonne gagnante —
+        // on ne teinte en emerald « gagnant » que les lignes neutres.
         const tone = colorEquite
           ? val >= 0
             ? "text-emerald-300"
             : "text-rose-300"
-          : bold
-            ? "text-white"
-            : "text-white/80";
+          : isWinner
+            ? "text-emerald-200"
+            : bold
+              ? "text-white"
+              : "text-white/80";
         return (
           <td
             key={k}
-            className={`px-3 py-1.5 text-right font-mono tabular-nums ${tone} ${bold ? "font-bold" : ""}`}
+            className={`px-3 py-2 text-right font-mono tabular-nums ${tone} ${
+              bold ? "font-bold" : ""
+            } ${winnerBg}`}
           >
             {txt}
           </td>
