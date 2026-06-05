@@ -154,6 +154,28 @@ def _detail_read(
     }
 
 
+#: Capacités de LECTURE D'ENSEMBLE (liste) d'une entité métier d'un pôle :
+#: lister TOUTES les entités d'un type (deals du pipeline, analyses de
+#: leads, soumissions, projets, entreprises…), pas une seule par id. Donne
+#: une vue de liste paginée (résumés) via l'API REST (``GET
+#: /activity/entities/{type}``) et les outils MCP (``kratos_list_*``). Une
+#: clé qui peut lire l'activité d'un pôle (``<pole>:activity:read``, donc
+#: aussi une clé sans scopes en rétrocompat) peut lister ses entités ;
+#: cette capacité dédiée existe pour un contrôle plus fin si souhaité.
+def _list_read(
+    cap_id: str, pole_slug: str, label_fr: str, description: str
+) -> dict:
+    return {
+        "id": cap_id,
+        "pole": pole_slug,
+        "label_fr": label_fr,
+        "description": description,
+        "category": "lecture",
+        "risk": "faible",
+        "coming_soon": False,
+    }
+
+
 #: Pôles qui portent des tâches lisibles / écrivables par clé d'API
 #: (alignés sur les modèles de tâches sérialisables). Les autres pôles
 #: n'ont pas (encore) d'entité « tâche » exposée par clé d'API. Pour
@@ -213,6 +235,101 @@ def _build_capabilities() -> list[dict]:
                 "Lire le JSON détaillé d'une entreprise du pôle Gestion "
                 "d'entreprises par son id : nom, type, NEQ, contact "
                 "principal, description, statut."
+            ),
+        )
+    )
+    # Lecture DÉTAIL d'une analyse de lead (fiche d'analyse financière du
+    # pôle Prospection) par son id : adresse, étape kanban, statut, chiffres
+    # clés (prix, logements, MdF, refi…), dates.
+    caps.append(
+        _detail_read(
+            "prospection:analyses:read",
+            "prospection",
+            "Lire le détail d'une analyse de lead",
+            (
+                "Lire le JSON détaillé d'une analyse de lead (fiche d'analyse "
+                "financière) du pôle Prospection par son id : adresse, étape "
+                "kanban, statut (en cours / converti), chiffres clés (prix "
+                "demandé, nombre de logements, revenus, mise de fonds prêteur "
+                "B, refinancement…), dates."
+            ),
+        )
+    )
+    # ── Capacités de LECTURE D'ENSEMBLE (liste) par pôle ──────────────
+    #
+    # Vue de liste / d'ensemble : lister TOUTES les entités principales
+    # d'un pôle (résumés paginés), pas une seule par id. Couvre les deals
+    # du pipeline et les analyses de leads (Prospection), et l'entité
+    # principale des autres pôles.
+    caps.append(
+        _list_read(
+            "prospection:deals:list",
+            "prospection",
+            "Lister les deals du pipeline",
+            (
+                "Lister les deals du Pipeline Prospection (vue d'ensemble) : "
+                "adresse, étape pipeline, et chiffres clés de l'analyse liée. "
+                "Filtrable par étape. Résumés paginés (limite raisonnable)."
+            ),
+        )
+    )
+    caps.append(
+        _list_read(
+            "prospection:analyses:list",
+            "prospection",
+            "Lister les analyses de leads",
+            (
+                "Lister les analyses de leads du pôle Prospection (vue "
+                "d'ensemble), avec leur statut kanban. Filtrable par statut "
+                "(p. ex. « en cours »). Résumés paginés (limite raisonnable)."
+            ),
+        )
+    )
+    caps.append(
+        _list_read(
+            "devlog:soumissions:list",
+            "devlog",
+            "Lister les soumissions",
+            (
+                "Lister les soumissions (devis) du pôle Développement "
+                "logiciel (vue d'ensemble) : titre, client/lead, statut, "
+                "montant. Résumés paginés (limite raisonnable)."
+            ),
+        )
+    )
+    caps.append(
+        _list_read(
+            "devlog:projects:list",
+            "devlog",
+            "Lister les projets de développement",
+            (
+                "Lister les projets du pôle Développement logiciel (vue "
+                "d'ensemble) : nom, statut, échéance. Résumés paginés "
+                "(limite raisonnable)."
+            ),
+        )
+    )
+    caps.append(
+        _list_read(
+            "entreprise:list",
+            "entreprise",
+            "Lister les entreprises",
+            (
+                "Lister les entreprises du pôle Gestion d'entreprises (vue "
+                "d'ensemble) : nom, type, NEQ, statut. Résumés paginés "
+                "(limite raisonnable)."
+            ),
+        )
+    )
+    caps.append(
+        _list_read(
+            "construction:projects:list",
+            "construction",
+            "Lister les projets (chantiers)",
+            (
+                "Lister les projets / chantiers du pôle Construction (vue "
+                "d'ensemble) : nom, adresse, statut. Résumés paginés "
+                "(limite raisonnable)."
             ),
         )
     )
