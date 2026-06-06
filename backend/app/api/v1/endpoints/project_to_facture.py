@@ -10,7 +10,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.api.v1.endpoints.facture_import import _compute_billed_amount
@@ -171,24 +171,35 @@ async def convert_project_to_facture(
                 )
 
             # Progressive billing : combien a déjà été facturé pour ce
-            # projet (subtotal des factures existantes, exclut la
-            # courante qu'on vient de créer). On soustrait pour ne pas
-            # double-facturer ; le user donne un % / $ CUMULATIF visé.
+            # projet AU TITRE DE LA SOUMISSION DE BASE. On exclut
+            # volontairement les lignes « extra » (heures T&M, achats,
+            # ajouts hors-contrat) : elles ne réduisent PAS la cible
+            # cumulative du devis. On somme donc le total des lignes
+            # non-extra des factures existantes (hors la courante).
             already_billed = 0.0
             if data.progressive_billing:
                 from app.models.facture import Facture as _Fac
 
-                prev = (
+                prev_ids = (
                     await db.execute(
-                        select(_Fac).where(
+                        select(_Fac.id).where(
                             _Fac.project_id == project_id,
                             _Fac.id != facture.id,
                         )
                     )
                 ).scalars().all()
-                already_billed = round(
-                    sum(float(f.subtotal or 0) for f in prev), 2
-                )
+                if prev_ids:
+                    base_sum = (
+                        await db.execute(
+                            select(
+                                func.coalesce(func.sum(FactureItem.total), 0)
+                            ).where(
+                                FactureItem.facture_id.in_(prev_ids),
+                                FactureItem.kind != "extra",
+                            )
+                        )
+                    ).scalar_one()
+                    already_billed = round(float(base_sum or 0), 2)
 
             # Détermine le ratio cible cumulatif.
             if data.soumission_amount is not None and data.soumission_amount > 0:
@@ -292,6 +303,8 @@ async def convert_project_to_facture(
                     quantity=round(hours, 2),
                     unit_price=rate,
                     total=amount,
+                    # Heures T&M = hors soumission de base → extra.
+                    kind="extra",
                 )
                 db.add(item)
                 bucket_items.append((item, bucket["punches"]))
@@ -367,6 +380,9 @@ async def convert_project_to_facture(
                 quantity=qty,
                 unit_price=up,
                 total=billed,
+                # Achats / matériel / sous-traitant = hors soumission de
+                # base → extra (ne compte pas dans la cible cumulative).
+                kind="extra",
             )
             db.add(item)
             new_items.append((ac, item))

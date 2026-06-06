@@ -1573,6 +1573,48 @@ async def init_db() -> None:
             except Exception as exc:  # noqa: BLE001
                 print(f"[init_db] rotation reçus échouée : {exc}")
 
+        # Rétroactif (one-shot) : re-taguer en « extra » les lignes de
+        # facture hors-contrat générées automatiquement AVANT que le code
+        # ne pose kind="extra" (heures T&M, matériel, sous-traitant). Ces
+        # lignes portent des préfixes système fiables. Sans ça, les
+        # factures existantes : (a) gonflent à tort la « cible cumulative »
+        # de la soumission de base et bloquent la facturation, (b) faussent
+        # l'état de compte (faux trop-payé). Le marqueur empêche d'écraser
+        # les ajustements manuels faits ensuite.
+        try:
+            done = (
+                await conn.execute(
+                    text("SELECT 1 FROM applied_backfills WHERE key = :k"),
+                    {"k": "retag_extra_facture_items_v1"},
+                )
+            ).first()
+        except Exception:
+            done = True
+        if not done:
+            try:
+                res = await conn.execute(
+                    text(
+                        "UPDATE facture_items SET kind = 'extra' "
+                        "WHERE kind = 'service' AND ("
+                        "description LIKE 'Main-d''œuvre — %' "
+                        "OR description LIKE 'Matériel — %' "
+                        "OR description LIKE 'Sous-traitant — %')"
+                    )
+                )
+                await conn.execute(
+                    text(
+                        "INSERT INTO applied_backfills (key) VALUES (:k) "
+                        "ON CONFLICT (key) DO NOTHING"
+                    ),
+                    {"k": "retag_extra_facture_items_v1"},
+                )
+                print(
+                    f"[init_db] lignes facture re-taguées extra : "
+                    f"{res.rowcount}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[init_db] retag extra échoué : {exc}")
+
         # Seed des types de RV par défaut. Idempotent :
         # INSERT ... ON CONFLICT DO NOTHING. L'admin peut modifier
         # depuis l'UI ensuite (couleur, durée, buffer).
