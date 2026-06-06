@@ -1,5 +1,6 @@
 import { useTranslations } from "next-intl";
 import { Link } from "@/i18n/navigation";
+import { HorizonLogo } from "@/components/horizon-logo";
 
 export function SiteFooter() {
   const tNav = useTranslations("nav");
@@ -12,9 +13,7 @@ export function SiteFooter() {
     <footer className="border-t border-brand-800 bg-brand-950 text-white">
       <div className="container grid gap-10 py-12 md:grid-cols-4">
         <div>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/logo.png"
+          <HorizonLogo
             alt="Horizon Services Immobiliers"
             className="h-40 w-auto object-contain"
           />
