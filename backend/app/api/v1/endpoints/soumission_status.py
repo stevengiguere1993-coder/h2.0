@@ -29,7 +29,7 @@ router = APIRouter(prefix="/soumissions", tags=["soumission-status"])
 
 
 SoumissionStatusLiteral = Literal[
-    "draft", "sent", "accepted", "rejected", "expired"
+    "draft", "sent", "accepted", "rejected", "expired", "spam"
 ]
 
 
@@ -42,6 +42,8 @@ _SOUMISSION_TO_CRM = {
     SoumissionStatus.ACCEPTED.value: ContactRequestStatus.WON.value,
     SoumissionStatus.REJECTED.value: ContactRequestStatus.LOST.value,
     SoumissionStatus.EXPIRED.value: ContactRequestStatus.LOST.value,
+    # Soumission « spam » → le prospect lié est classé Refusé/Perdu.
+    SoumissionStatus.SPAM.value: ContactRequestStatus.LOST.value,
 }
 
 

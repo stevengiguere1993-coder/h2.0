@@ -95,7 +95,8 @@ const STATUS_LABELS: Record<string, string> = {
   sent: "Envoyée",
   accepted: "Acceptée",
   rejected: "Refusée",
-  expired: "Expirée"
+  expired: "Expirée",
+  spam: "Spam"
 };
 
 const STATUS_CLASS: Record<string, string> = {
@@ -103,7 +104,8 @@ const STATUS_CLASS: Record<string, string> = {
   sent: "bg-blue-500/20 text-blue-300",
   accepted: "bg-emerald-500/20 text-emerald-300",
   rejected: "bg-rose-500/20 text-rose-300",
-  expired: "bg-amber-500/20 text-amber-300"
+  expired: "bg-amber-500/20 text-amber-300",
+  spam: "bg-rose-500/20 text-rose-300"
 };
 
 const TPS_RATE = 0.05;

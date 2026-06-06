@@ -16,6 +16,9 @@ class SoumissionStatus(str, Enum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     EXPIRED = "expired"
+    # Soumission jugée non sérieuse / pourriel. Classe le prospect lié
+    # en « Refusé/Perdu » côté CRM (cf. soumission_status._SOUMISSION_TO_CRM).
+    SPAM = "spam"
 
 
 class Soumission(Base, TimestampUpdateMixin):
