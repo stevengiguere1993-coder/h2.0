@@ -1390,6 +1390,7 @@ function MessagesSection({
   );
   const [messages, setMessages] = useState<SmsRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [threadError, setThreadError] = useState(false);
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -1399,6 +1400,7 @@ function MessagesSection({
   const loadThread = useCallback(async (peer: string) => {
     setLoading(true);
     setMessages([]);
+    setThreadError(false);
     try {
       const res = await authedFetch(
         `/api/v1/voice/sms?peer_e164=${encodeURIComponent(peer)}&limit=100`
@@ -1415,7 +1417,15 @@ function MessagesSection({
             });
           }
         }
+      } else {
+        // Échec de chargement (ex. 500). Un 401 déclenche déjà la
+        // redirection vers la connexion via authedFetch. On distingue
+        // « échec » de « vraiment aucun message » pour ne pas induire
+        // en erreur.
+        setThreadError(true);
       }
+    } catch {
+      setThreadError(true);
     } finally {
       setLoading(false);
     }
@@ -1573,6 +1583,11 @@ function MessagesSection({
             <div className="flex-1 overflow-y-auto py-3 space-y-2">
               {loading ? (
                 <p className="text-[11px] text-white/40">Chargement…</p>
+              ) : threadError ? (
+                <p className="text-[11px] text-rose-300">
+                  Échec du chargement des messages. Rafraîchis, ou
+                  reconnecte-toi si ta session a expiré.
+                </p>
               ) : messages.length === 0 ? (
                 <p className="text-[11px] text-white/40">Aucun message.</p>
               ) : (
