@@ -70,6 +70,11 @@ class Statement:
     billed_to_date: float
     paid_to_date: float
     remaining_balance: float
+    # Part des factures qui sont des EXTRAS (hors soumission de base :
+    # heures T&M, achats/matériel, ajouts hors-contrat). Sert à montrer
+    # une ligne dédiée pour que le solde se réconcilie (le client n'est
+    # pas « en trop-payé » : son solde = total facturé − total payé).
+    extras_billed: float = 0.0
     # Langue de rendu du relevé : « fr » (défaut) ou « en ».
     lang: str = "fr"
 
@@ -363,7 +368,40 @@ async def _build_statement(
     contract_total = float(sm.total or 0) if sm else 0.0
     billed_to_date = round(sum(float(f.total or 0) for f in factures), 2)
     paid_to_date = round(sum(float(p.amount or 0) for p in payments), 2)
-    remaining = round((contract_total or billed_to_date) - paid_to_date, 2)
+
+    # Part « extras » du facturé (taxes incluses). On répartit le total
+    # de chaque facture entre contrat et extras au prorata des lignes
+    # (FactureItem.kind == "extra"), via le ratio TTC/HT de la facture.
+    extras_billed = 0.0
+    if facture_ids:
+        item_rows = (
+            await db.execute(
+                select(
+                    FactureItem.facture_id,
+                    FactureItem.total,
+                    FactureItem.kind,
+                ).where(FactureItem.facture_id.in_(facture_ids))
+            )
+        ).all()
+        extra_ht_by_fac: dict[int, float] = {}
+        for _fid, _it_total, _it_kind in item_rows:
+            if (_it_kind or "") == "extra":
+                extra_ht_by_fac[_fid] = extra_ht_by_fac.get(_fid, 0.0) + float(
+                    _it_total or 0
+                )
+        for f in factures:
+            ex_ht = extra_ht_by_fac.get(f.id, 0.0)
+            if ex_ht <= 0:
+                continue
+            sub = float(f.subtotal or 0)
+            ratio = (float(f.total or 0) / sub) if sub > 0 else 1.0
+            extras_billed += ex_ht * ratio
+        extras_billed = round(extras_billed, 2)
+
+    # Solde réel = ce qui a été FACTURÉ (contrat + extras) moins le payé.
+    # Avant on calculait contrat − payé, ce qui affichait un faux
+    # « trop-payé » dès qu'il y avait des extras sur les factures.
+    remaining = round(billed_to_date - paid_to_date, 2)
 
     return Statement(
         project_name=project.name,
@@ -374,6 +412,7 @@ async def _build_statement(
         billed_to_date=billed_to_date,
         paid_to_date=paid_to_date,
         remaining_balance=remaining,
+        extras_billed=extras_billed,
         lang=lang,
     )
 
@@ -766,8 +805,14 @@ def _render_bytes(
             recap_rows.append(
                 ["Total du contrat", _money(statement.contract_total)]
             )
+        recap_rows.append(
+            ["Total facturé", _money(statement.billed_to_date)]
+        )
+        if statement.extras_billed > 0:
+            recap_rows.append(
+                ["dont extras (hors contrat)", _money(statement.extras_billed)]
+            )
         recap_rows.extend([
-            ["Total facturé", _money(statement.billed_to_date)],
             ["Total payé", _money(statement.paid_to_date)],
             [
                 "Solde à venir",
@@ -905,6 +950,7 @@ def _render_statement_bytes(statement: Statement) -> bytes:
             "h_credit": "Payé",
             "empty": "Aucune facture envoyée au client pour ce projet.",
             "total_invoiced": "Total des factures",
+            "extras_billed": "dont extras (hors contrat)",
             "amount_paid": "Montant payé",
             "balance_due": "Solde dû",
         },
@@ -922,6 +968,7 @@ def _render_statement_bytes(statement: Statement) -> bytes:
             "h_credit": "Paid",
             "empty": "No invoice sent to the client for this project.",
             "total_invoiced": "Total invoiced",
+            "extras_billed": "incl. extras (off-contract)",
             "amount_paid": "Amount paid",
             "balance_due": "Balance due",
         },
@@ -1033,9 +1080,15 @@ def _render_statement_bytes(statement: Statement) -> bytes:
     solde_du = round(statement.billed_to_date - statement.paid_to_date, 2)
     recap_rows = [
         [tr["total_invoiced"], _money(statement.billed_to_date)],
+    ]
+    if statement.extras_billed > 0:
+        recap_rows.append(
+            [tr["extras_billed"], _money(statement.extras_billed)]
+        )
+    recap_rows.extend([
         [tr["amount_paid"], _money(statement.paid_to_date)],
         [tr["balance_due"], _money(solde_du)],
-    ]
+    ])
     recap_tbl = Table(
         recap_rows, colWidths=[doc.width * 0.30, doc.width * 0.20],
     )
