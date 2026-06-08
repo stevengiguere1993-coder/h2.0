@@ -81,6 +81,7 @@ class ListResponse(BaseModel):
 
 
 class ManualComparableIn(BaseModel):
+    matricule: Optional[str] = None
     civique: Optional[str] = None
     nom_rue: str = Field(..., min_length=1, max_length=255)
     municipalite: Optional[str] = None
@@ -152,19 +153,41 @@ def _compute_search_key(
     return make_search_key(m.group(1), nom_rue)
 
 
-async def _lookup_unit(
-    db: AsyncSession, search_key: Optional[str]
+async def _find_unit(
+    db: AsyncSession,
+    *,
+    matricule: Optional[str] = None,
+    civique: Optional[str] = None,
+    nom_rue: Optional[str] = None,
 ) -> Optional[MontrealPropertyUnit]:
-    """Trouve l'unité d'évaluation correspondant à la search_key."""
-    if not search_key:
-        return None
-    return (
-        await db.execute(
-            select(MontrealPropertyUnit).where(
-                MontrealPropertyUnit.search_key == search_key
-            )
+    """Trouve l'unité du rôle d'évaluation à croiser.
+
+    NB : `search_key` n'est PAS renseignée lors de l'import en masse des
+    rôles, donc on ne peut pas matcher dessus. On matche directement sur
+    les colonnes réellement remplies :
+    - par `matricule` (exact) si on l'a (ex. choisi via l'autocomplete) ;
+    - sinon par `civique_debut` (exact) + `nom_rue` (sous-chaîne, comme
+      l'autocomplete d'adresse).
+    En cas de copropriété (plusieurs unités à la même adresse), on retient
+    celle qui porte le plus de logements (l'immeuble principal)."""
+    stmt = None
+    if matricule:
+        stmt = select(MontrealPropertyUnit).where(
+            MontrealPropertyUnit.matricule == matricule.strip()
         )
-    ).scalars().first()
+    elif civique and nom_rue:
+        civic = str(civique).strip()
+        stmt = (
+            select(MontrealPropertyUnit)
+            .where(
+                MontrealPropertyUnit.civique_debut == civic,
+                MontrealPropertyUnit.nom_rue.ilike(f"%{nom_rue.strip()}%"),
+            )
+            .order_by(MontrealPropertyUnit.nombre_logement.desc().nullslast())
+        )
+    if stmt is None:
+        return None
+    return (await db.execute(stmt)).scalars().first()
 
 
 def _enrich_from_unit(
@@ -251,8 +274,7 @@ async def list_comparables(
         civic, rue = _parse_civic_street(address)
         if rue:
             sector_nom_rue = rue
-            key = _compute_search_key(civic, rue)
-            unit = await _lookup_unit(db, key)
+            unit = await _find_unit(db, civique=civic, nom_rue=rue)
             if unit is not None:
                 sector_nom_rue = unit.nom_rue or sector_nom_rue
                 sector_municipalite = (
@@ -407,7 +429,7 @@ async def _upsert_scraped(
                 ),
                 fetched_at=datetime.now(timezone.utc),
             )
-            unit = await _lookup_unit(db, search_key)
+            unit = await _find_unit(db, civique=civique, nom_rue=nom_rue)
             _enrich_from_unit(comp, unit)
             db.add(comp)
         except Exception as exc:  # noqa: BLE001
@@ -442,6 +464,7 @@ async def create_manual(
         address_full = " ".join(p for p in parts if p) or None
 
     comp = SoldComparable(
+        matricule=body.matricule,
         civique=body.civique,
         nom_rue=body.nom_rue,
         municipalite=body.municipalite,
@@ -459,7 +482,12 @@ async def create_manual(
         created_by_email=current_user.email,
     )
 
-    unit = await _lookup_unit(db, search_key)
+    unit = await _find_unit(
+        db,
+        matricule=body.matricule,
+        civique=body.civique,
+        nom_rue=body.nom_rue,
+    )
     _enrich_from_unit(comp, unit)
 
     db.add(comp)
