@@ -37,10 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, DBSession
 from app.integrations import scraping_proxy
-from app.integrations.roles_evaluation.montreal import (
-    make_search_key,
-    normalize_street,
-)
+from app.integrations.roles_evaluation.montreal import make_search_key
 from app.models.montreal_property_unit import MontrealPropertyUnit
 from app.models.sold_comparable import SoldComparable
 from app.services.audit import log_action
