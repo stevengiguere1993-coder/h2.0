@@ -36,6 +36,13 @@ services:
         sync: false
       - key: QUICKBOOKS_ENV
         value: sandbox
+      # VPS de scraping (Playwright / EvalWeb / Centris). L'URL n'est pas
+      # secrète ; la clé doit être renseignée à la main dans le dashboard
+      # Render (même valeur que SCRAPING_API_KEY sur le VPS).
+      - key: SCRAPING_VPS_URL
+        value: https://scraper.immohorizon.com
+      - key: SCRAPING_VPS_KEY
+        sync: false
     healthCheckPath: /health
 
 databases:
