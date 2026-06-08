@@ -3075,9 +3075,18 @@ def _derive_tri_auto_inputs(results: dict) -> dict:
     financables = set(results.get("frais_demarrage_financables") or [])
     pret_constr = 0.0
     for k, v in frais.items():
+        if k == "frais_custom":
+            continue  # liste de postes perso — traités juste après
         if k in financables:
             try:
                 pret_constr += float(v or 0) * (1.0 - mdf_pct)
+            except (TypeError, ValueError):
+                continue
+    # Postes personnalisés finançables (même logique).
+    for c in (frais.get("frais_custom") or []):
+        if isinstance(c, dict) and c.get("financable"):
+            try:
+                pret_constr += float(c.get("montant") or 0) * (1.0 - mdf_pct)
             except (TypeError, ValueError):
                 continue
 
