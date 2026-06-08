@@ -438,7 +438,6 @@ def _key_results_band(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
     colors = rl["colors"]
 
     scenarios = (results or {}).get("scenarios") or {}
-    achat = scenarios.get("achat") or {}
 
     prix = rec.asking_price
     best_amount = None
@@ -451,11 +450,13 @@ def _key_results_band(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
         mdf_b = results.get("mdf_preteur_b")
     if mdf_b is None:
         mdf_b = rec.mdf_preteur_b
-    cashflow = achat.get("cashflow_annuel")
-    equite = None
-    # Équité dégagée = équité du best refi (gagnant).
+    # Scénario gagnant (best refi) : sert au cashflow ET à l'équité, pour
+    # que tout le bandeau pointe sur le même scénario sélectionné.
     best = _best_refi_scenario(results) if results else None
+    cashflow = None
+    equite = None
     if best:
+        cashflow = best.get("cashflow_annuel")
         equite = best.get("equite_a_la_fin")
 
     # (label, valeur, vert?) — vert pour les métriques « positives ».
@@ -463,7 +464,7 @@ def _key_results_band(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
         ("PRIX DEMANDÉ", _money(prix), False),
         ("BEST REFI (ÉQUITÉ)", _money(best_amount), True),
         ("MDF PRÊTEUR B", _money(mdf_b), False),
-        ("CASHFLOW / AN (ACHAT)", _money(cashflow),
+        ("CASHFLOW / AN (BEST REFI)", _money(cashflow),
          (cashflow is not None and float(cashflow or 0) >= 0)),
         ("ÉQUITÉ AU REFI", _money(equite), True),
     ]
