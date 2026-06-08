@@ -1638,6 +1638,26 @@ function TriResults({ result }: { result: TriResult }) {
                   </td>
                 ))}
               </tr>
+              {/* Patrimoine de l'investisseur à cet horizon = cash retourné
+                  + valeur des parts. Mis en relief (gras). None-safe. */}
+              <tr className="border-t-2 border-brand-700">
+                <td className="px-2 py-2 font-bold text-white">Patrimoine</td>
+                {TRI_HORIZONS.map((h) => {
+                  const horizon = result.horizons[h.key];
+                  const cash = horizon?.cash_investisseur;
+                  const parts = horizon?.valeur_parts;
+                  const patrimoine =
+                    cash == null || parts == null ? null : cash + parts;
+                  return (
+                    <td
+                      key={h.key}
+                      className="px-2 py-2 text-right font-mono font-bold tabular-nums text-white"
+                    >
+                      {fmtMoney(patrimoine)}
+                    </td>
+                  );
+                })}
+              </tr>
             </tbody>
           </table>
         </div>
