@@ -13,6 +13,7 @@ import { LeadAnalysisSummary } from "@/components/lead-analysis-summary";
 import { LeadAnalysisDetailModal } from "@/components/leads/LeadAnalysisDetailModal";
 import { NDASection } from "@/components/nda-section";
 import { OfferSection } from "@/components/offer-section";
+import { OffreInvestissementDealSection } from "@/components/offre-investissement-deal-section";
 import { useProspectionLayout } from "../../layout";
 import {
   AutoGrowTextarea,
@@ -412,6 +413,10 @@ export default function DealDetailPage() {
         ) : null}
 
         <OfferSection dealId={dealId} />
+
+        {deal?.lead_analysis_id != null ? (
+          <OffreInvestissementDealSection analysisId={deal.lead_analysis_id} />
+        ) : null}
 
         <NDASection dealId={dealId} />
 
