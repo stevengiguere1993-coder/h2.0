@@ -1365,6 +1365,11 @@ def _render_bytes(
         mdf_pct_amt = float(results.get("mdf_pct_prix_achat") or 0)
         mdf_total = float(results.get("mdf_preteur_b") or 0)
         financables = set(results.get("frais_demarrage_financables") or [])
+        # Fraction payée cash sur un poste finançable (le reste est prêté
+        # par le prêteur B). Cohérent avec le moteur finance : pour un
+        # poste finançable on sort `mdf_pct` en cash et on finance le
+        # complément `1 − mdf_pct`.
+        mdf_pct = float(results.get("mdf_preteur_b_pct") or 0)
 
         # (clé, libellé) — on annote « (finançable) » les postes pris en
         # charge (partiellement) par le prêteur B.
@@ -1387,39 +1392,98 @@ def _render_bytes(
             ("revenus_nets_pendant_projet",
              "Revenus nets pendant projet"),
         ]
-        frais_rows: List[tuple] = []
+
+        def _poste_split(key: str) -> tuple:
+            """(valeur, cash_à_sortir, prêt_prêteur_B) pour un poste.
+
+            Poste finançable → cash = valeur × mdf_pct, prêt = le
+            complément. Sinon 100 % cash, prêt nul. None-safe."""
+            try:
+                valeur = float(fd.get(key) or 0)
+            except (TypeError, ValueError):
+                valeur = 0.0
+            if key in financables:
+                cash = valeur * mdf_pct
+                pret = valeur - cash
+            else:
+                cash = valeur
+                pret = 0.0
+            return valeur, cash, pret
+
+        # En-tête à 3 colonnes de chiffres : valeur du poste, cash à
+        # sortir (MDF) et portion financée par le prêteur B.
+        header = [
+            Paragraph("Poste", s["th_left"]),
+            Paragraph("Cash à sortir", s["th"]),
+            Paragraph("Prêt prêteur B", s["th"]),
+        ]
+        data_rows: List[list] = [header]
+        total_cash_finances = 0.0
         for key, label in poste_defs:
             tag = (f" <font size=7 color='{_C_GREEN}'>(finançable)</font>"
                    if key in financables else "")
-            frais_rows.append((f"{label}{tag}", _money(fd.get(key))))
-        frais_rows.append(
-            ("Total frais de démarrage", f"<b>{_money(fd_total)}</b>"))
-        frais_rows.append(
-            ("MDF (% × prix d'achat)", _money(mdf_pct_amt)))
-        frais_rows.append(
-            ("MDF prêteur B totale", f"<b>{_money(mdf_total)}</b>"))
+            _valeur, cash, pret = _poste_split(key)
+            total_cash_finances += pret
+            data_rows.append([
+                Paragraph(f"{label}{tag}", s["small"]),
+                Paragraph(_money(cash), s["num"]),
+                Paragraph(_money(pret) if pret > 0.5 else "—", s["num"]),
+            ])
+        # Total des frais de démarrage (cash sorti sur l'ensemble des
+        # postes) + total de la portion financée par le prêteur B.
+        data_rows.append([
+            Paragraph("Total frais de démarrage", s["small"]),
+            Paragraph(f"<b>{_money(fd_total)}</b>", s["num_b"]),
+            Paragraph(
+                f"<b>{_money(total_cash_finances)}</b>"
+                if total_cash_finances > 0.5 else "—", s["num_b"]),
+        ])
+        data_rows.append([
+            Paragraph("dont financé par prêteur B", s["small"]),
+            Paragraph("—", s["num"]),
+            Paragraph(
+                f"<b>{_money(total_cash_finances)}</b>"
+                if total_cash_finances > 0.5 else "—", s["num_b"]),
+        ])
+        data_rows.append([
+            Paragraph("MDF (% × prix d'achat)", s["small"]),
+            Paragraph(_money(mdf_pct_amt), s["num"]),
+            Paragraph("—", s["num"]),
+        ])
+        data_rows.append([
+            Paragraph("MDF prêteur B totale", s["small"]),
+            Paragraph(f"<b>{_money(mdf_total)}</b>", s["num_b"]),
+            Paragraph("—", s["num"]),
+        ])
 
-        wrapped = [
-            (Paragraph(k, s["small"]), Paragraph(str(v), s["num"]))
-            for k, v in frais_rows
-        ]
-        t = Table(wrapped, colWidths=[78 * mm, "*"])
+        t = Table(
+            data_rows, colWidths=[78 * mm, "*", "*"], repeatRows=1)
         t.setStyle(
             TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LINEBELOW", (0, 0), (-1, -4), 0.25,
+                # En-tête ambre pâle.
+                ("BACKGROUND", (0, 0), (-1, 0),
+                 colors.HexColor(_C_AMBER_SOFT)),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.75,
+                 colors.HexColor(_C_AMBER_LINE)),
+                # Filets entre les postes (jusqu'au dernier poste avant
+                # les 4 lignes de total).
+                ("LINEBELOW", (0, 1), (-1, -5), 0.25,
                  colors.HexColor(_C_LINE)),
-                ("ROWBACKGROUNDS", (0, 0), (-1, -4),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -5),
                  [colors.white, colors.HexColor("#fafafa")]),
                 ("LEFTPADDING", (0, 0), (-1, -1), 6),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                 ("TOPPADDING", (0, 0), (-1, -1), 4),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                # Total frais (3e avant-dernière) en fond ambre pâle.
-                ("BACKGROUND", (0, -3), (-1, -3),
+                # Total frais de démarrage (4e avant-dernière) ambre pâle.
+                ("BACKGROUND", (0, -4), (-1, -4),
                  colors.HexColor(_C_AMBER_SOFT)),
-                ("LINEABOVE", (0, -3), (-1, -3), 0.75,
+                ("LINEABOVE", (0, -4), (-1, -4), 0.75,
                  colors.HexColor(_C_AMBER_LINE)),
+                # « dont financé par prêteur B » (3e avant-dernière) vert.
+                ("BACKGROUND", (0, -3), (-1, -3),
+                 colors.HexColor(_C_GREEN_SOFT)),
                 # MDF prêteur B totale (dernière) en fond vert pâle.
                 ("BACKGROUND", (0, -1), (-1, -1),
                  colors.HexColor(_C_GREEN_SOFT)),
