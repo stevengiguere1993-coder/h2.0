@@ -266,14 +266,16 @@ async def import_into_facture(
 
         new_items: list[tuple[Achat, FactureItem]] = []
         for ac in achats:
-            billed, rule_label = _compute_billed_amount(
+            billed, _rule_label = _compute_billed_amount(
                 ac, data.achat_markup_overrides, contracts_by_st
             )
             base_desc = ac.description or f"Achat {ac.reference or ac.id}"
             line_prefix = (
                 "Sous-traitant" if ac.kind == "sub_invoice" else "Matériel"
             )
-            desc = f"{base_desc} ({rule_label})" if rule_label != "coûtant" else base_desc
+            # La majoration / règle (`rule_label`) est INTERNE : appliquée
+            # au montant mais jamais affichée dans la description client.
+            desc = base_desc
             item = FactureItem(
                 facture_id=fa.id,
                 position=pos,

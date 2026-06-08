@@ -1324,6 +1324,30 @@ async def init_db() -> None:
         # On limite aux tâches avec monday_item_id NOT NULL pour ne pas
         # toucher les backlogs créés manuellement par les utilisateurs.
         for sql in (
+            # Auto-déverrouillage : un achat / une heure (punch) qui
+            # pointe vers un facture_item disparu (facture supprimée) ne
+            # doit plus être considéré « refacturé ». Le FK n'a pas de
+            # contrainte SET NULL réelle (colonne ajoutée par ALTER
+            # additif), donc on nettoie les références orphelines ici à
+            # chaque boot (idempotent + auto-réparateur).
+            """
+            UPDATE achats
+            SET invoiced_at = NULL, facture_item_id = NULL
+            WHERE facture_item_id IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM facture_items fi
+                WHERE fi.id = achats.facture_item_id
+              )
+            """,
+            """
+            UPDATE punches
+            SET invoiced_at = NULL, facture_item_id = NULL
+            WHERE facture_item_id IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM facture_items fi
+                WHERE fi.id = punches.facture_item_id
+              )
+            """,
             # Terminé : si completed_at est déjà set OU si le titre du
             # groupe matche done/complete/✓/etc.
             """
