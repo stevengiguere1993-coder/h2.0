@@ -103,9 +103,10 @@ export default function NewAchatPage() {
     setAmountTvq(v);
     syncTotal(amount, amountTps, v);
   }
-  // Refacturation client.
+  // Refacturation client. Majoration par défaut : 10 % quand l'achat est
+  // refacturable (modifiable librement, 0 = coûtant).
   const [isBillable, setIsBillable] = useState(true);
-  const [markupPercent, setMarkupPercent] = useState("");
+  const [markupPercent, setMarkupPercent] = useState("10");
   const [paymentMethod, setPaymentMethod] = useState("");
   const [supplierInvoiceNumber, setSupplierInvoiceNumber] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(() => todayIso());
@@ -127,6 +128,15 @@ export default function NewAchatPage() {
     const p = projects.find((x) => String(x.id) === String(projectId));
     if (p?.billing_kind) setIsBillable(p.billing_kind !== "forfaitaire");
   }, [projectId, projects]);
+
+  // Majoration par défaut : 10 % dès que l'achat est refacturable (si le
+  // champ est vide), vidée si non refacturable. La saisie manuelle est
+  // préservée.
+  useEffect(() => {
+    setMarkupPercent((prev) =>
+      isBillable ? (prev.trim() === "" ? "10" : prev) : ""
+    );
+  }, [isBillable]);
 
   useEffect(() => {
     let cancelled = false;

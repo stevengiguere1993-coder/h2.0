@@ -29,6 +29,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    event,
 )
 from sqlalchemy.orm import Mapped, deferred, mapped_column
 
@@ -238,3 +239,17 @@ class Achat(Base, TimestampUpdateMixin):
     @property
     def has_receipt_image(self) -> bool:
         return self.receipt_image_content_type is not None
+
+
+#: Majoration par défaut appliquée à un achat refacturable quand l'admin
+#: ne saisit rien. Modifiable à tout moment (fiche achat + import facture).
+DEFAULT_BILLABLE_MARKUP = 10.0
+
+
+@event.listens_for(Achat, "before_insert")
+def _default_billable_markup(_mapper, _conn, target: "Achat") -> None:
+    """Un achat refacturable entré SANS majoration explicite reçoit
+    10 % par défaut. `markup_percent` NULL = « non saisi » → on applique
+    le défaut ; 0 = coûtant choisi volontairement (laissé tel quel)."""
+    if getattr(target, "is_billable", False) and target.markup_percent is None:
+        target.markup_percent = DEFAULT_BILLABLE_MARKUP

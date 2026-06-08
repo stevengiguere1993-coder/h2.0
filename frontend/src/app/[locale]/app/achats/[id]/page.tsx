@@ -693,7 +693,15 @@ export default function AchatDetailPage() {
                       <input
                         type="checkbox"
                         checked={isBillable}
-                        onChange={(e) => setIsBillable(e.target.checked)}
+                        onChange={(e) => {
+                          const on = e.target.checked;
+                          setIsBillable(on);
+                          // Cocher « refacturable » sans majoration saisie
+                          // → 10 % par défaut (modifiable).
+                          if (on && markupPercent.trim() === "") {
+                            setMarkupPercent("10");
+                          }
+                        }}
                         disabled={!!a?.invoiced_at}
                       />
                       Refacturable au client
