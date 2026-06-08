@@ -50,10 +50,22 @@
   "why": {
     "title": "Pourquoi nous choisir",
     "items": [
-      { "title": "Propriétaires nous-mêmes", "desc": "Nous détenons des immeubles multilogements. Votre budget est traité comme le nôtre." },
-      { "title": "Équipe intégrée", "desc": "Pas de sous-traitance sauvage. Nos corps de métier, notre contrôle qualité." },
-      { "title": "Transparence totale", "desc": "Prix détaillés, échéancier clair, suivi numérique du chantier." },
-      { "title": "Finition exemplaire", "desc": "Notre marque de commerce. Vérifiez nos projets livrés avant de vous engager." }
+      {
+        "title": "Propriétaires nous-mêmes",
+        "desc": "Nous détenons des immeubles multilogements. Votre budget est traité comme le nôtre."
+      },
+      {
+        "title": "Équipe intégrée",
+        "desc": "Pas de sous-traitance sauvage. Nos corps de métier, notre contrôle qualité."
+      },
+      {
+        "title": "Transparence totale",
+        "desc": "Prix détaillés, échéancier clair, suivi numérique du chantier."
+      },
+      {
+        "title": "Finition exemplaire",
+        "desc": "Notre marque de commerce. Vérifiez nos projets livrés avant de vous engager."
+      }
     ]
   },
   "cta": {
@@ -95,6 +107,64 @@
     "success": "Merci! Votre demande a bien été reçue. Référence : {reference}. Nous vous contactons sous 24 h ouvrables.",
     "errorGeneric": "Désolé, une erreur est survenue. Veuillez réessayer ou nous appeler directement.",
     "errorRateLimit": "Trop de demandes en peu de temps. Veuillez réessayer dans quelques minutes."
+  },
+  "comparables": {
+    "title": "Comparables vendus",
+    "description": "Recherche les immeubles multilogements vendus récemment pour appuyer tes évaluations. Croise une adresse avec les rôles fonciers et conserve tes comparables dans ta base.",
+    "search": "Rechercher",
+    "searching": "Recherche en cours…",
+    "address": "Adresse",
+    "address_placeholder": "Tape un numéro civique + rue (ex. 261 Mont-Royal)",
+    "address_linked": "Adresse rattachée au matricule {matricule}.",
+    "no_address_match": "Aucune adresse correspondante dans le rôle d'évaluation MTL.",
+    "filters": {
+      "min_price": "Prix min",
+      "max_price": "Prix max",
+      "min_logements": "Min logements",
+      "max_logements": "Max logements",
+      "min_annee": "Année min",
+      "max_annee": "Année max",
+      "sold_since": "Vendu depuis"
+    },
+    "columns": {
+      "address": "Adresse",
+      "price": "Prix",
+      "date_sold": "Date vente",
+      "nb_logement": "Nb log",
+      "annee": "Année",
+      "superficie": "Superficie",
+      "source": "Source"
+    },
+    "results_count": "{count} comparable(s) trouvé(s)",
+    "prompt_search": "Cherche une adresse ou applique des filtres, puis clique « Rechercher » pour afficher les comparables vendus.",
+    "no_results": "Aucun comparable ne correspond à ta recherche.",
+    "no_results_hint": "Ajoute un comparable connu manuellement pour enrichir ta base.",
+    "source_manual": "Manuel",
+    "source_journal": "Journal",
+    "journal_not_configured": "La source automatique (Journal) n'est pas encore activée. En attendant, ajoute tes comparables connus manuellement — ils sont croisés automatiquement avec les rôles fonciers et conservés dans ta base.",
+    "add_manual": "Ajouter un comparable manuel",
+    "delete": "Supprimer",
+    "delete_confirm": "Supprimer ce comparable ?",
+    "modal": {
+      "title": "Ajouter un comparable manuel",
+      "subtitle": "Saisis une vente connue. Elle est croisée automatiquement avec les rôles fonciers et conservée dans ta base.",
+      "address_full": "Adresse complète",
+      "address_full_hint": "Ou renseigne le numéro civique et la rue séparément ci-dessous.",
+      "civique": "Numéro civique",
+      "nom_rue": "Rue",
+      "municipalite": "Municipalité",
+      "region": "Région",
+      "price": "Prix de vente",
+      "date_sold": "Date de vente",
+      "nb_logement": "Nb logements",
+      "annee": "Année",
+      "superficie": "Superficie (m²)",
+      "cancel": "Annuler",
+      "submit": "Ajouter",
+      "err_price_required": "Le prix est requis.",
+      "err_date_required": "La date de vente est requise.",
+      "err_address_required": "Indique une adresse complète, ou un numéro civique + une rue."
+    }
   },
   "footer": {
     "rights": "Tous droits réservés.",
