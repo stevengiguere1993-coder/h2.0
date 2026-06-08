@@ -8,6 +8,14 @@ services:
                                 # exposé via nginx + SSL
     environment:
       SCRAPING_API_KEY: ${SCRAPING_API_KEY:?SCRAPING_API_KEY required}
+      # Credentials QUB (Québecor) pour l'endpoint
+      # /scrape/numeriq-comparables (comparables vendus du Journal
+      # de Montréal). Optionnels au boot : si absents, l'endpoint
+      # renvoie un 502 propre — il ne casse PAS le démarrage du
+      # service. À renseigner dans le fichier .env du VPS une fois
+      # le compte QUB obtenu.
+      NUMERIQ_USERNAME: ${NUMERIQ_USERNAME:-}
+      NUMERIQ_PASSWORD: ${NUMERIQ_PASSWORD:-}
     deploy:
       resources:
         limits:
