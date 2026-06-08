@@ -871,9 +871,18 @@ def _derive_tri_auto_inputs(results: dict) -> dict:
     financables = set(results.get("frais_demarrage_financables") or [])
     pret_constr = 0.0
     for k, v in frais.items():
+        if k == "frais_custom":
+            continue  # liste de postes perso — traités juste après
         if k in financables:
             try:
                 pret_constr += float(v or 0) * (1.0 - mdf_pct)
+            except (TypeError, ValueError):
+                continue
+    # Postes personnalisés finançables (même logique).
+    for c in (frais.get("frais_custom") or []):
+        if isinstance(c, dict) and c.get("financable"):
+            try:
+                pret_constr += float(c.get("montant") or 0) * (1.0 - mdf_pct)
             except (TypeError, ValueError):
                 continue
 
@@ -1443,6 +1452,34 @@ def _render_bytes(
                 Paragraph(_money(cash), s["num"]),
                 Paragraph(_money(pret) if pret > 0.5 else "—", s["num"]),
             ])
+
+        # Postes de frais de démarrage PERSONNALISÉS (Paramètres →
+        # Calculateur). Affichés même à 0 $ pour refléter exactement la
+        # fiche d'analyse.
+        for c in (fd.get("frais_custom") or []):
+            if not isinstance(c, dict):
+                continue
+            try:
+                cval = float(c.get("montant") or 0)
+            except (TypeError, ValueError):
+                cval = 0.0
+            cfin = bool(c.get("financable"))
+            if cfin:
+                ccash = cval * mdf_pct
+                cpret = cval - ccash
+            else:
+                ccash = cval
+                cpret = 0.0
+            total_cash_finances += cpret
+            ctag = (f" <font size=7 color='{_C_GREEN}'>(finançable)</font>"
+                    if cfin else "")
+            clabel = str(c.get("label_fr") or "Frais personnalisé")
+            data_rows.append([
+                Paragraph(f"{clabel}{ctag}", s["small"]),
+                Paragraph(_money(ccash), s["num"]),
+                Paragraph(_money(cpret) if cpret > 0.5 else "—", s["num"]),
+            ])
+
         # Total des frais de démarrage (cash sorti sur l'ensemble des
         # postes) + total de la portion financée par le prêteur B.
         data_rows.append([
