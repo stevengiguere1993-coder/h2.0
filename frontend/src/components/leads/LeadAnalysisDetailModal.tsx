@@ -3205,6 +3205,12 @@ function FraisDemarrageBreakdownPanel({
                 Finançable
               </th>
               <th className="px-3 py-2 text-right">Cash à sortir</th>
+              <th
+                className="px-3 py-2 text-right"
+                title="Portion de la valeur financée par le prêteur B (valeur − cash) pour les postes finançables"
+              >
+                Prêt prêteur B
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -3221,11 +3227,14 @@ function FraisDemarrageBreakdownPanel({
               <td className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-amber-200">
                 {fmtMoney(mdfPctValue)}
               </td>
+              <td className="px-3 py-2 text-right font-mono tabular-nums text-white/40">
+                —
+              </td>
             </tr>
             <tr>
               <td
                 className="px-3 pt-2.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/40"
-                colSpan={4}
+                colSpan={5}
               >
                 Frais de démarrage
               </td>
@@ -3241,6 +3250,11 @@ function FraisDemarrageBreakdownPanel({
               const cashForRow = isFinancable
                 ? displayVal * mdfPctNumeric
                 : displayVal;
+              // Portion financée par le prêteur B = valeur − cash à sortir.
+              // Poste non finançable → 100 % cash, rien de financé.
+              const pretForRow = isFinancable
+                ? displayVal - cashForRow
+                : null;
               return (
                 <tr
                   key={key}
@@ -3289,6 +3303,13 @@ function FraisDemarrageBreakdownPanel({
                   >
                     {fmtMoney(cashForRow)}
                   </td>
+                  <td
+                    className={`px-3 py-1.5 text-right font-mono tabular-nums ${
+                      pretForRow != null ? "text-emerald-300" : "text-white/40"
+                    }`}
+                  >
+                    {pretForRow != null ? fmtMoney(pretForRow) : "—"}
+                  </td>
                 </tr>
               );
             })}
@@ -3309,12 +3330,18 @@ function FraisDemarrageBreakdownPanel({
               <td className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-amber-200">
                 {fmtMoney(subTotalCash)}
               </td>
+              <td
+                className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-emerald-300"
+                title="Total financé par le prêteur B (= « dont financé par prêteur B »)"
+              >
+                {subTotalFinanced > 0.5 ? fmtMoney(subTotalFinanced) : "—"}
+              </td>
             </tr>
             {subTotalFinanced > 0.5 ? (
               <tr className="bg-emerald-500/[0.07]">
                 <td
                   className="px-3 py-1.5 pl-5 text-[10px] font-semibold text-emerald-300"
-                  colSpan={3}
+                  colSpan={4}
                 >
                   dont financé par prêteur B
                 </td>
@@ -3336,6 +3363,7 @@ function FraisDemarrageBreakdownPanel({
               <td className="px-3 py-2.5 text-right font-mono text-sm font-bold tabular-nums text-accent-500">
                 {fmtMoney(totalMdfLocal)}
               </td>
+              <td aria-hidden="true" />
             </tr>
           </tfoot>
         </table>
