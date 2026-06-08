@@ -22,7 +22,6 @@ from typing import Optional
 from sqlalchemy import (
     Date,
     DateTime,
-    Index,
     Integer,
     Numeric,
     String,
@@ -106,8 +105,4 @@ class SoldComparable(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
-    )
-
-    __table_args__ = (
-        Index("ix_sold_comparables_nom_rue", "nom_rue"),
     )
