@@ -8,6 +8,8 @@ Endpoints :
 - POST /scrape/evalweb-owners : flow stateful 4 étapes du portail
   montreal.ca/role-evaluation-fonciere
 - POST /scrape/centris : recherche multi-logements à vendre
+- POST /scrape/numeriq-comparables : comparables vendus du Journal
+  de Montréal (API interne numeriq, login QUB + Akamai)
 
 Auth : header `X-API-Key` requis pour tous les endpoints non-public.
 La clé est dans la variable d'env `SCRAPING_API_KEY`.
@@ -31,6 +33,7 @@ from pydantic import BaseModel, Field
 
 from evalweb import scrape_owners_via_browser
 from centris import scrape_listings_via_browser, scrape_detail_via_browser
+from numeriq_journal import scrape_comparables_via_browser
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("scraping")
@@ -208,3 +211,60 @@ async def centris_detail(req: CentrisDetailRequest):
     except Exception as exc:
         raise HTTPException(502, f"Échec détail Centris : {exc}")
     return detail
+
+
+# ============== Numeriq — Comparables vendus (Journal de MTL) ==============
+
+
+class NumeriqComparablesRequest(BaseModel):
+    nom_rue: Optional[str] = None
+    municipalite: Optional[str] = None
+    region: Optional[str] = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class NumeriqComparable(BaseModel):
+    address: Optional[str] = None
+    civique: Optional[str] = None
+    nom_rue: Optional[str] = None
+    municipalite: Optional[str] = None
+    region: Optional[str] = None
+    price: Optional[float] = None
+    date_sold: Optional[str] = None  # "YYYY-MM-DD"
+    source_url: Optional[str] = None
+    raw: dict = Field(default_factory=dict)
+
+
+class NumeriqComparablesResponse(BaseModel):
+    comparables: List[NumeriqComparable]
+
+
+@app.post(
+    "/scrape/numeriq-comparables",
+    response_model=NumeriqComparablesResponse,
+    dependencies=[Depends(require_api_key)],
+)
+async def numeriq_comparables(req: NumeriqComparablesRequest):
+    """Récupère les « comparables vendus » de l'outil du Journal de
+    Montréal (API interne numeriq, derrière login QUB + Akamai).
+
+    ⚠ SCAFFOLD : à valider avec une vraie session QUB (login flow,
+    URL/params de l'API numeriq, mapping des champs). Voir
+    numeriq_journal.py. En cas d'échec (credentials absents, login
+    KO, API à valider), on renvoie un 502 propre — jamais un crash.
+    """
+    browser: Browser = app.state.browser
+    try:
+        comparables = await scrape_comparables_via_browser(
+            browser,
+            nom_rue=req.nom_rue,
+            municipalite=req.municipalite,
+            region=req.region,
+            limit=req.limit,
+        )
+    except Exception as exc:
+        log.exception("numeriq comparables scrape failed: %s", exc)
+        raise HTTPException(502, f"Échec scrape Numeriq : {exc}")
+    return NumeriqComparablesResponse(
+        comparables=[NumeriqComparable(**c) for c in comparables]
+    )
