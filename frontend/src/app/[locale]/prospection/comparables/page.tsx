@@ -680,8 +680,70 @@ function AddComparableModal({
   const [annee, setAnnee] = useState("");
   const [superficie, setSuperficie] = useState("");
 
+  // Autocomplete adresse (aide facultative). Quand une suggestion est
+  // choisie, on pré-remplit civique/rue/municipalité et on mémorise le
+  // matricule pour croiser exactement avec le rôle d'évaluation côté API.
+  const [addrQuery, setAddrQuery] = useState("");
+  const [matricule, setMatricule] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const addrWrapRef = useRef<HTMLDivElement | null>(null);
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Debounce 350 ms → réutilise le même endpoint address-search que la
+  // recherche principale (rôle d'évaluation MTL).
+  useEffect(() => {
+    const q = addrQuery.trim();
+    if (q.length < 2) {
+      setSuggestions([]);
+      setSuggestLoading(false);
+      return;
+    }
+    setSuggestLoading(true);
+    const handle = setTimeout(async () => {
+      try {
+        const res = await authedFetch(
+          `/api/v1/prospection/mtl-properties/address-search?q=${encodeURIComponent(
+            q
+          )}&limit=12`
+        );
+        if (!res.ok) throw new Error();
+        const data = (await res.json()) as AddressSuggestion[];
+        setSuggestions(data);
+        setSuggestOpen(true);
+      } catch {
+        setSuggestions([]);
+      } finally {
+        setSuggestLoading(false);
+      }
+    }, 350);
+    return () => clearTimeout(handle);
+  }, [addrQuery]);
+
+  // Click hors du champ adresse → ferme le dropdown.
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (!addrWrapRef.current) return;
+      if (!addrWrapRef.current.contains(e.target as Node))
+        setSuggestOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  // Sélection d'une suggestion : pré-remplit les champs et garde le
+  // matricule. L'utilisateur peut toujours ajuster les champs ensuite.
+  function pickSuggestion(s: AddressSuggestion) {
+    setAddrQuery(s.label);
+    setMatricule(s.matricule);
+    if (s.civique) setCivique(s.civique);
+    if (s.nom_rue) setNomRue(s.nom_rue);
+    if (s.municipalite) setMunicipalite(s.municipalite);
+    setSuggestOpen(false);
+  }
 
   async function submit() {
     setError(null);
@@ -716,6 +778,10 @@ function AddComparableModal({
       if (nbLogement.trim()) payload.nb_logement = Number(nbLogement);
       if (annee.trim()) payload.annee_construction = Number(annee);
       if (superficie.trim()) payload.superficie_terrain = Number(superficie);
+      // Matricule du rôle d'évaluation (si l'adresse vient de
+      // l'autocomplete) : le backend croise exactement et enrichit les
+      // données. Optionnel — fallback texte si absent.
+      if (matricule) payload.matricule = matricule;
 
       const res = await authedFetch(
         "/api/v1/prospection/comparables/manual",
@@ -765,6 +831,69 @@ function AddComparableModal({
         </header>
 
         <div className="flex-1 space-y-3 overflow-y-auto p-4">
+          {/* Autocomplete : aide facultative. Pré-remplit civique/rue/
+              municipalité et rattache le matricule du rôle d'évaluation. */}
+          <div ref={addrWrapRef} className="relative">
+            <label className="label">Rechercher une adresse (rôle MTL)</label>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+              <input
+                type="text"
+                value={addrQuery}
+                onChange={(e) => {
+                  setAddrQuery(e.target.value);
+                  // L'utilisateur retape : on oublie le matricule choisi.
+                  setMatricule(null);
+                  setSuggestOpen(true);
+                }}
+                onFocus={() => {
+                  if (suggestions.length > 0) setSuggestOpen(true);
+                }}
+                autoComplete="off"
+                placeholder="Tape un numéro civique + rue (ex. 261 Mont-Royal)"
+                className="input pl-8 text-sm"
+              />
+              {suggestLoading ? (
+                <Loader2 className="absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-white/40" />
+              ) : null}
+            </div>
+
+            {suggestOpen && suggestions.length > 0 ? (
+              <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-auto rounded-lg border border-brand-800 bg-brand-950 shadow-xl">
+                {suggestions.map((s) => (
+                  <li key={s.matricule}>
+                    <button
+                      type="button"
+                      onClick={() => pickSuggestion(s)}
+                      className="flex w-full items-start gap-2 px-3 py-2 text-left text-sm hover:bg-brand-900"
+                    >
+                      <MapPin className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-emerald-400" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-white/80">
+                          {s.label}
+                        </div>
+                        <div className="text-[10px] text-white/40">
+                          Matricule {s.matricule}
+                        </div>
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {matricule ? (
+              <p className="mt-1 text-[11px] text-emerald-300">
+                Adresse rattachée au matricule {matricule} — nb logements,
+                année et superficie seront enrichis automatiquement.
+              </p>
+            ) : (
+              <p className="mt-1 text-[10px] text-white/40">
+                Facultatif : choisis une suggestion pour pré-remplir les
+                champs, ou saisis l&apos;adresse à la main ci-dessous.
+              </p>
+            )}
+          </div>
+
           <div>
             <label className="label">Adresse complète</label>
             <input
@@ -786,7 +915,12 @@ function AddComparableModal({
               <input
                 type="text"
                 value={civique}
-                onChange={(e) => setCivique(e.target.value)}
+                onChange={(e) => {
+                  setCivique(e.target.value);
+                  // Édition manuelle : le matricule choisi ne correspond
+                  // plus forcément à l'adresse saisie, on l'oublie.
+                  setMatricule(null);
+                }}
                 className="input text-sm"
               />
             </div>
@@ -795,7 +929,10 @@ function AddComparableModal({
               <input
                 type="text"
                 value={nomRue}
-                onChange={(e) => setNomRue(e.target.value)}
+                onChange={(e) => {
+                  setNomRue(e.target.value);
+                  setMatricule(null);
+                }}
                 className="input text-sm"
               />
             </div>
