@@ -299,6 +299,34 @@ def make_crud_router(
             or getattr(obj, "title", None)
             or getattr(obj, "full_name", None),
         }
+        # Suppression d'une facture : on « dé-refacture » les achats et
+        # les heures (punches) qui y étaient rattachés via leurs
+        # facture_items, pour qu'ils redeviennent disponibles à la
+        # refacturation et que leurs champs (majoration…) se
+        # déverrouillent. Le FK est SET NULL mais `invoiced_at` ne se
+        # réinitialise pas seul → on remet les deux à NULL ici, AVANT la
+        # suppression (après, les facture_items sont déjà cascade-delete).
+        if model is Facture:
+            from sqlalchemy import select as _select, update as _update
+            from app.models.facture_item import FactureItem as _FI
+
+            item_ids = (
+                await db.execute(
+                    _select(_FI.id).where(_FI.facture_id == item_id)
+                )
+            ).scalars().all()
+            if item_ids:
+                await db.execute(
+                    _update(Achat)
+                    .where(Achat.facture_item_id.in_(item_ids))
+                    .values(invoiced_at=None, facture_item_id=None)
+                )
+                await db.execute(
+                    _update(Punch)
+                    .where(Punch.facture_item_id.in_(item_ids))
+                    .values(invoiced_at=None, facture_item_id=None)
+                )
+
         await crud.delete(obj)
         from app.services.audit import log_action as _log_action
 

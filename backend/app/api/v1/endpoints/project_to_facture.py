@@ -351,14 +351,17 @@ async def convert_project_to_facture(
 
         new_items: list[tuple[Achat, FactureItem]] = []
         for ac in achats:
-            billed, rule_label = _compute_billed_amount(
+            billed, _rule_label = _compute_billed_amount(
                 ac, data.achat_markup_overrides, contracts_by_st
             )
             base_desc = ac.description or f"Achat {ac.reference or ac.id}"
             line_prefix = (
                 "Sous-traitant" if ac.kind == "sub_invoice" else "Matériel"
             )
-            desc = f"{base_desc} ({rule_label})" if rule_label != "coûtant" else base_desc
+            # La majoration / règle de facturation (`rule_label`) est
+            # INTERNE : on l'applique au montant (`billed`) mais on ne
+            # l'affiche JAMAIS dans la description vue par le client.
+            desc = base_desc
             contract = (
                 contracts_by_st.get(ac.sous_traitant_id or 0)
                 if ac.kind == "sub_invoice"
