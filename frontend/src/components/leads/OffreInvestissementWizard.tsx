@@ -102,6 +102,122 @@ export type OffreInvestissementWizardData = {
   }>;
 };
 
+/**
+ * Sous-ensemble du `LeadAnalysis` (GET /lead-analyses/{id}) nécessaire à
+ * la dérivation des données du wizard. On ne type que les champs lus par
+ * `buildOffreWizardData` pour éviter de coupler ce module au type complet
+ * du modal — la réponse API peut contenir d'autres champs sans impact.
+ */
+export type OffreWizardSourceAnalysis = {
+  address?: string | null;
+  city?: string | null;
+  asking_price?: number | null;
+  revenus_bruts?: number | null;
+  nb_logements?: number | null;
+  annee_construction?: number | null;
+  evaluation_municipale?: number | null;
+  taxes_municipales?: number | null;
+  energie?: number | null;
+  assurances?: number | null;
+  best_refi_amount?: number | null;
+  best_refi_program?: string | null;
+  mdf_preteur_b?: number | null;
+  taux_interet_refi_pct?: number | null;
+  attachments?: Array<{
+    id: number;
+    filename: string;
+    content_type: string;
+    size_bytes?: number;
+  }> | null;
+};
+
+/**
+ * Formatage monétaire « 12 345 $ » — copie de `fmtMoney` (modal fiche
+ * d'analyse), gardée locale pour que ce module reste autonome.
+ */
+function fmtMoneyOffre(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  const rounded = Math.round(n);
+  const sign = rounded < 0 ? "-" : "";
+  const abs = Math.abs(rounded).toString();
+  const withSep = abs.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${sign}${withSep} $`;
+}
+
+/**
+ * Dérive les `OffreInvestissementWizardData` à partir d'un `LeadAnalysis`
+ * complet. Logique extraite telle quelle du `useMemo offreWizardData` qui
+ * vivait dans `LeadAnalysisDetailModal`, afin d'être réutilisable depuis
+ * la page deal du Pipeline. Aucune perte de champ.
+ */
+export function buildOffreWizardData(
+  data: OffreWizardSourceAnalysis | null | undefined
+): OffreInvestissementWizardData {
+  const fmt = (n: number | null | undefined) =>
+    n == null ? "—" : fmtMoneyOffre(n);
+  const fmtPct = (n: number | null | undefined) =>
+    n == null ? "—" : `${n}%`;
+  const autoFilled: AutoFilledRow[] = [
+    { label: "Adresse", value: data?.address || "—" },
+    { label: "Ville", value: data?.city || "—" },
+    { label: "Prix demandé", value: fmt(data?.asking_price ?? null) },
+    { label: "Revenus bruts", value: fmt(data?.revenus_bruts ?? null) },
+    {
+      label: "Nb logements",
+      value: data?.nb_logements ? String(data.nb_logements) : "—"
+    },
+    {
+      label: "Année construction",
+      value: data?.annee_construction
+        ? String(data.annee_construction)
+        : "—"
+    },
+    {
+      label: "Évaluation municipale",
+      value: fmt(data?.evaluation_municipale ?? null)
+    },
+    {
+      label: "Taxes municipales",
+      value: fmt(data?.taxes_municipales ?? null)
+    },
+    { label: "Énergie", value: fmt(data?.energie ?? null) },
+    { label: "Assurances", value: fmt(data?.assurances ?? null) },
+    {
+      label: "Best refi (montant)",
+      value: fmt(data?.best_refi_amount ?? null)
+    },
+    {
+      label: "Best refi (programme)",
+      value: data?.best_refi_program || "—"
+    },
+    { label: "MDF prêteur B", value: fmt(data?.mdf_preteur_b ?? null) },
+    {
+      label: "Taux refi",
+      value: fmtPct(data?.taux_interet_refi_pct ?? null)
+    }
+  ];
+  const askingPrice = data?.asking_price ?? 0;
+  const evalMuni = data?.evaluation_municipale ?? 0;
+  let bulletSub = "Acquisition à fort potentiel d'optimisation";
+  if (askingPrice && evalMuni && askingPrice < evalMuni) {
+    const pct = Math.round((1 - askingPrice / evalMuni) * 100);
+    bulletSub = `Offre d'achat acceptée ${pct}% sous la valeur municipale`;
+  }
+  return {
+    autoFilled,
+    bulletSuggestions: {
+      b1: bulletSub,
+      b2: "Loyers moyens actuels sous le marché",
+      b3: "Potentiel d'augmentation via optimisation",
+      b4: `Demande forte | Secteur ${data?.city || "Montréal"}`
+    },
+    quartier: data?.city || "Montréal",
+    existingPhotos: (data?.attachments || []).filter((a) =>
+      a.content_type.startsWith("image/")
+    )
+  };
+}
+
 export function OffreInvestissementWizard({
   open,
   onClose,
