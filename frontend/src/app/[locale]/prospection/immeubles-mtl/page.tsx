@@ -963,6 +963,19 @@ function OwnerCandidatesModal({
         )}/owner-evalweb` + (refresh ? "?refresh=true" : "");
       const r = await authedFetch(url);
       if (!r.ok) {
+        // 502 = le scrape auto a échoué côté serveur (site EvalWeb
+        // protégé / reCAPTCHA / VPS injoignable). Plutôt que d'afficher
+        // une erreur 502 brute, on bascule directement sur le collage
+        // manuel — c'est le chemin le plus fiable, en 1 clic.
+        if (r.status === 502 || r.status === 503 || r.status === 504) {
+          setShowPaste(true);
+          setEvalError(
+            "Le scrape automatique n'a pas abouti (site EvalWeb " +
+              "protégé). Colle la section « Propriétaire » ci-dessous — " +
+              "c'est la méthode la plus fiable."
+          );
+          return;
+        }
         const err = await r.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${r.status}`);
       }
