@@ -1044,24 +1044,38 @@ def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
         Paragraph("Prêt max refi", s["th"]),
         Paragraph("Cash investisseur", s["th"]),
         Paragraph("Valeur des parts", s["th"]),
+        Paragraph("Patrimoine", s["th"]),
     ]
     rows = [header]
     for h in ("2", "7", "12"):
         hd = horizons.get(h) or {}
+        cash_inv = hd.get("cash_investisseur")
+        val_parts = hd.get("valeur_parts")
+        # Patrimoine de l'investisseur à cet horizon = liquidités
+        # encaissées cette année + valeur de ses parts. None-safe :
+        # une absence de l'un OU l'autre intrant → « — ».
+        if cash_inv is None and val_parts is None:
+            patrimoine = None
+        else:
+            patrimoine = float(cash_inv or 0) + float(val_parts or 0)
         rows.append([
             Paragraph(f"An {h}", s["small"]),
             Paragraph(_money(hd.get("valeur_immeuble")), s["num"]),
             Paragraph(_money(hd.get("pret_max_refi")), s["num"]),
-            Paragraph(_money(hd.get("cash_investisseur")), s["num"]),
-            Paragraph(_money(hd.get("valeur_parts")), s["num"]),
+            Paragraph(_money(cash_inv), s["num"]),
+            Paragraph(_money(val_parts), s["num"]),
+            Paragraph(f"<b>{_money(patrimoine)}</b>", s["num_b"]),
         ])
-    th = Table(rows, colWidths=[24 * mm, "*", "*", "*", "*"], repeatRows=1)
+    th = Table(
+        rows, colWidths=[20 * mm, "*", "*", "*", "*", "*"], repeatRows=1)
     th.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(_C_AMBER_SOFT)),
         ("LINEBELOW", (0, 0), (-1, 0), 0.75, colors.HexColor(_C_AMBER_LINE)),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1),
          [colors.white, colors.HexColor("#fafafa")]),
+        # Colonne Patrimoine mise en relief (fond vert pâle).
+        ("BACKGROUND", (-1, 1), (-1, -1), colors.HexColor(_C_GREEN_SOFT)),
         ("BOX", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
         ("LEFTPADDING", (0, 0), (-1, -1), 5),
