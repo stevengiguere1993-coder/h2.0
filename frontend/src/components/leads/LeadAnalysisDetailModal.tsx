@@ -13,7 +13,6 @@ import {
   ClipboardList,
   Coins,
   Download,
-  FileDown,
   FileText,
   Flame,
   Gauge,
@@ -29,10 +28,6 @@ import {
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
-import {
-  OffreInvestissementWizard,
-  type OffreInvestissementWizardData
-} from "@/components/leads/OffreInvestissementWizard";
 import { useConfirm } from "@/components/confirm-dialog";
 import { PillPicker } from "@/components/task-pills";
 
@@ -614,74 +609,6 @@ export function LeadAnalysisDetailModal({
     kind: "ok" | "err";
   } | null>(null);
 
-  // ── Offre d'investissement .pptx (MVP) ────────────────────────────
-  const [offreWizardOpen, setOffreWizardOpen] = useState(false);
-  const offreWizardData = useMemo<OffreInvestissementWizardData>(() => {
-    const fmt = (n: number | null | undefined) =>
-      n == null ? "—" : fmtMoney(n);
-    const fmtPct = (n: number | null | undefined) =>
-      n == null ? "—" : `${n}%`;
-    const autoFilled: Array<{ label: string; value: string }> = [
-      { label: "Adresse", value: data?.address || "—" },
-      { label: "Ville", value: data?.city || "—" },
-      { label: "Prix demandé", value: fmt(data?.asking_price ?? null) },
-      { label: "Revenus bruts", value: fmt(data?.revenus_bruts ?? null) },
-      {
-        label: "Nb logements",
-        value: data?.nb_logements ? String(data.nb_logements) : "—"
-      },
-      {
-        label: "Année construction",
-        value: data?.annee_construction
-          ? String(data.annee_construction)
-          : "—"
-      },
-      {
-        label: "Évaluation municipale",
-        value: fmt(data?.evaluation_municipale ?? null)
-      },
-      {
-        label: "Taxes municipales",
-        value: fmt(data?.taxes_municipales ?? null)
-      },
-      { label: "Énergie", value: fmt(data?.energie ?? null) },
-      { label: "Assurances", value: fmt(data?.assurances ?? null) },
-      {
-        label: "Best refi (montant)",
-        value: fmt(data?.best_refi_amount ?? null)
-      },
-      {
-        label: "Best refi (programme)",
-        value: data?.best_refi_program || "—"
-      },
-      { label: "MDF prêteur B", value: fmt(data?.mdf_preteur_b ?? null) },
-      {
-        label: "Taux refi",
-        value: fmtPct(data?.taux_interet_refi_pct ?? null)
-      }
-    ];
-    const askingPrice = data?.asking_price ?? 0;
-    const evalMuni = data?.evaluation_municipale ?? 0;
-    let bulletSub = "Acquisition à fort potentiel d'optimisation";
-    if (askingPrice && evalMuni && askingPrice < evalMuni) {
-      const pct = Math.round((1 - askingPrice / evalMuni) * 100);
-      bulletSub = `Offre d'achat acceptée ${pct}% sous la valeur municipale`;
-    }
-    return {
-      autoFilled,
-      bulletSuggestions: {
-        b1: bulletSub,
-        b2: "Loyers moyens actuels sous le marché",
-        b3: "Potentiel d'augmentation via optimisation",
-        b4: `Demande forte | Secteur ${data?.city || "Montréal"}`
-      },
-      quartier: data?.city || "Montréal",
-      existingPhotos: (data?.attachments || []).filter((a) =>
-        a.content_type.startsWith("image/")
-      )
-    };
-  }, [data]);
-
   useEffect(() => {
     if (!pdfToast || pdfToast.kind === "err") return;
     const t = setTimeout(() => setPdfToast(null), 4000);
@@ -817,16 +744,6 @@ export function LeadAnalysisDetailModal({
                 Retour au deal
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={() => setOffreWizardOpen(true)}
-              disabled={!data}
-              title="Générer un .pptx d'offre d'investissement"
-              className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 text-[11px] font-medium text-emerald-300 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <FileDown className="h-3 w-3" />
-              Offre .pptx
-            </button>
             <button
               type="button"
               onClick={() => void downloadPdf()}
@@ -1325,12 +1242,6 @@ export function LeadAnalysisDetailModal({
           </>
         )}
       </div>
-      <OffreInvestissementWizard
-        open={offreWizardOpen}
-        onClose={() => setOffreWizardOpen(false)}
-        analysisId={analysisId}
-        data={offreWizardData}
-      />
     </div>
   );
 }
