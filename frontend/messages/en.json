@@ -50,10 +50,22 @@
   "why": {
     "title": "Why choose us",
     "items": [
-      { "title": "We are owners ourselves", "desc": "We own multi-unit buildings. Your budget is treated like our own." },
-      { "title": "Integrated team", "desc": "No rogue subcontracting. Our trades, our quality control." },
-      { "title": "Full transparency", "desc": "Itemized pricing, clear schedule, digital site tracking." },
-      { "title": "Exemplary finish", "desc": "Our trademark. Check our delivered projects before you commit." }
+      {
+        "title": "We are owners ourselves",
+        "desc": "We own multi-unit buildings. Your budget is treated like our own."
+      },
+      {
+        "title": "Integrated team",
+        "desc": "No rogue subcontracting. Our trades, our quality control."
+      },
+      {
+        "title": "Full transparency",
+        "desc": "Itemized pricing, clear schedule, digital site tracking."
+      },
+      {
+        "title": "Exemplary finish",
+        "desc": "Our trademark. Check our delivered projects before you commit."
+      }
     ]
   },
   "cta": {
@@ -95,6 +107,64 @@
     "success": "Thank you! Your request was received. Reference: {reference}. We will contact you within 24 business hours.",
     "errorGeneric": "Sorry, an error occurred. Please try again or call us directly.",
     "errorRateLimit": "Too many submissions recently. Please try again in a few minutes."
+  },
+  "comparables": {
+    "title": "Sold comparables",
+    "description": "Find recently sold multi-unit buildings to back up your valuations. Cross-reference an address with the property roll and keep your comparables in your database.",
+    "search": "Search",
+    "searching": "Searching…",
+    "address": "Address",
+    "address_placeholder": "Type a street number + street (e.g. 261 Mont-Royal)",
+    "address_linked": "Address linked to roll number {matricule}.",
+    "no_address_match": "No matching address in the Montreal property roll.",
+    "filters": {
+      "min_price": "Min price",
+      "max_price": "Max price",
+      "min_logements": "Min units",
+      "max_logements": "Max units",
+      "min_annee": "Min year",
+      "max_annee": "Max year",
+      "sold_since": "Sold since"
+    },
+    "columns": {
+      "address": "Address",
+      "price": "Price",
+      "date_sold": "Sale date",
+      "nb_logement": "Units",
+      "annee": "Year",
+      "superficie": "Area",
+      "source": "Source"
+    },
+    "results_count": "{count} comparable(s) found",
+    "prompt_search": "Search an address or apply filters, then click “Search” to display sold comparables.",
+    "no_results": "No comparable matches your search.",
+    "no_results_hint": "Add a known comparable manually to enrich your database.",
+    "source_manual": "Manual",
+    "source_journal": "Journal",
+    "journal_not_configured": "The automatic source (Journal) is not enabled yet. In the meantime, add your known comparables manually — they are automatically cross-referenced with the property roll and kept in your database.",
+    "add_manual": "Add a manual comparable",
+    "delete": "Delete",
+    "delete_confirm": "Delete this comparable?",
+    "modal": {
+      "title": "Add a manual comparable",
+      "subtitle": "Enter a known sale. It is automatically cross-referenced with the property roll and kept in your database.",
+      "address_full": "Full address",
+      "address_full_hint": "Or fill in the street number and street separately below.",
+      "civique": "Street number",
+      "nom_rue": "Street",
+      "municipalite": "City",
+      "region": "Region",
+      "price": "Sale price",
+      "date_sold": "Sale date",
+      "nb_logement": "Units",
+      "annee": "Year",
+      "superficie": "Area (m²)",
+      "cancel": "Cancel",
+      "submit": "Add",
+      "err_price_required": "Price is required.",
+      "err_date_required": "Sale date is required.",
+      "err_address_required": "Provide a full address, or a street number + a street."
+    }
   },
   "footer": {
     "rights": "All rights reserved.",
