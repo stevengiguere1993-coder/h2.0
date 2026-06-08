@@ -505,6 +505,33 @@ export function LeadAnalysisDetailModal({
         body: JSON.stringify({ [field]: value })
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // Le backend peut avoir RECALCULÉ les résultats (si le champ
+      // modifié est un intrant du calcul — ex. décocher un poste
+      // finançable prêteur B). On fusionne les champs DÉRIVÉS de la
+      // réponse pour rafraîchir l'affichage, sans écraser les intrants
+      // en cours d'édition.
+      try {
+        const updated = (await r.json()) as Record<string, unknown>;
+        if (updated && typeof updated === "object") {
+          setData((prev) => {
+            if (!prev) return prev;
+            const merged = { ...prev } as Record<string, unknown>;
+            for (const f of [
+              "analysis_results_json",
+              "mdf_preteur_b",
+              "best_refi_amount",
+              "best_refi_program",
+              "status",
+              "validation_warnings"
+            ]) {
+              if (f in updated) merged[f] = updated[f];
+            }
+            return merged as LeadDetail;
+          });
+        }
+      } catch {
+        /* réponse non-JSON : on conserve l'état optimistic */
+      }
       save.markSaved();
       onAfterUpdate?.();
     } catch {

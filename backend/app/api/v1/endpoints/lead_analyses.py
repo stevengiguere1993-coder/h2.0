@@ -1158,6 +1158,21 @@ async def update_analysis(
         new_vw = validate_extraction(rec, per_source_values=per_src)
         rec.validation_warnings = new_vw or None
 
+    # Recalcul auto : si un intrant du calcul a changé ET que l'analyse a
+    # déjà été calculée une fois, on relance le moteur pour garder les
+    # résultats (MDF, prêt prêteur B, scénarios) synchronisés. Sans ça,
+    # décocher un poste « finançable prêteur B » sur une analyse déjà
+    # faite ne mettait rien à jour.
+    patched = set(payload.model_dump(exclude_unset=True).keys())
+    if (patched & RECALC_INPUT_FIELDS) and rec.analysis_results_json:
+        try:
+            await _compute_and_store(rec, db)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "recalcul auto après patch échoué (analyse %s): %s",
+                analysis_id, exc,
+            )
+
     await db.commit()
     await db.refresh(rec)
     return await get_analysis(analysis_id, db, user)
@@ -1615,23 +1630,30 @@ class RunAnalysisResult(BaseModel):
     analysis_results: dict
 
 
-@router.post(
-    "/{analysis_id}/run-financial-analysis",
-    response_model=RunAnalysisResult,
-    summary="Lance le moteur de calcul financier (réplique Excel).",
-)
-async def run_financial_analysis(
-    analysis_id: int, db: DBSession, user: CurrentUser
-) -> RunAnalysisResult:
-    """Lit les champs du `LeadAnalysis`, lance le moteur de calcul
-    (réplique exacte des 2 calculateurs Excel), persiste le résultat
-    en JSON, met à jour `best_refi_amount` + `best_refi_program`,
-    et bascule le statut en `decision_en_attente`."""
-    _require_prospection(user)
-    rec = await db.get(LeadAnalysis, analysis_id)
-    if rec is None:
-        raise HTTPException(404, "Analyse introuvable.")
+# Intrants qui, modifiés via PATCH, doivent re-déclencher le moteur de
+# calcul (recalcul auto) si l'analyse a déjà été calculée une fois.
+RECALC_INPUT_FIELDS = {
+    "asking_price", "nb_logements", "typology_json", "revenus_bruts",
+    "taxes_municipales", "taxes_scolaires", "assurances", "energie",
+    "depenses_autres", "loyers_projetes_json",
+    "loyers_max_abordabilite_json", "travaux_estimes",
+    "nb_logements_ajoutes", "nb_thermopompes_ajoutees", "ajout_wifi",
+    "reduction_energie_pct", "taux_interet_refi_pct", "tga_pct",
+    "taux_interet_achat_pct", "duree_projet_annees",
+    "frais_developpement", "frais_negociations", "mdf_preteur_b_pct",
+    "taux_interet_preteur_b_projet_pct",
+    "frais_demarrage_overrides_json", "frais_demarrage_financables_json",
+}
 
+
+async def _compute_and_store(rec, db) -> dict:
+    """Construit les intrants depuis ``rec`` (+ overrides globaux),
+    lance ``compute_all`` et PERSISTE les champs dérivés sur ``rec``
+    (``analysis_results_json``, ``best_refi_amount``,
+    ``best_refi_program``, ``mdf_preteur_b``). Ne commit PAS et ne
+    touche pas au statut — au caller de le faire. Partagé par le bouton
+    Calculer ET par le PATCH (recalcul auto quand un intrant change sur
+    une analyse déjà calculée)."""
     from app.services.lead_analysis_finance import FinanceInputs, compute_all
 
     # Désérialise les loyers projetés (typologie_prix) depuis le JSON
@@ -1803,6 +1825,27 @@ async def run_financial_analysis(
     rec.best_refi_amount = results.best_refi_amount
     rec.best_refi_program = results.best_refi_program
     rec.mdf_preteur_b = results.mdf_preteur_b
+    return results_dict
+
+
+@router.post(
+    "/{analysis_id}/run-financial-analysis",
+    response_model=RunAnalysisResult,
+    summary="Lance le moteur de calcul financier (réplique Excel).",
+)
+async def run_financial_analysis(
+    analysis_id: int, db: DBSession, user: CurrentUser
+) -> RunAnalysisResult:
+    """Lit les champs du `LeadAnalysis`, lance le moteur de calcul
+    (réplique exacte des 2 calculateurs Excel), persiste le résultat,
+    et bascule le statut en `decision_en_attente` (1er calcul)."""
+    _require_prospection(user)
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+
+    results_dict = await _compute_and_store(rec, db)
+
     # Auto-bascule en « Décision en attente » comme spécifié.
     if rec.status == LeadAnalysisStatus.A_ANALYSER.value:
         rec.status = LeadAnalysisStatus.DECISION_EN_ATTENTE.value
@@ -1810,8 +1853,8 @@ async def run_financial_analysis(
     await db.commit()
 
     return RunAnalysisResult(
-        best_refi_amount=results.best_refi_amount,
-        best_refi_program=results.best_refi_program,
+        best_refi_amount=rec.best_refi_amount,
+        best_refi_program=rec.best_refi_program,
         analysis_results=results_dict,
     )
 
