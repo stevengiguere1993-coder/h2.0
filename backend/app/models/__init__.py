@@ -151,6 +151,7 @@ from app.models.measurement import MeasurementSnapshot
 from app.models.measurement_photo import MeasurementPhoto
 from app.models.market_rent import MarketRent
 from app.models.montreal_property_unit import MontrealPropertyUnit
+from app.models.sold_comparable import SoldComparable  # noqa: F401
 from app.models.notification import Notification
 from app.models.numbering_counter import NumberingCounter
 from app.models.payment import Payment
@@ -300,6 +301,7 @@ __all__ = [
     "MeasurementSnapshot",
     "MeasurementPhoto",
     "MontrealPropertyUnit",
+    "SoldComparable",
     "NDA",
     "NDAStatus",
     "Notification",
