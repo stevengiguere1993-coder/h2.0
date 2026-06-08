@@ -3300,7 +3300,7 @@ function FraisDemarrageBreakdownPanel({
                 Sous-total frais de démarrage (cash)
               </td>
               <td
-                className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-amber-200/90"
+                className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-amber-200"
                 title="Valeur brute totale des frais de démarrage (si aucun n'était finançable)"
               >
                 {fmtMoney(subTotalValeur)}
@@ -3313,12 +3313,12 @@ function FraisDemarrageBreakdownPanel({
             {subTotalFinanced > 0.5 ? (
               <tr className="bg-emerald-500/[0.07]">
                 <td
-                  className="px-3 py-1.5 pl-5 text-[10px] text-emerald-300"
+                  className="px-3 py-1.5 pl-5 text-[10px] font-semibold text-emerald-300"
                   colSpan={3}
                 >
                   dont financé par prêteur B
                 </td>
-                <td className="px-3 py-1.5 text-right font-mono text-[10px] tabular-nums text-emerald-300">
+                <td className="px-3 py-1.5 text-right font-mono text-[10px] font-semibold tabular-nums text-emerald-300">
                   +{fmtMoney(subTotalFinanced)}
                 </td>
               </tr>
