@@ -113,6 +113,59 @@ async def scrape_centris_detail(listing_url: str) -> Optional[dict]:
         return r.json()
 
 
+async def scrape_numeriq_comparables(
+    *,
+    nom_rue: Optional[str] = None,
+    municipalite: Optional[str] = None,
+    region: Optional[str] = None,
+    limit: int = 50,
+) -> Optional[List[dict]]:
+    """Appelle le VPS pour scraper les comparables de vente (journal
+    des ventes Numériq) pour un secteur donné.
+
+    Retourne la liste de dicts comparables, ou None si le VPS n'est
+    pas configuré. Toute réponse non-200 (404/500/502) renvoie une
+    liste vide : l'endpoint /scrape/numeriq-comparables n'existe
+    peut-être pas encore côté VPS, et un scrape qui échoue ne doit
+    JAMAIS faire planter la recherche (le cache + le manuel suffisent).
+    """
+    if not vps_available():
+        return None
+    url = f"{VPS_URL}/scrape/numeriq-comparables"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.post(
+                url,
+                headers=_headers(),
+                json={
+                    "nom_rue": nom_rue,
+                    "municipalite": municipalite,
+                    "region": region,
+                    "limit": limit,
+                },
+            )
+            if r.status_code != 200:
+                log.warning(
+                    "VPS numeriq-comparables returned %s for %s/%s: %s",
+                    r.status_code,
+                    municipalite,
+                    nom_rue,
+                    r.text[:200],
+                )
+                return []
+            return r.json().get("comparables", [])
+    except Exception as exc:  # noqa: BLE001
+        # Réseau KO / VPS down / JSON invalide — on ne fait jamais
+        # planter la recherche : le cache + le manuel répondent.
+        log.warning(
+            "VPS numeriq-comparables failed for %s/%s: %s",
+            municipalite,
+            nom_rue,
+            exc,
+        )
+        return []
+
+
 async def is_vps_healthy() -> bool:
     """Health check vers le VPS. Utilisé par le diagnostics endpoint."""
     if not VPS_URL:
