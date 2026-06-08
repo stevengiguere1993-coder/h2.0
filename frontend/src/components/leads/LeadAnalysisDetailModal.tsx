@@ -3198,6 +3198,22 @@ function FraisDemarrageBreakdownPanel({
     data.taux_interet_preteur_b_projet
   );
 
+  // Postes de frais de démarrage PERSONNALISÉS (ajoutés dans Paramètres →
+  // Calculateur, présents dans `frais_demarrage.frais_custom`). Affichés
+  // même à 0 $. Leur finançabilité = `financable_par_defaut` (gérée dans
+  // Paramètres) — cohérent avec le calcul backend.
+  type CustomFraisRow = {
+    id?: string;
+    label_fr?: string;
+    montant?: number;
+    financable?: boolean;
+  };
+  const customFrais: CustomFraisRow[] = Array.isArray(
+    (frais as { frais_custom?: unknown } | null)?.frais_custom
+  )
+    ? ((frais as { frais_custom?: CustomFraisRow[] }).frais_custom ?? [])
+    : [];
+
   let subTotalCash = 0;
   let subTotalFinanced = 0;
   // Somme brute de tous les postes (colonne « Valeur ») : la valeur totale
@@ -3210,6 +3226,18 @@ function FraisDemarrageBreakdownPanel({
       if (!Number.isFinite(v)) continue;
       subTotalValeur += v;
       if (financables.has(k)) {
+        subTotalCash += v * mdfPctNumeric;
+        subTotalFinanced += v * (1 - mdfPctNumeric);
+      } else {
+        subTotalCash += v;
+      }
+    }
+    // Postes personnalisés (même logique finançable).
+    for (const c of customFrais) {
+      const v = Number(c.montant || 0);
+      if (!Number.isFinite(v)) continue;
+      subTotalValeur += v;
+      if (c.financable) {
         subTotalCash += v * mdfPctNumeric;
         subTotalFinanced += v * (1 - mdfPctNumeric);
       } else {
@@ -3346,6 +3374,57 @@ function FraisDemarrageBreakdownPanel({
                   <td
                     className={`px-3 py-1.5 text-right font-mono tabular-nums ${
                       isFinancable ? "text-emerald-300" : "text-white/80"
+                    }`}
+                  >
+                    {fmtMoney(cashForRow)}
+                  </td>
+                  <td
+                    className={`px-3 py-1.5 text-right font-mono tabular-nums ${
+                      pretForRow != null ? "text-emerald-300" : "text-white/40"
+                    }`}
+                  >
+                    {pretForRow != null ? fmtMoney(pretForRow) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+            {customFrais.length > 0 ? (
+              <tr>
+                <td
+                  className="px-3 pt-2.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/40"
+                  colSpan={5}
+                >
+                  Frais de démarrage personnalisés
+                </td>
+              </tr>
+            ) : null}
+            {customFrais.map((c, idx) => {
+              const v = Number(c.montant || 0);
+              const isFin = !!c.financable;
+              const cashForRow = isFin ? v * mdfPctNumeric : v;
+              const pretForRow = isFin ? v - cashForRow : null;
+              return (
+                <tr
+                  key={c.id || `custom-${idx}`}
+                  className={`border-t border-brand-800/50 ${
+                    idx % 2 === 1 ? "bg-white/[0.015]" : ""
+                  }`}
+                >
+                  <td className="px-3 py-1.5 pl-5 text-white/60">
+                    {c.label_fr || "Frais personnalisé"}
+                  </td>
+                  <td className="px-3 py-1.5 text-right font-mono tabular-nums text-white/80">
+                    {fmtMoney(v)}
+                  </td>
+                  <td
+                    className="px-3 py-1.5 text-center text-[10px] text-white/60"
+                    title="Finançabilité définie dans Paramètres → Calculateur"
+                  >
+                    {isFin ? "Oui" : "—"}
+                  </td>
+                  <td
+                    className={`px-3 py-1.5 text-right font-mono tabular-nums ${
+                      isFin ? "text-emerald-300" : "text-white/80"
                     }`}
                   >
                     {fmtMoney(cashForRow)}
