@@ -19,7 +19,12 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-VPS_URL = os.environ.get("SCRAPING_VPS_URL", "").rstrip("/")
+# L'URL du VPS n'est pas un secret — on fournit un fallback par défaut
+# pour que le lien fonctionne même si la var d'env n'est pas déclarée
+# dans le dashboard Render. La clé, elle, reste sans défaut (secret).
+VPS_URL = os.environ.get(
+    "SCRAPING_VPS_URL", "https://scraper.immohorizon.com"
+).rstrip("/")
 VPS_KEY = os.environ.get("SCRAPING_VPS_KEY", "")
 
 # Timeout généreux pour Playwright (le flow EvalWeb 4 étapes peut

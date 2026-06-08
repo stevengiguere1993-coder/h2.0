@@ -1203,10 +1203,10 @@ class MtlDiagnostics(BaseModel):
 @router.get(
     "/diagnostics",
     response_model=MtlDiagnostics,
-    summary="État de la table mtl_property_units (admin).",
+    summary="État de la table mtl_property_units (lecture seule).",
 )
 async def mtl_diagnostics(
-    db: DBSession, _: CurrentAdmin
+    db: DBSession, _: CurrentUser
 ) -> MtlDiagnostics:
     """Retourne un état détaillé de ce qui est en DB. Utiliser
     pour vérifier si Montréal proper / les villes liées sont bien
@@ -1292,7 +1292,7 @@ class MtlHealth(BaseModel):
     response_model=MtlHealth,
     summary="Diagnostic combiné BD + lien VPS Hetzner (scraping)",
 )
-async def mtl_health(db: DBSession, _: CurrentAdmin) -> MtlHealth:
+async def mtl_health(db: DBSession, _: CurrentUser) -> MtlHealth:
     """Identifie en 1 appel si le problème vient :
     - de la BD vide (montreal_property_units sans rows), OU
     - du VPS Hetzner non joignable (URL/clé manquantes ou serveur down).

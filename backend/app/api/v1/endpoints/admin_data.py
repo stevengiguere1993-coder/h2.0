@@ -60,6 +60,23 @@ _req_state: dict = {
 }
 
 
+# État en mémoire de l'import provincial (Rive-Sud / Rive-Nord / Laval).
+# Déclaré ici, avant `purge_mtl_data()` qui le réinitialise — la section
+# d'upload provincial plus bas ne fait que le lire / l'écrire.
+_provincial_state: dict = {
+    "status": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "rows_processed": None,
+    "rows_upserted": None,
+    "region": None,
+    "error": None,
+    "last_progress_at": None,
+    "current_file": None,
+    "rows_so_far": 0,
+}
+
+
 async def _mtl_import_worker(max_rows: Optional[int]) -> None:
     """Tourne en background : ouvre sa propre session DB (la session
     de la requête HTTP est fermée dès que la réponse 202 est envoyée)."""
@@ -726,19 +743,10 @@ async def rental_scrape_status(_: RequireOwner) -> dict:
 # Le rôle d'évaluation provincial est ~3-5 GB compressé. Comme le
 # REQ ZIP, on utilise l'upload chunked du browser pour bypasser la
 # limite proxy. L'ingestion filtre par région (liste de villes).
-
-_provincial_state: dict = {
-    "status": "idle",
-    "started_at": None,
-    "finished_at": None,
-    "rows_processed": None,
-    "rows_upserted": None,
-    "region": None,
-    "error": None,
-    "last_progress_at": None,
-    "current_file": None,
-    "rows_so_far": 0,
-}
+#
+# NB : `_provincial_state` est déclaré plus haut (à côté de `_mtl_state`
+# / `_req_state`) car `purge_mtl_data()` le réinitialise avant que cette
+# section ne soit atteinte.
 
 _PROVINCIAL_UPLOADS_DIR = os.path.join(
     tempfile.gettempdir(), "provincial-uploads"
@@ -1355,16 +1363,6 @@ async def provincial_upload_finalize(
         "status": "started",
         "size_mb": round(total_size / 1024 / 1024, 1),
         "region": region,
-    }
-
-
-@router.get(
-    "/provincial/import-status",
-    summary="État de l'import provincial en cours ou terminé.",
-)
-async def provincial_import_status(_: RequireOwner) -> dict:
-    return {
-        k: v for k, v in _provincial_state.items() if not k.startswith("_")
     }
 
 

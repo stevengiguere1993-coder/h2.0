@@ -164,10 +164,21 @@ RIVE_SUD_CITIES: Set[str] = {
     "Chambly", "Saint-Basile-le-Grand",
     "Beloeil", "McMasterville",
     "Saint-Mathieu-de-Beloeil", "Otterburn Park",
+    "Mont-Saint-Hilaire", "Carignan", "Richelieu",
+    "Marieville", "Iberville", "Saint-Luc",
     # Champlain
     "Candiac", "La Prairie", "Saint-Constant",
     "Sainte-Catherine", "Saint-Philippe",
     "Saint-Jean-sur-Richelieu", "Saint-Mathias-sur-Richelieu",
+    "Delson", "Saint-Mathieu", "Saint-Isidore",
+    "Léry", "Châteauguay", "Mercier", "Saint-Rémi",
+    "Kahnawake",
+    # Vaudreuil-Soulanges / Montérégie-Ouest (bucket « rive-sud »
+    # faute d'une catégorie dédiée côté UI — ces villes sont à l'ouest
+    # de l'île, dans le périmètre ≤ 50 km importé).
+    "Vaudreuil-Dorion", "L'Île-Perrot",
+    "Notre-Dame-de-l'Île-Perrot", "Pincourt",
+    "Terrasse-Vaudreuil", "Saint-Lazare", "Hudson",
 }
 
 LAVAL_CITIES: Set[str] = {
@@ -179,14 +190,14 @@ LAVAL_CITIES: Set[str] = {
 RIVE_NORD_CITIES: Set[str] = {
     # Couronne Nord
     "Terrebonne", "Mascouche", "Repentigny", "Charlemagne",
-    "L'Assomption", "Lachenaie",
+    "L'Assomption", "Lachenaie", "Le Gardeur", "Saint-Sulpice",
     # Laurentides Sud
     "Saint-Eustache", "Deux-Montagnes", "Sainte-Marthe-sur-le-Lac",
-    "Saint-Joseph-du-Lac",
+    "Saint-Joseph-du-Lac", "Pointe-Calumet", "Oka",
     "Boisbriand", "Sainte-Thérèse", "Blainville", "Lorraine",
     "Rosemère", "Bois-des-Filion",
-    "Mirabel", "Saint-Sauveur",
-    "Sainte-Anne-des-Plaines",
+    "Mirabel", "Saint-Sauveur", "Saint-Jérôme",
+    "Sainte-Anne-des-Plaines", "Kanesatake",
 }
 
 ALL_REGIONS = {
