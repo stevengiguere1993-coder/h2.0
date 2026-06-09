@@ -3232,12 +3232,17 @@ function FraisDemarrageBreakdownPanel({
         subTotalCash += v;
       }
     }
-    // Postes personnalisés (même logique finançable).
+    // Postes personnalisés : même logique que les fixes — override de
+    // montant (overrides[id]) + finançable par fiche (set financables).
     for (const c of customFrais) {
-      const v = Number(c.montant || 0);
+      const cid = String(c.id || "");
+      const v =
+        cid !== "" && overrides[cid] != null
+          ? Number(overrides[cid])
+          : Number(c.montant || 0);
       if (!Number.isFinite(v)) continue;
       subTotalValeur += v;
-      if (c.financable) {
+      if (cid !== "" && financables.has(cid)) {
         subTotalCash += v * mdfPctNumeric;
         subTotalFinanced += v * (1 - mdfPctNumeric);
       } else {
@@ -3399,28 +3404,57 @@ function FraisDemarrageBreakdownPanel({
               </tr>
             ) : null}
             {customFrais.map((c, idx) => {
-              const v = Number(c.montant || 0);
-              const isFin = !!c.financable;
-              const cashForRow = isFin ? v * mdfPctNumeric : v;
-              const pretForRow = isFin ? v - cashForRow : null;
+              const cid = String(c.id || "");
+              const computed = Number(c.montant || 0);
+              const overridden = cid !== "" && overrides[cid] != null;
+              const displayVal = overridden
+                ? Number(overrides[cid])
+                : computed;
+              const isFin = cid !== "" && financables.has(cid);
+              const cashForRow = isFin
+                ? displayVal * mdfPctNumeric
+                : displayVal;
+              const pretForRow = isFin ? displayVal - cashForRow : null;
               return (
                 <tr
-                  key={c.id || `custom-${idx}`}
+                  key={cid || `custom-${idx}`}
                   className={`border-t border-brand-800/50 ${
                     idx % 2 === 1 ? "bg-white/[0.015]" : ""
                   }`}
                 >
                   <td className="px-3 py-1.5 pl-5 text-white/60">
                     {c.label_fr || "Frais personnalisé"}
+                    {overridden ? (
+                      <button
+                        type="button"
+                        onClick={() => setOverride(cid, null)}
+                        className="ml-1.5 rounded bg-amber-500/20 px-1.5 py-0 text-[9px] font-medium text-amber-200 hover:bg-amber-500/30"
+                        title="Réinitialiser à la valeur calculée"
+                      >
+                        override · réinit
+                      </button>
+                    ) : null}
                   </td>
-                  <td className="px-3 py-1.5 text-right font-mono tabular-nums text-white/80">
-                    {fmtMoney(v)}
+                  <td className="px-3 py-1.5 text-right">
+                    <EditableMoney
+                      value={displayVal}
+                      computed={computed}
+                      overridden={overridden}
+                      onSave={(v) =>
+                        cid && setOverride(cid, v === computed ? null : v)
+                      }
+                    />
                   </td>
-                  <td
-                    className="px-3 py-1.5 text-center text-[10px] text-white/60"
-                    title="Finançabilité définie dans Paramètres → Calculateur"
-                  >
-                    {isFin ? "Oui" : "—"}
+                  <td className="px-3 py-1.5 text-center">
+                    <FinancableToggle
+                      checked={isFin}
+                      onToggle={() => cid && toggleFinancable(cid)}
+                      title={
+                        isFin
+                          ? `Finançable — payé seulement à ${_fmtPctShort(mdfPctNumeric)} en cash`
+                          : "Non finançable — payé 100 % en cash"
+                      }
+                    />
                   </td>
                   <td
                     className={`px-3 py-1.5 text-right font-mono tabular-nums ${
