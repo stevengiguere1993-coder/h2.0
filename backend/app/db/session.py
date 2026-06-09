@@ -848,6 +848,9 @@ async def init_db() -> None:
             # mémorise les créneaux proposés par Léa pour les
             # retrouver au tour suivant).
             ("voice_calls", "session_state", "TEXT"),
+            # Mobile perso de l'utilisateur — click-to-call fait sonner CE
+            # numéro (mappé dans le portail) quand l'utilisateur appelle.
+            ("users", "phone_e164", "VARCHAR(20)"),
             ("prospection_deals", "lead_analysis_id", "INTEGER"),
             ("lead_analyses", "converted_to_deal_id", "INTEGER"),
             # Phase A2 (tri-couche extraction) : modèle utilisé pour

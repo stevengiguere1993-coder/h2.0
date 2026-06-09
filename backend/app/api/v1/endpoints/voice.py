@@ -2455,12 +2455,14 @@ class OutboundCallResponse(BaseModel):
     summary="Initie un appel sortant click-to-call (admin)",
 )
 async def create_outbound_call(
-    payload: OutboundCallRequest, _: CurrentAdmin, db: DBSession
+    payload: OutboundCallRequest, user: CurrentAdmin, db: DBSession
 ) -> OutboundCallResponse:
-    """Click-to-call : Twilio appelle d'abord le mobile interne
-    (`TWILIO_FORWARD_TO`), puis bridge vers la cible une fois qu'on a
-    décroché. Crée la ligne `Call` AVANT l'API call pour pouvoir
-    référencer `call_id` dans l'URL du bridge TwiML.
+    """Click-to-call : Twilio fait d'abord sonner le mobile de
+    L'UTILISATEUR CONNECTÉ (son `phone_e164` défini dans le portail/profil,
+    PAS un numéro fixe d'env Render), puis bridge vers la cible une fois
+    qu'il a décroché. Ainsi, quand Philippe lance un appel, ça sonne sur
+    SON téléphone — pas celui du propriétaire. Crée la ligne `Call` AVANT
+    l'API call pour référencer `call_id` dans l'URL du bridge TwiML.
     """
     target = _normalize_e164(payload.target_e164)
     if not target.startswith("+"):
@@ -2490,13 +2492,19 @@ async def create_outbound_call(
     if pn is None:
         raise HTTPException(status_code=400, detail="no_active_phone_number")
 
-    bridge_to = (
-        (pn.forward_to_e164 or os.getenv("TWILIO_FORWARD_TO") or "").strip()
-    )
-    if not bridge_to:
+    # Le téléphone qui sonne (jambe agent) = le mobile de l'utilisateur
+    # CONNECTÉ, mappé dans le portail (Profil → Mobile), et NON un numéro
+    # fixe d'environnement Render partagé. Ainsi chaque commercial entend
+    # son propre téléphone sonner. Mobile non renseigné → on refuse avec
+    # un message clair plutôt que de faire sonner le mauvais numéro.
+    bridge_to = _normalize_e164(getattr(user, "phone_e164", None) or "")
+    if not bridge_to.startswith("+"):
         raise HTTPException(
             status_code=400,
-            detail="no_bridge_target (set forward_to_e164 or TWILIO_FORWARD_TO)",
+            detail=(
+                "no_user_phone: renseigne ton numéro de mobile dans ton "
+                "profil pour passer des appels depuis Kratos."
+            ),
         )
 
     # On crée la ligne d'abord pour avoir l'ID dispo dans l'URL TwiML.

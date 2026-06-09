@@ -87,6 +87,8 @@ class UserRead(UserBase):
     # Couleur de profil — clé courte (violet, rose, emerald…). NULL =
     # neutre. Sert à teinter la pastille d'assignation côté frontend.
     profile_color: Optional[str] = None
+    # Mobile perso (E.164) pour le click-to-call. NULL si non renseigné.
+    phone_e164: Optional[str] = None
     # Nom d'affichage dérivé : « Prénom Nom » si renseignés, sinon la
     # partie locale du courriel. La propriété est calculée côté ORM
     # (User.display_name) et lue automatiquement via from_attributes.
