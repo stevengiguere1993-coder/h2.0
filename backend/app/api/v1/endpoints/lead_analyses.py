@@ -834,6 +834,68 @@ async def _load_frais_custom_defs(db) -> list[dict]:
     return []
 
 
+# Clé BD du registre unifié des frais de démarrage (ordre / label /
+# visibilité). Cf. ``prospection_analysis_defaults`` (groupe ``mdf_frais``).
+_FRAIS_REGISTRY_KEY = "mdf_frais_registry"
+
+
+def _sanitize_registry(value_json) -> list[dict]:
+    """Normalise la liste ORDONNÉE du registre ``mdf_frais_registry`` en
+    ``[{key, label_fr, visible}]``. Robustesse : value_json mal formé →
+    liste vide ; jamais d'exception. Une clé vide / dupliquée est
+    ignorée."""
+    if not isinstance(value_json, list):
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for it in value_json:
+        if not isinstance(it, dict):
+            continue
+        key = str(it.get("key", "") or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "key": key,
+                "label_fr": str(it.get("label_fr", "") or ""),
+                "visible": bool(it.get("visible", True)),
+            }
+        )
+    return out
+
+
+async def _load_frais_registry(db) -> tuple[list[str], list[dict]]:
+    """Charge le registre unifié des frais de démarrage (clé
+    ``mdf_frais_registry``, groupe ``mdf_frais``, ``value_json``).
+
+    Retourne ``(frais_masques, registry_ordered)`` :
+      - ``frais_masques`` : liste des ``key`` dont ``visible == false``
+        (postes masqués) → passée à ``FinanceInputs.frais_masques`` pour
+        forcer ces postes à 0 $ dans le calcul.
+      - ``registry_ordered`` : liste ORDONNÉE ``[{key, label_fr,
+        visible}]`` du registre — exposée dans ``analysis_results_json``
+        (``frais_registry``) pour que la fiche + le PDF affichent dans le
+        bon ordre / avec les bons labels sans re-fetcher.
+
+    Registre absent / mal formé → ``([], [])`` : AUCUN masquage et aucun
+    ordre imposé (le calcul reste STRICTEMENT identique à avant)."""
+    try:
+        rows = (
+            await db.execute(select(ProspectionAnalysisDefault))
+        ).scalars().all()
+        for row in rows:
+            if row.key == _FRAIS_REGISTRY_KEY:
+                registry = _sanitize_registry(row.value_json)
+                masques = [
+                    e["key"] for e in registry if not e["visible"]
+                ]
+                return masques, registry
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to load mdf_frais_registry from DB: %s", exc)
+    return [], []
+
+
 @router.post(
     "/extract",
     response_model=ExtractResult,
@@ -1748,6 +1810,16 @@ async def _compute_and_store(rec, db) -> dict:
         await _load_fiscal_overrides(db)
     )
 
+    # Juin 2026 : registre unifié des frais de démarrage (ordre / label /
+    # visibilité). ``frais_masques`` = clés des postes masqués
+    # (visible:false) → forcés à 0 $ dans le moteur. ``frais_registry`` =
+    # liste ordonnée [{key, label_fr, visible}] exposée dans le JSON de
+    # résultats pour l'affichage (fiche + PDF). Registre absent →
+    # ([], []) : aucun masquage, calcul identique à avant.
+    frais_masques_global, frais_registry_global = (
+        await _load_frais_registry(db)
+    )
+
     inputs = FinanceInputs(
         adresse=rec.address or "",
         prix_achat=float(rec.asking_price or 0),
@@ -1801,6 +1873,10 @@ async def _compute_and_store(rec, db) -> dict:
         # Juin 2026 : barèmes fiscaux (groupe ``baremes_fiscaux``).
         # ``None`` → fallback ``TAXES_BIENVENUE_MTL_BRACKETS``.
         taxes_bienvenue_brackets=taxes_bienvenue_brackets_global,
+        # Juin 2026 : registre unifié — postes masqués (visible:false).
+        # Forcés à 0 $ dans le moteur. Liste vide → aucun masquage
+        # (calcul identique à avant).
+        frais_masques=frais_masques_global,
         # Mai 2026 : nouveau frais MDF, surchargé globalement via le
         # défaut ``frais_dossier_preteur_pct``. Si la BD n'a pas (encore)
         # de ligne pour cette clé, on laisse ``FinanceInputs`` retomber
@@ -1835,6 +1911,13 @@ async def _compute_and_store(rec, db) -> dict:
     use_aph = loyer_abord > 0 and inputs.nombre_logements > 0
     results = compute_all(inputs, use_aph_select=use_aph)
     results_dict = results.to_dict()
+
+    # Juin 2026 : expose l'ORDRE et les LABELS du registre dans le JSON
+    # de résultats pour que la fiche + le PDF affichent les postes dans
+    # le bon ordre, avec les bons labels et l'état de visibilité, SANS
+    # re-fetcher le registre. Format : [{key, label_fr, visible}] ordonné.
+    # Registre absent → liste vide (aucun ordre/label imposé côté front).
+    results_dict["frais_registry"] = frais_registry_global
 
     rec.analysis_results_json = json.dumps(results_dict)[:50_000]
     rec.best_refi_amount = results.best_refi_amount
