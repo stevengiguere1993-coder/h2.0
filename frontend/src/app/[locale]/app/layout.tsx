@@ -39,7 +39,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="flex min-w-0 flex-1 flex-col">
           <AppLayoutContextProvider onOpenSidebar={() => setSidebarOpen(true)}>
             <ConfirmProvider>
-              <main className="flex-1 overflow-x-hidden">{children}</main>
+              {/* #20 — overflow-x-auto (et non hidden) : sur mobile, un
+                  contenu plus large que l'écran reste atteignable en
+                  défilant horizontalement au lieu d'être coupé. */}
+              <main className="flex-1 overflow-x-auto">{children}</main>
               {/* Kratos est désormais intégré dans le AppTopbar de
                   chaque page (statique, ne chevauche plus le contenu). */}
               <KratosFloating />

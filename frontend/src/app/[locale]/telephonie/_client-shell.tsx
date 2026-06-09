@@ -118,7 +118,10 @@ export function TelephonieClientShell({
             }}
           >
             <ConfirmProvider>
-              <main className="flex-1 overflow-x-hidden">{children}</main>
+              {/* #20 — overflow-x-auto : le contenu trop large (ex. fil de
+                  messages) reste accessible en défilant horizontalement
+                  sur cellulaire, au lieu d'être coupé hors écran. */}
+              <main className="flex-1 overflow-x-auto">{children}</main>
               <KratosFloating />
               <HelpButton />
               <VoiceConsole />
