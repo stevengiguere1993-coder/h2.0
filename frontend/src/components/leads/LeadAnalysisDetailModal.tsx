@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import {
   AlertTriangle,
@@ -3197,6 +3197,13 @@ function FraisDemarrageBreakdownPanel({
     mdfPctNumeric,
     data.taux_interet_preteur_b_projet
   );
+  // Libellés des postes FIXES indexés par clé, pour résoudre rapidement
+  // un label par défaut quand le registre n'impose rien.
+  const fixedLabelByKey = useMemo<Record<string, string>>(() => {
+    const m: Record<string, string> = {};
+    for (const [k, lbl] of fraisLabels) m[k as string] = lbl;
+    return m;
+  }, [fraisLabels]);
 
   // Postes de frais de démarrage PERSONNALISÉS (ajoutés dans Paramètres →
   // Calculateur, présents dans `frais_demarrage.frais_custom`). Affichés
@@ -3213,6 +3220,113 @@ function FraisDemarrageBreakdownPanel({
   )
     ? ((frais as { frais_custom?: CustomFraisRow[] }).frais_custom ?? [])
     : [];
+  const customById = useMemo<Record<string, CustomFraisRow>>(() => {
+    const m: Record<string, CustomFraisRow> = {};
+    for (const c of customFrais) {
+      const cid = String(c.id || "");
+      if (cid) m[cid] = c;
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(customFrais)]);
+
+  // Registre unifié des frais de démarrage : liste ORDONNÉE
+  // [{key, label_fr, visible}] où `key` est soit une clé de poste FIXE,
+  // soit l'`id` d'un poste PERSONNALISÉ. Injecté par le backend dans
+  // `analysis_results_json`. Absent (anciens résultats non recalculés)
+  // → fallback sur l'ordre historique (fixes puis perso).
+  type RegistryEntry = { key?: string; label_fr?: string; visible?: boolean };
+  const registry: RegistryEntry[] | null = Array.isArray(
+    (data as { frais_registry?: unknown }).frais_registry
+  )
+    ? ((data as { frais_registry?: RegistryEntry[] }).frais_registry ?? null)
+    : null;
+
+  // Modèle d'UNE ligne de poste, indépendant de l'origine (fixe / perso).
+  // `key` = clé fixe OU id perso (sert d'identifiant override/finançable).
+  type FraisLineRow = {
+    key: string;
+    label: string;
+    computed: number;
+    isCustom: boolean;
+  };
+
+  // Liste ORDONNÉE unifiée des lignes à afficher / sommer. Pilotée par le
+  // registre quand il existe (ordre + labels + visibilité), sinon ordre
+  // historique (fixes via `fraisLabels`, puis perso via `customFrais`).
+  const fraisRows: FraisLineRow[] = useMemo(() => {
+    const rows: FraisLineRow[] = [];
+    if (registry) {
+      for (const entry of registry) {
+        const key = String(entry?.key || "");
+        if (!key) continue;
+        if (entry?.visible === false) continue; // poste masqué → sauter
+        if (Object.prototype.hasOwnProperty.call(fixedLabelByKey, key)) {
+          // Poste FIXE : valeur déjà calculée dans `frais[key]`.
+          rows.push({
+            key,
+            label: String(entry?.label_fr || fixedLabelByKey[key] || key),
+            computed: frais ? Number((frais as Record<string, number>)[key] || 0) : 0,
+            isCustom: false
+          });
+        } else if (customById[key]) {
+          // Poste PERSONNALISÉ : item matché par id.
+          const c = customById[key];
+          rows.push({
+            key,
+            label: String(entry?.label_fr || c.label_fr || "Frais personnalisé"),
+            computed: Number(c.montant || 0),
+            isCustom: true
+          });
+        }
+        // Clé inconnue (ni fixe ni perso) → ignorée silencieusement.
+      }
+    } else {
+      // Fallback : comportement historique strictement préservé.
+      for (const [k, label] of fraisLabels) {
+        rows.push({
+          key: k as string,
+          label,
+          computed: frais ? Number((frais as Record<string, number>)[k] || 0) : 0,
+          isCustom: false
+        });
+      }
+      for (const c of customFrais) {
+        const cid = String(c.id || "");
+        rows.push({
+          key: cid,
+          label: c.label_fr || "Frais personnalisé",
+          computed: Number(c.montant || 0),
+          isCustom: true
+        });
+      }
+    }
+    return rows;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    JSON.stringify(registry),
+    JSON.stringify(fraisLabels),
+    JSON.stringify(customFrais),
+    fixedLabelByKey,
+    customById,
+    frais
+  ]);
+
+  // Métriques d'une ligne (valeur affichée, cash, prêt) calculées avec la
+  // MÊME logique override + finançable que l'affichage historique. Un poste
+  // fixe à 0 $ non-override n'est PAS affiché (garde le filtre d'avant) ;
+  // les perso s'affichent même à 0.
+  function lineMetrics(row: FraisLineRow) {
+    const { key } = row;
+    const overridden = key !== "" && overrides[key] != null;
+    const displayVal = overridden ? Number(overrides[key]) : row.computed;
+    const isFin = key !== "" && financables.has(key);
+    const cashForRow = isFin ? displayVal * mdfPctNumeric : displayVal;
+    const pretForRow = isFin ? displayVal - cashForRow : null;
+    // Poste fixe nul et non-override → masqué (comme avant). Perso : toujours.
+    const hidden = !row.isCustom && !overridden && !row.computed;
+    return { overridden, displayVal, isFin, cashForRow, pretForRow, hidden };
+  }
 
   let subTotalCash = 0;
   let subTotalFinanced = 0;
@@ -3220,29 +3334,15 @@ function FraisDemarrageBreakdownPanel({
   // des frais de démarrage si AUCUN n'était finançable. Affichage seulement.
   let subTotalValeur = 0;
   if (frais) {
-    for (const k of FRAIS_KEYS) {
-      const v =
-        overrides[k] != null ? Number(overrides[k]) : Number(frais[k] || 0);
+    // Sous-totaux sur la liste ORDONNÉE unifiée (mêmes formules qu'avant :
+    // override de montant + finançable par fiche). On somme TOUTES les
+    // lignes du registre (postes masqués déjà exclus de `fraisRows`).
+    for (const row of fraisRows) {
+      const { displayVal, isFin } = lineMetrics(row);
+      const v = Number(displayVal);
       if (!Number.isFinite(v)) continue;
       subTotalValeur += v;
-      if (financables.has(k)) {
-        subTotalCash += v * mdfPctNumeric;
-        subTotalFinanced += v * (1 - mdfPctNumeric);
-      } else {
-        subTotalCash += v;
-      }
-    }
-    // Postes personnalisés : même logique que les fixes — override de
-    // montant (overrides[id]) + finançable par fiche (set financables).
-    for (const c of customFrais) {
-      const cid = String(c.id || "");
-      const v =
-        cid !== "" && overrides[cid] != null
-          ? Number(overrides[cid])
-          : Number(c.montant || 0);
-      if (!Number.isFinite(v)) continue;
-      subTotalValeur += v;
-      if (cid !== "" && financables.has(cid)) {
+      if (isFin) {
         subTotalCash += v * mdfPctNumeric;
         subTotalFinanced += v * (1 - mdfPctNumeric);
       } else {
@@ -3253,6 +3353,10 @@ function FraisDemarrageBreakdownPanel({
   const totalMdfLocal = mdfPctValue + subTotalCash;
 
   if (!frais) return null;
+
+  // Y a-t-il au moins un poste perso à afficher (pour le titre de section
+  // « personnalisés » du mode fallback) ?
+  const hasCustomRows = customFrais.length > 0;
 
   return (
     <section className="mt-4 rounded-xl border border-brand-800 bg-brand-950/40 p-4">
@@ -3319,158 +3423,93 @@ function FraisDemarrageBreakdownPanel({
                 Frais de démarrage
               </td>
             </tr>
-            {fraisLabels.map(([key, label], idx) => {
-              const computed = Number(frais[key] || 0);
-              const overridden = overrides[key] != null;
-              const displayVal = overridden
-                ? Number(overrides[key])
-                : computed;
-              if (!overridden && !computed) return null;
-              const isFinancable = financables.has(key);
-              const cashForRow = isFinancable
-                ? displayVal * mdfPctNumeric
-                : displayVal;
-              // Portion financée par le prêteur B = valeur − cash à sortir.
-              // Poste non finançable → 100 % cash, rien de financé.
-              const pretForRow = isFinancable
-                ? displayVal - cashForRow
-                : null;
+            {fraisRows.map((row, idx) => {
+              const {
+                overridden,
+                displayVal,
+                isFin,
+                cashForRow,
+                pretForRow,
+                hidden
+              } = lineMetrics(row);
+              if (hidden) return null;
+              const { key, label, computed, isCustom } = row;
+              // En mode fallback (registre absent), on garde le sous-titre
+              // historique « Frais de démarrage personnalisés » juste avant
+              // le premier poste perso. En mode registre, l'ordre est unifié
+              // et piloté par le registre → pas de séparateur.
+              const showCustomHeader =
+                !registry &&
+                isCustom &&
+                hasCustomRows &&
+                fraisRows.slice(0, idx).every((r) => !r.isCustom);
               return (
-                <tr
-                  key={key}
-                  className={`border-t border-brand-800/50 ${
-                    idx % 2 === 1 ? "bg-white/[0.015]" : ""
-                  }`}
-                >
-                  <td className="px-3 py-1.5 pl-5 text-white/60">
-                    {label}
-                    {overridden ? (
-                      <button
-                        type="button"
-                        onClick={() => setOverride(key, null)}
-                        className="ml-1.5 rounded bg-amber-500/20 px-1.5 py-0 text-[9px] font-medium text-amber-200 hover:bg-amber-500/30"
-                        title="Réinitialiser à la valeur calculée"
+                <Fragment key={key || `frais-${idx}`}>
+                  {showCustomHeader ? (
+                    <tr>
+                      <td
+                        className="px-3 pt-2.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/40"
+                        colSpan={5}
                       >
-                        override · réinit
-                      </button>
-                    ) : null}
-                  </td>
-                  <td className="px-3 py-1.5 text-right">
-                    <EditableMoney
-                      value={displayVal}
-                      computed={computed}
-                      overridden={overridden}
-                      onSave={(v) =>
-                        setOverride(key, v === computed ? null : v)
-                      }
-                    />
-                  </td>
-                  <td className="px-3 py-1.5 text-center">
-                    <FinancableToggle
-                      checked={isFinancable}
-                      onToggle={() => toggleFinancable(key)}
-                      title={
-                        isFinancable
-                          ? `Finançable — payé seulement à ${_fmtPctShort(mdfPctNumeric)} en cash`
-                          : "Non finançable — payé 100 % en cash"
-                      }
-                    />
-                  </td>
-                  <td
-                    className={`px-3 py-1.5 text-right font-mono tabular-nums ${
-                      isFinancable ? "text-emerald-300" : "text-white/80"
+                        Frais de démarrage personnalisés
+                      </td>
+                    </tr>
+                  ) : null}
+                  <tr
+                    className={`border-t border-brand-800/50 ${
+                      idx % 2 === 1 ? "bg-white/[0.015]" : ""
                     }`}
                   >
-                    {fmtMoney(cashForRow)}
-                  </td>
-                  <td
-                    className={`px-3 py-1.5 text-right font-mono tabular-nums ${
-                      pretForRow != null ? "text-emerald-300" : "text-white/40"
-                    }`}
-                  >
-                    {pretForRow != null ? fmtMoney(pretForRow) : "—"}
-                  </td>
-                </tr>
-              );
-            })}
-            {customFrais.length > 0 ? (
-              <tr>
-                <td
-                  className="px-3 pt-2.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/40"
-                  colSpan={5}
-                >
-                  Frais de démarrage personnalisés
-                </td>
-              </tr>
-            ) : null}
-            {customFrais.map((c, idx) => {
-              const cid = String(c.id || "");
-              const computed = Number(c.montant || 0);
-              const overridden = cid !== "" && overrides[cid] != null;
-              const displayVal = overridden
-                ? Number(overrides[cid])
-                : computed;
-              const isFin = cid !== "" && financables.has(cid);
-              const cashForRow = isFin
-                ? displayVal * mdfPctNumeric
-                : displayVal;
-              const pretForRow = isFin ? displayVal - cashForRow : null;
-              return (
-                <tr
-                  key={cid || `custom-${idx}`}
-                  className={`border-t border-brand-800/50 ${
-                    idx % 2 === 1 ? "bg-white/[0.015]" : ""
-                  }`}
-                >
-                  <td className="px-3 py-1.5 pl-5 text-white/60">
-                    {c.label_fr || "Frais personnalisé"}
-                    {overridden ? (
-                      <button
-                        type="button"
-                        onClick={() => setOverride(cid, null)}
-                        className="ml-1.5 rounded bg-amber-500/20 px-1.5 py-0 text-[9px] font-medium text-amber-200 hover:bg-amber-500/30"
-                        title="Réinitialiser à la valeur calculée"
-                      >
-                        override · réinit
-                      </button>
-                    ) : null}
-                  </td>
-                  <td className="px-3 py-1.5 text-right">
-                    <EditableMoney
-                      value={displayVal}
-                      computed={computed}
-                      overridden={overridden}
-                      onSave={(v) =>
-                        cid && setOverride(cid, v === computed ? null : v)
-                      }
-                    />
-                  </td>
-                  <td className="px-3 py-1.5 text-center">
-                    <FinancableToggle
-                      checked={isFin}
-                      onToggle={() => cid && toggleFinancable(cid)}
-                      title={
-                        isFin
-                          ? `Finançable — payé seulement à ${_fmtPctShort(mdfPctNumeric)} en cash`
-                          : "Non finançable — payé 100 % en cash"
-                      }
-                    />
-                  </td>
-                  <td
-                    className={`px-3 py-1.5 text-right font-mono tabular-nums ${
-                      isFin ? "text-emerald-300" : "text-white/80"
-                    }`}
-                  >
-                    {fmtMoney(cashForRow)}
-                  </td>
-                  <td
-                    className={`px-3 py-1.5 text-right font-mono tabular-nums ${
-                      pretForRow != null ? "text-emerald-300" : "text-white/40"
-                    }`}
-                  >
-                    {pretForRow != null ? fmtMoney(pretForRow) : "—"}
-                  </td>
-                </tr>
+                    <td className="px-3 py-1.5 pl-5 text-white/60">
+                      {label}
+                      {overridden ? (
+                        <button
+                          type="button"
+                          onClick={() => key && setOverride(key, null)}
+                          className="ml-1.5 rounded bg-amber-500/20 px-1.5 py-0 text-[9px] font-medium text-amber-200 hover:bg-amber-500/30"
+                          title="Réinitialiser à la valeur calculée"
+                        >
+                          override · réinit
+                        </button>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-1.5 text-right">
+                      <EditableMoney
+                        value={displayVal}
+                        computed={computed}
+                        overridden={overridden}
+                        onSave={(v) =>
+                          key && setOverride(key, v === computed ? null : v)
+                        }
+                      />
+                    </td>
+                    <td className="px-3 py-1.5 text-center">
+                      <FinancableToggle
+                        checked={isFin}
+                        onToggle={() => key && toggleFinancable(key)}
+                        title={
+                          isFin
+                            ? `Finançable — payé seulement à ${_fmtPctShort(mdfPctNumeric)} en cash`
+                            : "Non finançable — payé 100 % en cash"
+                        }
+                      />
+                    </td>
+                    <td
+                      className={`px-3 py-1.5 text-right font-mono tabular-nums ${
+                        isFin ? "text-emerald-300" : "text-white/80"
+                      }`}
+                    >
+                      {fmtMoney(cashForRow)}
+                    </td>
+                    <td
+                      className={`px-3 py-1.5 text-right font-mono tabular-nums ${
+                        pretForRow != null ? "text-emerald-300" : "text-white/40"
+                      }`}
+                    >
+                      {pretForRow != null ? fmtMoney(pretForRow) : "—"}
+                    </td>
+                  </tr>
+                </Fragment>
               );
             })}
           </tbody>
