@@ -203,6 +203,13 @@ class User(Base, TimestampMixin):
     profile_color: Mapped[Optional[str]] = mapped_column(
         String(16), nullable=True
     )
+    # Mobile personnel (E.164, ex. « +15149619015 »). Click-to-call : quand
+    # CET utilisateur lance un appel sortant depuis le portail, c'est SON
+    # téléphone qui sonne pour le mettre en relation (mappé ici, pas via un
+    # numéro fixe d'environnement Render). Renseigné dans Profil → Mobile.
+    phone_e164: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True
+    )
 
     @property
     def display_name(self) -> str:
