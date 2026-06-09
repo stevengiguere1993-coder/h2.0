@@ -14,7 +14,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { AddressInput } from "@/components/address-input";
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -1857,6 +1857,7 @@ function WeeklyTeamGridView({
   onCellClick: (employeId: number, date: Date) => void;
   onEventClick: (event: AgendaEvent) => void;
 }) {
+  const router = useRouter();
   // Calcule les 7 jours de la semaine (lundi → dimanche) qui
   // contiennent refDate.
   const week = useMemo(() => {
@@ -1917,7 +1918,11 @@ function WeeklyTeamGridView({
       | { kind: "phase"; phase: Phase; project: Project | null }
       | { kind: "event"; event: AgendaEvent }
     > = [];
-    // Phases : assignée ET range couvre ce jour
+    // Phases : assignée ET range couvre ce jour. #19 — on n'affiche
+    // qu'UN bloc par projet (et non un par phase) : si plusieurs phases
+    // du même projet couvrent ce jour, on les regroupe en un seul bloc
+    // « chantier » cliquable.
+    const seenProjects = new Set<number>();
     for (const p of phases) {
       const ids = p.assignee_employe_ids || [];
       const single =
@@ -1932,6 +1937,8 @@ function WeeklyTeamGridView({
       pe.setHours(23, 59, 59, 999);
       const t = day.getTime();
       if (t >= ps.getTime() && t <= pe.getTime()) {
+        if (seenProjects.has(p.project_id)) continue;
+        seenProjects.add(p.project_id);
         out.push({
           kind: "phase",
           phase: p,
@@ -2097,25 +2104,32 @@ function WeeklyTeamGridView({
                     blocks.map((b, idx) => {
                       if (b.kind === "phase") {
                         const c = projectColor(b.phase.project_id);
+                        // #19 — Un bloc = un PROJET (chantier), cliquable
+                        // pour ouvrir le projet, plutôt qu'une phase isolée.
+                        const projName = b.project
+                          ? projectLabel(b.project)
+                          : `Projet #${b.phase.project_id}`;
                         return (
                           <span
-                            key={`p-${b.phase.id}-${idx}`}
-                            className="block rounded px-1.5 py-1 text-[10px] font-semibold leading-tight"
+                            key={`p-${b.phase.project_id}-${idx}`}
+                            role="link"
+                            tabIndex={0}
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                              router.push(
+                                `/app/projets/${b.phase.project_id}` as any
+                              );
+                            }}
+                            className="block cursor-pointer rounded px-1.5 py-1 text-[10px] font-semibold leading-tight hover:opacity-90"
                             style={{
                               backgroundColor: c.bg,
                               color: c.text,
                               border: `1px solid ${c.border}`
                             }}
-                            title={`${b.phase.name}${
-                              b.project ? ` · ${projectLabel(b.project)}` : ""
-                            }`}
+                            title={`Ouvrir le chantier : ${projName}`}
                           >
-                            <span className="block">📐 {b.phase.name}</span>
-                            {b.project ? (
-                              <span className="block text-[9px] opacity-80">
-                                {projectLabel(b.project)}
-                              </span>
-                            ) : null}
+                            <span className="block">🏗️ {projName}</span>
                           </span>
                         );
                       }
@@ -2373,30 +2387,73 @@ function TimelineView({
           : "Non-assigné";
         ensureRow(key, label).items.push(item);
       }
+      // #19 — En vue « Par personne », on ne montre PAS une barre par
+      // phase : on regroupe les phases d'un même projet en UNE seule
+      // barre par projet (couvrant de la première à la dernière phase),
+      // cliquable pour ouvrir le projet — comme la vue « Par chantier ».
+      const projAgg = new Map<
+        string,
+        {
+          empKey: string;
+          empLabel: string;
+          projectId: number;
+          projectName: string;
+          startIdx: number;
+          endIdx: number;
+        }
+      >();
       for (const ph of phases) {
-        const item = phaseToItem(ph);
-        if (!item) continue;
-        // Multi-assignation : on émet une barre par employé assigné
-        // pour que tous apparaissent dans la vue « Par personne ».
+        if (!ph.start_date || !ph.duration_days || ph.duration_days <= 0)
+          continue;
+        const s = parseLocalDate(ph.start_date);
+        const e = new Date(s);
+        e.setDate(e.getDate() + ph.duration_days - 1);
+        if (e < start || s >= endExclusive) continue;
+        const startIdx = clampIdx(s);
+        const endIdx = clampIdx(e);
         const employeIds =
           ph.assignee_employe_ids && ph.assignee_employe_ids.length > 0
             ? ph.assignee_employe_ids
             : ph.assignee_employe_id
               ? [ph.assignee_employe_id]
               : [];
-        if (employeIds.length === 0) {
-          ensureRow("emp-none", "Non-assigné").items.push(item);
-        } else {
-          for (const empId of employeIds) {
-            const key = `emp-${empId}`;
-            const label =
-              employeById.get(empId)?.full_name || `Employé #${empId}`;
-            ensureRow(key, label).items.push({
-              ...item,
-              key: `${item.key}-e${empId}`
+        const targets: (number | null)[] =
+          employeIds.length > 0 ? employeIds : [null];
+        const proj = projectById.get(ph.project_id);
+        const projectName = proj?.name || `Projet #${ph.project_id}`;
+        for (const empId of targets) {
+          const empKey = empId ? `emp-${empId}` : "emp-none";
+          const empLabel = empId
+            ? employeById.get(empId)?.full_name || `Employé #${empId}`
+            : "Non-assigné";
+          const aggKey = `${empKey}::${ph.project_id}`;
+          const ex = projAgg.get(aggKey);
+          if (ex) {
+            ex.startIdx = Math.min(ex.startIdx, startIdx);
+            ex.endIdx = Math.max(ex.endIdx, endIdx);
+          } else {
+            projAgg.set(aggKey, {
+              empKey,
+              empLabel,
+              projectId: ph.project_id,
+              projectName,
+              startIdx,
+              endIdx
             });
           }
         }
+      }
+      for (const agg of projAgg.values()) {
+        ensureRow(agg.empKey, agg.empLabel).items.push({
+          key: `proj-${agg.projectId}-${agg.empKey}`,
+          kind: "phase",
+          title: agg.projectName,
+          subtitle: "Chantier",
+          startIdx: agg.startIdx,
+          endIdx: agg.endIdx,
+          accent: "bg-fuchsia-500/80 border-fuchsia-400 text-white",
+          href: `/app/projets/${agg.projectId}`
+        });
       }
     }
 
