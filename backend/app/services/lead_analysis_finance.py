@@ -1316,6 +1316,43 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             if str(_c.get("id", "")) not in masques
         ]
 
+    # ── Intérêts de portage sur le PRÊT DE CONSTRUCTION COMPLET ──
+    # Le prêteur B finance aussi la portion finançable des frais de
+    # démarrage (Σ frais finançables × (1−MDF%)), EN PLUS de (1−MDF%)×prix.
+    # Ces montants prêtés génèrent eux aussi des intérêts pendant le
+    # projet. On recalcule donc ``interets`` sur (1−MDF%) × (prix + Σ frais
+    # finançables) × taux × durée — cohérent avec le « prêt de
+    # construction » du TRI. Cocher/décocher un frais finançable fait
+    # désormais bouger les intérêts. (``interets`` n'est jamais lui-même
+    # finançable → pas de circularité.) Doit rester AVANT ``frais.total``.
+    _mdf_pct = (
+        inputs.mdf_preteur_b_pct
+        if inputs.mdf_preteur_b_pct is not None
+        else 0.25
+    )
+    _fin = set(inputs.frais_demarrage_financables or [])
+    _frais_fin_total = 0.0
+    for _k, _v in frais.__dict__.items():
+        if _k in ("frais_custom", "interets"):
+            continue
+        if _k in _fin:
+            try:
+                _frais_fin_total += float(_v or 0)
+            except (TypeError, ValueError):
+                pass
+    for _c in frais.frais_custom:
+        if str(_c.get("id", "")) in _fin:
+            try:
+                _frais_fin_total += float(_c.get("montant", 0) or 0)
+            except (TypeError, ValueError):
+                pass
+    frais.interets = (
+        (1 - _mdf_pct)
+        * (inputs.prix_achat + _frais_fin_total)
+        * inputs.taux_interet_preteur_b_projet
+        * inputs.duree_projet_annees
+    )
+
     prix_acquisition = inputs.prix_achat + frais.total
     # MDF avec prêteur B = X % prix achat + frais démarrage cash. X
     # est `mdf_preteur_b_pct` (défaut 25 %, parfois 35 %).
