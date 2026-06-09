@@ -166,6 +166,7 @@ export function HelpRequestsSection() {
             à Claude, dis « regarde les bugs acceptés » et il les traite.
           </p>
         </div>
+        <CopyAllButton reports={filtered} />
         <button
           type="button"
           onClick={load}
@@ -423,18 +424,91 @@ function ScreenshotThumb({ reportId }: { reportId: number }) {
   );
 }
 
+/** Formate un signalement en texte prêt à coller à Claude. */
+function formatReport(report: HelpReport): string {
+  const date = new Date(report.created_at).toLocaleString("fr-CA");
+  const lines: string[] = [
+    `Bug signalé par ${report.user_email || "(anonyme)"} le ${date}`
+  ];
+  if (report.context_url) lines.push(`URL : ${report.context_url}`);
+  if (report.has_screenshot) lines.push("(capture d'écran jointe)");
+  lines.push("", report.message.trim());
+  return lines.join("\n");
+}
+
+/** Copie du texte dans le presse-papier (avec fallback execCommand). */
+async function copyToClipboard(text: string): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.clipboard) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
+}
+
+/** Bouton « Tout copier » : copie d'un coup TOUS les signalements
+ * affichés, formatés et séparés, pour les coller en bloc à Claude. */
+function CopyAllButton({ reports }: { reports: HelpReport[] }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    if (reports.length === 0) return;
+    const header =
+      `${reports.length} bug${reports.length > 1 ? "s" : ""} à corriger ` +
+      `(copiés le ${new Date().toLocaleString("fr-CA")}) :`;
+    const blocks = reports.map(
+      (r, i) => `### Bug ${i + 1}/${reports.length}\n${formatReport(r)}`
+    );
+    const text = [header, "", blocks.join("\n\n---\n\n")].join("\n");
+    try {
+      await copyToClipboard(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* silent */
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      disabled={reports.length === 0}
+      className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-xs font-semibold transition disabled:opacity-40 ${
+        copied
+          ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300"
+          : "border-accent-500/40 bg-accent-500/10 text-accent-500 hover:bg-accent-500/20"
+      }`}
+      title="Copier tous les bugs affichés pour les coller à Claude"
+    >
+      {copied ? (
+        <>
+          <Check className="h-3.5 w-3.5" />
+          Copié
+        </>
+      ) : (
+        <>
+          <Copy className="h-3.5 w-3.5" />
+          Tout copier ({reports.length})
+        </>
+      )}
+    </button>
+  );
+}
+
 /** Bouton qui copie une demande formatée pour la coller à Claude. */
 function CopyReportButton({ report }: { report: HelpReport }) {
   const [copied, setCopied] = useState(false);
 
   function buildText(): string {
-    const date = new Date(report.created_at).toLocaleString("fr-CA");
-    const lines: string[] = [
-      `Bug signalé par ${report.user_email || "(anonyme)"} le ${date}`
-    ];
-    if (report.context_url) lines.push(`URL : ${report.context_url}`);
-    lines.push("", report.message.trim());
-    return lines.join("\n");
+    return formatReport(report);
   }
 
   async function handleCopy() {
