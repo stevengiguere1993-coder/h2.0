@@ -3043,6 +3043,13 @@ class CallRead(BaseModel):
     entity_id: Optional[int] = None
     followup_suggestion: Optional[str] = None
     caller_kind: Optional[str] = None
+    # Numéro du correspondant EXTERNE (l'autre partie) : pour un appel
+    # sortant c'est le destinataire (to_e164, ex. le client appelé), pour
+    # un entrant c'est l'appelant (from_e164). Évite d'afficher notre
+    # propre numéro Horizon dans le journal pour les appels sortants.
+    peer_e164: Optional[str] = None
+    # Nom du contact identifié (client / locataire / lead / prospect).
+    contact_name: Optional[str] = None
 
 
 class CallTurnRead(BaseModel):
@@ -3220,7 +3227,34 @@ async def list_calls(
         stmt = stmt.where(Call.entity_id == entity_id)
     stmt = stmt.order_by(Call.started_at.desc()).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
-    return [CallRead.model_validate(r) for r in rows]
+
+    # Numéro pair (correspondant externe) + nom du contact identifié.
+    # Pour un sortant, le correspondant est `to_e164` (le client appelé) ;
+    # pour un entrant, c'est `from_e164`. On résout le nom via le CRM,
+    # avec un cache par numéro pour limiter les requêtes.
+    out: List[CallRead] = []
+    ident_cache: dict = {}
+    for r in rows:
+        cr = CallRead.model_validate(r)
+        peer = (
+            r.to_e164
+            if r.direction == CallDirection.OUTBOUND.value
+            else r.from_e164
+        ) or ""
+        cr.peer_e164 = peer or None
+        if peer:
+            if peer not in ident_cache:
+                try:
+                    ident_cache[peer] = await identify_caller(db, peer)
+                except Exception:  # noqa: BLE001
+                    ident_cache[peer] = None
+            ident = ident_cache[peer]
+            if ident is not None:
+                cr.contact_name = ident.name
+                if ident.kind != CallerKind.UNKNOWN:
+                    cr.caller_kind = ident.kind.value
+        out.append(cr)
+    return out
 
 
 @router.get(
