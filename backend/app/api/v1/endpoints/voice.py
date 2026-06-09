@@ -3733,6 +3733,7 @@ async def list_sms_threads(
             continue
         threads[peer] = {
             "peer_e164": peer,
+            "name": None,
             "last_message": {
                 "id": r.id,
                 "direction": r.direction,
@@ -3747,6 +3748,29 @@ async def list_sms_threads(
         }
         if len(threads) >= limit:
             break
+
+    # Identification CRM live : on retrouve le NOM du contact (et on
+    # rafraîchit le badge) pour chaque numéro pair connu, afin d'afficher
+    # « Bob Tremblay » plutôt qu'un numéro nu dans l'inbox.
+    _KIND_TO_ENTITY = {
+        CallerKind.CLIENT: "client",
+        CallerKind.LOCATAIRE: "locataire",
+        CallerKind.LEAD_PROSPECTION: "prospection_lead",
+        CallerKind.LEAD_WEB: "contact_request",
+    }
+    for peer, t in threads.items():
+        try:
+            ident = await identify_caller(db, peer)
+        except Exception:  # noqa: BLE001
+            continue
+        t["name"] = ident.name
+        if ident.kind != CallerKind.UNKNOWN:
+            t["caller_kind"] = ident.kind.value
+            t["entity_type"] = _KIND_TO_ENTITY.get(
+                ident.kind, t.get("entity_type")
+            )
+            t["entity_id"] = ident.entity_id
+
     return list(threads.values())
 
 
