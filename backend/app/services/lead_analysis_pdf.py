@@ -1395,7 +1395,8 @@ def _render_bytes(
         mdf_pct = float(results.get("mdf_preteur_b_pct") or 0)
 
         # (clé, libellé) — on annote « (finançable) » les postes pris en
-        # charge (partiellement) par le prêteur B.
+        # charge (partiellement) par le prêteur B. Sert aussi de table de
+        # libellés par défaut quand un poste FIXE est piloté par le registre.
         poste_defs = [
             ("evaluateur", "Évaluateur 1"),
             ("evaluateur_2", "Évaluateur 2"),
@@ -1415,9 +1416,27 @@ def _render_bytes(
             ("revenus_nets_pendant_projet",
              "Revenus nets pendant projet"),
         ]
+        _fixed_label_by_key = {k: lbl for k, lbl in poste_defs}
+
+        # Registre unifié des frais de démarrage : liste ORDONNÉE
+        # [{key, label_fr, visible}] injectée par le moteur dans les
+        # résultats. `key` = clé d'un poste FIXE OU `id` d'un poste
+        # PERSONNALISÉ. Absent (anciens résultats non recalculés) → None →
+        # fallback sur `poste_defs` + sous-section custom (ordre historique).
+        registry = results.get("frais_registry")
+        if not isinstance(registry, list):
+            registry = None
+
+        # Postes personnalisés indexés par id (pour résolution via registre).
+        custom_by_id = {}
+        for c in (fd.get("frais_custom") or []):
+            if isinstance(c, dict):
+                cid = str(c.get("id") or "")
+                if cid:
+                    custom_by_id[cid] = c
 
         def _poste_split(key: str) -> tuple:
-            """(valeur, cash_à_sortir, prêt_prêteur_B) pour un poste.
+            """(valeur, cash_à_sortir, prêt_prêteur_B) pour un poste FIXE.
 
             Poste finançable → cash = valeur × mdf_pct, prêt = le
             complément. Sinon 100 % cash, prêt nul. None-safe."""
@@ -1433,6 +1452,21 @@ def _render_bytes(
                 pret = 0.0
             return valeur, cash, pret
 
+        def _custom_split(c: dict) -> tuple:
+            """(cash, prêt) pour un poste PERSONNALISÉ. `financable` est
+            déjà l'état effectif PAR FICHE (calculé par le moteur)."""
+            try:
+                cval = float(c.get("montant") or 0)
+            except (TypeError, ValueError):
+                cval = 0.0
+            if bool(c.get("financable")):
+                ccash = cval * mdf_pct
+                cpret = cval - ccash
+            else:
+                ccash = cval
+                cpret = 0.0
+            return ccash, cpret
+
         # En-tête à 3 colonnes de chiffres : valeur du poste, cash à
         # sortir (MDF) et portion financée par le prêteur B.
         header = [
@@ -1442,7 +1476,11 @@ def _render_bytes(
         ]
         data_rows: List[list] = [header]
         total_cash_finances = 0.0
-        for key, label in poste_defs:
+
+        def _append_fixed(key: str, label: str) -> None:
+            """Ajoute une ligne de poste FIXE (libellé fourni par le
+            registre ou la table par défaut)."""
+            nonlocal total_cash_finances
             tag = (f" <font size=7 color='{_C_GREEN}'>(finançable)</font>"
                    if key in financables else "")
             _valeur, cash, pret = _poste_split(key)
@@ -1453,32 +1491,52 @@ def _render_bytes(
                 Paragraph(_money(pret) if pret > 0.5 else "—", s["num"]),
             ])
 
-        # Postes de frais de démarrage PERSONNALISÉS (Paramètres →
-        # Calculateur). Affichés même à 0 $ pour refléter exactement la
-        # fiche d'analyse.
-        for c in (fd.get("frais_custom") or []):
-            if not isinstance(c, dict):
-                continue
-            try:
-                cval = float(c.get("montant") or 0)
-            except (TypeError, ValueError):
-                cval = 0.0
+        def _append_custom(c: dict, label: str) -> None:
+            """Ajoute une ligne de poste PERSONNALISÉ (affiché même à 0 $)."""
+            nonlocal total_cash_finances
             cfin = bool(c.get("financable"))
-            if cfin:
-                ccash = cval * mdf_pct
-                cpret = cval - ccash
-            else:
-                ccash = cval
-                cpret = 0.0
+            ccash, cpret = _custom_split(c)
             total_cash_finances += cpret
             ctag = (f" <font size=7 color='{_C_GREEN}'>(finançable)</font>"
                     if cfin else "")
-            clabel = str(c.get("label_fr") or "Frais personnalisé")
             data_rows.append([
-                Paragraph(f"{clabel}{ctag}", s["small"]),
+                Paragraph(f"{label}{ctag}", s["small"]),
                 Paragraph(_money(ccash), s["num"]),
                 Paragraph(_money(cpret) if cpret > 0.5 else "—", s["num"]),
             ])
+
+        if registry is not None:
+            # Mode registre : ordre / libellés / visibilité pilotés par le
+            # registre. On saute les postes masqués (visible:false) et on
+            # mélange fixes + perso dans l'ordre exact du registre.
+            for entry in registry:
+                if not isinstance(entry, dict):
+                    continue
+                key = str(entry.get("key") or "")
+                if not key:
+                    continue
+                if entry.get("visible") is False:
+                    continue
+                if key in _fixed_label_by_key:
+                    label = str(entry.get("label_fr")
+                                or _fixed_label_by_key[key])
+                    _append_fixed(key, label)
+                elif key in custom_by_id:
+                    c = custom_by_id[key]
+                    label = str(entry.get("label_fr")
+                                or c.get("label_fr") or "Frais personnalisé")
+                    _append_custom(c, label)
+                # Clé inconnue (ni fixe ni perso) → ignorée.
+        else:
+            # Fallback historique : postes fixes dans l'ordre `poste_defs`,
+            # puis postes personnalisés.
+            for key, label in poste_defs:
+                _append_fixed(key, label)
+            for c in (fd.get("frais_custom") or []):
+                if not isinstance(c, dict):
+                    continue
+                clabel = str(c.get("label_fr") or "Frais personnalisé")
+                _append_custom(c, clabel)
 
         # Total des frais de démarrage (cash sorti sur l'ensemble des
         # postes) + total de la portion financée par le prêteur B.
