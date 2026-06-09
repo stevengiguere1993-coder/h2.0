@@ -108,7 +108,10 @@ async def list_billables(
     total_projected = 0.0
     for a in achats:
         cost = float(a.amount or 0)
-        markup = float(a.markup_percent or 0)
+        # Majoration par défaut 10 % quand non saisie (NULL) ; 0 = coûtant.
+        markup = (
+            float(a.markup_percent) if a.markup_percent is not None else 10.0
+        )
         projected = round(cost * (1 + markup / 100.0), 2)
         total_cost += cost
         total_projected += projected
@@ -118,7 +121,9 @@ async def list_billables(
                 reference=a.reference,
                 description=a.description,
                 amount=cost,
-                markup_percent=markup if a.markup_percent is not None else None,
+                # Renvoie la majoration effective (10 % par défaut) pour
+                # qu'elle s'affiche et s'applique à l'import.
+                markup_percent=markup,
                 fournisseur_id=a.fournisseur_id,
                 fournisseur_name=fourn_names.get(a.fournisseur_id or 0),
                 supplier_invoice_number=a.supplier_invoice_number,
