@@ -116,6 +116,10 @@ export default function ProjectDetailPage() {
   const [onlyApproved, setOnlyApproved] = useState(true);
   const [dueInDays, setDueInDays] = useState("30");
   const [tab, setTab] = useState<TabId>("summary");
+  // #25 — Phase ciblée par un clic depuis le Gantt / la liste agenda :
+  // on ouvre l'onglet Planification ET on défile/surligne cette phase
+  // précise (au lieu de juste afficher toutes les planifs).
+  const [focusPhaseId, setFocusPhaseId] = useState<number | null>(null);
 
   // Si l'URL contient un fragment (#planification, #agenda…) on bascule
   // sur ce tab au mount. Permet le deep-link depuis l'agenda chantier
@@ -561,13 +565,18 @@ export default function ProjectDetailPage() {
                   onSave={saveAll}
                 />
               ) : tab === "planification" ? (
-                <PlanificationTab projectId={id} />
+                <PlanificationTab
+                  projectId={id}
+                  focusPhaseId={focusPhaseId}
+                  onFocusConsumed={() => setFocusPhaseId(null)}
+                />
               ) : tab === "agenda" ? (
                 <ChantierAgendaTab
                   projectId={id}
                   projectName={p?.name || ""}
                   projectEndDate={p?.end_date || null}
-                  onOpenPhase={() => {
+                  onOpenPhase={(phaseId) => {
+                    setFocusPhaseId(phaseId ?? null);
                     setTab("planification");
                     if (typeof window !== "undefined") {
                       window.history.replaceState(null, "", "#planification");
@@ -2605,9 +2614,21 @@ type LinkedEvent = {
   event_type: string;
 };
 
-function PlanificationTab({ projectId }: { projectId: number }) {
+function PlanificationTab({
+  projectId,
+  focusPhaseId = null,
+  onFocusConsumed
+}: {
+  projectId: number;
+  focusPhaseId?: number | null;
+  onFocusConsumed?: () => void;
+}) {
   const confirm = useConfirm();
   const [phases, setPhases] = useState<Phase[]>([]);
+  // #25 — Phase à surligner brièvement après un clic depuis l'agenda.
+  const [highlightPhaseId, setHighlightPhaseId] = useState<number | null>(
+    null
+  );
   const [tasks, setTasks] = useState<PhaseTask[]>([]);
   // Events ponctuels liés au projet ET rattachés à une phase précise.
   // Affichés inline sous leur phase (« Livraison conteneur 8h » sous
@@ -2677,6 +2698,26 @@ function PlanificationTab({ projectId }: { projectId: number }) {
     void load();
   }, [load]);
 
+  // #25 — Quand on arrive ici via un clic sur une phase précise (Gantt /
+  // liste agenda), on défile jusqu'à sa carte et on la surligne ~2,5 s
+  // une fois les phases chargées.
+  useEffect(() => {
+    if (focusPhaseId == null) return;
+    if (!phases.some((p) => p.id === focusPhaseId)) return;
+    const el =
+      typeof document !== "undefined"
+        ? document.getElementById(`phase-card-${focusPhaseId}`)
+        : null;
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightPhaseId(focusPhaseId);
+      const t = setTimeout(() => setHighlightPhaseId(null), 2500);
+      onFocusConsumed?.();
+      return () => clearTimeout(t);
+    }
+    onFocusConsumed?.();
+  }, [focusPhaseId, phases, onFocusConsumed]);
+
   // Auto-seed des 3 phases de base (Démolition / Plomberie /
   // Électricité) la première fois qu'on ouvre le tab Planification
   // pour ce projet et qu'il n'a aucune phase. On stocke un flag local
@@ -2699,7 +2740,10 @@ function PlanificationTab({ projectId }: { projectId: number }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, projectId]);
 
-  async function addPhase(name?: string, durationDays = 5) {
+  // #22/#25 — Une nouvelle phase démarre à 1 jour (et non 5) : sinon une
+  // planification entrée « pour une journée » s'affichait comme une longue
+  // barre couvrant 5 jours. L'utilisateur ajuste la durée dans l'éditeur.
+  async function addPhase(name?: string, durationDays = 1) {
     setBusyPhase("new");
     setErr(null);
     try {
@@ -3065,6 +3109,7 @@ function PlanificationTab({ projectId }: { projectId: number }) {
               key={ph.id}
               phase={ph}
               index={idx}
+              highlighted={highlightPhaseId === ph.id}
               count={phases.length}
               projectId={projectId}
               tasks={tasks.filter((t) => t.phase_id === ph.id)}
@@ -3160,10 +3205,12 @@ function PhaseCard({
   onMoveDown,
   onAddTask,
   onPatchTask,
-  onRemoveTask
+  onRemoveTask,
+  highlighted = false
 }: {
   phase: Phase;
   index: number;
+  highlighted?: boolean;
   projectId: number;
   employes: Array<{ id: number; full_name: string }>;
   sousTraitants: Array<{
@@ -3303,7 +3350,14 @@ function PhaseCard({
   };
 
   return (
-    <li className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+    <li
+      id={`phase-card-${phase.id}`}
+      className={`rounded-2xl border bg-brand-900 p-4 transition ${
+        highlighted
+          ? "border-accent-500 ring-2 ring-accent-500/60"
+          : "border-brand-800"
+      }`}
+    >
       <div className="flex items-start gap-3">
         <span className="mt-1 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-accent-500 text-xs font-bold text-brand-950">
           {index + 1}
@@ -3756,7 +3810,7 @@ function ChantierAgendaTab({
   projectId: number;
   projectName: string;
   projectEndDate?: string | null;
-  onOpenPhase: () => void;
+  onOpenPhase: (phaseId?: number) => void;
 }) {
   const confirm = useConfirm();
   const [events, setEvents] = useState<ChantierEvent[]>([]);
@@ -4507,7 +4561,7 @@ function EventRow({
   projectName: string;
   projectEndDate?: string | null;
   onRemove: () => void;
-  onClickPhase?: () => void;
+  onClickPhase?: (phaseId: number) => void;
   onClickEvent?: (e: ChantierEvent) => void;
 }) {
   const s = new Date(event.start_at);
@@ -4546,7 +4600,7 @@ function EventRow({
       } ${clickable ? "cursor-pointer hover:border-accent-500" : ""}`}
       onClick={
         isPhase && onClickPhase
-          ? onClickPhase
+          ? () => onClickPhase(Math.abs(event.id))
           : onClickEvent
           ? () => onClickEvent(event)
           : undefined
@@ -4602,7 +4656,7 @@ function ChantierGantt({
   events: ChantierEvent[];
   employes: Array<{ id: number; full_name: string }>;
   onRemoveEvent: (id: number) => void;
-  onOpenPhase: () => void;
+  onOpenPhase: (phaseId: number) => void;
 }) {
   const empById = useMemo(() => {
     const m = new Map<number, string>();
@@ -4756,7 +4810,9 @@ function ChantierGantt({
                     : ""
                 }`}
                 onClick={
-                  e.event_type === "phase" ? onOpenPhase : undefined
+                  e.event_type === "phase"
+                    ? () => onOpenPhase(Math.abs(e.id))
+                    : undefined
                 }
               >
                 <div className="flex min-w-0 items-start gap-1.5">
