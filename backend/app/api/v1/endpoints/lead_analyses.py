@@ -884,13 +884,38 @@ async def _load_frais_registry(db) -> tuple[list[str], list[dict]]:
         rows = (
             await db.execute(select(ProspectionAnalysisDefault))
         ).scalars().all()
+        registry: list[dict] = []
+        custom_items: list = []
         for row in rows:
             if row.key == _FRAIS_REGISTRY_KEY:
                 registry = _sanitize_registry(row.value_json)
-                masques = [
-                    e["key"] for e in registry if not e["visible"]
-                ]
-                return masques, registry
+            elif row.key == "frais_mdf_custom" and isinstance(
+                row.value_json, list
+            ):
+                custom_items = row.value_json
+        if not registry:
+            # Pas de registre en BD → fallback (comportement d'avant).
+            return [], []
+        # Postes PERSONNALISÉS pas encore référencés dans le registre
+        # (ex. créés AVANT l'introduction du registre) : on les append à
+        # la fin (visibles) pour qu'ils apparaissent dans la fiche + le
+        # PDF, comme le fait le GET /mdf-registry pour l'UI Paramètres.
+        known = {e["key"] for e in registry}
+        for it in custom_items:
+            if not isinstance(it, dict):
+                continue
+            cid = str(it.get("id", "") or "").strip()
+            if cid and cid not in known:
+                registry.append(
+                    {
+                        "key": cid,
+                        "label_fr": str(it.get("label_fr", "") or ""),
+                        "visible": True,
+                    }
+                )
+                known.add(cid)
+        masques = [e["key"] for e in registry if not e["visible"]]
+        return masques, registry
     except Exception as exc:  # noqa: BLE001
         log.warning("Failed to load mdf_frais_registry from DB: %s", exc)
     return [], []
