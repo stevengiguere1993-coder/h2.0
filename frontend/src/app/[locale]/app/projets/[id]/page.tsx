@@ -11,6 +11,7 @@ import {
   Mail,
   MapPin,
   Plus,
+  ArrowDownUp,
   Save,
   Trash2
 } from "lucide-react";
@@ -377,13 +378,27 @@ export default function ProjectDetailPage() {
       />
 
       <div className="p-4 lg:p-6">
-        <Link
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/app/projets" as any}
+        <button
+          type="button"
+          onClick={() => {
+            // Retour intelligent : si on est arrivé ici depuis une autre
+            // page de l'app (ex. l'agenda), on revient dessus via
+            // l'historique. Sinon (accès direct / nouvel onglet), repli
+            // sur la liste des projets.
+            if (
+              typeof window !== "undefined" &&
+              window.history.length > 1
+            ) {
+              router.back();
+            } else {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              router.push("/app/projets" as any);
+            }
+          }}
           className="inline-flex items-center text-sm text-white/70 hover:text-accent-500"
         >
-          <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux projets
-        </Link>
+          <ArrowLeft className="mr-1 h-4 w-4" /> Retour
+        </button>
 
         {loading ? (
           <div className="flex min-h-[40vh] items-center justify-center">
@@ -2898,6 +2913,29 @@ function PlanificationTab({ projectId }: { projectId: number }) {
     }
   }
 
+  // #14 — Remet les phases en ordre chronologique (date de début
+  // croissante). Les phases sans date passent à la fin. Persiste le
+  // nouvel ordre via l'endpoint de réordonnancement.
+  async function sortPhasesByDate() {
+    const next = [...phases].sort((a, b) => {
+      const da = a.start_date ? new Date(a.start_date).getTime() : Infinity;
+      const dbb = b.start_date ? new Date(b.start_date).getTime() : Infinity;
+      if (da !== dbb) return da - dbb;
+      return a.id - b.id;
+    });
+    // Aucun changement → ne rien faire.
+    if (next.every((p, i) => p.id === phases[i].id)) return;
+    setPhases(next);
+    try {
+      await authedFetch(`/api/v1/projects/${projectId}/phases/reorder`, {
+        method: "PUT",
+        body: JSON.stringify({ phase_ids: next.map((p) => p.id) })
+      });
+    } catch {
+      setErr("Réordonnancement échoué.");
+    }
+  }
+
   async function addTask(phaseId: number | null) {
     setBusyTask("new");
     setErr(null);
@@ -2986,19 +3024,32 @@ function PlanificationTab({ projectId }: { projectId: number }) {
           Plomberie, Finition). Chaque phase a une date de début et une
           durée en jours — la fin est calculée automatiquement.
         </p>
-        <button
-          type="button"
-          onClick={() => addPhase()}
-          disabled={busyPhase === "new"}
-          className="btn-accent text-xs disabled:opacity-60"
-        >
-          {busyPhase === "new" ? (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
-          )}
-          Nouvelle phase
-        </button>
+        <div className="flex items-center gap-2">
+          {phases.length > 1 ? (
+            <button
+              type="button"
+              onClick={() => sortPhasesByDate()}
+              className="inline-flex items-center rounded-lg border border-brand-700 px-2.5 py-1.5 text-xs text-white/70 hover:border-accent-500 hover:text-accent-500"
+              title="Réordonner les phases par date de début"
+            >
+              <ArrowDownUp className="mr-1.5 h-3.5 w-3.5" />
+              Trier par date
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => addPhase()}
+            disabled={busyPhase === "new"}
+            className="btn-accent text-xs disabled:opacity-60"
+          >
+            {busyPhase === "new" ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Nouvelle phase
+          </button>
+        </div>
       </div>
 
       {phases.length === 0 ? (
