@@ -305,19 +305,7 @@ export function HelpRequestsSection() {
                       </p>
                     ) : null}
                     {r.has_screenshot ? (
-                      <a
-                        href={`/api/v1/help/reports/${r.id}/screenshot`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="mt-2 inline-block"
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={`/api/v1/help/reports/${r.id}/screenshot`}
-                          alt="Capture jointe"
-                          className="max-h-48 rounded-md border border-brand-800 object-contain"
-                        />
-                      </a>
+                      <ScreenshotThumb reportId={r.id} />
                     ) : null}
                     <ResolutionNoteEditor
                       reportId={r.id}
@@ -368,6 +356,70 @@ export function HelpRequestsSection() {
         </div>
       )}
     </section>
+  );
+}
+
+/** Charge la capture jointe via authedFetch (l'endpoint exige le Bearer
+ * token, donc un <img src=URL> direct renverrait 401 / image cassée) et
+ * l'affiche via un object URL. Clic = ouverture pleine taille. */
+function ScreenshotThumb({ reportId }: { reportId: number }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [err, setErr] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let objUrl: string | null = null;
+    (async () => {
+      try {
+        const res = await authedFetch(
+          `/api/v1/help/reports/${reportId}/screenshot`
+        );
+        if (!res.ok) throw new Error();
+        const blob = await res.blob();
+        objUrl = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(objUrl);
+          return;
+        }
+        setUrl(objUrl);
+      } catch {
+        if (!cancelled) setErr(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (objUrl) URL.revokeObjectURL(objUrl);
+    };
+  }, [reportId]);
+
+  if (err) {
+    return (
+      <p className="mt-2 text-[11px] text-rose-300">
+        Impossible de charger la capture.
+      </p>
+    );
+  }
+  if (!url) {
+    return (
+      <p className="mt-2 text-[11px] text-white/40">
+        Chargement de la capture…
+      </p>
+    );
+  }
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="mt-2 inline-block"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt="Capture jointe"
+        className="max-h-48 rounded-md border border-brand-800 object-contain"
+      />
+    </a>
   );
 }
 
