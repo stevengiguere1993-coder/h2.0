@@ -58,8 +58,10 @@ class AuthService:
         # (access_token_expire_minutes, currently 30 min).
         from datetime import timedelta
 
+        # « Rester connecté » = 30 jours. Sinon, durée par défaut de la
+        # config (24 h). Évite les déconnexions intempestives en journée.
         expires_delta = (
-            timedelta(hours=12) if remember_me else None
+            timedelta(days=30) if remember_me else None
         )
 
         access_token = create_access_token(

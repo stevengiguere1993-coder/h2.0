@@ -43,7 +43,10 @@ class Settings(BaseSettings):
     # Security
     jwt_secret: str
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30
+    # Durée de session par défaut (sans « Rester connecté »). 24 h pour un
+    # outil interne : on évite que les équipes soient déconnectées en
+    # pleine journée. « Rester connecté » étend à 30 jours (cf. AuthService).
+    access_token_expire_minutes: int = 60 * 24
 
     # Frontend origins (comma-separated) for CORS in production
     frontend_origins: Optional[str] = None

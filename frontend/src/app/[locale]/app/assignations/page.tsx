@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Archive,
   Briefcase,
   Calendar,
   CheckSquare,
@@ -119,7 +118,6 @@ export default function AssignationsPage() {
   const [selectedEmpId, setSelectedEmpId] = useState<number | null>(null);
   const [busyPhaseId, setBusyPhaseId] = useState<number | null>(null);
   const [showInactive, setShowInactive] = useState(false);
-  const [showArchivedPhases, setShowArchivedPhases] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -240,14 +238,6 @@ export default function AssignationsPage() {
       return !end || end >= today;
     });
   }, [empPhases]);
-  const pastPhases = useMemo(() => {
-    const today = todayISO();
-    return empPhases.filter((ph) => {
-      const end = phaseEndISO(ph);
-      return !!end && end < today;
-    });
-  }, [empPhases]);
-
   const empEvents = useMemo(() => {
     if (!selectedEmpId) return [];
     return events
@@ -537,36 +527,13 @@ export default function AssignationsPage() {
                     </h3>
                     {activePhases.length === 0 ? (
                       <p className="mt-2 text-sm text-white/40">
-                        {pastPhases.length > 0
-                          ? "Aucune phase en cours ou à venir."
-                          : "Aucune phase assignée."}
+                        Aucune phase en cours ou à venir.
                       </p>
                     ) : (
                       <ul className="mt-2 space-y-2">
                         {activePhases.map(phaseItem)}
                       </ul>
                     )}
-
-                    {pastPhases.length > 0 ? (
-                      <div className="mt-3">
-                        <button
-                          type="button"
-                          onClick={() => setShowArchivedPhases((v) => !v)}
-                          className="flex items-center gap-1.5 text-[11px] font-medium text-white/45 hover:text-white/80"
-                        >
-                          <Archive className="h-3.5 w-3.5" />
-                          Phases terminées ({pastPhases.length})
-                          <span className="text-white/30">
-                            {showArchivedPhases ? "▾" : "▸"}
-                          </span>
-                        </button>
-                        {showArchivedPhases ? (
-                          <ul className="mt-2 space-y-2 opacity-60">
-                            {pastPhases.map(phaseItem)}
-                          </ul>
-                        ) : null}
-                      </div>
-                    ) : null}
                   </section>
 
                   <section className="mt-6">

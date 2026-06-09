@@ -16,7 +16,6 @@ import {
   Phone,
   PhoneCall,
   UserCircle,
-  Workflow,
   X
 } from "lucide-react";
 
@@ -39,8 +38,7 @@ const SECTIONS: {
   { key: "messages", label: "Messages", icon: MessageSquare },
   { key: "numeros", label: "Numéros & routage", icon: Phone },
   { key: "filtres", label: "Filtres anti-spam", icon: Filter },
-  { key: "heures", label: "Heures d'ouverture", icon: Clock },
-  { key: "plan", label: "Roadmap", icon: Workflow }
+  { key: "heures", label: "Heures d'ouverture", icon: Clock }
 ];
 
 export function TelephonieSidebar({

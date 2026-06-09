@@ -19,8 +19,7 @@ export type TelephonieSection =
   | "messages"
   | "numeros"
   | "filtres"
-  | "heures"
-  | "plan";
+  | "heures";
 
 type TelephonieLayoutCtx = {
   onOpenSidebar: () => void;

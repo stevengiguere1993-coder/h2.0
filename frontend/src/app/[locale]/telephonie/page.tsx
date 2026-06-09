@@ -20,7 +20,6 @@ import {
   ShieldCheck,
   Sparkles,
   TrendingUp,
-  Workflow,
   X
 } from "lucide-react";
 
@@ -521,7 +520,6 @@ export default function TelephonieHome() {
           />
         ) : null}
 
-        {section === "plan" ? <PlanSection /> : null}
       </div>
 
       {drawerCall ? (
@@ -591,8 +589,7 @@ function SectionTabs({
     { key: "messages", label: "Messages", icon: <MessageSquare className="h-3.5 w-3.5" /> },
     { key: "numeros", label: "Numéros", icon: <Phone className="h-3.5 w-3.5" /> },
     { key: "filtres", label: "Filtres", icon: <Filter className="h-3.5 w-3.5" /> },
-    { key: "heures", label: "Heures", icon: <Clock className="h-3.5 w-3.5" /> },
-    { key: "plan", label: "Roadmap", icon: <Workflow className="h-3.5 w-3.5" /> }
+    { key: "heures", label: "Heures", icon: <Clock className="h-3.5 w-3.5" /> }
   ];
   return (
     <div className="flex items-center gap-2 overflow-x-auto border-b border-brand-800 pb-2">
@@ -2222,182 +2219,6 @@ function BusinessHoursSection({
         ))}
       </div>
     </section>
-  );
-}
-
-// ----------------------------------------------------------------------
-// Plan section (les 4 phases)
-// ----------------------------------------------------------------------
-
-function PlanSection() {
-  return (
-    <section className="mt-5 space-y-3">
-      <PhaseCard
-        num={1}
-        title="Fondations"
-        status="done"
-        items={[
-          "Module backend voice + abstraction provider",
-          "Modèles SQL + webhook Twilio signé HMAC",
-          "Auto-bootstrap + dispatch <Dial> simple"
-        ]}
-      />
-      <PhaseCard
-        num={2}
-        title="Secrétaire IA bilingue"
-        status="done"
-        items={[
-          "Polly Neural FR/EN + Claude tour-par-tour",
-          "Création ContactRequest sur callback",
-          "Toggle activable par numéro"
-        ]}
-      />
-      <PhaseCard
-        num={3}
-        title="Filtres + Heures + Voicemail IA"
-        status="done"
-        items={[
-          "Blocklist + VIP whitelist par pattern",
-          "Heures d'ouverture par jour de semaine",
-          "Voicemail Record + transcription + résumé Claude"
-        ]}
-      />
-      <PhaseCard
-        num={4}
-        title="Sortant + lien CRM"
-        status="done"
-        items={[
-          "Click-to-call avec entity_type/id",
-          "AI outbound auto sur nouveaux leads (toggle safety)",
-          "Suggestion follow-up Claude post-appel"
-        ]}
-      />
-      <PhaseCard
-        num={5}
-        title="Anti-spam 6 couches + Voice SDK hybride"
-        status="done"
-        items={[
-          "Geo, STIR/SHAKEN, rate limit, honeypot, Lookup, cost cap",
-          "Identification CRM avant décroché (bypass spam VIP)",
-          "Voice SDK browser WebRTC + fallback mobile 15 sec"
-        ]}
-      />
-      <PhaseCard
-        num={6}
-        title="SMS bidirectionnel + petit téléphone CRM"
-        status="done"
-        items={[
-          "SMS entrants + sortants via le 438 (inbox threadée)",
-          "Auto-identification CRM des SMS (client / locataire / lead)",
-          "Petit téléphone à côté des numéros : prospect, client, lead",
-          "Tous les appels CRM enregistrés dans /telephonie (entity_type/id)"
-        ]}
-      />
-
-      {/* ============ Prochaines étapes ============ */}
-      <h2 className="mt-8 text-sm font-bold uppercase tracking-wider text-amber-300">
-        Prochaines étapes
-      </h2>
-      <p className="text-[12px] text-white/60">
-        Notes pour quand on sera prêt à fusionner davantage la téléphonie
-        avec les autres volets. Aucun de ces items n&apos;est en cours,
-        ils attendent ton feu vert.
-      </p>
-
-      <PhaseCard
-        num={7}
-        title="Onglet « Communications » dans chaque fiche CRM"
-        status="done"
-        items={[
-          "Onglet/section « Communications » ajouté dans /prospection/[id], /app/crm/[id] et /app/clients/[id]",
-          "Endpoint GET /api/v1/voice/communications/{type}/{id} accessible à tout utilisateur authentifié (read-only, scopé par entité)",
-          "Filtres Tout / Appels / SMS / Voicemail + recherche libre dans le contenu, lien vers le drawer détaillé /telephonie"
-        ]}
-      />
-
-      <PhaseCard
-        num={8}
-        title="Routage intelligent inbound + intake construction IA"
-        status="done"
-        items={[
-          "Urgence locataire : Léa détecte les mots-clés (dégât, fuite, panne chauffage…) et hot-transfère vers URGENCY_FORWARD_E164",
-          "Suivi de projet : appelant identifié comme client/contact d'un projet actif → ring les membres online via Voice SDK + fallback mobile",
-          "Intake construction conversationnel : Léa collecte type travaux, adresse, échéancier, budget, courriel, meilleur moment de rappel",
-          "À la fin de l'intake : ContactRequest auto-créé + courriel récap envoyé via Microsoft Graph avec lien tokenisé /valider-demande/{token}",
-          "Page publique de validation : client édite les infos, ajoute des photos, confirme — la fiche CRM est synchronisée automatiquement",
-          "Toggle « Rappel auto leads » (appels SORTANTS vers nouveaux ContactRequests web) reste OFF par défaut — à flip seulement quand l'intake inbound aura été validé en prod"
-        ]}
-      />
-
-      <PhaseCard
-        num={9}
-        title="Fusion CRM ↔ Téléphonie (vue 360 contact)"
-        status="done"
-        items={[
-          "VoiceConsole actif dans tout le portail construction (/app) — les appels entrants ring via WebRTC quel que soit l'écran ouvert",
-          "Quick-reply SMS depuis la fiche prospect/client/lead, envoyé directement via le 438 d'Horizon (timeline auto-refresh)",
-          "Notifications cloche : voicemails (déjà en place), SMS entrants (déjà en place), URGENCES locataires (nouveau — broadcast à tous les owners avec lien direct vers l'appel)"
-        ]}
-      />
-
-      <PhaseCard
-        num={10}
-        title="App mobile dédiée + dial pad + push"
-        status="done"
-        items={[
-          "PWA installable (manifest scope global + service worker v4) — bouton « Installer l'app » dispo, ajoute Horizon à l'écran d'accueil iPhone et Android",
-          "WebPush bout-en-bout : pywebpush + VAPID, pushManager frontend, sw.js gère push/notificationclick. Urgences locataires push tous les owners en plus de la cloche",
-          "Dial pad flottant dans /telephonie — composer un numéro et lancer un appel click-to-call qui passe par le 438 (le cell de l'user sonne, puis bridge vers la cible)",
-          "Résumé IA post-appel (followup_suggestion) déjà exposé dans le CallDrawer avec bouton « Re-générer »",
-          "À venir si besoin : app Android native APK direct (sans App Store) ; recording avec consentement Québec ; extension push aux SMS reçus"
-        ]}
-      />
-    </section>
-  );
-}
-
-function PhaseCard({
-  num,
-  title,
-  status,
-  items
-}: {
-  num: number;
-  title: string;
-  status: "done" | "in_progress" | "todo";
-  items: string[];
-}) {
-  return (
-    <article className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <header className="flex items-center justify-between gap-3 border-b border-brand-800 pb-3">
-        <div className="flex items-center gap-3">
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-800 text-xs font-bold text-white">
-            {num}
-          </span>
-          <h3 className="text-base font-bold text-white">{title}</h3>
-        </div>
-        <span
-          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-            status === "done"
-              ? "bg-emerald-500/15 text-emerald-300"
-              : status === "in_progress"
-                ? "bg-amber-500/15 text-amber-300"
-                : "bg-white/5 text-white/50"
-          }`}
-        >
-          {status === "done"
-            ? "Livré"
-            : status === "in_progress"
-              ? "En cours"
-              : "À faire"}
-        </span>
-      </header>
-      <ul className="mt-3 space-y-1 text-xs text-white/70">
-        {items.map((it, i) => (
-          <li key={i}>• {it}</li>
-        ))}
-      </ul>
-    </article>
   );
 }
 
