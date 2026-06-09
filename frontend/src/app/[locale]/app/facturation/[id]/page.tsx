@@ -85,11 +85,14 @@ type ProjectMini = {
 };
 type ProjectFinances = {
   projected_revenue: number;
+  projected_revenue_ex_tax?: number;
   projected_total_cost: number;
   projected_profit: number;
   actual_total_cost: number;
   actual_profit: number | null;
   invoiced_amount: number;
+  invoiced_amount_ex_tax?: number;
+  extras_billed_amount?: number;
   paid_amount: number;
   balance_due: number;
 };
@@ -1221,6 +1224,19 @@ export default function FactureDetailPage() {
                       })}{" "}
                       payé
                     </p>
+                    {projFin.extras_billed_amount &&
+                    projFin.extras_billed_amount > 0 ? (
+                      <p className="mt-0.5 text-[10px] text-white/50">
+                        dont{" "}
+                        {projFin.extras_billed_amount.toLocaleString("fr-CA", {
+                          style: "currency",
+                          currency: "CAD",
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2
+                        })}{" "}
+                        extras (hors devis)
+                      </p>
+                    ) : null}
                   </div>
                   <div
                     className={`rounded-lg border p-3 ${
@@ -1254,37 +1270,38 @@ export default function FactureDetailPage() {
                     </p>
                   </div>
                 </div>
-                {projFin.projected_revenue > 0 ? (
-                  <div className="mt-3">
-                    <div className="flex items-center justify-between text-[11px] text-white/50">
-                      <span>Avancement de facturation</span>
-                      <span className="font-mono text-white/70">
-                        {Math.min(
-                          100,
-                          Math.round(
-                            (projFin.invoiced_amount /
-                              projFin.projected_revenue) *
-                              100
-                          )
-                        )}
-                        %
-                      </span>
+                {(() => {
+                  // Avancement SUR LE DEVIS uniquement : on exclut les
+                  // extras (hors contrat). On compare en HT quand
+                  // disponible (devis HT vs facturé base HT) pour rester
+                  // cohérent ; sinon on retombe sur le TTC.
+                  const devisBase =
+                    projFin.projected_revenue_ex_tax ??
+                    projFin.projected_revenue;
+                  const billedBase =
+                    (projFin.invoiced_amount_ex_tax ??
+                      projFin.invoiced_amount) -
+                    (projFin.extras_billed_amount ?? 0);
+                  if (!(devisBase > 0)) return null;
+                  const pct = Math.min(
+                    100,
+                    Math.round((billedBase / devisBase) * 100)
+                  );
+                  return (
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between text-[11px] text-white/50">
+                        <span>Avancement sur le devis (hors extras)</span>
+                        <span className="font-mono text-white/70">{pct}%</span>
+                      </div>
+                      <div className="mt-1 h-2 overflow-hidden rounded-full bg-brand-950">
+                        <div
+                          className="h-full bg-accent-500 transition-all"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="mt-1 h-2 overflow-hidden rounded-full bg-brand-950">
-                      <div
-                        className="h-full bg-accent-500 transition-all"
-                        style={{
-                          width: `${Math.min(
-                            100,
-                            (projFin.invoiced_amount /
-                              projFin.projected_revenue) *
-                              100
-                          )}%`
-                        }}
-                      />
-                    </div>
-                  </div>
-                ) : null}
+                  );
+                })()}
               </section>
             ) : null}
 

@@ -799,25 +799,26 @@ def _render_bytes(
         story.append(st_tbl)
         story.append(Spacer(1, 12))
 
-        # Totaux de l'état de compte
+        # Totaux de l'état de compte — décomposition claire devis / extras.
+        _base_billed = round(
+            statement.billed_to_date - statement.extras_billed, 2
+        )
         recap_rows = []
         if statement.contract_total > 0:
             recap_rows.append(
-                ["Total du contrat", _money(statement.contract_total)]
+                ["Montant du devis", _money(statement.contract_total)]
             )
         recap_rows.append(
-            ["Total facturé", _money(statement.billed_to_date)]
+            ["Facturé sur le devis", _money(_base_billed)]
         )
         if statement.extras_billed > 0:
             recap_rows.append(
-                ["dont extras (hors contrat)", _money(statement.extras_billed)]
+                ["Extras (hors contrat)", _money(statement.extras_billed)]
             )
         recap_rows.extend([
-            ["Total payé", _money(statement.paid_to_date)],
-            [
-                "Solde à venir",
-                _money(statement.remaining_balance),
-            ],
+            ["Total facturé", _money(statement.billed_to_date)],
+            ["Montant payé", _money(statement.paid_to_date)],
+            ["Solde dû", _money(statement.remaining_balance)],
         ])
         recap_tbl = Table(
             recap_rows,
@@ -949,8 +950,10 @@ def _render_statement_bytes(statement: Statement) -> bytes:
             "h_debit": "Facturé",
             "h_credit": "Payé",
             "empty": "Aucune facture envoyée au client pour ce projet.",
-            "total_invoiced": "Total des factures",
-            "extras_billed": "dont extras (hors contrat)",
+            "quote_amount": "Montant du devis",
+            "billed_on_quote": "Facturé sur le devis",
+            "total_invoiced": "Total facturé",
+            "extras_billed": "Extras (hors contrat)",
             "amount_paid": "Montant payé",
             "balance_due": "Solde dû",
         },
@@ -967,8 +970,10 @@ def _render_statement_bytes(statement: Statement) -> bytes:
             "h_debit": "Invoiced",
             "h_credit": "Paid",
             "empty": "No invoice sent to the client for this project.",
+            "quote_amount": "Quote amount",
+            "billed_on_quote": "Billed on quote",
             "total_invoiced": "Total invoiced",
-            "extras_billed": "incl. extras (off-contract)",
+            "extras_billed": "Extras (off-contract)",
             "amount_paid": "Amount paid",
             "balance_due": "Balance due",
         },
@@ -1078,14 +1083,19 @@ def _render_statement_bytes(statement: Statement) -> bytes:
     # Récap client : total des factures envoyées, montant déjà payé,
     # et solde restant dû (total facturé − payé).
     solde_du = round(statement.billed_to_date - statement.paid_to_date, 2)
-    recap_rows = [
-        [tr["total_invoiced"], _money(statement.billed_to_date)],
-    ]
+    base_billed = round(statement.billed_to_date - statement.extras_billed, 2)
+    recap_rows = []
+    if statement.contract_total > 0:
+        recap_rows.append(
+            [tr["quote_amount"], _money(statement.contract_total)]
+        )
+    recap_rows.append([tr["billed_on_quote"], _money(base_billed)])
     if statement.extras_billed > 0:
         recap_rows.append(
             [tr["extras_billed"], _money(statement.extras_billed)]
         )
     recap_rows.extend([
+        [tr["total_invoiced"], _money(statement.billed_to_date)],
         [tr["amount_paid"], _money(statement.paid_to_date)],
         [tr["balance_due"], _money(solde_du)],
     ])
