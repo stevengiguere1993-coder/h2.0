@@ -1270,6 +1270,13 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
                 continue
             if hasattr(frais, k):
                 setattr(frais, k, float(v))
+        # Override PAR FICHE des postes PERSONNALISÉS (clé = id du poste,
+        # comme les postes fixes). Permet d'ajuster un frais perso sur une
+        # fiche sans toucher au défaut global.
+        for _c in frais.frais_custom:
+            _cid = str(_c.get("id", ""))
+            if _cid and inputs.frais_demarrage_overrides.get(_cid) is not None:
+                _c["montant"] = float(inputs.frais_demarrage_overrides[_cid])
     prix_acquisition = inputs.prix_achat + frais.total
     # MDF avec prêteur B = X % prix achat + frais démarrage cash. X
     # est `mdf_preteur_b_pct` (défaut 25 %, parfois 35 %).
@@ -1299,7 +1306,13 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
     # est financé) ; sinon 100 % cash. Liste vide → contribution nulle.
     for item in frais.frais_custom:
         amount = float(item.get("montant", 0) or 0)
-        if item.get("financable"):
+        # Finançabilité PAR FICHE (set `financables`, clé = id du poste),
+        # comme les postes fixes — surchargeable dans la fiche. On reflète
+        # l'état EFFECTIF dans le JSON (`financable`) pour le PDF/affichage.
+        _cid = str(item.get("id", ""))
+        is_fin = _cid in financables
+        item["financable"] = is_fin
+        if is_fin:
             frais_cash_total += amount * mdf_pct
         else:
             frais_cash_total += amount
