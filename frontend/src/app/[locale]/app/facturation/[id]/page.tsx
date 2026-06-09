@@ -397,14 +397,14 @@ export default function FactureDetailPage() {
     }
   }
 
-  async function saveDueAt() {
+  async function saveDueAt(value: string = dueAt) {
     if (!f) return;
     setSaving(true);
     try {
       const res = await authedFetch(`/api/v1/factures/${id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          due_at: dueAt ? new Date(dueAt).toISOString() : null
+          due_at: value ? new Date(value).toISOString() : null
         })
       });
       if (!res.ok) throw new Error();
@@ -1140,7 +1140,12 @@ export default function FactureDetailPage() {
                     const yyyy = base.getFullYear();
                     const mm = String(base.getMonth() + 1).padStart(2, "0");
                     const dd = String(base.getDate()).padStart(2, "0");
-                    setDueAt(`${yyyy}-${mm}-${dd}`);
+                    const next = `${yyyy}-${mm}-${dd}`;
+                    setDueAt(next);
+                    // #4 — l'échéance choisie est enregistrée tout de suite
+                    // (avant on devait cliquer l'icône de sauvegarde, vite
+                    // oubliée → le changement était perdu en quittant).
+                    void saveDueAt(next);
                   }}
                   className="input w-48"
                 >
@@ -1156,12 +1161,13 @@ export default function FactureDetailPage() {
                   type="date"
                   value={dueAt}
                   onChange={(e) => setDueAt(e.target.value)}
+                  onBlur={() => void saveDueAt()}
                   className="input w-44"
                   title="Date d'échéance — modifie pour personnaliser"
                 />
                 <button
                   type="button"
-                  onClick={saveDueAt}
+                  onClick={() => void saveDueAt()}
                   disabled={saving}
                   className="btn-secondary text-xs"
                 >
