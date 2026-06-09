@@ -2452,6 +2452,97 @@ async def init_db() -> None:
             # Table absente au tout premier boot — retentera plus tard.
             pass
 
+        # ── Seed du REGISTRE unifié des frais de démarrage (juin 2026) ──
+        # Défaut à valeur structurée (``value_json``) : LISTE ORDONNÉE des
+        # postes de frais de démarrage (composition MDF prêteur B). Chaque
+        # entrée ``{key, label_fr, visible}`` : l'ordre de la liste = ordre
+        # d'affichage, ``visible:false`` = poste masqué (le moteur le force
+        # à 0 $ via ``FinanceInputs.frais_masques``). Le registre est une
+        # couche de CONFIG (ordre / label / visibilité) PAR-DESSUS le
+        # moteur — il NE CHANGE AUCUNE formule ni montant.
+        #
+        # Seedé avec les 16 postes FIXES DANS L'ORDRE INTERNE du moteur
+        # (``FraisDemarrage``), tous ``visible:true``, labels FR = ceux du
+        # PDF (``poste_defs``) / frontend (``buildFraisLabels``). Les postes
+        # PERSONNALISÉS ne sont PAS seedés ici : ils sont APPENDUS
+        # dynamiquement au registre par les endpoints CRUD ``frais-custom``.
+        #
+        # UPSERT idempotent : INSERT avec la liste par défaut si la clé est
+        # absente ; sur conflit on ne met à jour QUE les métadonnées
+        # (label/desc/group) — JAMAIS ``value_json`` (préserve l'ordre, la
+        # visibilité et les perso configurés par l'admin via les endpoints).
+        mdf_frais_registry_json = json.dumps([
+            {"key": "courtier_hypothecaire_1",
+             "label_fr": "Courtier hypothécaire 1", "visible": True},
+            {"key": "courtier_hypothecaire_2",
+             "label_fr": "Courtier hypothécaire 2", "visible": True},
+            {"key": "taxes_bienvenue",
+             "label_fr": "Taxes de bienvenue (calculées)", "visible": True},
+            {"key": "evaluateur",
+             "label_fr": "Évaluateur 1", "visible": True},
+            {"key": "evaluateur_2",
+             "label_fr": "Évaluateur 2", "visible": True},
+            {"key": "inspection",
+             "label_fr": "Inspection", "visible": True},
+            {"key": "avocat",
+             "label_fr": "Avocat", "visible": True},
+            {"key": "notaire",
+             "label_fr": "Notaire 1", "visible": True},
+            {"key": "notaire_2",
+             "label_fr": "Notaire 2", "visible": True},
+            {"key": "rapport_efficacite",
+             "label_fr": "Rapport efficacité énergétique", "visible": True},
+            {"key": "frais_developpement",
+             "label_fr": "Frais de développement", "visible": True},
+            {"key": "frais_negociations",
+             "label_fr": "Frais de négociations", "visible": True},
+            {"key": "frais_travaux",
+             "label_fr": "Frais de travaux", "visible": True},
+            {"key": "frais_dossier_preteur",
+             "label_fr": "Frais de dossier du prêteur", "visible": True},
+            {"key": "interets",
+             "label_fr": "Intérêts pendant projet (portage)",
+             "visible": True},
+            {"key": "revenus_nets_pendant_projet",
+             "label_fr": "Revenus nets pendant projet", "visible": True},
+        ])
+        try:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO prospection_analysis_defaults
+                      (key, value_json, label_fr, description_fr,
+                       step, group_name, updated_at)
+                    VALUES (:key, CAST(:value_json AS JSONB), :label_fr,
+                            :description_fr, :step, :group, NOW())
+                    ON CONFLICT (key) DO UPDATE SET
+                        label_fr       = EXCLUDED.label_fr,
+                        description_fr = EXCLUDED.description_fr,
+                        group_name     = EXCLUDED.group_name
+                    """
+                ),
+                {
+                    "key": "mdf_frais_registry",
+                    "value_json": mdf_frais_registry_json,
+                    "label_fr": (
+                        "Registre des frais de démarrage (ordre/visibilité)"
+                    ),
+                    "description_fr": (
+                        "Liste ordonnée des postes de frais de démarrage "
+                        "(composition MDF prêteur B). Chaque entrée {key, "
+                        "label_fr, visible} : l'ordre de la liste = ordre "
+                        "d'affichage, visible:false = poste masqué. Couche "
+                        "de config (ordre/label/visibilité) par-dessus le "
+                        "moteur de calcul — ne change aucune formule."
+                    ),
+                    "step": 0.01,
+                    "group": "mdf_frais",
+                },
+            )
+        except Exception:
+            # Table absente au tout premier boot — retentera plus tard.
+            pass
+
         # ── Backfill `financable_par_defaut` (mai 2026) ──────────────
         # On ne TOUCHE PAS aux items pour lesquels Phil a déjà
         # configuré explicitement la valeur (NULL → on backfill, NOT
