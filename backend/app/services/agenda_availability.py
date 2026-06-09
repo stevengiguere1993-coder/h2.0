@@ -215,7 +215,7 @@ async def check_slot_availability(
                 )
             ).scalars().all()
             phase_ids.update(direct_rows)
-        conflicting_names: list[str] = []
+        conflicting_labels: list[str] = []
         if phase_ids:
             phases = (
                 await db.execute(
@@ -225,17 +225,47 @@ async def check_slot_availability(
                     )
                 )
             ).scalars().all()
+            # On affiche l'ADRESSE du projet (et non le nom de phase qui
+            # peut être périmé, ex. « projet 121 » saisi à la création du
+            # devis puis renommé) pour que le message de conflit soit clair.
+            proj_ids = {
+                getattr(p, "project_id", None)
+                for p in phases
+                if getattr(p, "project_id", None)
+            }
+            projects_by_id: dict = {}
+            if proj_ids:
+                from app.models.project import Project as _Proj
+
+                projects_by_id = {
+                    pr.id: pr
+                    for pr in (
+                        await db.execute(
+                            select(_Proj).where(_Proj.id.in_(proj_ids))
+                        )
+                    ).scalars().all()
+                }
             for p in phases:
                 if p.start_date is None:
                     continue
                 duration = int(p.duration_days or 0)
                 p_end = p.start_date + timedelta(days=max(duration - 1, 0))
                 if p.start_date <= slot_date_end and p_end >= slot_date_start:
-                    conflicting_names.append(p.name or f"phase #{p.id}")
-        if conflicting_names:
+                    proj = projects_by_id.get(getattr(p, "project_id", None))
+                    label = ""
+                    if proj is not None:
+                        label = (proj.address or "").strip() or (
+                            proj.name or ""
+                        )
+                    if not label:
+                        label = p.name or f"phase #{p.id}"
+                    conflicting_labels.append(label)
+        if conflicting_labels:
+            # Dédup en gardant l'ordre.
+            uniq = list(dict.fromkeys(conflicting_labels))
             result.conflicts.append(
-                f"Assigné(e) à une phase de chantier en cours : "
-                f"{', '.join(conflicting_names)}"
+                "Déjà assigné(e) à un chantier en cours : "
+                f"{', '.join(uniq)}"
             )
             result.is_available = False
 

@@ -190,12 +190,12 @@ async def import_into_facture(
                     await db.execute(select(Employe).where(Employe.id.in_(emp_ids)))
                 ).scalars().all()
             }
-            # Regroupement par (employé, taux facturable). On garde la
-            # liste des punches dans chaque bucket pour les marquer
-            # individuellement après le flush.
-            buckets: dict[
-                tuple[int, float], dict
-            ] = {}
+            # UNE SEULE ligne « Main-d'œuvre » totale (toutes les heures
+            # additionnées, AUCUN nom d'employé sur la facture client).
+            # Prix unitaire = moyenne pondérée des taux pour garder le
+            # total exact.
+            total_hours = 0.0
+            total_amount = 0.0
             for p in punches:
                 emp = emps.get(p.employe_id)
                 if emp and emp.billing_rate is not None:
@@ -204,36 +204,30 @@ async def import_into_facture(
                     rate = float(emp.hourly_rate)
                 else:
                     rate = 0.0
-                key = (p.employe_id, rate)
-                bucket = buckets.setdefault(
-                    key, {"hours": 0.0, "punches": []}
-                )
-                bucket["hours"] += float(p.hours or 0)
-                bucket["punches"].append(p)
+                h = float(p.hours or 0)
+                total_hours += h
+                total_amount += h * rate
+            total_hours = round(total_hours, 2)
+            total_amount = round(total_amount, 2)
 
-            bucket_items: list[tuple[FactureItem, list[Punch]]] = []
-            for (emp_id, rate), bucket in buckets.items():
-                emp = emps.get(emp_id)
-                label = emp.full_name if emp else f"Employé #{emp_id}"
-                hours = bucket["hours"]
+            if total_hours > 0:
+                unit_price = round(total_amount / total_hours, 2)
                 item = FactureItem(
                     facture_id=fa.id,
                     position=pos,
-                    description=f"Main-d'œuvre — {label}",
+                    description="Main-d'œuvre",
                     unit="h",
-                    quantity=round(hours, 2),
-                    unit_price=rate,
-                    total=round(hours * rate, 2),
+                    quantity=total_hours,
+                    unit_price=unit_price,
+                    total=total_amount,
+                    kind="extra",
                 )
                 db.add(item)
-                bucket_items.append((item, bucket["punches"]))
                 pos += 1
                 added += 1
-
-            await db.flush()
-            now = datetime.now(timezone.utc)
-            for item, p_list in bucket_items:
-                for p in p_list:
+                await db.flush()
+                now = datetime.now(timezone.utc)
+                for p in punches:
                     p.invoiced_at = now
                     p.facture_item_id = item.id
 

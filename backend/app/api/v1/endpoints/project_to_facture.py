@@ -273,7 +273,12 @@ async def convert_project_to_facture(
                 ).scalars().all()
             }
 
-            buckets: dict[tuple[int, float], dict] = {}
+            # UNE SEULE ligne « Main-d'œuvre » totale sur la facture
+            # client : toutes les heures additionnées, AUCUN nom d'employé
+            # (le client ne doit pas les voir). Prix unitaire = moyenne
+            # pondérée des taux, pour que le total reste exact.
+            total_hours = 0.0
+            total_amount = 0.0
             for p in punches:
                 emp = emps.get(p.employe_id)
                 if emp and emp.billing_rate is not None:
@@ -282,39 +287,31 @@ async def convert_project_to_facture(
                     rate = float(emp.hourly_rate)
                 else:
                     rate = 0.0
-                key = (p.employe_id, rate)
-                bucket = buckets.setdefault(
-                    key, {"hours": 0.0, "punches": []}
-                )
-                bucket["hours"] += float(p.hours or 0)
-                bucket["punches"].append(p)
+                h = float(p.hours or 0)
+                total_hours += h
+                total_amount += h * rate
+            total_hours = round(total_hours, 2)
+            total_amount = round(total_amount, 2)
 
-            bucket_items: list[tuple[FactureItem, list[Punch]]] = []
-            for (emp_id, rate), bucket in buckets.items():
-                emp = emps.get(emp_id)
-                label = emp.full_name if emp else f"Employé #{emp_id}"
-                hours = bucket["hours"]
-                amount = round(hours * rate, 2)
+            if total_hours > 0:
+                unit_price = round(total_amount / total_hours, 2)
                 item = FactureItem(
                     facture_id=facture.id,
                     position=pos,
-                    description=f"Main-d'œuvre — {label}",
+                    description="Main-d'œuvre",
                     unit="h",
-                    quantity=round(hours, 2),
-                    unit_price=rate,
-                    total=amount,
+                    quantity=total_hours,
+                    unit_price=unit_price,
+                    total=total_amount,
                     # Heures T&M = hors soumission de base → extra.
                     kind="extra",
                 )
                 db.add(item)
-                bucket_items.append((item, bucket["punches"]))
                 pos += 1
-
-            await db.flush()
-            from datetime import datetime as _dt2, timezone as _tz2
-            now_h = _dt2.now(_tz2.utc)
-            for item, p_list in bucket_items:
-                for p in p_list:
+                await db.flush()
+                from datetime import datetime as _dt2, timezone as _tz2
+                now_h = _dt2.now(_tz2.utc)
+                for p in punches:
                     p.invoiced_at = now_h
                     p.facture_item_id = item.id
 
