@@ -1646,7 +1646,7 @@ function MessagesSection({
                 ))
               )}
             </div>
-            <div className="flex items-end gap-2 border-t border-brand-800 pt-3">
+            <div className="sticky bottom-28 z-10 -mx-4 mt-2 flex items-end gap-2 border-t border-brand-800 bg-brand-900 px-4 pb-3 pt-3 lg:static lg:bottom-auto lg:mx-0 lg:mt-0 lg:bg-transparent lg:px-0 lg:pb-0">
               <textarea
                 placeholder="Réponse…"
                 value={reply}
