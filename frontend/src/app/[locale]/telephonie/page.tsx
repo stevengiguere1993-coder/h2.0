@@ -20,7 +20,6 @@ import {
   ShieldCheck,
   Sparkles,
   TrendingUp,
-  Users,
   Workflow,
   X
 } from "lucide-react";
@@ -674,6 +673,11 @@ function DashboardSection({
             .reduce((s, c) => s + (c.duration_sec || 0), 0) /
             todayCalls.filter((c) => c.duration_sec).length
         );
+  const answeredToday = todayCalls.filter(
+    (c) => c.status === "completed" || c.status === "in-progress"
+  ).length;
+  const answerRate =
+    totalToday === 0 ? 0 : Math.round((answeredToday / totalToday) * 100);
 
   const primary = numbers[0];
   const secretaryOn = !!primary?.secretary_mode_active;
@@ -782,12 +786,11 @@ function DashboardSection({
           tone="blue"
         />
         <KpiCard
-          icon={<Users className="h-4 w-4" />}
-          label="Filtres actifs"
-          value={String(numbers.length ? "—" : 0)}
-          subtitle="VIP + blocklist"
-          tone="violet"
-          onClick={() => onJumpTo("filtres")}
+          icon={<TrendingUp className="h-4 w-4" />}
+          label="Taux de réponse"
+          value={totalToday ? `${answerRate}%` : "—"}
+          subtitle={`${answeredToday} / ${totalToday} répondus`}
+          tone="teal"
         />
         <KpiCard
           icon={<TrendingUp className="h-4 w-4" />}

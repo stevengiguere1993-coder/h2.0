@@ -25,7 +25,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import CurrentAdmin, CurrentUser, DBSession
 from app.integrations.voice import get_voice_provider
@@ -35,6 +35,7 @@ from app.integrations.voice.caller_identity import (
     build_identity_context_block,
     build_personalized_greeting,
     identify_caller,
+    resolve_callers,
 )
 from app.integrations.voice.lead_outbound import (
     build_outbound_system_prompt,
@@ -3228,31 +3229,29 @@ async def list_calls(
     stmt = stmt.order_by(Call.started_at.desc()).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
 
-    # Numéro pair (correspondant externe) + nom du contact identifié.
-    # Pour un sortant, le correspondant est `to_e164` (le client appelé) ;
-    # pour un entrant, c'est `from_e164`. On résout le nom via le CRM,
-    # avec un cache par numéro pour limiter les requêtes.
-    out: List[CallRead] = []
-    ident_cache: dict = {}
-    for r in rows:
-        cr = CallRead.model_validate(r)
-        peer = (
+    # Numéro pair (correspondant externe) : pour un sortant c'est le
+    # destinataire (to_e164, le client appelé) ; pour un entrant c'est
+    # l'appelant (from_e164). On résout TOUS les contacts en une passe
+    # groupée (4 requêtes au total au lieu de 4 par appel).
+    def _peer(r: Call) -> str:
+        return (
             r.to_e164
             if r.direction == CallDirection.OUTBOUND.value
             else r.from_e164
         ) or ""
+
+    idents = await resolve_callers(db, [p for r in rows if (p := _peer(r))])
+
+    out: List[CallRead] = []
+    for r in rows:
+        cr = CallRead.model_validate(r)
+        peer = _peer(r)
         cr.peer_e164 = peer or None
-        if peer:
-            if peer not in ident_cache:
-                try:
-                    ident_cache[peer] = await identify_caller(db, peer)
-                except Exception:  # noqa: BLE001
-                    ident_cache[peer] = None
-            ident = ident_cache[peer]
-            if ident is not None:
-                cr.contact_name = ident.name
-                if ident.kind != CallerKind.UNKNOWN:
-                    cr.caller_kind = ident.kind.value
+        ident = idents.get(peer) if peer else None
+        if ident is not None:
+            cr.contact_name = ident.name
+            if ident.kind != CallerKind.UNKNOWN:
+                cr.caller_kind = ident.kind.value
         out.append(cr)
     return out
 
@@ -3482,7 +3481,10 @@ async def list_sms(
         stmt = stmt.where(VoiceSms.entity_type == entity_type)
     if entity_id is not None:
         stmt = stmt.where(VoiceSms.entity_id == entity_id)
-    stmt = stmt.order_by(VoiceSms.received_at.desc()).limit(limit)
+    # Coalesce : les SMS sortants n'ont que `sent_at` (pas de received_at).
+    stmt = stmt.order_by(
+        func.coalesce(VoiceSms.received_at, VoiceSms.sent_at).desc()
+    ).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
     return [SmsRead.model_validate(r) for r in rows]
 
@@ -3590,7 +3592,7 @@ async def list_communications_for_entity(
             CommunicationEvent(
                 kind="sms",
                 id=s.id,
-                at=s.received_at,
+                at=s.received_at or s.sent_at,
                 direction=s.direction,
                 status=s.status,
                 from_e164=s.from_e164,
@@ -3751,9 +3753,13 @@ async def list_sms_threads(
     pair (numéro extérieur à Horizon), avec son dernier SMS, le nombre
     de non-lus et l'identification CRM si reconnue.
     """
+    # Tri par date d'activité réelle : un SMS SORTANT n'a pas de
+    # `received_at` (seulement `sent_at`) — on coalesce pour que les
+    # envois récents remontent bien en haut de l'inbox.
+    activity_at = func.coalesce(VoiceSms.received_at, VoiceSms.sent_at)
     rows = (
         await db.execute(
-            select(VoiceSms).order_by(VoiceSms.received_at.desc()).limit(limit * 4)
+            select(VoiceSms).order_by(activity_at.desc()).limit(limit * 4)
         )
     ).scalars().all()
     # Group by peer (extérieur).
@@ -3765,6 +3771,7 @@ async def list_sms_threads(
             if r.direction == "inbound" and r.read_at is None:
                 t["unread"] += 1
             continue
+        when = r.received_at or r.sent_at
         threads[peer] = {
             "peer_e164": peer,
             "name": None,
@@ -3772,7 +3779,7 @@ async def list_sms_threads(
                 "id": r.id,
                 "direction": r.direction,
                 "body": r.body,
-                "received_at": r.received_at.isoformat(),
+                "received_at": when.isoformat() if when else None,
                 "num_media": r.num_media,
             },
             "caller_kind": r.caller_kind,
@@ -3783,19 +3790,19 @@ async def list_sms_threads(
         if len(threads) >= limit:
             break
 
-    # Identification CRM live : on retrouve le NOM du contact (et on
-    # rafraîchit le badge) pour chaque numéro pair connu, afin d'afficher
-    # « Bob Tremblay » plutôt qu'un numéro nu dans l'inbox.
+    # Identification CRM (NOM + badge) en une passe groupée pour tous les
+    # numéros pairs (4 requêtes au total au lieu de 4 par fil), afin
+    # d'afficher « Bob Tremblay » plutôt qu'un numéro nu dans l'inbox.
     _KIND_TO_ENTITY = {
         CallerKind.CLIENT: "client",
         CallerKind.LOCATAIRE: "locataire",
         CallerKind.LEAD_PROSPECTION: "prospection_lead",
         CallerKind.LEAD_WEB: "contact_request",
     }
+    idents = await resolve_callers(db, list(threads.keys()))
     for peer, t in threads.items():
-        try:
-            ident = await identify_caller(db, peer)
-        except Exception:  # noqa: BLE001
+        ident = idents.get(peer)
+        if ident is None:
             continue
         t["name"] = ident.name
         if ident.kind != CallerKind.UNKNOWN:
