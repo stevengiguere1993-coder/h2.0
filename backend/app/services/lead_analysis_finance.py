@@ -955,6 +955,18 @@ class FinanceInputs:
     # (``value_json``).
     taxes_bienvenue_brackets: Optional[List[tuple]] = None
 
+    # Juin 2026 — Registre unifié des frais de démarrage : MASQUAGE de
+    # postes. Liste des clés masquées : clé interne d'un poste FIXE
+    # (ex. ``"evaluateur"``, ``"inspection"``) OU ``id`` d'un poste
+    # PERSONNALISÉ. Provient du registre ``mdf_frais_registry`` (entrées
+    # avec ``visible == false``). Un poste masqué est forcé à 0 $ APRÈS
+    # le calcul des frais et l'application des overrides, AVANT le total
+    # / le cash — il disparaît ainsi de la MDF et du prix d'acquisition.
+    # Vide (défaut) → aucun masquage → résultat STRICTEMENT identique à
+    # avant (le masquage est opt-in). Les postes NON masqués gardent
+    # leurs formules et montants au centime près.
+    frais_masques: list[str] = field(default_factory=list)
+
 
 @dataclass
 class FinanceResults:
@@ -1277,6 +1289,33 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             _cid = str(_c.get("id", ""))
             if _cid and inputs.frais_demarrage_overrides.get(_cid) is not None:
                 _c["montant"] = float(inputs.frais_demarrage_overrides[_cid])
+
+    # ── Registre unifié des frais : MASQUAGE de postes ───────────
+    # Juin 2026. APRÈS la construction de ``frais`` et l'application des
+    # overrides (par fiche), AVANT le calcul du total / du cash : on
+    # force à 0 $ chaque poste masqué (visible:false dans le registre
+    # ``mdf_frais_registry``). Postes FIXES masqués par clé interne
+    # (attribut de ``FraisDemarrage``) ; postes PERSONNALISÉS masqués par
+    # ``id`` (retirés de ``frais.frais_custom``). On NE TOUCHE À RIEN
+    # d'autre : les formules et montants des postes NON masqués restent
+    # identiques au centime. Liste vide → aucun masquage (no-op).
+    masques = set(inputs.frais_masques or [])
+    if masques:
+        for _mk in masques:
+            # ``frais_custom`` est une LISTE (postes perso) — jamais un
+            # montant scalaire : on ne la met PAS à 0.0 ici (les perso
+            # sont retirés ci-dessous par leur ``id``).
+            if _mk == "frais_custom":
+                continue
+            if hasattr(frais, _mk):
+                setattr(frais, _mk, 0.0)
+        # Postes personnalisés masqués : on les retire de la liste pour
+        # qu'ils ne contribuent ni au total, ni au cash, ni à l'affichage.
+        frais.frais_custom = [
+            _c for _c in frais.frais_custom
+            if str(_c.get("id", "")) not in masques
+        ]
+
     prix_acquisition = inputs.prix_achat + frais.total
     # MDF avec prêteur B = X % prix achat + frais démarrage cash. X
     # est `mdf_preteur_b_pct` (défaut 25 %, parfois 35 %).
