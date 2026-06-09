@@ -311,6 +311,11 @@ async def create_frais_custom(
         entity_id=rec.id,
         details={"key": _FRAIS_CUSTOM_KEY, "item": new_item},
     )
+    # Registre unifié : APPEND le nouveau poste (visible) à la fin du
+    # registre pour qu'il apparaisse dans l'ordre d'affichage.
+    await _registry_append_key(
+        db, new_item["id"], new_item["label_fr"], visible=True
+    )
     return FraisCustomItem(**new_item)
 
 
@@ -397,4 +402,503 @@ async def delete_frais_custom(
         entity_id=rec.id,
         details={"key": _FRAIS_CUSTOM_KEY, "item": removed},
     )
+    # Registre unifié : retire l'entrée du poste supprimé.
+    await _registry_remove_key(db, item_id)
     return None
+
+
+# ── Registre unifié des frais de démarrage (juin 2026) ──────────────
+#
+# Une couche de CONFIG (ordre / label / visibilité) PAR-DESSUS le moteur
+# de calcul. Le registre NE CHANGE AUCUNE formule ni montant : il décrit
+# seulement, pour chaque poste de frais de démarrage (composition MDF
+# prêteur B), dans quel ORDRE l'afficher, sous quel LABEL, et s'il est
+# VISIBLE (``visible:false`` = poste masqué/supprimé → le moteur le force
+# à 0 $ via ``FinanceInputs.frais_masques``, cf. ``lead_analysis_finance``).
+#
+# Stockage : clé ``mdf_frais_registry`` (groupe ``mdf_frais``) dans
+# ``ProspectionAnalysisDefault.value_json`` = LISTE ORDONNÉE d'entrées
+# ``{"key": str, "label_fr": str, "visible": bool}``. ``key`` = clé
+# interne d'un poste FIXE (ex. ``"evaluateur"``) OU ``id`` d'un poste
+# PERSONNALISÉ (cf. ``frais_mdf_custom``). L'ORDRE de la liste = ordre
+# d'affichage. Seedé idempotemment au boot (``app.db.session``) avec les
+# 16 postes fixes, tous ``visible:true`` ; les perso sont APPENDUS
+# dynamiquement (POST custom) et retirés à la suppression (DELETE custom).
+
+_REGISTRY_KEY = "mdf_frais_registry"
+
+# Postes FIXES dans l'ORDRE d'affichage canonique (= ordre interne du
+# moteur ``FraisDemarrage``). ``(key, label_fr, nature)`` :
+#   - nature ``montant_fixe`` : montant $ paramétrable (défaut BD
+#     ``frais_<key>`` / fallback ``FRAIS_FIXES``).
+#   - nature ``pct`` : % paramétrable (courtiers / frais dossier prêteur).
+#   - nature ``formule`` : calculé par le moteur (taxes, intérêts,
+#     revenus nets pendant projet) — pas de défaut global éditable.
+#   - nature ``input_fiche`` : saisi sur chaque fiche (dév., négos,
+#     travaux) — pas de défaut global éditable.
+# ``supprimable`` est toujours False pour les fixes (seuls les perso le
+# sont). Les labels viennent de ``poste_defs`` (service PDF) /
+# ``buildFraisLabels`` (frontend) — source unique de vérité FR.
+_FIXED_POSTES: tuple[tuple[str, str, str], ...] = (
+    ("courtier_hypothecaire_1", "Courtier hypothécaire 1", "pct"),
+    ("courtier_hypothecaire_2", "Courtier hypothécaire 2", "pct"),
+    ("taxes_bienvenue", "Taxes de bienvenue (calculées)", "formule"),
+    ("evaluateur", "Évaluateur 1", "montant_fixe"),
+    ("evaluateur_2", "Évaluateur 2", "montant_fixe"),
+    ("inspection", "Inspection", "montant_fixe"),
+    ("avocat", "Avocat", "montant_fixe"),
+    ("notaire", "Notaire 1", "montant_fixe"),
+    ("notaire_2", "Notaire 2", "montant_fixe"),
+    ("rapport_efficacite", "Rapport efficacité énergétique", "montant_fixe"),
+    ("frais_developpement", "Frais de développement", "input_fiche"),
+    ("frais_negociations", "Frais de négociations", "input_fiche"),
+    ("frais_travaux", "Frais de travaux", "input_fiche"),
+    ("frais_dossier_preteur", "Frais de dossier du prêteur", "pct"),
+    ("interets", "Intérêts pendant projet (portage)", "formule"),
+    ("revenus_nets_pendant_projet", "Revenus nets pendant projet", "formule"),
+)
+
+# Index rapide clé → (label par défaut, nature) pour les postes fixes.
+_FIXED_META: dict[str, tuple[str, str]] = {
+    k: (label, nature) for (k, label, nature) in _FIXED_POSTES
+}
+
+# Mapping clé interne d'un poste fixe → clé BD du défaut qui porte son
+# montant $ (nature ``montant_fixe``). Cf. ``FRAIS_FIXES`` (moteur) et le
+# seed ``frais_*``. Utilisé pour joindre le « montant par défaut » dans
+# la réponse GET.
+_FIXED_KEY_TO_DB_AMOUNT: dict[str, str] = {
+    "evaluateur": "frais_evaluateur",
+    "evaluateur_2": "frais_evaluateur_2",
+    "inspection": "frais_inspection",
+    "avocat": "frais_avocat",
+    "notaire": "frais_notaire",
+    "notaire_2": "frais_notaire_2",
+    "rapport_efficacite": "frais_rapport_efficacite",
+}
+
+# Mapping clé interne d'un poste fixe → clé BD du défaut qui porte son %
+# (nature ``pct``, stocké en pourcentage en BD : 1.0 = 1 %, 2.0 = 2 %).
+_FIXED_KEY_TO_DB_PCT: dict[str, str] = {
+    "courtier_hypothecaire_1": "pct_courtier_hypothecaire_1",
+    "courtier_hypothecaire_2": "pct_courtier_hypothecaire_2",
+    "frais_dossier_preteur": "frais_dossier_preteur_pct",
+}
+
+
+def _default_registry_entries() -> list[dict]:
+    """Les 16 postes fixes, dans l'ordre, tous visibles. Sert de base
+    quand le registre n'existe pas encore / est mal formé."""
+    return [
+        {"key": k, "label_fr": label, "visible": True}
+        for (k, label, _nature) in _FIXED_POSTES
+    ]
+
+
+def _coerce_registry(value_json) -> list[dict]:
+    """Normalise le ``value_json`` du registre en liste d'entrées
+    ``{key, label_fr, visible}``. Robustesse : value_json mal formé
+    (None, pas une liste, items non-dict, key absente) → entrées
+    ignorées ; jamais d'exception. Si AUCUNE entrée valide → on retombe
+    sur les 16 postes fixes par défaut (auto-réparation)."""
+    out: list[dict] = []
+    if isinstance(value_json, list):
+        seen: set[str] = set()
+        for it in value_json:
+            if not isinstance(it, dict):
+                continue
+            key = str(it.get("key", "") or "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(
+                {
+                    "key": key,
+                    "label_fr": str(it.get("label_fr", "") or ""),
+                    "visible": bool(it.get("visible", True)),
+                }
+            )
+    if not out:
+        return _default_registry_entries()
+    return out
+
+
+async def _get_registry_row(db) -> ProspectionAnalysisDefault:
+    """Récupère (ou crée si absente) la ligne ``mdf_frais_registry``.
+
+    Crée la ligne avec les 16 postes fixes (tous visibles) si elle
+    manque — filet de sécurité pour les déploiements antérieurs au seed.
+    """
+    rec = (
+        await db.execute(
+            select(ProspectionAnalysisDefault).where(
+                ProspectionAnalysisDefault.key == _REGISTRY_KEY
+            )
+        )
+    ).scalar_one_or_none()
+    if rec is None:
+        rec = ProspectionAnalysisDefault(
+            key=_REGISTRY_KEY,
+            value_json=_default_registry_entries(),
+            label_fr="Registre des frais de démarrage (ordre/visibilité)",
+            description_fr=(
+                "Liste ordonnée des postes de frais de démarrage "
+                "(composition MDF prêteur B). Chaque entrée {key, "
+                "label_fr, visible} : ordre d'affichage = ordre de la "
+                "liste, visible:false = poste masqué."
+            ),
+            step=0.01,
+            group="mdf_frais",
+        )
+        db.add(rec)
+        await db.flush()
+    return rec
+
+
+def _registry_entries(rec: ProspectionAnalysisDefault) -> list[dict]:
+    return _coerce_registry(rec.value_json)
+
+
+async def _registry_append_key(
+    db, key: str, label_fr: str = "", visible: bool = True
+) -> None:
+    """APPEND une entrée au registre si la ``key`` n'y est pas déjà.
+    No-op si déjà présente. Utilisé à la création d'un poste perso."""
+    key = str(key or "").strip()
+    if not key:
+        return
+    rec = await _get_registry_row(db)
+    entries = _registry_entries(rec)
+    if any(e["key"] == key for e in entries):
+        return
+    entries.append(
+        {"key": key, "label_fr": str(label_fr or ""), "visible": bool(visible)}
+    )
+    rec.value_json = entries
+    flag_modified(rec, "value_json")
+    await db.flush()
+
+
+async def _registry_remove_key(db, key: str) -> None:
+    """Retire l'entrée ``key`` du registre. No-op si absente. Utilisé à
+    la suppression d'un poste perso."""
+    key = str(key or "").strip()
+    if not key:
+        return
+    rec = await _get_registry_row(db)
+    entries = _registry_entries(rec)
+    new_entries = [e for e in entries if e["key"] != key]
+    if len(new_entries) == len(entries):
+        return
+    rec.value_json = new_entries
+    flag_modified(rec, "value_json")
+    await db.flush()
+
+
+# ── Schémas Pydantic du registre ───────────────────────────────────
+
+
+class RegistryPosteRead(BaseModel):
+    """Un poste du registre, ENRICHI pour l'UI (GET /mdf-registry)."""
+
+    key: str
+    label_fr: str
+    # ``montant_fixe`` | ``pct`` | ``formule`` | ``input_fiche`` | ``perso``
+    nature: str
+    visible: bool
+    supprimable: bool
+    financable_par_defaut: Optional[bool] = None
+    # Montant $ par défaut (nature ``montant_fixe`` / poste perso ``fixe``)
+    # OU None si non applicable.
+    montant_defaut: Optional[float] = None
+    # Pourcentage par défaut (nature ``pct`` / poste perso ``pct_*``) en
+    # POURCENTAGE (1.0 = 1 %, 2.0 = 2 %) OU None si non applicable.
+    pct_defaut: Optional[float] = None
+
+
+class RegistryOrderUpdate(BaseModel):
+    order: List[str] = Field(
+        description=(
+            "Liste ordonnée des clés (key d'un poste fixe ou id d'un "
+            "poste perso). Réécrit l'ordre du registre ; les clés "
+            "absentes du body restent à la fin (ordre courant)."
+        )
+    )
+
+
+class RegistryEntryPatch(BaseModel):
+    label_fr: Optional[str] = Field(default=None, max_length=255)
+    visible: Optional[bool] = None
+
+
+def _build_defaults_index(
+    rows: list[ProspectionAnalysisDefault],
+) -> tuple[dict[str, float], dict[str, float], dict[str, Optional[bool]]]:
+    """Indexe les défauts BD : (montants $ par clé BD, pourcentages par
+    clé BD, financable par clé BD). Sert à enrichir la réponse GET."""
+    amounts: dict[str, float] = {}
+    pcts: dict[str, float] = {}
+    financables: dict[str, Optional[bool]] = {}
+    for row in rows:
+        if row.value_float is not None:
+            amounts[row.key] = float(row.value_float)
+            pcts[row.key] = float(row.value_float)
+        financables[row.key] = getattr(row, "financable_par_defaut", None)
+    return amounts, pcts, financables
+
+
+@router.get(
+    "/mdf-registry",
+    response_model=List[RegistryPosteRead],
+)
+async def get_mdf_registry(
+    db: DBSession,
+    user: RequireAdminOrOwner,
+) -> List[RegistryPosteRead]:
+    """Liste ORDONNÉE des postes de frais de démarrage, enrichie pour
+    l'UI. Pour chaque entrée du registre : label (registre, sinon
+    défaut), nature, montant/% par défaut, ``financable_par_defaut``,
+    ``visible`` et ``supprimable`` (True uniquement pour les perso). Les
+    postes perso (``frais_mdf_custom``) absents du registre sont APPENDUS
+    à la fin (auto-réparation)."""
+    # Import local du moteur : fallback des montants/% hardcoded quand la
+    # BD n'a pas (encore) de défaut pour un poste fixe.
+    from app.services.lead_analysis_finance import (
+        DEFAULT_FRAIS_DOSSIER_PRETEUR_PCT,
+        FRAIS_FIXES,
+        PCT_COURTIERS,
+    )
+
+    rows = (
+        await db.execute(select(ProspectionAnalysisDefault))
+    ).scalars().all()
+    db_amounts, db_pcts, db_financables = _build_defaults_index(rows)
+
+    # Définitions des postes perso (clé → item) pour label / montant /
+    # nature / financable.
+    custom_defs: dict[str, dict] = {}
+    for row in rows:
+        if row.key == _FRAIS_CUSTOM_KEY and isinstance(row.value_json, list):
+            for it in row.value_json:
+                if isinstance(it, dict):
+                    cid = str(it.get("id", "") or "").strip()
+                    if cid:
+                        custom_defs[cid] = it
+
+    reg_rec = await _get_registry_row(db)
+    entries = _registry_entries(reg_rec)
+
+    out: list[RegistryPosteRead] = []
+    seen: set[str] = set()
+
+    def _emit(key: str, reg_label: str, visible: bool) -> None:
+        seen.add(key)
+        fixed = _FIXED_META.get(key)
+        if fixed is not None:
+            default_label, nature = fixed
+            label = reg_label or default_label
+            montant_defaut: Optional[float] = None
+            pct_defaut: Optional[float] = None
+            financable = None
+            if nature == "montant_fixe":
+                db_key = _FIXED_KEY_TO_DB_AMOUNT.get(key)
+                if db_key and db_key in db_amounts:
+                    montant_defaut = db_amounts[db_key]
+                    financable = db_financables.get(db_key)
+                else:
+                    montant_defaut = FRAIS_FIXES.get(key)
+            elif nature == "pct":
+                db_key = _FIXED_KEY_TO_DB_PCT.get(key)
+                if db_key and db_key in db_pcts:
+                    pct_defaut = db_pcts[db_key]
+                    financable = db_financables.get(db_key)
+                elif key in ("courtier_hypothecaire_1", "courtier_hypothecaire_2"):
+                    # Fallback fraction → pourcentage.
+                    pct_defaut = PCT_COURTIERS.get(key, 0.0) * 100.0
+                elif key == "frais_dossier_preteur":
+                    pct_defaut = DEFAULT_FRAIS_DOSSIER_PRETEUR_PCT * 100.0
+            elif nature == "input_fiche":
+                # frais_developpement / frais_travaux finançables
+                # historiquement par défaut.
+                financable = key in ("frais_developpement", "frais_travaux")
+            out.append(
+                RegistryPosteRead(
+                    key=key,
+                    label_fr=label,
+                    nature=nature,
+                    visible=visible,
+                    supprimable=False,
+                    financable_par_defaut=financable,
+                    montant_defaut=montant_defaut,
+                    pct_defaut=pct_defaut,
+                )
+            )
+            return
+        # Poste personnalisé.
+        it = custom_defs.get(key)
+        if it is not None:
+            type_montant = it.get("type_montant", "fixe")
+            label = reg_label or str(it.get("label_fr", "") or "")
+            try:
+                valeur = float(it.get("valeur", 0) or 0)
+            except (TypeError, ValueError):
+                valeur = 0.0
+            montant_defaut = valeur if type_montant == "fixe" else None
+            pct_defaut = valeur if type_montant != "fixe" else None
+            out.append(
+                RegistryPosteRead(
+                    key=key,
+                    label_fr=label,
+                    nature="perso",
+                    visible=visible,
+                    supprimable=True,
+                    financable_par_defaut=bool(
+                        it.get("financable_par_defaut", False)
+                    ),
+                    montant_defaut=montant_defaut,
+                    pct_defaut=pct_defaut,
+                )
+            )
+            return
+        # Clé orpheline (poste perso supprimé hors-bande, ou clé inconnue) :
+        # on l'expose quand même (supprimable) pour que l'UI puisse la
+        # retirer — mais sans défaut.
+        out.append(
+            RegistryPosteRead(
+                key=key,
+                label_fr=reg_label or key,
+                nature="perso",
+                visible=visible,
+                supprimable=True,
+                financable_par_defaut=None,
+                montant_defaut=None,
+                pct_defaut=None,
+            )
+        )
+
+    for e in entries:
+        _emit(e["key"], e.get("label_fr", ""), bool(e.get("visible", True)))
+
+    # Append les perso non encore référencés dans le registre (créés
+    # avant l'existence du registre, ou désynchronisés).
+    for cid in custom_defs:
+        if cid not in seen:
+            _emit(cid, "", True)
+
+    return out
+
+
+@router.put(
+    "/mdf-registry/order",
+    response_model=List[RegistryPosteRead],
+)
+async def update_mdf_registry_order(
+    payload: RegistryOrderUpdate,
+    db: DBSession,
+    user: RequireAdminOrOwner,
+) -> List[RegistryPosteRead]:
+    """Réécrit l'ORDRE du registre. ``label_fr`` / ``visible`` existants
+    sont CONSERVÉS par key ; les keys présentes dans le registre mais
+    absentes du body restent à la fin (ordre courant). Audit log."""
+    rec = await _get_registry_row(db)
+    entries = _registry_entries(rec)
+    by_key = {e["key"]: e for e in entries}
+
+    ordered: list[dict] = []
+    placed: set[str] = set()
+    for key in payload.order:
+        k = str(key or "").strip()
+        if not k or k in placed:
+            continue
+        placed.add(k)
+        if k in by_key:
+            ordered.append(by_key[k])
+        else:
+            # Key inconnue du registre (ex. poste fixe jamais seedé) :
+            # on l'ajoute avec son label par défaut si fixe, sinon brut.
+            default_label = _FIXED_META.get(k, ("", ""))[0]
+            ordered.append(
+                {"key": k, "label_fr": default_label, "visible": True}
+            )
+    # Conserve les keys du registre absentes du body, à la fin.
+    for e in entries:
+        if e["key"] not in placed:
+            ordered.append(e)
+
+    old_order = [e["key"] for e in entries]
+    rec.value_json = ordered
+    flag_modified(rec, "value_json")
+    rec.updated_by_user_id = getattr(user, "id", None)
+    await db.flush()
+
+    await log_action(
+        db,
+        user=user,
+        action="prospection_analysis_default.mdf_registry_reordered",
+        entity_type="prospection_analysis_default",
+        entity_id=rec.id,
+        details={
+            "key": _REGISTRY_KEY,
+            "old_order": old_order,
+            "new_order": [e["key"] for e in ordered],
+        },
+    )
+    return await get_mdf_registry(db, user)
+
+
+@router.patch(
+    "/mdf-registry/{key}",
+    response_model=List[RegistryPosteRead],
+)
+async def patch_mdf_registry_entry(
+    key: str,
+    payload: RegistryEntryPatch,
+    db: DBSession,
+    user: RequireAdminOrOwner,
+) -> List[RegistryPosteRead]:
+    """Met à jour l'entrée du registre pour ``key`` (label_fr et/ou
+    visible). Crée l'entrée si absente (à la fin, avec le label par
+    défaut si c'est un poste fixe). Audit log."""
+    key = str(key or "").strip()
+    if not key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Clé de poste manquante.",
+        )
+    rec = await _get_registry_row(db)
+    entries = _registry_entries(rec)
+
+    idx = next((i for i, e in enumerate(entries) if e["key"] == key), None)
+    if idx is None:
+        # Création de l'entrée à la fin.
+        default_label = _FIXED_META.get(key, ("", ""))[0]
+        entry = {"key": key, "label_fr": default_label, "visible": True}
+        entries.append(entry)
+        idx = len(entries) - 1
+
+    old_entry = dict(entries[idx])
+    fields = payload.model_dump(exclude_unset=True)
+    if "label_fr" in fields and fields["label_fr"] is not None:
+        entries[idx]["label_fr"] = str(fields["label_fr"])
+    if "visible" in fields and fields["visible"] is not None:
+        entries[idx]["visible"] = bool(fields["visible"])
+
+    rec.value_json = entries
+    flag_modified(rec, "value_json")
+    rec.updated_by_user_id = getattr(user, "id", None)
+    await db.flush()
+
+    await log_action(
+        db,
+        user=user,
+        action="prospection_analysis_default.mdf_registry_entry_updated",
+        entity_type="prospection_analysis_default",
+        entity_id=rec.id,
+        details={
+            "key": _REGISTRY_KEY,
+            "entry_key": key,
+            "old_entry": old_entry,
+            "new_entry": entries[idx],
+        },
+    )
+    return await get_mdf_registry(db, user)
