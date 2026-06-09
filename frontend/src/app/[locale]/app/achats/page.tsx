@@ -77,7 +77,7 @@ type Project = { id: number; name: string; address?: string | null };
 type Fournisseur = { id: number; name: string };
 
 const STATUS_LABELS: Record<string, string> = {
-  received: "Reçu",
+  received: "À payer",
   paid: "Payé",
   cancelled: "Annulé"
 };
@@ -312,7 +312,7 @@ export default function AchatsPage() {
           {(
             [
               { value: "", label: "Tous" },
-              { value: "received", label: "Reçus / à payer" },
+              { value: "received", label: "À payer" },
               { value: "paid", label: "Payés" }
             ] as const
           ).map((tab) => {

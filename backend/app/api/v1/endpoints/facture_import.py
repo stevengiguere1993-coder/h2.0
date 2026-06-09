@@ -45,11 +45,17 @@ def _compute_billed_amount(
             if contract.billing_mode == "lump_sum":
                 amt = float(contract.lump_sum_amount or 0)
                 return round(amt, 2), "contrat forfait"
-        # Pas de contrat → on retombe sur le coûtant (pas de markup
-        # caché : l'admin verra qu'il manque un contrat).
-        return round(cost, 2), "sans contrat (coûtant)"
-    # Achat « material » — markup individuel (override > champ achat > 0).
-    pct = float(markup_overrides.get(ac.id, ac.markup_percent or 0))
+        # Pas de contrat sous-traitant → on retombe sur la majoration
+        # MANUELLE de l'achat (comme un achat matériel), pour pouvoir
+        # facturer une facture de sous-traitant avec un markup ajustable.
+        # (fall-through vers le calcul markup ci-dessous)
+    # Achat matériel OU sous-traitant sans contrat — markup individuel.
+    # Priorité : override à l'import > markup_percent de l'achat > défaut
+    # 10 % (NULL = non saisi → 10 % ; 0 = coûtant volontaire).
+    _base_markup = (
+        float(ac.markup_percent) if ac.markup_percent is not None else 10.0
+    )
+    pct = float(markup_overrides.get(ac.id, _base_markup))
     return round(cost * (1 + pct / 100.0), 2), (
         f"+{pct:g} %" if pct > 0 else "coûtant"
     )

@@ -76,7 +76,7 @@ type Project = { id: number; name: string; address?: string | null };
 type Fournisseur = { id: number; name: string };
 
 const STATUS_LABELS: Record<string, string> = {
-  received: "Reçu",
+  received: "À payer",
   paid: "Payé",
   cancelled: "Annulé"
 };
@@ -223,8 +223,15 @@ export default function AchatDetailPage() {
           }
         }
         setIsBillable(data.is_billable !== false);
+        // Achat refacturable sans majoration enregistrée → on affiche
+        // 10 % par défaut (modifiable ; 0 = coûtant). Couvre les achats
+        // existants créés avant le défaut backend.
         setMarkupPercent(
-          data.markup_percent != null ? String(data.markup_percent) : ""
+          data.markup_percent != null
+            ? String(data.markup_percent)
+            : data.is_billable !== false
+            ? "10"
+            : ""
         );
         setStatusStr(data.status);
         setInvoiceDate(
