@@ -56,6 +56,7 @@ import type { TelephonieSection as Section } from "./_client-shell";
 
 type SmsThread = {
   peer_e164: string;
+  name: string | null;
   last_message: {
     id: number;
     direction: string;
@@ -1509,12 +1510,17 @@ function MessagesSection({
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className="truncate text-xs font-semibold text-white">
-                          {t.peer_e164}
+                          {t.name || t.peer_e164}
                         </span>
                         {t.caller_kind && t.caller_kind !== "unknown" ? (
                           <CallerKindBadge kind={t.caller_kind} />
                         ) : null}
                       </div>
+                      {t.name ? (
+                        <div className="truncate font-mono text-[10px] text-white/40">
+                          {t.peer_e164}
+                        </div>
+                      ) : null}
                       <div className="truncate text-[11px] text-white/50">
                         {t.last_message.direction === "outbound" ? "→ " : ""}
                         {t.last_message.body || "(MMS)"}
@@ -1575,8 +1581,27 @@ function MessagesSection({
         ) : selected ? (
           <>
             <div className="flex items-center justify-between border-b border-brand-800 pb-2">
-              <div className="font-mono text-sm font-bold text-white">
-                {selected}
+              <div className="min-w-0">
+                {(() => {
+                  const st = threads.find((t) => t.peer_e164 === selected);
+                  return (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-bold text-white">
+                          {st?.name || selected}
+                        </span>
+                        {st?.caller_kind && st.caller_kind !== "unknown" ? (
+                          <CallerKindBadge kind={st.caller_kind} />
+                        ) : null}
+                      </div>
+                      {st?.name ? (
+                        <div className="font-mono text-[11px] text-white/40">
+                          {selected}
+                        </div>
+                      ) : null}
+                    </>
+                  );
+                })()}
               </div>
               <CallButton targetE164={selected} label="Appeler" />
             </div>
