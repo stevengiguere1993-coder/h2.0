@@ -118,6 +118,88 @@ async def identify_caller(
     return IdentifiedCaller(CallerKind.UNKNOWN, None, None, None)
 
 
+async def resolve_callers(
+    db: AsyncSession, phones: list[str]
+) -> dict[str, IdentifiedCaller]:
+    """Version GROUPÉE de `identify_caller` pour identifier plusieurs
+    numéros d'un coup (journal d'appels, fils SMS). Au lieu de 4 requêtes
+    PAR numéro (N+1), on fait UNE requête par table avec un `IN` sur les
+    10 derniers chiffres. Priorité respectée : client > locataire > lead
+    prospection > lead web. Retourne un dict {numéro original → caller}.
+    """
+    # last10 -> numéros originaux qui le partagent
+    last10_to_phones: dict[str, list[str]] = {}
+    for p in phones:
+        l10 = _last10(p)
+        if l10:
+            last10_to_phones.setdefault(l10, []).append(p)
+
+    resolved: dict[str, IdentifiedCaller] = {}
+    remaining = set(last10_to_phones.keys())
+
+    async def _scan(model, attr: str, build) -> None:
+        if not remaining:
+            return
+        col = getattr(model, attr, None)
+        if col is None:
+            return
+        try:
+            last10_expr = func.right(
+                func.regexp_replace(col, r"[^0-9]", "", "g"), 10
+            )
+            rows = (
+                await db.execute(
+                    select(model).where(last10_expr.in_(list(remaining)))
+                )
+            ).scalars().all()
+        except Exception as exc:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "resolve_callers scan failed on %s.%s: %s",
+                getattr(model, "__tablename__", "?"), attr, exc,
+            )
+            return
+        for row in rows:
+            l10 = _last10(getattr(row, attr, "") or "")
+            if l10 in remaining:  # 1re table (par priorité) qui le réclame
+                resolved[l10] = build(row)
+                remaining.discard(l10)
+
+    if remaining:
+        await _scan(
+            Client, "phone",
+            lambda r: IdentifiedCaller(CallerKind.CLIENT, r.id, r.name, None),
+        )
+        await _scan(
+            Locataire, "phone",
+            lambda r: IdentifiedCaller(
+                CallerKind.LOCATAIRE, r.id, r.full_name, None
+            ),
+        )
+        await _scan(
+            ProspectionLead, "owner_phone",
+            lambda r: IdentifiedCaller(
+                CallerKind.LEAD_PROSPECTION,
+                r.id,
+                getattr(r, "owner_name", None) or "propriétaire",
+                None,
+            ),
+        )
+        await _scan(
+            ContactRequest, "phone",
+            lambda r: IdentifiedCaller(CallerKind.LEAD_WEB, r.id, r.name, None),
+        )
+
+    unknown = IdentifiedCaller(CallerKind.UNKNOWN, None, None, None)
+    out: dict[str, IdentifiedCaller] = {}
+    for l10, plist in last10_to_phones.items():
+        caller = resolved.get(l10, unknown)
+        for p in plist:
+            out[p] = caller
+    return out
+
+
 async def _find_with_phone(
     db: AsyncSession, model, attr: str, last10: str
 ):
