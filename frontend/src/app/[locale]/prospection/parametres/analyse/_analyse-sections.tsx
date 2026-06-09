@@ -4,15 +4,21 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Building2,
   Calculator,
+  Check,
   CheckCircle2,
+  Eye,
+  EyeOff,
+  GripVertical,
   Landmark,
   Loader2,
+  Pencil,
   Percent,
   Plus,
   Save,
   SlidersHorizontal,
   Trash2,
-  Wallet
+  Wallet,
+  X
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -56,12 +62,6 @@ type FraisCustomItem = {
 
 const API = "/api/v1/prospection/analysis-defaults";
 
-// Clé spéciale : la liste dynamique de frais personnalisés est stockée
-// dans cette ligne (groupe mdf_frais) mais éditée via les routes
-// frais-custom — on la masque du rendu scalaire pour ne pas afficher
-// un input numérique cassé sur sa value_json (liste).
-const FRAIS_CUSTOM_KEY = "frais_mdf_custom";
-
 // ── Helpers d'unité / format ───────────────────────────────────────
 
 /**
@@ -92,12 +92,6 @@ function unitFor(def: AnalysisDefault): string {
   if (def.step >= 1) return "$";
   return "";
 }
-
-const TYPE_MONTANT_LABEL: Record<FraisCustomItem["type_montant"], string> = {
-  fixe: "Montant fixe ($)",
-  pct_prix_achat: "% du prix d'achat",
-  pct_financement: "% du financement"
-};
 
 // ── Hook : charge les défauts d'un groupe ──────────────────────────
 
@@ -618,17 +612,632 @@ export function InputsManuelsSection() {
   );
 }
 
-// ── 5. Frais de démarrage (MDF) + liste dynamique ──────────────────
+// ── 5. Frais de démarrage (MDF) — REGISTRE UNIFIÉ ──────────────────
+//
+// UNE seule liste pour TOUS les postes (fixes, %, formules, inputs de
+// fiche et perso), chargée via GET ``/analysis-defaults/mdf-registry``
+// (ordonnée + enrichie). Pour chaque poste on peut :
+//   • réordonner par drag-drop (poignée GripVertical → PUT .../order) ;
+//   • renommer le libellé (PATCH .../mdf-registry/{key} {label_fr}) ;
+//   • éditer le montant $ / % (montant_fixe, pct, perso) via les
+//     endpoints defaults existants (poste fixe → PATCH
+//     /analysis-defaults/{cléBD} ; perso → PATCH /frais-custom/{id}) ;
+//   • basculer « finançable par défaut » (même endpoints) ;
+//   • masquer/afficher (PATCH .../mdf-registry/{key} {visible}) pour les
+//     non-supprimables, ou supprimer (DELETE /frais-custom/{id}) pour
+//     les perso.
+// Le drag-drop réutilise le DnD HTML5 natif du repo (poignée
+// GripVertical + draggable/onDragStart/onDragOver/onDrop), aucune lib
+// externe (le projet n'embarque pas @dnd-kit).
 
-function FraisCustomList() {
-  const [items, setItems] = useState<FraisCustomItem[]>([]);
+type RegistryNature =
+  | "montant_fixe"
+  | "pct"
+  | "formule"
+  | "input_fiche"
+  | "perso";
+
+type RegistryPoste = {
+  key: string;
+  label_fr: string;
+  nature: RegistryNature;
+  visible: boolean;
+  supprimable: boolean;
+  financable_par_defaut: boolean | null;
+  montant_defaut: number | null;
+  pct_defaut: number | null;
+};
+
+// Mapping clé interne d'un poste FIXE → clé BD du défaut $ (montant).
+// Miroir de ``_FIXED_KEY_TO_DB_AMOUNT`` côté backend.
+const FIXED_KEY_TO_DB_AMOUNT: Record<string, string> = {
+  evaluateur: "frais_evaluateur",
+  evaluateur_2: "frais_evaluateur_2",
+  inspection: "frais_inspection",
+  avocat: "frais_avocat",
+  notaire: "frais_notaire",
+  notaire_2: "frais_notaire_2",
+  rapport_efficacite: "frais_rapport_efficacite"
+};
+
+// Mapping clé interne d'un poste FIXE → clé BD du défaut % (pourcentage,
+// 1.0 = 1 %). Miroir de ``_FIXED_KEY_TO_DB_PCT`` côté backend.
+const FIXED_KEY_TO_DB_PCT: Record<string, string> = {
+  courtier_hypothecaire_1: "pct_courtier_hypothecaire_1",
+  courtier_hypothecaire_2: "pct_courtier_hypothecaire_2",
+  frais_dossier_preteur: "frais_dossier_preteur_pct"
+};
+
+// Libellé court de la nature (badge à droite du libellé).
+const NATURE_BADGE: Record<RegistryNature, string> = {
+  montant_fixe: "Montant",
+  pct: "Pourcentage",
+  formule: "Calculé",
+  input_fiche: "Saisi par fiche",
+  perso: "Personnalisé"
+};
+
+// Un poste est éditable (montant/%) seulement pour ces natures.
+function isEditableValue(nature: RegistryNature): boolean {
+  return nature === "montant_fixe" || nature === "pct" || nature === "perso";
+}
+
+// L'unité affichée pour la valeur éditable d'un poste.
+function unitForPoste(p: RegistryPoste): "$" | "%" | "" {
+  if (p.nature === "montant_fixe") return "$";
+  if (p.nature === "pct") return "%";
+  if (p.nature === "perso") return p.montant_defaut != null ? "$" : "%";
+  return "";
+}
+
+// ── Hook DnD HTML5 natif (clés string) ─────────────────────────────
+// Repris du mécanisme du repo (soumission devlog / pipeline) : poignée
+// draggable, liseré de drop, calcul du nouvel ordre des clés au drop.
+function useKeyDnd(
+  keys: string[],
+  onReorder: (orderedKeys: string[]) => void
+) {
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+
+  function reset() {
+    setDragKey(null);
+    setOverIndex(null);
+  }
+
+  function commit(targetIndex: number) {
+    if (dragKey == null) return;
+    const from = keys.indexOf(dragKey);
+    if (from < 0) return;
+    const next = keys.filter((x) => x !== dragKey);
+    let insertAt = targetIndex;
+    if (from < targetIndex) insertAt -= 1;
+    insertAt = Math.max(0, Math.min(insertAt, next.length));
+    next.splice(insertAt, 0, dragKey);
+    reset();
+    const changed = next.some((x, i) => x !== keys[i]);
+    if (changed) onReorder(next);
+  }
+
+  function handleProps(key: string) {
+    return {
+      draggable: true,
+      onDragStart: (ev: React.DragEvent) => {
+        setDragKey(key);
+        try {
+          ev.dataTransfer.effectAllowed = "move";
+          ev.dataTransfer.setData("text/plain", key);
+        } catch {
+          /* ignore (jsdom) */
+        }
+      },
+      onDragEnd: reset
+    };
+  }
+
+  function rowProps(index: number) {
+    return {
+      onDragOver: (ev: React.DragEvent) => {
+        if (dragKey == null) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        ev.dataTransfer.dropEffect = "move";
+        const rect = (
+          ev.currentTarget as HTMLElement
+        ).getBoundingClientRect();
+        const after = ev.clientY - rect.top > rect.height / 2;
+        const next = after ? index + 1 : index;
+        if (overIndex !== next) setOverIndex(next);
+      },
+      onDrop: (ev: React.DragEvent) => {
+        if (dragKey == null) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        commit(overIndex ?? index);
+      }
+    };
+  }
+
+  return {
+    dragKey,
+    overIndex,
+    isDragging: dragKey != null,
+    handleProps,
+    rowProps,
+    reset
+  };
+}
+
+// Liseré bleu de drop (même rendu que la soumission devlog).
+function dropRowClass(
+  index: number,
+  count: number,
+  overIndex: number | null,
+  isDragging: boolean
+): string {
+  if (!isDragging || overIndex == null) return "";
+  if (overIndex === index) {
+    return "shadow-[inset_0_2px_0_0_rgb(96,165,250)]";
+  }
+  if (overIndex === count && index === count - 1) {
+    return "shadow-[inset_0_-2px_0_0_rgb(96,165,250)]";
+  }
+  return "";
+}
+
+// ── Une ligne du registre unifié ───────────────────────────────────
+
+function RegistryRow({
+  poste,
+  index,
+  count,
+  dnd,
+  onReload,
+  onError
+}: {
+  poste: RegistryPoste;
+  index: number;
+  count: number;
+  dnd: ReturnType<typeof useKeyDnd>;
+  onReload: (next: RegistryPoste[]) => void;
+  onError: (msg: string | null) => void;
+}) {
+  // Brouillons d'édition.
+  const [labelDraft, setLabelDraft] = useState(poste.label_fr);
+  const [editingLabel, setEditingLabel] = useState(false);
+  const [valueDraft, setValueDraft] = useState(
+    poste.montant_defaut != null
+      ? String(poste.montant_defaut)
+      : poste.pct_defaut != null
+        ? String(poste.pct_defaut)
+        : ""
+  );
+  const [savingLabel, setSavingLabel] = useState(false);
+  const [savingValue, setSavingValue] = useState(false);
+  const [valueSaved, setValueSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  // Resync les brouillons quand la donnée amont change (rechargement).
+  useEffect(() => {
+    if (!editingLabel) setLabelDraft(poste.label_fr);
+  }, [poste.label_fr, editingLabel]);
+  useEffect(() => {
+    setValueDraft(
+      poste.montant_defaut != null
+        ? String(poste.montant_defaut)
+        : poste.pct_defaut != null
+          ? String(poste.pct_defaut)
+          : ""
+    );
+  }, [poste.montant_defaut, poste.pct_defaut]);
+
+  const editable = isEditableValue(poste.nature);
+  const unit = unitForPoste(poste);
+  const currentValue =
+    poste.montant_defaut != null
+      ? poste.montant_defaut
+      : poste.pct_defaut != null
+        ? poste.pct_defaut
+        : null;
+  const valueNum = Number(valueDraft);
+  const valueDirty =
+    Number.isFinite(valueNum) &&
+    Math.abs(valueNum - (currentValue ?? 0)) > 1e-9;
+
+  // Endpoint + body pour éditer le montant/% d'un poste fixe (clé BD)
+  // ou perso (frais-custom). Retourne null si non éditable.
+  function valueRequest(value: number): { url: string; body: string } | null {
+    if (poste.nature === "perso") {
+      return {
+        url: `${API}/frais-custom/${poste.key}`,
+        body: JSON.stringify({ valeur: value })
+      };
+    }
+    if (poste.nature === "montant_fixe") {
+      const dbKey = FIXED_KEY_TO_DB_AMOUNT[poste.key];
+      if (!dbKey) return null;
+      return {
+        url: `${API}/${encodeURIComponent(dbKey)}`,
+        body: JSON.stringify({ value_float: value })
+      };
+    }
+    if (poste.nature === "pct") {
+      const dbKey = FIXED_KEY_TO_DB_PCT[poste.key];
+      if (!dbKey) return null;
+      return {
+        url: `${API}/${encodeURIComponent(dbKey)}`,
+        body: JSON.stringify({ value_float: value })
+      };
+    }
+    return null;
+  }
+
+  // Endpoint + body pour basculer « finançable par défaut ». Pour les
+  // postes fixes, le flag vit sur la ligne BD du montant/%.
+  function financableRequest(
+    next: boolean
+  ): { url: string; body: string } | null {
+    if (poste.nature === "perso") {
+      return {
+        url: `${API}/frais-custom/${poste.key}`,
+        body: JSON.stringify({ financable_par_defaut: next })
+      };
+    }
+    const dbKey =
+      FIXED_KEY_TO_DB_AMOUNT[poste.key] ?? FIXED_KEY_TO_DB_PCT[poste.key];
+    if (!dbKey) return null;
+    return {
+      url: `${API}/${encodeURIComponent(dbKey)}`,
+      body: JSON.stringify({ financable_par_defaut: next })
+    };
+  }
+
+  // Recharge la liste enrichie depuis le registre après une action qui
+  // n'en renvoie pas (endpoints defaults / frais-custom).
+  async function reloadRegistry() {
+    const r = await authedFetch(`${API}/mdf-registry`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    onReload((await r.json()) as RegistryPoste[]);
+  }
+
+  async function saveLabel() {
+    const next = labelDraft.trim();
+    if (!next || next === poste.label_fr) {
+      setEditingLabel(false);
+      setLabelDraft(poste.label_fr);
+      return;
+    }
+    setSavingLabel(true);
+    onError(null);
+    try {
+      const r = await authedFetch(
+        `${API}/mdf-registry/${encodeURIComponent(poste.key)}`,
+        { method: "PATCH", body: JSON.stringify({ label_fr: next }) }
+      );
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      onReload((await r.json()) as RegistryPoste[]);
+      setEditingLabel(false);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setSavingLabel(false);
+    }
+  }
+
+  async function saveValue() {
+    if (!Number.isFinite(valueNum)) {
+      onError("Valeur invalide.");
+      return;
+    }
+    const req = valueRequest(valueNum);
+    if (!req) return;
+    setSavingValue(true);
+    onError(null);
+    try {
+      const r = await authedFetch(req.url, {
+        method: "PATCH",
+        body: req.body
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      await reloadRegistry();
+      setValueSaved(true);
+      setTimeout(() => setValueSaved(false), 2000);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setSavingValue(false);
+    }
+  }
+
+  async function toggleFinancable(next: boolean) {
+    const req = financableRequest(next);
+    if (!req) return;
+    setBusy(true);
+    onError(null);
+    try {
+      const r = await authedFetch(req.url, {
+        method: "PATCH",
+        body: req.body
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      await reloadRegistry();
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Masquer / afficher (non-supprimables) via le registre.
+  async function setVisible(next: boolean) {
+    setBusy(true);
+    onError(null);
+    try {
+      const r = await authedFetch(
+        `${API}/mdf-registry/${encodeURIComponent(poste.key)}`,
+        { method: "PATCH", body: JSON.stringify({ visible: next }) }
+      );
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      onReload((await r.json()) as RegistryPoste[]);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Supprimer un poste perso (DELETE) — puis recharge le registre.
+  async function removePerso() {
+    setBusy(true);
+    onError(null);
+    try {
+      const r = await authedFetch(`${API}/frais-custom/${poste.key}`, {
+        method: "DELETE"
+      });
+      if (!r.ok && r.status !== 204) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      await reloadRegistry();
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const dropClass = dropRowClass(index, count, dnd.overIndex, dnd.isDragging);
+  const dimmed = !poste.visible;
+
+  return (
+    <div
+      {...dnd.rowProps(index)}
+      className={`rounded-lg border px-3 py-2.5 transition ${
+        dimmed
+          ? "border-brand-800 bg-brand-950/30 opacity-60"
+          : "border-brand-800 bg-brand-950/60"
+      } ${dropClass}`}
+    >
+      <div className="flex items-start gap-2">
+        {/* Poignée de drag-drop. */}
+        <span
+          {...dnd.handleProps(poste.key)}
+          role="button"
+          aria-label="Glisser pour réordonner"
+          title="Glisser pour réordonner"
+          className="mt-0.5 inline-flex cursor-grab touch-none text-white/50 hover:text-white/80 active:cursor-grabbing"
+        >
+          <GripVertical className="h-4 w-4" />
+        </span>
+
+        <div className="min-w-0 flex-1">
+          {/* Ligne libellé (éditable inline). */}
+          <div className="flex items-center gap-2">
+            {editingLabel ? (
+              <>
+                <input
+                  type="text"
+                  value={labelDraft}
+                  onChange={(e) => setLabelDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void saveLabel();
+                    if (e.key === "Escape") {
+                      setEditingLabel(false);
+                      setLabelDraft(poste.label_fr);
+                    }
+                  }}
+                  autoFocus
+                  className="input flex-1 py-1 text-xs"
+                  disabled={savingLabel}
+                />
+                <button
+                  type="button"
+                  onClick={() => void saveLabel()}
+                  disabled={savingLabel}
+                  className="rounded-md border border-emerald-500/40 bg-emerald-500/15 p-1 text-emerald-300 transition hover:bg-emerald-500/25 disabled:opacity-40"
+                  title="Enregistrer le nom"
+                >
+                  {savingLabel ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Check className="h-3.5 w-3.5" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingLabel(false);
+                    setLabelDraft(poste.label_fr);
+                  }}
+                  className="rounded-md border border-brand-700 p-1 text-white/60 transition hover:bg-brand-800 hover:text-white/80"
+                  title="Annuler"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </>
+            ) : (
+              <>
+                <span
+                  className={`truncate text-xs font-semibold ${
+                    dimmed ? "text-white/50" : "text-white/85"
+                  }`}
+                >
+                  {poste.label_fr}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLabelDraft(poste.label_fr);
+                    setEditingLabel(true);
+                  }}
+                  className="rounded-md p-1 text-white/40 transition hover:bg-brand-800 hover:text-white/70"
+                  title="Renommer"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+                <span className="shrink-0 rounded-full border border-brand-700 bg-brand-900 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white/50">
+                  {NATURE_BADGE[poste.nature]}
+                </span>
+                {dimmed ? (
+                  <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-200">
+                    Masqué
+                  </span>
+                ) : null}
+              </>
+            )}
+          </div>
+
+          {/* Ligne valeur + finançable + actions. */}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {editable ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  step={poste.nature === "montant_fixe" ? 1 : 0.01}
+                  min={0}
+                  value={valueDraft}
+                  onChange={(e) => setValueDraft(e.target.value)}
+                  className="input w-28 py-1 font-mono text-xs"
+                  disabled={savingValue || dimmed}
+                />
+                <span className="w-4 shrink-0 text-[10px] text-white/40">
+                  {unit}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void saveValue()}
+                  disabled={!valueDirty || savingValue || dimmed}
+                  className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 text-[10px] font-semibold text-emerald-300 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {savingValue ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Save className="h-3 w-3" />
+                  )}
+                  Enregistrer
+                </button>
+                {valueSaved ? (
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                ) : null}
+              </div>
+            ) : (
+              <span className="rounded-md border border-brand-700 bg-brand-900/60 px-2 py-1 text-[10px] italic text-white/50">
+                {poste.nature === "formule"
+                  ? "Calculé automatiquement"
+                  : "Saisi sur chaque fiche"}
+              </span>
+            )}
+
+            {/* Toggle finançable (si applicable). */}
+            {poste.financable_par_defaut != null ? (
+              <label className="flex cursor-pointer items-center gap-1.5 text-[10px] text-white/70">
+                <input
+                  type="checkbox"
+                  checked={!!poste.financable_par_defaut}
+                  onChange={(e) => void toggleFinancable(e.target.checked)}
+                  disabled={busy}
+                  className="h-3.5 w-3.5 cursor-pointer accent-amber-400"
+                />
+                Finançable par défaut
+              </label>
+            ) : null}
+
+            {/* Actions à droite : masquer/afficher ou supprimer. */}
+            <div className="ml-auto flex items-center gap-1">
+              {poste.supprimable ? (
+                <button
+                  type="button"
+                  onClick={() => void removePerso()}
+                  disabled={busy}
+                  className="rounded-md border border-rose-500/30 p-1.5 text-rose-300 transition hover:bg-rose-500/10 disabled:opacity-40"
+                  title="Supprimer ce poste"
+                >
+                  {busy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              ) : dimmed ? (
+                <button
+                  type="button"
+                  onClick={() => void setVisible(true)}
+                  disabled={busy}
+                  className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 text-[10px] font-semibold text-emerald-300 transition hover:bg-emerald-500/25 disabled:opacity-40"
+                  title="Réafficher ce poste"
+                >
+                  {busy ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Eye className="h-3 w-3" />
+                  )}
+                  Afficher
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void setVisible(false)}
+                  disabled={busy}
+                  className="rounded-md border border-brand-700 p-1.5 text-white/50 transition hover:bg-brand-800 hover:text-white/80 disabled:opacity-40"
+                  title="Masquer ce poste (exclu du calcul)"
+                >
+                  {busy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <EyeOff className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Liste unifiée + formulaire d'ajout ─────────────────────────────
+
+function UnifiedFraisRegistry() {
+  const [postes, setPostes] = useState<RegistryPoste[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
 
-  // Brouillon du nouveau frais.
+  // Brouillon du nouveau poste (créé comme perso).
   const [form, setForm] = useState<{
     label_fr: string;
     type_montant: FraisCustomItem["type_montant"];
@@ -645,9 +1254,12 @@ function FraisCustomList() {
     setLoading(true);
     setError(null);
     try {
-      const r = await authedFetch(`${API}/frais-custom`);
+      const r = await authedFetch(`${API}/mdf-registry`);
+      if (r.status === 403) {
+        throw new Error("Accès réservé aux administrateurs.");
+      }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setItems((await r.json()) as FraisCustomItem[]);
+      setPostes((await r.json()) as RegistryPoste[]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -662,6 +1274,37 @@ function FraisCustomList() {
   function notify(msg: string) {
     setFlash(msg);
     setTimeout(() => setFlash(null), 2200);
+  }
+
+  const keys = postes.map((p) => p.key);
+
+  // Réordonnancement (optimistic) — PUT .../order avec le nouvel ordre.
+  const dnd = useKeyDnd(keys, (orderedKeys) => {
+    const byKey = new Map(postes.map((p) => [p.key, p]));
+    const optimistic = orderedKeys
+      .map((k) => byKey.get(k))
+      .filter((p): p is RegistryPoste => p != null);
+    setPostes(optimistic);
+    void persistOrder(orderedKeys);
+  });
+
+  async function persistOrder(orderedKeys: string[]) {
+    setError(null);
+    try {
+      const r = await authedFetch(`${API}/mdf-registry/order`, {
+        method: "PUT",
+        body: JSON.stringify({ order: orderedKeys })
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      setPostes((await r.json()) as RegistryPoste[]);
+    } catch (e) {
+      setError((e as Error).message);
+      // Rollback : on recharge l'ordre serveur authentique.
+      void load();
+    }
   }
 
   async function add() {
@@ -686,8 +1329,10 @@ function FraisCustomList() {
         const t = await r.text().catch(() => "");
         throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
       }
-      const created = (await r.json()) as FraisCustomItem;
-      setItems((prev) => [...prev, created]);
+      // Le POST renvoie le poste perso ; on recharge le registre pour
+      // récupérer l'ordre + l'enrichissement à jour (le poste est
+      // auto-appendu au registre par le backend).
+      await load();
       setForm({
         label_fr: "",
         type_montant: "fixe",
@@ -702,113 +1347,51 @@ function FraisCustomList() {
     }
   }
 
-  async function toggleFin(item: FraisCustomItem, next: boolean) {
-    setItems((prev) =>
-      prev.map((it) =>
-        it.id === item.id ? { ...it, financable_par_defaut: next } : it
-      )
-    );
-    try {
-      const r = await authedFetch(`${API}/frais-custom/${item.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ financable_par_defaut: next })
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    } catch (e) {
-      setItems((prev) =>
-        prev.map((it) =>
-          it.id === item.id ? { ...it, financable_par_defaut: !next } : it
-        )
-      );
-      setError((e as Error).message);
-    }
-  }
-
-  async function remove(item: FraisCustomItem) {
-    setBusyId(item.id);
-    setError(null);
-    try {
-      const r = await authedFetch(`${API}/frais-custom/${item.id}`, {
-        method: "DELETE"
-      });
-      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
-      setItems((prev) => prev.filter((it) => it.id !== item.id));
-      notify("Frais retiré.");
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusyId(null);
-    }
-  }
-
   return (
-    <div className="mt-4 rounded-xl border border-brand-800 bg-brand-950/40 p-3">
-      <h3 className="text-xs font-bold uppercase tracking-wide text-amber-300">
-        Frais de démarrage personnalisés
-      </h3>
-      <p className="mt-0.5 text-[10px] text-white/50">
-        Postes additionnels ajoutables à la volée (montant fixe, % du prix
-        d&apos;achat ou % du financement).
+    <div>
+      <p className="mb-3 rounded-md border border-rose-500/30 bg-rose-500/[0.06] px-3 py-2 text-[11px] text-rose-200/90">
+        Liste unique de TOUS les postes de frais de démarrage. Glisse la
+        poignée pour réordonner, clique le crayon pour renommer, ajuste le
+        montant ou le pourcentage et coche « finançable par défaut ».
+        L&apos;ordre et les libellés se reflètent dans la fiche d&apos;analyse
+        et le PDF. Un poste{" "}
+        <strong className="text-white">masqué est exclu du calcul</strong> mais
+        reste dans la liste (bouton « Afficher » pour le réactiver). Les postes
+        « Calculé » et « Saisi par fiche » n&apos;ont pas de montant éditable
+        ici.
       </p>
 
       {loading ? (
-        <div className="mt-3 flex items-center gap-2 text-xs text-white/60">
+        <div className="flex items-center gap-2 text-xs text-white/60">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
         </div>
       ) : (
-        <div className="mt-3 space-y-2">
-          {items.length === 0 ? (
+        <div className="space-y-2">
+          {postes.length === 0 ? (
             <p className="text-[11px] text-white/40">
-              Aucun frais personnalisé pour l&apos;instant.
+              Aucun poste de frais pour l&apos;instant.
             </p>
           ) : (
-            items.map((item) => (
-              <div
-                key={item.id}
-                className="flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-semibold text-white/80">
-                    {item.label_fr}
-                  </p>
-                  <p className="text-[10px] text-white/50">
-                    {TYPE_MONTANT_LABEL[item.type_montant]} ·{" "}
-                    <span className="font-mono text-white/70">
-                      {item.valeur}
-                      {item.type_montant === "fixe" ? " $" : " %"}
-                    </span>
-                  </p>
-                </div>
-                <label className="flex cursor-pointer items-center gap-1 text-[10px] text-white/60">
-                  <input
-                    type="checkbox"
-                    checked={item.financable_par_defaut}
-                    onChange={(e) => void toggleFin(item, e.target.checked)}
-                    className="h-3.5 w-3.5 cursor-pointer accent-amber-400"
-                  />
-                  Finançable
-                </label>
-                <button
-                  type="button"
-                  onClick={() => void remove(item)}
-                  disabled={busyId === item.id}
-                  className="rounded-md border border-rose-500/30 p-1.5 text-rose-300 transition hover:bg-rose-500/10 disabled:opacity-40"
-                  title="Retirer"
-                >
-                  {busyId === item.id ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Trash2 className="h-3.5 w-3.5" />
-                  )}
-                </button>
-              </div>
+            postes.map((p, i) => (
+              <RegistryRow
+                key={p.key}
+                poste={p}
+                index={i}
+                count={postes.length}
+                dnd={dnd}
+                onReload={setPostes}
+                onError={setError}
+              />
             ))
           )}
         </div>
       )}
 
-      {/* Formulaire d'ajout. */}
+      {/* Formulaire d'ajout d'un poste (créé comme perso). */}
       <div className="mt-3 rounded-lg border border-dashed border-brand-700 bg-brand-950/60 p-3">
+        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
+          Ajouter un frais
+        </p>
         <div className="grid gap-2 sm:grid-cols-[1.4fr_1fr_0.8fr]">
           <input
             type="text"
@@ -883,44 +1466,23 @@ function FraisCustomList() {
         </p>
       ) : null}
       {error ? (
-        <p className="mt-2 text-[10px] text-rose-400">{error}</p>
+        <p className="mt-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-300">
+          {error}
+        </p>
       ) : null}
     </div>
   );
 }
 
 export function MdfFraisSection() {
-  const { defaults, setDefaults, loading, error } =
-    useGroupDefaults("mdf_frais");
-
-  function patch(next: AnalysisDefault) {
-    setDefaults((prev) => prev.map((d) => (d.key === next.key ? next : d)));
-  }
-
-  // Postes fixes éditables : on exclut la ligne porteuse de la liste
-  // dynamique (frais_mdf_custom, dont la value_json est une liste).
-  const fixed = defaults.filter((d) => d.key !== FRAIS_CUSTOM_KEY);
-
   return (
     <SectionShell
       icon={Wallet}
       iconClass="bg-rose-500/15 text-rose-400"
       title="Frais de démarrage (MDF prêteur B)"
-      subtitle="Postes fixes (montant + finançable) et frais personnalisés ajoutables."
-      loading={loading}
-      error={error}
+      subtitle="Liste unifiée : réordonne, renomme, édite montant/%, finançable, masque ou supprime chaque poste."
     >
-      <div className="grid gap-2.5 sm:grid-cols-2">
-        {fixed.map((def) => (
-          <ScalarDefaultRow
-            key={def.key}
-            def={def}
-            onUpdated={patch}
-            showFinancable
-          />
-        ))}
-      </div>
-      <FraisCustomList />
+      <UnifiedFraisRegistry />
     </SectionShell>
   );
 }
