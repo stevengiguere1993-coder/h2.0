@@ -13,7 +13,7 @@ import { ReceiptScanner } from "@/components/receipt-scanner";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
-import { splitFromTotal } from "@/lib/tax";
+import { splitFromTotal, TPS_RATE, TVQ_RATE } from "@/lib/tax";
 import { projectLabel } from "@/lib/project";
 
 type Project = {
@@ -93,7 +93,18 @@ export default function NewAchatPage() {
   }
   function onAmountChange(v: string) {
     setAmount(v);
-    syncTotal(v, amountTps, amountTvq);
+    // Saisie du montant HT → on calcule TPS + TVQ + total automatiquement
+    // (restent éditables ensuite). Champ vidé → on resynchronise le total.
+    const n = Number(v);
+    if (v.trim() !== "" && !Number.isNaN(n) && n > 0) {
+      const tps = Math.round(n * TPS_RATE * 100) / 100;
+      const tvq = Math.round(n * TVQ_RATE * 100) / 100;
+      setAmountTps(tps.toFixed(2));
+      setAmountTvq(tvq.toFixed(2));
+      setTotal((n + tps + tvq).toFixed(2));
+    } else {
+      syncTotal(v, amountTps, amountTvq);
+    }
   }
   function onTpsChange(v: string) {
     setAmountTps(v);

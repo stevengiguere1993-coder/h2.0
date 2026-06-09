@@ -352,6 +352,7 @@ export default function ServicesCataloguePage() {
                         <th className="px-3 py-2 text-left">Description</th>
                         <th className="px-3 py-2 text-right">Qté</th>
                         <th className="px-3 py-2 text-left">Unité</th>
+                        <th className="px-3 py-2 text-right">Coûtant</th>
                         <th className="px-3 py-2 text-right">Prix unit.</th>
                         <th className="px-3 py-2"></th>
                       </tr>
@@ -394,6 +395,21 @@ export default function ServicesCataloguePage() {
                                 })
                               }
                               className="w-20 bg-transparent text-sm text-white focus:outline-none"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="number"
+                              step="0.01"
+                              defaultValue={it.default_cost_per_unit ?? 0}
+                              onBlur={(e) =>
+                                patchItem(it.id, {
+                                  default_cost_per_unit:
+                                    Number(e.target.value) || 0
+                                })
+                              }
+                              title="Coûtant (interne)"
+                              className="w-24 bg-transparent text-right text-sm text-amber-300 focus:outline-none"
                             />
                           </td>
                           <td className="px-3 py-2">

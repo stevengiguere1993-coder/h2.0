@@ -42,7 +42,7 @@ const METHOD_LABELS: Record<PaymentMethod, string> = {
   debit_card: "Carte de débit",
   check: "Chèque",
   bank_transfer: "Virement bancaire",
-  other: "Autre"
+  other: "Paiement direct"
 };
 
 const METHOD_ICONS: Record<
@@ -299,7 +299,7 @@ function PaymentModal({
     { id: "debit_card", label: "Carte de débit" },
     { id: "check", label: "Chèque" },
     { id: "bank_transfer", label: "Virement bancaire" },
-    { id: "other", label: "Autre" }
+    { id: "other", label: "Paiement direct" }
   ];
 
   return (

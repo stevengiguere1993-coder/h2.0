@@ -86,6 +86,7 @@ type ProjectMini = {
 type ProjectFinances = {
   projected_revenue: number;
   projected_revenue_ex_tax?: number;
+  billing_kind?: string;
   projected_total_cost: number;
   projected_profit: number;
   actual_total_cost: number;
@@ -225,6 +226,14 @@ export default function FactureDetailPage() {
   const [importIncludeHours, setImportIncludeHours] = useState(false);
   const [importOnlyApproved, setImportOnlyApproved] = useState(true);
   const [importIncludeAchats, setImportIncludeAchats] = useState(false);
+
+  // Projet « à contrat » : on n'importe pas les items du devis (l'option
+  // est masquée + forcée à false pour ne pas l'envoyer au backend).
+  useEffect(() => {
+    if (projFin?.billing_kind === "contrat") {
+      setImportIncludeSoumission(false);
+    }
+  }, [projFin?.billing_kind]);
 
   // Phase A — sélection ligne-par-ligne des achats refacturables.
   type BillableAchat = {
@@ -1476,6 +1485,9 @@ export default function FactureDetailPage() {
             </p>
 
             <div className="mt-5 space-y-3">
+              {/* Projet « à contrat » : pas d'import des items du devis
+                  (la facturation suit le contrat, pas le devis). */}
+              {projFin?.billing_kind !== "contrat" ? (
               <label className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-900 p-3 text-sm text-white/80">
                 <input
                   type="checkbox"
@@ -1529,6 +1541,7 @@ export default function FactureDetailPage() {
                   ) : null}
                 </div>
               </label>
+              ) : null}
 
               <label className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-900 p-3 text-sm text-white/80">
                 <input
