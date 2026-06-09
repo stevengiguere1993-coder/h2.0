@@ -1477,7 +1477,7 @@ function MessagesSection({
   );
 
   return (
-    <section className="mt-5 grid gap-4 lg:grid-cols-[320px_1fr]">
+    <section className="mt-5 grid gap-4 pb-24 lg:grid-cols-[320px_1fr] lg:pb-0">
       {/* Inbox */}
       <div className="rounded-2xl border border-brand-800 bg-brand-900 p-3">
         <div className="flex items-center justify-between gap-2 px-1 pb-2">
@@ -1556,7 +1556,7 @@ function MessagesSection({
       </div>
 
       {/* Conversation panel */}
-      <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 flex flex-col min-h-[400px]">
+      <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 flex flex-col min-h-[400px] lg:max-h-[78vh] lg:overflow-hidden">
         {showComposer && !selected ? (
           <div className="space-y-3">
             <h3 className="text-sm font-bold text-white">Nouveau SMS</h3>
@@ -1618,7 +1618,7 @@ function MessagesSection({
               </div>
               <CallButton targetE164={selected} label="Appeler" />
             </div>
-            <div className="flex-1 overflow-y-auto py-3 space-y-2">
+            <div className="py-3 space-y-2 lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
               {loading ? (
                 <p className="text-[11px] text-white/40">Chargement…</p>
               ) : threadError ? (
