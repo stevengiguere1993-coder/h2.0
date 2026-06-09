@@ -689,6 +689,21 @@ async def _load_defaults_for_new_analysis(db) -> dict:
                     any_financable_flag_set = True
                     if bool(flag):
                         financables_from_db.append(financable_key)
+
+            # Frais PERSONNALISÉS (clé ``frais_mdf_custom``) : les ids des
+            # postes finançables par défaut rejoignent le set initial de
+            # la fiche, exactement comme les postes fixes.
+            if row.key == "frais_mdf_custom" and isinstance(
+                row.value_json, list
+            ):
+                for _it in row.value_json:
+                    if isinstance(_it, dict) and _it.get(
+                        "financable_par_defaut"
+                    ):
+                        _cid = str(_it.get("id", "")).strip()
+                        if _cid:
+                            any_financable_flag_set = True
+                            financables_from_db.append(_cid)
     except Exception as exc:  # noqa: BLE001
         # Table peut ne pas exister au tout premier boot — silencieux.
         log.warning("Failed to load analysis defaults from DB: %s", exc)
