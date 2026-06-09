@@ -416,8 +416,8 @@ export default function TelephonieHome() {
           <AlertTriangle className="mx-auto mb-2 h-6 w-6 text-rose-300" />
           <h1 className="text-base font-bold text-white">Accès restreint</h1>
           <p className="mt-2 text-xs text-rose-200">
-            Le volet Téléphonie est en cours de développement et n&apos;est
-            pas encore disponible pour ton compte.
+            Le volet Téléphonie n&apos;est pas activé pour ton compte.
+            Demande à un administrateur de t&apos;y donner accès.
           </p>
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any

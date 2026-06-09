@@ -466,9 +466,6 @@ export function LoginForm() {
                   transférer au bon user.
                 </span>
               </span>
-              <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-                En développement
-              </span>
             </button>
           ) : null}
           </div>
