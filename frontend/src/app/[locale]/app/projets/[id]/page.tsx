@@ -21,6 +21,7 @@ import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { TAX_FACTOR } from "@/lib/tax";
 import { useConfirm } from "@/components/confirm-dialog";
 import { MultiSelectDropdown } from "@/components/multi-select-dropdown";
 
@@ -5039,6 +5040,7 @@ type ProjectAchat = {
   project_id: number | null;
   description: string | null;
   amount: number | string | null;
+  amount_taxes: number | string | null;
   supplier_invoice_number: string | null;
   invoice_date: string | null;
   status: string;
@@ -5143,12 +5145,19 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
     }).format(n);
   }
 
+  // Affichage TTC (taxes incluses). Les PO n'ont pas de taxes stockées →
+  // on applique le facteur QC standard ; les achats ont leurs taxes
+  // réelles (amount + amount_taxes).
   const poTotal = pos.reduce(
-    (s, p) => s + (p.amount_max != null ? Number(p.amount_max) : 0),
+    (s, p) =>
+      s + (p.amount_max != null ? Number(p.amount_max) * TAX_FACTOR : 0),
     0
   );
   const achatTotal = achats.reduce(
-    (s, a) => s + (a.amount != null ? Number(a.amount) : 0),
+    (s, a) =>
+      s +
+      (a.amount != null ? Number(a.amount) : 0) +
+      (a.amount_taxes != null ? Number(a.amount_taxes) : 0),
     0
   );
 
@@ -5221,7 +5230,9 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                         ? fournisseurById.get(p.fournisseur_id)
                         : null;
                       const amt =
-                        p.amount_max != null ? Number(p.amount_max) : 0;
+                        p.amount_max != null
+                          ? Number(p.amount_max) * TAX_FACTOR
+                          : 0;
                       return (
                         <tr key={p.id} className="hover:bg-brand-800/30">
                           <td className="px-3 py-2">
@@ -5307,7 +5318,9 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                       const fr = a.fournisseur_id
                         ? fournisseurById.get(a.fournisseur_id)
                         : null;
-                      const amt = a.amount != null ? Number(a.amount) : 0;
+                      const amt =
+                        (a.amount != null ? Number(a.amount) : 0) +
+                        (a.amount_taxes != null ? Number(a.amount_taxes) : 0);
                       const linkedPo = a.purchase_order_id
                         ? pos.find((p) => p.id === a.purchase_order_id)
                         : null;

@@ -15,10 +15,11 @@ import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
 
 type Employe = { id: number; full_name: string; email: string | null };
-type Project = { id: number; name: string };
+type Project = { id: number; name: string; address?: string | null };
 type Prospect = { id: number; name: string; status: string };
 
 type Punch = {
@@ -932,7 +933,7 @@ function PunchModal({
                 <optgroup label="Projets">
                   {projects.map((p) => (
                     <option key={`p-${p.id}`} value={`p-${p.id}`}>
-                      {p.name}
+                      {projectLabel(p)}
                     </option>
                   ))}
                 </optgroup>
