@@ -1009,3 +1009,98 @@ async def employe_monthly_csv(
             "Content-Disposition": f'attachment; filename="{filename}"'
         },
     )
+
+
+# ---------- Saisie manuelle (admin / gestion) ----------
+class PunchManualCreate(BaseModel):
+    employe_id: int
+    project_id: Optional[int] = None
+    contact_request_id: Optional[int] = None
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    hours: Optional[float] = None
+    task: Optional[str] = None
+    notes: Optional[str] = None
+    approved: bool = False
+
+
+class PunchManualUpdate(BaseModel):
+    employe_id: Optional[int] = None
+    project_id: Optional[int] = None
+    contact_request_id: Optional[int] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    hours: Optional[float] = None
+    task: Optional[str] = None
+    notes: Optional[str] = None
+    approved: Optional[bool] = None
+
+
+def _hours_between(start, end):
+    if not start or not end:
+        return None
+    delta = (end - start).total_seconds() / 3600.0
+    return round(delta, 2) if delta > 0 else None
+
+
+@router.post(
+    "",
+    response_model=PunchRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Creer un punch manuellement (gestion admin)",
+)
+async def create_manual_punch(
+    data: PunchManualCreate, db: DBSession, _: RequireManager
+) -> PunchRead:
+    hours = (
+        data.hours
+        if data.hours is not None
+        else _hours_between(data.started_at, data.ended_at)
+    )
+    p = Punch(
+        employe_id=data.employe_id,
+        project_id=data.project_id,
+        contact_request_id=data.contact_request_id,
+        started_at=data.started_at,
+        ended_at=data.ended_at,
+        hours=hours,
+        task=(data.task or None),
+        notes=(data.notes or None),
+        approved=bool(data.approved),
+    )
+    db.add(p)
+    await db.flush()
+    await db.refresh(p)
+    if p.project_id:
+        try:
+            await bump_to_in_progress_if_needed(db, p.project_id)
+        except Exception:  # noqa: BLE001
+            pass
+    return PunchRead.model_validate(p)
+
+
+@router.patch(
+    "/{punch_id}",
+    response_model=PunchRead,
+    summary="Modifier un punch (gestion admin, incl. approuve)",
+)
+async def update_manual_punch(
+    punch_id: int, data: PunchManualUpdate, db: DBSession, _: RequireManager
+) -> PunchRead:
+    p = (
+        await db.execute(select(Punch).where(Punch.id == punch_id))
+    ).scalar_one_or_none()
+    if p is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Punch introuvable.")
+    fields = data.model_dump(exclude_unset=True)
+    for k, v in fields.items():
+        if k in ("task", "notes") and v == "":
+            v = None
+        setattr(p, k, v)
+    if "hours" not in fields and p.started_at and p.ended_at:
+        recomputed = _hours_between(p.started_at, p.ended_at)
+        if recomputed is not None:
+            p.hours = recomputed
+    await db.flush()
+    await db.refresh(p)
+    return PunchRead.model_validate(p)
