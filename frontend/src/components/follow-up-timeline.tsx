@@ -8,6 +8,7 @@ import {
   Plus,
   Mail as MailIcon,
   StickyNote,
+  Pencil,
   Trash2,
   Clock
 } from "lucide-react";
@@ -176,6 +177,39 @@ export function FollowUpTimeline({
     }
   }
 
+  // Édition inline d'un suivi (issue + notes).
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editOutcome, setEditOutcome] =
+    useState<FollowUp["outcome"]>("reached");
+  const [editNotes, setEditNotes] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
+
+  function startEdit(f: FollowUp) {
+    setEditingId(f.id);
+    setEditOutcome(f.outcome);
+    setEditNotes(f.notes || "");
+  }
+
+  async function saveEdit(id: number) {
+    setEditBusy(true);
+    try {
+      const res = await authedFetch(`/api/v1/follow-ups/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          outcome: editOutcome,
+          notes: editNotes.trim() || null
+        })
+      });
+      if (res.ok) {
+        const updated = (await res.json()) as FollowUp;
+        setItems((xs) => xs.map((x) => (x.id === id ? updated : x)));
+        setEditingId(null);
+      }
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
   return (
     <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
       <div className="flex items-center justify-between gap-3">
@@ -317,34 +351,92 @@ export function FollowUpTimeline({
               className="group flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm"
             >
               <span className="mt-1 text-accent-500">{KIND_ICON[f.kind]}</span>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-semibold text-white">
-                    {OUTCOME_LABEL[f.outcome] || f.outcome}
-                  </span>
-                  <span className="text-[10px] text-white/40">
-                    {new Date(f.performed_at).toLocaleString("fr-CA", {
-                      day: "numeric",
-                      month: "short",
-                      hour: "2-digit",
-                      minute: "2-digit"
-                    })}
-                  </span>
+              {editingId === f.id ? (
+                <div className="min-w-0 flex-1 space-y-2">
+                  <select
+                    value={editOutcome}
+                    onChange={(e) =>
+                      setEditOutcome(e.target.value as FollowUp["outcome"])
+                    }
+                    className="input text-xs"
+                  >
+                    <option value="reached">Joint</option>
+                    <option value="voicemail">Boîte vocale</option>
+                    <option value="no_answer">Pas de réponse</option>
+                    <option value="interested">Intéressé</option>
+                    <option value="not_interested">Pas intéressé (stop)</option>
+                    <option value="won">Accepté ✅ (stop)</option>
+                    <option value="lost">Perdu ❌ (stop)</option>
+                    <option value="pending">En attente</option>
+                    <option value="scheduled">Programmé</option>
+                  </select>
+                  <textarea
+                    rows={2}
+                    value={editNotes}
+                    onChange={(e) => setEditNotes(e.target.value)}
+                    placeholder="Notes…"
+                    className="input text-xs"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={editBusy}
+                      onClick={() => void saveEdit(f.id)}
+                      className="btn-accent text-[11px] disabled:opacity-60"
+                    >
+                      {editBusy ? "…" : "Enregistrer"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingId(null)}
+                      className="rounded-md border border-brand-800 px-2.5 py-1 text-[11px] text-white/70 hover:text-white"
+                    >
+                      Annuler
+                    </button>
+                  </div>
                 </div>
-                {f.notes ? (
-                  <p className="mt-1 whitespace-pre-line text-xs text-white/70">
-                    {f.notes}
-                  </p>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                onClick={() => remove(f.id)}
-                className="hidden rounded p-1 text-white/40 hover:text-rose-300 group-hover:block"
-                aria-label="Supprimer"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
+              ) : (
+                <>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-semibold text-white">
+                        {OUTCOME_LABEL[f.outcome] || f.outcome}
+                      </span>
+                      <span className="text-[10px] text-white/40">
+                        {new Date(f.performed_at).toLocaleString("fr-CA", {
+                          day: "numeric",
+                          month: "short",
+                          hour: "2-digit",
+                          minute: "2-digit"
+                        })}
+                      </span>
+                    </div>
+                    {f.notes ? (
+                      <p className="mt-1 whitespace-pre-line text-xs text-white/70">
+                        {f.notes}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => startEdit(f)}
+                      className="hidden rounded p-1 text-white/40 hover:text-accent-500 group-hover:block"
+                      aria-label="Modifier"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => remove(f.id)}
+                      className="hidden rounded p-1 text-white/40 hover:text-rose-300 group-hover:block"
+                      aria-label="Supprimer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </>
+              )}
             </li>
           ))}
         </ul>
