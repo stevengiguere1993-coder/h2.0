@@ -495,9 +495,6 @@ export default function AchatsPage() {
                         ) : (
                           <span className="rounded-md bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-amber-950">
                             À refacturer
-                            {a.markup_percent
-                              ? ` (+${Number(a.markup_percent)}%)`
-                              : ""}
                           </span>
                         )}
                       </td>
