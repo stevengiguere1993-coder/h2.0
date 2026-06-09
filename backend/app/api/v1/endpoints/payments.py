@@ -176,6 +176,22 @@ async def _recompute_facture_status(db, facture: Facture) -> None:
             facture.paid_at = datetime.combine(
                 last_paid_at, datetime.min.time(), tzinfo=timezone.utc
             )
+        # Facture FINALE entièrement payée → le projet passe « livré »
+        # (delivered) automatiquement. delivered est terminal, donc pas
+        # de risque de rétrograder un statut plus avancé.
+        if getattr(facture, "is_final", False) and facture.project_id:
+            from app.models.project import Project, ProjectStatus
+
+            proj = (
+                await db.execute(
+                    select(Project).where(Project.id == facture.project_id)
+                )
+            ).scalar_one_or_none()
+            if (
+                proj is not None
+                and proj.status != ProjectStatus.DELIVERED.value
+            ):
+                proj.status = ProjectStatus.DELIVERED.value
     else:
         # Not fully paid anymore — revert to SENT if it was PAID, keep
         # OVERDUE / DRAFT otherwise so we don't mask a prior state.
