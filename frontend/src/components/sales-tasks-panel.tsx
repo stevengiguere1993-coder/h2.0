@@ -105,7 +105,21 @@ export function SalesTasksPanel({
       ]);
       if (!tRes.ok) throw new Error(`http_${tRes.status}`);
       setTasks((await tRes.json()) as SalesTask[]);
-      if (eRes.ok) setEmployes((await eRes.json()) as Employe[]);
+      if (eRes.ok) {
+        const raw = (await eRes.json()) as {
+          id: number;
+          full_name?: string | null;
+          name?: string | null;
+          avatar_url?: string | null;
+        }[];
+        setEmployes(
+          raw.map((e) => ({
+            id: e.id,
+            name: e.full_name || e.name || `#${e.id}`,
+            avatar_url: e.avatar_url ?? null,
+          }))
+        );
+      }
     } catch {
       setError("Chargement des tâches échoué.");
     } finally {
