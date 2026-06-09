@@ -133,6 +133,8 @@ type CallRow = {
   entity_id: number | null;
   followup_suggestion: string | null;
   caller_kind: string | null;
+  peer_e164?: string | null;
+  contact_name?: string | null;
 };
 
 type CallTurnRow = {
@@ -847,17 +849,19 @@ function DashboardSection({
                     <DirectionIcon dir={c.direction} status={c.status} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 truncate">
-                        <span className="truncate font-mono text-sm text-white">
-                          {c.from_e164}
+                        <span className="truncate text-sm text-white">
+                          {c.contact_name || c.peer_e164 || c.from_e164}
                         </span>
                         {c.caller_kind && c.caller_kind !== "unknown" ? (
                           <CallerKindBadge kind={c.caller_kind} />
                         ) : null}
                       </div>
                       <div className="truncate text-[11px] text-white/50">
+                        {c.contact_name
+                          ? `${c.peer_e164 || c.from_e164} · `
+                          : ""}
                         {formatDateTime(c.started_at)}
                         {c.duration_sec != null ? ` · ${c.duration_sec}s` : ""}
-                        {c.lead_name ? ` · ${c.lead_name}` : ""}
                       </div>
                     </div>
                     <StatusBadge status={c.status} />
@@ -870,7 +874,7 @@ function DashboardSection({
                   c.status === "busy" ||
                   c.status === "failed" ? (
                     <CallbackInlineButton
-                      targetE164={c.from_e164}
+                      targetE164={c.peer_e164 || c.from_e164}
                       entityType={c.entity_type || undefined}
                       entityId={c.entity_id || undefined}
                     />
@@ -1290,6 +1294,8 @@ function CallsSection({
     ? calls.filter(
         (c) =>
           c.from_e164.toLowerCase().includes(q) ||
+          (c.peer_e164 || "").toLowerCase().includes(q) ||
+          (c.contact_name || "").toLowerCase().includes(q) ||
           (c.intent || "").toLowerCase().includes(q) ||
           (c.lead_name || "").toLowerCase().includes(q) ||
           (c.caller_kind || "").toLowerCase().includes(q) ||
@@ -1338,7 +1344,7 @@ function CallsSection({
                     <div className="flex items-center gap-2">
                       <DirectionIcon dir={c.direction} status={c.status} />
                       <span className="font-mono text-white">
-                        {c.from_e164}
+                        {c.peer_e164 || c.from_e164}
                       </span>
                       {c.was_blocked ? <Tag tone="rose">blocked</Tag> : null}
                       {c.was_vip ? <Tag tone="emerald">vip</Tag> : null}
@@ -1346,7 +1352,14 @@ function CallsSection({
                     </div>
                   </td>
                   <td className="py-2">
-                    {c.caller_kind && c.caller_kind !== "unknown" ? (
+                    {c.contact_name ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-white/90">{c.contact_name}</span>
+                        {c.caller_kind && c.caller_kind !== "unknown" ? (
+                          <CallerKindBadge kind={c.caller_kind} />
+                        ) : null}
+                      </div>
+                    ) : c.caller_kind && c.caller_kind !== "unknown" ? (
                       <CallerKindBadge kind={c.caller_kind} />
                     ) : (
                       <span className="text-white/30">—</span>
@@ -2431,10 +2444,13 @@ function CallDrawer({
           <div className="flex items-center gap-3">
             <DirectionIcon dir={call.direction} status={call.status} />
             <div>
-              <div className="font-mono text-base font-bold text-white">
-                {call.from_e164}
+              <div className="text-base font-bold text-white">
+                {call.contact_name || call.peer_e164 || call.from_e164}
               </div>
               <div className="text-[11px] text-white/50">
+                {call.contact_name
+                  ? `${call.peer_e164 || call.from_e164} · `
+                  : ""}
                 {formatDateTime(call.started_at)}
                 {call.duration_sec != null ? ` · ${call.duration_sec}s` : ""}
               </div>
