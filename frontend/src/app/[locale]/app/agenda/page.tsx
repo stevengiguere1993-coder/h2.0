@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   Calendar as CalendarIcon,
   ChevronLeft,
   ChevronRight,
@@ -1972,6 +1973,31 @@ function WeeklyTeamGridView({
     return Math.round(total * 10) / 10;
   }
 
+  // #15 — Un jour est « vide » si personne n'a de travail prévu : aucune
+  // phase de chantier et aucun event de travail (on ignore les
+  // congés/indispos qui ne sont pas du travail planifié).
+  const UNAVAIL_TYPES = [
+    "conge",
+    "congé",
+    "indispo",
+    "busy",
+    "absent",
+    "vacances"
+  ];
+  function dayHasWork(day: Date): boolean {
+    for (const emp of employes) {
+      for (const b of blocksFor(emp.id, day)) {
+        if (b.kind === "phase") return true;
+        if (
+          !UNAVAIL_TYPES.includes((b.event.event_type || "").toLowerCase())
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   if (employes.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
@@ -1994,14 +2020,26 @@ function WeeklyTeamGridView({
         >
           Employé
         </div>
-        {week.map((d, i) => (
-          <div
-            key={i}
-            className="bg-brand-950 px-2 py-2 text-center text-[11px] font-semibold text-white/70"
-          >
-            {dayLabel(d)}
-          </div>
-        ))}
+        {week.map((d, i) => {
+          const empty = !dayHasWork(d);
+          return (
+            <div
+              key={i}
+              className="bg-brand-950 px-2 py-2 text-center text-[11px] font-semibold text-white/70"
+            >
+              {dayLabel(d)}
+              {empty ? (
+                <span
+                  className="mt-0.5 flex items-center justify-center gap-1 text-[9px] font-medium text-amber-300"
+                  title="Personne n'est prévu sur cette journée"
+                >
+                  <AlertTriangle className="h-3 w-3" />
+                  Personne
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
 
         {/* Rows */}
         {employes.map((emp) => (
