@@ -17,6 +17,7 @@ from app.models.bon_travail import BonTravail
 from app.models.employe import Employe
 from app.models.facture import Facture, FactureStatus
 from app.models.fournisseur import Fournisseur
+from app.models.note_template import NoteTemplate
 from app.models.punch import Punch
 from app.models.purchase_order import PurchaseOrder
 from app.models.soumission import Soumission
@@ -55,6 +56,11 @@ from app.schemas.sous_traitant import (
     SousTraitantCreate,
     SousTraitantRead,
     SousTraitantUpdate,
+)
+from app.schemas.note_template import (
+    NoteTemplateCreate,
+    NoteTemplateRead,
+    NoteTemplateUpdate,
 )
 
 
@@ -361,6 +367,14 @@ fournisseurs_router = make_crud_router(
 sous_traitants_router = make_crud_router(
     prefix="/sous-traitants", tag="sous-traitants",
     model=SousTraitant, create_schema=SousTraitantCreate, update_schema=SousTraitantUpdate, read_schema=SousTraitantRead,
+)
+# #16 — Catalogue de notes prédéfinies. Lecture ouverte à tout utilisateur
+# connecté (insertion dans une soumission), écriture réservée aux managers.
+note_templates_router = make_crud_router(
+    prefix="/note-templates", tag="note-templates",
+    model=NoteTemplate, create_schema=NoteTemplateCreate,
+    update_schema=NoteTemplateUpdate, read_schema=NoteTemplateRead,
+    require_manager=False,
 )
 soumissions_router = make_crud_router(
     prefix="/soumissions", tag="soumissions",
