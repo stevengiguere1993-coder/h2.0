@@ -916,6 +916,8 @@ function POItemsSection({
   const [draftQty, setDraftQty] = useState("1");
   const [draftUnit, setDraftUnit] = useState("");
   const [draftPrice, setDraftPrice] = useState("");
+  // #13 — sélecteur de catalogue (service-templates) pour ce PO
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -1011,26 +1013,36 @@ function POItemsSection({
     <div>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <label className="label">Articles à acheter</label>
-        {items.length > 0 ? (
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-white/60">
-              Total :{" "}
-              <span className="font-semibold text-white">
-                {total.toLocaleString("fr-CA", {
-                  style: "currency",
-                  currency: "CAD"
-                })}
+        <div className="flex items-center gap-2">
+          {items.length > 0 ? (
+            <>
+              <span className="text-xs text-white/60">
+                Total :{" "}
+                <span className="font-semibold text-white">
+                  {total.toLocaleString("fr-CA", {
+                    style: "currency",
+                    currency: "CAD"
+                  })}
+                </span>
               </span>
-            </span>
-            <button
-              type="button"
-              onClick={() => onSuggestAmountMax(total)}
-              className="rounded-md border border-accent-500/40 bg-accent-500/10 px-2 py-1 text-[11px] font-semibold text-accent-300 hover:bg-accent-500/20"
-            >
-              Utiliser le total
-            </button>
-          </div>
-        ) : null}
+              <button
+                type="button"
+                onClick={() => onSuggestAmountMax(total)}
+                className="rounded-md border border-accent-500/40 bg-accent-500/10 px-2 py-1 text-[11px] font-semibold text-accent-300 hover:bg-accent-500/20"
+              >
+                Utiliser le total
+              </button>
+            </>
+          ) : null}
+          {/* #13 — insérer une ligne depuis le catalogue de services */}
+          <button
+            type="button"
+            onClick={() => setPickerOpen(true)}
+            className="rounded-md border border-brand-700 bg-brand-900 px-2 py-1 text-[11px] font-semibold text-white/80 hover:border-accent-500 hover:text-white"
+          >
+            + Catalogue
+          </button>
+        </div>
       </div>
       <p className="mb-2 text-[11px] text-white/50">
         Liste « épicerie » que l&apos;employé apporte chez le fournisseur.
@@ -1106,6 +1118,182 @@ function POItemsSection({
           </div>
         </div>
       )}
+
+      {pickerOpen ? (
+        <POCataloguePicker
+          poId={poId}
+          onClose={() => setPickerOpen(false)}
+          onInserted={() => {
+            setPickerOpen(false);
+            void load();
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+type POCatalogueTemplate = {
+  id: number;
+  name: string;
+  description: string | null;
+  default_unit: string | null;
+  default_unit_price: number | null;
+};
+
+// #13 — Sélecteur de services du catalogue pour un bon de commande.
+// Insère les lignes du modèle via /service-templates/{id}/apply-to-po.
+function POCataloguePicker({
+  poId,
+  onClose,
+  onInserted
+}: {
+  poId: number;
+  onClose: () => void;
+  onInserted: () => void;
+}) {
+  const [templates, setTemplates] = useState<POCatalogueTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [q, setQ] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authedFetch("/api/v1/service-templates");
+        if (!res.ok) throw new Error();
+        if (!cancelled)
+          setTemplates((await res.json()) as POCatalogueTemplate[]);
+      } catch {
+        if (!cancelled) setError("Chargement échoué.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filtered = q.trim()
+    ? templates.filter((t) =>
+        t.name.toLowerCase().includes(q.trim().toLowerCase())
+      )
+    : templates;
+
+  async function apply(t: POCatalogueTemplate) {
+    setBusy(t.id);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/service-templates/${t.id}/apply-to-po`,
+        {
+          method: "POST",
+          body: JSON.stringify({ purchase_order_id: poId })
+        }
+      );
+      if (!res.ok) throw new Error();
+      onInserted();
+    } catch {
+      setError("Insertion échouée.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-xl overflow-hidden rounded-2xl border border-brand-800 bg-brand-950"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+          <h3 className="text-sm font-bold text-white">
+            Insérer un article du catalogue
+          </h3>
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/app/services-catalogue" as any}
+            className="text-xs text-accent-500 hover:underline"
+          >
+            Gérer le catalogue →
+          </Link>
+        </header>
+
+        <div className="border-b border-brand-800 p-4">
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Rechercher un service…"
+            className="input"
+            autoFocus
+          />
+        </div>
+
+        <div className="max-h-96 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="h-5 w-5 animate-spin text-white/40" />
+            </div>
+          ) : filtered.length === 0 ? (
+            <p className="px-4 py-10 text-center text-sm text-white/50">
+              {templates.length === 0
+                ? "Catalogue vide. Crée ton premier service dans « Gérer le catalogue »."
+                : "Aucun service ne correspond à la recherche."}
+            </p>
+          ) : (
+            <ul className="divide-y divide-brand-800">
+              {filtered.map((t) => (
+                <li
+                  key={t.id}
+                  className="flex items-center justify-between gap-3 px-4 py-3"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-white">
+                      {t.name}
+                    </p>
+                    {t.description ? (
+                      <p className="mt-0.5 truncate text-xs text-white/50">
+                        {t.description}
+                      </p>
+                    ) : null}
+                    {t.default_unit_price != null ? (
+                      <p className="mt-1 text-xs text-accent-400">
+                        {t.default_unit_price} $
+                        {t.default_unit ? ` / ${t.default_unit}` : ""}
+                      </p>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => apply(t)}
+                    disabled={busy === t.id}
+                    className="rounded-lg bg-accent-500 px-3 py-2 text-xs font-bold text-brand-950 disabled:opacity-60"
+                  >
+                    {busy === t.id ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      "Insérer"
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {error ? (
+          <p className="border-t border-brand-800 px-4 py-3 text-xs text-rose-300">
+            {error}
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }
