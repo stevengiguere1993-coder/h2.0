@@ -7,7 +7,7 @@ from typing import Optional, Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.contact_request import ContactRequest
+from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.schemas.contact_request import ContactRequestCreate, ContactRequestUpdate
 
 
@@ -77,6 +77,17 @@ class ContactRequestRepository:
         update_data = data.model_dump(exclude_unset=True)
         if "status" in update_data and update_data["status"] is not None:
             update_data["status"] = update_data["status"].value
+        # Cohérence statut <-> motif de perte :
+        #  - un motif renseigné force le statut à `lost` (Refusé) ;
+        #  - tout statut explicite != lost efface le motif (on ne garde
+        #    pas un motif de perte sur un lead ré-ouvert).
+        if update_data.get("lost_reason"):
+            update_data["status"] = ContactRequestStatus.LOST.value
+        elif (
+            update_data.get("status")
+            and update_data["status"] != ContactRequestStatus.LOST.value
+        ):
+            update_data["lost_reason"] = None
         for field, value in update_data.items():
             setattr(record, field, value)
         await self.db.flush()
