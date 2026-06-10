@@ -48,7 +48,7 @@ from typing import Optional
 from fastapi import APIRouter, Body, HTTPException, Query, status
 from sqlalchemy import select
 
-from app.api.deps import DBSession, RequireAdminOrOwner
+from app.api.deps import CurrentUser, DBSession, RequireAdminOrOwner
 from app.models.drive_convention import DriveConvention
 from app.models.drive_entity_link import DriveEntityLink
 from app.schemas.drive_convention import (
@@ -435,7 +435,11 @@ async def apply_convention(
 )
 async def list_entity_links(
     db: DBSession,
-    user: RequireAdminOrOwner,
+    # Lecture seule, non sensible (id/nom de dossier), consommée par
+    # <EntityDriveSection> sur CHAQUE page câblée → ouverte à tout
+    # utilisateur connecté, comme les endpoints de fichiers Drive. Les
+    # mutations (POST/PATCH/DELETE ci-dessous) restent admin/owner.
+    user: CurrentUser,
     entity_type: Optional[str] = Query(default=None, max_length=64),
     # ge=0 : entity_id=0 filtre les liens "Drive de page" (singleton).
     entity_id: Optional[int] = Query(default=None, ge=0),
