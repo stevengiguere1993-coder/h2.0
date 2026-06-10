@@ -7,8 +7,10 @@ import {
   Loader2,
   MapPin,
   Plus,
+  RefreshCw,
   Trash2,
-  Users
+  Users,
+  Video
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -60,6 +62,72 @@ export default function RencontresListPage() {
   }, []);
 
   // Création modal.
+  // Synchro Teams : statut (configurée ?) + fiches importées (badges)
+  // + déclenchement manuel.
+  const [teamsConfigured, setTeamsConfigured] = useState<boolean | null>(
+    null
+  );
+  const [teamsImportedIds, setTeamsImportedIds] = useState<Set<number>>(
+    new Set()
+  );
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+
+  const loadTeamsStatus = useCallback(async () => {
+    try {
+      const r = await authedFetch("/api/v1/rencontres/teams-sync/status");
+      if (!r.ok) return;
+      const data = (await r.json()) as {
+        configured?: boolean;
+        imported_rencontre_ids?: number[];
+      };
+      setTeamsConfigured(!!data.configured);
+      setTeamsImportedIds(new Set(data.imported_rencontre_ids || []));
+    } catch {
+      /* silencieux — le bouton restera simplement caché */
+    }
+  }, []);
+
+  async function runTeamsSync() {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const r = await authedFetch("/api/v1/rencontres/teams-sync/run", {
+        method: "POST"
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        setSyncMsg(`Synchro échouée : ${t.slice(0, 200)}`);
+        return;
+      }
+      const res = (await r.json()) as {
+        imported?: { title: string }[];
+        pending?: number;
+        no_transcript?: number;
+      };
+      const n = res.imported?.length || 0;
+      if (n > 0) {
+        setSyncMsg(
+          `${n} rencontre${n > 1 ? "s" : ""} importée${n > 1 ? "s" : ""} de Teams ✓`
+        );
+        await load();
+        await loadTeamsStatus();
+      } else if ((res.pending || 0) > 0) {
+        setSyncMsg(
+          "Aucune nouvelle transcription prête — les transcriptions Teams " +
+            "prennent quelques minutes après la fin d'un meeting. Réessaie " +
+            "tantôt."
+        );
+      } else {
+        setSyncMsg("Rien de nouveau à importer.");
+      }
+    } catch (e) {
+      setSyncMsg(`Synchro échouée : ${(e as Error).message}`);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   const [createOpen, setCreateOpen] = useState(false);
   const [fTitle, setFTitle] = useState("");
   const [fDate, setFDate] = useState("");
@@ -111,7 +179,8 @@ export default function RencontresListPage() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadTeamsStatus();
+  }, [load, loadTeamsStatus]);
 
   async function submitCreate(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -149,18 +218,44 @@ export default function RencontresListPage() {
         }
         subtitle="Conseils d'actionnaires, retraites stratégiques, comptes rendus"
         rightSlot={
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            className="btn-accent inline-flex items-center gap-1.5 text-sm"
-          >
-            <Plus className="h-4 w-4" />
-            Nouvelle rencontre
-          </button>
+          <span className="flex items-center gap-2">
+            {teamsConfigured ? (
+              <button
+                type="button"
+                onClick={() => void runTeamsSync()}
+                disabled={syncing}
+                title="Importe les rencontres Teams transcrites en fiches pré-remplies (transcription + résumé IA)"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm font-medium text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+              >
+                {syncing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                {syncing ? "Synchro…" : "Synchroniser Teams"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="btn-accent inline-flex items-center gap-1.5 text-sm"
+            >
+              <Plus className="h-4 w-4" />
+              Nouvelle rencontre
+            </button>
+          </span>
         }
       />
 
       <div className="p-4 lg:p-6">
+        {syncMsg ? (
+          <p
+            className="mb-3 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-300"
+            role="status"
+          >
+            {syncMsg}
+          </p>
+        ) : null}
         {filterEntId ? (
           <p className="mb-3 text-xs" style={{ color: "var(--qg-text-muted)" }}>
             Filtré sur l&apos;entreprise{" "}
@@ -264,6 +359,15 @@ export default function RencontresListPage() {
                             brouillon
                           </span>
                         )}
+                        {teamsImportedIds.has(r.id) ? (
+                          <span
+                            className="inline-flex items-center gap-0.5 rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 py-0 text-[10px] font-semibold text-sky-300"
+                            title="Importée automatiquement depuis Teams"
+                          >
+                            <Video className="h-2.5 w-2.5" />
+                            Teams
+                          </span>
+                        ) : null}
                       </div>
                       {entNames.length > 0 ? (
                         <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px]" style={{ color: "var(--qg-text-muted)" }}>
