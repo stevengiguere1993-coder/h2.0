@@ -991,6 +991,11 @@ async def init_db() -> None:
             ("lead_analyses", "tri_pct_investisseur", "NUMERIC(6, 4)"),
             ("lead_analyses", "tri_croissance_loyers", "NUMERIC(6, 4)"),
             ("lead_analyses", "tri_croissance_depenses", "NUMERIC(6, 4)"),
+            # Motif de perte d'un lead construction (juin 2026) : renseigné
+            # quand le lead passe en `lost` (Refusé). NULL sur les lignes
+            # existantes => neutre. Sans cet ALTER, le SELECT sur
+            # contact_requests plante (colonne mappée par l'ORM mais absente).
+            ("contact_requests", "lost_reason", "VARCHAR(120)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
