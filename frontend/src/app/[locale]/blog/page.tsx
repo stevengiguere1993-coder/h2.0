@@ -10,12 +10,22 @@ export const metadata: Metadata = {
     "Conseils, budgets et guides de rénovation pour le Grand Montréal."
 };
 
-type Props = { params: Promise<{ locale: string }> };
+type Props = {
+  params: Promise<{ locale: string }>;
+  searchParams: Promise<{ page?: string }>;
+};
 
-export default async function BlogIndex({ params }: Props) {
+const PAGE_SIZE = 24;
+
+export default async function BlogIndex({ params, searchParams }: Props) {
   const { locale } = await params;
+  const { page: pageParam } = await searchParams;
   setRequestLocale(locale);
-  const articles = await listArticles(locale, 30);
+  const page = Math.max(1, Number(pageParam) || 1);
+  // On demande PAGE_SIZE + 1 pour savoir s'il existe une page suivante.
+  const rows = await listArticles(locale, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE);
+  const hasNext = rows.length > PAGE_SIZE;
+  const articles = rows.slice(0, PAGE_SIZE);
 
   return (
     <section className="section">
@@ -63,6 +73,36 @@ export default async function BlogIndex({ params }: Props) {
             ))}
           </div>
         )}
+
+        {articles.length > 0 && (page > 1 || hasNext) ? (
+          <nav className="mt-12 flex items-center justify-between gap-4">
+            {page > 1 ? (
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={{ pathname: "/blog", query: { page: page - 1 } } as any}
+                className="btn-secondary text-sm"
+              >
+                {locale === "fr" ? "← Précédent" : "← Previous"}
+              </Link>
+            ) : (
+              <span />
+            )}
+            <span className="text-xs text-white/50">
+              {locale === "fr" ? "Page" : "Page"} {page}
+            </span>
+            {hasNext ? (
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={{ pathname: "/blog", query: { page: page + 1 } } as any}
+                className="btn-secondary text-sm"
+              >
+                {locale === "fr" ? "Suivant →" : "Next →"}
+              </Link>
+            ) : (
+              <span />
+            )}
+          </nav>
+        ) : null}
       </div>
     </section>
   );

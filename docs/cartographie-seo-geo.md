@@ -135,17 +135,20 @@ vers les articles de blog correspondants, et inversement.
 
 ---
 
-## 10. Écarts & plan d'action priorisé
+## 10. Écarts & plan d'action — état
 
-| # | Écart constaté | Impact | Action |
+| # | Écart constaté | Impact | Statut |
 |---|---|---|---|
-| **P1** | **Les ~3 456 articles IA ne sont PAS au sitemap.** Seul `/blog` (index, 20 items) y figure. Le reste est quasi orphelin. | 🔴 Élevé — du contenu produit chaque jour reste sous-découvert par Google. | Rendre `sitemap.ts` async et y injecter les `/blog/{slug}` via l'API `/api/v1/blog`. |
-| **P2** | Pages géo (couche B) **uniquement en FR** au sitemap ; pas d'`alternates.languages` (hreflang) sur la route `renovation`. | 🟠 Moyen — marché anglophone (West Island) mal servi. | Pré-rendre la variante `/en/...` + ajouter hreflang FR/EN. |
-| **P3** | **Pas de `BreadcrumbList`** JSON-LD sur les pages géo. | 🟠 Moyen — fil d'Ariane SERP manquant. | Ajouter un 3ᵉ nœud `BreadcrumbList` au `@graph`. |
-| **P4** | Maillage cloisonné : pages géo ↔ articles de blog non reliés. | 🟡 Faible-moyen | Lier chaque page géo aux articles du même `city`/`service`. |
-| **P5** | Écart de libellé ville front/back (« Saint-Bruno-de-Montarville » vs « Saint-Bruno »). | 🟢 Faible | Harmoniser le nom dans `seo_daily.py`. |
-| **P6** | Index blog plafonné à `limit=20` → faible maillage vers le contenu profond. | 🟡 Faible-moyen | Pagination ou archive `/blog/villes`, `/blog/services`. |
+| **P1** | Les ~3 456 articles IA n'étaient PAS au sitemap (seul `/blog` y figurait). | 🔴 Élevé | ✅ **Fait** — `sitemap.ts` async + endpoint `GET /blog/sitemap` ; chaque `/blog/{slug}` (FR et `/en/...`) est listé. |
+| **P2** | Pages géo uniquement en FR ; pas de hreflang. | 🟠 Moyen | ⏸️ **Différé** — le gabarit `renovation` et les données `seo-locations.ts` sont 100 % en français. Émettre des URLs `/en/...` afficherait du texte FR (mauvaise langue + duplication) → **chantier de traduction de contenu**, pas un câblage. |
+| **P3** | Pas de `BreadcrumbList` JSON-LD sur les pages géo. | 🟠 Moyen | ✅ **Fait** — nœud `BreadcrumbList` (Accueil → service → ville) ajouté au `@graph`. |
+| **P4** | Pages géo ↔ articles de blog non reliés. | 🟡 Faible-moyen | ✅ **Fait** — section « Guides » sur chaque page géo (filtres API `service`/`city`). |
+| **P5** | Libellé ville front/back divergent. | 🟢 Faible | ✅ **Fait** — `seo_daily.py` utilise « Saint-Bruno-de-Montarville ». |
+| **P6** | Index blog plafonné → contenu profond peu maillé. | 🟡 Faible-moyen | ✅ **Fait** — pagination `?page=` (24/page, Précédent/Suivant). |
 
 > Les commentaires « 80 / 400 pages » historiques dans `sitemap.ts` et
-> `seo-locations.ts` ont été corrigés en même temps que cette carte : le
-> compte réel est **432** pages géo.
+> `seo-locations.ts` ont été corrigés : le compte réel est **432** pages géo.
+>
+> **Reste à faire (P2)** : produire les variantes EN (copy du gabarit +
+> traductions des 8 services dans `seo-locations.ts`), puis émettre les
+> `/en/renovation/...` au sitemap avec `alternates.languages` FR/EN.

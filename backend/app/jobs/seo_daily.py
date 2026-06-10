@@ -49,7 +49,7 @@ CITIES = [
     "Beaconsfield", "Kirkland", "Dorval", "L'Île-Bizard",
     # Rive-Sud
     "Longueuil", "Brossard", "Boucherville", "Saint-Lambert",
-    "La Prairie", "Candiac", "Chambly", "Saint-Bruno",
+    "La Prairie", "Candiac", "Chambly", "Saint-Bruno-de-Montarville",
     "Saint-Hubert", "Saint-Constant", "Châteauguay", "Delson",
     # Rive-Nord
     "Laval", "Terrebonne", "Repentigny", "Mascouche", "Blainville",

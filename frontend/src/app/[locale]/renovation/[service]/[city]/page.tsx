@@ -5,12 +5,15 @@ import { ArrowRight, CheckCircle2, MapPin } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { ContactForm } from "@/components/contact-form";
+import { articleKeyForService, listArticlesFor } from "@/lib/blog";
 import {
   SEO_CITIES,
   SEO_SERVICES,
   getSeoCity,
   getSeoService
 } from "@/lib/seo-locations";
+
+const SITE = "https://immohorizon.com";
 
 type Props = {
   params: Promise<{ locale: string; service: string; city: string }>;
@@ -56,6 +59,17 @@ export default async function ServiceCityPage({ params }: Props) {
     a: f.a.replaceAll("{city}", c.name)
   }));
 
+  // Maillage géo ↔ blog : articles ciblant cette ville + ce service.
+  const articleKey = articleKeyForService(s.slug);
+  const relatedArticles = articleKey
+    ? await listArticlesFor(locale, {
+        service: articleKey,
+        city: c.name,
+        limit: 4
+      })
+    : [];
+
+  const canonical = `${SITE}/renovation/${s.slug}/${c.slug}`;
   const jsonLd = {
     "@context": "https://schema.org",
     "@graph": [
@@ -66,10 +80,28 @@ export default async function ServiceCityPage({ params }: Props) {
         provider: {
           "@type": "GeneralContractor",
           name: "Horizon Services Immobiliers",
-          url: "https://immohorizon.com",
+          url: SITE,
           email: "info@immohorizon.com"
         },
         description: s.description
+      },
+      {
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: "Accueil", item: SITE },
+          {
+            "@type": "ListItem",
+            position: 2,
+            name: s.nameCap,
+            item: `${SITE}/services/${s.slug}`
+          },
+          {
+            "@type": "ListItem",
+            position: 3,
+            name: `${s.nameCap} à ${c.name}`,
+            item: canonical
+          }
+        ]
       },
       {
         "@type": "FAQPage",
@@ -180,6 +212,42 @@ export default async function ServiceCityPage({ params }: Props) {
           </div>
         </div>
       </section>
+
+      {/* Guides liés (maillage géo ↔ blog) */}
+      {relatedArticles.length > 0 ? (
+        <section className="section">
+          <div className="container">
+            <h2 className="text-2xl font-bold text-white sm:text-3xl">
+              Guides — {s.name} à {c.name}
+            </h2>
+            <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              {relatedArticles.map((a) => (
+                <Link
+                  key={a.id}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={
+                    { pathname: "/blog/[slug]", params: { slug: a.slug } } as any
+                  }
+                  className="group rounded-2xl border border-brand-800 bg-brand-900 p-6 transition hover:border-accent-500 hover:bg-brand-900/70"
+                >
+                  <h3 className="text-base font-semibold text-white group-hover:text-accent-500">
+                    {a.title}
+                  </h3>
+                  {a.excerpt ? (
+                    <p className="mt-2 line-clamp-3 text-sm text-brand-200">
+                      {a.excerpt}
+                    </p>
+                  ) : null}
+                  <span className="mt-4 inline-flex items-center text-sm text-accent-500">
+                    Lire le guide
+                    <ArrowRight className="ml-1 h-4 w-4" />
+                  </span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       {/* Internal linking */}
       <section className="section">
