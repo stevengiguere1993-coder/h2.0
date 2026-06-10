@@ -51,8 +51,9 @@ export default function sitemap(): MetadataRoute.Sitemap {
     }
   }
 
-  // 80 SEO local landing pages: /renovation/{service}/{city}
-  // Only emitted for the default locale (FR) where they are pre-rendered.
+  // 432 SEO local landing pages: /renovation/{service}/{city}
+  // (54 villes × 8 services). Only emitted for the default locale (FR)
+  // where they are pre-rendered.
   for (const s of SEO_SERVICES) {
     for (const c of SEO_CITIES) {
       entries.push({
