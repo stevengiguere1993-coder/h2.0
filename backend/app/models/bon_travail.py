@@ -39,6 +39,11 @@ class BonTravail(Base, TimestampUpdateMixin):
         String(32), nullable=False, default=BonTravailStatus.DRAFT.value, index=True
     )
 
+    # Volet d'origine du bon : "gestion_immo" quand il est créé depuis la
+    # zone Gestion immobilière (réparation d'immeuble), sinon NULL/"construction".
+    # Sert au miroir lecture seule côté gestion immobilière.
+    origin: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+
     sent_to_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     signed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

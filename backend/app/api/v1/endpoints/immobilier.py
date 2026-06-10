@@ -34,6 +34,10 @@ from app.api.deps import CurrentUser, DBSession
 from app.models.entreprise import Entreprise
 from app.models.bon_travail import BonTravail
 from app.models.client import Client
+from app.models.employe import Employe
+from app.models.project import Project
+from app.models.project_phase import ProjectPhase
+from app.models.sous_traitant import SousTraitant
 from app.models.immobilier import (
     Bail,
     BailStatus,
@@ -781,6 +785,7 @@ async def create_bon_from_immeuble(
         scope_md=scope,
         client_id=client.id if client else None,
         status="draft",
+        origin="gestion_immo",
     )
     bon.created_at = _now()
     bon.updated_at = _now()
@@ -794,6 +799,247 @@ async def create_bon_from_immeuble(
         "client_name": ent.name if ent else None,
         "client_created": client_created,
     }
+
+
+# ── Miroir lecture seule des bons de travail (gestion immobilière) ─────
+#
+# Kyle (volet immobilier) crée des bons de travail qui partent en
+# Construction. Il doit pouvoir SUIVRE leur avancement depuis sa zone,
+# sans pouvoir assigner de personnes ni modifier la planification (ça reste
+# du ressort de Construction). Ces deux endpoints servent un miroir en
+# lecture seule, gardé par `_require_volet` (immobilier).
+
+
+def _project_status_progress(status_value: Optional[str]) -> int:
+    """Pourcentage indicatif d'avancement à partir du statut projet."""
+    return {
+        "planned": 5,
+        "ready_to_start": 15,
+        "in_progress": 60,
+        "suspended": 40,
+        "delivered": 100,
+    }.get(status_value or "", 0)
+
+
+class _BonAvancementProject(BaseModel):
+    id: int
+    label: str
+    status: Optional[str]
+    progress_pct: int
+    start_date: Optional[date]
+    end_date: Optional[date]
+    phase_count: int
+
+
+class _BonAvancementItem(BaseModel):
+    id: int
+    reference: str
+    title: str
+    status: str
+    created_at: Optional[datetime]
+    sent_at: Optional[datetime]
+    signed_at: Optional[datetime]
+    client_name: Optional[str]
+    project: Optional[_BonAvancementProject]
+
+
+@router.get("/bons-travail", response_model=List[_BonAvancementItem])
+async def list_gestion_immo_bons(db: DBSession, user: CurrentUser) -> List[_BonAvancementItem]:
+    """Liste TOUS les bons de travail issus de la gestion immobilière, avec
+    leur avancement (statut du bon + état du chantier lié). Lecture seule."""
+    _require_volet(user)
+    bons = (
+        await db.execute(
+            select(BonTravail)
+            .where(
+                (BonTravail.origin == "gestion_immo")
+                | (BonTravail.scope_md.ilike("%Gestion immobilière%"))
+            )
+            .order_by(BonTravail.created_at.desc())
+        )
+    ).scalars().all()
+    if not bons:
+        return []
+
+    client_ids = {b.client_id for b in bons if b.client_id}
+    clients = {
+        c.id: c.name
+        for c in (
+            await db.execute(select(Client).where(Client.id.in_(client_ids)))
+        ).scalars().all()
+    } if client_ids else {}
+
+    project_ids = {b.project_id for b in bons if b.project_id}
+    projects = {
+        p.id: p
+        for p in (
+            await db.execute(select(Project).where(Project.id.in_(project_ids)))
+        ).scalars().all()
+    } if project_ids else {}
+
+    phase_counts: dict[int, int] = {}
+    if project_ids:
+        rows = (
+            await db.execute(
+                select(ProjectPhase.project_id, func.count(ProjectPhase.id))
+                .where(ProjectPhase.project_id.in_(project_ids))
+                .group_by(ProjectPhase.project_id)
+            )
+        ).all()
+        phase_counts = {pid: int(cnt) for pid, cnt in rows}
+
+    out: List[_BonAvancementItem] = []
+    for b in bons:
+        proj_summary = None
+        proj = projects.get(b.project_id) if b.project_id else None
+        if proj is not None:
+            proj_summary = _BonAvancementProject(
+                id=proj.id,
+                label=(proj.address or proj.name or f"Projet #{proj.id}"),
+                status=proj.status,
+                progress_pct=_project_status_progress(proj.status),
+                start_date=proj.start_date,
+                end_date=proj.end_date,
+                phase_count=phase_counts.get(proj.id, 0),
+            )
+        out.append(
+            _BonAvancementItem(
+                id=b.id,
+                reference=b.reference,
+                title=b.title,
+                status=b.status,
+                created_at=b.created_at,
+                sent_at=b.sent_at,
+                signed_at=b.signed_at,
+                client_name=clients.get(b.client_id) if b.client_id else None,
+                project=proj_summary,
+            )
+        )
+    return out
+
+
+class _BonPhaseRead(BaseModel):
+    id: int
+    name: str
+    start_date: Optional[date]
+    end_date: Optional[date]
+    duration_days: Optional[float]
+    assignee_name: Optional[str]
+
+
+class _BonAvancementDetail(BaseModel):
+    id: int
+    reference: str
+    title: str
+    description: Optional[str]
+    scope_md: Optional[str]
+    status: str
+    created_at: Optional[datetime]
+    sent_at: Optional[datetime]
+    signed_at: Optional[datetime]
+    client_name: Optional[str]
+    project: Optional[_BonAvancementProject]
+    phases: List[_BonPhaseRead]
+
+
+@router.get("/bons-travail/{bon_id}", response_model=_BonAvancementDetail)
+async def get_gestion_immo_bon(
+    bon_id: int, db: DBSession, user: CurrentUser
+) -> _BonAvancementDetail:
+    """Détail lecture seule d'un bon de travail gestion immobilière :
+    statut + planification du chantier lié (phases, dates, personnes
+    assignées affichées mais NON modifiables)."""
+    _require_volet(user)
+    bon = await db.get(BonTravail, bon_id)
+    if bon is None or not (
+        bon.origin == "gestion_immo"
+        or (bon.scope_md and "Gestion immobilière" in bon.scope_md)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bon de travail introuvable.",
+        )
+
+    client_name = None
+    if bon.client_id:
+        c = await db.get(Client, bon.client_id)
+        client_name = c.name if c else None
+
+    proj_summary = None
+    phases_out: List[_BonPhaseRead] = []
+    if bon.project_id:
+        proj = await db.get(Project, bon.project_id)
+        if proj is not None:
+            phases = (
+                await db.execute(
+                    select(ProjectPhase)
+                    .where(ProjectPhase.project_id == proj.id)
+                    .order_by(ProjectPhase.position.asc(), ProjectPhase.id.asc())
+                )
+            ).scalars().all()
+            proj_summary = _BonAvancementProject(
+                id=proj.id,
+                label=(proj.address or proj.name or f"Projet #{proj.id}"),
+                status=proj.status,
+                progress_pct=_project_status_progress(proj.status),
+                start_date=proj.start_date,
+                end_date=proj.end_date,
+                phase_count=len(phases),
+            )
+            # Pré-charge les noms des personnes assignées (employés + ST).
+            emp_ids = {p.assignee_employe_id for p in phases if p.assignee_employe_id}
+            st_ids = {
+                p.assignee_sous_traitant_id for p in phases if p.assignee_sous_traitant_id
+            }
+            emps = {
+                e.id: e.full_name
+                for e in (
+                    await db.execute(select(Employe).where(Employe.id.in_(emp_ids)))
+                ).scalars().all()
+            } if emp_ids else {}
+            sts = {
+                s.id: s.full_name
+                for s in (
+                    await db.execute(
+                        select(SousTraitant).where(SousTraitant.id.in_(st_ids))
+                    )
+                ).scalars().all()
+            } if st_ids else {}
+            for p in phases:
+                end_d = None
+                if p.start_date is not None and p.duration_days:
+                    span = max(int(p.duration_days) - 1, 0)
+                    end_d = p.start_date + timedelta(days=span)
+                assignee = None
+                if p.assignee_employe_id:
+                    assignee = emps.get(p.assignee_employe_id)
+                elif p.assignee_sous_traitant_id:
+                    assignee = sts.get(p.assignee_sous_traitant_id)
+                phases_out.append(
+                    _BonPhaseRead(
+                        id=p.id,
+                        name=p.name,
+                        start_date=p.start_date,
+                        end_date=end_d,
+                        duration_days=float(p.duration_days) if p.duration_days else None,
+                        assignee_name=assignee,
+                    )
+                )
+
+    return _BonAvancementDetail(
+        id=bon.id,
+        reference=bon.reference,
+        title=bon.title,
+        description=bon.description,
+        scope_md=bon.scope_md,
+        status=bon.status,
+        created_at=bon.created_at,
+        sent_at=bon.sent_at,
+        signed_at=bon.signed_at,
+        client_name=client_name,
+        project=proj_summary,
+        phases=phases_out,
+    )
 
 
 # ── Retirer une entreprise du portefeuille immobilier ──────────────────

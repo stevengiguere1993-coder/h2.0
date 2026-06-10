@@ -137,6 +137,7 @@ async def init_db() -> None:
             ("sous_traitants", "punctuality_rating", "INTEGER"),
             ("sous_traitants", "quality_rating", "INTEGER"),
             ("sous_traitants", "region", "VARCHAR(255)"),
+            ("bons_travail", "origin", "VARCHAR(32)"),
             ("sous_traitants", "charges_travel_fee", "BOOLEAN"),
             ("sous_traitants", "travel_fee_amount", "NUMERIC(10, 2)"),
             ("sous_traitants", "travel_fee_notes", "TEXT"),
