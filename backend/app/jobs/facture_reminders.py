@@ -217,6 +217,9 @@ async def run() -> dict:
                 fa.next_reminder_at = now + timedelta(
                     days=REMINDER_INTERVAL_DAYS
                 )
+                # Persiste tout de suite : si le job plante plus loin, on ne
+                # re-traitera pas cette facture au prochain run.
+                await db.commit()
                 continue
 
             if not mailer.ready:
@@ -262,6 +265,11 @@ async def run() -> dict:
                 fa.next_reminder_at = now + timedelta(
                     days=REMINDER_INTERVAL_DAYS
                 )
+                # Commit immédiat APRÈS l'envoi : le rappel envoyé est
+                # enregistré sur-le-champ. Si le job plante sur une facture
+                # suivante, on ne renvoie pas ce rappel-ci au prochain run
+                # (évite les doubles courriels sur échec partiel).
+                await db.commit()
             except Exception as exc:
                 log.exception("Reminder send failed for %s: %s", fa.reference, exc)
 

@@ -95,9 +95,18 @@ async def trigger_follow_up_reminders(
 async def trigger_facture_reminders(
     x_cron_secret: Optional[str] = Header(default=None),
     secret: Optional[str] = Query(default=None),
+    force: bool = Query(default=False),
 ) -> CronResult:
     _check_secret(x_cron_secret, secret)
+    from app.db.session import AsyncSessionLocal
     from app.jobs.facture_reminders import run as _job_run
+    from app.services.cron_guard import claim_cron_run
+
+    # Anti-doublon : pas deux fois en moins de 2 h (sauf force).
+    if not force:
+        async with AsyncSessionLocal() as gdb:
+            if not await claim_cron_run(gdb, "facture-reminders", 2 * 3600):
+                return CronResult(ok=True, job="facture-reminders")
 
     try:
         await _job_run()
@@ -558,6 +567,7 @@ async def _safe(name: str, coro_factory, results: dict) -> None:
 async def trigger_all_daily(
     x_cron_secret: Optional[str] = Header(default=None),
     secret: Optional[str] = Query(default=None),
+    force: bool = Query(default=False),
 ) -> MegaCronResult:
     """Mega-cron daily : exécute tous les jobs schedulés du jour
     en séquence dans un seul appel HTTP. À configurer une seule fois
@@ -566,9 +576,27 @@ async def trigger_all_daily(
 
     Gère les erreurs job par job — si l'un échoue, les suivants
     s'exécutent quand même et le rapport agrégé remonte les détails.
+
+    Anti-doublon : refuse de tourner si un run a déjà eu lieu il y a moins
+    de 6 h (sauf ``force=true``), pour éviter les doubles courriels de
+    rappel si le scheduler rejoue l'appel.
     """
     _check_secret(x_cron_secret, secret)
     from app.db.session import AsyncSessionLocal
+    from app.services.cron_guard import claim_cron_run
+
+    if not force:
+        async with AsyncSessionLocal() as gdb:
+            claimed = await claim_cron_run(gdb, "all-daily", 6 * 3600)
+        if not claimed:
+            return MegaCronResult(
+                ok=True,
+                job="all-daily",
+                jobs_run=0,
+                jobs_ok=0,
+                jobs_failed=0,
+                details={"skipped": "run trop récent (< 6 h) — anti-doublon"},
+            )
 
     details: dict = {}
 
