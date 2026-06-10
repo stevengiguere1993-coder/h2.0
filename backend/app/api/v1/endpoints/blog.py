@@ -44,12 +44,25 @@ async def list_articles(
     locale: str = Query(default="fr", pattern="^(fr|en)$"),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
+    service: Optional[str] = Query(default=None, max_length=64),
+    city: Optional[str] = Query(default=None, max_length=120),
 ) -> List[ArticleSummary]:
     stmt = (
         select(SeoArticle)
         .where(SeoArticle.published.is_(True))
         .where(SeoArticle.locale == locale)
-        .order_by(SeoArticle.published_at.desc().nulls_last(), SeoArticle.created_at.desc())
+    )
+    # Filtres optionnels — utilisés par les pages géo pour relier leurs
+    # articles (même service / même ville).
+    if service:
+        stmt = stmt.where(SeoArticle.target_service == service)
+    if city:
+        stmt = stmt.where(SeoArticle.target_city == city)
+    stmt = (
+        stmt.order_by(
+            SeoArticle.published_at.desc().nulls_last(),
+            SeoArticle.created_at.desc(),
+        )
         .offset(skip)
         .limit(limit)
     )
@@ -66,6 +79,39 @@ async def list_articles(
             published_at=r.published_at.isoformat() if r.published_at else None,
         )
         for r in rows
+    ]
+
+
+class ArticleSitemapEntry(BaseModel):
+    slug: str
+    locale: str
+    published_at: Optional[str] = None
+
+
+@router.get(
+    "/sitemap",
+    response_model=List[ArticleSitemapEntry],
+    summary="All published article slugs for the XML sitemap",
+)
+async def sitemap_articles(db: DBSession) -> List[ArticleSitemapEntry]:
+    # Charge léger (slug + locale + date) de TOUS les articles publiés,
+    # toutes locales. Consommé par frontend/src/app/sitemap.ts pour que
+    # chaque /blog/{slug} soit découvrable par Google.
+    stmt = (
+        select(
+            SeoArticle.slug, SeoArticle.locale, SeoArticle.published_at
+        )
+        .where(SeoArticle.published.is_(True))
+        .order_by(SeoArticle.published_at.desc().nulls_last())
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        ArticleSitemapEntry(
+            slug=slug,
+            locale=locale,
+            published_at=pub.isoformat() if pub else None,
+        )
+        for slug, locale, pub in rows
     ]
 
 
