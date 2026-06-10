@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -368,6 +368,35 @@ export default function CrmKanbanPage() {
     setHoverCol(null);
   }
 
+  // ── Drag tactile (mobile) ───────────────────────────────────────────
+  // Le HTML5 drag-and-drop ne fonctionne pas au doigt : on ajoute un
+  // glisser basé sur les Pointer Events, déclenché depuis la poignée
+  // (grip) de la carte. On retrouve la colonne sous le doigt via
+  // elementFromPoint(data-col-id).
+  function columnIdAtPoint(x: number, y: number): string | null {
+    if (typeof document === "undefined") return null;
+    const el = document.elementFromPoint(x, y);
+    const colEl = el?.closest("[data-col-id]");
+    return colEl?.getAttribute("data-col-id") || null;
+  }
+  function onTouchDragStart(id: number) {
+    setDragging(id);
+  }
+  function onTouchDragMove(x: number, y: number) {
+    setHoverCol(columnIdAtPoint(x, y));
+  }
+  function onTouchDragEnd(id: number, x: number, y: number) {
+    const cid = columnIdAtPoint(x, y);
+    const col = columns.find((c) => c.id === cid);
+    if (col) {
+      const item = items.find((p) => p.id === id);
+      const currentCol = item ? item.kanban_column || item.status : null;
+      if (item && currentCol !== col.id) moveProspect(id, col);
+    }
+    setDragging(null);
+    setHoverCol(null);
+  }
+
   return (
     <>
       <AppTopbar
@@ -409,6 +438,7 @@ export default function CrmKanbanPage() {
               return (
                 <div
                   key={col.id}
+                  data-col-id={col.id}
                   onDragOver={(e) => {
                     e.preventDefault();
                     setHoverCol(col.id);
@@ -489,6 +519,9 @@ export default function CrmKanbanPage() {
                             dragging={dragging === p.id}
                             onDragStart={() => onDragStart(p.id)}
                             onDragEnd={onDragEnd}
+                            onTouchDragStart={() => onTouchDragStart(p.id)}
+                            onTouchDragMove={onTouchDragMove}
+                            onTouchDragEnd={(x, y) => onTouchDragEnd(p.id, x, y)}
                             onDelete={() => deleteProspect(p.id, p.name)}
                             onCreateSoumission={() => startSoumission(p)}
                           />
@@ -521,6 +554,9 @@ function ProspectCard({
   dragging,
   onDragStart,
   onDragEnd,
+  onTouchDragStart,
+  onTouchDragMove,
+  onTouchDragEnd,
   onDelete,
   onCreateSoumission
 }: {
@@ -528,9 +564,15 @@ function ProspectCard({
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
+  onTouchDragStart: () => void;
+  onTouchDragMove: (x: number, y: number) => void;
+  onTouchDragEnd: (x: number, y: number) => void;
   onDelete: () => void;
   onCreateSoumission: () => void;
 }) {
+  // Suivi du geste tactile sur la poignée (distingue tap vs glisser).
+  const touch = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+
   return (
     <div
       draggable
@@ -540,7 +582,43 @@ function ProspectCard({
         dragging ? "opacity-40" : ""
       }`}
     >
-      <GripVertical className="absolute left-1 top-3 h-3 w-3 text-white/20" />
+      {/* Poignée de glissement — fonctionne au doigt (Pointer Events).
+          touch-action:none pour que le glisser ne déclenche pas le scroll. */}
+      <div
+        className="absolute left-0 top-0 flex h-full w-7 cursor-grab touch-none items-start justify-center pt-3 text-white/30 active:cursor-grabbing"
+        style={{ touchAction: "none" }}
+        aria-label="Glisser pour déplacer"
+        title="Glisser pour déplacer"
+        onPointerDown={(e) => {
+          if (e.pointerType === "mouse") return; // souris → DnD HTML5
+          touch.current = { x: e.clientX, y: e.clientY, moved: false };
+          (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          const t = touch.current;
+          if (!t || e.pointerType === "mouse") return;
+          const dist = Math.hypot(e.clientX - t.x, e.clientY - t.y);
+          if (!t.moved && dist > 8) {
+            t.moved = true;
+            onTouchDragStart();
+          }
+          if (t.moved) {
+            e.preventDefault();
+            onTouchDragMove(e.clientX, e.clientY);
+          }
+        }}
+        onPointerUp={(e) => {
+          const t = touch.current;
+          touch.current = null;
+          if (!t || e.pointerType === "mouse") return;
+          if (t.moved) onTouchDragEnd(e.clientX, e.clientY);
+        }}
+        onPointerCancel={() => {
+          touch.current = null;
+        }}
+      >
+        <GripVertical className="h-4 w-4" />
+      </div>
 
       <div className="absolute right-2 top-2 flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
         <button
@@ -573,7 +651,7 @@ function ProspectCard({
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={`/app/crm/${p.id}` as any}
-        className="block pl-3 pr-12"
+        className="block pl-5 pr-12"
       >
         <p className="truncate text-sm font-semibold text-white">{p.name}</p>
         {p.phone ? (

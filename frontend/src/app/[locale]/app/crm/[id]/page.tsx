@@ -63,7 +63,7 @@ const STATUS_LABELS: Record<string, string> = {
   new: "Nouveau",
   contacted: "À rappeler",
   rdv_prevu: "Rendez-vous prévu",
-  qualified: "Qualifié",
+  qualified: "Soumission en préparation",
   quoted: "Soumission envoyée",
   won: "Soumission acceptée",
   lost: "Soumission refusée",
