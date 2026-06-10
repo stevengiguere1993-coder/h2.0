@@ -1,8 +1,9 @@
 /**
  * SEO landing data: cities of Greater Montreal and renovation services.
  * Used by the dynamic /renovation/[service]/[city] route to render
- * 80 unique landing pages for local SEO. These pages are not linked
- * from the main navigation; they exist for Google + the sitemap.
+ * 432 unique landing pages for local SEO (54 villes × 8 services).
+ * These pages are not linked from the main navigation; they exist
+ * for Google + the sitemap.
  */
 
 export type SeoCity = {

@@ -1,6 +1,7 @@
 import type { MetadataRoute } from "next";
 
 import { routing } from "@/i18n/routing";
+import { listArticleSitemap } from "@/lib/blog";
 import { SEO_CITIES, SEO_SERVICES } from "@/lib/seo-locations";
 
 const BASE = process.env.NEXT_PUBLIC_SITE_URL || "https://immohorizon.com";
@@ -33,7 +34,7 @@ const HIGH_PRIORITY_PAGES = new Set([
   "/renovation-multilogement-montreal"
 ]);
 
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
   const entries: MetadataRoute.Sitemap = [];
 
@@ -51,8 +52,9 @@ export default function sitemap(): MetadataRoute.Sitemap {
     }
   }
 
-  // 80 SEO local landing pages: /renovation/{service}/{city}
-  // Only emitted for the default locale (FR) where they are pre-rendered.
+  // 432 SEO local landing pages: /renovation/{service}/{city}
+  // (54 villes × 8 services). Only emitted for the default locale (FR)
+  // where they are pre-rendered.
   for (const s of SEO_SERVICES) {
     for (const c of SEO_CITIES) {
       entries.push({
@@ -62,6 +64,21 @@ export default function sitemap(): MetadataRoute.Sitemap {
         priority: 0.8
       });
     }
+  }
+
+  // Articles de blog générés par le cron SEO. Chaque /blog/{slug} est
+  // listé pour être découvrable (sans ça, les milliers d'articles
+  // restent orphelins). EN sert sous /en/blog/{slug}. Résilient : si
+  // l'API est indisponible, le sitemap garde les pages statiques.
+  const articles = await listArticleSitemap();
+  for (const a of articles) {
+    const prefix = a.locale === routing.defaultLocale ? "" : `/${a.locale}`;
+    entries.push({
+      url: `${BASE}${prefix}/blog/${a.slug}`,
+      lastModified: a.published_at ? new Date(a.published_at) : now,
+      changeFrequency: "monthly",
+      priority: 0.6
+    });
   }
 
   return entries;
