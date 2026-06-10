@@ -8,9 +8,11 @@ import {
   Image as ImageIcon,
   Loader2,
   MapPin,
+  Pencil,
   Plus,
   Ruler,
-  Trash2
+  Trash2,
+  X
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -69,6 +71,8 @@ export function MeasurementsPanel({
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [photoMeasureOpen, setPhotoMeasureOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Mesure en cours d'édition (relevé checklist OU mesure simple).
+  const [editing, setEditing] = useState<Measurement | null>(null);
 
   const load = useCallback(async () => {
     if (!clientId && !contactRequestId) return;
@@ -150,6 +154,64 @@ export function MeasurementsPanel({
     const created = (await res.json()) as Measurement;
     setItems((xs) => [created, ...xs]);
     setChecklistOpen(false);
+  }
+
+  // Met à jour un relevé checklist existant (réutilise le modal de
+  // relevé pré-rempli, recalcule l'aire principale).
+  async function updateChecklist(
+    id: number,
+    payload: {
+      label: string;
+      area_ft2: number;
+      notes: string;
+      data: Record<string, unknown>;
+    }
+  ) {
+    const res = await authedFetch(`/api/v1/measurements/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        label: payload.label,
+        area_ft2: payload.area_ft2,
+        notes: payload.notes || null,
+        template_data_json: JSON.stringify(payload.data)
+      })
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt.slice(0, 240));
+    }
+    const updated = (await res.json()) as Measurement;
+    setItems((xs) => xs.map((x) => (x.id === id ? updated : x)));
+    setEditing(null);
+  }
+
+  // Met à jour une mesure simple (polygone, mur, photo) : libellé,
+  // aire, hauteur de mur, notes.
+  async function updateSimple(
+    id: number,
+    payload: {
+      label: string;
+      area_ft2: number;
+      wall_height_ft: number | null;
+      notes: string;
+    }
+  ) {
+    const res = await authedFetch(`/api/v1/measurements/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        label: payload.label,
+        area_ft2: payload.area_ft2,
+        wall_height_ft: payload.wall_height_ft,
+        notes: payload.notes || null
+      })
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt.slice(0, 240));
+    }
+    const updated = (await res.json()) as Measurement;
+    setItems((xs) => xs.map((x) => (x.id === id ? updated : x)));
+    setEditing(null);
   }
 
   async function persistPhotoMeasure(r: PhotoMeasureResult) {
@@ -309,6 +371,7 @@ export function MeasurementsPanel({
                 key={m.id}
                 measurement={m}
                 onRemove={() => remove(m.id)}
+                onEdit={() => setEditing(m)}
               />
             ))}
           </ul>
@@ -344,16 +407,202 @@ export function MeasurementsPanel({
           onDone={persistPhotoMeasure}
         />
       ) : null}
+
+      {editing && editing.kind === "checklist" && editing.template_type ? (
+        <MeasurementChecklistModal
+          initial={{
+            tplId: editing.template_type,
+            label: editing.label,
+            notes: editing.notes || "",
+            values: parseTemplateValues(editing.template_data_json)
+          }}
+          onClose={() => setEditing(null)}
+          onSubmit={(payload) => updateChecklist(editing.id, payload)}
+        />
+      ) : null}
+
+      {editing && editing.kind !== "checklist" ? (
+        <SimpleMeasurementEditModal
+          measurement={editing}
+          onClose={() => setEditing(null)}
+          onSubmit={(payload) => updateSimple(editing.id, payload)}
+        />
+      ) : null}
     </section>
+  );
+}
+
+/** Parse en toute sécurité le JSON des valeurs d'un relevé checklist. */
+function parseTemplateValues(json: string | null): Record<string, unknown> {
+  if (!json) return {};
+  try {
+    const v = JSON.parse(json);
+    return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Modal compact d'édition d'une mesure simple (polygone, mur, photo). */
+function SimpleMeasurementEditModal({
+  measurement: m,
+  onClose,
+  onSubmit
+}: {
+  measurement: Measurement;
+  onClose: () => void;
+  onSubmit: (payload: {
+    label: string;
+    area_ft2: number;
+    wall_height_ft: number | null;
+    notes: string;
+  }) => Promise<void>;
+}) {
+  const isVertical = m.kind === "vertical";
+  const isPhoto = m.kind === "photo";
+  const [label, setLabel] = useState(m.label);
+  const [area, setArea] = useState(String(m.area_ft2 ?? ""));
+  const [wallHeight, setWallHeight] = useState(
+    m.wall_height_ft != null ? String(m.wall_height_ft) : ""
+  );
+  const [notes, setNotes] = useState(m.notes || "");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    if (!label.trim()) {
+      setError("Donne un libellé à cette mesure.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit({
+        label: label.trim(),
+        area_ft2: Number(area) || 0,
+        wall_height_ft: isVertical && wallHeight ? Number(wallHeight) : null,
+        notes: notes.trim()
+      });
+    } catch (e) {
+      setError((e as Error).message);
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={() => (!submitting ? onClose() : null)}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+          <h3 className="text-sm font-bold text-white">Modifier la mesure</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="rounded-md p-1 text-white/60 hover:bg-white/5"
+            aria-label="Fermer"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="space-y-4 p-4">
+          <div>
+            <label className="label">Libellé</label>
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              className="input"
+              autoFocus
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">
+                {isPhoto ? "Longueur max" : "Aire"}
+                <span className="ml-1 text-xs text-white/40">
+                  ({isPhoto ? "ft" : "ft²"})
+                </span>
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={area}
+                onChange={(e) => setArea(e.target.value)}
+                className="input"
+              />
+            </div>
+            {isVertical ? (
+              <div>
+                <label className="label">
+                  Hauteur de mur
+                  <span className="ml-1 text-xs text-white/40">(ft)</span>
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={wallHeight}
+                  onChange={(e) => setWallHeight(e.target.value)}
+                  className="input"
+                />
+              </div>
+            ) : null}
+          </div>
+
+          <div>
+            <label className="label">Notes</label>
+            <textarea
+              rows={2}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="input"
+            />
+          </div>
+
+          {error ? <p className="text-sm text-rose-300">{error}</p> : null}
+
+          <div className="flex items-center justify-end gap-2 border-t border-brand-800 pt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={submitting}
+              className="btn-secondary text-sm"
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={submitting}
+              className="btn-accent text-sm disabled:opacity-60"
+            >
+              {submitting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              Mettre à jour
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
 function MeasurementCard({
   measurement: m,
-  onRemove
+  onRemove,
+  onEdit
 }: {
   measurement: Measurement;
   onRemove: () => void;
+  onEdit: () => void;
 }) {
   const tpl = m.template_type ? getTemplate(m.template_type) : null;
   const checklistEntries =
@@ -485,20 +734,36 @@ function MeasurementCard({
               : "🏠 Horizontale"}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onRemove}
-          className="rounded p-1 text-white/40 hover:text-rose-300"
-          aria-label="Supprimer"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded p-1 text-white/40 hover:text-accent-400"
+            aria-label="Modifier"
+            title="Modifier cette mesure"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={onRemove}
+            className="rounded p-1 text-white/40 hover:text-rose-300"
+            aria-label="Supprimer"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       {Number(m.area_ft2) > 0 ? (
-        <p className="mt-2 text-2xl font-bold text-accent-500">
-          {Number(m.area_ft2).toFixed(1)} ft²
-        </p>
+        <button
+          type="button"
+          onClick={onEdit}
+          className="mt-2 block text-left text-2xl font-bold text-accent-500 transition hover:text-accent-400"
+          title="Cliquer pour modifier"
+        >
+          {Number(m.area_ft2).toFixed(1)} {isPhoto ? "ft" : "ft²"}
+        </button>
       ) : null}
       {m.kind === "vertical" && m.wall_height_ft ? (
         <p className="text-xs text-white/50">
