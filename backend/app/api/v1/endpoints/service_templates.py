@@ -22,6 +22,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
+from app.models.purchase_order import PurchaseOrder
+from app.models.purchase_order_item import PurchaseOrderItem
 from app.models.service_template import ServiceTemplate, ServiceTemplateItem
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
@@ -94,6 +96,10 @@ class TemplateWithItems(TemplateRead):
 
 class ApplyToSoumission(BaseModel):
     soumission_id: int
+
+
+class ApplyToPurchaseOrder(BaseModel):
+    purchase_order_id: int
 
 
 async def _ensure_template(db, template_id: int) -> ServiceTemplate:
@@ -345,6 +351,89 @@ async def apply_to_soumission(
             await db.flush()
             await db.refresh(si)
             created_ids.append(si.id)
+            pos += 1
+
+    return created_ids
+
+
+# ---- apply to purchase order (#13) ----
+
+@router.post("/{template_id}/apply-to-po", response_model=List[int])
+async def apply_to_purchase_order(
+    template_id: int,
+    data: ApplyToPurchaseOrder,
+    db: DBSession,
+    _: CurrentUser,
+) -> List[int]:
+    """Copie chaque item du catalogue comme nouvelle ligne du bon de
+    commande cible. Un PO est interne (sans taxes) : on reprend le prix
+    unitaire du catalogue. Renvoie les IDs des lignes créées."""
+    t = await _ensure_template(db, template_id)
+    po = (
+        await db.execute(
+            select(PurchaseOrder).where(
+                PurchaseOrder.id == data.purchase_order_id
+            )
+        )
+    ).scalar_one_or_none()
+    if po is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Purchase order not found"
+        )
+
+    items = (
+        await db.execute(
+            select(ServiceTemplateItem)
+            .where(ServiceTemplateItem.template_id == template_id)
+            .order_by(ServiceTemplateItem.position.asc())
+        )
+    ).scalars().all()
+
+    current_max = (
+        await db.execute(
+            select(PurchaseOrderItem.position)
+            .where(PurchaseOrderItem.purchase_order_id == po.id)
+            .order_by(PurchaseOrderItem.position.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    pos = (int(current_max) + 1) if current_max is not None else 0
+
+    created_ids: List[int] = []
+    if not items:
+        # Catalogue sans sous-items → une seule ligne à partir des
+        # valeurs par défaut du modèle.
+        line = PurchaseOrderItem(
+            purchase_order_id=po.id,
+            position=pos,
+            description=t.name,
+            unit=t.default_unit,
+            quantity=1,
+            unit_price=float(t.default_unit_price or 0),
+            total=float(t.default_unit_price or 0),
+        )
+        db.add(line)
+        await db.flush()
+        await db.refresh(line)
+        created_ids.append(line.id)
+    else:
+        for it in items:
+            total = round(
+                float(it.default_quantity) * float(it.default_unit_price), 2
+            )
+            line = PurchaseOrderItem(
+                purchase_order_id=po.id,
+                position=pos,
+                description=it.description,
+                unit=it.unit,
+                quantity=float(it.default_quantity),
+                unit_price=float(it.default_unit_price),
+                total=total,
+            )
+            db.add(line)
+            await db.flush()
+            await db.refresh(line)
+            created_ids.append(line.id)
             pos += 1
 
     return created_ids
