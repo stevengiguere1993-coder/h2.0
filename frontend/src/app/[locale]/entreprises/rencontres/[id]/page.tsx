@@ -786,16 +786,33 @@ function SectionCard({
     };
   }, []);
 
-  async function uploadAudio(_file: File) {
-    // Désactivé : on garde uniquement la dictée live (gratuite,
-    // 100 % navigateur). Évite la dépendance Whisper API payante.
-    alert(
-      "L'upload audio n'est pas disponible — utilise plutôt « Dicter ». "
-      + "Le mode dictée a un auto-save toutes les 5s et se relance "
-      + "automatiquement quand le micro se met en pause. Tu peux dire "
-      + "« virgule », « point », « nouveau paragraphe » à la voix."
-    );
-    if (fileRef.current) fileRef.current.value = "";
+  async function uploadAudio(file: File) {
+    // Transcription serveur via Gemini (gratuit) — l'audio est envoyé,
+    // transcrit en français québécois avec interlocuteurs, puis ajouté
+    // au transcript de la section. Limite ~18 MB (≈ 30-45 min
+    // compressées) ; au-delà le backend renvoie un message clair.
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const r = await authedFetch(
+        `/api/v1/rencontres/${rencontreId}/sections/${section.id}/transcribe`,
+        { method: "POST", body: form }
+      );
+      if (!r.ok) {
+        const t = await r.text();
+        alert(t.slice(0, 300) || `Transcription échouée (HTTP ${r.status}).`);
+        return;
+      }
+      const updated = (await r.json()) as Section;
+      setTranscript(updated.transcript || "");
+      onChanged(updated);
+    } catch (e) {
+      alert((e as Error).message || "Erreur réseau pendant la transcription.");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
   }
 
   const summary = parseSummary(section.ai_summary_json);
@@ -863,6 +880,20 @@ function SectionCard({
                 ? "👉 Clique ici pour démarrer"
                 : "Dicter (mode persistant + auto-save)"}
           </button>
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading}
+            title="Téléverse un enregistrement (mp3, m4a, wav… max ~18 MB ≈ 30-45 min) — transcrit automatiquement en français québécois avec interlocuteurs"
+            className="inline-flex items-center gap-1.5 rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-[11px] font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+          >
+            {uploading ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <FileAudio className="h-3 w-3" />
+            )}
+            {uploading ? "Transcription en cours…" : "Téléverser un audio"}
+          </button>
           <span
             className="text-[10px]"
             style={{ color: "var(--qg-text-muted)" }}
@@ -873,7 +904,7 @@ function SectionCard({
           <input
             ref={fileRef}
             type="file"
-            accept="audio/*"
+            accept="audio/*,video/mp4,video/webm"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
