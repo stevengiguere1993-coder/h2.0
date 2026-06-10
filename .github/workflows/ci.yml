@@ -47,8 +47,6 @@ jobs:
     name: Frontend — lint (next lint)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Non bloquant : la base contient encore beaucoup de eslint-disable.
-    continue-on-error: true
     defaults:
       run:
         working-directory: frontend
@@ -60,15 +58,17 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      - run: npm run lint
+      - name: Lint (informatif)
+        # Non bloquant : la base contient encore beaucoup de eslint-disable.
+        # On surface les warnings sans casser la PR. À rendre bloquant une
+        # fois la dette de lint résorbée.
+        continue-on-error: true
+        run: npm run lint
 
   backend-tests:
     name: Backend — pytest
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Non bloquant : l'install des deps backend (weasyprint, etc.) peut
-    # être lourde/instable. On surface les résultats, sans bloquer.
-    continue-on-error: true
     defaults:
       run:
         working-directory: backend
@@ -85,4 +85,9 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
       - name: Run tests
+        # Les tests de calcul ne touchent pas la DB, mais l'import de la
+        # config (pydantic Settings) exige ces variables — valeurs factices.
+        env:
+          DATABASE_URL: postgresql+asyncpg://test:test@localhost/test
+          JWT_SECRET: ci-test-secret-not-used
         run: pytest -q
