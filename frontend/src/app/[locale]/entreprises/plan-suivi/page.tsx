@@ -438,13 +438,7 @@ export default function PlanSuiviPage() {
 
   return (
     <div className="min-h-screen bg-brand-950">
-      <QGTopbar
-        breadcrumbs={[
-          { label: "Entreprises", href: "/entreprises" as any },
-          { label: "Plan & Suivi" }
-        ]}
-        onOpenSidebar={onOpenSidebar}
-      />
+      <QGTopbar greeting="Plan & Suivi" subtitle="Entreprises" />
 
       <div className="mx-auto max-w-6xl px-4 py-6 lg:px-6">
         <PageDriveSection

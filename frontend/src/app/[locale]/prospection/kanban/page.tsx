@@ -13,7 +13,7 @@ export default async function ProspectionKanbanRedirectPage({
   params,
 }: {
   params: Promise<Params>;
-}): Promise<never> {
+}): Promise<void> {
   const { locale } = await params;
   redirect({ href: "/prospection/leads", locale });
 }

@@ -17,7 +17,13 @@ export function LanguageSwitcher() {
       type="button"
       onClick={() =>
         startTransition(() =>
-          router.replace(pathname, { locale: next, scroll: false })
+          // `usePathname()` renvoie le motif de route courant ; on re-navigue
+          // sur le même chemin dans l'autre locale. Le type de `replace`
+          // est plus large que celui de `pathname` (limitation next-intl).
+          router.replace(
+            pathname as Parameters<typeof router.replace>[0],
+            { locale: next, scroll: false }
+          )
         )
       }
       disabled={isPending}

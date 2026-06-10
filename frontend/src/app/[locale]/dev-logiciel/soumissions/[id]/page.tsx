@@ -543,8 +543,6 @@ function useDnd(ids: number[], onReorder: (orderedIds: number[]) => void) {
 function DragHandle(
   props: React.HTMLAttributes<HTMLSpanElement> & {
     draggable?: boolean;
-    onDragStart?: (ev: React.DragEvent) => void;
-    onDragEnd?: (ev: React.DragEvent) => void;
   }
 ) {
   return (

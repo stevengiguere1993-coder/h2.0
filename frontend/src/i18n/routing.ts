@@ -168,6 +168,9 @@ export const routing = defineRouting({
       fr: "/app/paie",
       en: "/app/paie"
     },
+    "/entreprises": { fr: "/entreprises", en: "/entreprises" },
+    "/immobilier": { fr: "/immobilier", en: "/immobilier" },
+    "/investisseur": { fr: "/investisseur", en: "/investisseur" },
     "/soumission/[token]": {
       fr: "/soumission/[token]",
       en: "/soumission/[token]"
