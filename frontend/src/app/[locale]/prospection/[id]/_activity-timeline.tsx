@@ -8,9 +8,11 @@ import {
   Loader2,
   Mail,
   MessageCircle,
+  Pencil,
   PhoneCall,
   Plus,
   StickyNote,
+  Trash2,
   Users
 } from "lucide-react";
 
@@ -77,6 +79,9 @@ export function ActivityTimeline({ leadId }: { leadId: number }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  // Édition / suppression d'une entrée existante de l'historique.
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -98,6 +103,32 @@ export function ActivityTimeline({ leadId }: { leadId: number }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function deleteAction(id: number) {
+    if (
+      !window.confirm(
+        "Supprimer cette action de l'historique ? C'est définitif."
+      )
+    )
+      return;
+    setDeletingId(id);
+    try {
+      const r = await authedFetch(`/api/v1/follow-ups/${id}`, {
+        method: "DELETE"
+      });
+      if (r.ok || r.status === 204) {
+        setItems((prev) => prev.filter((x) => x.id !== id));
+      } else if (r.status === 403) {
+        alert("Suppression réservée aux gestionnaires.");
+      } else {
+        alert(`Échec de la suppression (HTTP ${r.status}).`);
+      }
+    } catch (e) {
+      alert((e as Error).message);
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   return (
     <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
@@ -175,53 +206,92 @@ export function ActivityTimeline({ leadId }: { leadId: number }) {
                   }`}
                 />
                 <div className="rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <Icon className="h-3.5 w-3.5 text-emerald-400" />
-                      <span className="text-sm font-semibold text-white">
-                        {KIND_LABEL[it.kind] || it.kind}
-                      </span>
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                          OUTCOME_COLOR[it.outcome] || "bg-white/10 text-white/60"
-                        }`}
-                      >
-                        {OUTCOME_LABEL[it.outcome] || it.outcome}
-                      </span>
-                      {it.direction === "inbound" ? (
-                        <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-[10px] text-blue-300">
-                          Entrant
-                        </span>
+                  {editingId === it.id ? (
+                    <EditActionForm
+                      item={it}
+                      onSaved={() => {
+                        setEditingId(null);
+                        void load();
+                      }}
+                      onCancel={() => setEditingId(null)}
+                    />
+                  ) : (
+                    <>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Icon className="h-3.5 w-3.5 text-emerald-400" />
+                          <span className="text-sm font-semibold text-white">
+                            {KIND_LABEL[it.kind] || it.kind}
+                          </span>
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                              OUTCOME_COLOR[it.outcome] ||
+                              "bg-white/10 text-white/60"
+                            }`}
+                          >
+                            {OUTCOME_LABEL[it.outcome] || it.outcome}
+                          </span>
+                          {it.direction === "inbound" ? (
+                            <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-[10px] text-blue-300">
+                              Entrant
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <span className="text-[11px] text-white/40">
+                            {date.toLocaleString("fr-CA", {
+                              day: "2-digit",
+                              month: "short",
+                              hour: "2-digit",
+                              minute: "2-digit"
+                            })}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setEditingId(it.id)}
+                            title="Modifier cette action"
+                            aria-label="Modifier cette action"
+                            className="rounded p-1 text-white/30 hover:bg-white/10 hover:text-white"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void deleteAction(it.id)}
+                            disabled={deletingId === it.id}
+                            title="Supprimer cette action"
+                            aria-label="Supprimer cette action"
+                            className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-40"
+                          >
+                            {deletingId === it.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                      {it.notes ? (
+                        <p className="mt-1.5 whitespace-pre-wrap text-xs text-white/70">
+                          {it.notes}
+                        </p>
                       ) : null}
-                    </div>
-                    <span className="shrink-0 text-[11px] text-white/40">
-                      {date.toLocaleString("fr-CA", {
-                        day: "2-digit",
-                        month: "short",
-                        hour: "2-digit",
-                        minute: "2-digit"
-                      })}
-                    </span>
-                  </div>
-                  {it.notes ? (
-                    <p className="mt-1.5 whitespace-pre-wrap text-xs text-white/70">
-                      {it.notes}
-                    </p>
-                  ) : null}
-                  {nextDate ? (
-                    <p className="mt-2 flex items-center gap-1 text-[11px] text-violet-300">
-                      <Check className="h-3 w-3" />
-                      Prochaine action :{" "}
-                      {nextDate.toLocaleDateString("fr-CA", {
-                        day: "2-digit",
-                        month: "short",
-                        year: "numeric"
-                      })}
-                      {it.next_action_label
-                        ? ` — ${it.next_action_label}`
-                        : ""}
-                    </p>
-                  ) : null}
+                      {nextDate ? (
+                        <p className="mt-2 flex items-center gap-1 text-[11px] text-violet-300">
+                          <Check className="h-3 w-3" />
+                          Prochaine action :{" "}
+                          {nextDate.toLocaleDateString("fr-CA", {
+                            day: "2-digit",
+                            month: "short",
+                            year: "numeric"
+                          })}
+                          {it.next_action_label
+                            ? ` — ${it.next_action_label}`
+                            : ""}
+                        </p>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               </li>
             );
@@ -377,6 +447,158 @@ function LogActionForm({
           type="submit"
           disabled={saving}
           className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-emerald-950 hover:bg-emerald-400 disabled:opacity-50"
+        >
+          {saving ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Check className="h-3.5 w-3.5" />
+          )}
+          Enregistrer
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// Convertit un ISO en valeur d'<input type="datetime-local"> (heure locale).
+function toLocalInput(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(
+    d.getDate()
+  )}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// Édition inline d'une entrée existante de l'historique. On modifie ce que le
+// backend autorise (PATCH /follow-ups/{id}) : résultat, notes et la prochaine
+// action. Le type (appel/courriel…) et le sens restent figés une fois loggés.
+function EditActionForm({
+  item,
+  onSaved,
+  onCancel
+}: {
+  item: FollowUp;
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  const [outcome, setOutcome] = useState(item.outcome);
+  const [notes, setNotes] = useState(item.notes ?? "");
+  const [nextActionAt, setNextActionAt] = useState(
+    toLocalInput(item.next_action_at)
+  );
+  const [nextActionLabel, setNextActionLabel] = useState(
+    item.next_action_label ?? ""
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      const body: Record<string, unknown> = {
+        outcome,
+        notes: notes.trim(),
+        next_action_at: nextActionAt
+          ? new Date(nextActionAt).toISOString()
+          : null,
+        next_action_label: nextActionAt
+          ? nextActionLabel.trim() || null
+          : null
+      };
+      const r = await authedFetch(`/api/v1/follow-ups/${item.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-2">
+      <span className="block text-xs font-semibold text-emerald-300">
+        Modifier — {KIND_LABEL[item.kind] || item.kind}
+      </span>
+      <label className="block text-xs">
+        <span className="block text-white/60">Résultat</span>
+        <select
+          value={outcome}
+          onChange={(e) => setOutcome(e.target.value)}
+          className="input mt-0.5"
+        >
+          {Object.entries(OUTCOME_LABEL).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block text-xs">
+        <span className="block text-white/60">Notes</span>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={3}
+          className="input mt-0.5 font-sans"
+        />
+      </label>
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+        <label className="block text-xs">
+          <span className="block text-white/60">
+            Rappel auto (date + heure)
+          </span>
+          <input
+            type="datetime-local"
+            value={nextActionAt}
+            onChange={(e) => setNextActionAt(e.target.value)}
+            className="input mt-0.5"
+          />
+        </label>
+        <label className="block text-xs">
+          <span className="block text-white/60">Type de relance prévue</span>
+          <select
+            value={nextActionLabel}
+            onChange={(e) => setNextActionLabel(e.target.value)}
+            className="input mt-0.5"
+          >
+            <option value="">— Choisir —</option>
+            <option value="Rappeler">Appel</option>
+            <option value="Texto">SMS / Texto</option>
+            <option value="Courriel">Courriel</option>
+            <option value="Visite">Visite</option>
+            <option value="Note interne">Note interne</option>
+          </select>
+        </label>
+      </div>
+      {error ? (
+        <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {error}
+        </p>
+      ) : null}
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="rounded-lg border border-brand-700 px-3 py-1.5 text-xs text-white/70 hover:bg-white/5 disabled:opacity-50"
+        >
+          Annuler
+        </button>
+        <button
+          type="submit"
+          disabled={saving}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-emerald-950 hover:bg-emerald-400 disabled:opacity-50"
         >
           {saving ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
