@@ -219,6 +219,12 @@ class Settings(BaseSettings):
     # À configurer OBLIGATOIREMENT sur Render avant le premier connect.
     drive_token_encryption_key: Optional[str] = None
 
+    # Clé Fernet dédiée au coffre « Abonnements » (mots de passe). Si
+    # absente, repli sur drive_token_encryption_key. Si AUCUNE des deux
+    # n'est configurée, le coffre REFUSE de stocker un mot de passe
+    # (jamais de clair) — cf. app.services.secret_vault.
+    subscription_encryption_key: Optional[str] = None
+
     @property
     def is_production(self) -> bool:
         return self.env.lower() == "production"

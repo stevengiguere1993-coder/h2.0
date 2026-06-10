@@ -108,6 +108,7 @@ from app.api.v1.endpoints import (
     email_templates,
     mtl_properties,
     comparables,
+    subscriptions,
     lead_analyses,
     prospection,
     prospection_analyse_extract,
@@ -350,6 +351,7 @@ api_router.include_router(mtl_properties.router)
 # Doit matcher AVANT prospection.router (/prospection/{lead_id}) comme
 # les autres sous-routes littérales de /prospection.
 api_router.include_router(comparables.router)
+api_router.include_router(subscriptions.router)
 # /prospection/analyses/extract DOIT être avant prospection_analyses
 # pour que le path littéral matche avant /prospection/analyses/{id}.
 api_router.include_router(prospection_analyse_extract.router)
