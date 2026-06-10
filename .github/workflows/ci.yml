@@ -1,0 +1,93 @@
+# ci — garde-fou qualité sur les Pull Requests (et push sur main).
+#
+# Objectif : empêcher qu'une régression de type reparte en prod. Le build
+# de prod a `typescript.ignoreBuildErrors: true` (next.config), donc rien
+# n'attrapait les erreurs TS — c'est ce job qui le fait désormais.
+#
+# - frontend-typecheck : BLOQUANT. `tsc --noEmit` sur les sources. En
+#   checkout frais il n'y a pas de dossier `.next`, donc les types de
+#   routes générés ne sont pas vérifiés ici (ils restent gérés par le
+#   build Next) — on ne valide que le code source.
+# - frontend-lint / backend-tests : NON bloquants pour l'instant
+#   (continue-on-error). Ils remontent l'info sans casser les PR, le temps
+#   de stabiliser. À passer bloquants ensuite.
+
+name: ci
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-typecheck:
+    name: Frontend — type-check (tsc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install deps
+        run: npm ci
+      - name: Type-check
+        run: npm run typecheck
+
+  frontend-lint:
+    name: Frontend — lint (next lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Lint (informatif)
+        # Non bloquant : la base contient encore beaucoup de eslint-disable.
+        # On surface les warnings sans casser la PR. À rendre bloquant une
+        # fois la dette de lint résorbée.
+        continue-on-error: true
+        run: npm run lint
+
+  backend-tests:
+    name: Backend — pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: Run tests
+        # Les tests de calcul ne touchent pas la DB, mais l'import de la
+        # config (pydantic Settings) exige ces variables — valeurs factices.
+        env:
+          DATABASE_URL: postgresql+asyncpg://test:test@localhost/test
+          JWT_SECRET: ci-test-secret-not-used
+        run: pytest -q
