@@ -219,7 +219,15 @@ export function EntityDriveSection({
         setState("oauth");
         return;
       }
-      if (!statusRes.ok) throw new Error(`http_${statusRes.status}`);
+      if (!statusRes.ok) {
+        // Le statut est la PORTE de la section : tant qu'on n'a pas confirmé
+        // `active: true`, on ne montre RIEN. Si l'appel échoue (403, 500,
+        // hoquet réseau…), on masque en silence plutôt que d'afficher une
+        // carte d'erreur rouge sur une page où Drive n'a peut-être rien à
+        // faire. La section reste invisible « tant que pas prouvée active ».
+        setState("disabled");
+        return;
+      }
       const statusJson = (await statusRes.json()) as PageModuleStatus;
       setStatus(statusJson ?? null);
 
@@ -434,7 +442,13 @@ export function EntityDriveSection({
   );
 
   // --- États qui ne rendent rien (section invisible) -----------------
-  if (state === "disabled") return null;
+  // On ne rend RIEN tant que le statut n'est pas résolu (`loading`) NI quand
+  // le module est désactivé. C'est ce qui élimine le « flash » : avant, la
+  // section s'affichait pleine (titre + spinner) pendant le chargement du
+  // statut, puis disparaissait quand `active: false` arrivait → « Documents
+  // Drive » clignotait sur toutes les pages câblées mais inactives. Désormais
+  // la section n'apparaît qu'une fois `active: true` confirmé.
+  if (state === "disabled" || state === "loading") return null;
 
   const resolvedTitle =
     title || status?.display_title || "Documents Drive";
@@ -443,18 +457,6 @@ export function EntityDriveSection({
   const wrapperClass =
     "mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5 " +
     (className || "");
-
-  if (state === "loading") {
-    return (
-      <section className={wrapperClass}>
-        <SectionHeader title={resolvedTitle} />
-        <div className="mt-4 flex items-center gap-2 text-xs text-white/50">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement des
-          documents Drive…
-        </div>
-      </section>
-    );
-  }
 
   if (state === "oauth") {
     return (
