@@ -95,6 +95,11 @@ async def health():
     return {
         "ok": True,
         "browser_connected": app.state.browser.is_connected(),
+        # Indique si les identifiants QUB (Québecor) sont configurés sur le
+        # VPS — c'est ici que le scraper de comparables se connecte. Permet
+        # au backend d'afficher un bandeau « source auto » honnête sans avoir
+        # à dupliquer le flag côté Render.
+        "numeriq_configured": bool(os.environ.get("NUMERIQ_USERNAME")),
     }
 
 
