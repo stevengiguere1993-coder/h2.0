@@ -462,17 +462,109 @@ async def clean_transcript(
         return text
 
 
+TRANSCRIBE_PROMPT = (
+    "Tu transcris l'enregistrement audio d'une rencontre d'affaires en "
+    "français québécois. Règles :\n"
+    "- Transcris fidèlement TOUT ce qui est dit, en français correct "
+    "(corrige accents et homophones évidents, garde le sens exact).\n"
+    "- Quand tu distingues plusieurs interlocuteurs, préfixe chaque "
+    "réplique par « Intervenant 1 : », « Intervenant 2 : », etc. (ou "
+    "leur prénom si mentionné dans l'audio).\n"
+    "- Saute une ligne entre les répliques.\n"
+    "- N'ajoute AUCUN commentaire, résumé ou titre — seulement la "
+    "transcription."
+)
+
+# Limite inline Gemini (~20 MB par requête). On garde une marge.
+_MAX_TRANSCRIBE_BYTES = 18 * 1024 * 1024
+
+_AUDIO_MIME_FALLBACK = "audio/mpeg"
+_AUDIO_MIME_OK = {
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/m4a",
+    "audio/x-m4a",
+    "audio/aac",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/ogg",
+    "audio/webm",
+    "audio/flac",
+    "video/mp4",
+    "video/webm",
+}
+
+
 async def transcribe_audio(
     filename: str, content_type: str, data: bytes
 ) -> str:
-    """Transcription audio désactivée — on s'appuie uniquement sur la
-    dictée vocale Web Speech API (gratuite, native navigateur).
+    """Transcrit un enregistrement audio via Gemini (gratuit).
 
-    Ce stub est conservé pour ne pas casser les imports / endpoints,
-    mais lève toujours une RuntimeError. L'UI doit éviter d'appeler
-    cet endpoint et orienter l'utilisateur vers la dictée live."""
+    Gemini accepte l'audio nativement dans ``generateContent`` — on
+    cascade sur les modèles de ``GEMINI_MODEL_CASCADE`` comme pour le
+    texte. Lève RuntimeError avec un message clair si la clé Gemini est
+    absente ou si le fichier dépasse la limite inline (~18 MB ≈ 30-45
+    minutes d'audio compressé)."""
+    import os as _os
+
+    from app.integrations.ai._base import AIProviderError as _AIError
+    from app.integrations.ai._gemini import GeminiProvider
+
+    if len(data) > _MAX_TRANSCRIBE_BYTES:
+        raise RuntimeError(
+            "Fichier audio trop gros pour la transcription (max ~18 MB). "
+            "Astuce : exporte en m4a/mp3 compressé, ou découpe "
+            "l'enregistrement en parties."
+        )
+
+    mime = (content_type or "").split(";")[0].strip().lower()
+    if mime not in _AUDIO_MIME_OK:
+        mime = _AUDIO_MIME_FALLBACK
+
+    provider = GeminiProvider()
+    if not provider.api_key:
+        raise RuntimeError(
+            "Transcription indisponible : la clé GEMINI_API_KEY n'est pas "
+            "configurée côté serveur."
+        )
+
+    cascade = [
+        m.strip()
+        for m in (
+            _os.getenv("GEMINI_MODEL_CASCADE")
+            or "gemini-2.5-flash,gemini-2.5-pro,gemini-2.0-flash"
+        ).split(",")
+        if m.strip()
+    ]
+    last_err: Exception | None = None
+    for model in cascade:
+        try:
+            res = await provider.complete_with_media(
+                prompt=(
+                    "Transcris cet enregistrement de rencontre "
+                    f"(fichier : {filename})."
+                ),
+                media_bytes=data,
+                mime_type=mime,
+                system=TRANSCRIBE_PROMPT,
+                max_tokens=60_000,
+                temperature=0.1,
+                model=model,
+            )
+            text = (res.text or "").strip()
+            if text:
+                return text
+            last_err = RuntimeError(f"{model} : transcription vide")
+        except _AIError as exc:
+            log.warning("Transcription %s a échoué : %s", model, exc)
+            last_err = exc
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Transcription %s erreur inattendue : %s", model, exc
+            )
+            last_err = exc
     raise RuntimeError(
-        "La transcription d'audio uploadé est désactivée. Utilise la "
-        "dictée vocale en direct (bouton « Dicter ») — c'est gratuit, "
-        "100 % navigateur, et bien adapté au français québécois."
+        "La transcription a échoué sur tous les modèles Gemini "
+        f"({'; '.join(cascade)}). Détail : {str(last_err)[:200]}"
     )
