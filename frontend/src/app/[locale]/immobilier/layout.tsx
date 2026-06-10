@@ -13,6 +13,7 @@ import {
   Building2,
   Check,
   ChevronDown,
+  CircleDollarSign,
   ClipboardList,
   Hammer,
   Home,
@@ -51,6 +52,7 @@ const NAV: NavItem[] = [
   // fiche immeuble (onglets Logements / Baux). La page /immobilier/locataires
   // reste accessible directement au besoin.
   { href: "/immobilier/baux", label: "Baux & paiements", icon: ClipboardList },
+  { href: "/immobilier/finances", label: "Finances", icon: CircleDollarSign },
   { href: "/immobilier/renouvellements", label: "Renouvellements", icon: ClipboardList },
   { href: "/immobilier/maintenance", label: "Maintenance", icon: Wrench },
   { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer },

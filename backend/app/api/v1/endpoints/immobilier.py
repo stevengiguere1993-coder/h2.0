@@ -41,6 +41,7 @@ from app.models.project_photo import ProjectPhoto
 from app.models.sous_traitant import SousTraitant
 from app.models.immobilier import (
     Bail,
+    DepenseImmeuble,
     BailStatus,
     Evaluation,
     EvaluationKind,
@@ -1670,6 +1671,304 @@ async def loyers_overview(
         nb_retards=nb_retards,
         nb_attente=nb_attente,
     )
+
+
+
+# ── Dépenses d'immeuble + P&L ──────────────────────────────────────────
+
+
+class DepenseRead(BaseModel):
+    id: int
+    immeuble_id: int
+    categorie: str
+    libelle: str
+    montant: float
+    frequence: str
+    date_depense: Optional[date] = None
+    notes: Optional[str] = None
+
+
+class DepenseCreate(BaseModel):
+    categorie: str = "autre"
+    libelle: str
+    montant: float = Field(..., ge=0)
+    frequence: str = "ponctuel"
+    date_depense: Optional[date] = None
+    notes: Optional[str] = None
+
+
+class DepenseUpdate(BaseModel):
+    categorie: Optional[str] = None
+    libelle: Optional[str] = None
+    montant: Optional[float] = Field(default=None, ge=0)
+    frequence: Optional[str] = None
+    date_depense: Optional[date] = None
+    notes: Optional[str] = None
+
+
+def _depense_to_read(d: DepenseImmeuble) -> DepenseRead:
+    return DepenseRead(
+        id=d.id,
+        immeuble_id=d.immeuble_id,
+        categorie=d.categorie,
+        libelle=d.libelle,
+        montant=float(d.montant or 0),
+        frequence=d.frequence,
+        date_depense=d.date_depense,
+        notes=d.notes,
+    )
+
+
+@router.get(
+    "/immeubles/{immeuble_id}/depenses",
+    response_model=List[DepenseRead],
+)
+async def list_depenses(
+    immeuble_id: int, db: DBSession, user: CurrentUser
+) -> List[DepenseRead]:
+    _require_volet(user)
+    await _require_immeuble_visible(db, user, immeuble_id)
+    rows = (
+        await db.execute(
+            select(DepenseImmeuble)
+            .where(DepenseImmeuble.immeuble_id == immeuble_id)
+            .order_by(DepenseImmeuble.id.desc())
+        )
+    ).scalars().all()
+    return [_depense_to_read(d) for d in rows]
+
+
+@router.post(
+    "/immeubles/{immeuble_id}/depenses",
+    response_model=DepenseRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_depense(
+    immeuble_id: int,
+    payload: DepenseCreate,
+    db: DBSession,
+    user: CurrentUser,
+) -> DepenseRead:
+    _require_volet(user)
+    await _require_immeuble_visible(db, user, immeuble_id)
+    await _get_immeuble_or_404(db, immeuble_id)
+    obj = DepenseImmeuble(
+        immeuble_id=immeuble_id,
+        categorie=payload.categorie or "autre",
+        libelle=payload.libelle.strip(),
+        montant=payload.montant,
+        frequence=(
+            payload.frequence
+            if payload.frequence in ("ponctuel", "mensuel", "annuel")
+            else "ponctuel"
+        ),
+        date_depense=payload.date_depense,
+        notes=payload.notes,
+        created_by_email=user.email,
+    )
+    db.add(obj)
+    await db.commit()
+    await db.refresh(obj)
+    return _depense_to_read(obj)
+
+
+@router.put("/depenses/{depense_id}", response_model=DepenseRead)
+async def update_depense(
+    depense_id: int,
+    payload: DepenseUpdate,
+    db: DBSession,
+    user: CurrentUser,
+) -> DepenseRead:
+    _require_volet(user)
+    obj = await db.get(DepenseImmeuble, depense_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Dépense introuvable.")
+    await _require_immeuble_visible(db, user, obj.immeuble_id)
+    data = payload.model_dump(exclude_unset=True)
+    if "frequence" in data and data["frequence"] not in (
+        "ponctuel",
+        "mensuel",
+        "annuel",
+    ):
+        data.pop("frequence")
+    for k, v in data.items():
+        setattr(obj, k, v)
+    await db.commit()
+    await db.refresh(obj)
+    return _depense_to_read(obj)
+
+
+@router.delete(
+    "/depenses/{depense_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_depense(
+    depense_id: int, db: DBSession, user: CurrentUser
+) -> None:
+    _require_volet(user)
+    obj = await db.get(DepenseImmeuble, depense_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Dépense introuvable.")
+    await _require_immeuble_visible(db, user, obj.immeuble_id)
+    await db.delete(obj)
+    await db.commit()
+
+
+class PnlRow(BaseModel):
+    immeuble_id: int
+    immeuble_name: str
+    loyers_annualises: float
+    revenus_recus: float
+    depenses: float
+    dette_annuelle: float
+    cashflow_potentiel: float
+    cashflow_reel: float
+    nb_baux_actifs: int
+
+
+class PnlOverview(BaseModel):
+    annee: int
+    rows: List[PnlRow]
+    totaux: PnlRow
+
+
+@router.get("/finances/pnl", response_model=PnlOverview)
+async def finances_pnl(
+    db: DBSession,
+    user: CurrentUser,
+    annee: Optional[int] = None,
+    entreprise_id: Optional[int] = None,
+) -> PnlOverview:
+    """P&L annuel par immeuble.
+
+    - revenus_recus : paiements de loyer enregistrés dans l'année ;
+    - loyers_annualises : loyers des baux ACTIFS × 12 (potentiel) ;
+    - depenses : ponctuelles datées dans l'année + récurrentes
+      annualisées (mensuel × 12, annuel × 1) ;
+    - dette_annuelle : paiements mensuels des hypothèques ACTIVES × 12 ;
+    - cashflow_potentiel = loyers_annualises − depenses − dette ;
+    - cashflow_reel = revenus_recus − depenses − dette.
+    """
+    _require_volet(user)
+    year = annee or datetime.now(timezone.utc).year
+    y_start = date(year, 1, 1)
+    y_end = date(year, 12, 31)
+
+    imm_q = select(Immeuble).where(Immeuble.is_active.is_(True))
+    if entreprise_id is not None:
+        imm_q = imm_q.where(
+            Immeuble.owner_entreprise_id == int(entreprise_id)
+        )
+    immeubles = (await db.execute(imm_q)).scalars().all()
+    visible = await visible_immeuble_ids(db, user)
+    if visible is not None:
+        immeubles = [i for i in immeubles if i.id in visible]
+    imm_ids = [i.id for i in immeubles]
+
+    rows: List[PnlRow] = []
+    if imm_ids:
+        logements = (
+            await db.execute(
+                select(Logement).where(Logement.immeuble_id.in_(imm_ids))
+            )
+        ).scalars().all()
+        log_to_imm = {l.id: l.immeuble_id for l in logements}
+        baux = []
+        if log_to_imm:
+            baux = (
+                await db.execute(
+                    select(Bail).where(
+                        Bail.logement_id.in_(list(log_to_imm.keys())),
+                        Bail.status == "ACTIF",
+                    )
+                )
+            ).scalars().all()
+        bail_to_imm = {b.id: log_to_imm.get(b.logement_id) for b in baux}
+        paiements = []
+        if bail_to_imm:
+            paiements = (
+                await db.execute(
+                    select(PaiementLoyer).where(
+                        PaiementLoyer.bail_id.in_(list(bail_to_imm.keys())),
+                        PaiementLoyer.mois_couvert >= y_start,
+                        PaiementLoyer.mois_couvert <= y_end,
+                    )
+                )
+            ).scalars().all()
+        depenses = (
+            await db.execute(
+                select(DepenseImmeuble).where(
+                    DepenseImmeuble.immeuble_id.in_(imm_ids)
+                )
+            )
+        ).scalars().all()
+        hypos = (
+            await db.execute(
+                select(Hypotheque).where(
+                    Hypotheque.immeuble_id.in_(imm_ids),
+                    Hypotheque.status == "ACTIVE",
+                )
+            )
+        ).scalars().all()
+
+        for imm in immeubles:
+            loyers = sum(
+                float(b.loyer_mensuel or 0) * 12
+                for b in baux
+                if bail_to_imm.get(b.id) == imm.id
+            )
+            recus = sum(
+                float(p.montant or 0)
+                for p in paiements
+                if bail_to_imm.get(p.bail_id) == imm.id
+            )
+            dep = 0.0
+            for d in depenses:
+                if d.immeuble_id != imm.id:
+                    continue
+                if d.frequence == "mensuel":
+                    dep += float(d.montant or 0) * 12
+                elif d.frequence == "annuel":
+                    dep += float(d.montant or 0)
+                elif d.date_depense and y_start <= d.date_depense <= y_end:
+                    dep += float(d.montant or 0)
+            dette = sum(
+                float(h.paiement_mensuel or 0) * 12
+                for h in hypos
+                if h.immeuble_id == imm.id
+            )
+            rows.append(
+                PnlRow(
+                    immeuble_id=imm.id,
+                    immeuble_name=imm.name,
+                    loyers_annualises=round(loyers, 2),
+                    revenus_recus=round(recus, 2),
+                    depenses=round(dep, 2),
+                    dette_annuelle=round(dette, 2),
+                    cashflow_potentiel=round(loyers - dep - dette, 2),
+                    cashflow_reel=round(recus - dep - dette, 2),
+                    nb_baux_actifs=sum(
+                        1
+                        for b in baux
+                        if bail_to_imm.get(b.id) == imm.id
+                    ),
+                )
+            )
+
+    rows.sort(key=lambda r: r.cashflow_potentiel)
+    tot = PnlRow(
+        immeuble_id=0,
+        immeuble_name="TOTAL",
+        loyers_annualises=round(sum(r.loyers_annualises for r in rows), 2),
+        revenus_recus=round(sum(r.revenus_recus for r in rows), 2),
+        depenses=round(sum(r.depenses for r in rows), 2),
+        dette_annuelle=round(sum(r.dette_annuelle for r in rows), 2),
+        cashflow_potentiel=round(
+            sum(r.cashflow_potentiel for r in rows), 2
+        ),
+        cashflow_reel=round(sum(r.cashflow_reel for r in rows), 2),
+        nb_baux_actifs=sum(r.nb_baux_actifs for r in rows),
+    )
+    return PnlOverview(annee=year, rows=rows, totaux=tot)
 
 
 # ── Hypothèques ────────────────────────────────────────────────────────
