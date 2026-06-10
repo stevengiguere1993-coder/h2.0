@@ -16,7 +16,6 @@ import {
   Sparkles,
   Sun,
   Trello,
-  TrendingUp,
   UserCircle,
   X
 } from "lucide-react";
@@ -90,12 +89,6 @@ const PROSPECTION_SECTIONS: NavSection[] = [
         href: "/prospection/immeubles-mtl",
         label: "Rôles fonciers",
         icon: Building2,
-        minRole: "employee"
-      },
-      {
-        href: "/prospection/comparables",
-        label: "Comparables",
-        icon: TrendingUp,
         minRole: "employee"
       },
       {
