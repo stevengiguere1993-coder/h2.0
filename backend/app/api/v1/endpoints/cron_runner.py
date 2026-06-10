@@ -72,6 +72,26 @@ async def trigger_unassigned_day_alerts(
     return CronResult(ok=True, job="unassigned-day-alerts")
 
 
+@router.post("/run/teams-meeting-sync", response_model=CronResult)
+async def trigger_teams_meeting_sync(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+) -> CronResult:
+    """Importe les rencontres Teams transcrites en fiches Rencontres."""
+    _check_secret(x_cron_secret, secret)
+    from app.jobs.teams_meeting_sync import _run
+
+    try:
+        await _run()
+    except Exception as exc:
+        log.exception("Cron teams_meeting_sync failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Job a échoué : {exc}",
+        )
+    return CronResult(ok=True, job="teams-meeting-sync")
+
+
 @router.post("/run/follow-up-reminders", response_model=CronResult)
 async def trigger_follow_up_reminders(
     x_cron_secret: Optional[str] = Header(default=None),
