@@ -318,15 +318,21 @@ async def apply_to_soumission(
     if not items:
         # Template has no sub-items → create a single line using the
         # template's own defaults (name + default_unit + price).
+        cpu = float(t.default_cost_per_unit or 0)
+        up = float(t.default_unit_price or 0)
+        # Garde-fou anti-perte : prix par défaut vide mais coûtant défini
+        # => on facture au moins le coûtant.
+        if up <= 0 and cpu > 0:
+            up = cpu
         si = SoumissionItem(
             soumission_id=sm.id,
             position=pos,
             description=t.name,
             unit=t.default_unit,
             quantity=1,
-            unit_price=float(t.default_unit_price or 0),
-            cost_per_unit=float(t.default_cost_per_unit or 0),
-            total=float(t.default_unit_price or 0),
+            unit_price=up,
+            cost_per_unit=cpu,
+            total=round(up, 2),
         )
         db.add(si)
         await db.flush()
@@ -334,17 +340,19 @@ async def apply_to_soumission(
         created_ids.append(si.id)
     else:
         for it in items:
-            total = round(
-                float(it.default_quantity) * float(it.default_unit_price), 2
-            )
+            cpu = float(it.default_cost_per_unit or 0)
+            up = float(it.default_unit_price or 0)
+            if up <= 0 and cpu > 0:
+                up = cpu
+            total = round(float(it.default_quantity) * up, 2)
             si = SoumissionItem(
                 soumission_id=sm.id,
                 position=pos,
                 description=it.description,
                 unit=it.unit,
                 quantity=float(it.default_quantity),
-                unit_price=float(it.default_unit_price),
-                cost_per_unit=float(it.default_cost_per_unit or 0),
+                unit_price=up,
+                cost_per_unit=cpu,
                 total=total,
             )
             db.add(si)
