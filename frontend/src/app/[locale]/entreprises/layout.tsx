@@ -17,6 +17,7 @@ import {
   ChevronRight,
   Compass,
   Contact as ContactIcon,
+  CreditCard,
   ExternalLink,
   Home,
   LayoutGrid,
@@ -83,6 +84,9 @@ export default function EntreprisesLayout({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [entreprises, setEntreprises] = useState<EntrepriseLite[]>([]);
   const [openTasksCount, setOpenTasksCount] = useState<number>(0);
+  // Accès au coffre « Abonnements » — l'onglet n'apparaît que pour les
+  // utilisateurs autorisés (proprio + liste nominative).
+  const [vaultAccess, setVaultAccess] = useState(false);
   const [addEntOpen, setAddEntOpen] = useState(false);
   // Toggle « tri alphabétique » dans la sidebar — purement visuel,
   // n'écrase pas les positions sauvegardées en DB.
@@ -196,13 +200,18 @@ export default function EntreprisesLayout({
     let cancelled = false;
     void (async () => {
       try {
-        const [healthRes, statsRes] = await Promise.all([
+        const [healthRes, statsRes, vaultRes] = await Promise.all([
           authedFetch(
             "/api/v1/entreprises/health?include_archived=true"
           ),
-          authedFetch("/api/v1/entreprises/stats/overview")
+          authedFetch("/api/v1/entreprises/stats/overview"),
+          authedFetch("/api/v1/subscriptions/vault-status")
         ]);
         if (cancelled) return;
+        if (vaultRes.ok) {
+          const v = await vaultRes.json();
+          setVaultAccess(!!v?.has_access);
+        }
         if (healthRes.ok) {
           const data = await healthRes.json();
           setEntreprises(
@@ -265,7 +274,16 @@ export default function EntreprisesLayout({
     { href: "/entreprises/vision", label: "Vision & Stratégie", icon: BarChart3 },
     { href: "/entreprises/comparatif", label: "Comparatif", icon: BarChart3 },
     { href: "/entreprises/projets", label: "Projets", icon: Briefcase },
-    { href: "/entreprises/contacts", label: "Contacts", icon: ContactIcon }
+    { href: "/entreprises/contacts", label: "Contacts", icon: ContactIcon },
+    ...(vaultAccess
+      ? [
+          {
+            href: "/entreprises/abonnements",
+            label: "Abonnements",
+            icon: CreditCard
+          }
+        ]
+      : [])
   ];
 
   const REGLAGES: NavItem[] = [
