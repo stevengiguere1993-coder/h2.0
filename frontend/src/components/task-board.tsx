@@ -692,33 +692,28 @@ function KanbanView({
   const [newName, setNewName] = useState("");
 
   // ── Repli de la colonne « Terminé » ───────────────────────────────
-  // Les tâches complétées s'accumulent : on garde les N plus récentes
-  // visibles et on plie les plus anciennes derrière une pastille. Le
-  // chevron d'en-tête peut replier toute la colonne. État mémorisé par
+  // Les complétées s'accumulent : par défaut on montre les 5 plus
+  // récentes ; UN SEUL geste (chevron d'en-tête ou pastille) déplie
+  // TOUTES les terminées, et re-clic ramène à 5. État mémorisé par
   // kanban (clé = chemin de la page).
   const RECENT_DONE = 5;
   const pathname = usePathname();
   const doneKey = `kratos.taskBoard.doneCollapse.${pathname}`;
-  const [doneCollapsed, setDoneCollapsed] = useState(false);
   const [doneShowAll, setDoneShowAll] = useState(false);
 
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(doneKey);
       const s = raw ? JSON.parse(raw) : {};
-      setDoneCollapsed(!!s.collapsed);
       setDoneShowAll(!!s.showAll);
     } catch {
       /* localStorage indisponible → défauts */
     }
   }, [doneKey]);
 
-  function persistDone(collapsed: boolean, showAll: boolean) {
+  function persistDone(showAll: boolean) {
     try {
-      window.localStorage.setItem(
-        doneKey,
-        JSON.stringify({ collapsed, showAll })
-      );
+      window.localStorage.setItem(doneKey, JSON.stringify({ showAll }));
     } catch {
       /* ignore */
     }
@@ -898,7 +893,6 @@ function KanbanView({
             : ordered;
         const hiddenCount =
           foldable && !doneShowAll ? ordered.length - RECENT_DONE : 0;
-        const bodyHidden = isDone && doneCollapsed && list.length > 0;
         return (
           <div
             key={col.value}
@@ -930,30 +924,30 @@ function KanbanView({
                   <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
                     {list.length}
                   </span>
-                  {isDone && list.length > 0 ? (
+                  {isDone && list.length > RECENT_DONE ? (
                     <button
                       type="button"
                       onClick={() => {
-                        const n = !doneCollapsed;
-                        setDoneCollapsed(n);
-                        persistDone(n, doneShowAll);
+                        const n = !doneShowAll;
+                        setDoneShowAll(n);
+                        persistDone(n);
                       }}
                       title={
-                        doneCollapsed
-                          ? "Déplier la colonne"
-                          : "Replier la colonne"
+                        doneShowAll
+                          ? "Réduire aux 5 récentes"
+                          : "Voir toutes les terminées"
                       }
                       aria-label={
-                        doneCollapsed
-                          ? "Déplier la colonne Terminé"
-                          : "Replier la colonne Terminé"
+                        doneShowAll
+                          ? "Réduire la colonne Terminé"
+                          : "Voir toutes les terminées"
                       }
                       className="rounded p-0.5 text-white/40 hover:bg-white/10 hover:text-white"
                     >
-                      {doneCollapsed ? (
-                        <ChevronDown className="h-3.5 w-3.5" />
-                      ) : (
+                      {doneShowAll ? (
                         <ChevronUp className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5" />
                       )}
                     </button>
                   ) : null}
@@ -962,13 +956,7 @@ function KanbanView({
             </div>
 
             <div className="flex-1 space-y-2 p-3">
-              {bodyHidden ? (
-                <p className="py-2 text-center text-[11px] text-white/30">
-                  {list.length} terminée{list.length > 1 ? "s" : ""} —
-                  repliées
-                </p>
-              ) : (
-                <>
+              <>
                   {list.length === 0 && adding !== col.value ? (
                     <p className="py-8 text-center text-xs text-white/40">
                       Aucune tâche
@@ -982,13 +970,13 @@ function KanbanView({
                       type="button"
                       onClick={() => {
                         setDoneShowAll(true);
-                        persistDone(doneCollapsed, true);
+                        persistDone(true);
                       }}
-                      className="flex w-full items-center justify-center gap-1.5 rounded-full border border-brand-700 bg-brand-950 px-3 py-1.5 text-[11px] font-medium text-white/55 transition hover:border-accent-500/50 hover:text-white"
+                      className="flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:text-white"
                     >
                       <ChevronDown className="h-3.5 w-3.5" />
-                      {hiddenCount} terminée{hiddenCount > 1 ? "s" : ""} plus
-                      ancienne{hiddenCount > 1 ? "s" : ""}
+                      Voir les {hiddenCount} plus ancienne
+                      {hiddenCount > 1 ? "s" : ""}
                     </button>
                   ) : null}
 
@@ -997,12 +985,12 @@ function KanbanView({
                       type="button"
                       onClick={() => {
                         setDoneShowAll(false);
-                        persistDone(doneCollapsed, false);
+                        persistDone(false);
                       }}
-                      className="flex w-full items-center justify-center gap-1.5 rounded-full border border-brand-700 bg-brand-950 px-3 py-1.5 text-[11px] font-medium text-white/55 transition hover:border-accent-500/50 hover:text-white"
+                      className="flex w-full items-center justify-center gap-1.5 rounded-md bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/70 transition hover:text-white"
                     >
                       <ChevronUp className="h-3.5 w-3.5" />
-                      Replier les terminées
+                      Réduire aux {RECENT_DONE} récentes
                     </button>
                   ) : null}
 
@@ -1035,8 +1023,7 @@ function KanbanView({
                       <Plus className="h-3 w-3" /> Tâche
                     </button>
                   )}
-                </>
-              )}
+              </>
             </div>
           </div>
         );
