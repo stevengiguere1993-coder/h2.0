@@ -96,18 +96,25 @@ async def fetch_listing_urls(
             break
 
         soup = BeautifulSoup(r.text, "html.parser")
-        # Patterns possibles : <a class="title …" href="/v-..."> OU
-        # <a data-listing-id="123" href="/v-...">. On prend tout lien
-        # qui commence par /v-.
+        # Kijiji 2026 : les cartes portent data-testid="listing-link"
+        # et les hrefs sont devenus ABSOLUS
+        # (https://www.kijiji.ca/v-...). On accepte l'ancien format
+        # relatif (/v-...) ET le nouveau via *= au lieu de ^=.
         seen: set[str] = set()
-        for a in soup.select("a[href^='/v-']"):
+        for a in soup.select(
+            "a[data-testid='listing-link'], a[href*='/v-']"
+        ):
             href = a.get("href")
             if not href or not isinstance(href, str):
                 continue
+            if "/v-" not in href:
+                continue
+            # Normalise : URL absolue, sans paramètres de tracking
+            # (clé de déduplication stable).
             full = (
                 href if href.startswith("http")
                 else f"https://www.kijiji.ca{href}"
-            )
+            ).split("?")[0]
             if full in seen:
                 continue
             seen.add(full)
