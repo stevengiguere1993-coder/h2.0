@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import api_router
 from app.core.config import settings
-from app.db.session import close_db, init_db
+from app.db.session import close_db, ensure_critical_columns, init_db
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await init_db()
     except Exception as exc:
         logger.warning("init_db failed during startup: %s", exc)
+
+    # Garantit les colonnes critiques HORS de la grosse transaction
+    # init_db : si une étape d'init_db échoue, toute sa transaction est
+    # annulée (y compris les ADD COLUMN). Ici chaque colonne est créée
+    # dans sa propre transaction → garantie même si init_db a planté.
+    try:
+        await ensure_critical_columns()
+    except Exception as exc:
+        logger.warning("ensure_critical_columns failed during startup: %s", exc)
 
     # Backfill : crée le projet (+ facture d'acompte DRAFT) pour les
     # soumissions ACCEPTED qui n'en ont pas encore. Rattrape les
