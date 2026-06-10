@@ -22,6 +22,9 @@ class SousTraitantCreate(BaseModel):
     insurance_expires_at: Optional[date] = None
     trades: Optional[str] = Field(default=None, max_length=500)
     hourly_rate: Optional[float] = Field(default=None, ge=0)
+    charges_travel_fee: Optional[bool] = None
+    travel_fee_amount: Optional[float] = Field(default=None, ge=0)
+    travel_fee_notes: Optional[str] = None
     rating: Optional[int] = Field(default=None, ge=1, le=5)
     competence_rating: Optional[int] = Field(default=None, ge=1, le=5)
     availability_rating: Optional[int] = Field(default=None, ge=1, le=5)
@@ -44,6 +47,9 @@ class SousTraitantUpdate(BaseModel):
     insurance_expires_at: Optional[date] = None
     trades: Optional[str] = None
     hourly_rate: Optional[float] = None
+    charges_travel_fee: Optional[bool] = None
+    travel_fee_amount: Optional[float] = Field(default=None, ge=0)
+    travel_fee_notes: Optional[str] = None
     rating: Optional[int] = Field(default=None, ge=1, le=5)
     competence_rating: Optional[int] = Field(default=None, ge=1, le=5)
     availability_rating: Optional[int] = Field(default=None, ge=1, le=5)
@@ -70,6 +76,9 @@ class SousTraitantRead(BaseModel):
     insurance_expires_at: Optional[date]
     trades: Optional[str]
     hourly_rate: Optional[float]
+    charges_travel_fee: Optional[bool]
+    travel_fee_amount: Optional[float]
+    travel_fee_notes: Optional[str]
     rating: Optional[int]
     competence_rating: Optional[int]
     availability_rating: Optional[int]

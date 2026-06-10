@@ -41,6 +41,9 @@ type SousTraitant = {
   insurance_expires_at: string | null;
   trades: string | null;
   hourly_rate: number | null;
+  charges_travel_fee: boolean | null;
+  travel_fee_amount: number | null;
+  travel_fee_notes: string | null;
   rating: number | null;
   competence_rating: number | null;
   availability_rating: number | null;
@@ -329,6 +332,23 @@ function Card({ st }: { st: SousTraitant }) {
         <span className="text-white/50">Taux horaire</span>
         <span className="font-semibold text-white">{fmtRate(st.hourly_rate)}</span>
       </div>
+
+      {/* Frais de déplacement (#26) */}
+      {st.charges_travel_fee ? (
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-white/50">Déplacement</span>
+          <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 font-medium text-amber-300">
+            Facturé
+            {st.travel_fee_amount != null
+              ? ` · ${new Intl.NumberFormat("fr-CA", {
+                  style: "currency",
+                  currency: "CAD",
+                  maximumFractionDigits: 2
+                }).format(st.travel_fee_amount)}`
+              : ""}
+          </span>
+        </div>
+      ) : null}
     </Link>
   );
 }

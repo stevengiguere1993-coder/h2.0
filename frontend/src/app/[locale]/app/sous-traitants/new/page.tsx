@@ -41,6 +41,8 @@ export default function NewSousTraitantPage() {
     setCustomCity("");
   }
   const [hourlyRate, setHourlyRate] = useState("");
+  const [chargesTravelFee, setChargesTravelFee] = useState(false);
+  const [travelFeeAmount, setTravelFeeAmount] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,6 +65,9 @@ export default function NewSousTraitantPage() {
       if (regions.length) payload.region = regions.join(", ");
       if (rbqLicense.trim()) payload.rbq_license = rbqLicense.trim();
       if (hourlyRate) payload.hourly_rate = Number(hourlyRate);
+      payload.charges_travel_fee = chargesTravelFee;
+      if (chargesTravelFee && travelFeeAmount)
+        payload.travel_fee_amount = Number(travelFeeAmount);
 
       const res = await authedFetch("/api/v1/sous-traitants", {
         method: "POST",
@@ -286,6 +291,44 @@ export default function NewSousTraitantPage() {
                 className="input"
               />
             </div>
+          </div>
+
+          {/* Frais de déplacement (#26) */}
+          <div className="rounded-lg border border-brand-800 bg-brand-900/40 p-4">
+            <label className="flex cursor-pointer items-start gap-2">
+              <input
+                type="checkbox"
+                checked={chargesTravelFee}
+                onChange={(e) => setChargesTravelFee(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span className="text-sm">
+                <span className="block font-medium text-white">
+                  Facture des frais de déplacement
+                </span>
+                <span className="mt-0.5 block text-[11px] text-white/60">
+                  Impacte le prix final — coche si ce sous-traitant charge un
+                  déplacement.
+                </span>
+              </span>
+            </label>
+            {chargesTravelFee ? (
+              <div className="mt-3 sm:w-48">
+                <label htmlFor="travel_fee_amount" className="label">
+                  Montant indicatif (CAD)
+                </label>
+                <input
+                  id="travel_fee_amount"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={travelFeeAmount}
+                  onChange={(e) => setTravelFeeAmount(e.target.value)}
+                  placeholder="Ex. 75"
+                  className="input"
+                />
+              </div>
+            ) : null}
           </div>
 
           {error ? <p className="text-sm text-rose-400">{error}</p> : null}
