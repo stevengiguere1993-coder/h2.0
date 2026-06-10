@@ -1,7 +1,14 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { Building2, Plus, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
+import {
+  Building2,
+  ChevronDown,
+  ChevronUp,
+  Plus,
+  Search
+} from "lucide-react";
 
 import {
   TaskCard,
@@ -684,6 +691,39 @@ function KanbanView({
   const [adding, setAdding] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
 
+  // ── Repli de la colonne « Terminé » ───────────────────────────────
+  // Les tâches complétées s'accumulent : on garde les N plus récentes
+  // visibles et on plie les plus anciennes derrière une pastille. Le
+  // chevron d'en-tête peut replier toute la colonne. État mémorisé par
+  // kanban (clé = chemin de la page).
+  const RECENT_DONE = 5;
+  const pathname = usePathname();
+  const doneKey = `kratos.taskBoard.doneCollapse.${pathname}`;
+  const [doneCollapsed, setDoneCollapsed] = useState(false);
+  const [doneShowAll, setDoneShowAll] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(doneKey);
+      const s = raw ? JSON.parse(raw) : {};
+      setDoneCollapsed(!!s.collapsed);
+      setDoneShowAll(!!s.showAll);
+    } catch {
+      /* localStorage indisponible → défauts */
+    }
+  }, [doneKey]);
+
+  function persistDone(collapsed: boolean, showAll: boolean) {
+    try {
+      window.localStorage.setItem(
+        doneKey,
+        JSON.stringify({ collapsed, showAll })
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
   // Touch-drag support pour mobile : HTML5 dnd ne fonctionne pas avec
   // les events tactiles. On émule un long-press → drag → drop via les
   // events `onTouch*` posés sur chaque card, avec `elementFromPoint`
@@ -810,11 +850,55 @@ function KanbanView({
     if (v) onCreate(status, v);
   }
 
+  const renderCard = (t: TaskBoardItem) => (
+    <div
+      key={t.id}
+      onTouchStart={(e) => onCardTouchStart(e, t.id)}
+      onTouchMove={onCardTouchMove}
+      onTouchEnd={onCardTouchEnd}
+      onTouchCancel={onCardTouchEnd}
+      style={{ touchAction: dragId === t.id ? "none" : "auto" }}
+    >
+      <TaskCard
+        task={t}
+        users={users}
+        onPatch={(p) => onPatch(t.id, p)}
+        onDelete={(ev) => {
+          ev.stopPropagation();
+          ev.preventDefault();
+          onDelete(t.id);
+        }}
+        onOpenDetails={() => onOpenDetails(t.id)}
+        onMove={onMove ? () => onMove(t.id) : undefined}
+        draggable
+        dragging={dragId === t.id}
+        onDragStart={() => setDragId(t.id)}
+        onDragEnd={() => {
+          setDragId(null);
+          setHoverCol(null);
+        }}
+        footer={t.footer}
+      />
+    </div>
+  );
+
   return (
     <div className="flex gap-3 overflow-x-auto pb-3">
       {TASK_STATUS_OPTIONS.map((col) => {
         const list = byStatus[col.value] || [];
         const isHover = hoverCol === col.value;
+        // Colonne « Terminé » : on affiche les plus récentes d'abord et on
+        // plie les anciennes au-delà de RECENT_DONE.
+        const isDone = col.value === "done";
+        const ordered = isDone ? [...list].reverse() : list;
+        const foldable = isDone && ordered.length > RECENT_DONE;
+        const visible =
+          foldable && !doneShowAll
+            ? ordered.slice(0, RECENT_DONE)
+            : ordered;
+        const hiddenCount =
+          foldable && !doneShowAll ? ordered.length - RECENT_DONE : 0;
+        const bodyHidden = isDone && doneCollapsed && list.length > 0;
         return (
           <div
             key={col.value}
@@ -842,79 +926,116 @@ function KanbanView({
                   />
                   {col.label}
                 </h3>
-                <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
-                  {list.length}
+                <span className="flex items-center gap-1.5">
+                  <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                    {list.length}
+                  </span>
+                  {isDone && list.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const n = !doneCollapsed;
+                        setDoneCollapsed(n);
+                        persistDone(n, doneShowAll);
+                      }}
+                      title={
+                        doneCollapsed
+                          ? "Déplier la colonne"
+                          : "Replier la colonne"
+                      }
+                      aria-label={
+                        doneCollapsed
+                          ? "Déplier la colonne Terminé"
+                          : "Replier la colonne Terminé"
+                      }
+                      className="rounded p-0.5 text-white/40 hover:bg-white/10 hover:text-white"
+                    >
+                      {doneCollapsed ? (
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronUp className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  ) : null}
                 </span>
               </div>
             </div>
 
             <div className="flex-1 space-y-2 p-3">
-              {list.length === 0 && adding !== col.value ? (
-                <p className="py-8 text-center text-xs text-white/40">
-                  Aucune tâche
+              {bodyHidden ? (
+                <p className="py-2 text-center text-[11px] text-white/30">
+                  {list.length} terminée{list.length > 1 ? "s" : ""} —
+                  repliées
                 </p>
-              ) : null}
-
-              {list.map((t) => (
-                <div
-                  key={t.id}
-                  onTouchStart={(e) => onCardTouchStart(e, t.id)}
-                  onTouchMove={onCardTouchMove}
-                  onTouchEnd={onCardTouchEnd}
-                  onTouchCancel={onCardTouchEnd}
-                  style={{ touchAction: dragId === t.id ? "none" : "auto" }}
-                >
-                  <TaskCard
-                    task={t}
-                    users={users}
-                    onPatch={(p) => onPatch(t.id, p)}
-                    onDelete={(ev) => {
-                      ev.stopPropagation();
-                      ev.preventDefault();
-                      onDelete(t.id);
-                    }}
-                    onOpenDetails={() => onOpenDetails(t.id)}
-                    onMove={onMove ? () => onMove(t.id) : undefined}
-                    draggable
-                    dragging={dragId === t.id}
-                    onDragStart={() => setDragId(t.id)}
-                    onDragEnd={() => {
-                      setDragId(null);
-                      setHoverCol(null);
-                    }}
-                    footer={t.footer}
-                  />
-                </div>
-              ))}
-
-              {adding === col.value ? (
-                <input
-                  autoFocus
-                  type="text"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  onBlur={() => commitCreate(col.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commitCreate(col.value);
-                    if (e.key === "Escape") {
-                      setAdding(null);
-                      setNewName("");
-                    }
-                  }}
-                  placeholder="Nom de la tâche…"
-                  className="w-full rounded border border-brand-800 bg-brand-950 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
-                />
               ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAdding(col.value);
-                    setNewName("");
-                  }}
-                  className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-brand-700 px-2 py-1.5 text-[11px] text-white/40 hover:border-accent-500 hover:text-accent-400"
-                >
-                  <Plus className="h-3 w-3" /> Tâche
-                </button>
+                <>
+                  {list.length === 0 && adding !== col.value ? (
+                    <p className="py-8 text-center text-xs text-white/40">
+                      Aucune tâche
+                    </p>
+                  ) : null}
+
+                  {visible.map((t) => renderCard(t))}
+
+                  {hiddenCount > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDoneShowAll(true);
+                        persistDone(doneCollapsed, true);
+                      }}
+                      className="flex w-full items-center justify-center gap-1.5 rounded-full border border-brand-700 bg-brand-950 px-3 py-1.5 text-[11px] font-medium text-white/55 transition hover:border-accent-500/50 hover:text-white"
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                      {hiddenCount} terminée{hiddenCount > 1 ? "s" : ""} plus
+                      ancienne{hiddenCount > 1 ? "s" : ""}
+                    </button>
+                  ) : null}
+
+                  {foldable && doneShowAll ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDoneShowAll(false);
+                        persistDone(doneCollapsed, false);
+                      }}
+                      className="flex w-full items-center justify-center gap-1.5 rounded-full border border-brand-700 bg-brand-950 px-3 py-1.5 text-[11px] font-medium text-white/55 transition hover:border-accent-500/50 hover:text-white"
+                    >
+                      <ChevronUp className="h-3.5 w-3.5" />
+                      Replier les terminées
+                    </button>
+                  ) : null}
+
+                  {adding === col.value ? (
+                    <input
+                      autoFocus
+                      type="text"
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      onBlur={() => commitCreate(col.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitCreate(col.value);
+                        if (e.key === "Escape") {
+                          setAdding(null);
+                          setNewName("");
+                        }
+                      }}
+                      placeholder="Nom de la tâche…"
+                      className="w-full rounded border border-brand-800 bg-brand-950 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdding(col.value);
+                        setNewName("");
+                      }}
+                      className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-brand-700 px-2 py-1.5 text-[11px] text-white/40 hover:border-accent-500 hover:text-accent-400"
+                    >
+                      <Plus className="h-3 w-3" /> Tâche
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>
