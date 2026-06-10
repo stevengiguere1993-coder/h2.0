@@ -164,6 +164,11 @@ async def create_item(
     # Rabais = negative line, frais = positive no-tax line.
     qty = data.quantity
     unit_price = data.unit_price
+    # Garde-fou anti-perte : pour une ligne « service », si aucun prix
+    # unitaire n'est saisi (laissé vide => 0) mais qu'un coûtant l'est,
+    # on facture AU MOINS le coûtant. Évite de vendre à 0 un item oublié.
+    if data.kind == "service" and unit_price <= 0 and data.cost_per_unit > 0:
+        unit_price = data.cost_per_unit
     if data.kind == "rabais" and unit_price > 0:
         unit_price = -abs(unit_price)
     total = round(qty * unit_price, 2)
@@ -212,8 +217,21 @@ async def update_item(
     update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(item, field, value)
-    # Re-derive total whenever qty or price changes
-    if "quantity" in update_data or "unit_price" in update_data:
+    # Garde-fou anti-perte (cf. create_item) : ligne « service » sans prix
+    # unitaire mais avec un coûtant => on facture au moins le coûtant.
+    if (
+        item.kind == "service"
+        and float(item.unit_price or 0) <= 0
+        and float(item.cost_per_unit or 0) > 0
+    ):
+        item.unit_price = item.cost_per_unit
+    # Re-derive total whenever qty / prix / coûtant change (le coûtant
+    # peut relever le prix via le garde-fou ci-dessus).
+    if (
+        "quantity" in update_data
+        or "unit_price" in update_data
+        or "cost_per_unit" in update_data
+    ):
         item.total = round(float(item.quantity) * float(item.unit_price), 2)
     await db.flush()
     await _recompute_soumission_totals(db, soumission_id)
