@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronsUpDown,
+  ChevronUp,
   Info,
   Loader2,
   MapPin,
@@ -101,6 +104,113 @@ function comparableAddress(c: Comparable): string {
   return parts || "—";
 }
 
+// Prix par logement (« $/porte ») — la métrique de comparaison reine pour
+// appuyer une évaluation de multilogement. Null si prix ou nb de logements
+// manquant (un comparable Journal sans croisement rôle foncier n'a pas
+// toujours le nb de logements).
+function pricePerDoor(c: Comparable): number | null {
+  if (c.price == null || !c.nb_logement || c.nb_logement <= 0) return null;
+  return c.price / c.nb_logement;
+}
+
+function fmtPerDoor(n: number | null): string {
+  if (n == null) return "—";
+  return `${Math.round(n).toLocaleString("fr-CA")} $`;
+}
+
+function median(nums: number[]): number | null {
+  if (nums.length === 0) return null;
+  const s = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+function mean(nums: number[]): number | null {
+  if (nums.length === 0) return null;
+  return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+// Clés de tri du tableau de résultats. Le tri est purement client-side.
+type SortKey =
+  | "price"
+  | "perDoor"
+  | "date_sold"
+  | "nb_logement"
+  | "annee_construction"
+  | "superficie_terrain";
+
+// En-tête de colonne cliquable (tri). Affiche une flèche ↑/↓ sur la colonne
+// active, une double-flèche discrète sur les autres.
+function SortableTh({
+  label,
+  sortKey: k,
+  activeKey,
+  dir,
+  onSort
+}: {
+  label: string;
+  sortKey: SortKey;
+  activeKey: SortKey | null;
+  dir: "asc" | "desc";
+  onSort: (k: SortKey) => void;
+}) {
+  const active = activeKey === k;
+  return (
+    <th className="px-3 py-2.5 text-right">
+      <button
+        type="button"
+        onClick={() => onSort(k)}
+        className={`ml-auto inline-flex items-center gap-1 uppercase tracking-wider transition hover:text-white/80 ${
+          active ? "text-emerald-300" : ""
+        }`}
+        title={`Trier par ${label.toLowerCase()}`}
+      >
+        {label}
+        {active ? (
+          dir === "desc" ? (
+            <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronUp className="h-3 w-3" />
+          )
+        ) : (
+          <ChevronsUpDown className="h-3 w-3 opacity-30" />
+        )}
+      </button>
+    </th>
+  );
+}
+
+// Tuile de statistique de synthèse (bandeau au-dessus du tableau).
+function StatTile({
+  label,
+  value,
+  hint,
+  accent = false
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  accent?: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900 px-4 py-3">
+      <p className="text-[11px] uppercase tracking-wider text-white/50">
+        {label}
+      </p>
+      <p
+        className={`mt-1 text-lg font-bold tabular-nums ${
+          accent ? "text-emerald-300" : "text-white"
+        }`}
+      >
+        {value}
+      </p>
+      {hint ? (
+        <p className="mt-0.5 text-[10px] text-white/40">{hint}</p>
+      ) : null}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Page
 // ─────────────────────────────────────────────────────────────────────────
@@ -133,6 +243,24 @@ export default function ComparablesPage() {
 
   // Modal ajout manuel
   const [showAddModal, setShowAddModal] = useState(false);
+
+  // Tri du tableau (client-side). Par défaut : aucun tri imposé → on garde
+  // l'ordre renvoyé par le backend (le plus récent d'abord).
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const toggleSort = useCallback((k: SortKey) => {
+    setSortKey((prev) => {
+      if (prev === k) {
+        // Même colonne → on inverse le sens.
+        setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+        return prev;
+      }
+      // Nouvelle colonne → on démarre en décroissant (le plus pertinent
+      // pour comparer prix / $-porte / superficie).
+      setSortDir("desc");
+      return k;
+    });
+  }, []);
 
   // Santé : la source automatique (Journal) est-elle branchée ?
   const [journalConfigured, setJournalConfigured] = useState<boolean | null>(
@@ -288,6 +416,44 @@ export default function ComparablesPage() {
       alert((e as Error).message);
     }
   }
+
+  // Lot trié (client-side). On laisse les valeurs nulles toujours en bas,
+  // quel que soit le sens du tri.
+  const sortedComparables = (() => {
+    if (!sortKey) return comparables;
+    const activeSort: SortKey = sortKey;
+    const valueOf = (c: Comparable): number | null => {
+      if (activeSort === "perDoor") return pricePerDoor(c);
+      if (activeSort === "date_sold") {
+        if (!c.date_sold) return null;
+        const t = Date.parse(c.date_sold);
+        return Number.isNaN(t) ? null : t;
+      }
+      const v = c[activeSort];
+      return typeof v === "number" ? v : null;
+    };
+    return [...comparables].sort((a, b) => {
+      const va = valueOf(a);
+      const vb = valueOf(b);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      return sortDir === "desc" ? vb - va : va - vb;
+    });
+  })();
+
+  // Statistiques de synthèse sur le lot trouvé (pour ancrer une évaluation).
+  // On ne retient que les comparables ayant un nb de logements (donc un
+  // $/porte calculable) pour les agrégats $/porte.
+  const perDoorValues = comparables
+    .map(pricePerDoor)
+    .filter((v): v is number => v != null);
+  const priceValues = comparables
+    .map((c) => c.price)
+    .filter((v): v is number => v != null);
+  const medPerDoor = median(perDoorValues);
+  const meanPerDoor = mean(perDoorValues);
+  const medPrice = median(priceValues);
 
   return (
     <>
@@ -522,6 +688,43 @@ export default function ComparablesPage() {
           </p>
         ) : null}
 
+        {/* Synthèse pour ancrer une évaluation : médiane / moyenne du prix
+            par logement + médiane du prix de vente sur le lot trouvé. */}
+        {searched && !loading && comparables.length > 0 ? (
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <StatTile
+              label="Médiane $ / logement"
+              value={fmtPerDoor(medPerDoor)}
+              hint={
+                perDoorValues.length > 0
+                  ? `sur ${perDoorValues.length} comparable${
+                      perDoorValues.length > 1 ? "s" : ""
+                    } avec nb de logements`
+                  : "nb de logements manquant"
+              }
+              accent
+            />
+            <StatTile
+              label="Moyenne $ / logement"
+              value={fmtPerDoor(meanPerDoor)}
+              hint={
+                perDoorValues.length > 0
+                  ? `sur ${perDoorValues.length} comparable${
+                      perDoorValues.length > 1 ? "s" : ""
+                    } avec nb de logements`
+                  : "nb de logements manquant"
+              }
+            />
+            <StatTile
+              label="Médiane prix de vente"
+              value={fmtPrice(medPrice)}
+              hint={`sur ${priceValues.length} vente${
+                priceValues.length > 1 ? "s" : ""
+              }`}
+            />
+          </div>
+        ) : null}
+
         {/* Tableau de résultats */}
         <div className="mt-4 overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
           {loading && comparables.length === 0 ? (
@@ -553,17 +756,54 @@ export default function ComparablesPage() {
                 <thead className="bg-brand-950/60 text-left text-[11px] uppercase tracking-wider text-white/50">
                   <tr>
                     <th className="px-3 py-2.5">Adresse</th>
-                    <th className="px-3 py-2.5 text-right">Prix</th>
-                    <th className="px-3 py-2.5 text-right">Date vente</th>
-                    <th className="px-3 py-2.5 text-right">Nb log</th>
-                    <th className="px-3 py-2.5 text-right">Année</th>
-                    <th className="px-3 py-2.5 text-right">Superficie</th>
+                    <SortableTh
+                      label="Prix"
+                      sortKey="price"
+                      activeKey={sortKey}
+                      dir={sortDir}
+                      onSort={toggleSort}
+                    />
+                    <SortableTh
+                      label="$ / log"
+                      sortKey="perDoor"
+                      activeKey={sortKey}
+                      dir={sortDir}
+                      onSort={toggleSort}
+                    />
+                    <SortableTh
+                      label="Date vente"
+                      sortKey="date_sold"
+                      activeKey={sortKey}
+                      dir={sortDir}
+                      onSort={toggleSort}
+                    />
+                    <SortableTh
+                      label="Nb log"
+                      sortKey="nb_logement"
+                      activeKey={sortKey}
+                      dir={sortDir}
+                      onSort={toggleSort}
+                    />
+                    <SortableTh
+                      label="Année"
+                      sortKey="annee_construction"
+                      activeKey={sortKey}
+                      dir={sortDir}
+                      onSort={toggleSort}
+                    />
+                    <SortableTh
+                      label="Superficie"
+                      sortKey="superficie_terrain"
+                      activeKey={sortKey}
+                      dir={sortDir}
+                      onSort={toggleSort}
+                    />
                     <th className="px-3 py-2.5">Source</th>
                     <th className="px-3 py-2.5"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-brand-800">
-                  {comparables.map((c) => {
+                  {sortedComparables.map((c) => {
                     const isManual = c.source === "manual";
                     return (
                       <tr
@@ -596,6 +836,9 @@ export default function ComparablesPage() {
                         </td>
                         <td className="px-3 py-2.5 text-right font-bold tabular-nums text-emerald-300">
                           {fmtPrice(c.price)}
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-emerald-200/90">
+                          {fmtPerDoor(pricePerDoor(c))}
                         </td>
                         <td className="px-3 py-2.5 text-right tabular-nums text-white/70">
                           {fmtDate(c.date_sold)}
