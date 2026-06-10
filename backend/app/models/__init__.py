@@ -119,6 +119,7 @@ from app.models.investissement import (  # noqa: F401
     InvestissementStatus,
 )
 from app.models.immobilier import (  # noqa: F401
+    DepenseImmeuble,
     Bail,
     BailRenouvellement,
     BailRenouvellementStatus,
@@ -300,6 +301,7 @@ __all__ = [
     "Evaluation",
     "Distribution",
     "Hypotheque",
+    "DepenseImmeuble",
     "Immeuble",
     "ImmeubleOwnership",
     "Investissement",
