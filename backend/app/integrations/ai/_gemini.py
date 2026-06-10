@@ -13,6 +13,7 @@ Tier gratuit (au moment de l'écriture) :
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 from typing import List, Optional
@@ -139,6 +140,94 @@ class GeminiProvider:
         except (KeyError, IndexError, TypeError) as exc:
             raise AIProviderError(
                 f"Gemini : réponse inattendue → {data}"
+            ) from exc
+
+        usage = data.get("usageMetadata") or {}
+        return CompletionResult(
+            text=text.strip(),
+            model=model,
+            provider=self.name,
+            input_tokens=usage.get("promptTokenCount"),
+            output_tokens=usage.get("candidatesTokenCount"),
+            raw=data,
+        )
+
+    # ---------- média (audio inline) ----------
+
+    async def complete_with_media(
+        self,
+        *,
+        prompt: str,
+        media_bytes: bytes,
+        mime_type: str,
+        system: Optional[str] = None,
+        max_tokens: int = 8192,
+        temperature: float = 0.2,
+        model: Optional[str] = None,
+    ) -> CompletionResult:
+        """Completion avec un média joint (audio) via ``inline_data``.
+
+        Gemini accepte l'audio (mp3, m4a/aac, wav, ogg, webm, flac…)
+        directement dans ``generateContent`` — c'est ce qui permet la
+        transcription gratuite d'un enregistrement de rencontre. Limite
+        pratique : ~20 MB par requête en inline (au-delà il faudrait la
+        Files API, non branchée ici).
+        """
+        self._check_key()
+        model = model or self.default_completion_model
+
+        payload: dict = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": mime_type,
+                                "data": base64.b64encode(
+                                    media_bytes
+                                ).decode("ascii"),
+                            }
+                        },
+                    ],
+                }
+            ],
+            "generationConfig": {
+                "maxOutputTokens": max_tokens,
+                "temperature": temperature,
+                # Transcription = sortie longue ; on coupe le thinking
+                # pour que tout le budget serve au texte.
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
+        }
+        if system:
+            payload["systemInstruction"] = {"parts": [{"text": system}]}
+
+        url = (
+            f"{GEMINI_BASE}/models/{model}:generateContent"
+            f"?key={self.api_key}"
+        )
+        # L'upload inline + la transcription d'un long audio peuvent
+        # prendre du temps → timeout généreux.
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            try:
+                resp = await client.post(url, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+            except httpx.HTTPStatusError as exc:
+                raise AIProviderError(
+                    f"Gemini média HTTP {exc.response.status_code}: "
+                    f"{exc.response.text[:300]}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise AIProviderError(f"Gemini média réseau : {exc}") from exc
+
+        try:
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise AIProviderError(
+                f"Gemini média : réponse inattendue → {data}"
             ) from exc
 
         usage = data.get("usageMetadata") or {}
