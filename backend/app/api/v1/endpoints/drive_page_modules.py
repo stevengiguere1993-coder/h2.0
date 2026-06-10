@@ -25,7 +25,7 @@ import logging
 from fastapi import APIRouter, Body, HTTPException, status
 from sqlalchemy import func, select
 
-from app.api.deps import DBSession, RequireAdminOrOwner
+from app.api.deps import CurrentUser, DBSession, RequireAdminOrOwner
 from app.models.drive_convention import DriveConvention
 from app.models.drive_entity_link import DriveEntityLink
 from app.models.drive_page_module import DrivePageModule
@@ -105,7 +105,7 @@ async def list_page_modules(
 async def get_page_module_status(
     entity_type: str,
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
 ) -> DrivePageModuleStatus:
     """Statut minimal pour ``<EntityDriveSection>``.
 

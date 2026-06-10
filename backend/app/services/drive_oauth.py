@@ -54,6 +54,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.drive_audit_log import DriveAuditLog
 from app.models.drive_user_token import DriveUserToken
+from app.services.drive_exceptions import (
+    DriveAPIError,
+    DriveAuthError,
+    DriveError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -376,9 +381,23 @@ async def _refresh(
                     success=False,
                     error_message=f"http_{r.status_code}: {r.text[:200]}",
                 )
-                raise RuntimeError(f"refresh HTTP {r.status_code}")
+                # Refresh token expiré ou révoqué (invalid_grant) : ce n'est
+                # PAS une erreur serveur — l'utilisateur doit reconnecter son
+                # compte. On lève une DriveAuthError typée pour que l'endpoint
+                # réponde 401 (carte « Connexion Drive requise ») au lieu d'un
+                # 500 « Internal Server Error ».
+                raise DriveAuthError(
+                    "Session Google Drive expirée ou révoquée. "
+                    "Reconnecte ton compte dans Paramètres → Drive."
+                )
             payload = r.json()
+    except DriveError:
+        # Déjà typée (DriveAuthError ci-dessus) → on la laisse remonter.
+        raise
     except Exception as exc:
+        # Échec réseau / transitoire en contactant Google (timeout, DNS, JSON
+        # illisible…). On audit puis on remonte une erreur Drive typée → 502
+        # (et non un 500 brut), avec un bouton « Réessayer » côté UI.
         await _audit(
             db,
             user_id=row.user_id,
@@ -387,12 +406,19 @@ async def _refresh(
             success=False,
             error_message=str(exc)[:200],
         )
-        raise
+        raise DriveAPIError(
+            "Échec temporaire du rafraîchissement de la session Google "
+            "Drive. Réessaie dans un instant.",
+            original=exc,
+        ) from exc
 
     new_access = payload.get("access_token")
     expires_in = int(payload.get("expires_in", 3600))
     if not new_access:
-        raise RuntimeError("Google refresh sans access_token")
+        raise DriveAuthError(
+            "Réponse Google sans access_token. "
+            "Reconnecte ton compte dans Paramètres → Drive."
+        )
 
     row.access_token = _encrypt(new_access)
     row.expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
