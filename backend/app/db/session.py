@@ -114,6 +114,43 @@ async def _rotate_existing_receipts_cw90(conn) -> int:
     return rotated
 
 
+async def ensure_critical_columns() -> None:
+    """Crée — chacune dans SA PROPRE transaction — les colonnes dont
+    l'absence casse un endpoint critique.
+
+    À appeler APRÈS `init_db` et INDÉPENDAMMENT de lui : `init_db`
+    s'exécute dans une seule grosse transaction, donc si une étape y
+    échoue, tout est annulé (y compris les `ADD COLUMN`). Ici chaque
+    `ALTER` est isolé et committé seul → la colonne critique est garantie
+    même si `init_db` a planté. Idempotent (`ADD COLUMN IF NOT EXISTS`).
+    """
+    import logging
+    from sqlalchemy import text
+
+    log = logging.getLogger("db.ensure_critical_columns")
+    critical_columns = (
+        # Sans cette colonne, GET /api/v1/contact (pipeline construction)
+        # plante → « Impossible de charger les prospects » (régression #785).
+        ("contact_requests", "lost_reason", "VARCHAR(120)"),
+    )
+    for table, column, col_type in critical_columns:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        f"ALTER TABLE {table} "
+                        f"ADD COLUMN IF NOT EXISTS {column} {col_type}"
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "ensure_critical_columns %s.%s failed: %s",
+                table,
+                column,
+                exc,
+            )
+
+
 async def init_db() -> None:
     """
     Initialize database tables.
