@@ -590,3 +590,41 @@ class MaintenanceOrdre(Base, TimestampUpdateMixin):
     complete_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class DepenseImmeuble(Base, TimestampUpdateMixin):
+    """Dépense d'exploitation d'un immeuble (taxes, assurances,
+    entretien, déneigement, énergie…).
+
+    ``frequence`` pilote l'annualisation dans le P&L :
+      - "ponctuel" : compté dans l'année de ``date_depense`` ;
+      - "mensuel"  : montant × 12 (coût courant) ;
+      - "annuel"   : montant × 1 (coût courant).
+    """
+
+    __tablename__ = "immeuble_depenses"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    immeuble_id: Mapped[int] = mapped_column(
+        ForeignKey("immeubles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # taxes_municipales / taxes_scolaires / assurances / energie /
+    # entretien / deneigement / conciergerie / gestion / autre
+    categorie: Mapped[str] = mapped_column(
+        String(48), nullable=False, default="autre"
+    )
+    libelle: Mapped[str] = mapped_column(String(255), nullable=False)
+    montant: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    frequence: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="ponctuel",
+        server_default="ponctuel",
+    )
+    date_depense: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by_email: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True
+    )
