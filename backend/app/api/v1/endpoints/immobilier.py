@@ -1483,6 +1483,195 @@ async def delete_paiement(
     await db.commit()
 
 
+# ── Vue transversale « Loyers & retards » ─────────────────────────────
+# Tous les baux actifs du portefeuille croisés avec les paiements d'un
+# mois donné — LA vue quotidienne du gestionnaire (qui a payé, qui est
+# en retard, marquer payé en 1 clic depuis la page Baux & paiements).
+
+
+class LoyerOverviewRow(BaseModel):
+    bail_id: int
+    immeuble_id: int
+    immeuble_name: str
+    logement_numero: Optional[str] = None
+    locataire_id: Optional[int] = None
+    locataire_name: Optional[str] = None
+    locataire_phone: Optional[str] = None
+    loyer_mensuel: float
+    paiement_id: Optional[int] = None
+    montant_paye: Optional[float] = None
+    paye_le: Optional[date] = None
+    # "paye" | "retard" | "attente" (mois courant, pas encore au seuil)
+    etat: str
+
+
+class LoyerOverview(BaseModel):
+    mois: str
+    rows: List[LoyerOverviewRow]
+    total_attendu: float
+    total_recu: float
+    nb_payes: int
+    nb_retards: int
+    nb_attente: int
+
+
+@router.get("/loyers/overview", response_model=LoyerOverview)
+async def loyers_overview(
+    db: DBSession,
+    user: CurrentUser,
+    mois: Optional[str] = None,
+    entreprise_id: Optional[int] = None,
+) -> LoyerOverview:
+    """Croisement baux actifs × paiements pour un mois (def. courant).
+
+    Un bail sans paiement pour le mois est « retard » passé le 5 du
+    mois (même règle que le flag ``en_retard`` à la création d'un
+    paiement), sinon « attente ».
+    """
+    _require_volet(user)
+
+    today = datetime.now(timezone.utc).date()
+    if mois:
+        try:
+            month_start = datetime.strptime(mois + "-01", "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="Format mois attendu : YYYY-MM."
+            )
+    else:
+        month_start = today.replace(day=1)
+    month_label = month_start.strftime("%Y-%m")
+
+    # Périmètre immeubles : filtre entreprise + visibilité employé.
+    imm_q = select(Immeuble).where(Immeuble.is_active.is_(True))
+    if entreprise_id is not None:
+        imm_q = imm_q.where(
+            Immeuble.owner_entreprise_id == int(entreprise_id)
+        )
+    immeubles = (await db.execute(imm_q)).scalars().all()
+    visible = await visible_immeuble_ids(db, user)
+    if visible is not None:
+        immeubles = [i for i in immeubles if i.id in visible]
+    imm_by_id = {i.id: i for i in immeubles}
+    if not imm_by_id:
+        return LoyerOverview(
+            mois=month_label,
+            rows=[],
+            total_attendu=0.0,
+            total_recu=0.0,
+            nb_payes=0,
+            nb_retards=0,
+            nb_attente=0,
+        )
+
+    logements = (
+        await db.execute(
+            select(Logement).where(
+                Logement.immeuble_id.in_(list(imm_by_id.keys()))
+            )
+        )
+    ).scalars().all()
+    log_by_id = {l.id: l for l in logements}
+
+    baux = (
+        await db.execute(
+            select(Bail).where(
+                Bail.logement_id.in_(list(log_by_id.keys())),
+                Bail.status == "ACTIF",
+            )
+        )
+    ).scalars().all()
+
+    locataires = {}
+    loc_ids = {b.locataire_id for b in baux if b.locataire_id}
+    if loc_ids:
+        for loc in (
+            await db.execute(
+                select(Locataire).where(Locataire.id.in_(list(loc_ids)))
+            )
+        ).scalars().all():
+            locataires[loc.id] = loc
+
+    paiements_mois = {}
+    bail_ids = [b.id for b in baux]
+    if bail_ids:
+        for p in (
+            await db.execute(
+                select(PaiementLoyer).where(
+                    PaiementLoyer.bail_id.in_(bail_ids),
+                    PaiementLoyer.mois_couvert == month_start,
+                )
+            )
+        ).scalars().all():
+            paiements_mois[p.bail_id] = p
+
+    # Seuil de retard : après le 5 du mois couvert (ou mois passé).
+    overdue_threshold = month_start.replace(day=5)
+    rows: List[LoyerOverviewRow] = []
+    total_attendu = 0.0
+    total_recu = 0.0
+    nb_payes = nb_retards = nb_attente = 0
+
+    for b in baux:
+        logement = log_by_id.get(b.logement_id)
+        imm = imm_by_id.get(logement.immeuble_id) if logement else None
+        if imm is None:
+            continue
+        loc = locataires.get(b.locataire_id)
+        p = paiements_mois.get(b.id)
+        loyer = float(b.loyer_mensuel or 0)
+        total_attendu += loyer
+        if p is not None:
+            etat = "paye"
+            nb_payes += 1
+            total_recu += float(p.montant or 0)
+        elif today > overdue_threshold:
+            etat = "retard"
+            nb_retards += 1
+        else:
+            etat = "attente"
+            nb_attente += 1
+        rows.append(
+            LoyerOverviewRow(
+                bail_id=b.id,
+                immeuble_id=imm.id,
+                immeuble_name=imm.name,
+                logement_numero=(
+                    logement.numero if logement is not None else None
+                ),
+                locataire_id=loc.id if loc else None,
+                locataire_name=loc.full_name if loc else None,
+                locataire_phone=loc.phone if loc else None,
+                loyer_mensuel=loyer,
+                paiement_id=p.id if p else None,
+                montant_paye=float(p.montant) if p else None,
+                paye_le=p.paye_le if p else None,
+                etat=etat,
+            )
+        )
+
+    # Retards d'abord, puis attente, puis payés ; tri secondaire par
+    # immeuble + logement pour une lecture stable.
+    order = {"retard": 0, "attente": 1, "paye": 2}
+    rows.sort(
+        key=lambda r: (
+            order.get(r.etat, 3),
+            r.immeuble_name,
+            r.logement_numero or "",
+        )
+    )
+
+    return LoyerOverview(
+        mois=month_label,
+        rows=rows,
+        total_attendu=round(total_attendu, 2),
+        total_recu=round(total_recu, 2),
+        nb_payes=nb_payes,
+        nb_retards=nb_retards,
+        nb_attente=nb_attente,
+    )
+
+
 # ── Hypothèques ────────────────────────────────────────────────────────
 
 
