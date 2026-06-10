@@ -225,6 +225,15 @@ class Settings(BaseSettings):
     # (jamais de clair) — cf. app.services.secret_vault.
     subscription_encryption_key: Optional[str] = None
 
+    # Synchro Teams → Rencontres : boîtes (organisateurs) dont on scanne
+    # le calendrier pour importer les rencontres Teams transcrites.
+    # Liste séparée par virgules, ex. "phil@x.com,steven@x.com".
+    # Vide = synchro désactivée. Réutilise l'app Azure du mailer
+    # (AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET) avec les
+    # permissions Calendars.Read + OnlineMeetings.Read.All +
+    # OnlineMeetingTranscript.Read.All (+ application access policy).
+    teams_meeting_user_emails: str = ""
+
     @property
     def is_production(self) -> bool:
         return self.env.lower() == "production"
