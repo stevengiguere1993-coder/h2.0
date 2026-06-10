@@ -22,7 +22,8 @@ import {
  */
 export function MeasurementChecklistModal({
   onClose,
-  onSubmit
+  onSubmit,
+  initial
 }: {
   onClose: () => void;
   onSubmit: (payload: {
@@ -32,11 +33,23 @@ export function MeasurementChecklistModal({
     notes: string;
     data: Record<string, unknown>;
   }) => Promise<void>;
+  /** Quand fourni, le modal s'ouvre en mode édition d'un relevé
+   *  existant : type verrouillé, champs pré-remplis, bouton
+   *  « Mettre à jour ». */
+  initial?: {
+    tplId: string;
+    label: string;
+    notes: string;
+    values: Record<string, unknown>;
+  };
 }) {
-  const [tplId, setTplId] = useState<string>("");
-  const [values, setValues] = useState<Record<string, unknown>>({});
-  const [label, setLabel] = useState("");
-  const [notes, setNotes] = useState("");
+  const editing = Boolean(initial);
+  const [tplId, setTplId] = useState<string>(initial?.tplId ?? "");
+  const [values, setValues] = useState<Record<string, unknown>>(
+    initial?.values ?? {}
+  );
+  const [label, setLabel] = useState(initial?.label ?? "");
+  const [notes, setNotes] = useState(initial?.notes ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -101,7 +114,7 @@ export function MeasurementChecklistModal({
         <header className="sticky top-0 flex items-center justify-between border-b border-brand-800 bg-brand-950 px-4 py-3">
           <h3 className="text-sm font-bold text-white">
             {template
-              ? `Relevé — ${template.icon} ${template.label}`
+              ? `${editing ? "Modifier" : "Relevé"} — ${template.icon} ${template.label}`
               : "Choisir un type de relevé"}
           </h3>
           <button
@@ -185,18 +198,22 @@ export function MeasurementChecklistModal({
             ) : null}
 
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-brand-800 pt-4">
-              <button
-                type="button"
-                onClick={() => {
-                  setTplId("");
-                  setValues({});
-                  setLabel("");
-                }}
-                disabled={submitting}
-                className="text-xs text-white/50 hover:text-white"
-              >
-                ← Changer de type
-              </button>
+              {editing ? (
+                <span />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTplId("");
+                    setValues({});
+                    setLabel("");
+                  }}
+                  disabled={submitting}
+                  className="text-xs text-white/50 hover:text-white"
+                >
+                  ← Changer de type
+                </button>
+              )}
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -215,7 +232,7 @@ export function MeasurementChecklistModal({
                   {submitting ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : null}
-                  Sauvegarder
+                  {editing ? "Mettre à jour" : "Sauvegarder"}
                 </button>
               </div>
             </div>
