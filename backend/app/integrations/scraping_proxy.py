@@ -176,3 +176,25 @@ async def is_vps_healthy() -> bool:
             return r.status_code == 200 and r.json().get("ok") is True
     except Exception:
         return False
+
+
+async def get_vps_health() -> Optional[dict]:
+    """Retourne le JSON complet du ``/health`` du VPS, ou ``None`` si
+    injoignable.
+
+    Contient au minimum ``ok`` et ``browser_connected`` ; les images
+    récentes exposent aussi ``numeriq_configured`` (présence des
+    identifiants QUB là où le scraper de comparables se connecte). Permet
+    au backend de bâtir un statut « source auto » fidèle à la réalité.
+    """
+    if not VPS_URL:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+            r = await client.get(f"{VPS_URL}/health")
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            return data if isinstance(data, dict) else None
+    except Exception:
+        return None
