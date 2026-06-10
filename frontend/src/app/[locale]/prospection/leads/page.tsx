@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -1170,6 +1170,37 @@ function KanbanBoard({
   const [dragId, setDragId] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
 
+  // Barre de défilement horizontale dupliquée EN HAUT du kanban, synchronisée
+  // avec le défilement réel. Le kanban est large (15 colonnes) et, avec
+  // beaucoup de cartes, les colonnes deviennent très hautes → la scrollbar
+  // native se retrouve loin en bas. Celle du haut permet de se déplacer entre
+  // les colonnes sans devoir descendre tout en bas.
+  const topScrollRef = useRef<HTMLDivElement>(null);
+  const bodyScrollRef = useRef<HTMLDivElement>(null);
+  const [kanbanWidth, setKanbanWidth] = useState(0);
+
+  useEffect(() => {
+    const measure = () => {
+      if (bodyScrollRef.current) {
+        setKanbanWidth(bodyScrollRef.current.scrollWidth);
+      }
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [leads]);
+
+  // Synchronise le défilement entre les deux barres. Le garde > 1px évite
+  // toute oscillation due aux arrondis sub-pixels.
+  function syncScroll(
+    from: HTMLDivElement | null,
+    to: HTMLDivElement | null
+  ) {
+    if (from && to && Math.abs(to.scrollLeft - from.scrollLeft) > 1) {
+      to.scrollLeft = from.scrollLeft;
+    }
+  }
+
   const COLUMNS: { key: string; label: string }[] = [
     { key: "a_visiter", label: "Repéré" },
     { key: "visite", label: "Visité" },
@@ -1203,7 +1234,25 @@ function KanbanBoard({
   }
 
   return (
-    <div className="overflow-x-auto p-3">
+    <div>
+      {/* Barre de défilement dupliquée EN HAUT, synchronisée avec le kanban. */}
+      <div
+        ref={topScrollRef}
+        onScroll={() =>
+          syncScroll(topScrollRef.current, bodyScrollRef.current)
+        }
+        className="overflow-x-auto"
+        aria-hidden="true"
+      >
+        <div style={{ width: kanbanWidth, height: 1 }} />
+      </div>
+      <div
+        ref={bodyScrollRef}
+        onScroll={() =>
+          syncScroll(bodyScrollRef.current, topScrollRef.current)
+        }
+        className="overflow-x-auto p-3"
+      >
       <div className="flex gap-3" style={{ minWidth: "max-content" }}>
         {COLUMNS.map((col) => {
           const items = byStatus[col.key] || [];
@@ -1352,6 +1401,7 @@ function KanbanBoard({
             </div>
           );
         })}
+      </div>
       </div>
     </div>
   );
