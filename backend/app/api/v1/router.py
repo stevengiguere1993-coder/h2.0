@@ -147,6 +147,7 @@ from app.api.v1.endpoints.business import (
     punch_router,
     soumissions_router,
     sous_traitants_router,
+    note_templates_router,
 )
 
 api_router = APIRouter()
@@ -297,6 +298,7 @@ api_router.include_router(follow_ups.router)
 api_router.include_router(employes.router)
 api_router.include_router(fournisseurs_router)
 api_router.include_router(sous_traitants_router)
+api_router.include_router(note_templates_router)
 api_router.include_router(soumissions_router)
 api_router.include_router(soumission_items.router)
 api_router.include_router(soumission_qbo.router)

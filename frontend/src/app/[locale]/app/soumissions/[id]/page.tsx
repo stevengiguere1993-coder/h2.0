@@ -171,6 +171,8 @@ export default function SoumissionDetailPage() {
   const [validUntil, setValidUntil] = useState<string>("");
   const [notes, setNotes] = useState("");
   const [clientNote, setClientNote] = useState("");
+  // #16 — sélecteur de notes prédéfinies (catalogue) pour la note client
+  const [notePickerOpen, setNotePickerOpen] = useState(false);
   const [propertyAddress, setPropertyAddress] = useState("");
   const [pricingKind, setPricingKind] = useState<"forfaitaire" | "estime">(
     "forfaitaire"
@@ -1395,12 +1397,21 @@ export default function SoumissionDetailPage() {
                     les modalités sont déjà dans le contrat lui-même. */}
                 {kind === "quote" ? (
                   <div>
-                    <label htmlFor="client_note" className="label">
-                      Note sur la soumission{" "}
-                      <span className="text-[10px] font-normal text-accent-500">
-                        (visible par le client)
-                      </span>
-                    </label>
+                    <div className="flex items-end justify-between gap-2">
+                      <label htmlFor="client_note" className="label">
+                        Note sur la soumission{" "}
+                        <span className="text-[10px] font-normal text-accent-500">
+                          (visible par le client)
+                        </span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setNotePickerOpen(true)}
+                        className="mb-1 rounded-md border border-brand-700 bg-brand-900 px-2 py-1 text-[11px] font-semibold text-white/80 hover:border-accent-500 hover:text-white"
+                      >
+                        + Catalogue de notes
+                      </button>
+                    </div>
                     <textarea
                       id="client_note"
                       rows={3}
@@ -1613,6 +1624,18 @@ export default function SoumissionDetailPage() {
             } catch {
               /* ignore */
             }
+          }}
+        />
+      ) : null}
+
+      {notePickerOpen ? (
+        <NoteTemplatePicker
+          onClose={() => setNotePickerOpen(false)}
+          onInsert={(body) => {
+            setClientNote((prev) =>
+              prev.trim() ? `${prev.trim()}\n${body}` : body
+            );
+            setNotePickerOpen(false);
           }}
         />
       ) : null}
@@ -2338,6 +2361,205 @@ function ServiceTemplatePicker({
                       "Insérer"
                     )}
                   </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {error ? (
+          <p className="border-t border-brand-800 px-4 py-3 text-xs text-rose-300">
+            {error}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+type NoteTemplate = {
+  id: number;
+  name: string;
+  body: string;
+  category: string;
+};
+
+// #16 — Catalogue de notes prédéfinies : insérer une note type dans la
+// note client, et gérer (créer / supprimer) le catalogue sur place. Le
+// texte inséré reste éditable dans le textarea = personnalisable.
+function NoteTemplatePicker({
+  onClose,
+  onInsert
+}: {
+  onClose: () => void;
+  onInsert: (body: string) => void;
+}) {
+  const [templates, setTemplates] = useState<NoteTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newBody, setNewBody] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await authedFetch("/api/v1/note-templates");
+      if (!res.ok) throw new Error();
+      setTemplates((await res.json()) as NoteTemplate[]);
+    } catch {
+      setError("Chargement échoué.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function createTemplate() {
+    if (!newName.trim() || !newBody.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authedFetch("/api/v1/note-templates", {
+        method: "POST",
+        body: JSON.stringify({
+          name: newName.trim(),
+          body: newBody.trim()
+        })
+      });
+      if (!res.ok) throw new Error();
+      setNewName("");
+      setNewBody("");
+      setCreating(false);
+      await load();
+    } catch {
+      setError("Création échouée.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeTemplate(tid: number) {
+    setBusy(true);
+    try {
+      const res = await authedFetch(`/api/v1/note-templates/${tid}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) throw new Error();
+      setTemplates((xs) => xs.filter((x) => x.id !== tid));
+    } catch {
+      setError("Suppression échouée.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-950"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+          <h3 className="text-sm font-bold text-white">
+            Catalogue de notes
+          </h3>
+          <button
+            type="button"
+            onClick={() => setCreating((v) => !v)}
+            className="rounded-md border border-brand-700 bg-brand-900 px-2 py-1 text-[11px] font-semibold text-white/80 hover:border-accent-500 hover:text-white"
+          >
+            <Plus className="mr-1 inline h-3 w-3" />
+            Nouvelle note
+          </button>
+        </header>
+
+        {creating ? (
+          <div className="space-y-2 border-b border-brand-800 bg-brand-900/40 p-4">
+            <input
+              type="text"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Nom (ex. Paiement 50/50)"
+              className="input"
+              autoFocus
+            />
+            <textarea
+              rows={3}
+              value={newBody}
+              onChange={(e) => setNewBody(e.target.value)}
+              placeholder="Texte de la note…"
+              className="input"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCreating(false)}
+                className="rounded-md px-3 py-1.5 text-xs text-white/70 hover:bg-white/5"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={createTemplate}
+                disabled={busy || !newName.trim() || !newBody.trim()}
+                className="btn-accent text-xs disabled:opacity-50"
+              >
+                Enregistrer
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="h-5 w-5 animate-spin text-white/40" />
+            </div>
+          ) : templates.length === 0 ? (
+            <p className="px-4 py-10 text-center text-sm text-white/50">
+              Aucune note prédéfinie. Crée ta première avec « Nouvelle
+              note ».
+            </p>
+          ) : (
+            <ul className="divide-y divide-brand-800">
+              {templates.map((t) => (
+                <li key={t.id} className="px-4 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-white">
+                        {t.name}
+                      </p>
+                      <p className="mt-0.5 whitespace-pre-wrap text-xs text-white/60">
+                        {t.body}
+                      </p>
+                    </div>
+                    <div className="flex flex-shrink-0 items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onInsert(t.body)}
+                        className="rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-bold text-brand-950"
+                      >
+                        Insérer
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeTemplate(t.id)}
+                        disabled={busy}
+                        className="rounded-md p-1.5 text-white/40 hover:bg-rose-500/10 hover:text-rose-300"
+                        aria-label="Supprimer"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
                 </li>
               ))}
             </ul>
