@@ -563,18 +563,34 @@ async def comparables_health(
     vps_url_set = bool(scraping_proxy.VPS_URL)
     vps_key_set = bool(scraping_proxy.VPS_KEY)
     vps_reachable = False
+    numeriq_configured = False
     if vps_url_set and vps_key_set:
         try:
-            vps_reachable = await scraping_proxy.is_vps_healthy()
+            vps_health = await scraping_proxy.get_vps_health()
         except Exception:  # noqa: BLE001
-            vps_reachable = False
+            vps_health = None
+        if vps_health and vps_health.get("ok") is True:
+            vps_reachable = True
+            # Le VPS récent expose `numeriq_configured` (présence des
+            # identifiants QUB, là où le scraper se connecte réellement).
+            # S'il ne l'expose pas (ancienne image pas encore redéployée),
+            # on retombe sur le flag backend NUMERIQ_USERNAME.
+            if "numeriq_configured" in vps_health:
+                numeriq_configured = bool(
+                    vps_health.get("numeriq_configured")
+                )
+            else:
+                numeriq_configured = bool(os.environ.get("NUMERIQ_USERNAME"))
+
+    # « Source auto activée » = le VPS répond ET les identifiants QUB sont
+    # configurés. Le bandeau ne disparaît donc que lorsque la source peut
+    # réellement fonctionner — pas seulement parce qu'une variable existe.
+    journal_source_configured = vps_reachable and numeriq_configured
 
     return HealthResponse(
         cache_count=cache_count,
         vps_url_set=vps_url_set,
         vps_key_set=vps_key_set,
         vps_reachable=vps_reachable,
-        journal_source_configured=bool(
-            os.environ.get("NUMERIQ_USERNAME")
-        ),
+        journal_source_configured=journal_source_configured,
     )
