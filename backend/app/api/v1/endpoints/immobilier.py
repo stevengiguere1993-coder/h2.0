@@ -37,6 +37,7 @@ from app.models.client import Client
 from app.models.employe import Employe
 from app.models.project import Project
 from app.models.project_phase import ProjectPhase
+from app.models.project_photo import ProjectPhoto
 from app.models.sous_traitant import SousTraitant
 from app.models.immobilier import (
     Bail,
@@ -927,6 +928,12 @@ class _BonPhaseRead(BaseModel):
     assignee_name: Optional[str]
 
 
+class _BonPhotoMeta(BaseModel):
+    id: int
+    caption: Optional[str]
+    content_type: str
+
+
 class _BonAvancementDetail(BaseModel):
     id: int
     reference: str
@@ -940,6 +947,7 @@ class _BonAvancementDetail(BaseModel):
     client_name: Optional[str]
     project: Optional[_BonAvancementProject]
     phases: List[_BonPhaseRead]
+    photos: List[_BonPhotoMeta]
 
 
 @router.get("/bons-travail/{bon_id}", response_model=_BonAvancementDetail)
@@ -967,6 +975,7 @@ async def get_gestion_immo_bon(
 
     proj_summary = None
     phases_out: List[_BonPhaseRead] = []
+    photos_out: List[_BonPhotoMeta] = []
     if bon.project_id:
         proj = await db.get(Project, bon.project_id)
         if proj is not None:
@@ -1026,6 +1035,23 @@ async def get_gestion_immo_bon(
                     )
                 )
 
+            # Métadonnées des photos du chantier (sans charger les blobs).
+            prows = (
+                await db.execute(
+                    select(
+                        ProjectPhoto.id,
+                        ProjectPhoto.caption,
+                        ProjectPhoto.content_type,
+                    )
+                    .where(ProjectPhoto.project_id == proj.id)
+                    .order_by(ProjectPhoto.created_at.desc())
+                )
+            ).all()
+            photos_out = [
+                _BonPhotoMeta(id=pid, caption=cap, content_type=ct)
+                for pid, cap, ct in prows
+            ]
+
     return _BonAvancementDetail(
         id=bon.id,
         reference=bon.reference,
@@ -1039,7 +1065,45 @@ async def get_gestion_immo_bon(
         client_name=client_name,
         project=proj_summary,
         phases=phases_out,
+        photos=photos_out,
     )
+
+
+@router.get("/bons-travail/{bon_id}/photos/{photo_id}")
+async def get_gestion_immo_bon_photo(
+    bon_id: int, photo_id: int, db: DBSession, user: CurrentUser
+) -> Response:
+    """Sert l'image d'une photo de chantier, pour un bon gestion immobilière.
+    Passe par la porte immobilier : Kyle (sans volet construction) peut voir
+    les photos d'avancement du chantier lié à SON bon, en lecture seule."""
+    _require_volet(user)
+    bon = await db.get(BonTravail, bon_id)
+    if (
+        bon is None
+        or bon.project_id is None
+        or not (
+            bon.origin == "gestion_immo"
+            or (bon.scope_md and "Gestion immobilière" in bon.scope_md)
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Bon introuvable."
+        )
+    # Charge les octets explicitement (la colonne `image` est deferred), en
+    # vérifiant que la photo appartient bien au chantier de CE bon.
+    row = (
+        await db.execute(
+            select(ProjectPhoto.image, ProjectPhoto.content_type).where(
+                ProjectPhoto.id == photo_id,
+                ProjectPhoto.project_id == bon.project_id,
+            )
+        )
+    ).first()
+    if row is None or not row[0]:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Photo introuvable."
+        )
+    return Response(content=bytes(row[0]), media_type=row[1] or "image/jpeg")
 
 
 # ── Retirer une entreprise du portefeuille immobilier ──────────────────

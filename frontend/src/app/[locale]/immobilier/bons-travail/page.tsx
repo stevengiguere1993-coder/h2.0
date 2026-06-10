@@ -58,10 +58,17 @@ type BonPhase = {
   assignee_name: string | null;
 };
 
+type BonPhoto = {
+  id: number;
+  caption: string | null;
+  content_type: string;
+};
+
 type BonDetail = BonListItem & {
   description: string | null;
   scope_md: string | null;
   phases: BonPhase[];
+  photos: BonPhoto[];
 };
 
 const BON_STATUS: Record<string, { label: string; cls: string }> = {
@@ -597,6 +604,25 @@ function BonDetailModal({
                     ))}
                   </ul>
                 )}
+
+                {detail.photos.length > 0 ? (
+                  <>
+                    <p className="mt-4 text-[11px] font-semibold uppercase tracking-wider text-white/40">
+                      Photos du chantier ({detail.photos.length})
+                    </p>
+                    <div className="mt-1.5 grid grid-cols-3 gap-1.5">
+                      {detail.photos.map((ph) => (
+                        <PhotoThumb
+                          key={ph.id}
+                          bonId={bonId}
+                          photoId={ph.id}
+                          caption={ph.caption}
+                          contentType={ph.content_type}
+                        />
+                      ))}
+                    </div>
+                  </>
+                ) : null}
               </div>
             ) : (
               <p className="mt-4 rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-3 py-3 text-xs text-white/50">
@@ -619,6 +645,82 @@ function BonDetailModal({
         )}
       </div>
     </div>
+  );
+}
+
+// Charge une photo protégée par auth : `<img src>` ne peut pas envoyer le
+// Bearer, donc on récupère le blob via authedFetch puis on crée une URL
+// objet locale. Les PDF (le format est autorisé à l'upload) ouvrent dans un
+// nouvel onglet au clic.
+function PhotoThumb({
+  bonId,
+  photoId,
+  caption,
+  contentType
+}: {
+  bonId: number;
+  photoId: number;
+  caption: string | null;
+  contentType: string;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  const isImage = contentType.startsWith("image/");
+
+  useEffect(() => {
+    let active = true;
+    let objUrl: string | null = null;
+    (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/immobilier/bons-travail/${bonId}/photos/${photoId}`
+        );
+        if (!r.ok) return;
+        const blob = await r.blob();
+        objUrl = URL.createObjectURL(blob);
+        if (active) setUrl(objUrl);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      active = false;
+      if (objUrl) URL.revokeObjectURL(objUrl);
+    };
+  }, [bonId, photoId]);
+
+  const cls =
+    "flex aspect-square items-center justify-center overflow-hidden rounded-lg border border-brand-800 bg-brand-950";
+
+  if (!url) {
+    return (
+      <div className={cls}>
+        <Loader2 className="h-4 w-4 animate-spin text-white/30" />
+      </div>
+    );
+  }
+  if (!isImage) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={caption || "Document"}
+        className={`${cls} text-xs font-semibold text-white/70 hover:text-amber-300`}
+      >
+        📄 Ouvrir
+      </a>
+    );
+  }
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" className={cls}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt={caption || "Photo du chantier"}
+        title={caption || undefined}
+        className="h-full w-full object-cover"
+      />
+    </a>
   );
 }
 
