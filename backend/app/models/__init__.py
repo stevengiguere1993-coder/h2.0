@@ -57,6 +57,7 @@ from app.models.drive_user_token import DriveUserToken  # noqa: F401
 from app.models.email_log import EmailLog
 from app.models.email_template import EmailTemplate
 from app.models.note_template import NoteTemplate
+from app.models.cron_run import CronRun
 from app.models.employe import Employe
 from app.models.employe_rate_history import EmployeRateHistory  # noqa: F401
 from app.models.entreprise import Entreprise, EntrepriseLink, EntreprisePartner  # noqa: F401
@@ -280,6 +281,7 @@ __all__ = [
     "EmailLog",
     "EmailTemplate",
     "NoteTemplate",
+    "CronRun",
     "Employe",
     "Facture",
     "FactureItem",
