@@ -44,6 +44,9 @@ type SousTraitant = {
   insurance_expires_at: string | null;
   trades: string | null;
   hourly_rate: number | null;
+  charges_travel_fee: boolean | null;
+  travel_fee_amount: number | null;
+  travel_fee_notes: string | null;
   rating: number | null;
   competence_rating: number | null;
   availability_rating: number | null;
@@ -111,6 +114,9 @@ export default function SousTraitantDetailPage() {
   const [insExpiresAt, setInsExpiresAt] = useState("");
   const [trades, setTrades] = useState("");
   const [hourlyRate, setHourlyRate] = useState("");
+  const [chargesTravelFee, setChargesTravelFee] = useState(false);
+  const [travelFeeAmount, setTravelFeeAmount] = useState("");
+  const [travelFeeNotes, setTravelFeeNotes] = useState("");
   const [rating, setRating] = useState<number>(0);
   const [competence, setCompetence] = useState<number>(0);
   const [availability, setAvailability] = useState<number>(0);
@@ -150,6 +156,13 @@ export default function SousTraitantDetailPage() {
         setHourlyRate(
           data.hourly_rate != null ? String(data.hourly_rate) : ""
         );
+        setChargesTravelFee(!!data.charges_travel_fee);
+        setTravelFeeAmount(
+          data.travel_fee_amount != null
+            ? String(data.travel_fee_amount)
+            : ""
+        );
+        setTravelFeeNotes(data.travel_fee_notes || "");
         setRating(data.rating || 0);
         setCompetence(data.competence_rating || 0);
         setAvailability(data.availability_rating || 0);
@@ -190,6 +203,10 @@ export default function SousTraitantDetailPage() {
       insExpiresAt !== (st.insurance_expires_at || "") ||
       trades !== (st.trades || "") ||
       hourlyRate !== (st.hourly_rate != null ? String(st.hourly_rate) : "") ||
+      chargesTravelFee !== !!st.charges_travel_fee ||
+      travelFeeAmount !==
+        (st.travel_fee_amount != null ? String(st.travel_fee_amount) : "") ||
+      travelFeeNotes !== (st.travel_fee_notes || "") ||
       rating !== (st.rating || 0) ||
       competence !== (st.competence_rating || 0) ||
       availability !== (st.availability_rating || 0) ||
@@ -201,6 +218,7 @@ export default function SousTraitantDetailPage() {
   }, [
     st, fullName, contactName, email, phone, address, regions, rbqLicense,
     rbqExpiresAt, insProvider, insPolicy, insExpiresAt, trades, hourlyRate,
+    chargesTravelFee, travelFeeAmount, travelFeeNotes,
     rating, competence, availability, punctuality, quality, active, notes
   ]);
 
@@ -223,6 +241,13 @@ export default function SousTraitantDetailPage() {
         insurance_expires_at: insExpiresAt || null,
         trades: trades.trim() || null,
         hourly_rate: hourlyRate ? Number(hourlyRate) : null,
+        charges_travel_fee: chargesTravelFee,
+        travel_fee_amount:
+          chargesTravelFee && travelFeeAmount ? Number(travelFeeAmount) : null,
+        travel_fee_notes:
+          chargesTravelFee && travelFeeNotes.trim()
+            ? travelFeeNotes.trim()
+            : null,
         rating: rating || null,
         competence_rating: competence || null,
         availability_rating: availability || null,
@@ -537,6 +562,71 @@ export default function SousTraitantDetailPage() {
                         onChange={(e) => setHourlyRate(e.target.value)}
                         className="input sm:w-48"
                       />
+                    </div>
+
+                    {/* Frais de déplacement (#26) */}
+                    <div className="border-t border-brand-800 pt-4">
+                      <label className="flex cursor-pointer items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={chargesTravelFee}
+                          onChange={(e) =>
+                            setChargesTravelFee(e.target.checked)
+                          }
+                          className="mt-0.5"
+                        />
+                        <span className="text-sm">
+                          <span className="block font-medium text-white">
+                            Facture des frais de déplacement
+                          </span>
+                          <span className="mt-0.5 block text-[11px] text-white/60">
+                            Certains sous-traitants chargent un déplacement —
+                            ça impacte le prix final d&apos;un chantier.
+                          </span>
+                        </span>
+                      </label>
+                      {chargesTravelFee ? (
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          <div>
+                            <label
+                              htmlFor="travel_fee_amount"
+                              className="label"
+                            >
+                              Montant indicatif (CAD)
+                            </label>
+                            <input
+                              id="travel_fee_amount"
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={travelFeeAmount}
+                              onChange={(e) =>
+                                setTravelFeeAmount(e.target.value)
+                              }
+                              placeholder="Ex. 75"
+                              className="input"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor="travel_fee_notes"
+                              className="label"
+                            >
+                              Détails
+                            </label>
+                            <input
+                              id="travel_fee_notes"
+                              type="text"
+                              value={travelFeeNotes}
+                              onChange={(e) =>
+                                setTravelFeeNotes(e.target.value)
+                              }
+                              placeholder="Ex. 0,60 $/km au-delà de 30 km"
+                              className="input"
+                            />
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </section>

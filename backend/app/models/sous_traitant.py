@@ -48,6 +48,18 @@ class SousTraitant(Base, TimestampUpdateMixin):
     hourly_rate: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
     rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1..5 (note générale, legacy)
 
+    # Frais de déplacement — certains sous-traitants facturent un
+    # déplacement, d'autres non ; ça impacte le prix final. `charges_travel_fee`
+    # = drapeau oui/non, `travel_fee_amount` = montant indicatif (CAD),
+    # `travel_fee_notes` = précisions (ex. « 0,60 $/km au-delà de 30 km »).
+    charges_travel_fee: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True
+    )
+    travel_fee_amount: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+    travel_fee_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # Qualifications 1..5 on four axes — the overall score shown in the UI
     # is the mean of the axes that are filled in.
     competence_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
