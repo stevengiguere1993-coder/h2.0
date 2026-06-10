@@ -6337,7 +6337,7 @@ function DevlogPlanificationTab({ projectId }: { projectId: number }) {
   function onDragStart(id: number) {
     setDragId(id);
   }
-  function onDragOver(e: React.DragEvent<HTMLDivElement>) {
+  function onDragOver(e: React.DragEvent<HTMLElement>) {
     e.preventDefault();
   }
   function onDrop(targetId: number) {

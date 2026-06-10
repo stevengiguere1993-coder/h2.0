@@ -192,9 +192,10 @@ export default async function ServiceCityPage({ params }: Props) {
               {nearbyCities.map((nc) => (
                 <li key={nc.slug}>
                   <Link
-                    href={
-                      `/renovation/${s.slug}/${nc.slug}` as `/renovation/${string}/${string}`
-                    }
+                    href={{
+                      pathname: "/renovation/[service]/[city]",
+                      params: { service: s.slug, city: nc.slug }
+                    }}
                     className="text-accent-500 hover:text-accent-600"
                   >
                     Rénovation {s.name} à {nc.name}
@@ -211,9 +212,10 @@ export default async function ServiceCityPage({ params }: Props) {
               {otherServices.map((os) => (
                 <li key={os.slug}>
                   <Link
-                    href={
-                      `/renovation/${os.slug}/${c.slug}` as `/renovation/${string}/${string}`
-                    }
+                    href={{
+                      pathname: "/renovation/[service]/[city]",
+                      params: { service: os.slug, city: c.slug }
+                    }}
                     className="text-accent-500 hover:text-accent-600"
                   >
                     Rénovation {os.name} à {c.name}

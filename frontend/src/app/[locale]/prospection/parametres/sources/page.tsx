@@ -1379,6 +1379,16 @@ export default function ProspectionSourcesPage() {
   );
 }
 
+type DiagItem = {
+  file: string;
+  encoding?: string;
+  delimiter?: string;
+  headers_seen?: string[];
+  columns_mapped?: string[];
+  has_matricule?: boolean;
+  error?: string;
+};
+
 function DiagnosticsPanel({ diagnostics }: { diagnostics: DiagItem[] }) {
   // Catégorise les fichiers : importés / hors-périmètre / erreurs / autre.
   const imported: DiagItem[] = [];

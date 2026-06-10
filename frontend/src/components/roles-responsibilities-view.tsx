@@ -76,7 +76,7 @@ export function RolesResponsibilitiesView({
     parentId: number | null,
     label: string,
     kind: string
-  ) => Promise<OrgNode | null> | void;
+  ) => Promise<OrgNode | null | undefined> | void;
 }) {
   const [filter, setFilter] = useState<Filter>({
     pole: "all",
@@ -437,7 +437,7 @@ function RoleDetail({
     parentId: number | null,
     label: string,
     kind: string
-  ) => Promise<OrgNode | null> | void;
+  ) => Promise<OrgNode | null | undefined> | void;
   onClose: () => void;
 }) {
   const assigneeOptions = useMemo<TargetPickerOption[]>(

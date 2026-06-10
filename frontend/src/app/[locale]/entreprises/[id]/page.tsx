@@ -957,6 +957,27 @@ function fmtCurrencyImmo(n: number | null | undefined): string {
   }).format(n);
 }
 
+type ImmobilierSummary = {
+  nb_immeubles: number;
+  nb_logements_actifs: number;
+  nb_logements_occupes: number;
+  taux_occupation: number;
+  revenu_mensuel_part: number | null;
+  revenu_annuel_part: number | null;
+  valeur_portefeuille_part: number | null;
+  balance_hypothecaire_part: number | null;
+  equity_part: number | null;
+  immeubles: Array<{
+    immeuble_id: number;
+    name: string;
+    address: string;
+    city?: string | null;
+    cover_photo_url?: string | null;
+    ownership_pct: number;
+    revenu_mensuel_part: number | null;
+  }>;
+};
+
 function EntrepriseImmobilierSection({ entrepriseId }: { entrepriseId: number }) {
   const [data, setData] = useState<ImmobilierSummary | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -1089,6 +1110,18 @@ const PARTNER_ROLES = [
   { value: "preteur", label: "Prêteur" },
   { value: "autre", label: "Autre" }
 ];
+
+type Partner = {
+  id: number;
+  display_name: string;
+  display_email?: string | null;
+  role: string;
+  user_id?: number | null;
+  ownership_pct?: number | null;
+  partner_notes?: string | null;
+  partner_name?: string | null;
+  partner_email?: string | null;
+};
 
 function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
   const [list, setList] = useState<Partner[] | null>(null);

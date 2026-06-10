@@ -209,7 +209,8 @@ export function VoiceConsole() {
             setErrorMsg(msg || "device error");
           }
         });
-        device.on("incoming", (call: CallAny) => {
+        device.on("incoming", (...args: unknown[]) => {
+          const call = args[0] as CallAny;
           if (!mounted) {
             call.reject();
             return;
