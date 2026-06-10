@@ -27,6 +27,74 @@ type BonResult = {
   client_created: boolean;
 };
 
+type BonProject = {
+  id: number;
+  label: string;
+  status: string | null;
+  progress_pct: number;
+  start_date: string | null;
+  end_date: string | null;
+  phase_count: number;
+};
+
+type BonListItem = {
+  id: number;
+  reference: string;
+  title: string;
+  status: string;
+  created_at: string | null;
+  sent_at: string | null;
+  signed_at: string | null;
+  client_name: string | null;
+  project: BonProject | null;
+};
+
+type BonPhase = {
+  id: number;
+  name: string;
+  start_date: string | null;
+  end_date: string | null;
+  duration_days: number | null;
+  assignee_name: string | null;
+};
+
+type BonDetail = BonListItem & {
+  description: string | null;
+  scope_md: string | null;
+  phases: BonPhase[];
+};
+
+const BON_STATUS: Record<string, { label: string; cls: string }> = {
+  draft: { label: "Brouillon", cls: "bg-slate-500/20 text-slate-200" },
+  sent: { label: "Envoyé", cls: "bg-sky-500/20 text-sky-200" },
+  signed: { label: "Signé", cls: "bg-emerald-500/20 text-emerald-200" },
+  cancelled: { label: "Annulé", cls: "bg-rose-500/20 text-rose-200" }
+};
+
+const PROJECT_STATUS: Record<string, { label: string; cls: string }> = {
+  planned: { label: "À planifier", cls: "bg-slate-500/20 text-slate-200" },
+  ready_to_start: {
+    label: "En attente de début",
+    cls: "bg-amber-500/20 text-amber-200"
+  },
+  in_progress: { label: "En cours", cls: "bg-sky-500/20 text-sky-200" },
+  suspended: { label: "Suspendu", cls: "bg-orange-500/20 text-orange-200" },
+  delivered: { label: "Livré", cls: "bg-emerald-500/20 text-emerald-200" }
+};
+
+function fmtDate(iso: string | null): string {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleDateString("fr-CA", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric"
+    });
+  } catch {
+    return iso;
+  }
+}
+
 export default function BonsTravailPage() {
   const { currentEntrepriseId } = useImmobilierLayout();
   const [immeubles, setImmeubles] = useState<ImmeubleListItem[] | null>(null);
@@ -38,6 +106,23 @@ export default function BonsTravailPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BonResult | null>(null);
+  // Suivi (miroir lecture seule) des bons de travail gestion immo.
+  const [bons, setBons] = useState<BonListItem[] | null>(null);
+  const [detailId, setDetailId] = useState<number | null>(null);
+
+  async function loadBons() {
+    try {
+      const r = await authedFetch("/api/v1/immobilier/bons-travail");
+      if (!r.ok) return;
+      setBons((await r.json()) as BonListItem[]);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  useEffect(() => {
+    void loadBons();
+  }, []);
 
   // Charge les immeubles de la compagnie active.
   useEffect(() => {
@@ -111,6 +196,7 @@ export default function BonsTravailPage() {
       setTitre("");
       setDescription("");
       setLogement("");
+      void loadBons();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -257,8 +343,282 @@ export default function BonsTravailPage() {
             </Link>
           </div>
         ) : null}
+
+        {/* Suivi lecture seule — avancement des bons de travail */}
+        <section className="mt-8">
+          <h2 className="text-lg font-bold text-white">
+            Suivi des bons de travail
+          </h2>
+          <p className="mt-1 max-w-2xl text-xs text-white/50">
+            Avancement des bons partis en Construction. Lecture seule :
+            l&apos;assignation des équipes et la planification se gèrent côté
+            Construction.
+          </p>
+
+          {bons === null ? (
+            <div className="mt-4 flex items-center gap-2 text-sm text-white/50">
+              <Loader2 className="h-4 w-4 animate-spin" /> Chargement…
+            </div>
+          ) : bons.length === 0 ? (
+            <p className="mt-4 rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-4 py-8 text-center text-sm text-white/50">
+              Aucun bon de travail pour l&apos;instant. Crée-en un ci-dessus.
+            </p>
+          ) : (
+            <ul className="mt-4 grid gap-3 lg:grid-cols-2">
+              {bons.map((b) => {
+                const bs = BON_STATUS[b.status] || {
+                  label: b.status,
+                  cls: "bg-white/10 text-white/70"
+                };
+                const ps = b.project
+                  ? PROJECT_STATUS[b.project.status || ""] || {
+                      label: b.project.status || "—",
+                      cls: "bg-white/10 text-white/70"
+                    }
+                  : null;
+                return (
+                  <li
+                    key={b.id}
+                    className="rounded-2xl border border-brand-800 bg-brand-900 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-white">
+                          {b.title}
+                        </p>
+                        <p className="mt-0.5 font-mono text-[10px] text-white/40">
+                          {b.reference}
+                          {b.client_name ? ` · ${b.client_name}` : ""}
+                        </p>
+                      </div>
+                      <span
+                        className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${bs.cls}`}
+                      >
+                        {bs.label}
+                      </span>
+                    </div>
+
+                    {b.project ? (
+                      <div className="mt-3 rounded-xl border border-brand-800 bg-brand-950/50 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-xs font-medium text-white/80">
+                            🏗️ {b.project.label}
+                          </span>
+                          {ps ? (
+                            <span
+                              className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${ps.cls}`}
+                            >
+                              {ps.label}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-brand-800">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-amber-400 to-emerald-400"
+                            style={{ width: `${b.project.progress_pct}%` }}
+                          />
+                        </div>
+                        <p className="mt-1.5 text-[10px] text-white/45">
+                          {b.project.phase_count} phase
+                          {b.project.phase_count > 1 ? "s" : ""}
+                          {b.project.start_date
+                            ? ` · du ${fmtDate(b.project.start_date)}`
+                            : ""}
+                          {b.project.end_date
+                            ? ` au ${fmtDate(b.project.end_date)}`
+                            : ""}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="mt-3 rounded-xl border border-dashed border-brand-800 bg-brand-950/40 px-3 py-2 text-[11px] text-white/45">
+                        Pas encore pris en charge par Construction (aucun
+                        chantier lié).
+                      </p>
+                    )}
+
+                    <div className="mt-3 flex items-center justify-between">
+                      <span className="text-[10px] text-white/35">
+                        Créé le {fmtDate(b.created_at)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setDetailId(b.id)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-brand-700 px-2.5 py-1 text-[11px] font-semibold text-white/80 hover:border-amber-300 hover:text-white"
+                      >
+                        Voir le suivi →
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
       </div>
+
+      {detailId != null ? (
+        <BonDetailModal bonId={detailId} onClose={() => setDetailId(null)} />
+      ) : null}
     </>
+  );
+}
+
+function BonDetailModal({
+  bonId,
+  onClose
+}: {
+  bonId: number;
+  onClose: () => void;
+}) {
+  const [detail, setDetail] = useState<BonDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/immobilier/bons-travail/${bonId}`
+        );
+        if (!r.ok) return;
+        if (!cancelled) setDetail((await r.json()) as BonDetail);
+      } catch {
+        /* ignore */
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bonId]);
+
+  const bs = detail
+    ? BON_STATUS[detail.status] || {
+        label: detail.status,
+        cls: "bg-white/10 text-white/70"
+      }
+    : null;
+  const ps =
+    detail?.project && detail.project.status
+      ? PROJECT_STATUS[detail.project.status] || {
+          label: detail.project.status,
+          cls: "bg-white/10 text-white/70"
+        }
+      : null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 sm:items-center"
+      onClick={onClose}
+    >
+      <div
+        className="my-auto w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {loading || !detail ? (
+          <div className="flex items-center justify-center py-10">
+            <Loader2 className="h-6 w-6 animate-spin text-white/40" />
+          </div>
+        ) : (
+          <>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-lg font-bold text-white">
+                  {detail.title}
+                </h3>
+                <p className="mt-0.5 font-mono text-[11px] text-white/40">
+                  {detail.reference}
+                  {detail.client_name ? ` · ${detail.client_name}` : ""}
+                </p>
+              </div>
+              {bs ? (
+                <span
+                  className={`flex-shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${bs.cls}`}
+                >
+                  {bs.label}
+                </span>
+              ) : null}
+            </div>
+
+            {detail.description ? (
+              <p className="mt-3 whitespace-pre-wrap text-sm text-white/70">
+                {detail.description}
+              </p>
+            ) : null}
+
+            {detail.project ? (
+              <div className="mt-4 rounded-xl border border-brand-800 bg-brand-900 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm font-semibold text-white">
+                    🏗️ {detail.project.label}
+                  </span>
+                  {ps ? (
+                    <span
+                      className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${ps.cls}`}
+                    >
+                      {ps.label}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-brand-800">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-amber-400 to-emerald-400"
+                    style={{ width: `${detail.project.progress_pct}%` }}
+                  />
+                </div>
+
+                <p className="mt-3 text-[11px] font-semibold uppercase tracking-wider text-white/40">
+                  Planification ({detail.phases.length})
+                </p>
+                {detail.phases.length === 0 ? (
+                  <p className="mt-1 text-xs text-white/45">
+                    Aucune phase planifiée pour l&apos;instant.
+                  </p>
+                ) : (
+                  <ul className="mt-1.5 space-y-1.5">
+                    {detail.phases.map((ph) => (
+                      <li
+                        key={ph.id}
+                        className="flex items-center justify-between gap-2 rounded-lg bg-brand-950/60 px-2.5 py-1.5"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-medium text-white">
+                            {ph.name}
+                          </p>
+                          <p className="text-[10px] text-white/45">
+                            {ph.start_date ? fmtDate(ph.start_date) : "—"}
+                            {ph.end_date ? ` → ${fmtDate(ph.end_date)}` : ""}
+                            {ph.assignee_name ? ` · ${ph.assignee_name}` : ""}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : (
+              <p className="mt-4 rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-3 py-3 text-xs text-white/50">
+                Ce bon n&apos;est pas encore rattaché à un chantier en
+                Construction. L&apos;avancement s&apos;affichera ici dès sa
+                prise en charge.
+              </p>
+            )}
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg border border-brand-700 px-4 py-2 text-sm text-white/80 hover:border-amber-300 hover:text-white"
+              >
+                Fermer
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
