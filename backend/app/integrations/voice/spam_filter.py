@@ -38,8 +38,11 @@ log = logging.getLogger(__name__)
 
 
 # Limites par défaut — overridables via env.
-MAX_CALLS_PER_HOUR = int(os.getenv("VOICE_MAX_CALLS_PER_HOUR", "3"))
-MAX_CALLS_PER_7D = int(os.getenv("VOICE_MAX_CALLS_PER_7D", "20"))
+# Seuils volontairement larges : un vrai client/locataire qui rappelle
+# plusieurs fois (ou l'équipe qui teste la ligne) ne doit pas se faire
+# bannir. La protection coût repose surtout sur le plafond journalier.
+MAX_CALLS_PER_HOUR = int(os.getenv("VOICE_MAX_CALLS_PER_HOUR", "10"))
+MAX_CALLS_PER_7D = int(os.getenv("VOICE_MAX_CALLS_PER_7D", "50"))
 AUTO_BAN_HOURS = int(os.getenv("VOICE_AUTO_BAN_HOURS", "24"))
 HONEYPOT_THRESHOLD = int(os.getenv("VOICE_HONEYPOT_THRESHOLD", "3"))
 DAILY_COST_CAP_CENTS = int(os.getenv("VOICE_DAILY_COST_CAP_CENTS", "500"))  # $5
