@@ -104,22 +104,34 @@ export default function RencontresListPage() {
         imported?: { title: string }[];
         pending?: number;
         no_transcript?: number;
+        auto_transcription_enabled?: number;
       };
       const n = res.imported?.length || 0;
+      const armed = res.auto_transcription_enabled || 0;
+      const armedNote =
+        armed > 0
+          ? ` ✅ ${armed} meeting${armed > 1 ? "s" : ""} à venir armé${
+              armed > 1 ? "s" : ""
+            } pour transcription auto.`
+          : "";
       if (n > 0) {
         setSyncMsg(
-          `${n} rencontre${n > 1 ? "s" : ""} importée${n > 1 ? "s" : ""} de Teams ✓`
+          `${n} rencontre${n > 1 ? "s" : ""} importée${
+            n > 1 ? "s" : ""
+          } de Teams ✓${armedNote}`
         );
         await load();
         await loadTeamsStatus();
       } else if ((res.pending || 0) > 0) {
         setSyncMsg(
-          "Aucune nouvelle transcription prête — les transcriptions Teams " +
-            "prennent quelques minutes après la fin d'un meeting. Réessaie " +
-            "tantôt."
+          "Réunion(s) trouvée(s), mais sans transcription disponible. " +
+            "Soit Teams ne l'a pas encore publiée (réessaie dans quelques " +
+            "minutes), soit la transcription n'était pas activée pour ce " +
+            "meeting — dans ce cas elle n'apparaîtra pas." +
+            armedNote
         );
       } else {
-        setSyncMsg("Rien de nouveau à importer.");
+        setSyncMsg("Rien de nouveau à importer." + armedNote);
       }
     } catch (e) {
       setSyncMsg(`Synchro échouée : ${(e as Error).message}`);
