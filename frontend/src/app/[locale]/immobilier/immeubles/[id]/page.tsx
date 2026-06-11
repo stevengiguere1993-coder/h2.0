@@ -11,6 +11,7 @@ import {
   ClipboardList,
   DollarSign,
   Home,
+  FileDown,
   Loader2,
   Pencil,
   Percent,
@@ -67,6 +68,8 @@ type Bail = {
   date_fin: string;
   loyer_mensuel: number;
   status: string;
+  signed_at?: string | null;
+  signed_by_name?: string | null;
 };
 
 type Hypotheque = {
@@ -1300,7 +1303,7 @@ function BauxTab({
                 <StatusBadge status={b.status} />
               </td>
               <td className="px-4 py-2 text-xs">
-                <BailSignButton bailId={b.id} />
+                <BailSignButton bailId={b.id} signed={!!b.signed_at} />
               </td>
               <td className="px-4 py-2 text-right">
                 <TalFormDropdown bailId={b.id} />
@@ -1313,9 +1316,59 @@ function BauxTab({
   );
 }
 
-function BailSignButton({ bailId }: { bailId: number }) {
+function BailSignButton({
+  bailId,
+  signed
+}: {
+  bailId: number;
+  signed: boolean;
+}) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [dl, setDl] = useState(false);
+
+  async function downloadSigned() {
+    setDl(true);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/document`
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `bail-${bailId}-signe.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert((e as Error).message);
+    } finally {
+      setDl(false);
+    }
+  }
+
+  if (signed) {
+    return (
+      <button
+        type="button"
+        onClick={() => void downloadSigned()}
+        disabled={dl}
+        className="inline-flex w-fit items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50"
+        title="Télécharger le bail signé (PDF)"
+      >
+        {dl ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : (
+          <FileDown className="h-3 w-3" />
+        )}
+        Bail signé (PDF)
+      </button>
+    );
+  }
+
   async function send() {
     setBusy(true);
     setMsg(null);
