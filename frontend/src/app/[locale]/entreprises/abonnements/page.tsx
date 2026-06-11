@@ -38,6 +38,7 @@ type Subscription = {
   cost: number | null;
   currency: string;
   billing_cycle: string; // "monthly" | "yearly"
+  quantite: number;
   next_renewal_at: string | null;
   paid_by: string | null;
   owner_user_id: number | null;
@@ -62,7 +63,28 @@ type AccessList = { authorized: AccessUser[]; all_users: AccessUser[] };
 
 function monthlyCost(s: Subscription): number {
   if (s.cost == null) return 0;
-  return s.billing_cycle === "yearly" ? s.cost / 12 : s.cost;
+  const unit = s.billing_cycle === "yearly" ? s.cost / 12 : s.cost;
+  return unit * (s.quantite || 1);
+}
+
+// Regroupe les cartes par catégorie, triées du groupe le plus coûteux au
+// moins coûteux — la « belle façon » de s'y retrouver quand il y en a
+// beaucoup.
+function groupByCategorie(
+  list: Subscription[]
+): [string, Subscription[]][] {
+  const groups = new Map<string, Subscription[]>();
+  for (const s of list) {
+    const k = (s.category || "Autre").trim() || "Autre";
+    const arr = groups.get(k) || [];
+    arr.push(s);
+    groups.set(k, arr);
+  }
+  const total = (items: Subscription[]) =>
+    items.reduce((acc, s) => acc + monthlyCost(s), 0);
+  return Array.from(groups.entries()).sort(
+    (a, b) => total(b[1]) - total(a[1])
+  );
 }
 
 function fmtMoney(n: number): string {
@@ -359,20 +381,35 @@ export default function AbonnementsPage() {
         {shared.length === 0 ? (
           <EmptyHint text="Aucun compte commun pour l'instant." />
         ) : (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            {shared.map((s) => (
-              <SubCard
-                key={s.id}
-                s={s}
-                revealedPwd={revealed[s.id]}
-                onToggleReveal={() => toggleReveal(s)}
-                onCopySecret={() => copySecret(s)}
-                onCopyText={copyText}
-                onEdit={() => setEditing(s)}
-                onDelete={() => remove(s)}
-              />
+          <>
+            {groupByCategorie(shared).map(([cat, items]) => (
+              <div key={cat} className="mb-4">
+                <p className="mb-2 flex items-baseline gap-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--qg-text-muted)]">
+                  {cat}
+                  <span className="font-normal normal-case text-[var(--qg-text-faint)]">
+                    {fmtMoney(
+                      items.reduce((acc, s) => acc + monthlyCost(s), 0)
+                    )}
+                    /mois
+                  </span>
+                </p>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {items.map((s) => (
+                  <SubCard
+                    key={s.id}
+                    s={s}
+                    revealedPwd={revealed[s.id]}
+                    onToggleReveal={() => toggleReveal(s)}
+                    onCopySecret={() => copySecret(s)}
+                    onCopyText={copyText}
+                    onEdit={() => setEditing(s)}
+                    onDelete={() => remove(s)}
+                  />
+                  ))}
+                </div>
+              </div>
             ))}
-          </div>
+          </>
         )}
 
         {/* Abonnements personnels */}
@@ -384,20 +421,35 @@ export default function AbonnementsPage() {
         {personal.length === 0 ? (
           <EmptyHint text="Aucun abonnement personnel pour l'instant." />
         ) : (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            {personal.map((s) => (
-              <SubCard
-                key={s.id}
-                s={s}
-                revealedPwd={revealed[s.id]}
-                onToggleReveal={() => toggleReveal(s)}
-                onCopySecret={() => copySecret(s)}
-                onCopyText={copyText}
-                onEdit={() => setEditing(s)}
-                onDelete={() => remove(s)}
-              />
+          <>
+            {groupByCategorie(personal).map(([cat, items]) => (
+              <div key={cat} className="mb-4">
+                <p className="mb-2 flex items-baseline gap-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--qg-text-muted)]">
+                  {cat}
+                  <span className="font-normal normal-case text-[var(--qg-text-faint)]">
+                    {fmtMoney(
+                      items.reduce((acc, s) => acc + monthlyCost(s), 0)
+                    )}
+                    /mois
+                  </span>
+                </p>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {items.map((s) => (
+                  <SubCard
+                    key={s.id}
+                    s={s}
+                    revealedPwd={revealed[s.id]}
+                    onToggleReveal={() => toggleReveal(s)}
+                    onCopySecret={() => copySecret(s)}
+                    onCopyText={copyText}
+                    onEdit={() => setEditing(s)}
+                    onDelete={() => remove(s)}
+                  />
+                  ))}
+                </div>
+              </div>
             ))}
-          </div>
+          </>
         )}
       </div>
 
@@ -540,10 +592,18 @@ function SubCard({
         </div>
         <div className="text-right">
           <p className="font-semibold tabular-nums">
-            {s.cost != null ? fmtMoney(s.cost) : "—"}
+            {s.cost != null
+              ? (s.quantite || 1) > 1
+                ? `${fmtMoney(s.cost)} × ${s.quantite}`
+                : fmtMoney(s.cost)
+              : "—"}
           </p>
           <p className="text-[11px] text-[var(--qg-text-muted)]">
-            / {s.billing_cycle === "yearly" ? "an" : "mois"}
+            {s.cost != null && (s.quantite || 1) > 1
+              ? `= ${fmtMoney(s.cost * s.quantite)} / ${
+                  s.billing_cycle === "yearly" ? "an" : "mois"
+                }`
+              : `/ ${s.billing_cycle === "yearly" ? "an" : "mois"}`}
           </p>
         </div>
       </div>
@@ -674,6 +734,9 @@ function EditModal({
   const [cost, setCost] = useState(
     initial?.cost != null ? String(initial.cost) : ""
   );
+  const [quantite, setQuantite] = useState(
+    initial?.quantite ? String(initial.quantite) : "1"
+  );
   const [cycle, setCycle] = useState(initial?.billing_cycle ?? "monthly");
   const [renewal, setRenewal] = useState(initial?.next_renewal_at ?? "");
   const [paidBy, setPaidBy] = useState(initial?.paid_by ?? "");
@@ -702,6 +765,7 @@ function EditModal({
       url: url.trim() || null,
       cost: cost.trim() ? Number(cost) : null,
       billing_cycle: cycle,
+      quantite: Math.max(1, Number(quantite) || 1),
       next_renewal_at: renewal || null,
       paid_by: paidBy.trim() || null,
       login_username: isShared ? login.trim() || null : null,
@@ -826,6 +890,15 @@ function EditModal({
               <option value="monthly">Mensuel</option>
               <option value="yearly">Annuel</option>
             </select>
+          </Field>
+          <Field label="Quantité (coût × N)">
+            <input
+              value={quantite}
+              onChange={(e) => setQuantite(e.target.value)}
+              inputMode="numeric"
+              placeholder="1"
+              className={INPUT}
+            />
           </Field>
           <Field label="Renouvellement">
             <input
