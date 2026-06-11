@@ -73,11 +73,25 @@ async def identify_caller(
     # 1. Client actif (projet en cours = priorité max)
     client = await _find_with_phone(db, Client, "phone", last10)
     if client is not None:
+        display_name = client.name
+        ctx = "Client actuel d'Horizon (projet en cours)."
+        # Le champ `client.name` peut être une raison sociale ou un
+        # numéro d'unité (ex. « 8900 »). Si ce numéro correspond à une
+        # personne-contact, on salue la PERSONNE par son nom.
+        from app.models.contact import Contact
+
+        contact = await _find_with_phone(db, Contact, "phone", last10)
+        if contact is not None and contact.full_name:
+            display_name = contact.full_name
+            ctx = (
+                f"{contact.full_name} — contact du client "
+                f"« {client.name} » (projet en cours)."
+            )
         return IdentifiedCaller(
             CallerKind.CLIENT,
             client.id,
-            client.name,
-            f"Client actuel d'Horizon (projet en cours).",
+            display_name,
+            ctx,
         )
 
     # 2. Locataire (urgences possibles)

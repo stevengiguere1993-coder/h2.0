@@ -1752,9 +1752,13 @@ function NumbersSection({
             <p className="text-xs font-semibold uppercase tracking-wider text-white/80">
               Cibles de transfert (E.164)
             </p>
+            <p className="mb-1 text-[11px] text-white/50">
+              Astuce : plusieurs numéros séparés par virgule = on les sonne
+              tous en parallèle, le premier qui décroche gagne.
+            </p>
             <ForwardField
               label="Fallback générique"
-              hint="utilisé quand Léa transfère sans contexte particulier"
+              hint="utilisé quand Léa transfère sans contexte particulier. Plusieurs numéros séparés par virgule autorisés."
               value={n.forward_to_e164}
               onSave={(v) =>
                 patchNumber(n, { forward_to_e164: v ?? "" })
@@ -1771,7 +1775,7 @@ function NumbersSection({
             />
             <ForwardField
               label="🎯 Closer (lead qualifié)"
-              hint="vendeur humain pour confirmer un RDV"
+              hint="nouveau client en transfert direct : on sonne tous ces numéros en parallèle. Plusieurs numéros séparés par virgule."
               value={n.closer_forward_e164}
               onSave={(v) =>
                 patchNumber(n, { closer_forward_e164: v ?? "" })
@@ -1780,7 +1784,7 @@ function NumbersSection({
             />
             <ForwardField
               label="🏗️ Suivi projet (back-office)"
-              hint="utilisé si aucun chargé de projet assigné n'est dispo"
+              hint="utilisé si aucun responsable de projet assigné n'est dispo. Plusieurs numéros séparés par virgule."
               value={n.followup_forward_e164}
               onSave={(v) =>
                 patchNumber(n, { followup_forward_e164: v ?? "" })
@@ -1870,7 +1874,7 @@ function ForwardField({
               type="tel"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              placeholder="+15145551234"
+              placeholder="+15145551234, +15145559999"
               className="flex-1 rounded border border-brand-700 bg-brand-950 px-2 py-1 font-mono text-xs text-white placeholder:text-white/50 focus:border-accent-500 focus:outline-none"
               disabled={saving}
             />
