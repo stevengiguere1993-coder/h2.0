@@ -56,10 +56,26 @@ async def sync_teams_meetings(
         "no_transcript": 0,
         "pending": 0,
         "skipped_known": 0,
+        "auto_transcription_enabled": 0,
         "errors": [],
     }
     if not result["configured"]:
         return result
+
+    # 0) Auto-activation : force « enregistrer et transcrire
+    # automatiquement » sur les meetings À VENIR organisés par chaque
+    # partenaire — plus personne n'a à penser au toggle. Best-effort :
+    # sans la permission d'écriture (OnlineMeetings.ReadWrite.All), on
+    # remonte l'info dans errors et la synchro continue normalement.
+    for email in graph.meeting_user_emails():
+        try:
+            enf = await graph.enforce_auto_recording(email)
+            result["auto_transcription_enabled"] += enf.get("enabled", 0)
+            result["errors"].extend(enf.get("errors", []))
+        except Exception as exc:  # noqa: BLE001
+            result["errors"].append(
+                f"auto-transcription {email}: {str(exc)[:120]}"
+            )
 
     now = datetime.now(timezone.utc)
     start = now - timedelta(days=days_back)
