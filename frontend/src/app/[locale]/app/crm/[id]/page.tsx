@@ -1450,6 +1450,7 @@ function AppointmentScheduler({
   const [editDate, setEditDate] = useState("");
   const [editStartHm, setEditStartHm] = useState("");
   const [editEndHm, setEditEndHm] = useState("");
+  const [editAssigneeId, setEditAssigneeId] = useState<string>("");
   const [busyId, setBusyId] = useState<number | null>(null);
   const confirm = useConfirm();
 
@@ -1556,6 +1557,7 @@ function AppointmentScheduler({
     setEditEndHm(
       end ? `${p(end.getHours())}:${p(end.getMinutes())}` : ""
     );
+    setEditAssigneeId(a.assignee_id ? String(a.assignee_id) : "");
     setError(null);
   }
 
@@ -1564,6 +1566,7 @@ function AppointmentScheduler({
     setEditDate("");
     setEditStartHm("");
     setEditEndHm("");
+    setEditAssigneeId("");
   }
 
   async function saveEdit(id: number) {
@@ -1584,7 +1587,11 @@ function AppointmentScheduler({
     try {
       const res = await authedFetch(`/api/v1/appointments/${id}`, {
         method: "PATCH",
-        body: JSON.stringify({ start_at: startIso, end_at: endIso })
+        body: JSON.stringify({
+          start_at: startIso,
+          end_at: endIso,
+          assignee_id: editAssigneeId ? Number(editAssigneeId) : null
+        })
       });
       if (!res.ok) {
         throw new Error(await readErrorDetail(res));
@@ -1889,6 +1896,27 @@ function AppointmentScheduler({
                         }}
                         className="input text-xs"
                       />
+                    </div>
+                    <div className="sm:col-span-3">
+                      <label className="label text-[10px]">
+                        Employé assigné (fait la visite)
+                      </label>
+                      <select
+                        value={editAssigneeId}
+                        onChange={(e) => setEditAssigneeId(e.target.value)}
+                        className="input text-xs"
+                      >
+                        <option value="">— Personne assignée —</option>
+                        {employes.map((e) => (
+                          <option key={e.id} value={e.id}>
+                            {e.full_name}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-0.5 text-[10px] text-white/50">
+                        Changer l&apos;employé lui envoie l&apos;invitation
+                        calendrier (.ics) + un courriel.
+                      </p>
                     </div>
                     <div className="flex gap-2 sm:col-span-3">
                       <button

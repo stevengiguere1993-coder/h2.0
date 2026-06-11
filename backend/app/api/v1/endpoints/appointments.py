@@ -255,6 +255,7 @@ async def update_appointment(
     data: AppointmentUpdate,
     db: DBSession,
     user: RequireManager,
+    bg: BackgroundTasks,
 ) -> AppointmentRead:
     """Modifier un RDV prospect existant. Restreint aux events liés
     a un ContactRequest pour éviter de toucher aux events agenda
@@ -265,6 +266,7 @@ async def update_appointment(
             status.HTTP_404_NOT_FOUND, "Rendez-vous introuvable."
         )
 
+    old_assignee_id = event.assignee_id
     if data.start_at is not None:
         event.start_at = data.start_at
     if data.end_at is not None:
@@ -286,6 +288,46 @@ async def update_appointment(
 
     await db.flush()
     await db.refresh(event)
+
+    # Réassignation à un nouvel employé → on lui envoie l'invitation
+    # calendrier .ics + courriel (comme à la création), pour que le RDV
+    # atterrisse dans SON agenda. On ne renvoie rien si l'assigné n'a
+    # pas changé.
+    if (
+        event.assignee_id is not None
+        and event.assignee_id != old_assignee_id
+    ):
+        async def _invite_new_assignee(assignee_id: int, ev_id: int) -> None:
+            from app.db.session import AsyncSessionLocal
+
+            async with AsyncSessionLocal() as fresh_db:
+                emp = (
+                    await fresh_db.execute(
+                        select(Employe).where(Employe.id == assignee_id)
+                    )
+                ).scalar_one_or_none()
+                ev = (
+                    await fresh_db.execute(
+                        select(AgendaEvent).where(AgendaEvent.id == ev_id)
+                    )
+                ).scalar_one_or_none()
+                pr = (
+                    (
+                        await fresh_db.execute(
+                            select(ContactRequest).where(
+                                ContactRequest.id == ev.contact_request_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if ev and ev.contact_request_id
+                    else None
+                )
+                if emp is None or ev is None:
+                    return
+                await send_appointment_assignee_invite(emp, ev, pr)
+
+        bg.add_task(_invite_new_assignee, event.assignee_id, event.id)
+
     return AppointmentRead.model_validate(event)
 
 
