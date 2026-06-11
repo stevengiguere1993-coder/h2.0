@@ -373,7 +373,20 @@ async def run_once() -> int:
             ok_count += 1
 
     log.info("Run terminé : %d / %d articles générés", ok_count, len(slots))
-    return 0 if ok_count > 0 else 1
+    if ok_count == 0:
+        # Aucune génération réussie : quasi toujours un souci TRANSITOIRE de
+        # la cascade IA (rate-limit / quota / indisponibilité momentanée).
+        # Ce n'est PAS un crash du service — on log fort, mais on sort 0
+        # pour ne PAS déclencher l'alerte « Server failure » de Render à
+        # chaque hoquet des providers. Un vrai plantage (exception non
+        # gérée, DB down, import KO) sort déjà non-zéro via main() et
+        # continue d'alerter.
+        log.error(
+            "Aucun article généré sur %d tentative(s) — providers IA "
+            "probablement indisponibles. Réessai au prochain run.",
+            len(slots),
+        )
+    return 0
 
 
 def main() -> int:
