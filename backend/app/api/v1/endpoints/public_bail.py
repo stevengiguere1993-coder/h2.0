@@ -140,4 +140,45 @@ async def public_accept(
         bail.status = "actif"
     await db.flush()
     await db.refresh(bail)
+
+    # Génère le PDF du bail signé et le classe automatiquement dans le
+    # Drive de l'immeuble (best-effort — n'échoue jamais la signature).
+    await _archive_signed_bail(db, bail)
+
     return await _to_public(db, bail)
+
+
+async def _archive_signed_bail(db: AsyncSession, bail: Bail) -> None:
+    """Rend le PDF signé et le dépose dans le Drive de l'immeuble."""
+    try:
+        from app.services.bail_signed_pdf import render_bail_signed_pdf
+        from app.services.drive_auto_upload_dispatcher import (
+            dispatch_auto_upload,
+        )
+
+        pdf = await render_bail_signed_pdf(db, bail.id)
+        if not pdf:
+            return
+        logement = await db.get(Logement, bail.logement_id)
+        if logement is None:
+            return
+        locataire = await db.get(Locataire, bail.locataire_id)
+        await dispatch_auto_upload(
+            document_type="bail_signe",
+            entity_type="Immeuble",
+            entity_id=logement.immeuble_id,
+            user_id=None,
+            file_bytes=pdf,
+            db=db,
+            template_vars={
+                "nom_locataire": (
+                    locataire.full_name if locataire else "locataire"
+                ),
+                "numero_logement": logement.numero,
+            },
+            mime_type="application/pdf",
+        )
+    except Exception:  # noqa: BLE001
+        # Archivage best-effort : la signature reste valide même si le
+        # Drive est indisponible ou non configuré pour cet immeuble.
+        pass
