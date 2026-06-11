@@ -856,7 +856,7 @@ function SectionCard({
             void patchSection({ transcript });
           }
         }}
-        placeholder="Tape, dicte ou uploade un audio pour générer le transcript de cette section…"
+        placeholder="Colle un texte (transcription de ton téléphone…), tape, dicte, ou uploade un audio — puis « Résumer »."
         className="input mt-3 min-h-[160px] text-sm"
       />
 
