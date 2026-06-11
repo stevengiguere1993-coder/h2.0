@@ -162,6 +162,10 @@ class Call(Base):
     # Si on a forwardé l'appel à un mobile, on le note ici. Permet de
     # savoir « qui a répondu » sans deviner depuis le statut.
     forwarded_to_e164: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # État du transfert « file d'attente + jambes parallèles » (musique
+    # d'attente) : JSON {queue, legs: {sid: e164|done}, answered_sid,
+    # outcome}. NULL pour les transferts <Dial> classiques.
+    dial_state_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True

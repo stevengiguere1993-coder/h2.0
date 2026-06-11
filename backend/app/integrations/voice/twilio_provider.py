@@ -150,6 +150,7 @@ class TwilioVoiceProvider(VoiceProvider):
         to_e164: str,
         twiml_url: str,
         status_callback_url: Optional[str] = None,
+        timeout_sec: Optional[int] = None,
     ) -> str:
         """Lance un appel sortant via l'API REST Twilio.
 
@@ -163,6 +164,8 @@ class TwilioVoiceProvider(VoiceProvider):
             "To": to_e164,
             "Url": twiml_url,
         }
+        if timeout_sec:
+            form["Timeout"] = str(int(timeout_sec))
         if status_callback_url:
             form["StatusCallback"] = status_callback_url
             form["StatusCallbackMethod"] = "POST"
@@ -172,6 +175,45 @@ class TwilioVoiceProvider(VoiceProvider):
             resp.raise_for_status()
             data = resp.json()
         return str(data.get("sid") or "")
+
+    async def update_call_twiml(self, call_sid: str, twiml_url: str) -> None:
+        """Redirige un appel EN COURS vers un nouveau TwiML (interrompt
+        le verbe courant — p.ex. sort un appelant de la file d'attente
+        pour l'envoyer en boîte vocale)."""
+        url = f"{TWILIO_API_BASE}/Accounts/{self.account_sid}/Calls/{call_sid}.json"
+        form = {"Url": twiml_url, "Method": "POST"}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(url, data=form, auth=self._auth())
+            resp.raise_for_status()
+
+    async def end_call(self, call_sid: str) -> None:
+        """Termine un appel (qui sonne ou en cours) — utilisé pour
+        raccrocher les jambes parallèles perdantes quand quelqu'un a
+        décroché."""
+        url = f"{TWILIO_API_BASE}/Accounts/{self.account_sid}/Calls/{call_sid}.json"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(
+                url, data={"Status": "completed"}, auth=self._auth()
+            )
+            resp.raise_for_status()
+
+    async def start_call_recording(
+        self, call_sid: str, *, status_callback_url: Optional[str] = None
+    ) -> None:
+        """Démarre l'enregistrement (2 pistes) d'un appel en cours —
+        utilisé quand le pont passe par une file d'attente (<Enqueue>
+        n'a pas d'attribut record). Consentement annoncé par Léa avant."""
+        url = (
+            f"{TWILIO_API_BASE}/Accounts/{self.account_sid}"
+            f"/Calls/{call_sid}/Recordings.json"
+        )
+        form: dict[str, str] = {"RecordingChannels": "dual"}
+        if status_callback_url:
+            form["RecordingStatusCallback"] = status_callback_url
+            form["RecordingStatusCallbackMethod"] = "POST"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(url, data=form, auth=self._auth())
+            resp.raise_for_status()
 
     async def configure_number_webhook(
         self,
@@ -378,6 +420,61 @@ class TwilioVoiceProvider(VoiceProvider):
             f' action="{xml_escape(action_url)}" method="POST"{record_attr}>'
             f"{numbers_xml}"
             "</Dial>"
+            "</Response>"
+        )
+
+    def build_say_and_enqueue(
+        self,
+        *,
+        say: str,
+        lang: str,
+        queue_name: str,
+        action_url: str,
+    ) -> str:
+        """TwiML côté APPELANT : Léa annonce le transfert, puis l'appelant
+        entre dans une file d'attente Twilio. Sans `waitUrl`, Twilio joue
+        sa musique d'attente par défaut — c'est ce qu'on veut (au lieu de
+        la sonnerie d'un <Dial>). Les agents sont sonnés en parallèle par
+        API REST et le premier qui décroche « pioche » l'appelant via
+        <Dial><Queue>. `action_url` est appelé quand l'appelant quitte la
+        file (bridgé, raccroché, erreur)."""
+        voice = self._voice_for_lang(lang)
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f'<Say voice="{voice}" language="{lang}">{xml_escape(say)}</Say>'
+            f'<Enqueue action="{xml_escape(action_url)}" method="POST">'
+            f"{xml_escape(queue_name)}</Enqueue>"
+            "</Response>"
+        )
+
+    def build_whisper_and_dial_queue(
+        self,
+        *,
+        whisper_say: str,
+        lang: str,
+        queue_name: str,
+    ) -> str:
+        """TwiML côté AGENT (jambe sortante REST) : la personne qui
+        décroche entend le whisper « qui appelle + motif », puis est mise
+        en relation avec l'appelant qui patiente dans la file.
+
+        Le <Say> final se joue dans DEUX cas : file vide (l'appelant a
+        raccroché avant la mise en relation) ET fin normale de la
+        conversation (l'appelant raccroche le premier) — le message doit
+        donc rester neutre pour les deux."""
+        voice = self._voice_for_lang(lang)
+        gone = (
+            "La communication est terminée. Merci !"
+            if lang.startswith("fr")
+            else "The call has ended. Thank you!"
+        )
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f'<Say voice="{voice}" language="{lang}">{xml_escape(whisper_say)}</Say>'
+            f"<Dial><Queue>{xml_escape(queue_name)}</Queue></Dial>"
+            f'<Say voice="{voice}" language="{lang}">{xml_escape(gone)}</Say>'
             "</Response>"
         )
 

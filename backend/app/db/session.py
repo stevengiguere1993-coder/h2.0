@@ -1041,6 +1041,9 @@ async def init_db() -> None:
             # NULL sur les projets existants => on retombe sur l'ancienne
             # logique (premier membre actif → back-office).
             ("projects", "responsible_user_id", "INTEGER"),
+            # Transfert avec musique d'attente (juin 2026) : état JSON des
+            # jambes d'appel parallèles (file Twilio <Enqueue>).
+            ("voice_calls", "dial_state_json", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
