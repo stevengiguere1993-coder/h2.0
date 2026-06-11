@@ -168,6 +168,13 @@ def _voicemail_transcribe_url() -> str:
     return f"{_secretary_base_url()}/api/v1/voice/twilio/voicemail-transcript"
 
 
+def _transfer_whisper_url(call_id: int) -> str:
+    return (
+        f"{_secretary_base_url()}/api/v1/voice/twilio/"
+        f"transfer-whisper?call_id={int(call_id)}"
+    )
+
+
 def _voice_sdk_callback_url() -> str:
     return f"{_secretary_base_url()}/api/v1/voice/twilio/sdk-outbound"
 
@@ -1735,6 +1742,8 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
             action_url=action_url,
             timeout_sec=20,
             record=True,
+            # La personne qui décroche entend d'abord « qui appelle + motif ».
+            whisper_url=_transfer_whisper_url(call.id),
         )
         return Response(content=twiml, media_type="application/xml")
 
@@ -1834,6 +1843,91 @@ async def twilio_call_status(request: Request, db: DBSession) -> Response:
 
     await db.flush()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------
+# Webhook : whisper de transfert (résumé « qui appelle + motif »)
+# ---------------------------------------------------------------------
+
+
+def _human_reason_for_call(call: "Call") -> str:
+    """Phrase courte décrivant le motif de l'appel pour le whisper."""
+    if call.lead_reason:
+        return call.lead_reason.strip()
+    labels = {
+        "urgence_locataire": "urgence locataire",
+        "intake_construction": "demande de soumission / travaux",
+        "suivi_projet": "suivi de projet",
+        "callback": "demande de rappel",
+    }
+    if call.intent and call.intent in labels:
+        return labels[call.intent]
+    return "motif non précisé"
+
+
+@router.post(
+    "/twilio/transfer-whisper",
+    summary="Webhook Twilio : annonce « qui appelle + motif » à la personne qui décroche",
+    response_class=Response,
+)
+async def twilio_transfer_whisper(
+    request: Request, db: DBSession
+) -> Response:
+    """Joué à la personne qui décroche un transfert, AVANT la mise en
+    relation. Résume l'appelant (nom, identifié au CRM — incluant les
+    contacts d'un client entreprise) et le motif de l'appel. L'appelant
+    n'entend pas ce message. Best-effort : en cas de souci, on rend une
+    annonce neutre plutôt que de casser le pont."""
+    provider = _twilio_provider()
+    try:
+        await _validate_twilio_signature(request)
+    except HTTPException:
+        # Signature KO : on ne bloque pas la mise en relation.
+        return Response(
+            content=provider.build_say_only(
+                say="Appel transféré.", lang="fr-CA"
+            ),
+            media_type="application/xml",
+        )
+
+    call_id_raw = request.query_params.get("call_id", "")
+    name: Optional[str] = None
+    company: Optional[str] = None
+    reason = "motif non précisé"
+    lang = "fr-CA"
+    if call_id_raw.isdigit():
+        call = (
+            await db.execute(select(Call).where(Call.id == int(call_id_raw)))
+        ).scalar_one_or_none()
+        if call is not None:
+            lang = call.lang or "fr-CA"
+            reason = _human_reason_for_call(call)
+            try:
+                ident = await identify_caller(db, call.from_e164)
+                name = ident.name
+                if ident.kind == CallerKind.CONTACT:
+                    # Récupère la compagnie pour « X de la compagnie Y ».
+                    from app.models.contact import Contact
+
+                    c = (
+                        await db.execute(
+                            select(Contact).where(Contact.id == ident.entity_id)
+                        )
+                    ).scalar_one_or_none()
+                    company = getattr(c, "company", None) if c else None
+            except Exception as exc:  # noqa: BLE001
+                log.warning("whisper identify_caller failed: %s", exc)
+            if not name and call.lead_name:
+                name = call.lead_name
+
+    who = name or "un appelant non identifié"
+    if company:
+        who = f"{who}, de {company}"
+    say = f"Appel de {who}. Motif : {reason}."
+    return Response(
+        content=provider.build_say_only(say=say, lang=lang),
+        media_type="application/xml",
+    )
 
 
 # ---------------------------------------------------------------------

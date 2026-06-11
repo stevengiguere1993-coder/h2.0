@@ -316,6 +316,7 @@ class TwilioVoiceProvider(VoiceProvider):
         action_url: str,
         timeout_sec: int = 20,
         record: bool = False,
+        whisper_url: Optional[str] = None,
     ) -> str:
         """TwiML : la secrétaire annonce le transfert puis <Dial> ring
         PLUSIEURS numéros en parallèle (premier qui décroche gagne, les
@@ -325,10 +326,15 @@ class TwilioVoiceProvider(VoiceProvider):
         Si `record=True`, on enregistre l'appel (record-from-answer-dual,
         2 pistes) avec annonce de consentement parlée par Léa AVANT le
         transfert. Loi 25 du Québec exige le consentement explicite.
+
+        Si `whisper_url` est fourni, la personne qui décroche entend
+        d'abord ce TwiML (résumé « qui appelle + motif ») avant d'être
+        mise en relation — l'appelant, lui, n'entend pas le whisper.
         """
         voice = self._voice_for_lang(lang)
+        num_attr = f' url="{xml_escape(whisper_url)}"' if whisper_url else ""
         numbers_xml = "".join(
-            f"<Number>{xml_escape(t)}</Number>"
+            f"<Number{num_attr}>{xml_escape(t)}</Number>"
             for t in targets_e164
             if t
         )
@@ -354,6 +360,19 @@ class TwilioVoiceProvider(VoiceProvider):
             f' action="{xml_escape(action_url)}" method="POST"{record_attr}>'
             f"{numbers_xml}"
             "</Dial>"
+            "</Response>"
+        )
+
+    def build_say_only(self, *, say: str, lang: str = "fr-CA") -> str:
+        """TwiML minimal : une annonce vocale, SANS raccrocher. Utilisé
+        comme « whisper » sur un <Number url> : la personne qui décroche
+        entend l'annonce, puis Twilio la met automatiquement en relation
+        avec l'appelant (qui, lui, n'entend pas le whisper)."""
+        voice = self._voice_for_lang(lang)
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f'<Say voice="{voice}" language="{lang}">{xml_escape(say)}</Say>'
             "</Response>"
         )
 

@@ -38,6 +38,7 @@ class CallerKind(str, Enum):
     LEAD_WEB = "lead_web"                   # ancienne demande web
     CLIENT = "client"                        # projet en cours
     LOCATAIRE = "locataire"                  # locataire d'un immeuble
+    CONTACT = "contact"                      # personne-contact d'un client entreprise
     UNKNOWN = "unknown"
 
 
@@ -113,6 +114,25 @@ async def identify_caller(
             f"Lead Web : {cr.name} a rempli notre formulaire (sujet : "
             f"{cr.project_type}). Demande initiale : "
             f"{(cr.message or '')[:200]}.",
+        )
+
+    # 5. Contact-personne d'un client entreprise (répertoire /entreprises).
+    #    Permet de saluer un interlocuteur connu par son nom même s'il
+    #    n'est pas un client « projet en cours ».
+    from app.models.contact import Contact
+
+    contact = await _find_with_phone(db, Contact, "phone", last10)
+    if contact is not None:
+        company = getattr(contact, "company", None)
+        ctx = f"Contact connu : {contact.full_name}"
+        if company:
+            ctx += f" ({company})"
+        ctx += "."
+        return IdentifiedCaller(
+            CallerKind.CONTACT,
+            contact.id,
+            contact.full_name,
+            ctx,
         )
 
     return IdentifiedCaller(CallerKind.UNKNOWN, None, None, None)
