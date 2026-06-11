@@ -390,13 +390,22 @@ async def run_once() -> int:
 
 
 def main() -> int:
-    try:
-        return asyncio.run(run_once())
-    finally:
+    # IMPORTANT : run_once() ET close_db() doivent tourner dans le MÊME
+    # event loop. Avant, deux `asyncio.run` distincts étaient utilisés :
+    # le 2e (close_db → engine.dispose) tentait de fermer des connexions
+    # asyncpg créées dans le 1er loop, déjà fermé → « RuntimeError: Event
+    # loop is closed » → cron en status 1. On dispose donc le moteur dans
+    # le même loop, juste après le run.
+    async def _run() -> int:
         try:
-            asyncio.run(close_db())
-        except Exception:
-            pass
+            return await run_once()
+        finally:
+            try:
+                await close_db()
+            except Exception:  # noqa: BLE001
+                log.warning("close_db à l'arrêt a échoué (ignoré)")
+
+    return asyncio.run(_run())
 
 
 if __name__ == "__main__":
