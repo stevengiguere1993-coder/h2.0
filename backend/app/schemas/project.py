@@ -17,6 +17,7 @@ class ProjectCreate(BaseModel):
     client_id: Optional[int] = Field(default=None, gt=0)
     contact_request_id: Optional[int] = Field(default=None, gt=0)
     soumission_id: Optional[int] = Field(default=None, gt=0)
+    responsible_user_id: Optional[int] = Field(default=None, gt=0)
     status: Optional[str] = Field(default=None, max_length=32)
     address: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = None
@@ -32,6 +33,8 @@ class ProjectUpdate(BaseModel):
     client_id: Optional[int] = Field(default=None, gt=0)
     contact_request_id: Optional[int] = Field(default=None, gt=0)
     soumission_id: Optional[int] = Field(default=None, gt=0)
+    # Envoyer null (explicitement) pour retirer le responsable.
+    responsible_user_id: Optional[int] = Field(default=None, gt=0)
     status: Optional[str] = Field(default=None, max_length=32)
     address: Optional[str] = None
     description: Optional[str] = None
@@ -50,6 +53,10 @@ class ProjectRead(BaseModel):
     client_id: Optional[int]
     contact_request_id: Optional[int]
     soumission_id: Optional[int]
+    responsible_user_id: Optional[int] = None
+    # Nom du responsable (rempli côté endpoint via la relation) pour
+    # l'affichage sans requête supplémentaire côté UI.
+    responsible_name: Optional[str] = None
     status: str
     address: Optional[str]
     description: Optional[str]

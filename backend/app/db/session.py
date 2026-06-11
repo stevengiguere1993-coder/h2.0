@@ -1036,6 +1036,11 @@ async def init_db() -> None:
             # existantes => neutre. Sans cet ALTER, le SELECT sur
             # contact_requests plante (colonne mappée par l'ORM mais absente).
             ("contact_requests", "lost_reason", "VARCHAR(120)"),
+            # Responsable d'un projet (juin 2026) : l'employé/user vers qui
+            # router un appel de suivi d'un client existant (téléphonie Léa).
+            # NULL sur les projets existants => on retombe sur l'ancienne
+            # logique (premier membre actif → back-office).
+            ("projects", "responsible_user_id", "INTEGER"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

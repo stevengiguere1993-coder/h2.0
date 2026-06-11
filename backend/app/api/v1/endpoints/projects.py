@@ -32,6 +32,29 @@ def _billing_kind(kind: Optional[str], pricing_kind: Optional[str]) -> str:
     return pricing_kind or "forfaitaire"
 
 
+async def _responsible_name(db, user_id: Optional[int]) -> Optional[str]:
+    """Nom d'affichage du responsable (sans dépendre du lazy-load async
+    de la relation)."""
+    if not user_id:
+        return None
+    from sqlalchemy import select as _select
+
+    from app.models.user import User
+
+    row = (
+        await db.execute(
+            _select(User.first_name, User.last_name, User.email).where(
+                User.id == user_id
+            )
+        )
+    ).first()
+    if row is None:
+        return None
+    fn, ln, email = row
+    name = " ".join(p for p in [fn, ln] if p).strip()
+    return name or email
+
+
 @router.post(
     "",
     response_model=ProjectRead,
@@ -71,7 +94,11 @@ async def create_project(
             project.id,
         )
 
-    return ProjectRead.model_validate(project)
+    out = ProjectRead.model_validate(project)
+    out.responsible_name = await _responsible_name(
+        db, project.responsible_user_id
+    )
+    return out
 
 
 @router.get(
@@ -178,6 +205,9 @@ async def get_project(
         ).first()
         if sm is not None:
             out.billing_kind = _billing_kind(sm[0], sm[1])
+    out.responsible_name = await _responsible_name(
+        db, project.responsible_user_id
+    )
     return out
 
 
@@ -200,7 +230,11 @@ async def update_project(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found or invalid client_id",
         )
-    return ProjectRead.model_validate(project)
+    out = ProjectRead.model_validate(project)
+    out.responsible_name = await _responsible_name(
+        db, project.responsible_user_id
+    )
+    return out
 
 
 @router.delete(

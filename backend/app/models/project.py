@@ -52,6 +52,13 @@ class Project(Base):
         nullable=True,
         index=True,
     )
+    # Responsable du projet : l'employé/user vers qui router un appel de
+    # suivi d'un client existant (téléphonie). NULL => ancienne logique.
+    responsible_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     status: Mapped[str] = mapped_column(
         String(32),
