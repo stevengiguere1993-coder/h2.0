@@ -223,6 +223,8 @@ class BailRead(BailBase):
     id: int
     created_at: datetime
     updated_at: datetime
+    signed_at: Optional[datetime] = None
+    signed_by_name: Optional[str] = None
 
 
 # ─── Hypothèque ─────────────────────────────────────────────────────────
