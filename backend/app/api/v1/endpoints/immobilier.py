@@ -1163,6 +1163,48 @@ async def send_bail(
     }
 
 
+@router.get("/baux/{bail_id}/document")
+async def download_bail_document(
+    bail_id: int,
+    db: DBSession,
+    user: CurrentUser,
+) -> Response:
+    """Telecharge le PDF du bail signe (regenere a la volee).
+
+    Disponible uniquement pour un bail effectivement signe. Independant
+    du Drive : la piece reste recuperable depuis Kratos meme si l'immeuble
+    n'a pas de Drive lie.
+    """
+    _require_volet(user)
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail="Bail introuvable."
+        )
+    if bail.signed_at is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="Ce bail n'est pas encore signe.",
+        )
+    from app.services.bail_signed_pdf import render_bail_signed_pdf
+
+    pdf = await render_bail_signed_pdf(db, bail_id)
+    if not pdf:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Generation du PDF impossible.",
+        )
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="Bail_{bail_id}_signe.pdf"'
+            )
+        },
+    )
+
+
 # ── Logements ──────────────────────────────────────────────────────────
 
 
