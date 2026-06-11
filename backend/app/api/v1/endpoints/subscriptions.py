@@ -54,6 +54,7 @@ class SubscriptionRead(BaseModel):
     cost: Optional[float] = None
     currency: str
     billing_cycle: str
+    quantite: int = 1
     next_renewal_at: Optional[date] = None
     paid_by: Optional[str] = None
     owner_user_id: Optional[int] = None
@@ -72,6 +73,7 @@ class SubscriptionCreate(BaseModel):
     cost: Optional[float] = None
     currency: str = "CAD"
     billing_cycle: str = "monthly"
+    quantite: int = 1
     next_renewal_at: Optional[date] = None
     paid_by: Optional[str] = None
     owner_user_id: Optional[int] = None
@@ -89,6 +91,7 @@ class SubscriptionUpdate(BaseModel):
     cost: Optional[float] = None
     currency: Optional[str] = None
     billing_cycle: Optional[str] = None
+    quantite: Optional[int] = None
     next_renewal_at: Optional[date] = None
     paid_by: Optional[str] = None
     owner_user_id: Optional[int] = None
@@ -152,6 +155,7 @@ def _to_read(s: Subscription) -> SubscriptionRead:
         cost=float(s.cost) if s.cost is not None else None,
         currency=s.currency,
         billing_cycle=s.billing_cycle,
+        quantite=int(getattr(s, "quantite", 1) or 1),
         next_renewal_at=s.next_renewal_at,
         paid_by=s.paid_by,
         owner_user_id=s.owner_user_id,
@@ -292,6 +296,7 @@ async def create_subscription(
             if payload.billing_cycle in ("monthly", "yearly")
             else "monthly"
         ),
+        quantite=max(1, int(payload.quantite or 1)),
         next_renewal_at=payload.next_renewal_at,
         paid_by=payload.paid_by,
         owner_user_id=payload.owner_user_id,
@@ -347,6 +352,8 @@ async def update_subscription(
             continue
         if field == "billing_cycle" and value not in ("monthly", "yearly"):
             continue
+        if field == "quantite":
+            value = max(1, int(value or 1))
         setattr(sub, field, value)
 
     await db.flush()
