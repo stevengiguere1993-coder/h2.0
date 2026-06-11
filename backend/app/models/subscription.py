@@ -57,6 +57,11 @@ class Subscription(Base, TimestampUpdateMixin):
         default="monthly",
         server_default="monthly",
     )
+    # Nombre d'unités facturées au même prix (ex. 8 comptes bancaires à
+    # 6 $ chacun → coût réel = montant × quantite). 1 par défaut.
+    quantite: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     next_renewal_at: Mapped[Optional[date]] = mapped_column(
         Date, nullable=True
     )
