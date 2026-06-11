@@ -155,10 +155,10 @@ async def list_teams_meetings(
     return out
 
 
-async def resolve_online_meeting(
+async def find_online_meeting(
     user_email: str, join_url: str
-) -> Optional[str]:
-    """Id du onlineMeeting correspondant à un joinUrl (ou None)."""
+) -> Optional[dict]:
+    """Objet onlineMeeting complet pour un joinUrl (ou None)."""
     async with httpx.AsyncClient(timeout=30.0) as http:
         r = await _get(
             http,
@@ -167,14 +167,78 @@ async def resolve_online_meeting(
         )
         if r.status_code != 200:
             log.warning(
-                "resolve_online_meeting %s → HTTP %s : %s",
+                "find_online_meeting %s → HTTP %s : %s",
                 user_email,
                 r.status_code,
                 r.text[:200],
             )
             return None
         items = r.json().get("value", [])
-        return items[0]["id"] if items else None
+        return items[0] if items else None
+
+
+async def resolve_online_meeting(
+    user_email: str, join_url: str
+) -> Optional[str]:
+    """Id du onlineMeeting correspondant à un joinUrl (ou None)."""
+    meeting = await find_online_meeting(user_email, join_url)
+    return meeting["id"] if meeting else None
+
+
+async def enforce_auto_recording(
+    user_email: str, *, days_ahead: int = 7
+) -> dict:
+    """Active « enregistrer et transcrire automatiquement » sur les
+    meetings À VENIR organisés par ``user_email``.
+
+    Nécessite la permission d'application ``OnlineMeetings.ReadWrite.All``
+    (+ la même application access policy). Best-effort : un 403 signifie
+    que la permission d'écriture n'a pas encore été consentie — on le
+    remonte dans le bilan sans rien casser.
+    """
+    from datetime import timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    result = {"checked": 0, "enabled": 0, "errors": []}
+    try:
+        events = await list_teams_meetings(
+            user_email, now, now + timedelta(days=days_ahead)
+        )
+    except Exception as exc:  # noqa: BLE001
+        result["errors"].append(f"{user_email}: {str(exc)[:120]}")
+        return result
+
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        for ev in events:
+            organizer = (ev.get("organizer_email") or "").lower()
+            if organizer != user_email.lower():
+                continue  # on ne force que SES meetings
+            meeting = await find_online_meeting(
+                user_email, ev["join_url"]
+            )
+            if not meeting:
+                continue
+            result["checked"] += 1
+            if meeting.get("recordAutomatically"):
+                continue  # déjà activé
+            tok = await _token()
+            r = await http.patch(
+                f"{_GRAPH}/users/{user_email}/onlineMeetings/"
+                f"{meeting['id']}",
+                json={"recordAutomatically": True},
+                headers={"Authorization": f"Bearer {tok}"},
+            )
+            if r.status_code in (200, 204):
+                result["enabled"] += 1
+            else:
+                result["errors"].append(
+                    f"{ev.get('subject')}: HTTP {r.status_code} "
+                    f"{r.text[:80]}"
+                )
+                if r.status_code == 403:
+                    # Permission d'écriture absente → inutile d'insister.
+                    break
+    return result
 
 
 async def fetch_transcript_text(
