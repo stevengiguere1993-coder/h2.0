@@ -132,6 +132,9 @@ async def ensure_critical_columns() -> None:
         # Sans cette colonne, GET /api/v1/contact (pipeline construction)
         # plante → « Impossible de charger les prospects » (régression #785).
         ("contact_requests", "lost_reason", "VARCHAR(120)"),
+        # Coffre Abonnements : quantité (prix unitaire × N). La table
+        # existait avant l'ajout du champ → create_all ne l'ajoute pas.
+        ("subscriptions", "quantite", "INTEGER NOT NULL DEFAULT 1"),
     )
     for table, column, col_type in critical_columns:
         try:
