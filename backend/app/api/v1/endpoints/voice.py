@@ -1571,9 +1571,27 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
         if project_lead_to:
             call.forwarded_to_e164 = project_lead_to
             call.intent = "suivi_projet"
-            # Whisper « qui appelle + motif » au responsable, et si pas de
-            # réponse → fallback dial-followup (qui propose la boîte vocale
-            # pour un suivi de projet).
+            say_with_consent = (
+                decision.say
+                + " Cet appel pourrait être enregistré pour fins de qualité."
+            )
+            # Musique d'attente : l'appelant patiente en file pendant
+            # qu'on sonne le responsable (whisper « qui appelle + motif »
+            # à la décroche, boîte vocale si pas de réponse).
+            queue_twiml = await _start_queue_transfer(
+                db,
+                provider,
+                call=call,
+                targets=[project_lead_to],
+                say=say_with_consent,
+                lang=decision.lang,
+            )
+            if queue_twiml:
+                return Response(
+                    content=queue_twiml, media_type="application/xml"
+                )
+            # Repli si l'origination REST a échoué : <Dial> classique
+            # (sonnerie au lieu de musique), whisper + voicemail conservés.
             followup_url = (
                 f"{_secretary_base_url()}/api/v1/voice/twilio/"
                 f"dial-followup?call_id={call.id}"
@@ -1750,31 +1768,47 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
                 )
                 return Response(content=twiml, media_type="application/xml")
 
-        if not forward_to:
+        # Nouveaux clients / prospects : si des « numéros closers » sont
+        # configurés sur le numéro appelé, on sonne TOUS les closers en
+        # parallèle (les suivis de clients existants passent par
+        # transfer_project_lead, pas ici). Sinon, cible générique.
+        closers_raw = (pn.closer_forward_e164 if pn else None) or ""
+        targets = _parse_e164_list(closers_raw) or _parse_e164_list(forward_to)
+        if not targets:
             # Pas de cible de transfert ni de client online → callback.
             await _create_lead_from_callback(db, call=call)
             twiml = provider.build_say_and_hangup(
                 say=decision.say, lang=decision.lang
             )
             return Response(content=twiml, media_type="application/xml")
-        # Multi-cible : si le champ contient plusieurs numéros séparés
-        # par virgule, on ring tout le monde en parallèle. Fallback
-        # callback si personne ne décroche. Enregistrement activé +
-        # consentement annoncé.
-        targets = _parse_e164_list(forward_to)
-        call.forwarded_to_e164 = ",".join(targets) if targets else forward_to
-        action_url = (
-            f"{_secretary_base_url()}/api/v1/voice/twilio/"
-            f"dial-followup?call_id={call.id}"
-        )
+        call.forwarded_to_e164 = ",".join(targets)
         say_with_consent = (
             decision.say
             + " Cet appel pourrait être enregistré pour fins de qualité."
         )
+        # Musique d'attente : file Twilio + jambes parallèles. Premier
+        # closer qui décroche gagne (whisper « qui appelle + motif »),
+        # boîte vocale si personne ne répond.
+        queue_twiml = await _start_queue_transfer(
+            db,
+            provider,
+            call=call,
+            targets=targets,
+            say=say_with_consent,
+            lang=decision.lang,
+        )
+        if queue_twiml:
+            return Response(content=queue_twiml, media_type="application/xml")
+        # Repli si l'origination REST a échoué : <Dial> multi classique
+        # (sonnerie au lieu de musique), whisper + voicemail conservés.
+        action_url = (
+            f"{_secretary_base_url()}/api/v1/voice/twilio/"
+            f"dial-followup?call_id={call.id}"
+        )
         twiml = provider.build_say_and_dial_multi(
             say=say_with_consent,
             lang=decision.lang,
-            targets_e164=targets or [forward_to],
+            targets_e164=targets,
             action_url=action_url,
             timeout_sec=20,
             record=True,
@@ -1927,9 +1961,399 @@ async def twilio_transfer_whisper(
         )
 
     call_id_raw = request.query_params.get("call_id", "")
+    call = None
+    if call_id_raw.isdigit():
+        call = (
+            await db.execute(select(Call).where(Call.id == int(call_id_raw)))
+        ).scalar_one_or_none()
+    say, lang = await _whisper_say_for_call(db, call)
+    return Response(
+        content=provider.build_say_only(say=say, lang=lang),
+        media_type="application/xml",
+    )
+
+
+async def _whisper_say_for_call(
+    db, call: Optional["Call"]
+) -> tuple[str, str]:
+    """Texte du whisper « Appel de <nom>(, de <compagnie>). Motif : … »
+    + langue. Best-effort : ne lève jamais."""
     name: Optional[str] = None
     company: Optional[str] = None
     reason = "motif non précisé"
+    lang = "fr-CA"
+    if call is not None:
+        lang = call.lang or "fr-CA"
+        reason = _human_reason_for_call(call)
+        try:
+            ident = await identify_caller(db, call.from_e164)
+            name = ident.name
+            if ident.kind == CallerKind.CONTACT:
+                # Récupère la compagnie pour « X de la compagnie Y ».
+                from app.models.contact import Contact
+
+                c = (
+                    await db.execute(
+                        select(Contact).where(Contact.id == ident.entity_id)
+                    )
+                ).scalar_one_or_none()
+                company = getattr(c, "company", None) if c else None
+        except Exception as exc:  # noqa: BLE001
+            log.warning("whisper identify_caller failed: %s", exc)
+        if not name and call.lead_name:
+            name = call.lead_name
+
+    who = name or "un appelant non identifié"
+    if company:
+        who = f"{who}, de {company}"
+    return f"Appel de {who}. Motif : {reason}.", lang
+
+
+# ---------------------------------------------------------------------
+# Transfert avec MUSIQUE D'ATTENTE (file Twilio <Enqueue>)
+#
+# Au lieu d'un <Dial> (où l'appelant entend la sonnerie), l'appelant
+# entre dans une file d'attente Twilio (musique par défaut) pendant
+# qu'on sonne les cibles EN PARALLÈLE via l'API REST. Le premier agent
+# qui décroche entend le whisper « qui appelle + motif » puis pioche
+# l'appelant dans la file ; les autres jambes sont raccrochées. Si
+# personne ne répond (ou échec), l'appelant est redirigé vers la boîte
+# vocale + lead de rappel. Si l'origination REST échoue entièrement,
+# l'appelant retombe sur l'ancien flux <Dial> (sonnerie, pas de musique).
+# ---------------------------------------------------------------------
+
+
+def _queue_agent_leg_url(call_id: int) -> str:
+    return (
+        f"{_secretary_base_url()}/api/v1/voice/twilio/"
+        f"queue-agent-leg?call_id={int(call_id)}"
+    )
+
+
+def _queue_agent_status_url(call_id: int) -> str:
+    return (
+        f"{_secretary_base_url()}/api/v1/voice/twilio/"
+        f"queue-agent-status?call_id={int(call_id)}"
+    )
+
+
+def _queue_result_url(call_id: int) -> str:
+    return (
+        f"{_secretary_base_url()}/api/v1/voice/twilio/"
+        f"queue-result?call_id={int(call_id)}"
+    )
+
+
+def _queue_timeout_url(call_id: int) -> str:
+    return (
+        f"{_secretary_base_url()}/api/v1/voice/twilio/"
+        f"queue-timeout?call_id={int(call_id)}"
+    )
+
+
+def _voicemail_fallback_twiml(provider, lang: str) -> str:
+    """TwiML boîte vocale « personne n'est disponible » (transferts non
+    urgents). Message enregistré + transcrit, visible dans le portail."""
+    intro = (
+        "Désolée, personne n'est disponible pour l'instant. Laissez "
+        "votre message après le bip, nous vous rappellerons. Merci !"
+        if lang.startswith("fr")
+        else "Sorry, nobody is available right now. Please leave a "
+        "message after the beep and we'll call you back. Thank you!"
+    )
+    return provider.build_voicemail(
+        intro_say=intro,
+        lang=lang,
+        action_url=_voicemail_action_url(),
+        transcribe_callback_url=_voicemail_transcribe_url(),
+    )
+
+
+async def _start_queue_transfer(
+    db,
+    provider,
+    *,
+    call: "Call",
+    targets: list[str],
+    say: str,
+    lang: str,
+) -> Optional[str]:
+    """Origine une jambe REST par cible puis renvoie le TwiML <Enqueue>
+    (musique d'attente) pour l'appelant. Renvoie None si AUCUNE jambe
+    n'a pu être originée → l'appelant doit retomber sur le flux <Dial>."""
+    targets = [t for t in dict.fromkeys(targets) if t]
+    if not targets:
+        return None
+    queue_name = f"lea-{call.id}"
+    legs: dict[str, str] = {}
+    for target in targets:
+        try:
+            sid = await provider.initiate_outbound_call(
+                from_e164=call.to_e164,
+                to_e164=target,
+                twiml_url=_queue_agent_leg_url(call.id),
+                status_callback_url=_queue_agent_status_url(call.id),
+                timeout_sec=25,
+            )
+            if sid:
+                legs[sid] = target
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "queue transfer: origination vers %s échouée (call %s): %s",
+                target,
+                call.id,
+                exc,
+            )
+    if not legs:
+        return None
+    call.dial_state_json = json.dumps(
+        {
+            "queue": queue_name,
+            "legs": {sid: "pending" for sid in legs},
+            "targets": legs,
+            "answered_sid": None,
+            "outcome": None,
+        }
+    )
+    call.forwarded_to_e164 = ",".join(targets)
+    await db.flush()
+    return provider.build_say_and_enqueue(
+        say=say,
+        lang=lang,
+        queue_name=queue_name,
+        action_url=_queue_result_url(call.id),
+    )
+
+
+async def _locked_call(db, call_id_raw: str) -> Optional["Call"]:
+    """Charge le Call avec un verrou ligne (FOR UPDATE) — les webhooks
+    des jambes parallèles arrivent en concurrence."""
+    if not call_id_raw.isdigit():
+        return None
+    return (
+        await db.execute(
+            select(Call).where(Call.id == int(call_id_raw)).with_for_update()
+        )
+    ).scalar_one_or_none()
+
+
+@router.post(
+    "/twilio/queue-agent-leg",
+    summary="TwiML jambe agent : whisper puis pioche l'appelant dans la file",
+    response_class=Response,
+)
+async def twilio_queue_agent_leg(request: Request, db: DBSession) -> Response:
+    """Servi quand UN agent décroche sa jambe sortante. Premier arrivé
+    gagne : on marque la jambe gagnante, on raccroche les autres, on
+    démarre l'enregistrement (consentement déjà annoncé par Léa), puis
+    whisper + <Dial><Queue>. Best-effort partout : ne casse jamais la
+    mise en relation."""
+    provider = _twilio_provider()
+    params: dict[str, str] = {}
+    try:
+        params = await _validate_twilio_signature(request)
+    except HTTPException:
+        log.warning("queue-agent-leg: signature invalide (on continue)")
+    leg_sid = (params.get("CallSid") or "").strip()
+
+    call = await _locked_call(db, request.query_params.get("call_id", ""))
+    if call is None:
+        return Response(
+            content=provider.build_say_and_hangup(
+                say="Désolée, cet appel n'est plus actif.", lang="fr-CA"
+            ),
+            media_type="application/xml",
+        )
+    lang = call.lang or "fr-CA"
+    state: dict = {}
+    try:
+        state = json.loads(call.dial_state_json or "{}")
+    except Exception:  # noqa: BLE001
+        state = {}
+    queue_name = state.get("queue") or f"lea-{call.id}"
+
+    answered = state.get("answered_sid")
+    if answered and answered != leg_sid:
+        # Quelqu'un d'autre a déjà pris l'appel.
+        say = (
+            "L'appel a déjà été pris par un collègue. Merci !"
+            if lang.startswith("fr")
+            else "A colleague already took the call. Thank you!"
+        )
+        return Response(
+            content=provider.build_say_and_hangup(say=say, lang=lang),
+            media_type="application/xml",
+        )
+
+    if not answered and leg_sid:
+        state["answered_sid"] = leg_sid
+        if leg_sid in (state.get("targets") or {}):
+            call.forwarded_to_e164 = state["targets"][leg_sid]
+        call.dial_state_json = json.dumps(state)
+        await db.flush()
+        # Raccroche les jambes perdantes (best-effort).
+        for sid, st in (state.get("legs") or {}).items():
+            if sid != leg_sid and st == "pending":
+                try:
+                    await provider.end_call(sid)
+                except Exception:  # noqa: BLE001
+                    pass
+        # Enregistrement de la conversation (2 pistes) — le RecordingUrl
+        # revient via /twilio/status. Consentement annoncé avant la file.
+        try:
+            await provider.start_call_recording(
+                call.provider_sid,
+                status_callback_url=(
+                    f"{_secretary_base_url()}/api/v1/voice/twilio/status"
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("queue: enregistrement non démarré: %s", exc)
+        # Notifie les owners « pris en charge » (évite les doubles rappels).
+        try:
+            await _notify_call_taken(db, call=call, duration_sec=None)
+        except Exception:  # noqa: BLE001
+            pass
+
+    whisper_say, wlang = await _whisper_say_for_call(db, call)
+    twiml = provider.build_whisper_and_dial_queue(
+        whisper_say=whisper_say,
+        lang=wlang,
+        queue_name=queue_name,
+    )
+    return Response(content=twiml, media_type="application/xml")
+
+
+@router.post(
+    "/twilio/queue-agent-status",
+    summary="Webhook : statut final d'une jambe agent (transfert en file)",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def twilio_queue_agent_status(
+    request: Request, db: DBSession
+) -> Response:
+    """Quand TOUTES les jambes agents ont échoué (no-answer / busy /
+    failed) sans que personne décroche, on sort l'appelant de la file
+    vers la boîte vocale + lead de rappel."""
+    params = await _validate_twilio_signature(request)
+    leg_sid = (params.get("CallSid") or "").strip()
+    leg_status = (params.get("CallStatus") or "").lower()
+    if leg_status not in (
+        "completed",
+        "busy",
+        "failed",
+        "no-answer",
+        "canceled",
+    ):
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    call = await _locked_call(db, request.query_params.get("call_id", ""))
+    if call is None or not call.dial_state_json:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    try:
+        state = json.loads(call.dial_state_json)
+    except Exception:  # noqa: BLE001
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    legs: dict = state.get("legs") or {}
+    if leg_sid in legs:
+        legs[leg_sid] = "done"
+    state["legs"] = legs
+    all_done = all(st == "done" for st in legs.values())
+    nobody_answered = not state.get("answered_sid")
+    if all_done and nobody_answered and not state.get("outcome"):
+        state["outcome"] = "no-answer"
+        call.dial_state_json = json.dumps(state)
+        await db.flush()
+        # Lead de rappel + notif urgente, comme le flux <Dial> classique.
+        call.lead_reason = (
+            (call.lead_reason or "") + " [NO ANSWER - RAPPEL REQUIS]"
+        ).strip()
+        await _create_lead_from_callback(db, call=call)
+        await _notify_callback_required(db, call=call)
+        # Sort l'appelant de la file → boîte vocale. S'il a déjà
+        # raccroché, Twilio renvoie une erreur qu'on ignore.
+        provider = _twilio_provider()
+        try:
+            await provider.update_call_twiml(
+                call.provider_sid, _queue_timeout_url(call.id)
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.info("queue: redirection voicemail impossible: %s", exc)
+    else:
+        call.dial_state_json = json.dumps(state)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/twilio/queue-result",
+    summary="Webhook : l'appelant a quitté la file (bridgé / raccroché / erreur)",
+    response_class=Response,
+)
+async def twilio_queue_result(request: Request, db: DBSession) -> Response:
+    provider = _twilio_provider()
+    params: dict[str, str] = {}
+    try:
+        params = await _validate_twilio_signature(request)
+    except HTTPException:
+        log.warning("queue-result: signature invalide (on continue)")
+    result = (params.get("QueueResult") or "").lower()
+
+    call = await _locked_call(db, request.query_params.get("call_id", ""))
+    lang = (call.lang if call else "fr-CA") or "fr-CA"
+
+    if result == "bridged":
+        # La conversation a eu lieu et vient de se terminer.
+        return Response(content="<Response><Hangup/></Response>", media_type="application/xml")
+
+    if result == "hangup":
+        # L'appelant a raccroché pendant l'attente → on libère les
+        # jambes agents encore en train de sonner + lead de rappel.
+        if call is not None and call.dial_state_json:
+            try:
+                state = json.loads(call.dial_state_json)
+            except Exception:  # noqa: BLE001
+                state = {}
+            if not state.get("outcome"):
+                state["outcome"] = "caller-hangup"
+                call.dial_state_json = json.dumps(state)
+                for sid, st in (state.get("legs") or {}).items():
+                    if st == "pending" and sid != state.get("answered_sid"):
+                        try:
+                            await provider.end_call(sid)
+                        except Exception:  # noqa: BLE001
+                            pass
+                if not state.get("answered_sid"):
+                    call.lead_reason = (
+                        (call.lead_reason or "")
+                        + " [A RACCROCHÉ EN ATTENTE - RAPPEL REQUIS]"
+                    ).strip()
+                    await _create_lead_from_callback(db, call=call)
+                    await _notify_callback_required(db, call=call)
+        return Response(content="<Response/>", media_type="application/xml")
+
+    # redirected → on l'a déjà envoyé en voicemail ; error / queue-full /
+    # leave → boîte vocale directement.
+    if result == "redirected":
+        return Response(content="<Response/>", media_type="application/xml")
+    return Response(
+        content=_voicemail_fallback_twiml(provider, lang),
+        media_type="application/xml",
+    )
+
+
+@router.post(
+    "/twilio/queue-timeout",
+    summary="TwiML : personne n'a décroché → boîte vocale",
+    response_class=Response,
+)
+async def twilio_queue_timeout(request: Request, db: DBSession) -> Response:
+    provider = _twilio_provider()
+    try:
+        await _validate_twilio_signature(request)
+    except HTTPException:
+        log.warning("queue-timeout: signature invalide (on continue)")
+    call_id_raw = request.query_params.get("call_id", "")
     lang = "fr-CA"
     if call_id_raw.isdigit():
         call = (
@@ -1937,31 +2361,8 @@ async def twilio_transfer_whisper(
         ).scalar_one_or_none()
         if call is not None:
             lang = call.lang or "fr-CA"
-            reason = _human_reason_for_call(call)
-            try:
-                ident = await identify_caller(db, call.from_e164)
-                name = ident.name
-                if ident.kind == CallerKind.CONTACT:
-                    # Récupère la compagnie pour « X de la compagnie Y ».
-                    from app.models.contact import Contact
-
-                    c = (
-                        await db.execute(
-                            select(Contact).where(Contact.id == ident.entity_id)
-                        )
-                    ).scalar_one_or_none()
-                    company = getattr(c, "company", None) if c else None
-            except Exception as exc:  # noqa: BLE001
-                log.warning("whisper identify_caller failed: %s", exc)
-            if not name and call.lead_name:
-                name = call.lead_name
-
-    who = name or "un appelant non identifié"
-    if company:
-        who = f"{who}, de {company}"
-    say = f"Appel de {who}. Motif : {reason}."
     return Response(
-        content=provider.build_say_only(say=say, lang=lang),
+        content=_voicemail_fallback_twiml(provider, lang),
         media_type="application/xml",
     )
 
@@ -2459,20 +2860,10 @@ async def _twilio_dial_followup_impl(
     # on garde le comportement historique (rappel manuel ASAP, pas de
     # voicemail qui ferait perdre du temps sur un cas urgent).
     if call is not None and intent != "urgence_locataire":
-        intro = (
-            "Désolée, personne n'est disponible pour l'instant. Laissez "
-            "votre message après le bip, nous vous rappellerons. Merci !"
-            if lang.startswith("fr")
-            else "Sorry, nobody is available right now. Please leave a "
-            "message after the beep and we'll call you back. Thank you!"
+        return Response(
+            content=_voicemail_fallback_twiml(provider, lang),
+            media_type="application/xml",
         )
-        twiml = provider.build_voicemail(
-            intro_say=intro,
-            lang=lang,
-            action_url=_voicemail_action_url(),
-            transcribe_callback_url=_voicemail_transcribe_url(),
-        )
-        return Response(content=twiml, media_type="application/xml")
 
     say = (
         "Désolée, personne ne peut prendre votre appel pour l'instant. "
