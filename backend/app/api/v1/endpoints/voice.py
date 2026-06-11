@@ -3429,10 +3429,96 @@ async def _twilio_incoming_sms_impl(request: Request, db: DBSession) -> Response
         log.warning("SMS notification failed: %s", exc)
 
     await db.flush()
+
+    # Réponse automatique hors heures d'ouverture. On envoie le message
+    # si (a) la fonctionnalité est activée, (b) les bureaux sont fermés
+    # selon VoiceBusinessHours, et (c) on n'a PAS écrit à ce numéro dans
+    # les N dernières minutes (échange en cours / anti-spam : la réponse
+    # auto compte elle-même comme un message envoyé).
+    try:
+        await _maybe_send_after_hours_sms(
+            db,
+            pn=pn,
+            client_e164=from_e164,
+            caller_kind=identified.kind.value,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("after-hours auto-reply failed: %s", exc)
+
+    await db.flush()
     return Response(
         content='<?xml version="1.0" encoding="UTF-8"?><Response/>',
         media_type="application/xml",
     )
+
+
+async def _maybe_send_after_hours_sms(
+    db: DBSession,
+    *,
+    pn: PhoneNumber,
+    client_e164: str,
+    caller_kind: str,
+    entity_type: Optional[str],
+    entity_id: Optional[int],
+) -> None:
+    """Envoie (au plus une fois par fenêtre) la réponse automatique
+    « bureaux fermés » à un SMS entrant reçu hors heures d'ouverture."""
+    from datetime import timedelta
+
+    from app.core.config import settings
+    from app.integrations.voice.routing import is_within_business_hours
+
+    body = (settings.sms_after_hours_auto_reply or "").strip()
+    if not body:
+        return  # fonctionnalité désactivée
+
+    # Bureaux ouverts (ou aucune plage configurée) → rien à faire.
+    if await is_within_business_hours(db, phone_number_id=pn.id):
+        return
+
+    # Échange en cours / anti-spam : a-t-on envoyé un SMS à ce numéro
+    # dans les N dernières minutes ? (inclut une éventuelle réponse auto
+    # précédente, qui est aussi un message sortant.)
+    window = max(1, int(settings.sms_after_hours_suppress_minutes or 10))
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=window)
+    recent_outbound = (
+        await db.execute(
+            select(VoiceSms.id)
+            .where(
+                VoiceSms.phone_number_id == pn.id,
+                VoiceSms.to_e164 == client_e164,
+                VoiceSms.direction == "outbound",
+                VoiceSms.received_at >= cutoff,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if recent_outbound is not None:
+        return
+
+    provider = _twilio_provider()
+    data = await provider.send_sms(
+        from_e164=pn.e164, to_e164=client_e164, body=body
+    )
+    now = datetime.now(timezone.utc)
+    db.add(
+        VoiceSms(
+            phone_number_id=pn.id,
+            provider_sid=str(data.get("sid") or f"auto-ah-{int(now.timestamp())}"),
+            direction="outbound",
+            status=str(data.get("status") or "queued"),
+            from_e164=pn.e164,
+            to_e164=client_e164,
+            body=body,
+            sent_at=now,
+            caller_kind=caller_kind,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+    )
+    await db.flush()
 
 
 # ---------- SMS admin (envoi + liste threadée) ----------
