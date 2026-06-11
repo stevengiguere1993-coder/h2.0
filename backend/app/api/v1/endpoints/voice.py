@@ -534,15 +534,42 @@ async def _send_intake_validation_email(
 async def _find_project_lead_phone(
     db, *, call: "Call"
 ) -> Optional[str]:
-    """Renvoie le téléphone du premier ProjectMember actif du projet
-    lié à l'appelant. Si aucun ProjectMember n'a de phone, fallback
-    sur le `followup_forward_e164` configuré sur le PhoneNumber appelé
-    (back-office / réception). Utilisé pour transfer_project_lead."""
+    """Renvoie le téléphone vers qui router un appel de suivi.
+
+    Priorité :
+      1. le **responsable désigné** du projet (`responsible_user_id`) —
+         son `phone_e164`, sinon le `phone` de sa fiche Employe ;
+      2. à défaut, le premier ProjectMember actif ayant un téléphone ;
+      3. à défaut, le `followup_forward_e164` du PhoneNumber appelé
+         (back-office / réception).
+    Utilisé pour transfer_project_lead."""
     project = await _find_project_for_call(db, call)
     if project:
         from app.models.employe import Employe
         from app.models.project_member import ProjectMember
         from app.models.user import User
+
+        # 1. Responsable désigné du projet.
+        if getattr(project, "responsible_user_id", None):
+            resp = (
+                await db.execute(
+                    select(User).where(User.id == project.responsible_user_id)
+                )
+            ).scalar_one_or_none()
+            if resp is not None:
+                if getattr(resp, "phone_e164", None):
+                    return resp.phone_e164
+                if resp.email:
+                    emp = (
+                        await db.execute(
+                            select(Employe.phone).where(
+                                Employe.email == resp.email,
+                                Employe.phone.is_not(None),
+                            )
+                        )
+                    ).first()
+                    if emp and emp[0]:
+                        return emp[0]
 
         rows = (
             await db.execute(
@@ -1544,10 +1571,19 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
         if project_lead_to:
             call.forwarded_to_e164 = project_lead_to
             call.intent = "suivi_projet"
+            # Whisper « qui appelle + motif » au responsable, et si pas de
+            # réponse → fallback dial-followup (qui propose la boîte vocale
+            # pour un suivi de projet).
+            followup_url = (
+                f"{_secretary_base_url()}/api/v1/voice/twilio/"
+                f"dial-followup?call_id={call.id}"
+            )
             twiml = provider.build_say_and_dial(
                 say=decision.say,
                 lang=decision.lang,
                 dial_to_e164=project_lead_to,
+                whisper_url=_transfer_whisper_url(call.id),
+                action_url=followup_url,
             )
             return Response(content=twiml, media_type="application/xml")
         # Personne disponible → callback poli (le chargé sera notifié
@@ -2415,6 +2451,29 @@ async def _twilio_dial_followup_impl(
         await _notify_callback_required(db, call=call)
 
     lang = (call.lang if call else "fr-CA") or "fr-CA"
+    intent = (call.intent if call else "") or ""
+
+    # Pour un suivi/transfert non urgent : on propose la boîte vocale
+    # (l'appelant laisse un message → transcrit → visible à l'équipe),
+    # en plus du callback déjà créé ci-dessus. Pour une urgence locataire
+    # on garde le comportement historique (rappel manuel ASAP, pas de
+    # voicemail qui ferait perdre du temps sur un cas urgent).
+    if call is not None and intent != "urgence_locataire":
+        intro = (
+            "Désolée, personne n'est disponible pour l'instant. Laissez "
+            "votre message après le bip, nous vous rappellerons. Merci !"
+            if lang.startswith("fr")
+            else "Sorry, nobody is available right now. Please leave a "
+            "message after the beep and we'll call you back. Thank you!"
+        )
+        twiml = provider.build_voicemail(
+            intro_say=intro,
+            lang=lang,
+            action_url=_voicemail_action_url(),
+            transcribe_callback_url=_voicemail_transcribe_url(),
+        )
+        return Response(content=twiml, media_type="application/xml")
+
     say = (
         "Désolée, personne ne peut prendre votre appel pour l'instant. "
         "Nous vous rappellerons le plus rapidement possible. Merci !"

@@ -4918,6 +4918,8 @@ function ProjectTeamSection({
 }) {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [allUsers, setAllUsers] = useState<TeamMember[]>([]);
+  const [responsibleId, setResponsibleId] = useState<number | null>(null);
+  const [savingResp, setSavingResp] = useState(false);
   const [loading, setLoading] = useState(true);
   const [picking, setPicking] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -4926,18 +4928,47 @@ function ProjectTeamSection({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [mRes, uRes] = await Promise.all([
+      const [mRes, uRes, pRes] = await Promise.all([
         authedFetch(`/api/v1/projects/${projectId}/members`),
-        authedFetch("/api/v1/users")
+        authedFetch("/api/v1/users"),
+        authedFetch(`/api/v1/projects/${projectId}`)
       ]);
       if (mRes.ok) setMembers((await mRes.json()) as TeamMember[]);
       if (uRes.ok) setAllUsers((await uRes.json()) as TeamMember[]);
+      if (pRes.ok) {
+        const proj = (await pRes.json()) as {
+          responsible_user_id: number | null;
+        };
+        setResponsibleId(proj.responsible_user_id ?? null);
+      }
     } catch {
       setErr("Chargement de l'équipe échoué.");
     } finally {
       setLoading(false);
     }
   }, [projectId]);
+
+  async function setResponsible(userId: number | null) {
+    setSavingResp(true);
+    setErr(null);
+    const prev = responsibleId;
+    setResponsibleId(userId);
+    try {
+      const res = await authedFetch(`/api/v1/projects/${projectId}`, {
+        method: "PUT",
+        body: JSON.stringify({ responsible_user_id: userId })
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`${res.status} — ${txt.slice(0, 200)}`);
+      }
+    } catch (e) {
+      setResponsibleId(prev);
+      setErr(`Responsable non enregistré : ${(e as Error).message}`);
+    } finally {
+      setSavingResp(false);
+    }
+  }
 
   useEffect(() => {
     void load();
@@ -5038,6 +5069,36 @@ function ProjectTeamSection({
       {err ? (
         <p className="mt-2 text-xs text-rose-300">{err}</p>
       ) : null}
+
+      {/* Responsable du projet : vers qui la téléphonie (Léa) route un
+          appel de suivi d'un client existant. */}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <label
+          htmlFor="project-responsible"
+          className="text-xs font-semibold text-white/80"
+        >
+          📞 Responsable (suivi d&apos;appel) :
+        </label>
+        <select
+          id="project-responsible"
+          value={responsibleId ?? ""}
+          disabled={savingResp || loading}
+          onChange={(e) =>
+            setResponsible(e.target.value ? Number(e.target.value) : null)
+          }
+          className="rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1 text-xs text-white focus:border-accent-500 focus:outline-none disabled:opacity-50"
+        >
+          <option value="">— Aucun (réception / back-office) —</option>
+          {allUsers.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.full_name || u.email}
+            </option>
+          ))}
+        </select>
+        {savingResp ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-white/50" />
+        ) : null}
+      </div>
 
       {loading ? (
         <div className="mt-3 flex items-center gap-2 text-xs text-white/50">

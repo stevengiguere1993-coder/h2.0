@@ -296,14 +296,32 @@ class TwilioVoiceProvider(VoiceProvider):
         lang: str,
         dial_to_e164: str,
         timeout_sec: int = 20,
+        whisper_url: Optional[str] = None,
+        action_url: Optional[str] = None,
     ) -> str:
-        """TwiML : la secrétaire annonce le transfert puis <Dial>."""
+        """TwiML : la secrétaire annonce le transfert puis <Dial>.
+
+        Si `whisper_url` est fourni, la personne qui décroche entend
+        d'abord le résumé « qui appelle + motif » avant la mise en
+        relation. Si `action_url` est fourni, Twilio le POST en cas de
+        non-réponse/occupé (fallback, p.ex. boîte vocale)."""
         voice = self._voice_for_lang(lang)
+        num_attr = f' url="{xml_escape(whisper_url)}"' if whisper_url else ""
+        dial_attr = (
+            f' action="{xml_escape(action_url)}" method="POST"'
+            if action_url
+            else ""
+        )
+        inner = (
+            f"<Number{num_attr}>{xml_escape(dial_to_e164)}</Number>"
+            if whisper_url
+            else xml_escape(dial_to_e164)
+        )
         return (
             '<?xml version="1.0" encoding="UTF-8"?>'
             "<Response>"
             f'<Say voice="{voice}" language="{lang}">{xml_escape(say)}</Say>'
-            f'<Dial timeout="{int(timeout_sec)}">{xml_escape(dial_to_e164)}</Dial>'
+            f'<Dial timeout="{int(timeout_sec)}"{dial_attr}>{inner}</Dial>'
             "</Response>"
         )
 
