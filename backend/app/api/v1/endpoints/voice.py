@@ -1305,20 +1305,29 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
     else:
         spam = await check_incoming(db, from_e164=from_e164, verstat=verstat)
     if spam is not None and spam.result != SpamCheckResult.ALLOW:
-        existing.was_blocked = True
-        existing.intent = "spam"
-        await record_spam_block(db)
-        await db.flush()
+        # On laisse l'IA filtrer en conversation : seuls le PLAFOND DE
+        # COÛT journalier et le spam PROUVÉ (honeypot) basculent en boîte
+        # vocale. Les autres signaux (numéro masqué / non-NANP, STIR,
+        # rate-limit, VoIP anonyme) laissent Léa RÉPONDRE et qualifier —
+        # un humain qui masque son numéro n'est pas un robot. Le plafond
+        # de coût reste le garde-fou ultime contre les robocalls.
+        if spam.result in (
+            SpamCheckResult.BLOCK_CAP,
+            SpamCheckResult.BLOCK_HONEYPOT,
+        ):
+            existing.was_blocked = True
+            existing.intent = "spam"
+            await record_spam_block(db)
+            await db.flush()
+            log.info(
+                "Spam -> voicemail from=%s reason=%s (%s)",
+                from_e164, spam.result.value, spam.reason,
+            )
+            return _horizon_voicemail_response(provider)
         log.info(
-            "Spam blocked from=%s reason=%s (%s)",
+            "Spam signal laissé à l'IA from=%s reason=%s (%s)",
             from_e164, spam.result.value, spam.reason,
         )
-        # Quel que soit le motif (cap, rate-limit, honeypot, geo, STIR,
-        # VoIP anonyme) on bascule en BOÎTE VOCALE plutôt qu'une tonalité
-        # occupée : un vrai humain mal classé peut ainsi toujours laisser
-        # un message (on le rappelle), et on évite de facturer Polly +
-        # Claude sur un robot. Aucun appelant n'entend « occupé ».
-        return _horizon_voicemail_response(provider)
 
     # ----- Routage Phase 3 : blocklist / VIP / heures / secrétaire -----
     action = await decide_routing(
