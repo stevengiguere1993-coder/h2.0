@@ -352,6 +352,7 @@ html[data-portal-theme="light"] .bg-green-500\/30 { background-color: rgb(134 23
 html[data-portal-theme="light"] .text-orange-200,
 html[data-portal-theme="light"] .text-orange-300,
 html[data-portal-theme="light"] .text-orange-400 { color: #c2410c !important; }
+html[data-portal-theme="light"] .text-teal-100,
 html[data-portal-theme="light"] .text-teal-200,
 html[data-portal-theme="light"] .text-teal-300,
 html[data-portal-theme="light"] .text-teal-400 { color: #0f766e !important; }
