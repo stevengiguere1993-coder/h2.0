@@ -29,7 +29,11 @@ from sqlalchemy import func, select
 
 from app.api.deps import CurrentAdmin, CurrentUser, DBSession
 from app.integrations.voice import get_voice_provider
-from app.integrations.voice.routing import RoutingAction, decide_routing
+from app.integrations.voice.routing import (
+    RoutingAction,
+    decide_routing,
+    is_within_business_hours,
+)
 from app.integrations.voice.caller_identity import (
     CallerKind,
     build_identity_context_block,
@@ -1108,6 +1112,53 @@ def _safe_error_twiml(
     return Response(content=twiml, media_type="application/xml")
 
 
+def _horizon_voicemail_response(provider, lang: str = "fr-CA") -> Response:
+    """Boîte vocale d'accueil Horizon — utilisée comme repli (anti-spam,
+    cap de coût) à la place d'une tonalité occupée. Un humain mal classé
+    peut toujours laisser un message ; les robots raccrochent."""
+    intro = (
+        "Hello, you have reached Horizon Services Immobiliers. Please "
+        "leave a message after the beep and we will call you back."
+        if lang.startswith("en")
+        else "Bonjour, vous avez joint Horizon Services Immobiliers. "
+        "Laissez votre message après le bip, nous vous rappellerons dès "
+        "que possible."
+    )
+    twiml = provider.build_voicemail(
+        intro_say=intro,
+        lang=lang,
+        action_url=_voicemail_action_url(),
+        transcribe_callback_url=_voicemail_transcribe_url(),
+    )
+    return Response(content=twiml, media_type="application/xml")
+
+
+async def _begin_secretary_greeting(
+    db, provider, *, call: "Call", identified, after_hours: bool
+) -> Response:
+    """Tour 0 de la secrétaire IA : greeting (personnalisé si l'appelant
+    est reconnu au CRM) + <Gather> du 1er énoncé. `after_hours` adapte le
+    greeting (bureaux fermés → on demande construction vs locataire)."""
+    personalized = (
+        build_personalized_greeting(identified)
+        if identified.kind != CallerKind.UNKNOWN
+        else None
+    )
+    greeting = await decide_initial_greeting(
+        lang="fr-CA", personalized_say=personalized, after_hours=after_hours
+    )
+    call.lang = greeting.lang
+    await _record_turn(
+        db, call_id=call.id, role="assistant", text=greeting.say
+    )
+    twiml = provider.build_say_and_gather(
+        say=greeting.say,
+        lang=greeting.lang,
+        action_url=_secretary_action_url(),
+    )
+    return Response(content=twiml, media_type="application/xml")
+
+
 # ---------------------------------------------------------------------
 # Webhook : appel entrant
 # ---------------------------------------------------------------------
@@ -1262,24 +1313,12 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
             "Spam blocked from=%s reason=%s (%s)",
             from_e164, spam.result.value, spam.reason,
         )
-        if spam.result == SpamCheckResult.BLOCK_CAP:
-            # Cost cap atteint : on garde le canal ouvert mais on
-            # bascule sur voicemail (au cas où c'est un vrai client).
-            twiml = provider.build_voicemail(
-                intro_say=(
-                    "Bonjour, vous avez joint Horizon Services Immobiliers. "
-                    "Laissez votre message après le bip, nous vous "
-                    "rappellerons dès que possible."
-                ),
-                lang="fr-CA",
-                action_url=_voicemail_action_url(),
-                transcribe_callback_url=_voicemail_transcribe_url(),
-            )
-            return Response(content=twiml, media_type="application/xml")
-        # Tous les autres motifs : raccrochage poli (Reject = tonalité
-        # occupé, le robot ne saura pas qu'on l'a démasqué).
-        twiml = provider.build_reject_response("busy")
-        return Response(content=twiml, media_type="application/xml")
+        # Quel que soit le motif (cap, rate-limit, honeypot, geo, STIR,
+        # VoIP anonyme) on bascule en BOÎTE VOCALE plutôt qu'une tonalité
+        # occupée : un vrai humain mal classé peut ainsi toujours laisser
+        # un message (on le rappelle), et on évite de facturer Polly +
+        # Claude sur un robot. Aucun appelant n'entend « occupé ».
+        return _horizon_voicemail_response(provider)
 
     # ----- Routage Phase 3 : blocklist / VIP / heures / secrétaire -----
     action = await decide_routing(
@@ -1310,6 +1349,17 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
         return Response(content=twiml, media_type="application/xml")
 
     if action == RoutingAction.VOICEMAIL:
+        # Hors heures d'ouverture. Si la secrétaire IA est active, on
+        # laisse Léa RÉPONDRE et qualifier (urgence locataire →
+        # gestionnaires 24/7 ; construction / autre → prise de message),
+        # au lieu d'une boîte vocale sèche. Un locataire reconnu n'est
+        # pas requestionné (greeting personnalisé). Sinon (secrétaire
+        # désactivée), voicemail classique.
+        if pn.secretary_mode_active:
+            return await _begin_secretary_greeting(
+                db, provider, call=existing, identified=identified,
+                after_hours=True,
+            )
         existing.was_voicemail = True
         await db.flush()
         twiml = provider.build_voicemail(
@@ -1326,26 +1376,10 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
         return Response(content=twiml, media_type="application/xml")
 
     if action == RoutingAction.SECRETARY:
-        # Tour 0 : phrase d'accueil + Gather du 1er énoncé client.
-        # Si l'appelant est identifié, on personnalise le greeting.
-        personalized = (
-            build_personalized_greeting(identified)
-            if identified.kind != CallerKind.UNKNOWN
-            else None
+        return await _begin_secretary_greeting(
+            db, provider, call=existing, identified=identified,
+            after_hours=False,
         )
-        greeting = await decide_initial_greeting(
-            lang="fr-CA", personalized_say=personalized
-        )
-        existing.lang = greeting.lang
-        await _record_turn(
-            db, call_id=existing.id, role="assistant", text=greeting.say
-        )
-        twiml = provider.build_say_and_gather(
-            say=greeting.say,
-            lang=greeting.lang,
-            action_url=_secretary_action_url(),
-        )
-        return Response(content=twiml, media_type="application/xml")
 
     # ----- FORWARD (Phase 1) : transfert direct -----
     if not forward_to:
@@ -1446,12 +1480,41 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
         if identified.kind != CallerKind.UNKNOWN
         else None
     )
+    # Hors heures : Léa applique les règles after-hours (urgence
+    # locataire → gestionnaires ; reste → prise de message).
+    try:
+        after_hours = not await is_within_business_hours(
+            db, phone_number_id=call.phone_number_id
+        )
+    except Exception:  # noqa: BLE001
+        after_hours = False
     decision = await decide_next_turn(
         history=history,
         current_turn_count=len(turns),
         caller_e164=call.from_e164,
         identity_context=identity_ctx,
+        after_hours=after_hours,
     )
+
+    # Garde-fou hors heures : on ne dérange PERSONNE en direct la nuit
+    # (sauf urgence locataire). Toute tentative de transfert / prise de
+    # RDV non urgente est ramenée à une prise de message (callback).
+    if after_hours and decision.next_action in (
+        "transfer",
+        "transfer_project_lead",
+        "propose_slots",
+        "book_slot",
+    ):
+        decision.next_action = "callback"
+        decision.say = (
+            "Our offices are currently closed. I've noted your request "
+            "and someone will call you back as soon as we reopen. Thank "
+            "you for calling Horizon."
+            if decision.lang.startswith("en")
+            else "Nos bureaux sont présentement fermés. J'ai bien noté "
+            "votre demande et un représentant vous rappellera dès la "
+            "réouverture. Merci d'avoir appelé Horizon."
+        )
 
     # Persist langue + intent à mesure (la dernière décision écrase).
     call.lang = decision.lang

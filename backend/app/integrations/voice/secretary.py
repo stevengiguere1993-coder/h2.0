@@ -368,11 +368,15 @@ async def decide_initial_greeting(
     lang: str = "fr-CA",
     *,
     personalized_say: Optional[str] = None,
+    after_hours: bool = False,
 ) -> SecretaryDecision:
     """Phrase d'accueil — pas besoin d'IA, on a une formulation fixe.
 
     Si `personalized_say` est fourni (issu de l'identification CRM),
-    on l'utilise tel quel. Sinon, greeting générique.
+    on l'utilise tel quel (un locataire reconnu n'est PAS requestionné).
+    Sinon, greeting générique. Hors heures (`after_hours`), on précise
+    que les bureaux sont fermés et on demande explicitement s'il s'agit
+    d'un projet de construction ou d'un locataire, pour bien diriger.
 
     Conserver une greeting statique fait gagner ~1 sec de latence sur le
     premier décroché (pas d'appel API à attendre) et donne une expérience
@@ -386,24 +390,51 @@ async def decide_initial_greeting(
             say=personalized_say,
         )
     if lang.startswith("en"):
+        say = (
+            "Hello, you've reached Horizon Services. Our offices are "
+            "currently closed. To direct you properly: are you calling "
+            "about a construction or renovation project, or are you a "
+            "tenant in one of our buildings?"
+            if after_hours
+            else "Hello, you've reached Horizon Services. "
+            "How may I help you today?"
+        )
         return SecretaryDecision(
             lang="en-US",
             intent="unclear",
             next_action="continue",
-            say=(
-                "Hello, you've reached Horizon Services. "
-                "How may I help you today?"
-            ),
+            say=say,
         )
+    say = (
+        "Bonjour, Horizon Services Immobiliers. Nos bureaux sont "
+        "présentement fermés. Pour bien vous diriger : appelez-vous au "
+        "sujet d'un projet de construction ou de rénovation, ou êtes-vous "
+        "locataire d'un de nos immeubles ?"
+        if after_hours
+        else "Bonjour, Horizon Services Immobiliers. "
+        "Comment puis-je vous aider ?"
+    )
     return SecretaryDecision(
         lang="fr-CA",
         intent="unclear",
         next_action="continue",
-        say=(
-            "Bonjour, Horizon Services Immobiliers. "
-            "Comment puis-je vous aider ?"
-        ),
+        say=say,
     )
+
+
+_AFTER_HOURS_RULES = (
+    "\n\n--- HORS HEURES D'OUVERTURE (bureaux FERMÉS) ---\n"
+    "- Urgence locataire (dégât d'eau, fuite, panne de chauffage, "
+    "porte barrée, etc.) : transfère QUAND MÊME aux gestionnaires "
+    "(next_action = transfer_emergency). Les urgences sont traitées "
+    "24 h sur 24.\n"
+    "- Tout le reste (projet de construction ou rénovation, suivi de "
+    "projet, question administrative non urgente) : NE transfère PAS "
+    "et ne propose PAS de rendez-vous. Prends un message avec "
+    "next_action = callback (nom + numéro + raison) en précisant "
+    "poliment que les bureaux sont fermés et qu'on rappellera dès leur "
+    "réouverture."
+)
 
 
 async def decide_next_turn(
@@ -412,6 +443,7 @@ async def decide_next_turn(
     current_turn_count: int,
     caller_e164: str,
     identity_context: Optional[str] = None,
+    after_hours: bool = False,
 ) -> SecretaryDecision:
     """Demande à Claude la prochaine action de la secrétaire.
 
@@ -434,11 +466,13 @@ async def decide_next_turn(
     system = SECRETARY_SYSTEM_PROMPT
     if identity_context:
         system = (
-            f"{SECRETARY_SYSTEM_PROMPT}\n\n--- CONTEXTE APPELANT ---\n"
+            f"{system}\n\n--- CONTEXTE APPELANT ---\n"
             f"{identity_context}\n\nUtilise ce contexte pour appliquer "
             "les règles de routage (urgence locataire, suivi projet, "
             "intake construction)."
         )
+    if after_hours:
+        system = f"{system}{_AFTER_HOURS_RULES}"
 
     user_prompt = _build_user_prompt(history, caller_e164)
     messages = [Message(role="user", content=user_prompt)]
