@@ -105,6 +105,21 @@ _DEFAULT_RULES: list[dict[str, Any]] = [
             "client. Écrase la version précédente du même numéro."
         ),
     },
+    {
+        "name": "Bail signé → Immeuble",
+        "document_type": "bail_signe",
+        "entity_type": "Immeuble",
+        "subfolder_path_template": "Baux signés",
+        "file_name_template": "Bail_{nom_locataire}_{numero_logement}.pdf",
+        "overwrite_strategy": "keep_both",
+        "active": True,
+        "description": (
+            "Dépose le PDF du bail signé dans « Baux signés » du Drive de "
+            "l'immeuble. Garde chaque bail (un locataire = un fichier). "
+            "Actif par défaut : se déclenche dès qu'un Drive est lié à "
+            "l'immeuble."
+        ),
+    },
 ]
 
 
