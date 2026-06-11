@@ -80,25 +80,27 @@ class PhoneNumber(Base):
     # Phase 1 : numéro vers lequel on transfère les appels entrants
     # quand aucune CallRoute ne matche. En Phase 2, la secrétaire IA
     # prend le relais et ce champ devient un fallback.
-    forward_to_e164: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    forward_to_e164: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     # Phase 8 — cibles de routage par scénario, configurables depuis
     # l'app (au lieu d'env vars Render). Ordre de priorité côté code :
     #   1. valeur DB du PhoneNumber appelé
     #   2. variable d'env (URGENCY_FORWARD_E164, etc.)
     #   3. TWILIO_FORWARD_TO en dernier recours
     #
+    # Chaque champ accepte PLUSIEURS numéros séparés par virgule → ring
+    # tous en parallèle (premier qui décroche gagne). D'où VARCHAR(255).
     # urgency_forward_e164  → urgences locataires (dégât, panne, etc.)
     # closer_forward_e164   → leads qualifiés à confier au closer humain
     # followup_forward_e164 → suivi projet (override du chargé de projet
     #                          assigné si pas dispo, ex. numéro back-office)
     urgency_forward_e164: Mapped[Optional[str]] = mapped_column(
-        String(20), nullable=True
+        String(255), nullable=True
     )
     closer_forward_e164: Mapped[Optional[str]] = mapped_column(
-        String(20), nullable=True
+        String(255), nullable=True
     )
     followup_forward_e164: Mapped[Optional[str]] = mapped_column(
-        String(20), nullable=True
+        String(255), nullable=True
     )
     # Phase 2 : si True, la secrétaire IA décroche et qualifie l'appel
     # avant de transférer. Sinon : transfert direct (comportement Phase 1).

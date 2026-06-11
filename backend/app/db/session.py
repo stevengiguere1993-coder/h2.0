@@ -135,6 +135,11 @@ async def ensure_critical_columns() -> None:
         # Coffre Abonnements : quantité (prix unitaire × N). La table
         # existait avant l'ajout du champ → create_all ne l'ajoute pas.
         ("subscriptions", "quantite", "INTEGER NOT NULL DEFAULT 1"),
+        # Téléphonie Léa : sans ces colonnes, un SELECT sur la table
+        # plante et casse tout le flux d'appel entrant. On les met ici
+        # (transaction par colonne) pour survivre à un abort d'init_db.
+        ("projects", "responsible_user_id", "INTEGER"),
+        ("voice_calls", "dial_state_json", "TEXT"),
     )
     for table, column, col_type in critical_columns:
         try:
@@ -148,6 +153,33 @@ async def ensure_critical_columns() -> None:
         except Exception as exc:  # noqa: BLE001
             log.warning(
                 "ensure_critical_columns %s.%s failed: %s",
+                table,
+                column,
+                exc,
+            )
+
+    # Élargissements de colonnes critiques (transaction par colonne →
+    # résilient même si init_db a aborté). Les cibles de transfert
+    # téléphonique acceptent plusieurs numéros séparés par virgule, donc
+    # VARCHAR(20) (un seul numéro) est trop court.
+    widen_columns = (
+        ("voice_phone_numbers", "forward_to_e164", "VARCHAR(255)"),
+        ("voice_phone_numbers", "urgency_forward_e164", "VARCHAR(255)"),
+        ("voice_phone_numbers", "closer_forward_e164", "VARCHAR(255)"),
+        ("voice_phone_numbers", "followup_forward_e164", "VARCHAR(255)"),
+    )
+    for table, column, new_type in widen_columns:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        f"ALTER TABLE {table} "
+                        f"ALTER COLUMN {column} TYPE {new_type}"
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "ensure_critical_columns widen %s.%s failed: %s",
                 table,
                 column,
                 exc,

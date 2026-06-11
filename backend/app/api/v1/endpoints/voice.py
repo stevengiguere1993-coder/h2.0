@@ -1061,25 +1061,43 @@ async def _find_project_for_call(db, call: "Call"):
 # ---------------------------------------------------------------------
 
 
-def _safe_error_twiml(lang: str = "fr-CA") -> Response:
-    """TwiML servi quand un handler webhook lève une exception. Évite
-    le « We are sorry, an application error has occurred » par défaut
-    de Twilio qui sonne très moche pour l'appelant."""
-    if lang.startswith("en"):
-        say = (
-            "Sorry, we are experiencing a technical issue. "
-            "Please try again in a few minutes. Goodbye."
+def _safe_error_twiml(
+    lang: str = "fr-CA", *, allow_voicemail: bool = True
+) -> Response:
+    """TwiML de dernier recours quand un handler webhook lève une
+    exception. Plutôt qu'un message d'erreur sec, on bascule par défaut
+    en BOÎTE VOCALE (« on n'est pas disponible, laissez un message »,
+    transcrite). `allow_voicemail=False` est passé par le handler de
+    voicemail lui-même pour éviter toute boucle."""
+    en = lang.startswith("en")
+    # Voix Polly compatibles (la voix Léa fr-FR provoque « application
+    # error » côté Twilio sur un mismatch de langue).
+    voice = "Polly.Joanna-Neural" if en else "Polly.Gabrielle-Neural"
+    if allow_voicemail:
+        intro = (
+            "Sorry, nobody is available right now. Please leave a message "
+            "after the beep and we'll call you back. Thank you!"
+            if en
+            else "Désolée, nous ne sommes pas disponibles pour l'instant. "
+            "Laissez votre message après le bip, nous vous rappellerons. "
+            "Merci !"
         )
-        voice = "Polly.Joanna-Neural"
-    else:
-        say = (
-            "Désolée, nous rencontrons un souci technique. "
-            "Réessayez dans quelques minutes ou laissez-nous un message "
-            "par texto. Au revoir."
+        twiml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f'<Say voice="{voice}" language="{lang}">{intro}</Say>'
+            '<Record maxLength="90" finishOnKey="#" playBeep="true" '
+            'transcribe="true" '
+            f'transcribeCallback="{_voicemail_transcribe_url()}" '
+            f'action="{_voicemail_action_url()}" method="POST"/>'
+            "</Response>"
         )
-        # Voix française québécoise (fr-CA) — la voix Léa est fr-FR
-        # et provoque « application error » côté Twilio si mismatch.
-        voice = "Polly.Gabrielle-Neural"
+        return Response(content=twiml, media_type="application/xml")
+    say = (
+        "Sorry, we are experiencing a technical issue. Goodbye."
+        if en
+        else "Désolée, nous rencontrons un souci technique. Au revoir."
+    )
     twiml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
@@ -1568,50 +1586,60 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
                     timeout_sec=15,
                 )
                 return Response(content=twiml, media_type="application/xml")
-        if project_lead_to:
-            call.forwarded_to_e164 = project_lead_to
-            call.intent = "suivi_projet"
+        call.intent = "suivi_projet"
+        # Le champ peut contenir plusieurs numéros (responsable absent →
+        # back-office multi). On ring tout le monde en parallèle.
+        targets = _parse_e164_list(project_lead_to or "")
+        if targets:
+            call.forwarded_to_e164 = ",".join(targets)
             say_with_consent = (
                 decision.say
                 + " Cet appel pourrait être enregistré pour fins de qualité."
             )
             # Musique d'attente : l'appelant patiente en file pendant
             # qu'on sonne le responsable (whisper « qui appelle + motif »
-            # à la décroche, boîte vocale si pas de réponse).
-            queue_twiml = await _start_queue_transfer(
-                db,
-                provider,
-                call=call,
-                targets=[project_lead_to],
-                say=say_with_consent,
-                lang=decision.lang,
-            )
+            # à la décroche, boîte vocale si pas de réponse). Tout échec
+            # du flux file → repli <Dial>, jamais d'erreur à l'appelant.
+            try:
+                queue_twiml = await _start_queue_transfer(
+                    db,
+                    provider,
+                    call=call,
+                    targets=targets,
+                    say=say_with_consent,
+                    lang=decision.lang,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("queue transfer (suivi) a échoué, repli <Dial>")
+                queue_twiml = None
             if queue_twiml:
                 return Response(
                     content=queue_twiml, media_type="application/xml"
                 )
-            # Repli si l'origination REST a échoué : <Dial> classique
+            # Repli si l'origination REST a échoué : <Dial> multi classique
             # (sonnerie au lieu de musique), whisper + voicemail conservés.
-            followup_url = (
+            action_url = (
                 f"{_secretary_base_url()}/api/v1/voice/twilio/"
                 f"dial-followup?call_id={call.id}"
             )
-            twiml = provider.build_say_and_dial(
-                say=decision.say,
+            twiml = provider.build_say_and_dial_multi(
+                say=say_with_consent,
                 lang=decision.lang,
-                dial_to_e164=project_lead_to,
+                targets_e164=targets,
+                action_url=action_url,
+                timeout_sec=20,
+                record=True,
                 whisper_url=_transfer_whisper_url(call.id),
-                action_url=followup_url,
             )
             return Response(content=twiml, media_type="application/xml")
-        # Personne disponible → callback poli (le chargé sera notifié
-        # via la fiche projet → onglet Communications).
-        call.intent = "suivi_projet"
+        # Aucun responsable assigné (ni membre, ni back-office) → boîte
+        # vocale : on annonce qu'on n'est pas dispo et on prend le message
+        # (transcrit) + lead de rappel pour le suivi.
         await _create_lead_from_callback(db, call=call)
-        twiml = provider.build_say_and_hangup(
-            say=decision.say, lang=decision.lang
+        return Response(
+            content=_voicemail_fallback_twiml(provider, decision.lang),
+            media_type="application/xml",
         )
-        return Response(content=twiml, media_type="application/xml")
 
     # 3) Intake construction terminé : on persiste la collecte de Léa
     #    dans un ContactRequest avec un token de validation, on envoie
@@ -1775,12 +1803,13 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
         closers_raw = (pn.closer_forward_e164 if pn else None) or ""
         targets = _parse_e164_list(closers_raw) or _parse_e164_list(forward_to)
         if not targets:
-            # Pas de cible de transfert ni de client online → callback.
+            # Aucune cible de transfert ni client online → boîte vocale
+            # (on n'est pas dispo) + lead de rappel.
             await _create_lead_from_callback(db, call=call)
-            twiml = provider.build_say_and_hangup(
-                say=decision.say, lang=decision.lang
+            return Response(
+                content=_voicemail_fallback_twiml(provider, decision.lang),
+                media_type="application/xml",
             )
-            return Response(content=twiml, media_type="application/xml")
         call.forwarded_to_e164 = ",".join(targets)
         say_with_consent = (
             decision.say
@@ -1788,15 +1817,19 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
         )
         # Musique d'attente : file Twilio + jambes parallèles. Premier
         # closer qui décroche gagne (whisper « qui appelle + motif »),
-        # boîte vocale si personne ne répond.
-        queue_twiml = await _start_queue_transfer(
-            db,
-            provider,
-            call=call,
-            targets=targets,
-            say=say_with_consent,
-            lang=decision.lang,
-        )
+        # boîte vocale si personne ne répond. Tout échec → repli <Dial>.
+        try:
+            queue_twiml = await _start_queue_transfer(
+                db,
+                provider,
+                call=call,
+                targets=targets,
+                say=say_with_consent,
+                lang=decision.lang,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("queue transfer (générique) a échoué, repli <Dial>")
+            queue_twiml = None
         if queue_twiml:
             return Response(content=queue_twiml, media_type="application/xml")
         # Repli si l'origination REST a échoué : <Dial> multi classique
@@ -2116,7 +2149,16 @@ async def _start_queue_transfer(
         }
     )
     call.forwarded_to_e164 = ",".join(targets)
-    await db.flush()
+    # Les jambes sonnent déjà : on DOIT renvoyer l'<Enqueue>. Si la
+    # persistance échoue, les webhooks retombent sur le nom de file par
+    # défaut (lea-<id>) — la mise en relation marche quand même.
+    try:
+        await db.flush()
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "queue transfer: état non persisté (call %s) — on continue",
+            call.id,
+        )
     return provider.build_say_and_enqueue(
         say=say,
         lang=lang,
@@ -2390,10 +2432,12 @@ async def twilio_voicemail(request: Request, db: DBSession) -> Response:
             "twilio webhook rejected: %d %s",
             _http_exc.status_code, _http_exc.detail,
         )
-        return _safe_error_twiml()
+        # allow_voicemail=False : ce handler EST la boîte vocale, on ne
+        # se relance pas en boucle.
+        return _safe_error_twiml(allow_voicemail=False)
     except Exception:
         log.exception("twilio_voicemail failed")
-        return _safe_error_twiml()
+        return _safe_error_twiml(allow_voicemail=False)
 
 
 async def _twilio_voicemail_impl(request: Request, db: DBSession) -> Response:
@@ -3557,10 +3601,11 @@ class PhoneNumberRead(BaseModel):
 
 class PhoneNumberPatch(BaseModel):
     label: Optional[str] = Field(default=None, max_length=128)
-    forward_to_e164: Optional[str] = Field(default=None, max_length=20)
-    urgency_forward_e164: Optional[str] = Field(default=None, max_length=20)
-    closer_forward_e164: Optional[str] = Field(default=None, max_length=20)
-    followup_forward_e164: Optional[str] = Field(default=None, max_length=20)
+    # Plusieurs numéros séparés par virgule autorisés (ring en parallèle).
+    forward_to_e164: Optional[str] = Field(default=None, max_length=255)
+    urgency_forward_e164: Optional[str] = Field(default=None, max_length=255)
+    closer_forward_e164: Optional[str] = Field(default=None, max_length=255)
+    followup_forward_e164: Optional[str] = Field(default=None, max_length=255)
     secretary_mode_active: Optional[bool] = None
     lead_auto_callback_enabled: Optional[bool] = None
     active: Optional[bool] = None
