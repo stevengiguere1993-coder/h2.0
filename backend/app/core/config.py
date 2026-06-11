@@ -165,6 +165,25 @@ class Settings(BaseSettings):
     twilio_api_key_sid: Optional[str] = None
     twilio_api_key_secret: Optional[str] = None
 
+    # SMS entrant hors heures d'ouverture — réponse automatique. Quand un
+    # client texte la ligne de l'entreprise alors que les bureaux sont
+    # fermés (selon VoiceBusinessHours), on renvoie ce message une fois,
+    # sauf si on lui a déjà écrit dans les 10 dernières minutes
+    # (conversation active). Chaîne vide => fonctionnalité désactivée.
+    # Modifiable sans redéploiement via l'env SMS_AFTER_HOURS_AUTO_REPLY.
+    sms_after_hours_auto_reply: str = (
+        "Bonjour! Ceci est un message automatique de la ligne d'Horizon "
+        "Services Immobiliers. Nos bureaux sont présentement fermés — un "
+        "membre de notre équipe vous répondra dès que possible durant les "
+        "heures d'ouverture. Merci!"
+    )
+    # Fenêtre (minutes) : si on a envoyé un SMS à ce numéro dans ce délai,
+    # on NE renvoie PAS la réponse auto (la personne répond à un échange
+    # en cours). Sert aussi d'anti-spam : la réponse auto comptant comme
+    # un message envoyé, les SMS suivants du client dans la fenêtre sont
+    # ignorés.
+    sms_after_hours_suppress_minutes: int = 10
+
     # Stripe — paiement en ligne des factures Dev logiciel via
     # Checkout hosted (PR chantier #4, mai 2026). Voir
     # `app/services/devlog_stripe.py`.
