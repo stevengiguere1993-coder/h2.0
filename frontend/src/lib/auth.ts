@@ -147,8 +147,17 @@ export async function authedFetch(
   // restait ouvert). On purge le token et on renvoie vers la connexion
   // pour que l'utilisateur se ré-authentifie. Le garde-fou évite toute
   // boucle si on est déjà sur la page de connexion.
+  //
+  // EXCEPTION : les endpoints Drive (`/api/v1/drive/*`) utilisent 401
+  // pour signaler « Google Drive non connecté » (≠ session portail
+  // expirée). Les déconnecter du portail serait faux — pire, ça kickait
+  // l'utilisateur vers la connexion en ouvrant une fiche qui affiche une
+  // section Drive (ex. pipeline prospection). Ces 401-là sont gérés par
+  // le composant Drive lui-même (état « oauth »), on ne redirige pas.
+  const isDriveCall = path.startsWith("/api/v1/drive/");
   if (
     res.status === 401 &&
+    !isDriveCall &&
     typeof window !== "undefined" &&
     !window.location.pathname.includes("/connexion")
   ) {
