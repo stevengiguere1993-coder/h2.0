@@ -70,6 +70,7 @@ export function SiteFooter() {
         <div>
           <p className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">Contact</p>
           <ul className="space-y-2 text-sm text-white/80">
+            <li><a href="tel:+14388002979" className="hover:text-accent-500">438-800-2979</a></li>
             <li><a href="mailto:info@immohorizon.com" className="hover:text-accent-500">info@immohorizon.com</a></li>
             <li><a href="https://immohorizon.com" className="hover:text-accent-500">immohorizon.com</a></li>
           </ul>
