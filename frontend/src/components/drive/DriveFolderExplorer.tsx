@@ -1164,6 +1164,25 @@ export function DriveFolderExplorer({
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
 
+          <button
+            type="button"
+            onClick={() =>
+              window.open(
+                `https://drive.google.com/drive/folders/${encodeURIComponent(
+                  currentFolderId
+                )}`,
+                "_blank",
+                "noopener,noreferrer"
+              )
+            }
+            className="inline-flex items-center gap-1 rounded-lg border border-brand-800 px-2 py-1.5 text-xs text-white/60 hover:bg-white/5 hover:text-white"
+            title="Ouvrir ce dossier dans Google Drive (nouvel onglet)"
+            aria-label="Ouvrir dans Google Drive"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Google Drive</span>
+          </button>
+
           {(actions.upload || actions.createFolder) && !isSearching ? (
             <div className="relative">
               <button
@@ -2031,21 +2050,46 @@ function ItemActionsMenu({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{
+    left: number;
+    top?: number;
+    bottom?: number;
+  } | null>(null);
   const folder = isFolder(file);
+
+  // Le menu est rendu en `fixed` (positionné via le bouton) pour ne PAS
+  // etre rogne par le conteneur `overflow-x-auto` de la liste. On
+  // l'aligne a droite du bouton et on bascule vers le haut s'il n'y a
+  // pas la place en bas.
+  function openMenu(e: React.MouseEvent<HTMLButtonElement>) {
+    e.stopPropagation();
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    const r = e.currentTarget.getBoundingClientRect();
+    const MENU_W = 208; // w-52
+    const left = Math.max(8, r.right - MENU_W);
+    const spaceBelow = window.innerHeight - r.bottom;
+    if (spaceBelow < 300) {
+      setCoords({ left, bottom: window.innerHeight - r.top + 4 });
+    } else {
+      setCoords({ left, top: r.bottom + 4 });
+    }
+    setOpen(true);
+  }
+
   return (
     <div className={`relative inline-block ${className}`}>
       <button
         type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
+        onClick={openMenu}
         className="rounded-md p-1 text-white/60 hover:bg-white/10 hover:text-white"
         aria-label="Actions"
       >
         <MoreVertical className="h-4 w-4" />
       </button>
-      {open ? (
+      {open && coords ? (
         <>
           <button
             type="button"
@@ -2055,9 +2099,16 @@ function ItemActionsMenu({
               e.stopPropagation();
               setOpen(false);
             }}
-            className="fixed inset-0 z-30 cursor-default"
+            className="fixed inset-0 z-[1190] cursor-default"
           />
-          <div className="absolute right-0 z-40 mt-1 w-52 overflow-hidden rounded-lg border border-brand-800 bg-brand-950 text-xs shadow-2xl">
+          <div
+            style={{
+              position: "fixed",
+              left: coords.left,
+              top: coords.top,
+              bottom: coords.bottom
+            }}
+            className="z-[1200] max-h-[80vh] w-52 overflow-y-auto rounded-lg border border-brand-800 bg-brand-950 text-xs shadow-2xl">
             <MenuItem
               icon={folder ? FolderOpen : Eye}
               label={folder ? "Ouvrir" : "Aperçu"}
