@@ -28,6 +28,12 @@ function ContactContent() {
           <p className="mt-3 text-base text-brand-300">{t("subtitle")}</p>
           <div className="mt-8 space-y-4 text-sm text-white/80">
             <p>
+              <span className="font-semibold text-white">Téléphone :</span>{" "}
+              <a href="tel:+14388002979" className="text-brand-200 hover:text-accent-500">
+                438-800-2979
+              </a>
+            </p>
+            <p>
               <span className="font-semibold text-white">Courriel :</span>{" "}
               <a href="mailto:info@immohorizon.com" className="text-brand-200 hover:text-accent-500">
                 info@immohorizon.com
