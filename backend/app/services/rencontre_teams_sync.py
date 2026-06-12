@@ -122,16 +122,39 @@ async def sync_teams_meetings(
         if imported_count >= _MAX_IMPORTS_PER_RUN:
             result["pending"] += 1
             continue
+        # Le onlineMeeting et sa transcription vivent sous le compte de
+        # l'ORGANISATEUR — pas forcément la boîte dont on a lu le
+        # calendrier. Ex. Michael cree la reunion et la partage : le
+        # transcript est chez Michael, meme si on a vu l'evenement dans
+        # le calendrier de Phil. On essaie donc l'organisateur d'abord,
+        # puis la boite ou on l'a trouve, puis les autres boites
+        # configurees, jusqu'a obtenir une transcription.
+        candidates: list[str] = []
+        org = (ev.get("organizer_email") or "").strip()
+        if org:
+            candidates.append(org)
+        if ev["_mailbox"] not in candidates:
+            candidates.append(ev["_mailbox"])
+        for cand_email in graph.meeting_user_emails():
+            if cand_email not in candidates:
+                candidates.append(cand_email)
+
         mailbox = ev["_mailbox"]
+        meeting_id = None
+        transcript = None
         try:
-            meeting_id = await graph.resolve_online_meeting(
-                mailbox, ev["join_url"]
-            )
-            transcript = (
-                await graph.fetch_transcript_text(mailbox, meeting_id)
-                if meeting_id
-                else None
-            )
+            for cand in candidates:
+                mid = await graph.resolve_online_meeting(
+                    cand, ev["join_url"]
+                )
+                if not mid:
+                    continue
+                meeting_id = mid
+                mailbox = cand
+                txt = await graph.fetch_transcript_text(cand, mid)
+                if txt:
+                    transcript = txt
+                    break
         except Exception as exc:  # noqa: BLE001
             result["errors"].append(
                 f"{ev.get('subject')}: {str(exc)[:150]}"
