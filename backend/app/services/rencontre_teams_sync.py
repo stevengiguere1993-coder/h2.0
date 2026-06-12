@@ -57,6 +57,7 @@ async def sync_teams_meetings(
         "pending": 0,
         "skipped_known": 0,
         "auto_transcription_enabled": 0,
+        "diagnostic": None,
         "errors": [],
     }
     if not result["configured"]:
@@ -179,6 +180,19 @@ async def sync_teams_meetings(
             else:
                 # Transcription peut-être pas encore publiée → retentera.
                 result["pending"] += 1
+                # Diagnostic du 1er pending : on remonte la vraie raison
+                # (permission, pas l'organisateur, 0 transcription…) pour
+                # ne plus rester dans le flou.
+                if not result.get("diagnostic"):
+                    diag_mb = (ev.get("organizer_email") or "").strip() or mailbox
+                    try:
+                        result["diagnostic"] = await graph.diagnose_transcript(
+                            diag_mb, ev["join_url"]
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        result["diagnostic"] = (
+                            f"diagnostic indisponible : {str(exc)[:120]}"
+                        )
             continue
 
         # 3) Création de la fiche pré-remplie.
