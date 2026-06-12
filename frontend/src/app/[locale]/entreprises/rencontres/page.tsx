@@ -105,6 +105,7 @@ export default function RencontresListPage() {
         pending?: number;
         no_transcript?: number;
         auto_transcription_enabled?: number;
+        diagnostic?: string | null;
       };
       const n = res.imported?.length || 0;
       const armed = res.auto_transcription_enabled || 0;
@@ -125,9 +126,11 @@ export default function RencontresListPage() {
       } else if ((res.pending || 0) > 0) {
         setSyncMsg(
           "Réunion(s) trouvée(s), mais sans transcription disponible. " +
-            "Soit Teams ne l'a pas encore publiée (réessaie dans quelques " +
-            "minutes), soit la transcription n'était pas activée pour ce " +
-            "meeting — dans ce cas elle n'apparaîtra pas." +
+            (res.diagnostic
+              ? `Diagnostic : ${res.diagnostic}`
+              : "Soit Teams ne l'a pas encore publiée (réessaie dans " +
+                "quelques minutes), soit la transcription n'était pas " +
+                "activée pour ce meeting.") +
             armedNote
         );
       } else {
