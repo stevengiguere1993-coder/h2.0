@@ -278,6 +278,54 @@ async def fetch_transcript_text(
         return vtt_to_text(r2.text)
 
 
+async def diagnose_transcript(user_email: str, join_url: str) -> str:
+    """Explique en clair pourquoi aucune transcription n'a pu etre lue
+    pour ce meeting sous ``user_email``. Sert au panneau de diagnostic
+    quand le sync reste « pending » : on remonte le vrai code HTTP au
+    lieu de le masquer."""
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        r = await _get(
+            http,
+            f"{_GRAPH}/users/{user_email}/onlineMeetings",
+            **{"$filter": f"JoinWebUrl eq '{join_url}'"},
+        )
+        if r.status_code != 200:
+            return (
+                f"{user_email} : lecture des reunions refusee "
+                f"(HTTP {r.status_code}) — permission OnlineMeetings.Read.All "
+                f"+ application access policy a verifier."
+            )
+        items = r.json().get("value", [])
+        if not items:
+            return (
+                f"{user_email} : reunion introuvable sous ce compte "
+                f"(pas l'organisateur de ce meeting)."
+            )
+        mid = items[0]["id"]
+        r2 = await _get(
+            http,
+            f"{_GRAPH}/users/{user_email}/onlineMeetings/{mid}/transcripts",
+        )
+        if r2.status_code != 200:
+            return (
+                f"{user_email} : lecture des transcriptions refusee "
+                f"(HTTP {r2.status_code}) — permission "
+                f"OnlineMeetingTranscript.Read.All a accorder + consentement "
+                f"admin dans Entra."
+            )
+        tr = r2.json().get("value", [])
+        if not tr:
+            return (
+                f"{user_email} : 0 transcription publiee par Teams pour ce "
+                f"meeting (pas encore prete, ou transcription non activee "
+                f"pendant l'appel)."
+            )
+        return (
+            f"{user_email} : {len(tr)} transcription(s) detectee(s) mais "
+            f"contenu pas encore recuperable — reessaie dans 2-3 minutes."
+        )
+
+
 # ---------------------------------------------------------------------------
 # VTT → texte lisible avec interlocuteurs
 # ---------------------------------------------------------------------------
