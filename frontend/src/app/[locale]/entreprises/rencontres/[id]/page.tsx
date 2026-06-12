@@ -787,10 +787,39 @@ function SectionCard({
   }, []);
 
   async function uploadAudio(file: File) {
-    // Transcription serveur via Gemini (gratuit) — l'audio est envoyé,
+    // Fichier TEXTE déjà transcrit (ex. export d'une app de dictée du
+    // téléphone) : aucune transcription à faire — on lit le contenu et
+    // on l'ajoute directement au transcript de la section.
+    const isText =
+      /\.(txt|md|text|vtt|srt|rtf|log)$/i.test(file.name) ||
+      file.type.startsWith("text/");
+    if (isText) {
+      setUploading(true);
+      try {
+        const raw = (await file.text()).trim();
+        if (!raw) {
+          alert("Le fichier texte est vide.");
+          return;
+        }
+        const base = transcript.trim();
+        const merged = base ? `${base}
+
+${raw}` : raw;
+        setTranscript(merged);
+        await patchSection({ transcript: merged });
+      } catch (e) {
+        alert((e as Error).message || "Lecture du fichier texte échouée.");
+      } finally {
+        setUploading(false);
+        if (fileRef.current) fileRef.current.value = "";
+      }
+      return;
+    }
+
+    // Sinon : audio/vidéo → transcription serveur via Gemini (gratuit),
     // transcrit en français québécois avec interlocuteurs, puis ajouté
-    // au transcript de la section. Limite ~18 MB (≈ 30-45 min
-    // compressées) ; au-delà le backend renvoie un message clair.
+    // au transcript. Limite ~18 MB (≈ 30-45 min compressées) ; au-delà
+    // le backend renvoie un message clair.
     setUploading(true);
     try {
       const form = new FormData();
@@ -892,7 +921,7 @@ function SectionCard({
             ) : (
               <FileAudio className="h-3 w-3" />
             )}
-            {uploading ? "Transcription en cours…" : "Téléverser un audio"}
+            {uploading ? "Import en cours…" : "Téléverser un audio ou un texte"}
           </button>
           <span
             className="text-[10px]"
@@ -904,7 +933,7 @@ function SectionCard({
           <input
             ref={fileRef}
             type="file"
-            accept="audio/*,video/mp4,video/webm"
+            accept="audio/*,video/mp4,video/webm,text/plain,.txt,.md,.vtt,.srt,.rtf,.log"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
