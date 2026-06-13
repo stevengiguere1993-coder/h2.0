@@ -30,6 +30,8 @@ type Bon = {
   client_id: number | null;
   amount: number | string | null;
   status: string;
+  address?: string | null;
+  bon_type?: string;
   requires_signature?: boolean;
   assignee_user_id?: number | null;
   sent_to_email: string | null;
@@ -47,6 +49,15 @@ type Item = {
   unit: string | null;
   quantity: number;
   unit_price: number;
+  total: number;
+};
+
+type Recap = {
+  bon_type: string;
+  hours: number;
+  labor_total: number;
+  achats_total: number;
+  fixed_amount: number | null;
   total: number;
 };
 
@@ -92,6 +103,7 @@ export default function BonDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const [recap, setRecap] = useState<Recap | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
   const [sendBusy, setSendBusy] = useState(false);
   const [sendNotice, setSendNotice] = useState<string | null>(null);
@@ -104,9 +116,10 @@ export default function BonDetailPage() {
     async function load() {
       setLoading(true);
       try {
-        const [bRes, iRes] = await Promise.all([
+        const [bRes, iRes, rRes] = await Promise.all([
           authedFetch(`/api/v1/bons-travail/${id}`),
-          authedFetch(`/api/v1/bons-travail/${id}/items`)
+          authedFetch(`/api/v1/bons-travail/${id}/items`),
+          authedFetch(`/api/v1/bons-travail/${id}/recap`)
         ]);
         if (!bRes.ok) throw new Error(`http_${bRes.status}`);
         const bd = (await bRes.json()) as Bon;
@@ -114,6 +127,7 @@ export default function BonDetailPage() {
         if (cancelled) return;
         setB(bd);
         setItems(iData);
+        if (rRes.ok) setRecap((await rRes.json()) as Recap);
         setSendSubject(`Bon de travail ${bd.reference} — ${bd.title}`);
         if (bd.client_id) {
           const cr = await authedFetch(`/api/v1/clients/${bd.client_id}`);
@@ -211,6 +225,15 @@ export default function BonDetailPage() {
       setError("Suppression échouée.");
     } finally {
       setItemBusy(null);
+    }
+  }
+
+  async function refreshRecap() {
+    try {
+      const res = await authedFetch(`/api/v1/bons-travail/${id}/recap`);
+      if (res.ok) setRecap((await res.json()) as Recap);
+    } catch {
+      /* ignore */
     }
   }
 
@@ -453,6 +476,71 @@ export default function BonDetailPage() {
                 </div>
               </button>
             </div>
+
+            <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
+              <div className="flex items-center justify-between border-b border-brand-800 px-5 py-4">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  Récap — montant chargé au client
+                </h2>
+                <button
+                  type="button"
+                  onClick={refreshRecap}
+                  className="text-xs text-white/60 underline hover:text-white"
+                >
+                  Rafraîchir
+                </button>
+              </div>
+              <div className="px-5 py-4">
+                {recap?.bon_type === "garantie" ? (
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-white/70">
+                      Travaux sous garantie — rien chargé au client.
+                    </span>
+                    <span className="text-lg font-bold text-emerald-300">
+                      0,00 $
+                    </span>
+                  </div>
+                ) : recap ? (
+                  <div className="space-y-2 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/70">
+                        Main-d&apos;œuvre ({recap.hours} h)
+                      </span>
+                      <span className="text-white">
+                        {money(recap.labor_total)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/70">Achats / matériel</span>
+                      <span className="text-white">
+                        {money(recap.achats_total)}
+                      </span>
+                    </div>
+                    {recap.fixed_amount != null ? (
+                      <div className="flex items-center justify-between text-white/50">
+                        <span>Montant fixe saisi</span>
+                        <span>{money(recap.fixed_amount)}</span>
+                      </div>
+                    ) : null}
+                    <div className="mt-2 flex items-center justify-between border-t border-brand-800 pt-2">
+                      <span className="font-semibold text-white">
+                        Total chargé (avant taxes)
+                      </span>
+                      <span className="text-lg font-bold text-accent-500">
+                        {money(recap.total)}
+                      </span>
+                    </div>
+                    <p className="pt-1 text-xs text-white/50">
+                      Temps &amp; matériel : calculé selon les achats + heures
+                      du projet lié. Ajoute-les via « Achats, heures &amp;
+                      facture », puis rafraîchis.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-white/50">Récap indisponible.</p>
+                )}
+              </div>
+            </section>
 
             <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
               <div className="flex items-center justify-between border-b border-brand-800 px-5 py-4">
