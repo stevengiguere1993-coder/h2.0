@@ -414,7 +414,7 @@ export default function TelephonieHome() {
           <AlertTriangle className="mx-auto mb-2 h-6 w-6 text-rose-300" />
           <h1 className="text-base font-bold text-white">Accès restreint</h1>
           <p className="mt-2 text-xs text-rose-200">
-            Le volet Téléphonie n&apos;est pas activé pour ton compte.
+            Le volet Communications n&apos;est pas activé pour ton compte.
             Demande à un administrateur de t&apos;y donner accès.
           </p>
           <Link
@@ -435,7 +435,7 @@ export default function TelephonieHome() {
   return (
     <div className="min-h-screen bg-brand-950">
       <AppTopbar
-        breadcrumbs={[{ label: "Téléphonie" }]}
+        breadcrumbs={[{ label: "Communications" }]}
         onOpenSidebar={onOpenSidebar}
         searchPlaceholder="Filtrer les appels (numéro, intent…)"
         onSearch={(q) => setSearch(q)}

@@ -458,7 +458,7 @@ export function LoginForm() {
               </span>
               <span className="flex-1">
                 <span className="block text-base font-bold text-white">
-                  Téléphonie
+                  Communications
                 </span>
                 <span className="mt-0.5 block text-xs text-white/60">
                   Secrétaire IA d&apos;appels — numéro 514, qualifier
