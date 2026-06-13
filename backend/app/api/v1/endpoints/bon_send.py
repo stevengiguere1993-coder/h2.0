@@ -63,3 +63,33 @@ async def get_bon_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
+
+
+@router.post("/{bon_id}/ensure-project")
+async def ensure_bon_project(
+    bon_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    """Garantit qu'un bon de travail a un PROJET lié (kind=bon_travail)
+    pour porter ses achats / heures / facture. Idempotent : renvoie le
+    projet existant si déjà lié, sinon en crée un (titre/client/assigné
+    repris du bon)."""
+    from app.models.bon_travail import BonTravail
+    from app.models.project import Project, ProjectStatus
+
+    bon = await db.get(BonTravail, bon_id)
+    if bon is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bon introuvable.")
+    if bon.project_id:
+        return {"project_id": bon.project_id}
+    proj = Project(
+        name=bon.title or f"Bon {bon.reference}",
+        client_id=bon.client_id,
+        kind="bon_travail",
+        responsible_user_id=getattr(bon, "assignee_user_id", None),
+        status=ProjectStatus.IN_PROGRESS.value,
+    )
+    db.add(proj)
+    await db.flush()
+    bon.project_id = proj.id
+    await db.flush()
+    return {"project_id": proj.id}

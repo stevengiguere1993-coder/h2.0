@@ -30,6 +30,8 @@ type Bon = {
   client_id: number | null;
   amount: number | string | null;
   status: string;
+  requires_signature?: boolean;
+  assignee_user_id?: number | null;
   sent_to_email: string | null;
   sent_at: string | null;
   signed_at: string | null;
@@ -212,6 +214,22 @@ export default function BonDetailPage() {
     }
   }
 
+  async function manageProject() {
+    try {
+      const res = await authedFetch(
+        `/api/v1/bons-travail/${id}/ensure-project`,
+        { method: "POST" }
+      );
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const { project_id } = (await res.json()) as { project_id: number };
+      const locale =
+        (params as { locale?: string })?.locale === "en" ? "en" : "fr";
+      router.push(`/${locale}/app/projets/${project_id}`);
+    } catch (err) {
+      setSendNotice(`Ouverture du projet échouée : ${(err as Error).message}`);
+    }
+  }
+
   async function previewPdf() {
     try {
       const res = await authedFetch(`/api/v1/bons-travail/${id}/pdf`);
@@ -390,18 +408,47 @@ export default function BonDetailPage() {
                   </p>
                 </div>
               </button>
+              {b.requires_signature === false ? (
+                <div className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4">
+                  <FileText className="mt-0.5 h-5 w-5 flex-shrink-0 text-white/50" />
+                  <div>
+                    <p className="text-sm font-semibold text-white">
+                      Demande interne — sans signature
+                    </p>
+                    <p className="mt-0.5 text-xs text-white/60">
+                      Gestion immobilière : aucun envoi pour signature requis.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setSendOpen(true)}
+                  className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
+                >
+                  <Mail className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
+                  <div>
+                    <p className="text-sm font-semibold text-white">
+                      {b.sent_at ? "Renvoyer au client" : "Envoyer au client"}
+                    </p>
+                    <p className="mt-0.5 text-xs text-white/60">
+                      PDF + lien signature électronique.
+                    </p>
+                  </div>
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => setSendOpen(true)}
+                onClick={manageProject}
                 className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
               >
-                <Mail className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
+                <FileText className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
                 <div>
                   <p className="text-sm font-semibold text-white">
-                    {b.sent_at ? "Renvoyer au client" : "Envoyer au client"}
+                    Achats, heures &amp; facture
                   </p>
                   <p className="mt-0.5 text-xs text-white/60">
-                    PDF + lien signature électronique.
+                    Ouvre le projet lié pour suivre les coûts et facturer.
                   </p>
                 </div>
               </button>
