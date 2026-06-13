@@ -34,6 +34,9 @@ log = logging.getLogger(__name__)
 
 
 async def run() -> None:
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("appointment_reminders"):
+        return
     now = datetime.now(timezone.utc)
     # Fenêtre de 48 h (cf. docstring) : avec un cron quotidien, ça garantit
     # un préavis ≥ 24 h pour tout RDV, peu importe l'heure de la journée.

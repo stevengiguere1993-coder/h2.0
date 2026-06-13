@@ -26,6 +26,9 @@ log = logging.getLogger(__name__)
 
 
 async def _run() -> None:
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("kratos_problems_daily"):
+        return
     async with AsyncSessionLocal() as db:
         ents = (
             await db.execute(

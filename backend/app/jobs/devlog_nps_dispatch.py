@@ -118,6 +118,9 @@ async def _load_client(
 
 
 async def run_nps_dispatch(db: AsyncSession) -> dict:
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("devlog_nps_dispatch"):
+        return {"skipped": "disabled"}
     mailer = get_mailer()
     now_utc = datetime.now(timezone.utc)
 

@@ -193,6 +193,9 @@ def _active_non_admin_employes(rows: Iterable[Employe]) -> list[Employe]:
 
 
 async def _run() -> None:
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("unassigned_day_alerts"):
+        return
     async with AsyncSessionLocal() as db:
         today = datetime.now(timezone.utc).date()
         target = _next_business_day(today)

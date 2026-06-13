@@ -156,6 +156,9 @@ async def _compute_balance(db, fa: Facture) -> float:
 
 async def run() -> dict:
     """Walk all unpaid factures, flip overdue and send the right reminder."""
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("facture_reminders"):
+        return {"skipped": "disabled"}
     mailer = get_mailer()
     now = datetime.now(timezone.utc)
     flipped_overdue = 0
