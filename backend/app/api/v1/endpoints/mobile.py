@@ -809,30 +809,25 @@ async def my_projects(
 
 @router.get("/work-orders")
 async def my_work_orders(db: DBSession, user: CurrentUser) -> list[dict]:
-    """Ordres de travail (bons de travail) assignés à l'employé connecté,
-    à faire « dans son temps libre ». On exclut ceux déjà livrés."""
+    """Bons de travail assignés à l'employé connecté, à faire « dans son
+    temps libre ». On exclut les bons signés / annulés."""
+    from app.models.bon_travail import BonTravail
+
     rows = (
         await db.execute(
             select(
-                Project.id,
-                Project.name,
-                Project.address,
-                Project.status,
+                BonTravail.id,
+                BonTravail.title,
+                BonTravail.status,
             )
             .where(
-                Project.kind == "bon_travail",
-                Project.responsible_user_id == user.id,
-                Project.status != ProjectStatus.DELIVERED.value,
+                BonTravail.assignee_user_id == user.id,
+                BonTravail.status.notin_(["signed", "cancelled"]),
             )
-            .order_by(Project.created_at.desc())
+            .order_by(BonTravail.created_at.desc())
         )
     ).all()
     return [
-        {
-            "id": r[0],
-            "name": r[1],
-            "address": r[2],
-            "status": r[3],
-        }
+        {"id": r[0], "name": r[1], "address": None, "status": r[2]}
         for r in rows
     ]

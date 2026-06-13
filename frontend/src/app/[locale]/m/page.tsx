@@ -395,7 +395,7 @@ export default function MobileHome() {
                     <li key={w.id}>
                       <Link
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                        href={`/app/projets/${w.id}` as any}
+                        href={`/app/bons/${w.id}` as any}
                         className="block rounded-xl border border-brand-800 bg-brand-950 p-3 active:border-accent-500/60"
                       >
                         <span className="block text-sm font-semibold text-white">
