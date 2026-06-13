@@ -83,6 +83,9 @@ def _body(tasks_with_labels: List[tuple[SalesTask, str]]) -> str:
 
 
 async def run() -> None:
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("sales_task_reminders"):
+        return
     mailer = get_mailer()
     if not mailer.ready:
         log.warning("Graph mailer not configured — task reminders skipped.")

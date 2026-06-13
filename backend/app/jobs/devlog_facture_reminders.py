@@ -246,6 +246,9 @@ def _should_send(
 async def run() -> dict:
     """Parcourt les factures envoyées en retard et déclenche les
     relances qui sont dues d'après leur palier."""
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("devlog_facture_reminders"):
+        return {"skipped": "disabled"}
     mailer = get_mailer()
     now = datetime.now(timezone.utc)
     today = now.date()

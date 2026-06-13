@@ -356,6 +356,9 @@ async def generate_one(
 
 
 async def run_once() -> int:
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("seo_daily"):
+        return 0
     # Pas d'init_db ici : le cron n'a pas à gérer le schéma. Le web
     # service h2-0 (FastAPI) exécute create_all + ALTER COLUMN au
     # démarrage dans son lifespan. Le cron suppose que le schéma est

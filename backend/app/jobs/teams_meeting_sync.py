@@ -17,6 +17,9 @@ log = logging.getLogger(__name__)
 
 
 async def _run() -> None:
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("teams_meeting_sync"):
+        return
     async with AsyncSessionLocal() as db:
         result = await sync_teams_meetings(db)
         await db.commit()

@@ -76,6 +76,9 @@ def _body_html(sm: Soumission, total: Optional[float]) -> str:
 
 
 async def run() -> None:
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("soumission_reminders"):
+        return
     mailer = get_mailer()
     if not mailer.ready:
         log.warning(

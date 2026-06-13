@@ -332,6 +332,9 @@ async def run_weekly_client_reports(db: AsyncSession) -> dict:
     Retourne un résumé ``{projects_total, emails_sent, skipped_no_activity,
     skipped_no_client_email}``.
     """
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("devlog_weekly_client_report"):
+        return {"skipped": "disabled"}
     mailer = get_mailer()
     now_utc = datetime.now(timezone.utc)
     start_utc, end_utc = _week_window(now_utc)

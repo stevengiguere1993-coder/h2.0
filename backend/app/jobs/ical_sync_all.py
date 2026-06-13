@@ -19,6 +19,9 @@ log = logging.getLogger(__name__)
 
 
 async def run() -> None:
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("ical_sync_all"):
+        return
     async with AsyncSessionLocal() as db:
         feeds = (
             await db.execute(select(UserCalendarFeed))

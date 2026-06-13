@@ -59,6 +59,9 @@ def _previous_22h_montreal(now_utc: datetime) -> datetime:
 
 
 async def _run() -> None:
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("punch_auto_close"):
+        return
     async with AsyncSessionLocal() as db:
         now_utc = datetime.now(timezone.utc)
         cutoff_utc = _previous_22h_montreal(now_utc)

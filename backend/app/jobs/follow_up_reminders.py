@@ -29,6 +29,9 @@ STOP = ("won", "lost", "not_interested")
 
 
 async def _run() -> None:
+    from app.services.automation_state import is_automation_enabled
+    if not await is_automation_enabled("follow_up_reminders"):
+        return
     async with AsyncSessionLocal() as db:
         now = datetime.now(timezone.utc)
 
