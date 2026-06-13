@@ -786,6 +786,7 @@ async def create_bon_from_immeuble(
         description=payload.description,
         scope_md=scope,
         client_id=client.id if client else None,
+        address=f"{where}{loc}",
         status="draft",
         origin="gestion_immo",
         # Demande interne → pas de signature client requise.

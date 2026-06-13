@@ -149,6 +149,9 @@ async def ensure_critical_columns() -> None:
         # Bon de travail unifié : assignable + demande interne sans signature.
         ("bons_travail", "assignee_user_id", "INTEGER"),
         ("bons_travail", "requires_signature", "BOOLEAN NOT NULL DEFAULT true"),
+        # Classement par adresse + nature du montant (garantie / T&M).
+        ("bons_travail", "address", "VARCHAR(500)"),
+        ("bons_travail", "bon_type", "VARCHAR(32) NOT NULL DEFAULT 'temps_materiel'"),
     )
     for table, column, col_type in critical_columns:
         try:
