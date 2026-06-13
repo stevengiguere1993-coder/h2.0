@@ -93,3 +93,110 @@ async def ensure_bon_project(
     bon.project_id = proj.id
     await db.flush()
     return {"project_id": proj.id}
+
+
+@router.get("/{bon_id}/recap")
+async def bon_recap(bon_id: int, db: DBSession, user: CurrentUser) -> dict:
+    """Récap du montant chargé au client pour un bon de travail.
+
+    - garantie       → 0 $ (travaux sous garantie).
+    - temps_materiel → heures punchées (× taux facturable) + achats
+      refacturables (coût + markup / contrat) du PROJET lié. Lecture
+      seule : ne marque rien comme facturé."""
+    from sqlalchemy import select
+
+    from app.api.v1.endpoints.facture_import import _compute_billed_amount
+    from app.models.achat import Achat
+    from app.models.bon_travail import BonTravail
+    from app.models.employe import Employe
+    from app.models.project_subcontractor_contract import (
+        ProjectSubcontractorContract,
+    )
+    from app.models.punch import Punch
+
+    bon = await db.get(BonTravail, bon_id)
+    if bon is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bon introuvable.")
+
+    fixed_amount = float(bon.amount) if bon.amount is not None else None
+    out = {
+        "bon_type": bon.bon_type,
+        "hours": 0.0,
+        "labor_total": 0.0,
+        "achats_total": 0.0,
+        "fixed_amount": fixed_amount,
+        "total": 0.0,
+    }
+    if bon.bon_type == "garantie":
+        return out
+
+    pid = bon.project_id
+    if not pid:
+        # Pas encore de projet lié : si un montant fixe est saisi on
+        # l'utilise, sinon 0 (rien d'ajouté).
+        out["total"] = round(fixed_amount or 0.0, 2)
+        return out
+
+    # Heures (T&M)
+    punches = (
+        await db.execute(
+            select(Punch).where(
+                Punch.project_id == pid, Punch.hours.is_not(None)
+            )
+        )
+    ).scalars().all()
+    emp_ids = {p.employe_id for p in punches}
+    emps = {}
+    if emp_ids:
+        emps = {
+            e.id: e
+            for e in (
+                await db.execute(
+                    select(Employe).where(Employe.id.in_(emp_ids))
+                )
+            ).scalars().all()
+        }
+    hours = 0.0
+    labor = 0.0
+    for p in punches:
+        emp = emps.get(p.employe_id)
+        if emp and emp.billing_rate is not None:
+            rate = float(emp.billing_rate)
+        elif emp and emp.hourly_rate:
+            rate = float(emp.hourly_rate)
+        else:
+            rate = 0.0
+        h = float(p.hours or 0)
+        hours += h
+        labor += h * rate
+
+    # Achats refacturables
+    achats = (
+        await db.execute(
+            select(Achat).where(
+                Achat.project_id == pid, Achat.is_billable.is_(True)
+            )
+        )
+    ).scalars().all()
+    sub_ids = {a.sous_traitant_id for a in achats if a.sous_traitant_id}
+    contracts_by_st = {}
+    if sub_ids:
+        rows = (
+            await db.execute(
+                select(ProjectSubcontractorContract).where(
+                    ProjectSubcontractorContract.project_id == pid,
+                    ProjectSubcontractorContract.sous_traitant_id.in_(sub_ids),
+                )
+            )
+        ).scalars().all()
+        contracts_by_st = {c.sous_traitant_id: c for c in rows}
+    achats_total = 0.0
+    for ac in achats:
+        billed, _ = _compute_billed_amount(ac, {}, contracts_by_st)
+        achats_total += billed
+
+    out["hours"] = round(hours, 2)
+    out["labor_total"] = round(labor, 2)
+    out["achats_total"] = round(achats_total, 2)
+    out["total"] = round(labor + achats_total, 2)
+    return out
