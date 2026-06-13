@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   AlarmClock,
   Calendar,
+  ClipboardList,
   CheckCircle2,
   ChevronRight,
   Clock,
@@ -116,12 +117,20 @@ function fmtHm(h: number | null | undefined): string {
   return `${hh} h ${String(mm).padStart(2, "0")}`;
 }
 
+type WorkOrder = {
+  id: number;
+  name: string;
+  address: string | null;
+  status: string;
+};
+
 export default function MobileHome() {
   const router = useRouter();
   const [data, setData] = useState<MobileMe | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [punchBusy, setPunchBusy] = useState(false);
+  const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   // Most recent leave decision (pending/approved/rejected), shown as a
   // banner on the home so employees see the outcome without having to
   // dig through menus.
@@ -164,12 +173,16 @@ export default function MobileHome() {
     setLoading(true);
     setError(null);
     try {
-      const [meRes, leavesRes] = await Promise.all([
+      const [meRes, leavesRes, woRes] = await Promise.all([
         authedFetch("/api/v1/mobile/me"),
-        authedFetch("/api/v1/leaves/mine?limit=1")
+        authedFetch("/api/v1/leaves/mine?limit=1"),
+        authedFetch("/api/v1/mobile/work-orders")
       ]);
       if (!meRes.ok) throw new Error(`http_${meRes.status}`);
       setData((await meRes.json()) as MobileMe);
+      if (woRes.ok) {
+        setWorkOrders((await woRes.json()) as WorkOrder[]);
+      }
       if (leavesRes.ok) {
         const rows = (await leavesRes.json()) as Array<{
           id: number;
@@ -364,6 +377,40 @@ export default function MobileHome() {
                   />
                 </div>
               </div>
+            </section>
+
+            {/* À faire dans mon temps libre — ordres de travail assignés */}
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+              <p className="flex items-center gap-2 text-xs uppercase tracking-wider text-white/50">
+                <ClipboardList className="h-3.5 w-3.5 text-accent-500" /> À
+                faire dans mon temps libre
+              </p>
+              {workOrders.length === 0 ? (
+                <p className="mt-3 text-sm text-white/50">
+                  Aucun ordre de travail assigné pour l&apos;instant.
+                </p>
+              ) : (
+                <ul className="mt-3 space-y-2">
+                  {workOrders.map((w) => (
+                    <li key={w.id}>
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={`/app/projets/${w.id}` as any}
+                        className="block rounded-xl border border-brand-800 bg-brand-950 p-3 active:border-accent-500/60"
+                      >
+                        <span className="block text-sm font-semibold text-white">
+                          {w.name}
+                        </span>
+                        {w.address ? (
+                          <span className="mt-0.5 block text-xs text-white/55">
+                            {w.address}
+                          </span>
+                        ) : null}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </section>
 
             {/* Quick actions */}
