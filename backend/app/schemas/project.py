@@ -18,6 +18,8 @@ class ProjectCreate(BaseModel):
     contact_request_id: Optional[int] = Field(default=None, gt=0)
     soumission_id: Optional[int] = Field(default=None, gt=0)
     responsible_user_id: Optional[int] = Field(default=None, gt=0)
+    # "construction" (défaut) ou "bon_travail" (ordre de travail).
+    kind: Optional[str] = Field(default=None, max_length=32)
     status: Optional[str] = Field(default=None, max_length=32)
     address: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = None
@@ -53,6 +55,7 @@ class ProjectRead(BaseModel):
     client_id: Optional[int]
     contact_request_id: Optional[int]
     soumission_id: Optional[int]
+    kind: str = "construction"
     responsible_user_id: Optional[int] = None
     # Nom du responsable (rempli côté endpoint via la relation) pour
     # l'affichage sans requête supplémentaire côté UI.

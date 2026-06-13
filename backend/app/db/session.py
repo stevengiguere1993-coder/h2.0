@@ -139,6 +139,9 @@ async def ensure_critical_columns() -> None:
         # plante et casse tout le flux d'appel entrant. On les met ici
         # (transaction par colonne) pour survivre à un abort d'init_db.
         ("projects", "responsible_user_id", "INTEGER"),
+        # Type de projet ; DEFAULT backfille les lignes existantes en
+        # 'construction' (Postgres) → les projets actuels restent visibles.
+        ("projects", "kind", "VARCHAR(32) NOT NULL DEFAULT 'construction'"),
         ("voice_calls", "dial_state_json", "TEXT"),
         # Hub Automatisations : config éditable (cadence, etc.). La table
         # a été créée sans cette colonne au 1er déploiement → on l'ajoute.

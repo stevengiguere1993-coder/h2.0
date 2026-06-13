@@ -66,6 +66,12 @@ class Project(Base):
         default=ProjectStatus.PLANNED.value,
         index=True,
     )
+    # Type de projet : "construction" (défaut) ou "bon_travail" (ordre de
+    # travail assignable — réutilise la plomberie projet : achats, heures,
+    # facture). Permet de séparer les deux vues sans nouvelle table.
+    kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="construction", index=True
+    )
 
     address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
