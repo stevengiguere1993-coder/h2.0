@@ -4,7 +4,15 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, LargeBinary, Numeric, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    LargeBinary,
+    Numeric,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, deferred, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -37,6 +45,17 @@ class BonTravail(Base, TimestampUpdateMixin):
     amount: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=BonTravailStatus.DRAFT.value, index=True
+    )
+
+    # Employé/user assigné au bon — il devient une tâche pour lui
+    # (apparait dans son tableau de bord « à faire »).
+    assignee_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # Demande interne (ex. gestion immobilière) : pas de signature client
+    # requise. Par défaut True (un bon construction part chez le client).
+    requires_signature: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
     )
 
     # Volet d'origine du bon : "gestion_immo" quand il est créé depuis la

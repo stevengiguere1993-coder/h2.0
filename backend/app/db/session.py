@@ -146,6 +146,9 @@ async def ensure_critical_columns() -> None:
         # Hub Automatisations : config éditable (cadence, etc.). La table
         # a été créée sans cette colonne au 1er déploiement → on l'ajoute.
         ("automation_settings", "config_json", "TEXT"),
+        # Bon de travail unifié : assignable + demande interne sans signature.
+        ("bons_travail", "assignee_user_id", "INTEGER"),
+        ("bons_travail", "requires_signature", "BOOLEAN NOT NULL DEFAULT true"),
     )
     for table, column, col_type in critical_columns:
         try:

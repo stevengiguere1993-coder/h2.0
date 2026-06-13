@@ -31,8 +31,13 @@ export default function NewBonPage() {
   const [projectId, setProjectId] = useState("");
   const [clientId, setClientId] = useState("");
   const [amount, setAmount] = useState("");
+  const [assigneeId, setAssigneeId] = useState("");
+  const [internal, setInternal] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [users, setUsers] = useState<
+    { id: number; email: string; full_name?: string | null }[]
+  >([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,13 +45,22 @@ export default function NewBonPage() {
     let cancelled = false;
     async function load() {
       try {
-        const [pRes, cRes] = await Promise.all([
+        const [pRes, cRes, uRes] = await Promise.all([
           authedFetch("/api/v1/projects?limit=500"),
-          authedFetch("/api/v1/clients?limit=500")
+          authedFetch("/api/v1/clients?limit=500"),
+          authedFetch("/api/v1/users")
         ]);
         if (!cancelled) {
           if (pRes.ok) setProjects((await pRes.json()) as Project[]);
           if (cRes.ok) setClients((await cRes.json()) as Client[]);
+          if (uRes.ok)
+            setUsers(
+              (await uRes.json()) as {
+                id: number;
+                email: string;
+                full_name?: string | null;
+              }[]
+            );
         }
       } catch {
         /* ignore */
@@ -75,6 +89,10 @@ export default function NewBonPage() {
       if (projectId) payload.project_id = Number(projectId);
       if (clientId) payload.client_id = Number(clientId);
       if (amount) payload.amount = Number(amount);
+      if (assigneeId) payload.assignee_user_id = Number(assigneeId);
+      // Demande interne (gestion immobilière) → pas de signature.
+      payload.requires_signature = !internal;
+      if (internal) payload.origin = "gestion_immo";
 
       const res = await authedFetch("/api/v1/bons-travail", {
         method: "POST",
@@ -203,7 +221,43 @@ export default function NewBonPage() {
                 </p>
               ) : null}
             </div>
+            <div>
+              <label htmlFor="assignee" className="label">
+                Assigné à (employé)
+              </label>
+              <select
+                id="assignee"
+                value={assigneeId}
+                onChange={(e) => setAssigneeId(e.target.value)}
+                className="input"
+              >
+                <option value="">— Non assigné —</option>
+                {users.map((u) => (
+                  <option key={u.id} value={String(u.id)}>
+                    {u.full_name || u.email}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-white/50">
+                Apparaît dans son tableau de bord « à faire ».
+              </p>
+            </div>
           </div>
+
+          <label className="flex items-start gap-2 rounded-lg border border-brand-800 bg-brand-900 p-3">
+            <input
+              type="checkbox"
+              checked={internal}
+              onChange={(e) => setInternal(e.target.checked)}
+              className="mt-0.5 h-4 w-4"
+            />
+            <span className="text-sm text-white/85">
+              Demande interne (gestion immobilière)
+              <span className="mt-0.5 block text-xs text-white/55">
+                Pas de signature client requise — usage interne.
+              </span>
+            </span>
+          </label>
 
           <div>
             <label htmlFor="description" className="label">Description</label>

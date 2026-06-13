@@ -788,6 +788,8 @@ async def create_bon_from_immeuble(
         client_id=client.id if client else None,
         status="draft",
         origin="gestion_immo",
+        # Demande interne → pas de signature client requise.
+        requires_signature=False,
     )
     bon.created_at = _now()
     bon.updated_at = _now()

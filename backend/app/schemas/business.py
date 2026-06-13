@@ -269,6 +269,10 @@ class BonTravailCreate(BaseModel):
     project_id: Optional[int] = None
     client_id: Optional[int] = None
     amount: Optional[float] = None
+    assignee_user_id: Optional[int] = None
+    # False = demande interne (gestion immobilière) → pas de signature.
+    requires_signature: Optional[bool] = None
+    origin: Optional[str] = Field(default=None, max_length=32)
 
 
 class BonTravailUpdate(BaseModel):
@@ -281,6 +285,8 @@ class BonTravailUpdate(BaseModel):
     sent_at: Optional[datetime] = None
     signed_at: Optional[datetime] = None
     signed_by_name: Optional[str] = None
+    assignee_user_id: Optional[int] = None
+    requires_signature: Optional[bool] = None
 
 
 class BonTravailRead(_Base):
@@ -293,6 +299,9 @@ class BonTravailRead(_Base):
     client_id: Optional[int]
     amount: Optional[float]
     status: str
+    assignee_user_id: Optional[int] = None
+    requires_signature: bool = True
+    origin: Optional[str] = None
     sent_to_email: Optional[str]
     sent_at: Optional[datetime]
     signed_at: Optional[datetime]
