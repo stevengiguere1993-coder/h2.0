@@ -15,8 +15,11 @@ import {
   MessageSquare,
   Phone,
   PhoneCall,
+  Sparkles,
+  TrendingUp,
   UserCircle,
-  X
+  X,
+  Zap
 } from "lucide-react";
 
 import { useEffect, useState } from "react";
@@ -153,6 +156,31 @@ export function TelephonieSidebar({
               );
             })}
           </ul>
+
+          <div className="mt-6 border-t border-brand-800 pt-3">
+            <div className="mb-2 flex items-center gap-2 px-2 text-[10px] font-bold uppercase tracking-wider text-violet-300">
+              <Sparkles className="h-3 w-3" />
+              Acquisition
+            </div>
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/reglages/acquisition" as any}
+              onClick={onClose}
+              className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-white/70 hover:bg-brand-900 hover:text-white"
+            >
+              <TrendingUp className="h-4 w-4" />
+              Tableau acquisition
+            </Link>
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/reglages/automatisations" as any}
+              onClick={onClose}
+              className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-white/70 hover:bg-brand-900 hover:text-white"
+            >
+              <Zap className="h-4 w-4" />
+              Automatisations
+            </Link>
+          </div>
 
           <div className="mt-6 border-t border-brand-800 pt-3">
             <Link
