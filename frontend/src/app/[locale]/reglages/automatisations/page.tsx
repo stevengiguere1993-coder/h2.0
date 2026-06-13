@@ -13,6 +13,15 @@ import { authedFetch, getMe, getToken } from "@/lib/auth";
 // invisible pour les autres rôles : pas dans le menu construction.
 // ----------------------------------------------------------------------
 
+type Param = {
+  key: string;
+  label: string;
+  type: "int";
+  default: number;
+  help: string;
+  value: number;
+};
+
 type Automation = {
   key: string;
   label: string;
@@ -23,6 +32,7 @@ type Automation = {
   controllable: boolean;
   enabled: boolean;
   last_run_at: string | null;
+  params: Param[];
 };
 
 type Me = { email?: string | null; role?: string | null };
@@ -128,6 +138,38 @@ export default function AutomationsPage() {
         xs.map((x) => (x.key === a.key ? { ...x, enabled: prev } : x))
       );
       setError(`Changement non enregistré : ${(e as Error).message}`);
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  function updateParam(key: string, paramKey: string, val: number) {
+    setItems((xs) =>
+      xs.map((x) =>
+        x.key === key
+          ? {
+              ...x,
+              params: x.params.map((p) =>
+                p.key === paramKey ? { ...p, value: val } : p
+              )
+            }
+          : x
+      )
+    );
+  }
+
+  async function saveConfig(a: Automation) {
+    setBusyKey(a.key);
+    try {
+      const config = Object.fromEntries(a.params.map((p) => [p.key, p.value]));
+      const res = await authedFetch(`/api/v1/automations/${a.key}/config`, {
+        method: "PATCH",
+        body: JSON.stringify({ config })
+      });
+      if (!res.ok) throw new Error(`Erreur ${res.status}`);
+      setError(null);
+    } catch (e) {
+      setError(`Réglage non enregistré : ${(e as Error).message}`);
     } finally {
       setBusyKey(null);
     }
@@ -253,6 +295,44 @@ export default function AutomationsPage() {
                             )}
                           </div>
                         </div>
+
+                        {a.params.length > 0 ? (
+                          <div className="mt-3 flex flex-wrap items-end gap-3 border-t border-brand-800 pt-3">
+                            {a.params.map((p) => (
+                              <div key={p.key}>
+                                <label className="block text-[10px] font-medium uppercase tracking-wide text-white/60">
+                                  {p.label}
+                                </label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={p.value}
+                                  onChange={(e) =>
+                                    updateParam(
+                                      a.key,
+                                      p.key,
+                                      Number(e.target.value)
+                                    )
+                                  }
+                                  className="mt-1 w-24 rounded-md border border-brand-700 bg-brand-950 px-2 py-1 text-sm text-white focus:border-accent-500 focus:outline-none"
+                                />
+                                {p.help ? (
+                                  <p className="mt-0.5 max-w-[16rem] text-[10px] text-white/45">
+                                    {p.help}
+                                  </p>
+                                ) : null}
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              disabled={busyKey === a.key}
+                              onClick={() => void saveConfig(a)}
+                              className="rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-brand-950 transition hover:bg-accent-400 disabled:opacity-50"
+                            >
+                              Enregistrer
+                            </button>
+                          </div>
+                        ) : null}
                       </li>
                     ))}
                   </ul>
