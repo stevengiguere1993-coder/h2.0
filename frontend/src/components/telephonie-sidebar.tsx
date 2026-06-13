@@ -122,7 +122,7 @@ export function TelephonieSidebar({
         <nav className="flex-1 overflow-y-auto px-3 py-4">
           <div className="mb-3 flex items-center gap-2 px-2 text-[10px] font-bold uppercase tracking-wider text-teal-300">
             <PhoneCall className="h-3 w-3" />
-            Téléphonie
+            Communications
           </div>
 
           <ul className="space-y-0.5">
