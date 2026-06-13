@@ -16,6 +16,8 @@ type Bon = {
   project_id: number | null;
   client_id: number | null;
   amount: number | string | null;
+  address: string | null;
+  bon_type: string;
   status: string;
   sent_at: string | null;
   signed_at: string | null;
@@ -45,6 +47,9 @@ function money(n: number | string | null): string {
 export default function BonsPage() {
   const { onOpenSidebar } = useAppLayout();
   const [items, setItems] = useState<Bon[]>([]);
+  const [clientNames, setClientNames] = useState<Map<number, string>>(
+    new Map()
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -55,10 +60,22 @@ export default function BonsPage() {
       setLoading(true);
       setError(null);
       try {
-        const res = await authedFetch("/api/v1/bons-travail?limit=500");
+        const [res, cRes] = await Promise.all([
+          authedFetch("/api/v1/bons-travail?limit=500"),
+          authedFetch("/api/v1/clients?limit=500")
+        ]);
         if (!res.ok) throw new Error(`http_${res.status}`);
         const data = (await res.json()) as Bon[];
-        if (!cancelled) setItems(data);
+        if (!cancelled) {
+          setItems(data);
+          if (cRes.ok) {
+            const cs = (await cRes.json()) as Array<{
+              id: number;
+              name: string;
+            }>;
+            setClientNames(new Map(cs.map((c) => [c.id, c.name])));
+          }
+        }
       } catch {
         if (!cancelled) setError("Impossible de charger les bons de travail.");
       } finally {
@@ -71,6 +88,9 @@ export default function BonsPage() {
     };
   }, []);
 
+  const clientNameOf = (b: Bon) =>
+    b.client_id ? clientNames.get(b.client_id) ?? null : null;
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return items;
@@ -78,9 +98,12 @@ export default function BonsPage() {
       (b) =>
         b.reference.toLowerCase().includes(q) ||
         b.title.toLowerCase().includes(q) ||
+        (b.address || "").toLowerCase().includes(q) ||
+        (clientNameOf(b) || "").toLowerCase().includes(q) ||
         (b.description || "").toLowerCase().includes(q)
     );
-  }, [items, search]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, search, clientNames]);
 
   const byColumn = useMemo(() => {
     const map: Record<string, Bon[]> = Object.fromEntries(
@@ -90,8 +113,24 @@ export default function BonsPage() {
       const target = COLUMNS.find((c) => c.id === b.status) ? b.status : "draft";
       map[target].push(b);
     }
+    // Classement comme soumissions / projets : adresse → client → numéro.
+    const cmp = (a: Bon, b: Bon) => {
+      const byAddr = (a.address || "~").localeCompare(b.address || "~", "fr", {
+        sensitivity: "base"
+      });
+      if (byAddr !== 0) return byAddr;
+      const byClient = (clientNameOf(a) || "~").localeCompare(
+        clientNameOf(b) || "~",
+        "fr",
+        { sensitivity: "base" }
+      );
+      if (byClient !== 0) return byClient;
+      return a.reference.localeCompare(b.reference, "fr");
+    };
+    for (const id of Object.keys(map)) map[id].sort(cmp);
     return map;
-  }, [filtered]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, clientNames]);
 
   return (
     <>
@@ -170,19 +209,26 @@ export default function BonsPage() {
                           className="block rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-accent-500"
                         >
                           <h3 className="truncate text-sm font-semibold text-white">
-                            {b.reference}
+                            {b.address || "Adresse non renseignée"}
                           </h3>
-                          <p className="mt-0.5 truncate text-xs text-white/60">
-                            {b.title}
+                          <p className="mt-0.5 truncate text-xs text-white/70">
+                            {clientNameOf(b) || "Client —"}
+                          </p>
+                          <p className="mt-0.5 truncate text-xs text-white/50">
+                            {b.reference} · {b.title}
                           </p>
                           <div className="mt-2 flex items-center justify-between text-xs">
                             <span className="text-white/50">
-                              {b.signed_by_name
-                                ? `Signé ${b.signed_by_name}`
-                                : "—"}
+                              {b.bon_type === "garantie"
+                                ? "Garantie"
+                                : "Temps & matériel"}
                             </span>
                             <span className="font-semibold text-white">
-                              {money(b.amount)}
+                              {b.bon_type === "garantie"
+                                ? "0,00 $"
+                                : b.amount != null && b.amount !== ""
+                                  ? money(b.amount)
+                                  : "T&M"}
                             </span>
                           </div>
                         </Link>

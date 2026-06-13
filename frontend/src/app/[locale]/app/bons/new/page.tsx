@@ -9,7 +9,12 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 
-type Project = { id: number; name: string; client_id: number | null };
+type Project = {
+  id: number;
+  name: string;
+  client_id: number | null;
+  address?: string | null;
+};
 type Client = { id: number; name: string };
 
 function buildRef(): string {
@@ -31,6 +36,8 @@ export default function NewBonPage() {
   const [projectId, setProjectId] = useState("");
   const [clientId, setClientId] = useState("");
   const [amount, setAmount] = useState("");
+  const [address, setAddress] = useState("");
+  const [bonType, setBonType] = useState("temps_materiel");
   const [assigneeId, setAssigneeId] = useState("");
   const [internal, setInternal] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -88,7 +95,10 @@ export default function NewBonPage() {
       if (description.trim()) payload.description = description.trim();
       if (projectId) payload.project_id = Number(projectId);
       if (clientId) payload.client_id = Number(clientId);
-      if (amount) payload.amount = Number(amount);
+      if (address.trim()) payload.address = address.trim();
+      payload.bon_type = bonType;
+      // Garantie : rien n'est chargé au client.
+      payload.amount = bonType === "garantie" ? 0 : amount ? Number(amount) : null;
       if (assigneeId) payload.assignee_user_id = Number(assigneeId);
       // Demande interne (gestion immobilière) → pas de signature.
       payload.requires_signature = !internal;
@@ -200,6 +210,7 @@ export default function NewBonPage() {
                   setProjectId(next);
                   const p = projects.find((x) => String(x.id) === next);
                   if (p?.client_id) setClientId(String(p.client_id));
+                  if (p?.address) setAddress(p.address);
                 }}
                 className="input"
               >
@@ -260,6 +271,22 @@ export default function NewBonPage() {
           </label>
 
           <div>
+            <label htmlFor="address" className="label">
+              Adresse du chantier
+            </label>
+            <input
+              id="address"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="123 rue Principale, Sorel-Tracy"
+              className="input"
+            />
+            <p className="mt-1 text-xs text-white/50">
+              Sert au classement de la liste (adresse → client → numéro).
+            </p>
+          </div>
+
+          <div>
             <label htmlFor="description" className="label">Description</label>
             <textarea
               id="description"
@@ -272,23 +299,57 @@ export default function NewBonPage() {
           </div>
 
           <div>
-            <label htmlFor="amount" className="label">
-              Montant à charger au client (CAD, avant taxes)
-            </label>
-            <input
-              id="amount"
-              type="number"
-              step="0.01"
-              min="0"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              placeholder="0.00 (ou laisse vide et ajoute des items ensuite)"
-              className="input sm:w-64"
-            />
-            <p className="mt-1 text-xs text-white/50">
-              C&apos;est ce que le client paiera pour ces travaux
-              supplémentaires — pas ton coût de revient.
-            </p>
+            <label className="label">Montant chargé au client</label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setBonType("temps_materiel")}
+                className={`rounded-xl border p-3 text-left transition ${
+                  bonType === "temps_materiel"
+                    ? "border-accent-500 bg-brand-900"
+                    : "border-brand-800 bg-brand-900/60 hover:border-brand-700"
+                }`}
+              >
+                <p className="text-sm font-semibold text-white">
+                  Temps &amp; matériel
+                </p>
+                <p className="mt-0.5 text-xs text-white/60">
+                  Calculé selon les achats + heures ajoutés (récap sur la
+                  fiche).
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setBonType("garantie")}
+                className={`rounded-xl border p-3 text-left transition ${
+                  bonType === "garantie"
+                    ? "border-accent-500 bg-brand-900"
+                    : "border-brand-800 bg-brand-900/60 hover:border-brand-700"
+                }`}
+              >
+                <p className="text-sm font-semibold text-white">Garantie</p>
+                <p className="mt-0.5 text-xs text-white/60">
+                  Travaux sous garantie — 0 $ chargé au client.
+                </p>
+              </button>
+            </div>
+            {bonType === "temps_materiel" ? (
+              <div className="mt-3">
+                <label htmlFor="amount" className="label">
+                  Montant fixe (optionnel, CAD avant taxes)
+                </label>
+                <input
+                  id="amount"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="Laisse vide pour calculer selon achats + heures"
+                  className="input sm:w-64"
+                />
+              </div>
+            ) : null}
           </div>
 
           {error ? <p className="text-sm text-rose-400">{error}</p> : null}

@@ -47,6 +47,16 @@ class BonTravail(Base, TimestampUpdateMixin):
         String(32), nullable=False, default=BonTravailStatus.DRAFT.value, index=True
     )
 
+    # Adresse du chantier (lieu des travaux) — clé de classement de la
+    # liste : adresse → client → numéro, comme soumissions / projets.
+    address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Nature du montant chargé au client :
+    #  - "garantie"        → 0 $ (travaux sous garantie, non facturés)
+    #  - "temps_materiel"  → T&M : selon punchs (heures) + achats (coût+markup)
+    bon_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="temps_materiel"
+    )
+
     # Employé/user assigné au bon — il devient une tâche pour lui
     # (apparait dans son tableau de bord « à faire »).
     assignee_user_id: Mapped[Optional[int]] = mapped_column(
