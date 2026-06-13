@@ -113,9 +113,12 @@ async def list_projects(
     limit: int = Query(default=200, ge=1, le=500),
     client_id: Optional[int] = Query(default=None, gt=0),
     status_filter: Optional[str] = Query(default=None, alias="status"),
+    kind: Optional[str] = Query(default=None),
 ) -> List[ProjectRead]:
-    """List projects with optional client / status filter.
+    """List projects with optional client / status / kind filter.
 
+    Sans `kind`, les bons de travail sont exclus (vue projets de
+    construction propre). `kind=bon_travail` liste les ordres de travail.
     For employees (role=employee), only projects they've been assigned
     to via project_members are returned. Manager+ roles see everything.
     """
@@ -126,6 +129,7 @@ async def list_projects(
         limit=limit,
         client_id=client_id,
         status_filter=status_filter,
+        kind=kind,
     )
     if visible is not None:
         projects = [p for p in projects if p.id in visible]

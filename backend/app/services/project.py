@@ -44,10 +44,11 @@ class ProjectService:
         limit: int = 100,
         client_id: Optional[int] = None,
         status_filter: Optional[str] = None,
+        kind: Optional[str] = None,
     ) -> Sequence[Project]:
         """List projects with optional filtering."""
         return await self.repo.list(
-            skip, limit, client_id, status_filter=status_filter
+            skip, limit, client_id, status_filter=status_filter, kind=kind
         )
 
     async def update(
