@@ -805,3 +805,34 @@ async def my_projects(
         )
     ).scalars().all()
     return [ProjectMini.model_validate(p) for p in rows]
+
+
+@router.get("/work-orders")
+async def my_work_orders(db: DBSession, user: CurrentUser) -> list[dict]:
+    """Ordres de travail (bons de travail) assignés à l'employé connecté,
+    à faire « dans son temps libre ». On exclut ceux déjà livrés."""
+    rows = (
+        await db.execute(
+            select(
+                Project.id,
+                Project.name,
+                Project.address,
+                Project.status,
+            )
+            .where(
+                Project.kind == "bon_travail",
+                Project.responsible_user_id == user.id,
+                Project.status != ProjectStatus.DELIVERED.value,
+            )
+            .order_by(Project.created_at.desc())
+        )
+    ).all()
+    return [
+        {
+            "id": r[0],
+            "name": r[1],
+            "address": r[2],
+            "status": r[3],
+        }
+        for r in rows
+    ]
