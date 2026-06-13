@@ -33,7 +33,7 @@ const PERIODS = [
   { days: 90, label: "90 jours" }
 ];
 
-export default function AcquisitionPage() {
+export function AcquisitionPanel() {
   const [checking, setChecking] = useState(true);
   const [allowed, setAllowed] = useState(false);
   const [data, setData] = useState<Funnel | null>(null);

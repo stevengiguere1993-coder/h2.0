@@ -65,7 +65,7 @@ function formatLastRun(iso: string | null): string {
   });
 }
 
-export default function AutomationsPage() {
+export function AutomationsPanel() {
   const [checking, setChecking] = useState(true);
   const [allowed, setAllowed] = useState(false);
   const [items, setItems] = useState<Automation[]>([]);

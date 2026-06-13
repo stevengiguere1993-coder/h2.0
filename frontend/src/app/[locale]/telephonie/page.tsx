@@ -33,6 +33,8 @@ import { PushNotificationsToggle } from "@/components/push-notifications-toggle"
 import { RecordingPlayer } from "@/components/recording-player";
 import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { useTelephonieLayout } from "./_client-shell";
+import { AcquisitionPanel } from "@/components/communications/acquisition-panel";
+import { AutomationsPanel } from "@/components/communications/automations-panel";
 
 // Volet « Téléphonie / Secrétaire d'appels » — interface premium.
 //
@@ -519,6 +521,9 @@ export default function TelephonieHome() {
             onSave={saveHours}
           />
         ) : null}
+
+        {section === "acquisition" ? <AcquisitionPanel /> : null}
+        {section === "automatisations" ? <AutomationsPanel /> : null}
 
       </div>
 

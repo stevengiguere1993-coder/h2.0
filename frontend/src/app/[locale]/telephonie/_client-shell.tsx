@@ -19,7 +19,9 @@ export type TelephonieSection =
   | "messages"
   | "numeros"
   | "filtres"
-  | "heures";
+  | "heures"
+  | "acquisition"
+  | "automatisations";
 
 type TelephonieLayoutCtx = {
   onOpenSidebar: () => void;
@@ -103,6 +105,7 @@ export function TelephonieClientShell({
           userEmail={user.email}
           onSignOut={signOut}
           section={section}
+          showAcquisition={user.role === "owner" || user.role === "admin"}
           onSectionChange={(s) => {
             setSection(s);
             setSidebarOpen(false);
