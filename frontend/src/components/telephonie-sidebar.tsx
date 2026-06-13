@@ -50,7 +50,8 @@ export function TelephonieSidebar({
   userEmail: _userEmail,
   onSignOut,
   section,
-  onSectionChange
+  onSectionChange,
+  showAcquisition = false
 }: {
   open: boolean;
   onClose: () => void;
@@ -58,6 +59,7 @@ export function TelephonieSidebar({
   onSignOut: () => void;
   section: TelephonieSection;
   onSectionChange: (s: TelephonieSection) => void;
+  showAcquisition?: boolean;
 }) {
   // Badge « messages vocaux non lus » sur l'onglet Appels — basé sur les
   // notifications voicemail_received non lues (s'efface quand l'appel est
@@ -157,30 +159,47 @@ export function TelephonieSidebar({
             })}
           </ul>
 
-          <div className="mt-6 border-t border-brand-800 pt-3">
-            <div className="mb-2 flex items-center gap-2 px-2 text-[10px] font-bold uppercase tracking-wider text-violet-300">
-              <Sparkles className="h-3 w-3" />
-              Acquisition
+          {showAcquisition ? (
+            <div className="mt-6 border-t border-brand-800 pt-3">
+              <div className="mb-2 flex items-center gap-2 px-2 text-[10px] font-bold uppercase tracking-wider text-violet-300">
+                <Sparkles className="h-3 w-3" />
+                Acquisition
+              </div>
+              <ul className="space-y-0.5">
+                {[
+                  {
+                    key: "acquisition" as TelephonieSection,
+                    label: "Tableau acquisition",
+                    icon: TrendingUp
+                  },
+                  {
+                    key: "automatisations" as TelephonieSection,
+                    label: "Automatisations",
+                    icon: Zap
+                  }
+                ].map((s) => {
+                  const Icon = s.icon;
+                  const active = section === s.key;
+                  return (
+                    <li key={s.key}>
+                      <button
+                        type="button"
+                        onClick={() => onSectionChange(s.key)}
+                        className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition ${
+                          active
+                            ? "bg-violet-500/15 text-violet-200 font-semibold"
+                            : "text-white/70 hover:bg-brand-900 hover:text-white"
+                        }`}
+                      >
+                        <Icon className="h-4 w-4" />
+                        <span className="flex-1 text-left">{s.label}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
-            <Link
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={"/reglages/acquisition" as any}
-              onClick={onClose}
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-white/70 hover:bg-brand-900 hover:text-white"
-            >
-              <TrendingUp className="h-4 w-4" />
-              Tableau acquisition
-            </Link>
-            <Link
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={"/reglages/automatisations" as any}
-              onClick={onClose}
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-white/70 hover:bg-brand-900 hover:text-white"
-            >
-              <Zap className="h-4 w-4" />
-              Automatisations
-            </Link>
-          </div>
+          ) : null}
 
           <div className="mt-6 border-t border-brand-800 pt-3">
             <Link
