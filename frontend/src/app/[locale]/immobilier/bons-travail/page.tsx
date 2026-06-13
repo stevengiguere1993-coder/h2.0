@@ -110,6 +110,7 @@ export default function BonsTravailPage() {
   const [logement, setLogement] = useState("");
   const [titre, setTitre] = useState("");
   const [description, setDescription] = useState("");
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BonResult | null>(null);
@@ -199,10 +200,25 @@ export default function BonsTravailPage() {
       );
       if (!r.ok)
         throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
-      setResult((await r.json()) as BonResult);
+      const res = (await r.json()) as BonResult;
+      // Photo de la problématique (« avant ») — attachée au bon.
+      if (photoFile) {
+        try {
+          const fd = new FormData();
+          fd.append("file", photoFile);
+          await authedFetch(
+            `/api/v1/immobilier/bons-travail/${res.bon_id}/photos`,
+            { method: "POST", body: fd }
+          );
+        } catch {
+          /* la photo est optionnelle — on n'échoue pas la création */
+        }
+      }
+      setResult(res);
       setTitre("");
       setDescription("");
       setLogement("");
+      setPhotoFile(null);
       void loadBons();
     } catch (e) {
       setError((e as Error).message);
@@ -299,6 +315,19 @@ export default function BonsTravailPage() {
               placeholder="Détails des travaux…"
               className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-300"
             />
+          </Field>
+
+          <Field label="Photo de la problématique (avant)">
+            <input
+              type="file"
+              accept="image/*,application/pdf"
+              onChange={(e) => setPhotoFile(e.target.files?.[0] || null)}
+              className="block w-full text-sm text-white/70 file:mr-3 file:rounded-lg file:border-0 file:bg-amber-500/15 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-amber-100 hover:file:bg-amber-500/25"
+            />
+            <p className="mt-1 text-[11px] text-white/40">
+              Optionnel — la photo « avant » du problème à réparer. Les
+              photos « après » s&apos;ajoutent côté chantier.
+            </p>
           </Field>
 
           {error ? (

@@ -795,6 +795,8 @@ function ClientDocuments({
       created_at: string;
     }>
   >([]);
+  const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [uploadDocError, setUploadDocError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -905,6 +907,30 @@ function ClientDocuments({
     }).format(v);
   }
 
+  async function uploadDoc(file: File) {
+    setUploadingDoc(true);
+    setUploadDocError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await authedFetch(
+        `/api/v1/clients/${clientId}/documents`,
+        { method: "POST", body: fd }
+      );
+      if (!res.ok) {
+        throw new Error(
+          (await res.text()).slice(0, 160) || `HTTP ${res.status}`
+        );
+      }
+      const dRes = await authedFetch(`/api/v1/clients/${clientId}/documents`);
+      if (dRes.ok) setArchivedDocs(await dRes.json());
+    } catch (e) {
+      setUploadDocError((e as Error).message);
+    } finally {
+      setUploadingDoc(false);
+    }
+  }
+
   async function downloadArchivedDoc(docId: number) {
     const res = await authedFetch(
       `/api/v1/clients/${clientId}/documents/${docId}/download`
@@ -918,15 +944,41 @@ function ClientDocuments({
 
   return (
     <section className="space-y-2">
-      <div>
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-          Documents du client
-        </h2>
-        <p className="mt-1 text-xs text-white/60">
-          Contrats signés · soumissions · factures
-          {contactRequestId ? " · photos et documents du formulaire prospect" : ""}.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+            Documents du client
+          </h2>
+          <p className="mt-1 text-xs text-white/60">
+            Contrats signés · soumissions · factures · plans (PDF)
+            {contactRequestId ? " · documents du formulaire prospect" : ""}.
+          </p>
+        </div>
+        <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2 text-xs font-semibold text-accent-300 hover:bg-accent-500/20">
+          {uploadingDoc ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <FileText className="h-3.5 w-3.5" />
+          )}
+          Ajouter un document (PDF, plan…)
+          <input
+            type="file"
+            accept="application/pdf,image/*"
+            disabled={uploadingDoc}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void uploadDoc(f);
+              e.target.value = "";
+            }}
+            className="hidden"
+          />
+        </label>
       </div>
+      {uploadDocError ? (
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {uploadDocError}
+        </p>
+      ) : null}
 
       {loading ? (
         <div className="flex items-center justify-center py-6">
@@ -935,16 +987,16 @@ function ClientDocuments({
       ) : (
         <>
           <DocSection
-            title="Contrats signés (PDF archivés)"
+            title="Documents & plans (PDF archivés)"
             count={archivedDocs.length}
             icon={<FileText className="h-3.5 w-3.5" />}
             defaultOpen={archivedDocs.length > 0}
           >
             {archivedDocs.length === 0 ? (
               <p className="text-xs text-white/40">
-                Aucun contrat signé archivé. Le PDF du contrat signé
-                par les deux parties est déposé ici automatiquement
-                lorsque le client signe en ligne.
+                Aucun document. Les contrats signés en ligne s&apos;y
+                déposent automatiquement ; tu peux aussi ajouter des PDF
+                (plans, devis externes…) avec le bouton ci-dessus.
               </p>
             ) : (
               <ul className="space-y-2">

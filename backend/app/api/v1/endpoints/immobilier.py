@@ -1110,7 +1110,70 @@ async def get_gestion_immo_bon_photo(
     return Response(content=bytes(row[0]), media_type=row[1] or "image/jpeg")
 
 
-# ── Retirer une entreprise du portefeuille immobilier ──────────────────
+@router.post("/bons-travail/{bon_id}/photos")
+async def upload_gestion_immo_bon_photo(
+    bon_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+) -> dict:
+    """Ajoute une photo (problématique « avant », ou « après ») à un bon de
+    travail gestion immobilière. La photo est attachée au PROJET lié (mini-
+    projet) ; on le crée à la volée si le bon n'en a pas encore. Accepte
+    images + PDF."""
+    _require_volet(user)
+    bon = await db.get(BonTravail, bon_id)
+    if bon is None or not (
+        bon.origin == "gestion_immo"
+        or (bon.scope_md and "Gestion immobilière" in bon.scope_md)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Bon introuvable."
+        )
+
+    ct = (file.content_type or "").lower()
+    if ct not in _PHOTO_MIME_ALLOWED and ct != "application/pdf":
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Format non supporté (JPG, PNG, WEBP, HEIC, PDF).",
+        )
+    blob = await file.read()
+    if not blob:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Fichier vide."
+        )
+    if len(blob) > _PHOTO_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Fichier trop gros (> {_PHOTO_MAX_BYTES // (1024*1024)} Mo).",
+        )
+
+    # Le bon doit avoir un projet pour porter ses photos : on le crée au
+    # besoin (mini-projet — cohérent avec « Achats, heures & facture »).
+    if bon.project_id is None:
+        proj = Project(
+            name=bon.title or f"Bon {bon.reference}",
+            client_id=bon.client_id,
+            kind="bon_travail",
+            responsible_user_id=getattr(bon, "assignee_user_id", None),
+            status="in_progress",
+            address=getattr(bon, "address", None),
+        )
+        db.add(proj)
+        await db.flush()
+        bon.project_id = proj.id
+
+    photo = ProjectPhoto(
+        project_id=bon.project_id,
+        image=blob,
+        content_type=ct,
+        caption="Problématique (avant)",
+        uploaded_by_email=user.email,
+    )
+    db.add(photo)
+    await db.commit()
+    await db.refresh(photo)
+    return {"photo_id": photo.id, "project_id": bon.project_id}
 
 
 @router.post("/entreprises/{entreprise_id}/retirer-portefeuille")

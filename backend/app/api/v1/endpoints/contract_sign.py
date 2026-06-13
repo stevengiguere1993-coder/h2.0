@@ -22,7 +22,7 @@ import secrets
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
@@ -30,6 +30,7 @@ from sqlalchemy.orm import undefer
 
 from app.api.deps import CurrentUser, DBSession, RequireManager
 from app.integrations.email_graph import get_mailer
+from app.models.client import Client
 from app.models.client_document import ClientDocument
 from app.models.soumission import Soumission
 from app.models.user import User
@@ -196,6 +197,59 @@ async def list_client_documents(
         )
     ).scalars().all()
     return [ClientDocumentRead.model_validate(r) for r in rows]
+
+
+_DOC_MIME_ALLOWED = {
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+}
+_DOC_MAX_BYTES = 25 * 1024 * 1024  # 25 Mo (plans PDF volumineux)
+
+
+@docs_router.post(
+    "/{client_id}/documents",
+    response_model=ClientDocumentRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Téléverse un document (PDF, plan, image) sur un client",
+)
+async def upload_client_document(
+    client_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+) -> ClientDocumentRead:
+    client = await db.get(Client, client_id)
+    if client is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Client introuvable.")
+    ct = (file.content_type or "").lower()
+    if ct not in _DOC_MIME_ALLOWED:
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            "Format non supporté (PDF, JPG, PNG, WEBP, HEIC).",
+        )
+    blob = await file.read()
+    if not blob:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Fichier vide.")
+    if len(blob) > _DOC_MAX_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            f"Fichier trop gros (> {_DOC_MAX_BYTES // (1024*1024)} Mo).",
+        )
+    doc = ClientDocument(
+        client_id=client_id,
+        name=(file.filename or "document").strip()[:255],
+        content_type=ct,
+        blob=blob,
+        source="manual",
+    )
+    db.add(doc)
+    await db.flush()
+    await db.refresh(doc)
+    return ClientDocumentRead.model_validate(doc)
 
 
 @docs_router.get(
