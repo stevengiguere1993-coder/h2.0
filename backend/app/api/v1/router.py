@@ -122,6 +122,7 @@ from app.api.v1.endpoints import (
     purchase_order_items,
     client_qbo,
     cron_runner,
+    automations,
     numbering,
     qbo_account_map,
     qbo_oauth,
@@ -280,6 +281,7 @@ api_router.include_router(achat_qbo.router)
 api_router.include_router(achat_payment.router)
 api_router.include_router(purchase_order_actions.router)
 api_router.include_router(cron_runner.router)
+api_router.include_router(automations.router)
 api_router.include_router(numbering.router)
 api_router.include_router(qbo_account_map.router)
 api_router.include_router(extension.router)
