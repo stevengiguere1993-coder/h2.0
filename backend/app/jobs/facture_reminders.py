@@ -156,9 +156,16 @@ async def _compute_balance(db, fa: Facture) -> float:
 
 async def run() -> dict:
     """Walk all unpaid factures, flip overdue and send the right reminder."""
-    from app.services.automation_state import is_automation_enabled
+    from app.services.automation_state import (
+        get_automation_int,
+        is_automation_enabled,
+    )
     if not await is_automation_enabled("facture_reminders"):
         return {"skipped": "disabled"}
+    # Cadence éditable depuis le hub Automatisations (fallback constante).
+    interval_days = await get_automation_int(
+        "facture_reminders", "cadence_days", REMINDER_INTERVAL_DAYS
+    )
     mailer = get_mailer()
     now = datetime.now(timezone.utc)
     flipped_overdue = 0
@@ -195,7 +202,7 @@ async def run() -> dict:
             # rappel — ou l'échéance pour le tout premier.
             base = fa.last_reminder_at or fa.due_at
             due_next = fa.next_reminder_at or (
-                base + timedelta(days=REMINDER_INTERVAL_DAYS)
+                base + timedelta(days=interval_days)
             )
             if now < due_next:
                 continue
@@ -218,7 +225,7 @@ async def run() -> dict:
                 fa.reminder_count = count + 1
                 fa.last_reminder_at = now
                 fa.next_reminder_at = now + timedelta(
-                    days=REMINDER_INTERVAL_DAYS
+                    days=interval_days
                 )
                 # Persiste tout de suite : si le job plante plus loin, on ne
                 # re-traitera pas cette facture au prochain run.
@@ -266,7 +273,7 @@ async def run() -> dict:
                 fa.reminder_count = count + 1
                 fa.last_reminder_at = now
                 fa.next_reminder_at = now + timedelta(
-                    days=REMINDER_INTERVAL_DAYS
+                    days=interval_days
                 )
                 # Commit immédiat APRÈS l'envoi : le rappel envoyé est
                 # enregistré sur-le-champ. Si le job plante sur une facture

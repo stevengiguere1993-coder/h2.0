@@ -17,6 +17,7 @@ from app.api.deps import DBSession, RequireAdminOrOwner
 from app.automations.catalog import CATALOG_BY_KEY
 from app.services.automation_state import (
     list_automation_states,
+    set_automation_config,
     set_automation_enabled,
 )
 
@@ -25,6 +26,10 @@ router = APIRouter(prefix="/automations", tags=["automations"])
 
 class AutomationToggle(BaseModel):
     enabled: bool
+
+
+class AutomationConfig(BaseModel):
+    config: dict
 
 
 @router.get("")
@@ -54,3 +59,36 @@ async def toggle_automation(
         )
     await set_automation_enabled(db, key, data.enabled, user_id=user.id)
     return {"key": key, "enabled": data.enabled}
+
+
+@router.patch("/{key}/config")
+async def update_automation_config(
+    key: str,
+    data: AutomationConfig,
+    db: DBSession,
+    user: RequireAdminOrOwner,
+) -> dict:
+    """Met à jour les paramètres éditables d'une automatisation. On ne
+    garde que les clés déclarées dans le catalogue (et on coerce en int)."""
+    entry = CATALOG_BY_KEY.get(key)
+    if entry is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Automatisation inconnue.")
+    allowed = {p.key: p for p in entry.params}
+    clean: dict = {}
+    for pk, p in allowed.items():
+        if pk in data.config:
+            try:
+                v = int(data.config[pk])
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"Valeur invalide pour « {p.label} ».",
+                )
+            if v <= 0:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"« {p.label} » doit être un nombre positif.",
+                )
+            clean[pk] = v
+    await set_automation_config(db, key, clean, user_id=user.id)
+    return {"key": key, "config": clean}

@@ -140,6 +140,9 @@ async def ensure_critical_columns() -> None:
         # (transaction par colonne) pour survivre à un abort d'init_db.
         ("projects", "responsible_user_id", "INTEGER"),
         ("voice_calls", "dial_state_json", "TEXT"),
+        # Hub Automatisations : config éditable (cadence, etc.). La table
+        # a été créée sans cette colonne au 1er déploiement → on l'ajoute.
+        ("automation_settings", "config_json", "TEXT"),
     )
     for table, column, col_type in critical_columns:
         try:

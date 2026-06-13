@@ -76,9 +76,15 @@ def _body_html(sm: Soumission, total: Optional[float]) -> str:
 
 
 async def run() -> None:
-    from app.services.automation_state import is_automation_enabled
+    from app.services.automation_state import (
+        get_automation_int,
+        is_automation_enabled,
+    )
     if not await is_automation_enabled("soumission_reminders"):
         return
+    reminder_days = await get_automation_int(
+        "soumission_reminders", "cadence_days", REMINDER_DAYS
+    )
     mailer = get_mailer()
     if not mailer.ready:
         log.warning(
@@ -86,7 +92,7 @@ async def run() -> None:
         )
         return
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=REMINDER_DAYS)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=reminder_days)
 
     async with AsyncSessionLocal() as db:
         try:

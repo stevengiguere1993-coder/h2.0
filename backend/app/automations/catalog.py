@@ -12,11 +12,21 @@ cron lisent leur `key` via `is_automation_enabled(key)` (fail-open).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 Category = Literal["relance", "rapport", "synchro", "courriel", "telephonie"]
 Trigger = Literal["cron", "evenement"]
+
+
+@dataclass(frozen=True)
+class Param:
+    """Paramètre éditable d'une automatisation (rendu en input dans le hub)."""
+    key: str
+    label: str
+    type: Literal["int"]
+    default: int
+    help: str = ""
 
 
 @dataclass(frozen=True)
@@ -30,6 +40,8 @@ class Automation:
     description: str
     # True = on/off pris en charge en v1 (jobs cron câblés au garde-fou).
     controllable: bool = True
+    # Paramètres éditables depuis le hub (lus par le job, fail-safe).
+    params: tuple[Param, ...] = field(default_factory=tuple)
 
 
 # NB : `key` des jobs cron = nom du module dans app/jobs/ → sert aussi à
@@ -45,6 +57,12 @@ CATALOG: tuple[Automation, ...] = (
         "facture_reminders", "Rappels de factures", "relance", "cron",
         "Tous les jours · 08h30",
         "Courriel de rappel aux clients pour les factures impayées / à échéance.",
+        params=(
+            Param(
+                "cadence_days", "Cadence des rappels (jours)", "int", 4,
+                "Délai entre deux rappels pour une même facture en retard.",
+            ),
+        ),
     ),
     Automation(
         "devlog_facture_reminders", "Rappels factures (Dév. logiciel)",
@@ -55,6 +73,12 @@ CATALOG: tuple[Automation, ...] = (
         "soumission_reminders", "Rappels de soumissions", "relance", "cron",
         "Quotidien",
         "Relance les clients dont la soumission est en attente de réponse.",
+        params=(
+            Param(
+                "cadence_days", "Relancer après (jours)", "int", 5,
+                "Nombre de jours sans réponse avant d'envoyer la relance.",
+            ),
+        ),
     ),
     Automation(
         "appointment_reminders", "Rappels de rendez-vous", "relance", "cron",
