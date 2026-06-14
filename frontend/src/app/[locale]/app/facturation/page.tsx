@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { DollarSign, Loader2, Plus } from "lucide-react";
+import { ChevronDown, DollarSign, Loader2, Plus } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
@@ -92,6 +92,19 @@ export default function FacturationPage() {
   const [search, setSearch] = useState("");
   const [dragging, setDragging] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
+  // Colonnes repliées (fermées) par défaut : « Payées » et « Annulées ».
+  // « Brouillons », « Envoyées » et « En retard » restent dépliées.
+  // Cliquer l'en-tête d'une colonne bascule son état.
+  const [collapsed, setCollapsed] = useState<Set<string>>(
+    () => new Set(["paid", "void"])
+  );
+  const toggleCollapsed = (id: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   useEffect(() => {
     let cancelled = false;
@@ -215,31 +228,73 @@ export default function FacturationPage() {
             {COLUMNS.map((col) => {
               const cards = byColumn[col.id] || [];
               const isHover = hoverCol === col.id;
+              const isCollapsed = collapsed.has(col.id);
+
+              const dropHandlers = {
+                onDragOver: (e: React.DragEvent) => {
+                  e.preventDefault();
+                  setHoverCol(col.id);
+                },
+                onDragLeave: () =>
+                  setHoverCol((h) => (h === col.id ? null : h)),
+                onDrop: () => {
+                  if (dragging == null) return;
+                  const f = items.find((x) => x.id === dragging);
+                  if (f && f.status !== col.id) move(dragging, col.id);
+                  setDragging(null);
+                  setHoverCol(null);
+                }
+              };
+
+              // Colonne repliée : bande verticale étroite, cliquable
+              // pour la rouvrir. Accepte toujours le drop d'une carte.
+              if (isCollapsed) {
+                return (
+                  <button
+                    key={col.id}
+                    type="button"
+                    onClick={() => toggleCollapsed(col.id)}
+                    title={`Afficher « ${col.label} »`}
+                    {...dropHandlers}
+                    className={`flex w-14 min-w-[56px] flex-shrink-0 flex-col items-center gap-3 rounded-xl border bg-brand-900/60 py-3 transition ${
+                      isHover
+                        ? "border-accent-500 bg-brand-900"
+                        : "border-brand-800 hover:border-accent-500"
+                    }`}
+                  >
+                    <ChevronDown className="h-4 w-4 -rotate-90 text-white/70" />
+                    <span className={`h-2 w-2 rounded-full ${col.dot}`} />
+                    <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                      {cards.length}
+                    </span>
+                    <span
+                      className="text-sm font-semibold text-white"
+                      style={{ writingMode: "vertical-rl" }}
+                    >
+                      {col.label}
+                    </span>
+                  </button>
+                );
+              }
+
               return (
                 <div
                   key={col.id}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setHoverCol(col.id);
-                  }}
-                  onDragLeave={() =>
-                    setHoverCol((h) => (h === col.id ? null : h))
-                  }
-                  onDrop={() => {
-                    if (dragging == null) return;
-                    const f = items.find((x) => x.id === dragging);
-                    if (f && f.status !== col.id) move(dragging, col.id);
-                    setDragging(null);
-                    setHoverCol(null);
-                  }}
+                  {...dropHandlers}
                   className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
                     isHover
                       ? "border-accent-500 bg-brand-900"
                       : "border-brand-800"
                   }`}
                 >
-                  <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={() => toggleCollapsed(col.id)}
+                    title={`Replier « ${col.label} »`}
+                    className="flex w-full items-center justify-between border-b border-brand-800 px-4 py-3 text-left transition hover:bg-brand-900"
+                  >
                     <div className="flex items-center gap-2">
+                      <ChevronDown className="h-4 w-4 text-white/70" />
                       <span className={`h-2 w-2 rounded-full ${col.dot}`} />
                       <h2 className="text-sm font-semibold text-white">
                         {col.label}
@@ -248,7 +303,7 @@ export default function FacturationPage() {
                     <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
                       {cards.length}
                     </span>
-                  </div>
+                  </button>
 
                   <div className="flex-1 space-y-3 p-3">
                     {cards.length === 0 ? (

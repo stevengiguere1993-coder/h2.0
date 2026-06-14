@@ -358,7 +358,12 @@ class PunchRead(_Base):
 
 # ---------- Facture ----------
 class FactureCreate(BaseModel):
-    reference: str = Field(..., max_length=32)
+    # Référence optionnelle : laissée vide, l'API attribue le prochain
+    # numéro séquentiel (aligné sur la séquence QuickBooks). Ça garantit
+    # que les factures « hors projet » suivent la même numérotation que
+    # celles générées depuis un projet, au lieu d'un horodatage côté
+    # client.
+    reference: str = Field(default="", max_length=32)
     client_id: Optional[int] = None
     project_id: Optional[int] = None
     subtotal: Optional[float] = None

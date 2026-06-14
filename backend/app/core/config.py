@@ -87,12 +87,15 @@ class Settings(BaseSettings):
     azure_client_secret: Optional[str] = None
     mail_from_email: str = "info@immohorizon.com"
     mail_from_name: str = "Horizon Services Immobiliers"
-    # Adresse mise en copie cachée (BCC) sur TOUS les courriels sortants
-    # destinés à l'externe (clients, fournisseurs…). Les envois marqués
+    # Adresse mise en copie cachée (BCC) sur les courriels sortants
+    # destinés à l'externe (clients, fournisseurs…). Désactivé par
+    # défaut : on ne copie plus automatiquement info@/sgiguere@ sur les
+    # envois clients (un CC explicite est ajouté au besoin avant l'envoi
+    # et reste consultable). Pour réactiver une copie de supervision,
+    # définir l'env var CLIENT_EMAIL_BCC="adresse@…". Les envois marqués
     # `internal=True` (codes/tests d'auth, rappels au personnel) en sont
-    # exclus. Vider la valeur (env CLIENT_EMAIL_BCC="") désactive la
-    # copie.
-    client_email_bcc: str = "sgiguere@immohorizon.com"
+    # de toute façon exclus.
+    client_email_bcc: str = ""
 
     # Adresse « agenda » : reçoit une invitation calendrier (.ics) pour
     # CHAQUE rendez-vous prospect planifié, même quand le RDV n'est
