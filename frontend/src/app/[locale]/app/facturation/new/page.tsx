@@ -17,15 +17,6 @@ function yyyyMmDd(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-function buildRef(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return (
-    `FAC-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
-    `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
-  );
-}
-
 export default function NewFacturePage() {
   const { onOpenSidebar } = useAppLayout();
   const router = useNextRouter();
@@ -33,7 +24,6 @@ export default function NewFacturePage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
 
-  const [reference] = useState(() => buildRef());
   const [clientId, setClientId] = useState("");
   const [projectId, setProjectId] = useState("");
   const [dueAt, setDueAt] = useState(() => {
@@ -73,7 +63,10 @@ export default function NewFacturePage() {
     setError(null);
     setSubmitting(true);
     try {
-      const payload: Record<string, unknown> = { reference };
+      // Pas de référence côté client : le backend attribue le prochain
+      // numéro séquentiel (même numérotation que les factures issues
+      // d'un projet).
+      const payload: Record<string, unknown> = {};
       if (clientId) payload.client_id = Number(clientId);
       if (projectId) payload.project_id = Number(projectId);
       if (dueAt) payload.due_at = new Date(dueAt).toISOString();
@@ -112,7 +105,8 @@ export default function NewFacturePage() {
 
         <h1 className="mt-6 text-2xl font-bold text-white">Nouvelle facture</h1>
         <p className="mt-1 text-sm text-white/60">
-          Référence générée : <span className="text-accent-500">{reference}</span>
+          Le numéro de facture est attribué automatiquement à la création
+          (numérotation séquentielle).
         </p>
 
         <form onSubmit={onSubmit} className="mt-6 max-w-2xl space-y-5">
