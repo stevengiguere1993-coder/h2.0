@@ -3534,6 +3534,7 @@ async def _twilio_outbound_bridge_impl(request: Request, db: DBSession) -> Respo
 
     call_id_raw = request.query_params.get("call_id", "")
     target = ""
+    caller_id: Optional[str] = None
     if call_id_raw and call_id_raw.isdigit():
         call = (
             await db.execute(
@@ -3542,6 +3543,12 @@ async def _twilio_outbound_bridge_impl(request: Request, db: DBSession) -> Respo
         ).scalar_one_or_none()
         if call is not None:
             target = call.to_e164
+            # Caller ID présenté à la cible = NOTRE numéro d'entreprise
+            # (celui d'où part le bon, pas le mobile interne qui sonne).
+            # Le NOM affiché (CNAM) dépend de l'enregistrement Twilio de
+            # ce numéro — voir doc. On force le numéro explicitement pour
+            # que l'affichage soit toujours le bon, même multi-numéros.
+            caller_id = call.from_e164
             # Met à jour le provider_sid avec le CallSid réel si on l'a
             # raté à l'init (latence d'API).
             sid = params.get("CallSid", "")
@@ -3555,7 +3562,9 @@ async def _twilio_outbound_bridge_impl(request: Request, db: DBSession) -> Respo
         )
         return Response(content=twiml, media_type="application/xml")
 
-    twiml = provider.build_forward_response(forward_to_e164=target)
+    twiml = provider.build_forward_response(
+        forward_to_e164=target, caller_id=caller_id
+    )
     return Response(content=twiml, media_type="application/xml")
 
 
