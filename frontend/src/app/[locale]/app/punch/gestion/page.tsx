@@ -8,7 +8,8 @@ import {
   Download,
   Loader2,
   Plus,
-  Trash2
+  Trash2,
+  Users
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
@@ -385,6 +386,13 @@ export default function PunchGestionPage() {
         onOpenSidebar={onOpenSidebar}
         rightSlot={
           <div className="flex items-center gap-2">
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/app/punch/sous-traitants" as any}
+              className="btn-secondary text-sm"
+            >
+              <Users className="mr-1.5 h-4 w-4" /> Sous-traitants
+            </Link>
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/app/paie" as any}

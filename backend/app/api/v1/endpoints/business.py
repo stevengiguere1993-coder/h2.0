@@ -22,6 +22,7 @@ from app.models.punch import Punch
 from app.models.purchase_order import PurchaseOrder
 from app.models.soumission import Soumission
 from app.models.sous_traitant import SousTraitant
+from app.models.sous_traitant_timesheet import SousTraitantTimesheet
 from app.repositories.generic import GenericCrud
 from app.schemas.business import (
     AchatCreate,
@@ -56,6 +57,11 @@ from app.schemas.sous_traitant import (
     SousTraitantCreate,
     SousTraitantRead,
     SousTraitantUpdate,
+)
+from app.schemas.sous_traitant_timesheet import (
+    SousTraitantTimesheetCreate,
+    SousTraitantTimesheetRead,
+    SousTraitantTimesheetUpdate,
 )
 from app.schemas.note_template import (
     NoteTemplateCreate,
@@ -367,6 +373,15 @@ fournisseurs_router = make_crud_router(
 sous_traitants_router = make_crud_router(
     prefix="/sous-traitants", tag="sous-traitants",
     model=SousTraitant, create_schema=SousTraitantCreate, update_schema=SousTraitantUpdate, read_schema=SousTraitantRead,
+)
+# Feuille de temps sous-traitant : saisie des heures par projet (admin
+# gestion de temps). Lecture/écriture réservées aux managers.
+sous_traitant_timesheets_router = make_crud_router(
+    prefix="/sous-traitant-timesheets", tag="sous-traitant-timesheets",
+    model=SousTraitantTimesheet,
+    create_schema=SousTraitantTimesheetCreate,
+    update_schema=SousTraitantTimesheetUpdate,
+    read_schema=SousTraitantTimesheetRead,
 )
 # #16 — Catalogue de notes prédéfinies. Lecture ouverte à tout utilisateur
 # connecté (insertion dans une soumission), écriture réservée aux managers.
