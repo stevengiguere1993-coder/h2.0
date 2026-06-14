@@ -135,6 +135,34 @@ def _date(d: Optional[datetime | date]) -> str:
     return d.strftime("%Y-%m-%d")
 
 
+def _ink_black(png_bytes: bytes) -> bytes:
+    """Recolore une signature tracée en NOIR pour le PDF.
+
+    La signature est captée sur un canvas sombre avec des traits BLANCS
+    sur fond transparent → quasi invisible sur le PDF blanc. On repeint
+    les pixels (du trait) en noir tout en conservant leur alpha
+    (anti-aliasing). Best-effort : si Pillow échoue ou si l'image est
+    opaque (pas de fond transparent, donc pas une signature blanche),
+    on retourne l'original tel quel.
+    """
+    try:
+        from PIL import Image as PILImage  # type: ignore
+
+        img = PILImage.open(io.BytesIO(png_bytes)).convert("RGBA")
+        px = list(img.getdata())
+        # Pas de transparence → on ne risque pas de transformer un fond
+        # blanc en bloc noir.
+        if px and min(a for *_rgb, a in px) > 250:
+            return png_bytes
+        img.putdata([(0, 0, 0, a) for *_rgb, a in px])
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        return out.getvalue()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Recolorisation signature échouée: %s", exc)
+        return png_bytes
+
+
 async def _load(db: AsyncSession, soumission_id: int):
     sm = (
         await db.execute(
@@ -532,7 +560,9 @@ def _render_bytes(
         story.append(Paragraph("SIGNATURE DU CLIENT", s["accent"]))
         try:
             sig_img = Image(
-                io.BytesIO(sig_bytes), width=60 * mm, height=24 * mm
+                io.BytesIO(_ink_black(sig_bytes)),
+                width=60 * mm,
+                height=24 * mm,
             )
             sig_img.hAlign = "LEFT"
             story.append(sig_img)
