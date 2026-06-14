@@ -12,13 +12,14 @@ trail — the signed IP and name are captured when accepted.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DBSession
@@ -30,6 +31,8 @@ from app.services.soumission_pdf import render_soumission_pdf
 
 
 router = APIRouter(prefix="/public/soumissions", tags=["public-soumissions"])
+
+log = logging.getLogger(__name__)
 
 
 class PublicItem(BaseModel):
@@ -245,98 +248,140 @@ async def public_accept(
         raw_ip = raw_ip.split(",")[0].strip()[:64]
     sm.signed_ip = raw_ip
 
-    # Persist the drawn signature (guaranteed present at this point).
-    sm.signature_image = sig_bytes
-    sm.signature_image_content_type = sig_ct
+    # Cœur de l'acceptation (statut + nom + IP) : ces colonnes existent
+    # toujours, ce flush DOIT réussir. Tout le reste est best-effort et
+    # ISOLÉ par SAVEPOINT (`begin_nested`) pour qu'un échec d'effet de
+    # bord n'avorte JAMAIS la transaction principale ni ne renvoie un
+    # HTTP 500 au client.
+    await db.flush()
 
-    # Propagate to prospect + auto-create client (same logic as the
-    # internal /status endpoint).
-    if sm.contact_request_id:
-        cr = (
+    # Signature tracée : écrite via UPDATE isolé. On ne passe pas par
+    # l'attribut ORM pour ne pas « salir » sm — si la colonne BYTEA
+    # manque sur une vieille base, le SAVEPOINT seul est annulé et le
+    # reste de la transaction survit (la signature reste exigée côté
+    # client ; seul son archivage image dégrade).
+    try:
+        async with db.begin_nested():
             await db.execute(
-                select(ContactRequest).where(
-                    ContactRequest.id == sm.contact_request_id
+                update(Soumission)
+                .where(Soumission.id == sm.id)
+                .values(
+                    signature_image=sig_bytes,
+                    signature_image_content_type=sig_ct,
                 )
             )
-        ).scalar_one_or_none()
-        if cr is not None:
-            cr.status = ContactRequestStatus.WON.value
-            existing = (
-                await db.execute(
-                    select(Client).where(Client.contact_request_id == cr.id)
-                )
-            ).scalar_one_or_none()
-            if existing is None:
-                client = Client(
-                    name=cr.name,
-                    email=cr.email,
-                    phone=cr.phone,
-                    address=cr.address,
-                    contact_request_id=cr.id,
-                )
-                db.add(client)
-                await db.flush()
-                if sm.client_id is None:
-                    sm.client_id = client.id
-            elif sm.client_id is None:
-                sm.client_id = existing.id
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "Signature image non stockée pour soumission %s", sm.id,
+            exc_info=True,
+        )
 
-    await db.flush()
+    # Propagation prospect → client (WON + auto-création client).
+    try:
+        async with db.begin_nested():
+            if sm.contact_request_id:
+                cr = (
+                    await db.execute(
+                        select(ContactRequest).where(
+                            ContactRequest.id == sm.contact_request_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                if cr is not None:
+                    cr.status = ContactRequestStatus.WON.value
+                    existing = (
+                        await db.execute(
+                            select(Client).where(
+                                Client.contact_request_id == cr.id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if existing is None:
+                        client = Client(
+                            name=cr.name,
+                            email=cr.email,
+                            phone=cr.phone,
+                            address=cr.address,
+                            contact_request_id=cr.id,
+                        )
+                        db.add(client)
+                        await db.flush()
+                        if sm.client_id is None:
+                            sm.client_id = client.id
+                    elif sm.client_id is None:
+                        sm.client_id = existing.id
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "Propagation client échouée pour soumission %s", sm.id,
+            exc_info=True,
+        )
 
     # Auto-création du projet + facture d'acompte DRAFT dès la
     # signature en ligne. La facture reste en DRAFT dans /facturation
     # — l'admin clique « Envoyer au client » plus tard.
     try:
-        from app.api.v1.endpoints.soumission_to_project import (
-            provision_project_for_soumission,
-        )
-        await provision_project_for_soumission(db, sm)
-        await db.flush()
+        async with db.begin_nested():
+            from app.api.v1.endpoints.soumission_to_project import (
+                provision_project_for_soumission,
+            )
+            await provision_project_for_soumission(db, sm)
     except Exception:  # noqa: BLE001
         # Best-effort : ne pas bloquer la signature client si la
         # création du projet échoue. L'admin pourra relancer
         # manuellement.
-        pass
+        log.warning(
+            "Provision projet échouée pour soumission %s", sm.id,
+            exc_info=True,
+        )
 
     # Contrat signé par le client → on archive le PDF signé (les deux
     # signatures) dans les documents de la fiche client. Best-effort.
     if getattr(sm, "kind", "quote") == "contract" and sm.client_id:
         try:
-            from app.models.client_document import ClientDocument
+            async with db.begin_nested():
+                from app.models.client_document import ClientDocument
 
-            rendered = await render_soumission_pdf(db, sm.id)
-            if rendered is not None:
-                _, pdf_bytes = rendered
-                db.add(
-                    ClientDocument(
-                        client_id=sm.client_id,
-                        name=f"contrat-{sm.reference}-signe.pdf",
-                        content_type="application/pdf",
-                        source="contract",
-                        soumission_id=sm.id,
-                        blob=pdf_bytes,
+                rendered = await render_soumission_pdf(db, sm.id)
+                if rendered is not None:
+                    _, pdf_bytes = rendered
+                    db.add(
+                        ClientDocument(
+                            client_id=sm.client_id,
+                            name=f"contrat-{sm.reference}-signe.pdf",
+                            content_type="application/pdf",
+                            source="contract",
+                            soumission_id=sm.id,
+                            blob=pdf_bytes,
+                        )
                     )
-                )
-                await db.flush()
         except Exception:  # noqa: BLE001
-            pass
+            log.warning(
+                "Archivage PDF contrat échoué pour soumission %s", sm.id,
+                exc_info=True,
+            )
 
+    await db.flush()
     await db.refresh(sm)
 
-    # Notify managers+ that the quote was signed online
+    # Notify managers+ that the quote was signed online (best-effort,
+    # isolé pour ne pas avorter la transaction au commit final).
     try:
-        from app.services.notifications import notify_role
+        async with db.begin_nested():
+            from app.services.notifications import notify_role
 
-        await notify_role(
-            db,
-            min_role="manager",
-            kind="soumission.accepted",
-            title=f"Soumission acceptée — {sm.reference}",
-            body=f"Signée par {sm.signed_name} en ligne.",
-            href=f"/app/soumissions/{sm.id}",
+            await notify_role(
+                db,
+                min_role="manager",
+                kind="soumission.accepted",
+                title=f"Soumission acceptée — {sm.reference}",
+                body=f"Signée par {sm.signed_name} en ligne.",
+                href=f"/app/soumissions/{sm.id}",
+            )
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "Notification soumission acceptée échouée pour %s", sm.id,
+            exc_info=True,
         )
-    except Exception:
-        pass
 
     return await public_read(token, db)
 

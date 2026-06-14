@@ -3,13 +3,14 @@ bon de travail from a tokenized link."""
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DBSession
@@ -19,6 +20,8 @@ from app.services.bon_pdf import render_bon_pdf
 
 
 router = APIRouter(prefix="/public/bons", tags=["public-bons"])
+
+log = logging.getLogger(__name__)
 
 
 class PublicItem(BaseModel):
@@ -178,9 +181,26 @@ async def public_accept(
         raw_ip = raw_ip.split(",")[0].strip()[:64]
     bon.signature_ip = raw_ip
 
-    # Persist the drawn signature (guaranteed present at this point).
-    bon.signature_image = sig_bytes
-    bon.signature_image_content_type = sig_ct
+    # Cœur de la signature (statut + nom + IP) : ce flush DOIT réussir.
     await db.flush()
+
+    # Signature tracée : écrite via UPDATE isolé par SAVEPOINT. Si la
+    # colonne BYTEA manque sur une vieille base, seul le SAVEPOINT est
+    # annulé — la signature du bon n'est jamais bloquée par un 500.
+    try:
+        async with db.begin_nested():
+            await db.execute(
+                update(BonTravail)
+                .where(BonTravail.id == bon.id)
+                .values(
+                    signature_image=sig_bytes,
+                    signature_image_content_type=sig_ct,
+                )
+            )
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "Signature image non stockée pour bon %s", bon.id, exc_info=True
+        )
+
     await db.refresh(bon)
     return await public_read(token, db)
