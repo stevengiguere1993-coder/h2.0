@@ -224,7 +224,7 @@ export default function FacturationPage() {
         ) : items.length === 0 ? (
           <EmptyState />
         ) : (
-          <div className="flex gap-4 overflow-x-auto pb-4">
+          <div className="space-y-3">
             {COLUMNS.map((col) => {
               const cards = byColumn[col.id] || [];
               const isHover = hoverCol === col.id;
@@ -246,42 +246,15 @@ export default function FacturationPage() {
                 }
               };
 
-              // Colonne repliée : bande verticale étroite, cliquable
-              // pour la rouvrir. Accepte toujours le drop d'une carte.
-              if (isCollapsed) {
-                return (
-                  <button
-                    key={col.id}
-                    type="button"
-                    onClick={() => toggleCollapsed(col.id)}
-                    title={`Afficher « ${col.label} »`}
-                    {...dropHandlers}
-                    className={`flex w-14 min-w-[56px] flex-shrink-0 flex-col items-center gap-3 rounded-xl border bg-brand-900/60 py-3 transition ${
-                      isHover
-                        ? "border-accent-500 bg-brand-900"
-                        : "border-brand-800 hover:border-accent-500"
-                    }`}
-                  >
-                    <ChevronDown className="h-4 w-4 -rotate-90 text-white/70" />
-                    <span className={`h-2 w-2 rounded-full ${col.dot}`} />
-                    <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
-                      {cards.length}
-                    </span>
-                    <span
-                      className="text-sm font-semibold text-white"
-                      style={{ writingMode: "vertical-rl" }}
-                    >
-                      {col.label}
-                    </span>
-                  </button>
-                );
-              }
-
+              // Barres horizontales pleine largeur, empilées. L'en-tête
+              // se clique pour dérouler/replier ; les factures s'affichent
+              // en rangée horizontale à l'intérieur. La barre reste une
+              // cible de drop même repliée.
               return (
                 <div
                   key={col.id}
                   {...dropHandlers}
-                  className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
+                  className={`rounded-xl border bg-brand-900/60 transition ${
                     isHover
                       ? "border-accent-500 bg-brand-900"
                       : "border-brand-800"
@@ -290,11 +263,19 @@ export default function FacturationPage() {
                   <button
                     type="button"
                     onClick={() => toggleCollapsed(col.id)}
-                    title={`Replier « ${col.label} »`}
-                    className="flex w-full items-center justify-between border-b border-brand-800 px-4 py-3 text-left transition hover:bg-brand-900"
+                    title={
+                      isCollapsed
+                        ? `Dérouler « ${col.label} »`
+                        : `Replier « ${col.label} »`
+                    }
+                    className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-brand-900"
                   >
                     <div className="flex items-center gap-2">
-                      <ChevronDown className="h-4 w-4 text-white/70" />
+                      <ChevronDown
+                        className={`h-4 w-4 text-white/70 transition-transform ${
+                          isCollapsed ? "-rotate-90" : ""
+                        }`}
+                      />
                       <span className={`h-2 w-2 rounded-full ${col.dot}`} />
                       <h2 className="text-sm font-semibold text-white">
                         {col.label}
@@ -305,32 +286,44 @@ export default function FacturationPage() {
                     </span>
                   </button>
 
-                  <div className="flex-1 space-y-3 p-3">
-                    {cards.length === 0 ? (
-                      <p className="py-8 text-center text-xs text-white/40">
-                        Aucune facture
-                      </p>
-                    ) : (
-                      cards.map((f) => (
-                        <Card
-                          key={f.id}
-                          fa={f}
-                          clientName={
-                            f.client_id ? clientNames.get(f.client_id) ?? null : null
-                          }
-                          projectName={
-                            f.project_id ? projectNames.get(f.project_id) ?? null : null
-                          }
-                          dragging={dragging === f.id}
-                          onDragStart={() => setDragging(f.id)}
-                          onDragEnd={() => {
-                            setDragging(null);
-                            setHoverCol(null);
-                          }}
-                        />
-                      ))
-                    )}
-                  </div>
+                  {!isCollapsed ? (
+                    <div className="border-t border-brand-800 p-3">
+                      {cards.length === 0 ? (
+                        <p className="py-6 text-center text-xs text-white/40">
+                          Aucune facture
+                        </p>
+                      ) : (
+                        <div className="flex gap-3 overflow-x-auto pb-1">
+                          {cards.map((f) => (
+                            <div
+                              key={f.id}
+                              className="w-72 flex-shrink-0"
+                            >
+                              <Card
+                                fa={f}
+                                clientName={
+                                  f.client_id
+                                    ? clientNames.get(f.client_id) ?? null
+                                    : null
+                                }
+                                projectName={
+                                  f.project_id
+                                    ? projectNames.get(f.project_id) ?? null
+                                    : null
+                                }
+                                dragging={dragging === f.id}
+                                onDragStart={() => setDragging(f.id)}
+                                onDragEnd={() => {
+                                  setDragging(null);
+                                  setHoverCol(null);
+                                }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
