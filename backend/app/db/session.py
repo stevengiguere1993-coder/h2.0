@@ -152,6 +152,24 @@ async def ensure_critical_columns() -> None:
         # Classement par adresse + nature du montant (garantie / T&M).
         ("bons_travail", "address", "VARCHAR(500)"),
         ("bons_travail", "bon_type", "VARCHAR(32) NOT NULL DEFAULT 'temps_materiel'"),
+        # Signature électronique en ligne (soumissions + bons de travail).
+        # Ces colonnes étaient seulement dans le bloc transactionnel
+        # `additive_columns` d'init_db : si init_db abort en cours de route,
+        # elles ne sont jamais créées et /accept plante en HTTP 500 au
+        # moment d'écrire la signature (`signature_image` est `deferred`,
+        # donc invisible en lecture — le bug ne se déclenche qu'à la
+        # signature). On les isole ici pour qu'elles existent toujours.
+        ("soumissions", "signature_token", "VARCHAR(64)"),
+        ("soumissions", "signed_name", "VARCHAR(255)"),
+        ("soumissions", "signed_ip", "VARCHAR(64)"),
+        ("soumissions", "signature_image", "BYTEA"),
+        ("soumissions", "signature_image_content_type", "VARCHAR(100)"),
+        ("bons_travail", "signature_token", "VARCHAR(64)"),
+        ("bons_travail", "signed_at", "TIMESTAMP WITH TIME ZONE"),
+        ("bons_travail", "signed_by_name", "VARCHAR(255)"),
+        ("bons_travail", "signature_ip", "VARCHAR(64)"),
+        ("bons_travail", "signature_image", "BYTEA"),
+        ("bons_travail", "signature_image_content_type", "VARCHAR(100)"),
     )
     for table, column, col_type in critical_columns:
         try:

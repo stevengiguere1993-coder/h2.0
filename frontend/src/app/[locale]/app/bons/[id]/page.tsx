@@ -431,35 +431,21 @@ export default function BonDetailPage() {
                   </p>
                 </div>
               </button>
-              {b.requires_signature === false ? (
-                <div className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4">
-                  <FileText className="mt-0.5 h-5 w-5 flex-shrink-0 text-white/50" />
-                  <div>
-                    <p className="text-sm font-semibold text-white">
-                      Demande interne — sans signature
-                    </p>
-                    <p className="mt-0.5 text-xs text-white/60">
-                      Gestion immobilière : aucun envoi pour signature requis.
-                    </p>
-                  </div>
+              <button
+                type="button"
+                onClick={() => setSendOpen(true)}
+                className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
+              >
+                <Mail className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
+                <div>
+                  <p className="text-sm font-semibold text-white">
+                    {b.sent_at ? "Renvoyer pour signature" : "Envoyer pour signature"}
+                  </p>
+                  <p className="mt-0.5 text-xs text-white/60">
+                    PDF + lien signature électronique.
+                  </p>
                 </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setSendOpen(true)}
-                  className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
-                >
-                  <Mail className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
-                  <div>
-                    <p className="text-sm font-semibold text-white">
-                      {b.sent_at ? "Renvoyer au client" : "Envoyer au client"}
-                    </p>
-                    <p className="mt-0.5 text-xs text-white/60">
-                      PDF + lien signature électronique.
-                    </p>
-                  </div>
-                </button>
-              )}
+              </button>
               <button
                 type="button"
                 onClick={manageProject}

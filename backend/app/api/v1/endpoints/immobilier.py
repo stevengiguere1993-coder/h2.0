@@ -789,8 +789,10 @@ async def create_bon_from_immeuble(
         address=f"{where}{loc}",
         status="draft",
         origin="gestion_immo",
-        # Demande interne → pas de signature client requise.
-        requires_signature=False,
+        # Signature toujours requise, même pour une demande interne de
+        # gestion immobilière (le bon part chez l'exécutant / la
+        # compagnie pour signature au même titre qu'un client externe).
+        requires_signature=True,
     )
     bon.created_at = _now()
     bon.updated_at = _now()

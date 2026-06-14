@@ -100,8 +100,10 @@ export default function NewBonPage() {
       // Garantie : rien n'est chargé au client.
       payload.amount = bonType === "garantie" ? 0 : amount ? Number(amount) : null;
       if (assigneeId) payload.assignee_user_id = Number(assigneeId);
-      // Demande interne (gestion immobilière) → pas de signature.
-      payload.requires_signature = !internal;
+      // Signature toujours requise — qu'il s'agisse d'une demande
+      // interne (gestion immobilière) ou d'un client externe. La case
+      // « interne » ne sert plus qu'au classement (origin).
+      payload.requires_signature = true;
       if (internal) payload.origin = "gestion_immo";
 
       const res = await authedFetch("/api/v1/bons-travail", {
@@ -265,7 +267,8 @@ export default function NewBonPage() {
             <span className="text-sm text-white/85">
               Demande interne (gestion immobilière)
               <span className="mt-0.5 block text-xs text-white/55">
-                Pas de signature client requise — usage interne.
+                Classement interne. Le bon reste à faire signer, comme pour
+                un client externe.
               </span>
             </span>
           </label>
