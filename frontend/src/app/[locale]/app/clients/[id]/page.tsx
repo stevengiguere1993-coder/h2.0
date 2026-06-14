@@ -942,6 +942,17 @@ function ClientDocuments({
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
+  // Ouvre le PDF de la soumission (avec la signature tracée du client
+  // rendue dessus depuis le backend) dans un nouvel onglet.
+  async function viewSoumissionPdf(soumissionId: number) {
+    const res = await authedFetch(`/api/v1/soumissions/${soumissionId}/pdf`);
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener,noreferrer");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
   return (
     <section className="space-y-2">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1043,10 +1054,11 @@ function ClientDocuments({
               <ul className="space-y-2">
                 {signedSoumissions.map((s) => (
                   <li key={s.id}>
-                    <Link
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      href={`/app/soumissions/${s.id}` as any}
-                      className="flex items-start justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-sm hover:border-emerald-500/50"
+                    <button
+                      type="button"
+                      onClick={() => void viewSoumissionPdf(s.id)}
+                      title="Ouvrir le PDF signé"
+                      className="flex w-full items-start justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-left text-sm hover:border-emerald-500/50"
                     >
                       <div className="min-w-0">
                         <p className="truncate font-semibold text-white">
@@ -1059,11 +1071,14 @@ function ClientDocuments({
                             ? ` le ${new Date(s.accepted_at).toLocaleDateString("fr-CA")}`
                             : ""}
                         </p>
+                        <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-emerald-300/80">
+                          <FileText className="h-3 w-3" /> Voir le PDF signé
+                        </p>
                       </div>
                       <span className="shrink-0 text-sm font-semibold text-emerald-300">
                         {fmtMoney(s.total)}
                       </span>
-                    </Link>
+                    </button>
                   </li>
                 ))}
               </ul>
