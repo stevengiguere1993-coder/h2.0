@@ -108,6 +108,10 @@ export default function PublicSoumissionPage() {
       setError("Ton nom complet est requis pour signer.");
       return;
     }
+    if (!signatureDataUrl) {
+      setError("La signature tracée est obligatoire — signe dans le cadre.");
+      return;
+    }
     setSubmitting("accept");
     setError(null);
     try {
@@ -366,7 +370,7 @@ export default function PublicSoumissionPage() {
 
             <div className="mt-4">
               <label className="text-xs text-white/70">
-                Signature tracée (optionnel)
+                Signature tracée (obligatoire)
               </label>
               <div className="mt-1">
                 <SignaturePad onChange={setSignatureDataUrl} />
@@ -381,7 +385,7 @@ export default function PublicSoumissionPage() {
               <button
                 type="button"
                 onClick={accept}
-                disabled={submitting !== null || !signName.trim()}
+                disabled={submitting !== null || !signName.trim() || !signatureDataUrl}
                 className="inline-flex items-center gap-2 rounded-lg bg-accent-500 px-5 py-3 text-sm font-bold text-brand-950 hover:bg-accent-400 disabled:opacity-60"
               >
                 {submitting === "accept" ? (
