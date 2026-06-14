@@ -156,6 +156,15 @@ async def public_accept(
             status.HTTP_409_CONFLICT,
             detail="Ce bon n'est plus modifiable.",
         )
+    # Signature tracée OBLIGATOIRE : le nom seul ne suffit pas. Validé
+    # avant toute mutation pour ne rien persister en cas de refus.
+    sig_bytes, sig_ct = _decode_data_url(data.signature_image_data_url)
+    if not sig_bytes:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="La signature tracée est obligatoire.",
+        )
+
     now = datetime.now(timezone.utc)
     bon.status = BonTravailStatus.SIGNED.value
     bon.signed_at = now
@@ -169,10 +178,9 @@ async def public_accept(
         raw_ip = raw_ip.split(",")[0].strip()[:64]
     bon.signature_ip = raw_ip
 
-    sig_bytes, sig_ct = _decode_data_url(data.signature_image_data_url)
-    if sig_bytes:
-        bon.signature_image = sig_bytes
-        bon.signature_image_content_type = sig_ct
+    # Persist the drawn signature (guaranteed present at this point).
+    bon.signature_image = sig_bytes
+    bon.signature_image_content_type = sig_ct
     await db.flush()
     await db.refresh(bon)
     return await public_read(token, db)

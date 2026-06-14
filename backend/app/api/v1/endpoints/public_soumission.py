@@ -218,6 +218,16 @@ async def public_accept(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cette soumission n'est plus active.",
         )
+    # Signature tracée OBLIGATOIRE : on refuse l'acceptation tant qu'aucun
+    # tracé n'est fourni (le nom seul ne suffit pas). Validé avant toute
+    # mutation pour ne rien persister en cas de refus.
+    sig_bytes, sig_ct = _decode_data_url(data.signature_image_data_url)
+    if not sig_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="La signature tracée est obligatoire.",
+        )
+
     now = datetime.now(timezone.utc)
     sm.status = SoumissionStatus.ACCEPTED.value
     if sm.accepted_at is None:
@@ -235,11 +245,9 @@ async def public_accept(
         raw_ip = raw_ip.split(",")[0].strip()[:64]
     sm.signed_ip = raw_ip
 
-    # Persist the drawn signature when provided.
-    sig_bytes, sig_ct = _decode_data_url(data.signature_image_data_url)
-    if sig_bytes:
-        sm.signature_image = sig_bytes
-        sm.signature_image_content_type = sig_ct
+    # Persist the drawn signature (guaranteed present at this point).
+    sm.signature_image = sig_bytes
+    sm.signature_image_content_type = sig_ct
 
     # Propagate to prospect + auto-create client (same logic as the
     # internal /status endpoint).
