@@ -363,6 +363,67 @@ async def public_accept(
     await db.flush()
     await db.refresh(sm)
 
+    # Envoi au client de son PDF signé (preuve avec sa signature tracée
+    # rendue dessus). Best-effort : un échec d'envoi ne bloque jamais la
+    # signature. S'applique aux soumissions comme aux contrats.
+    try:
+        recipient: Optional[str] = None
+        if sm.client_id:
+            cl = await db.get(Client, sm.client_id)
+            if cl is not None:
+                recipient = cl.email
+        if not recipient and sm.contact_request_id:
+            cr = (
+                await db.execute(
+                    select(ContactRequest).where(
+                        ContactRequest.id == sm.contact_request_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if cr is not None:
+                recipient = cr.email
+        if recipient:
+            from app.integrations.email_graph import (
+                EmailAttachment,
+                get_mailer,
+            )
+
+            mailer = get_mailer()
+            if mailer.ready:
+                rendered = await render_soumission_pdf(db, sm.id)
+                if rendered is not None:
+                    _, pdf_bytes = rendered
+                    is_contract = getattr(sm, "kind", "quote") == "contract"
+                    label = "contrat" if is_contract else "soumission"
+                    accord = "" if is_contract else "e"
+                    await mailer.send(
+                        to=[recipient],
+                        subject=(
+                            f"Votre {label} signé{accord} — {sm.reference}"
+                        ),
+                        html_body=(
+                            "<p>Bonjour,</p>"
+                            f"<p>Merci d'avoir signé votre {label} "
+                            f"<b>{sm.reference}</b>. Vous trouverez en "
+                            "pièce jointe le PDF avec votre signature.</p>"
+                            "<p>L'équipe Horizon Services Immobiliers</p>"
+                        ),
+                        reply_to=mailer.sender,
+                        attachments=[
+                            EmailAttachment(
+                                name=f"{label}-{sm.reference}-signe.pdf",
+                                content_bytes=pdf_bytes,
+                                content_type="application/pdf",
+                            )
+                        ],
+                    )
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "Envoi du PDF signé au client échoué pour soumission %s",
+            sm.id,
+            exc_info=True,
+        )
+
     # Notify managers+ that the quote was signed online (best-effort,
     # isolé pour ne pas avorter la transaction au commit final).
     try:

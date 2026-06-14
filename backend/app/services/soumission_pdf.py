@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from app.models.contact_request import ContactRequest
 from app.models.client import Client
@@ -137,7 +138,12 @@ def _date(d: Optional[datetime | date]) -> str:
 async def _load(db: AsyncSession, soumission_id: int):
     sm = (
         await db.execute(
-            select(Soumission).where(Soumission.id == soumission_id)
+            # signature_image est `deferred` : on l'« undefer » pour
+            # pouvoir dessiner la signature tracée du client sur le PDF
+            # (le rendu ReportLab est synchrone, pas de lazy-load async).
+            select(Soumission)
+            .where(Soumission.id == soumission_id)
+            .options(undefer(Soumission.signature_image))
         )
     ).scalar_one_or_none()
     if sm is None:
@@ -512,6 +518,33 @@ def _render_bytes(
             s["small"],
         )
     )
+
+    # Bloc « signature du client » : preuve visuelle de la signature
+    # tracée en ligne. Affiché seulement quand la soumission est
+    # acceptée ET qu'une image de signature existe.
+    sig_bytes = None
+    try:
+        sig_bytes = sm.signature_image
+    except Exception:
+        sig_bytes = None
+    if getattr(sm, "status", "") == "accepted" and sig_bytes:
+        story.append(Spacer(1, 18))
+        story.append(Paragraph("SIGNATURE DU CLIENT", s["accent"]))
+        try:
+            sig_img = Image(
+                io.BytesIO(sig_bytes), width=60 * mm, height=24 * mm
+            )
+            sig_img.hAlign = "LEFT"
+            story.append(sig_img)
+        except Exception as exc:
+            log.warning("Could not embed client signature in PDF: %s", exc)
+        story.append(Paragraph("_______________________________", s["small"]))
+        signer = getattr(sm, "signed_name", None) or "Client"
+        story.append(Paragraph(f"Signée par <b>{signer}</b>", s["body"]))
+        if getattr(sm, "accepted_at", None):
+            story.append(Paragraph(f"Le {_date(sm.accepted_at)}", s["small"]))
+        if getattr(sm, "signed_ip", None):
+            story.append(Paragraph(f"IP : {sm.signed_ip}", s["small"]))
 
     story.append(Spacer(1, 16))
     story.append(
