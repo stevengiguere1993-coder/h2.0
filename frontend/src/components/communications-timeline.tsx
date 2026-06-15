@@ -7,7 +7,7 @@
 // du voicemail, etc.) restent dans /telephonie : on offre seulement
 // un lien rapide vers le drawer correspondant.
 
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   Bot,
   Loader2,
@@ -433,6 +433,44 @@ export function CommunicationsTimeline({
   );
 }
 
+/** Texte de message déroulable. Replié = 3 lignes max (line-clamp) ;
+ *  déplié = texte complet qui revient à la ligne (lisible en entier sur
+ *  mobile). Le bouton « Voir plus » n'apparaît que si le texte est long
+ *  ou multi-lignes. */
+function ExpandableText({
+  text,
+  className,
+  icon
+}: {
+  text: string;
+  className?: string;
+  icon?: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 140 || text.includes("\n");
+  return (
+    <div className="mt-1">
+      <p
+        className={`text-xs ${className ?? ""} ${
+          open ? "whitespace-pre-wrap break-words" : "line-clamp-3 break-words"
+        }`}
+      >
+        {icon}
+        {text}
+      </p>
+      {long ? (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="mt-0.5 text-[11px] font-semibold text-accent-400 hover:text-accent-300"
+        >
+          {open ? "Voir moins" : "Voir plus"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function EventRow({
   ev,
   onReload
@@ -531,27 +569,24 @@ function EventRow({
             {isEmail ? (
               <>
                 {ev.subject ? (
-                  <p className="mt-1 text-xs font-semibold text-white/90">
+                  <p className="mt-1 break-words text-xs font-semibold text-white/90">
                     {ev.subject}
                   </p>
                 ) : null}
                 {ev.body ? (
-                  <p className="mt-0.5 line-clamp-3 text-xs text-white/70">
-                    {ev.body}
-                  </p>
+                  <ExpandableText text={ev.body} className="text-white/70" />
                 ) : null}
               </>
             ) : null}
             {isSms && ev.body ? (
-              <p className="mt-1 line-clamp-3 text-xs text-white/80">
-                {ev.body}
-              </p>
+              <ExpandableText text={ev.body} className="text-white/80" />
             ) : null}
             {isVoicemail && ev.voicemail_summary ? (
-              <p className="mt-1 line-clamp-3 text-xs text-white/80">
-                <Mic className="mr-1 inline h-3 w-3" />
-                {ev.voicemail_summary}
-              </p>
+              <ExpandableText
+                text={ev.voicemail_summary}
+                className="text-white/80"
+                icon={<Mic className="mr-1 inline h-3 w-3" />}
+              />
             ) : null}
             {isCall && ev.call_summary ? (
               <p className="mt-1 text-xs text-white/80">
