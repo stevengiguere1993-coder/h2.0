@@ -235,6 +235,19 @@ async def create_rencontre(
     db.add(r)
     await db.commit()
     await db.refresh(r)
+
+    # Section par défaut : on évite à l'utilisateur l'étape « ajouter un
+    # topic ». Le sujet est déjà le nom de la rencontre — on crée donc une
+    # section prête à recevoir audio / texte / dictée immédiatement.
+    db.add(
+        RencontreSection(
+            rencontre_id=r.id,
+            position=0,
+            title=r.title,
+        )
+    )
+    await db.commit()
+    await db.refresh(r)
     return RencontreRead.model_validate(r)
 
 
