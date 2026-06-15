@@ -307,6 +307,17 @@ async def _run() -> None:
         # (will use later for soumission-specific logic).
         _ = Soumission
 
+    # Moteur de relances : enrôle les nouveaux leads, fait avancer la
+    # cadence et envoie les courriels dus. Session + commit propres,
+    # isolé pour ne pas faire échouer le reste du job.
+    try:
+        from app.services.relance_engine import run_relance_cadence
+
+        stats = await run_relance_cadence()
+        log.info("relance cadence: %s", stats)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("relance cadence engine failed: %s", exc)
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
