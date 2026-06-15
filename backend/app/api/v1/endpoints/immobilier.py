@@ -41,6 +41,7 @@ from app.models.project_photo import ProjectPhoto
 from app.models.sous_traitant import SousTraitant
 from app.models.immobilier import (
     Bail,
+    BailRenouvellement,
     DepenseImmeuble,
     BailStatus,
     Evaluation,
@@ -1688,7 +1689,7 @@ async def loyers_overview(
         await db.execute(
             select(Bail).where(
                 Bail.logement_id.in_(list(log_by_id.keys())),
-                Bail.status == "ACTIF",
+                Bail.status == BailStatus.ACTIF.value,
             )
         )
     ).scalars().all()
@@ -1782,6 +1783,158 @@ async def loyers_overview(
         nb_attente=nb_attente,
     )
 
+
+# ── Échéances de bail (avis de renouvellement) ─────────────────────────
+
+
+class EcheanceRow(BaseModel):
+    bail_id: int
+    immeuble: str
+    logement: str
+    locataire: str
+    date_fin: date
+    fenetre_debut: date  # avis au plus tôt (≈ 6 mois avant la fin)
+    fenetre_fin: date    # avis au plus tard (≈ 3 mois avant la fin)
+    statut: str          # a_envoyer | en_retard | a_venir
+    jours: int           # jours avant l'ouverture (a_venir) ou avant la fin
+    loyer_mensuel: float
+
+
+class EcheanceOverview(BaseModel):
+    rows: List[EcheanceRow]
+    nb_a_envoyer: int
+    nb_en_retard: int
+    nb_a_venir: int
+
+
+@router.get("/baux/echeances", response_model=EcheanceOverview)
+async def baux_echeances(
+    db: DBSession,
+    user: CurrentUser,
+    entreprise_id: Optional[int] = None,
+    horizon_jours: int = 45,
+) -> EcheanceOverview:
+    """Baux actifs dont la fenêtre d'avis de renouvellement approche.
+
+    Au Québec, l'avis de modification d'un bail de 12 mois doit être
+    transmis entre 6 et 3 mois avant la fin. On expose les baux dont la
+    fenêtre s'ouvre bientôt (« à venir »), est ouverte (« à envoyer »),
+    ou est dépassée mais le bail pas encore terminé (« en retard »). Les
+    baux pour lesquels un avis a déjà été enregistré dans le cycle sont
+    écartés.
+    """
+    _require_volet(user)
+    today = datetime.now(timezone.utc).date()
+
+    imm_q = select(Immeuble).where(Immeuble.is_active.is_(True))
+    if entreprise_id is not None:
+        imm_q = imm_q.where(
+            Immeuble.owner_entreprise_id == int(entreprise_id)
+        )
+    immeubles = (await db.execute(imm_q)).scalars().all()
+    visible = await visible_immeuble_ids(db, user)
+    if visible is not None:
+        immeubles = [i for i in immeubles if i.id in visible]
+    imm_by_id = {i.id: i for i in immeubles}
+    if not imm_by_id:
+        return EcheanceOverview(
+            rows=[], nb_a_envoyer=0, nb_en_retard=0, nb_a_venir=0
+        )
+
+    logements = (
+        await db.execute(
+            select(Logement).where(
+                Logement.immeuble_id.in_(list(imm_by_id.keys()))
+            )
+        )
+    ).scalars().all()
+    log_by_id = {l.id: l for l in logements}
+
+    baux = (
+        await db.execute(
+            select(Bail).where(
+                Bail.logement_id.in_(list(log_by_id.keys())),
+                Bail.status == BailStatus.ACTIF.value,
+            )
+        )
+    ).scalars().all()
+
+    loc_by_id: dict = {}
+    loc_ids = {b.locataire_id for b in baux if b.locataire_id}
+    if loc_ids:
+        for loc in (
+            await db.execute(
+                select(Locataire).where(Locataire.id.in_(list(loc_ids)))
+            )
+        ).scalars().all():
+            loc_by_id[loc.id] = loc
+
+    # Avis déjà envoyés (par bail).
+    renouv_by_bail: dict = {}
+    bail_ids = [b.id for b in baux]
+    if bail_ids:
+        for r in (
+            await db.execute(
+                select(BailRenouvellement).where(
+                    BailRenouvellement.bail_id.in_(bail_ids)
+                )
+            )
+        ).scalars().all():
+            renouv_by_bail.setdefault(r.bail_id, []).append(r.avis_envoye_le)
+
+    rows: List[EcheanceRow] = []
+    for b in baux:
+        if not b.date_fin:
+            continue
+        window_start = b.date_fin - timedelta(days=183)
+        window_end = b.date_fin - timedelta(days=91)
+        # Avis déjà transmis dans ce cycle ?
+        if any(
+            d and d >= window_start for d in renouv_by_bail.get(b.id, [])
+        ):
+            continue
+        if today >= b.date_fin:
+            continue  # bail terminé (reconduit automatiquement)
+        if today < window_start - timedelta(days=horizon_jours):
+            continue  # trop loin pour alerter
+
+        if today < window_start:
+            statut, jours = "a_venir", (window_start - today).days
+        elif today <= window_end:
+            statut, jours = "a_envoyer", (window_end - today).days
+        else:
+            statut, jours = "en_retard", (b.date_fin - today).days
+
+        logement = log_by_id.get(b.logement_id)
+        immeuble = (
+            imm_by_id.get(logement.immeuble_id) if logement else None
+        )
+        locataire = loc_by_id.get(b.locataire_id)
+        rows.append(
+            EcheanceRow(
+                bail_id=b.id,
+                immeuble=(immeuble.name if immeuble else "—"),
+                logement=(logement.numero if logement else "—"),
+                locataire=(
+                    locataire.full_name if locataire else "—"
+                ),
+                date_fin=b.date_fin,
+                fenetre_debut=window_start,
+                fenetre_fin=window_end,
+                statut=statut,
+                jours=jours,
+                loyer_mensuel=float(b.loyer_mensuel or 0),
+            )
+        )
+
+    order = {"en_retard": 0, "a_envoyer": 1, "a_venir": 2}
+    rows.sort(key=lambda r: (order.get(r.statut, 9), r.date_fin))
+    return EcheanceOverview(
+        rows=rows,
+        nb_a_envoyer=sum(1 for r in rows if r.statut == "a_envoyer"),
+        nb_en_retard=sum(1 for r in rows if r.statut == "en_retard"),
+        nb_a_venir=sum(1 for r in rows if r.statut == "a_venir"),
+    )
 
 
 # ── Dépenses d'immeuble + P&L ──────────────────────────────────────────
@@ -1988,7 +2141,7 @@ async def finances_pnl(
                 await db.execute(
                     select(Bail).where(
                         Bail.logement_id.in_(list(log_to_imm.keys())),
-                        Bail.status == "ACTIF",
+                        Bail.status == BailStatus.ACTIF.value,
                     )
                 )
             ).scalars().all()
