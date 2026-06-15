@@ -137,6 +137,7 @@ async def ensure_critical_columns() -> None:
         ("subscriptions", "quantite", "INTEGER NOT NULL DEFAULT 1"),
         # RACI : les colonnes sont des comptes Kratos (table preexistante).
         ("raci_people", "user_id", "INTEGER"),
+        ("raci_activities", "subsection", "VARCHAR(120) NOT NULL DEFAULT ''"),
         # Téléphonie Léa : sans ces colonnes, un SELECT sur la table
         # plante et casse tout le flux d'appel entrant. On les met ici
         # (transaction par colonne) pour survivre à un abort d'init_db.
