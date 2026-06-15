@@ -219,6 +219,43 @@ async def ensure_critical_columns() -> None:
             )
 
 
+async def ensure_raci_tables() -> None:
+    """Crée les tables RACI dans leur PROPRE transaction.
+
+    ``init_db`` lance ``create_all`` dans une seule grosse transaction qui
+    peut abort (et tout annuler, y compris la création de tables). Les
+    tables RACI étant récentes, on les (re)crée ici de façon isolée et
+    idempotente — elles existent ainsi toujours, même si ``init_db`` a
+    planté.
+    """
+    import logging
+
+    log = logging.getLogger("db.ensure_raci_tables")
+    try:
+        from app.db.base import Base
+        from app.models.raci import (  # noqa: F401
+            RaciActivity,
+            RaciCell,
+            RaciPerson,
+            RaciPole,
+            RaciSubsection,
+        )
+
+        tables = [
+            RaciPole.__table__,
+            RaciSubsection.__table__,
+            RaciPerson.__table__,
+            RaciActivity.__table__,
+            RaciCell.__table__,
+        ]
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(c, tables=tables)
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_raci_tables failed: %s", exc)
+
+
 async def init_db() -> None:
     """
     Initialize database tables.

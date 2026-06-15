@@ -18,7 +18,8 @@ import {
   Loader2,
   Grid3x3,
   Layers,
-  GripVertical
+  GripVertical,
+  Upload
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -76,6 +77,7 @@ export default function DistributionTachesPage() {
     Activity | "new" | null
   >(null);
   const [poleManagerOpen, setPoleManagerOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const [dragId, setDragId] = useState<number | null>(null);
 
@@ -256,6 +258,13 @@ export default function DistributionTachesPage() {
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm hover:border-[var(--qg-accent)]"
           >
             <Layers className="h-4 w-4" /> Pôles & sous-sections
+          </button>
+          <button
+            type="button"
+            onClick={() => setImportOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm hover:border-[var(--qg-accent)]"
+          >
+            <Upload className="h-4 w-4" /> Importer
           </button>
           <button
             type="button"
@@ -468,7 +477,125 @@ export default function DistributionTachesPage() {
           onChanged={() => void load()}
         />
       ) : null}
+      {importOpen ? (
+        <ImportModal
+          poles={poles}
+          onClose={() => setImportOpen(false)}
+          onSaved={() => {
+            setImportOpen(false);
+            void load();
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function ImportModal({
+  poles,
+  onClose,
+  onSaved
+}: {
+  poles: Pole[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [defaultPole, setDefaultPole] = useState(poles[0]?.label || "");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const parsed = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split(">").map((x) => x.trim());
+      if (parts.length >= 3) {
+        return {
+          pole: parts[0] || defaultPole,
+          subsection: parts[1],
+          label: parts.slice(2).join(" > ")
+        };
+      }
+      if (parts.length === 2) {
+        return { pole: parts[0] || defaultPole, subsection: "", label: parts[1] };
+      }
+      return { pole: defaultPole, subsection: "", label: parts[0] };
+    })
+    .filter((it) => it.label);
+
+  async function submit() {
+    if (parsed.length === 0) return;
+    setBusy(true);
+    try {
+      await authedFetch("/api/v1/raci/activities/bulk", {
+        method: "POST",
+        body: JSON.stringify({ items: parsed })
+      });
+      onSaved();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Importer des tâches" onClose={onClose}>
+      <p className="mb-2 text-xs text-[var(--qg-text-muted)]">
+        Une tâche par ligne. Format :{" "}
+        <code className="rounded bg-[var(--qg-card-bg)] px-1">
+          Pôle &gt; Sous-section &gt; Tâche
+        </code>{" "}
+        (les deux premiers sont optionnels). Les pôles / sous-sections
+        manquants seront créés. Tu pourras tout ajuster ensuite.
+      </p>
+      <label className="mb-1 block text-xs text-[var(--qg-text-muted)]">
+        Pôle par défaut (lignes sans pôle)
+      </label>
+      <select
+        className={INPUT}
+        value={defaultPole}
+        onChange={(e) => setDefaultPole(e.target.value)}
+      >
+        {poles.map((p) => (
+          <option key={p.id} value={p.label}>
+            {p.label}
+          </option>
+        ))}
+      </select>
+      <textarea
+        className={INPUT + " mt-3 min-h-[180px] font-mono text-xs"}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={
+          "Gestion locative > Encaissement > Encaisser les loyers\n" +
+          "Gestion locative > Relancer les retards\n" +
+          "Préparer les états financiers"
+        }
+        autoFocus
+      />
+      <p className="mt-2 text-xs text-[var(--qg-text-muted)]">
+        {parsed.length} tâche{parsed.length > 1 ? "s" : ""} détectée
+        {parsed.length > 1 ? "s" : ""}.
+      </p>
+      <div className="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg border border-[var(--qg-border)] px-3 py-2 text-sm hover:border-[var(--qg-accent)]"
+        >
+          Annuler
+        </button>
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={busy || parsed.length === 0}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--qg-accent)] px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Importer {parsed.length || ""}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
