@@ -84,6 +84,11 @@ from app.models.lead_analysis import (  # noqa: F401
 from app.models.nda import NDA, NDAStatus  # noqa: F401
 from app.models.offer import Offer, OfferStatus  # noqa: F401
 from app.models.org_node import OrgNode  # noqa: F401
+from app.models.raci import (  # noqa: F401
+    RaciActivity,
+    RaciCell,
+    RaciPerson,
+)
 from app.models.qg_embedding import Embedding  # noqa: F401
 from app.models.rencontre import (  # noqa: F401
     Rencontre,
@@ -318,6 +323,9 @@ __all__ = [
     "MontrealPropertyUnit",
     "SoldComparable",
     "TeamsMeetingImport",
+    "RaciActivity",
+    "RaciCell",
+    "RaciPerson",
     "Subscription",
     "SubscriptionVaultAccess",
     "NDA",

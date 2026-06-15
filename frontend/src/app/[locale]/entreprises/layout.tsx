@@ -20,6 +20,7 @@ import {
   CreditCard,
   ExternalLink,
   Home,
+  Grid3x3,
   LayoutGrid,
   Loader2,
   LogOut,
@@ -271,6 +272,11 @@ export default function EntreprisesLayout({
     { href: "/entreprises/kratos", label: "Kratos · Cerveau", icon: Brain },
     { href: "/entreprises/rencontres", label: "Rencontres", icon: Calendar },
     { href: "/entreprises/organigramme", label: "Organigramme", icon: Users },
+    {
+      href: "/entreprises/distribution-taches",
+      label: "Distribution des tâches",
+      icon: Grid3x3
+    },
     { href: "/entreprises/vision", label: "Vision & Stratégie", icon: BarChart3 },
     { href: "/entreprises/comparatif", label: "Comparatif", icon: BarChart3 },
     { href: "/entreprises/projets", label: "Projets", icon: Briefcase },

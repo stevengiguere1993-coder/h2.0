@@ -60,6 +60,7 @@ from app.api.v1.endpoints import (
     ndas,
     offers,
     org_nodes,
+    raci,
     org_seed_canonical,
     rencontres,
     rencontres_teams,
@@ -383,6 +384,7 @@ api_router.include_router(admin_data.router)
 api_router.include_router(help.router)
 api_router.include_router(kratos.router)
 api_router.include_router(org_nodes.router)
+api_router.include_router(raci.router)
 api_router.include_router(org_seed_canonical.router)
 # teams-sync AVANT rencontres : /rencontres/teams-sync/* ne doit pas
 # être avalé par /rencontres/{id}.
