@@ -1,12 +1,11 @@
 """Moteur de relances (cadence) — exécuté par le cron horaire.
 
-- Enrôle les nouveaux leads récents (ContactRequest non engagés) dans la
-  séquence globale (CadenceStep).
-- Fait avancer chaque plan à l'échéance : étape « courriel » → envoi
-  AUTOMATIQUE du gabarit ; étape « appel »/« sms » → tâche + notification
-  au staff.
-- Arrête la cadence dès que le lead RÉPOND (communication entrante) ou
-  est engagé/clos (statut won/lost/qualified/quoted/rdv_prevu/spam).
+À l'entrée en cadence, la séquence GLOBALE (CadenceStep) est copiée en
+relances par lead (RelanceItem) avec des dates planifiées — chacune
+modifiable ensuite sur la fiche prospect. Le moteur exécute à l'échéance :
+étape « courriel » → envoi AUTOMATIQUE du gabarit ; étape « appel »/« sms »
+→ tâche + notification. Il s'arrête (annule les relances restantes) dès
+que le lead RÉPOND (communication entrante) ou est engagé/clos.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -24,14 +23,12 @@ from app.models.contact_request import ContactRequest
 from app.models.email_log import EmailLog
 from app.models.email_template import EmailTemplate
 from app.models.follow_up import FollowUp
-from app.models.relance_plan import RelancePlan
+from app.models.relance_item import RelanceItem
 from app.models.voice import Call, VoiceSms
 
 log = logging.getLogger(__name__)
 
-# Lead « engagé » / clos → on arrête la cadence.
 _STOP_STATUSES = {"rdv_prevu", "qualified", "quoted", "won", "lost", "spam"}
-# On n'enrôle que les leads récents pour éviter un afflux massif au 1er run.
 _ENROLL_LOOKBACK_DAYS = 2
 
 
@@ -61,60 +58,42 @@ async def _active_steps(db: AsyncSession) -> list[CadenceStep]:
 async def _lead_responded(
     db: AsyncSession, lead_id: int, since: datetime
 ) -> bool:
-    em = (
-        await db.execute(
-            select(EmailLog.id)
-            .where(
-                EmailLog.entity_type == "contact_request",
-                EmailLog.entity_id == lead_id,
-                EmailLog.direction == "inbound",
-                EmailLog.created_at >= since,
-            )
-            .limit(1)
-        )
-    ).first()
-    if em:
-        return True
-    sms = (
-        await db.execute(
-            select(VoiceSms.id)
-            .where(
-                VoiceSms.entity_type == "contact_request",
-                VoiceSms.entity_id == lead_id,
-                VoiceSms.direction == "inbound",
-                VoiceSms.received_at >= since,
-            )
-            .limit(1)
-        )
-    ).first()
-    if sms:
-        return True
-    call = (
-        await db.execute(
-            select(Call.id)
-            .where(
-                Call.entity_type == "contact_request",
-                Call.entity_id == lead_id,
-                Call.direction == "inbound",
-                Call.started_at >= since,
-            )
-            .limit(1)
-        )
-    ).first()
-    return bool(call)
+    for stmt in (
+        select(EmailLog.id).where(
+            EmailLog.entity_type == "contact_request",
+            EmailLog.entity_id == lead_id,
+            EmailLog.direction == "inbound",
+            EmailLog.created_at >= since,
+        ),
+        select(VoiceSms.id).where(
+            VoiceSms.entity_type == "contact_request",
+            VoiceSms.entity_id == lead_id,
+            VoiceSms.direction == "inbound",
+            VoiceSms.received_at >= since,
+        ),
+        select(Call.id).where(
+            Call.entity_type == "contact_request",
+            Call.entity_id == lead_id,
+            Call.direction == "inbound",
+            Call.started_at >= since,
+        ),
+    ):
+        if (await db.execute(stmt.limit(1))).first():
+            return True
+    return False
 
 
 async def _send_cadence_email(
-    db: AsyncSession, lead: ContactRequest, step: CadenceStep
+    db: AsyncSession, lead: ContactRequest, item: RelanceItem
 ) -> bool:
-    if step.email_template_id is None:
+    if item.email_template_id is None:
         return False
     if not _valid_external_email(lead.email):
         return False
     tpl = (
         await db.execute(
             select(EmailTemplate).where(
-                EmailTemplate.id == step.email_template_id
+                EmailTemplate.id == item.email_template_id
             )
         )
     ).scalar_one_or_none()
@@ -168,35 +147,20 @@ async def _send_cadence_email(
             kind="email",
             direction="outbound",
             outcome="sent",
-            notes=f"[relance auto] {step.label}",
+            notes=f"[relance auto] {item.label}",
             performed_at=now,
         )
     )
     return True
 
 
-async def _run_cadence(db: AsyncSession) -> dict:
-    from app.services.notifications import notify_role
-
-    now = datetime.now(timezone.utc)
-    steps = await _active_steps(db)
-    if not steps:
-        return {"skipped": "no_active_steps"}
-
-    stats = {
-        "enrolled": 0,
-        "advanced": 0,
-        "emails_sent": 0,
-        "tasks": 0,
-        "stopped": 0,
-        "done": 0,
-    }
-
-    # 1) Enrôlement des nouveaux leads récents.
+async def _enroll_new_leads(
+    db: AsyncSession, steps: list[CadenceStep], now: datetime
+) -> int:
     enrolled_ids = {
         r[0]
         for r in (
-            await db.execute(select(RelancePlan.contact_request_id))
+            await db.execute(select(RelanceItem.contact_request_id).distinct())
         ).all()
     }
     cutoff = now - timedelta(days=_ENROLL_LOOKBACK_DAYS)
@@ -210,74 +174,118 @@ async def _run_cadence(db: AsyncSession) -> dict:
             .limit(500)
         )
     ).scalars().all()
+    count = 0
     for lead in new_leads:
         if lead.id in enrolled_ids:
             continue
-        base = lead.created_at or now
-        db.add(
-            RelancePlan(
-                contact_request_id=lead.id,
-                step_index=0,
-                next_at=base + timedelta(days=steps[0].delay_days),
-                status="active",
+        acc = lead.created_at or now
+        for pos, s in enumerate(steps):
+            acc = acc + timedelta(days=s.delay_days)
+            db.add(
+                RelanceItem(
+                    contact_request_id=lead.id,
+                    position=pos,
+                    channel=s.channel,
+                    label=s.label,
+                    email_template_id=s.email_template_id,
+                    scheduled_at=acc,
+                    status="pending",
+                )
             )
-        )
-        stats["enrolled"] += 1
+        count += 1
     await db.flush()
+    return count
 
-    # 2) Traitement des plans actifs.
-    plans = (
+
+async def _run_cadence(db: AsyncSession) -> dict:
+    from app.services.notifications import notify_role
+
+    now = datetime.now(timezone.utc)
+    steps = await _active_steps(db)
+    if not steps:
+        return {"skipped": "no_active_steps"}
+
+    stats = {
+        "enrolled": 0,
+        "emails_sent": 0,
+        "tasks": 0,
+        "stopped": 0,
+        "skipped": 0,
+    }
+    stats["enrolled"] = await _enroll_new_leads(db, steps, now)
+
+    # Relances dues, triées par contact puis échéance ; on n'exécute
+    # qu'UNE relance par contact et par passage (espacement naturel).
+    due = (
         await db.execute(
-            select(RelancePlan)
-            .where(RelancePlan.status == "active")
-            .limit(1000)
+            select(RelanceItem)
+            .where(
+                RelanceItem.status == "pending",
+                RelanceItem.scheduled_at <= now,
+            )
+            .order_by(
+                RelanceItem.contact_request_id.asc(),
+                RelanceItem.scheduled_at.asc(),
+                RelanceItem.position.asc(),
+            )
+            .limit(2000)
         )
     ).scalars().all()
-    for plan in plans:
+
+    processed: set[int] = set()
+    for item in due:
+        cid = item.contact_request_id
+        if cid in processed:
+            continue
         lead = (
             await db.execute(
-                select(ContactRequest).where(
-                    ContactRequest.id == plan.contact_request_id
-                )
+                select(ContactRequest).where(ContactRequest.id == cid)
             )
         ).scalar_one_or_none()
         if lead is None:
-            plan.status = "stopped"
+            item.status = "cancelled"
             continue
-        if lead.status in _STOP_STATUSES:
-            plan.status = "stopped"
+        # Arrêt : lead engagé/clos OU il a répondu depuis l'enrôlement.
+        if lead.status in _STOP_STATUSES or await _lead_responded(
+            db, cid, item.created_at
+        ):
+            await db.execute(
+                update(RelanceItem)
+                .where(
+                    RelanceItem.contact_request_id == cid,
+                    RelanceItem.status == "pending",
+                )
+                .values(status="cancelled")
+            )
+            processed.add(cid)
             stats["stopped"] += 1
             continue
-        if await _lead_responded(db, lead.id, plan.created_at):
-            plan.status = "stopped"
-            stats["stopped"] += 1
-            continue
-        if plan.next_at is None or plan.next_at > now:
-            continue
-        if plan.step_index >= len(steps):
-            plan.status = "done"
-            stats["done"] += 1
-            continue
-
-        step = steps[plan.step_index]
-        if step.channel == "email":
-            if await _send_cadence_email(db, lead, step):
+        # Exécution de la relance due.
+        if item.channel == "email":
+            if await _send_cadence_email(db, lead, item):
+                item.status = "sent"
                 stats["emails_sent"] += 1
+            else:
+                # Pas de gabarit / adresse invalide → on saute pour ne
+                # pas bloquer la suite de la séquence.
+                item.status = "skipped"
+                stats["skipped"] += 1
         else:
             db.add(
                 FollowUp(
                     subject_type="prospect",
                     subject_id=lead.id,
-                    kind=step.channel,
+                    kind=item.channel,
                     direction="outbound",
                     outcome="scheduled",
-                    notes=f"[relance auto] {step.label}",
+                    notes=f"[relance auto] {item.label}",
                     next_action_at=now,
-                    next_action_label=step.label,
+                    next_action_label=item.label,
                     overdue_notified=True,
                     performed_at=now,
                 )
             )
+            item.status = "done"
             stats["tasks"] += 1
             try:
                 await notify_role(
@@ -286,23 +294,14 @@ async def _run_cadence(db: AsyncSession) -> dict:
                     kind="relance.todo",
                     title=f"Relance à faire — {lead.name}",
                     body=(
-                        f"{step.label} "
-                        f"({'appel' if step.channel == 'call' else 'SMS'})"
+                        f"{item.label} "
+                        f"({'appel' if item.channel == 'call' else 'SMS'})"
                     ),
                     href=f"/app/crm/{lead.id}",
                 )
             except Exception:  # noqa: BLE001
                 pass
-
-        # Avancement vers l'étape suivante (ou fin de cadence).
-        nxt = plan.step_index + 1
-        if nxt < len(steps):
-            plan.step_index = nxt
-            plan.next_at = now + timedelta(days=steps[nxt].delay_days)
-            stats["advanced"] += 1
-        else:
-            plan.status = "done"
-            stats["done"] += 1
+        processed.add(cid)
 
     await db.flush()
     return stats

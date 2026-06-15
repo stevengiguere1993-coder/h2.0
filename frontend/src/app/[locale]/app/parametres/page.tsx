@@ -12,6 +12,7 @@ import {
   KeyRound,
   Loader2,
   RefreshCw,
+  Repeat,
   ShieldCheck,
   ScrollText,
   Trash2
@@ -187,6 +188,26 @@ export default function ParametresPage() {
               <p className="mt-0.5 text-xs text-white/60">
                 Messages-types pour relances et suivis. Variables
                 interpolées (nom, adresse, soumission #).
+              </p>
+            </div>
+            <ChevronRight className="h-4 w-4 text-white/40" />
+          </Link>
+        ) : null}
+
+        {hasMinRole(me, "manager") ? (
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/app/relances" as any}
+            className="mt-3 flex items-center gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:border-accent-500"
+          >
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+              <Repeat className="h-5 w-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-base font-bold text-white">Relances</h2>
+              <p className="mt-0.5 text-xs text-white/60">
+                Séquence de relance automatique (appels + courriels) appliquée
+                à tous les leads. Modifiable par prospect.
               </p>
             </div>
             <ChevronRight className="h-4 w-4 text-white/40" />
