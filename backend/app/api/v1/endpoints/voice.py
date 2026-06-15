@@ -309,6 +309,21 @@ async def _create_lead_from_callback(db, *, call: Call) -> Optional[int]:
     if call.contact_request_id is not None:
         return call.contact_request_id
 
+    # Appelant DÉJÀ CONNU dans le système → on ne crée pas de doublon
+    # « Nouveau ». L'appel est déjà rattaché à sa fiche (entity_type/
+    # entity_id posés par identify_caller) et apparaît donc dans ses
+    # Communications (et, pour un client construction, sur sa fiche).
+    if call.entity_type and call.entity_id:
+        if call.entity_type == "contact_request":
+            # C'est déjà un lead CRM : on relie l'appel à ce lead
+            # existant au lieu d'en créer un nouveau.
+            call.contact_request_id = call.entity_id
+            await db.flush()
+            return call.entity_id
+        # Client / locataire / lead prospection : connu hors CRM web.
+        # Le rappel vit dans sa timeline ; pas de carte « Nouveau ».
+        return None
+
     callback_phone = (
         (call.lead_callback_phone or "").strip()
         or call.from_e164
@@ -327,6 +342,22 @@ async def _create_lead_from_callback(db, *, call: Call) -> Optional[int]:
     # les rappels successifs au même prospect au lieu d'en créer plein).
     sanitized = "".join(c for c in callback_phone if c.isalnum()) or "anon"
     synth_email = f"tel{sanitized}@telephonie.local"
+
+    # Rappel ultérieur d'un même numéro INCONNU : réutiliser le lead déjà
+    # créé (email synthétique stable par numéro) au lieu d'empiler
+    # plusieurs cartes « Nouveau » pour le même appelant.
+    existing = (
+        await db.execute(
+            select(ContactRequest)
+            .where(func.lower(ContactRequest.email) == synth_email.lower())
+            .order_by(ContactRequest.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        call.contact_request_id = existing.id
+        await db.flush()
+        return existing.id
 
     cr = ContactRequest(
         name=name[:255],
