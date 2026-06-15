@@ -31,6 +31,22 @@ class RaciPole(Base, TimestampUpdateMixin):
     )
 
 
+class RaciSubsection(Base, TimestampUpdateMixin):
+    """Sous-section d'un pôle (ex. « Prospection » sous « Acquisition »)."""
+
+    __tablename__ = "raci_subsections"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    # Pôle d'appartenance (libellé). Cascade au renommage d'un pôle.
+    pole: Mapped[str] = mapped_column(
+        String(120), nullable=False, default="", server_default=""
+    )
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    position: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+
 class RaciPerson(Base, TimestampUpdateMixin):
     __tablename__ = "raci_people"
 
@@ -51,6 +67,10 @@ class RaciActivity(Base, TimestampUpdateMixin):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     # Pôle d'appartenance (libellé). Cascade au renommage d'un pôle.
     pole: Mapped[str] = mapped_column(
+        String(120), nullable=False, default="", server_default=""
+    )
+    # Sous-section (libellé) au sein du pôle, optionnelle (vide = directe).
+    subsection: Mapped[str] = mapped_column(
         String(120), nullable=False, default="", server_default=""
     )
     label: Mapped[str] = mapped_column(String(300), nullable=False)
