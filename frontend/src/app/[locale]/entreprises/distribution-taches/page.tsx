@@ -509,7 +509,17 @@ function ImportModal({
     .map((l) => l.trim())
     .filter(Boolean)
     .map((line) => {
-      const parts = line.split(">").map((x) => x.trim());
+      // Accepte le collage Excel (tabulation), le format « > » ou « | ».
+      const sep = line.includes("\t")
+        ? "\t"
+        : line.includes(">")
+          ? ">"
+          : line.includes("|")
+            ? "|"
+            : null;
+      const parts = sep
+        ? line.split(sep).map((x) => x.trim())
+        : [line.trim()];
       if (parts.length >= 3) {
         return {
           pole: parts[0] || defaultPole,
@@ -545,8 +555,9 @@ function ImportModal({
         <code className="rounded bg-[var(--qg-card-bg)] px-1">
           Pôle &gt; Sous-section &gt; Tâche
         </code>{" "}
-        (les deux premiers sont optionnels). Les pôles / sous-sections
-        manquants seront créés. Tu pourras tout ajuster ensuite.
+        (les deux premiers sont optionnels). Tu peux aussi coller 3
+        colonnes depuis Excel. Les pôles / sous-sections manquants
+        seront créés — tu pourras tout ajuster ensuite.
       </p>
       <label className="mb-1 block text-xs text-[var(--qg-text-muted)]">
         Pôle par défaut (lignes sans pôle)
