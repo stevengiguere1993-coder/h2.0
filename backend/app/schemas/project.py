@@ -61,6 +61,7 @@ class ProjectRead(BaseModel):
     # l'affichage sans requête supplémentaire côté UI.
     responsible_name: Optional[str] = None
     status: str
+    qbo_job_id: Optional[str] = None
     address: Optional[str]
     description: Optional[str]
     notes: Optional[str]

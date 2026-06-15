@@ -77,6 +77,13 @@ class Project(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # ID du « Job » QuickBooks (sous-client) représentant ce projet, une
+    # fois synchronisé. Sert de clé d'idempotence pour ne pas recréer de
+    # doublon et pour rattacher les factures au bon projet côté QBO.
+    qbo_job_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
