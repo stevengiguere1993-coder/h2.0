@@ -503,6 +503,34 @@ function ImportModal({
   const [defaultPole, setDefaultPole] = useState(poles[0]?.label || "");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [fileBusy, setFileBusy] = useState(false);
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFileBusy(true);
+    try {
+      const form = new FormData();
+      form.append("file", f);
+      form.append("default_pole", defaultPole);
+      const r = await authedFetch("/api/v1/raci/activities/import-file", {
+        method: "POST",
+        body: form
+      });
+      if (!r.ok) {
+        alert((await r.text()).slice(0, 200) || `Échec (HTTP ${r.status}).`);
+        return;
+      }
+      const d = (await r.json()) as { created?: number };
+      alert(`${d.created || 0} tâche(s) importée(s).`);
+      onSaved();
+    } catch (err) {
+      alert((err as Error).message);
+    } finally {
+      setFileBusy(false);
+      e.target.value = "";
+    }
+  }
 
   const parsed = text
     .split(/\r?\n/)
@@ -573,8 +601,30 @@ function ImportModal({
           </option>
         ))}
       </select>
+      <label className="mb-1 mt-3 block text-xs text-[var(--qg-text-muted)]">
+        Importer un fichier (.xlsx, .csv, .txt)
+      </label>
+      <input
+        type="file"
+        accept=".xlsx,.xlsm,.csv,.txt,text/csv"
+        onChange={(e) => void handleFile(e)}
+        disabled={fileBusy}
+        className="block w-full text-xs text-[var(--qg-text-muted)] file:mr-3 file:rounded-lg file:border-0 file:bg-[var(--qg-accent)] file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-white hover:file:opacity-90"
+      />
+      {fileBusy ? (
+        <p className="mt-1 flex items-center gap-1.5 text-xs text-[var(--qg-text-muted)]">
+          <Loader2 className="h-3 w-3 animate-spin" /> Import du fichier…
+        </p>
+      ) : null}
+
+      <div className="my-3 flex items-center gap-2 text-[11px] uppercase tracking-wider text-[var(--qg-text-faint)]">
+        <span className="h-px flex-1 bg-[var(--qg-border)]" />
+        ou colle ci-dessous
+        <span className="h-px flex-1 bg-[var(--qg-border)]" />
+      </div>
+
       <textarea
-        className={INPUT + " mt-3 min-h-[180px] font-mono text-xs"}
+        className={INPUT + " min-h-[160px] font-mono text-xs"}
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder={
