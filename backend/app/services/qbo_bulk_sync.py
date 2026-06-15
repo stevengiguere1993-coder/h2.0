@@ -148,3 +148,132 @@ async def dry_run_report(
         "summary": summary,
         "clients": out_clients,
     }
+
+
+async def run_migration(
+    db: AsyncSession, *, client_id: Optional[int] = None
+) -> dict:
+    """Migration RÉELLE (écritures QBO), idempotente.
+
+    Clients → Customers (réutilise par email/nom, sinon crée), Projets →
+    Jobs (sous-clients), Factures → Invoices rattachées au Job du projet
+    (sinon au client). Les ID QBO sont stockés des deux côtés pour ne pas
+    recréer de doublon au re-run. Les erreurs sont collectées par dossier
+    sans tout interrompre.
+    """
+    from app.integrations.quickbooks import QuickBooksError, get_qbo
+    from app.services.facture_qbo import (
+        _build_invoice_payload,
+        _build_lines,
+        _load_items,
+    )
+
+    qbo = get_qbo()
+    await qbo._load_refresh_from_db()
+    if not qbo.ready:
+        return {"error": "QuickBooks non connecté (OAuth)."}
+
+    cstmt = select(Client)
+    if client_id is not None:
+        cstmt = cstmt.where(Client.id == client_id)
+    clients = list((await db.execute(cstmt)).scalars().all())
+
+    res = {
+        "dry_run": False,
+        "scope": "client" if client_id is not None else "all",
+        "customers": {"created": 0, "already_linked": 0, "errors": 0},
+        "projects": {"linked": 0, "errors": 0},
+        "factures": {"pushed": 0, "errors": 0},
+        "details": [],
+    }
+
+    for c in clients:
+        detail: dict = {"client_id": c.id, "name": c.name, "errors": []}
+        # 1) Customer (réutilise par email/nom via ensure_customer).
+        try:
+            if not c.qbo_customer_id:
+                cust = await qbo.ensure_customer(
+                    display_name=c.name,
+                    email=c.email,
+                    phone=c.phone,
+                    billing_address=c.address,
+                )
+                cid = str(cust.get("Id") or "")
+                if not cid:
+                    raise QuickBooksError("Customer sans Id")
+                c.qbo_customer_id = cid
+                await db.flush()
+                res["customers"]["created"] += 1
+            else:
+                res["customers"]["already_linked"] += 1
+        except Exception as exc:  # noqa: BLE001
+            res["customers"]["errors"] += 1
+            detail["errors"].append(f"client: {exc}")
+            res["details"].append(detail)
+            continue
+        customer_id = c.qbo_customer_id
+
+        # 2) Projets → Jobs (sous-clients du Customer).
+        projects = list(
+            (
+                await db.execute(
+                    select(Project).where(Project.client_id == c.id)
+                )
+            ).scalars().all()
+        )
+        job_by_project: dict[int, Optional[str]] = {}
+        for p in projects:
+            try:
+                if not p.qbo_job_id:
+                    job = await qbo.ensure_project(
+                        parent_customer_id=customer_id,
+                        project_name=p.name,
+                    )
+                    jid = str(job.get("Id") or "")
+                    if jid:
+                        p.qbo_job_id = jid
+                        await db.flush()
+                        res["projects"]["linked"] += 1
+                job_by_project[p.id] = p.qbo_job_id
+            except Exception as exc:  # noqa: BLE001
+                res["projects"]["errors"] += 1
+                detail["errors"].append(f"projet {p.id}: {exc}")
+
+        # 3) Factures → Invoices (rattachées au Job du projet si dispo).
+        factures = list(
+            (
+                await db.execute(
+                    select(Facture).where(Facture.client_id == c.id)
+                )
+            ).scalars().all()
+        )
+        for f in factures:
+            try:
+                ref = customer_id
+                if f.project_id and job_by_project.get(f.project_id):
+                    ref = job_by_project[f.project_id]
+                items = await _load_items(db, f.id)
+                lines = await _build_lines(
+                    qbo, items, fallback_name=f.reference
+                )
+                payload = _build_invoice_payload(
+                    facture=f,
+                    customer_id=ref,
+                    lines=lines,
+                    existing_invoice_id=f.qbo_invoice_id,
+                    existing_sync_token=f.qbo_sync_token,
+                )
+                invoice = await qbo.create_invoice(payload)
+                inv = invoice.get("Invoice") or invoice
+                f.qbo_invoice_id = str(inv.get("Id") or "") or None
+                f.qbo_sync_token = str(inv.get("SyncToken") or "") or None
+                f.qbo_doc_number = str(inv.get("DocNumber") or "") or None
+                await db.flush()
+                res["factures"]["pushed"] += 1
+            except Exception as exc:  # noqa: BLE001
+                res["factures"]["errors"] += 1
+                detail["errors"].append(f"facture {f.id}: {exc}")
+
+        res["details"].append(detail)
+
+    return res
