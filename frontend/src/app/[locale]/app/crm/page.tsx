@@ -113,14 +113,6 @@ function loadCustomColumns(): Column[] {
   }
 }
 
-function saveCustomColumns(cols: Column[]) {
-  try {
-    window.localStorage.setItem(CUSTOM_COLS_KEY, JSON.stringify(cols));
-  } catch {
-    /* ignore */
-  }
-}
-
 const COLLAPSED_COLS_KEY = "hsi_crm_collapsed_columns_v1";
 // Colonnes repliées par défaut au premier chargement : Acceptée et
 // Refusée prennent de la place pour des leads "terminés" qu'on
@@ -167,8 +159,57 @@ export default function CrmKanbanPage() {
   const [createOpen, setCreateOpen] = useState(false);
 
   useEffect(() => {
-    setCustomColumns(loadCustomColumns());
     setCollapsedCols(loadCollapsedColumns());
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authedFetch("/api/v1/crm/columns");
+        let server: Column[] = res.ok
+          ? (
+              (await res.json()) as Array<{
+                key: string;
+                label: string;
+                dot: string | null;
+              }>
+            ).map((c) => ({
+              id: c.key,
+              label: c.label,
+              dot: c.dot || "bg-sky-400",
+              custom: true
+            }))
+          : [];
+        // Migration : pousse vers le serveur les colonnes encore
+        // seulement présentes dans le localStorage (ancien stockage),
+        // pour les rendre disponibles sur tous les appareils.
+        const local = loadCustomColumns();
+        const missing = local.filter(
+          (l) => !server.some((s) => s.id === l.id)
+        );
+        for (let i = 0; i < missing.length; i++) {
+          const m = missing[i];
+          try {
+            await authedFetch("/api/v1/crm/columns", {
+              method: "POST",
+              body: JSON.stringify({
+                key: m.id,
+                label: m.label,
+                dot: m.dot,
+                position: server.length + i
+              })
+            });
+          } catch {
+            /* ignore */
+          }
+        }
+        if (missing.length) server = [...server, ...missing];
+        if (!cancelled) setCustomColumns(server);
+      } catch {
+        if (!cancelled) setCustomColumns(loadCustomColumns());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   function toggleColumnCollapsed(colId: string) {
@@ -281,33 +322,44 @@ export default function CrmKanbanPage() {
     }
   }
 
-  function addCustomColumn() {
+  async function addCustomColumn() {
     const label = prompt("Nom de la nouvelle colonne :");
     if (!label || !label.trim()) return;
     const id = `custom_${Date.now()}`;
-    const next = [
-      ...customColumns,
-      {
-        id,
-        label: label.trim(),
-        dot: DOTS[(customColumns.length) % DOTS.length],
-        custom: true
-      }
-    ];
-    setCustomColumns(next);
-    saveCustomColumns(next);
+    const dot = DOTS[customColumns.length % DOTS.length];
+    const position = customColumns.length;
+    setCustomColumns((cur) => [
+      ...cur,
+      { id, label: label.trim(), dot, custom: true }
+    ]);
+    try {
+      const res = await authedFetch("/api/v1/crm/columns", {
+        method: "POST",
+        body: JSON.stringify({ key: id, label: label.trim(), dot, position })
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setError("Création de la colonne échouée.");
+    }
   }
 
-  function renameCustomColumn(colId: string) {
+  async function renameCustomColumn(colId: string) {
     const col = customColumns.find((c) => c.id === colId);
     if (!col) return;
     const label = prompt("Nouveau nom :", col.label);
     if (!label || !label.trim() || label === col.label) return;
-    const next = customColumns.map((c) =>
-      c.id === colId ? { ...c, label: label.trim() } : c
+    setCustomColumns((cur) =>
+      cur.map((c) => (c.id === colId ? { ...c, label: label.trim() } : c))
     );
-    setCustomColumns(next);
-    saveCustomColumns(next);
+    try {
+      const res = await authedFetch(`/api/v1/crm/columns/${colId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ label: label.trim() })
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setError("Renommage de la colonne échoué.");
+    }
   }
 
   async function removeCustomColumn(colId: string) {
@@ -322,9 +374,12 @@ export default function CrmKanbanPage() {
       )
     )
       return;
-    const next = customColumns.filter((c) => c.id !== colId);
-    setCustomColumns(next);
-    saveCustomColumns(next);
+    setCustomColumns((cur) => cur.filter((c) => c.id !== colId));
+    try {
+      await authedFetch(`/api/v1/crm/columns/${colId}`, { method: "DELETE" });
+    } catch {
+      /* ignore */
+    }
     // Clear kanban_column on affected prospects in the background.
     for (const p of affected) {
       try {
@@ -408,13 +463,23 @@ export default function CrmKanbanPage() {
         onSearch={setSearch}
         searchPlaceholder="Rechercher un prospect…"
         rightSlot={
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            className="btn-accent text-sm"
-          >
-            <Plus className="mr-1.5 h-4 w-4" /> Créer un prospect
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void addCustomColumn()}
+              className="btn-secondary text-sm"
+              title="Ajouter une colonne personnalisée (ex. « À rappeler »)"
+            >
+              <Plus className="mr-1.5 h-4 w-4" /> Colonne
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="btn-accent text-sm"
+            >
+              <Plus className="mr-1.5 h-4 w-4" /> Créer un prospect
+            </button>
+          </div>
         }
       />
 
