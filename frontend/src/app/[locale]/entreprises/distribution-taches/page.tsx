@@ -3,17 +3,28 @@
 /**
  * Distribution des tâches — matrice RACI.
  *
- * Lignes = tâches regroupées par PÔLE (gérable). Colonnes = comptes
- * Kratos. Chaque cellule cycle R → A → C → I → vide au clic et
- * s'enregistre automatiquement.
+ * Hiérarchie : Pôle → (sous-section) → Tâches. Colonnes = comptes Kratos.
+ * Cellule : clic = cycle R → A → C → I → vide (auto-save). Les tâches se
+ * réordonnent / se déplacent entre pôles et sous-sections par glisser-
+ * déposer.
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Pencil, Trash2, X, Loader2, Grid3x3, Layers } from "lucide-react";
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  X,
+  Loader2,
+  Grid3x3,
+  Layers,
+  GripVertical
+} from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
 
 type Pole = { id: number; label: string; position: number };
+type Subsection = { id: number; pole: string; label: string; position: number };
 type Person = {
   id: number;
   user_id?: number | null;
@@ -21,10 +32,17 @@ type Person = {
   subtitle?: string | null;
   position: number;
 };
-type Activity = { id: number; pole: string; label: string; position: number };
+type Activity = {
+  id: number;
+  pole: string;
+  subsection: string;
+  label: string;
+  position: number;
+};
 type Cell = { activity_id: number; person_id: number; value: string };
 type Board = {
   poles: Pole[];
+  subsections: Subsection[];
   people: Person[];
   activities: Activity[];
   cells: Cell[];
@@ -41,7 +59,6 @@ const INPUT =
 
 const CYCLE = ["", "R", "A", "C", "I"];
 
-// Libellés 100 % français (aucun terme anglais).
 const RACI_META: Record<string, { bg: string; full: string }> = {
   R: { bg: "#2563eb", full: "Réalise" },
   A: { bg: "#e11d48", full: "Autorité" },
@@ -59,6 +76,8 @@ export default function DistributionTachesPage() {
     Activity | "new" | null
   >(null);
   const [poleManagerOpen, setPoleManagerOpen] = useState(false);
+
+  const [dragId, setDragId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -125,21 +144,97 @@ export default function DistributionTachesPage() {
     void load();
   }
 
-  // Groupes ordonnés selon la liste de pôles ; activités orphelines à la fin.
+  function persistOrder(acts: Activity[]) {
+    void authedFetch("/api/v1/raci/activities/reorder", {
+      method: "PUT",
+      body: JSON.stringify({
+        items: acts.map((a) => ({
+          id: a.id,
+          pole: a.pole,
+          subsection: a.subsection || ""
+        }))
+      })
+    }).catch(() => void load());
+  }
+
+  // Déplace la tâche `dragId` dans (pole, subsection), avant `beforeId`
+  // (ou en fin de groupe si null). Réécrit l'ordre + persiste.
+  function moveTo(
+    pole: string,
+    subsection: string,
+    beforeId: number | null
+  ) {
+    if (!board || dragId == null || dragId === beforeId) return;
+    const moving = board.activities.find((a) => a.id === dragId);
+    if (!moving) return;
+    const rest = board.activities.filter((a) => a.id !== dragId);
+    const updated = { ...moving, pole, subsection };
+    let idx: number;
+    if (beforeId != null) {
+      idx = rest.findIndex((a) => a.id === beforeId);
+      if (idx < 0) idx = rest.length;
+    } else {
+      idx = rest.length;
+      for (let i = rest.length - 1; i >= 0; i--) {
+        if (
+          rest[i].pole === pole &&
+          (rest[i].subsection || "") === (subsection || "")
+        ) {
+          idx = i + 1;
+          break;
+        }
+      }
+    }
+    rest.splice(idx, 0, updated);
+    setBoard({ ...board, activities: rest });
+    persistOrder(rest);
+    setDragId(null);
+  }
+
   const poles = board?.poles || [];
+  const subsections = board?.subsections || [];
   const people = board?.people || [];
-  const groups: { pole: string; items: Activity[] }[] = [];
-  const byPole = new Map<string, Activity[]>();
-  board?.activities.forEach((a) => {
-    const arr = byPole.get(a.pole) || [];
-    arr.push(a);
-    byPole.set(a.pole, arr);
-  });
+
+  function tasksOf(pole: string, sub: string): Activity[] {
+    return (board?.activities || []).filter(
+      (a) => a.pole === pole && (a.subsection || "") === (sub || "")
+    );
+  }
+
+  // Construit l'ordre d'affichage : pôles → tâches directes → sous-sections.
+  type Row =
+    | { kind: "pole"; pole: string }
+    | { kind: "sub"; pole: string; sub: string }
+    | { kind: "task"; activity: Activity };
+  const rows: Row[] = [];
+  const seenPoles = new Set<string>();
   poles.forEach((pl) => {
-    groups.push({ pole: pl.label, items: byPole.get(pl.label) || [] });
-    byPole.delete(pl.label);
+    seenPoles.add(pl.label);
+    rows.push({ kind: "pole", pole: pl.label });
+    tasksOf(pl.label, "").forEach((a) => rows.push({ kind: "task", activity: a }));
+    subsections
+      .filter((su) => su.pole === pl.label)
+      .forEach((su) => {
+        rows.push({ kind: "sub", pole: pl.label, sub: su.label });
+        tasksOf(pl.label, su.label).forEach((a) =>
+          rows.push({ kind: "task", activity: a })
+        );
+      });
   });
-  byPole.forEach((items, pole) => groups.push({ pole, items }));
+  // Pôles orphelins (tâches dont le pôle n'existe plus dans la liste).
+  const orphanPoles = new Set(
+    (board?.activities || [])
+      .map((a) => a.pole)
+      .filter((pl) => pl && !seenPoles.has(pl))
+  );
+  orphanPoles.forEach((pl) => {
+    rows.push({ kind: "pole", pole: pl });
+    (board?.activities || [])
+      .filter((a) => a.pole === pl)
+      .forEach((a) => rows.push({ kind: "task", activity: a }));
+  });
+
+  const colCount = people.length + 1;
 
   return (
     <div className="space-y-4">
@@ -150,8 +245,8 @@ export default function DistributionTachesPage() {
             Distribution des tâches
           </h1>
           <p className="text-sm text-[var(--qg-text-muted)]">
-            Matrice RACI — qui fait quoi, par pôle. Clique une cellule pour
-            cycler R → A → C → I.
+            Matrice RACI — qui fait quoi, par pôle. Glisse une tâche pour la
+            déplacer ; clique une cellule pour cycler R → A → C → I.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -160,7 +255,7 @@ export default function DistributionTachesPage() {
             onClick={() => setPoleManagerOpen(true)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm hover:border-[var(--qg-accent)]"
           >
-            <Layers className="h-4 w-4" /> Pôles
+            <Layers className="h-4 w-4" /> Pôles & sous-sections
           </button>
           <button
             type="button"
@@ -179,7 +274,6 @@ export default function DistributionTachesPage() {
         </div>
       </div>
 
-      {/* Légende — français uniquement */}
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-4 py-2.5 text-xs">
         {Object.entries(RACI_META).map(([k, m]) => (
           <span key={k} className="inline-flex items-center gap-1.5">
@@ -210,7 +304,7 @@ export default function DistributionTachesPage() {
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="bg-[var(--qg-card-bg)]">
-                <th className="sticky left-0 z-20 min-w-[16rem] border-b border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-2 text-left text-xs font-semibold uppercase tracking-wider text-[var(--qg-text-muted)]">
+                <th className="sticky left-0 z-20 min-w-[18rem] border-b border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-2 text-left text-xs font-semibold uppercase tracking-wider text-[var(--qg-text-muted)]">
                   Pôle / Tâche
                 </th>
                 {people.map((p) => (
@@ -239,76 +333,107 @@ export default function DistributionTachesPage() {
               </tr>
             </thead>
             <tbody>
-              {groups.map((g) => (
-                <RaciGroup
-                  key={g.pole || "_"}
-                  pole={g.pole}
-                  peopleCount={people.length}
-                >
-                  {g.items.length === 0 ? (
-                    <tr>
+              {rows.map((row, ri) => {
+                if (row.kind === "pole") {
+                  return (
+                    <tr
+                      key={`pole-${row.pole}-${ri}`}
+                      onDragOver={(e) => {
+                        if (dragId != null) e.preventDefault();
+                      }}
+                      onDrop={() => moveTo(row.pole, "", null)}
+                    >
                       <td
-                        colSpan={people.length + 1}
-                        className="border-b border-[var(--qg-border)] px-2 py-1.5 text-[11px] italic text-[var(--qg-text-faint)]"
+                        colSpan={colCount}
+                        className="sticky left-0 border-b border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--qg-accent)]"
                       >
-                        Aucune tâche dans ce pôle.
+                        {row.pole || "Sans pôle"}
                       </td>
                     </tr>
-                  ) : (
-                    g.items.map((a) => (
-                      <tr key={a.id} className="group">
-                        <td className="sticky left-0 z-10 border-b border-r border-[var(--qg-border)] bg-[var(--qg-bg)] p-2 align-top">
-                          <div className="flex items-start justify-between gap-2">
-                            <span className="leading-snug">{a.label}</span>
-                            <span className="flex shrink-0 gap-1 opacity-0 transition group-hover:opacity-100">
-                              <button
-                                type="button"
-                                onClick={() => setActivityModal(a)}
-                                className="rounded p-0.5 text-[var(--qg-text-faint)] hover:text-[var(--qg-accent)]"
-                                title="Modifier"
-                              >
-                                <Pencil className="h-3 w-3" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void deleteActivity(a)}
-                                className="rounded p-0.5 text-[var(--qg-text-faint)] hover:text-rose-400"
-                                title="Supprimer"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </button>
-                            </span>
-                          </div>
+                  );
+                }
+                if (row.kind === "sub") {
+                  return (
+                    <tr
+                      key={`sub-${row.pole}-${row.sub}-${ri}`}
+                      onDragOver={(e) => {
+                        if (dragId != null) e.preventDefault();
+                      }}
+                      onDrop={() => moveTo(row.pole, row.sub, null)}
+                    >
+                      <td
+                        colSpan={colCount}
+                        className="sticky left-0 border-b border-[var(--qg-border)] bg-[var(--qg-bg)] py-1 pl-6 pr-2 text-[11px] font-semibold text-[var(--qg-text-muted)]"
+                      >
+                        ↳ {row.sub}
+                      </td>
+                    </tr>
+                  );
+                }
+                const a = row.activity;
+                return (
+                  <tr
+                    key={a.id}
+                    className={`group ${dragId === a.id ? "opacity-40" : ""}`}
+                    draggable
+                    onDragStart={() => setDragId(a.id)}
+                    onDragEnd={() => setDragId(null)}
+                    onDragOver={(e) => {
+                      if (dragId != null) e.preventDefault();
+                    }}
+                    onDrop={() => moveTo(a.pole, a.subsection || "", a.id)}
+                  >
+                    <td className="sticky left-0 z-10 border-b border-r border-[var(--qg-border)] bg-[var(--qg-bg)] p-2 align-top">
+                      <div className="flex items-start gap-1.5">
+                        <GripVertical className="mt-0.5 h-3.5 w-3.5 shrink-0 cursor-grab text-[var(--qg-text-faint)]" />
+                        <span className="flex-1 leading-snug">{a.label}</span>
+                        <span className="flex shrink-0 gap-1 opacity-0 transition group-hover:opacity-100">
+                          <button
+                            type="button"
+                            onClick={() => setActivityModal(a)}
+                            className="rounded p-0.5 text-[var(--qg-text-faint)] hover:text-[var(--qg-accent)]"
+                            title="Modifier"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void deleteActivity(a)}
+                            className="rounded p-0.5 text-[var(--qg-text-faint)] hover:text-rose-400"
+                            title="Supprimer"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </span>
+                      </div>
+                    </td>
+                    {people.map((p) => {
+                      const v = cellMap.get(cellKey(a.id, p.id)) || "";
+                      const meta = v ? RACI_META[v] : null;
+                      return (
+                        <td
+                          key={p.id}
+                          className="border-b border-l border-[var(--qg-border)] p-1 text-center"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => void cycleCell(a.id, p.id)}
+                            className="mx-auto grid h-8 w-8 place-items-center rounded text-xs font-bold transition hover:ring-2 hover:ring-[var(--qg-accent)]/40"
+                            style={
+                              meta
+                                ? { background: meta.bg, color: "#fff" }
+                                : { background: "transparent" }
+                            }
+                            title={meta ? meta.full : "Vide — clique pour R"}
+                          >
+                            {v}
+                          </button>
                         </td>
-                        {people.map((p) => {
-                          const v = cellMap.get(cellKey(a.id, p.id)) || "";
-                          const meta = v ? RACI_META[v] : null;
-                          return (
-                            <td
-                              key={p.id}
-                              className="border-b border-l border-[var(--qg-border)] p-1 text-center"
-                            >
-                              <button
-                                type="button"
-                                onClick={() => void cycleCell(a.id, p.id)}
-                                className="mx-auto grid h-8 w-8 place-items-center rounded text-xs font-bold transition hover:ring-2 hover:ring-[var(--qg-accent)]/40"
-                                style={
-                                  meta
-                                    ? { background: meta.bg, color: "#fff" }
-                                    : { background: "transparent" }
-                                }
-                                title={meta ? meta.full : "Vide — clique pour R"}
-                              >
-                                {v}
-                              </button>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))
-                  )}
-                </RaciGroup>
-              ))}
+                      );
+                    })}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -327,6 +452,7 @@ export default function DistributionTachesPage() {
         <ActivityModal
           activity={activityModal === "new" ? null : activityModal}
           poles={poles}
+          subsections={subsections}
           onClose={() => setActivityModal(null)}
           onSaved={() => {
             setActivityModal(null);
@@ -337,35 +463,12 @@ export default function DistributionTachesPage() {
       {poleManagerOpen ? (
         <PoleManager
           poles={poles}
+          subsections={subsections}
           onClose={() => setPoleManagerOpen(false)}
           onChanged={() => void load()}
         />
       ) : null}
     </div>
-  );
-}
-
-function RaciGroup({
-  pole,
-  peopleCount,
-  children
-}: {
-  pole: string;
-  peopleCount: number;
-  children: React.ReactNode;
-}) {
-  return (
-    <>
-      <tr>
-        <td
-          colSpan={peopleCount + 1}
-          className="sticky left-0 border-b border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--qg-accent)]"
-        >
-          {pole || "Sans pôle"}
-        </td>
-      </tr>
-      {children}
-    </>
   );
 }
 
@@ -446,17 +549,22 @@ function PersonPicker({
 function ActivityModal({
   activity,
   poles,
+  subsections,
   onClose,
   onSaved
 }: {
   activity: Activity | null;
   poles: Pole[];
+  subsections: Subsection[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [pole, setPole] = useState(activity?.pole || poles[0]?.label || "");
+  const [subsection, setSubsection] = useState(activity?.subsection || "");
   const [label, setLabel] = useState(activity?.label || "");
   const [busy, setBusy] = useState(false);
+
+  const subsForPole = subsections.filter((s) => s.pole === pole);
 
   async function save() {
     if (!label.trim()) return;
@@ -467,7 +575,7 @@ function ActivityModal({
         : "/api/v1/raci/activities";
       await authedFetch(url, {
         method: activity ? "PUT" : "POST",
-        body: JSON.stringify({ pole, label: label.trim() })
+        body: JSON.stringify({ pole, subsection, label: label.trim() })
       });
       onSaved();
     } finally {
@@ -486,7 +594,10 @@ function ActivityModal({
       <select
         className={INPUT}
         value={pole}
-        onChange={(e) => setPole(e.target.value)}
+        onChange={(e) => {
+          setPole(e.target.value);
+          setSubsection("");
+        }}
       >
         {poles.map((p) => (
           <option key={p.id} value={p.label}>
@@ -497,6 +608,26 @@ function ActivityModal({
           <option value={pole}>{pole}</option>
         ) : null}
       </select>
+
+      <label className="mb-1 mt-3 block text-xs text-[var(--qg-text-muted)]">
+        Sous-section (optionnel)
+      </label>
+      <select
+        className={INPUT}
+        value={subsection}
+        onChange={(e) => setSubsection(e.target.value)}
+      >
+        <option value="">— Aucune (directe au pôle) —</option>
+        {subsForPole.map((s) => (
+          <option key={s.id} value={s.label}>
+            {s.label}
+          </option>
+        ))}
+        {subsection && !subsForPole.some((s) => s.label === subsection) ? (
+          <option value={subsection}>{subsection}</option>
+        ) : null}
+      </select>
+
       <label className="mb-1 mt-3 block text-xs text-[var(--qg-text-muted)]">
         Tâche / responsabilité
       </label>
@@ -514,29 +645,26 @@ function ActivityModal({
 
 function PoleManager({
   poles,
+  subsections,
   onClose,
   onChanged
 }: {
   poles: Pole[];
+  subsections: Subsection[];
   onClose: () => void;
   onChanged: () => void;
 }) {
-  const [newLabel, setNewLabel] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [newPole, setNewPole] = useState("");
+  const [newSub, setNewSub] = useState<Record<number, string>>({});
 
   async function addPole() {
-    if (!newLabel.trim()) return;
-    setBusy(true);
-    try {
-      await authedFetch("/api/v1/raci/poles", {
-        method: "POST",
-        body: JSON.stringify({ label: newLabel.trim() })
-      });
-      setNewLabel("");
-      onChanged();
-    } finally {
-      setBusy(false);
-    }
+    if (!newPole.trim()) return;
+    await authedFetch("/api/v1/raci/poles", {
+      method: "POST",
+      body: JSON.stringify({ label: newPole.trim() })
+    });
+    setNewPole("");
+    onChanged();
   }
   async function renamePole(p: Pole) {
     const v = prompt("Renommer le pôle :", p.label);
@@ -552,42 +680,118 @@ function PoleManager({
     await authedFetch(`/api/v1/raci/poles/${p.id}`, { method: "DELETE" });
     onChanged();
   }
+  async function addSub(pole: string, pid: number) {
+    const v = (newSub[pid] || "").trim();
+    if (!v) return;
+    await authedFetch("/api/v1/raci/subsections", {
+      method: "POST",
+      body: JSON.stringify({ pole, label: v })
+    });
+    setNewSub((s) => ({ ...s, [pid]: "" }));
+    onChanged();
+  }
+  async function renameSub(s: Subsection) {
+    const v = prompt("Renommer la sous-section :", s.label);
+    if (!v || !v.trim() || v.trim() === s.label) return;
+    await authedFetch(`/api/v1/raci/subsections/${s.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ pole: s.pole, label: v.trim() })
+    });
+    onChanged();
+  }
+  async function deleteSub(s: Subsection) {
+    if (!confirm(`Supprimer la sous-section « ${s.label} » ?`)) return;
+    await authedFetch(`/api/v1/raci/subsections/${s.id}`, { method: "DELETE" });
+    onChanged();
+  }
 
   return (
-    <Modal title="Gérer les pôles" onClose={onClose}>
-      <div className="mb-3 space-y-1.5">
+    <Modal title="Pôles & sous-sections" onClose={onClose}>
+      <div className="max-h-[60vh] space-y-2 overflow-y-auto">
         {poles.map((p) => (
           <div
             key={p.id}
-            className="flex items-center justify-between rounded-lg border border-[var(--qg-border)] px-3 py-2 text-sm"
+            className="rounded-lg border border-[var(--qg-border)] p-2"
           >
-            <span>{p.label}</span>
-            <span className="flex gap-1">
-              <button
-                type="button"
-                onClick={() => void renamePole(p)}
-                className="rounded p-1 text-[var(--qg-text-faint)] hover:text-[var(--qg-accent)]"
-                title="Renommer"
-              >
-                <Pencil className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => void deletePole(p)}
-                className="rounded p-1 text-[var(--qg-text-faint)] hover:text-rose-400"
-                title="Supprimer"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </span>
+            <div className="flex items-center justify-between text-sm font-semibold">
+              <span>{p.label}</span>
+              <span className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => void renamePole(p)}
+                  className="rounded p-1 text-[var(--qg-text-faint)] hover:text-[var(--qg-accent)]"
+                  title="Renommer le pôle"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deletePole(p)}
+                  className="rounded p-1 text-[var(--qg-text-faint)] hover:text-rose-400"
+                  title="Supprimer le pôle"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            </div>
+            <div className="mt-1.5 space-y-1 pl-3">
+              {subsections
+                .filter((s) => s.pole === p.label)
+                .map((s) => (
+                  <div
+                    key={s.id}
+                    className="flex items-center justify-between text-xs text-[var(--qg-text-muted)]"
+                  >
+                    <span>↳ {s.label}</span>
+                    <span className="flex gap-1">
+                      <button
+                        type="button"
+                        onClick={() => void renameSub(s)}
+                        className="rounded p-0.5 hover:text-[var(--qg-accent)]"
+                        title="Renommer"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void deleteSub(s)}
+                        className="rounded p-0.5 hover:text-rose-400"
+                        title="Supprimer"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              <div className="flex gap-1.5 pt-1">
+                <input
+                  className={INPUT + " py-1 text-xs"}
+                  value={newSub[p.id] || ""}
+                  onChange={(e) =>
+                    setNewSub((s) => ({ ...s, [p.id]: e.target.value }))
+                  }
+                  placeholder="Nouvelle sous-section…"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void addSub(p.label, p.id);
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => void addSub(p.label, p.id)}
+                  className="shrink-0 rounded-lg border border-[var(--qg-border)] px-2 text-xs hover:border-[var(--qg-accent)]"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
           </div>
         ))}
       </div>
-      <div className="flex gap-2">
+      <div className="mt-3 flex gap-2 border-t border-[var(--qg-border)] pt-3">
         <input
           className={INPUT}
-          value={newLabel}
-          onChange={(e) => setNewLabel(e.target.value)}
+          value={newPole}
+          onChange={(e) => setNewPole(e.target.value)}
           placeholder="Nouveau pôle…"
           onKeyDown={(e) => {
             if (e.key === "Enter") void addPole();
@@ -596,10 +800,9 @@ function PoleManager({
         <button
           type="button"
           onClick={() => void addPole()}
-          disabled={busy}
-          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[var(--qg-accent)] px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[var(--qg-accent)] px-3 py-2 text-sm font-semibold text-white hover:opacity-90"
         >
-          <Plus className="h-4 w-4" /> Ajouter
+          <Plus className="h-4 w-4" /> Pôle
         </button>
       </div>
     </Modal>
