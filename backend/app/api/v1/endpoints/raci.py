@@ -178,22 +178,34 @@ async def get_board(db: DBSession, _: CurrentUser) -> RaciBoard:
             )
         )
     ).scalars().all()
-    subsections = (
-        await db.execute(
-            select(RaciSubsection).order_by(
-                RaciSubsection.pole,
-                RaciSubsection.position,
-                RaciSubsection.id,
+    try:
+        subsections = (
+            await db.execute(
+                select(RaciSubsection).order_by(
+                    RaciSubsection.pole,
+                    RaciSubsection.position,
+                    RaciSubsection.id,
+                )
             )
-        )
-    ).scalars().all()
+        ).scalars().all()
+    except Exception:  # noqa: BLE001
+        subsections = []
     cells = (await db.execute(select(RaciCell))).scalars().all()
     return RaciBoard(
-        poles=poles,
-        subsections=subsections,
-        people=people,
-        activities=activities,
-        cells=cells,
+        poles=[PoleRead.model_validate(p) for p in poles],
+        subsections=[SubsectionRead.model_validate(s) for s in subsections],
+        people=[PersonRead.model_validate(pp) for pp in people],
+        activities=[
+            ActivityRead(
+                id=a.id,
+                pole=a.pole or "",
+                subsection=(getattr(a, "subsection", "") or ""),
+                label=a.label,
+                position=a.position,
+            )
+            for a in activities
+        ],
+        cells=[CellRead.model_validate(c) for c in cells],
     )
 
 
@@ -377,6 +389,82 @@ async def reorder_activities(
         a.pole = (item.pole or "").strip()
         a.subsection = (item.subsection or "").strip()
     await db.commit()
+
+
+# ── Import en masse de tâches (collage one-shot) ───────────────────────
+
+
+class BulkItem(BaseModel):
+    pole: str = ""
+    subsection: str = ""
+    label: str = Field(..., min_length=1, max_length=300)
+
+
+class BulkWrite(BaseModel):
+    items: List[BulkItem]
+
+
+@router.post("/activities/bulk")
+async def bulk_create_activities(
+    data: BulkWrite, db: DBSession, _: CurrentUser
+) -> dict:
+    """Crée plusieurs tâches d'un coup. Crée au passage les pôles et
+    sous-sections référencés s'ils n'existent pas encore."""
+    poles = {
+        p.label
+        for p in (await db.execute(select(RaciPole))).scalars().all()
+    }
+    subs = {
+        (su.pole, su.label)
+        for su in (await db.execute(select(RaciSubsection))).scalars().all()
+    }
+    pole_pos = (
+        await db.execute(
+            select(RaciPole.position).order_by(RaciPole.position.desc())
+        )
+    ).scalars().first() or 0
+    sub_pos = (
+        await db.execute(
+            select(RaciSubsection.position).order_by(
+                RaciSubsection.position.desc()
+            )
+        )
+    ).scalars().first() or 0
+    act_pos = (
+        await db.execute(
+            select(RaciActivity.position).order_by(
+                RaciActivity.position.desc()
+            )
+        )
+    ).scalars().first() or 0
+
+    created = 0
+    for item in data.items:
+        label = item.label.strip()
+        if not label:
+            continue
+        pole = item.pole.strip()
+        sub = item.subsection.strip()
+        if pole and pole not in poles:
+            pole_pos += 1
+            db.add(RaciPole(label=pole, position=pole_pos))
+            poles.add(pole)
+        if pole and sub and (pole, sub) not in subs:
+            sub_pos += 1
+            db.add(RaciSubsection(pole=pole, label=sub, position=sub_pos))
+            subs.add((pole, sub))
+        act_pos += 1
+        db.add(
+            RaciActivity(
+                pole=pole,
+                subsection=sub,
+                label=label,
+                position=act_pos,
+            )
+        )
+        created += 1
+    await db.commit()
+    return {"created": created}
 
 
 # ── Personnes (colonnes = comptes Kratos) ──────────────────────────────
