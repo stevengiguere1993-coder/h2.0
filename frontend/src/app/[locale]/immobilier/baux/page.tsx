@@ -50,6 +50,34 @@ type Overview = {
   nb_attente: number;
 };
 
+type Echeance = {
+  bail_id: number;
+  immeuble: string;
+  logement: string;
+  locataire: string;
+  date_fin: string;
+  fenetre_debut: string;
+  fenetre_fin: string;
+  statut: string; // a_envoyer | en_retard | a_venir
+  jours: number;
+  loyer_mensuel: number;
+};
+type EcheanceData = {
+  rows: Echeance[];
+  nb_a_envoyer: number;
+  nb_en_retard: number;
+  nb_a_venir: number;
+};
+
+function fmtDateShort(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1).toLocaleDateString("fr-CA", {
+    day: "numeric",
+    month: "short",
+    year: "numeric"
+  });
+}
+
 function fmtMoney(n: number): string {
   return `${Math.round(n).toLocaleString("fr-CA")} $`;
 }
@@ -81,6 +109,7 @@ export default function BauxPage() {
   const [error, setError] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [echeances, setEcheances] = useState<EcheanceData | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -105,6 +134,19 @@ export default function BauxPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void (async () => {
+      const params = new URLSearchParams();
+      if (currentEntrepriseId != null) {
+        params.set("entreprise_id", String(currentEntrepriseId));
+      }
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/echeances?${params.toString()}`
+      );
+      if (r.ok) setEcheances((await r.json()) as EcheanceData);
+    })();
+  }, [currentEntrepriseId]);
 
   function flash(msg: string) {
     setToast(msg);
@@ -234,6 +276,10 @@ export default function BauxPage() {
               sub="avant le 5 du mois"
             />
           </div>
+        ) : null}
+
+        {echeances && echeances.rows.length > 0 ? (
+          <EcheancesSection data={echeances} />
         ) : null}
 
         {/* Tableau */}
@@ -367,6 +413,72 @@ export default function BauxPage() {
         </div>
       ) : null}
     </>
+  );
+}
+
+function EcheancesSection({ data }: { data: EcheanceData }) {
+  const TONE: Record<string, { box: string; chip: string; txt: string }> = {
+    en_retard: {
+      box: "border-rose-500/40 bg-rose-500/5",
+      chip: "bg-rose-500/20 text-rose-300",
+      txt: "En retard"
+    },
+    a_envoyer: {
+      box: "border-amber-500/40 bg-amber-500/5",
+      chip: "bg-amber-500/20 text-amber-300",
+      txt: "À envoyer"
+    },
+    a_venir: {
+      box: "border-sky-500/40 bg-sky-500/5",
+      chip: "bg-sky-500/20 text-sky-300",
+      txt: "À venir"
+    }
+  };
+  return (
+    <div className="mt-5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-amber-200">
+        <span>📅 Avis de renouvellement</span>
+        <span className="text-xs font-normal text-white/50">
+          {data.nb_en_retard > 0 ? `${data.nb_en_retard} en retard · ` : ""}
+          {data.nb_a_envoyer} à envoyer · {data.nb_a_venir} à venir
+        </span>
+      </div>
+      <p className="mb-3 text-xs text-white/50">
+        L'avis officiel se transmet via le formulaire du TAL ou de la CORPIQ,
+        entre 6 et 3 mois avant la fin du bail.
+      </p>
+      <div className="space-y-1.5">
+        {data.rows.map((r) => {
+          const t = TONE[r.statut] || TONE.a_venir;
+          return (
+            <div
+              key={r.bail_id}
+              className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm ${t.box}`}
+            >
+              <div className="min-w-0">
+                <span className="font-medium">{r.locataire}</span>
+                <span className="ml-2 text-xs text-white/50">
+                  {r.immeuble} · {r.logement}
+                </span>
+              </div>
+              <div className="flex items-center gap-3 text-xs text-white/60">
+                <span>Fin du bail : {fmtDateShort(r.date_fin)}</span>
+                <span className="hidden sm:inline">
+                  Fenêtre : {fmtDateShort(r.fenetre_debut)} →{" "}
+                  {fmtDateShort(r.fenetre_fin)}
+                </span>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${t.chip}`}
+                >
+                  {t.txt}
+                  {r.statut === "a_venir" ? ` dans ${r.jours} j` : ""}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
