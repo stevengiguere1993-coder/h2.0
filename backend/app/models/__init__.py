@@ -89,6 +89,7 @@ from app.models.raci import (  # noqa: F401
     RaciCell,
     RaciPerson,
     RaciPole,
+    RaciSubsection,
 )
 from app.models.qg_embedding import Embedding  # noqa: F401
 from app.models.rencontre import (  # noqa: F401
@@ -326,6 +327,7 @@ __all__ = [
     "TeamsMeetingImport",
     "RaciActivity",
     "RaciPole",
+    "RaciSubsection",
     "RaciCell",
     "RaciPerson",
     "Subscription",

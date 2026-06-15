@@ -10,7 +10,13 @@ from sqlalchemy import func, select, update
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.employe import Employe
-from app.models.raci import RaciActivity, RaciCell, RaciPerson, RaciPole
+from app.models.raci import (
+    RaciActivity,
+    RaciCell,
+    RaciPerson,
+    RaciPole,
+    RaciSubsection,
+)
 from app.models.user import User
 
 router = APIRouter(prefix="/raci", tags=["raci"])
@@ -60,13 +66,38 @@ class ActivityRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     pole: str
+    subsection: str = ""
     label: str
     position: int
 
 
 class ActivityWrite(BaseModel):
     pole: str = Field(default="", max_length=120)
+    subsection: str = Field(default="", max_length=120)
     label: str = Field(..., min_length=1, max_length=300)
+
+
+class SubsectionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    pole: str
+    label: str
+    position: int
+
+
+class SubsectionWrite(BaseModel):
+    pole: str = Field(default="", max_length=120)
+    label: str = Field(..., min_length=1, max_length=120)
+
+
+class ReorderItem(BaseModel):
+    id: int
+    pole: str = ""
+    subsection: str = ""
+
+
+class ReorderWrite(BaseModel):
+    items: List[ReorderItem]
 
 
 class CellRead(BaseModel):
@@ -90,6 +121,7 @@ class AvailableUser(BaseModel):
 
 class RaciBoard(BaseModel):
     poles: List[PoleRead]
+    subsections: List[SubsectionRead]
     people: List[PersonRead]
     activities: List[ActivityRead]
     cells: List[CellRead]
@@ -146,9 +178,22 @@ async def get_board(db: DBSession, _: CurrentUser) -> RaciBoard:
             )
         )
     ).scalars().all()
+    subsections = (
+        await db.execute(
+            select(RaciSubsection).order_by(
+                RaciSubsection.pole,
+                RaciSubsection.position,
+                RaciSubsection.id,
+            )
+        )
+    ).scalars().all()
     cells = (await db.execute(select(RaciCell))).scalars().all()
     return RaciBoard(
-        poles=poles, people=people, activities=activities, cells=cells
+        poles=poles,
+        subsections=subsections,
+        people=people,
+        activities=activities,
+        cells=cells,
     )
 
 
@@ -220,6 +265,11 @@ async def update_pole(
             .where(RaciActivity.pole == old)
             .values(pole=p.label)
         )
+        await db.execute(
+            update(RaciSubsection)
+            .where(RaciSubsection.pole == old)
+            .values(pole=p.label)
+        )
     await db.commit()
     await db.refresh(p)
     return p
@@ -231,6 +281,102 @@ async def delete_pole(pole_id: int, db: DBSession, _: CurrentUser) -> None:
     if p is not None:
         await db.delete(p)
         await db.commit()
+
+
+# ── Sous-sections ──────────────────────────────────────────────────────
+
+
+@router.post(
+    "/subsections",
+    response_model=SubsectionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_subsection(
+    data: SubsectionWrite, db: DBSession, _: CurrentUser
+) -> SubsectionRead:
+    maxpos = (
+        await db.execute(
+            select(RaciSubsection.position).order_by(
+                RaciSubsection.position.desc()
+            )
+        )
+    ).scalars().first()
+    s_ = RaciSubsection(
+        pole=data.pole.strip(),
+        label=data.label.strip(),
+        position=(maxpos or 0) + 1,
+    )
+    db.add(s_)
+    await db.commit()
+    await db.refresh(s_)
+    return s_
+
+
+@router.put("/subsections/{sub_id}", response_model=SubsectionRead)
+async def update_subsection(
+    sub_id: int, data: SubsectionWrite, db: DBSession, _: CurrentUser
+) -> SubsectionRead:
+    s_ = await db.get(RaciSubsection, sub_id)
+    if s_ is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Introuvable.")
+    old = s_.label
+    old_pole = s_.pole
+    s_.label = data.label.strip()
+    s_.pole = data.pole.strip()
+    # Cascade : les tâches de cette sous-section suivent le renommage.
+    if old and old != s_.label:
+        await db.execute(
+            update(RaciActivity)
+            .where(
+                RaciActivity.pole == old_pole,
+                RaciActivity.subsection == old,
+            )
+            .values(subsection=s_.label)
+        )
+    await db.commit()
+    await db.refresh(s_)
+    return s_
+
+
+@router.delete(
+    "/subsections/{sub_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_subsection(
+    sub_id: int, db: DBSession, _: CurrentUser
+) -> None:
+    s_ = await db.get(RaciSubsection, sub_id)
+    if s_ is not None:
+        # Les tâches retombent directement sous le pôle (sous-section vidée).
+        await db.execute(
+            update(RaciActivity)
+            .where(
+                RaciActivity.pole == s_.pole,
+                RaciActivity.subsection == s_.label,
+            )
+            .values(subsection="")
+        )
+        await db.delete(s_)
+        await db.commit()
+
+
+# ── Réordonnancement (drag & drop des tâches) ──────────────────────────
+
+
+@router.put("/activities/reorder", status_code=status.HTTP_204_NO_CONTENT)
+async def reorder_activities(
+    data: ReorderWrite, db: DBSession, _: CurrentUser
+) -> None:
+    """Réécrit position + pôle + sous-section de chaque tâche, dans
+    l'ordre fourni. Permet à la fois de réordonner et de déplacer une
+    tâche entre pôles / sous-sections en un seul appel."""
+    for i, item in enumerate(data.items):
+        a = await db.get(RaciActivity, item.id)
+        if a is None:
+            continue
+        a.position = i
+        a.pole = (item.pole or "").strip()
+        a.subsection = (item.subsection or "").strip()
+    await db.commit()
 
 
 # ── Personnes (colonnes = comptes Kratos) ──────────────────────────────
@@ -302,6 +448,7 @@ async def create_activity(
     ).scalars().first()
     a = RaciActivity(
         pole=data.pole.strip(),
+        subsection=data.subsection.strip(),
         label=data.label.strip(),
         position=(maxpos or 0) + 1,
     )
@@ -319,6 +466,7 @@ async def update_activity(
     if a is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Introuvable.")
     a.pole = data.pole.strip()
+    a.subsection = data.subsection.strip()
     a.label = data.label.strip()
     await db.commit()
     await db.refresh(a)
