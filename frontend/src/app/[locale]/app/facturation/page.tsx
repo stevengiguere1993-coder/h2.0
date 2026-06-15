@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, DollarSign, Loader2, Plus } from "lucide-react";
+import { ChevronDown, ChevronRight, DollarSign, Loader2, Plus } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
@@ -224,7 +224,7 @@ export default function FacturationPage() {
         ) : items.length === 0 ? (
           <EmptyState />
         ) : (
-          <div className="space-y-3">
+          <div className="flex gap-4 overflow-x-auto pb-4">
             {COLUMNS.map((col) => {
               const cards = byColumn[col.id] || [];
               const isHover = hoverCol === col.id;
@@ -246,15 +246,15 @@ export default function FacturationPage() {
                 }
               };
 
-              // Barres horizontales pleine largeur, empilées. L'en-tête
-              // se clique pour dérouler/replier ; les factures s'affichent
-              // en rangée horizontale à l'intérieur. La barre reste une
-              // cible de drop même repliée.
+              // Colonnes horizontales côte à côte, comme les autres
+              // kanban du système (CRM). L'en-tête se clique pour
+              // dérouler/replier ; repliée, on masque le corps mais la
+              // colonne reste une cible de drop.
               return (
                 <div
                   key={col.id}
                   {...dropHandlers}
-                  className={`rounded-xl border bg-brand-900/60 transition ${
+                  className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
                     isHover
                       ? "border-accent-500 bg-brand-900"
                       : "border-brand-800"
@@ -265,17 +265,17 @@ export default function FacturationPage() {
                     onClick={() => toggleCollapsed(col.id)}
                     title={
                       isCollapsed
-                        ? `Dérouler « ${col.label} »`
-                        : `Replier « ${col.label} »`
+                        ? "Cliquer pour déplier"
+                        : "Cliquer pour replier"
                     }
-                    className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-brand-900"
+                    className="flex w-full items-center justify-between border-b border-brand-800 px-4 py-3 text-left transition hover:bg-brand-900"
                   >
                     <div className="flex items-center gap-2">
-                      <ChevronDown
-                        className={`h-4 w-4 text-white/70 transition-transform ${
-                          isCollapsed ? "-rotate-90" : ""
-                        }`}
-                      />
+                      {isCollapsed ? (
+                        <ChevronRight className="h-3.5 w-3.5 text-white/50" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5 text-white/50" />
+                      )}
                       <span className={`h-2 w-2 rounded-full ${col.dot}`} />
                       <h2 className="text-sm font-semibold text-white">
                         {col.label}
@@ -286,44 +286,38 @@ export default function FacturationPage() {
                     </span>
                   </button>
 
-                  {!isCollapsed ? (
-                    <div className="border-t border-brand-800 p-3">
+                  {isCollapsed ? null : (
+                    <div className="flex-1 space-y-3 p-3">
                       {cards.length === 0 ? (
-                        <p className="py-6 text-center text-xs text-white/40">
+                        <p className="py-8 text-center text-xs text-white/40">
                           Aucune facture
                         </p>
                       ) : (
-                        <div className="flex gap-3 overflow-x-auto pb-1">
-                          {cards.map((f) => (
-                            <div
-                              key={f.id}
-                              className="w-72 flex-shrink-0"
-                            >
-                              <Card
-                                fa={f}
-                                clientName={
-                                  f.client_id
-                                    ? clientNames.get(f.client_id) ?? null
-                                    : null
-                                }
-                                projectName={
-                                  f.project_id
-                                    ? projectNames.get(f.project_id) ?? null
-                                    : null
-                                }
-                                dragging={dragging === f.id}
-                                onDragStart={() => setDragging(f.id)}
-                                onDragEnd={() => {
-                                  setDragging(null);
-                                  setHoverCol(null);
-                                }}
-                              />
-                            </div>
-                          ))}
-                        </div>
+                        cards.map((f) => (
+                          <Card
+                            key={f.id}
+                            fa={f}
+                            clientName={
+                              f.client_id
+                                ? clientNames.get(f.client_id) ?? null
+                                : null
+                            }
+                            projectName={
+                              f.project_id
+                                ? projectNames.get(f.project_id) ?? null
+                                : null
+                            }
+                            dragging={dragging === f.id}
+                            onDragStart={() => setDragging(f.id)}
+                            onDragEnd={() => {
+                              setDragging(null);
+                              setHoverCol(null);
+                            }}
+                          />
+                        ))
                       )}
                     </div>
-                  ) : null}
+                  )}
                 </div>
               );
             })}
