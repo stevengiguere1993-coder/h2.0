@@ -40,6 +40,9 @@ class ContactRequestUpdate(BaseModel):
     lost_reason: Optional[str] = Field(default=None, max_length=120)
     internal_notes: Optional[str] = Field(default=None, max_length=10_000)
     kanban_column: Optional[str] = Field(default=None, max_length=64)
+    # Rappel planifié. None laissé tel quel (exclude_unset) ; envoyer
+    # explicitement null efface le rappel.
+    rappel_at: Optional[datetime] = None
     name: Optional[str] = Field(default=None, max_length=255)
     email: Optional[str] = Field(default=None, max_length=320)
     phone: Optional[str] = Field(default=None, max_length=50)
@@ -69,6 +72,7 @@ class ContactRequestRead(BaseModel):
     status: str
     lost_reason: Optional[str] = None
     kanban_column: Optional[str] = None
+    rappel_at: Optional[datetime] = None
     internal_notes: Optional[str]
     assigned_to_user_id: Optional[int] = None
     gdpr_consent: bool
