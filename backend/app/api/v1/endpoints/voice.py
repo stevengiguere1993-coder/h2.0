@@ -64,6 +64,7 @@ from app.integrations.voice.voice_sdk import (
     voice_sdk_configured,
 )
 from app.integrations.voice.twilio_provider import TwilioVoiceProvider
+from app.models.client import Client
 from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.voice import (
     Call,
@@ -4425,6 +4426,170 @@ async def list_communications_for_entity(
 
     events.sort(key=lambda e: e.at, reverse=True)
     return events[:limit]
+
+
+class CommunicationFeedItem(CommunicationEvent):
+    """Élément du flux GLOBAL de communications (toutes fiches), enrichi
+    de l'identité de l'entité rattachée pour l'affichage + le lien."""
+
+    entity_type: str
+    entity_id: int
+    entity_name: Optional[str] = None
+
+
+# Portée « Construction » du flux : clients + leads CRM web. (Les
+# locataires relèvent de l'immobilier, les prospection_lead de la
+# prospection — exclus de cette vue.)
+_CONSTRUCTION_COMMS_ENTITIES = ("client", "contact_request")
+
+
+@router.get(
+    "/communications",
+    response_model=List[CommunicationFeedItem],
+    summary="Flux global des communications (Construction) — appels + SMS + courriels",
+)
+async def list_communications_feed(
+    _: CurrentUser,
+    db: DBSession,
+    kind: str = Query(default="all"),  # all | call | sms | email
+    direction: str = Query(default="all"),  # all | inbound | outbound
+    search: str = Query(default="", max_length=200),
+    limit: int = Query(default=100, ge=1, le=300),
+) -> List[CommunicationFeedItem]:
+    scope = list(_CONSTRUCTION_COMMS_ENTITIES)
+    over = limit * 3  # marge avant tri + filtre recherche
+    items: List[CommunicationFeedItem] = []
+
+    if kind in ("all", "email"):
+        stmt = select(EmailLog).where(
+            EmailLog.entity_type.in_(scope), EmailLog.entity_id.is_not(None)
+        )
+        if direction in ("inbound", "outbound"):
+            stmt = stmt.where(EmailLog.direction == direction)
+        stmt = stmt.order_by(
+            func.coalesce(
+                EmailLog.received_at, EmailLog.sent_at, EmailLog.created_at
+            ).desc()
+        ).limit(over)
+        for em in (await db.execute(stmt)).scalars().all():
+            items.append(
+                CommunicationFeedItem(
+                    kind="email",
+                    id=em.id,
+                    at=em.sent_at or em.received_at or em.created_at,
+                    direction=em.direction,
+                    status=em.status,
+                    subject=em.subject,
+                    email_from=em.from_email,
+                    email_to=em.to_email,
+                    body=em.body_preview or em.body_html,
+                    entity_type=em.entity_type or "",
+                    entity_id=em.entity_id or 0,
+                )
+            )
+
+    if kind in ("all", "call"):
+        stmt = select(Call).where(
+            Call.entity_type.in_(scope), Call.entity_id.is_not(None)
+        )
+        if direction in ("inbound", "outbound"):
+            stmt = stmt.where(Call.direction == direction)
+        stmt = stmt.order_by(Call.started_at.desc()).limit(over)
+        for c in (await db.execute(stmt)).scalars().all():
+            items.append(
+                CommunicationFeedItem(
+                    kind="call",
+                    id=c.id,
+                    at=c.started_at,
+                    direction=c.direction,
+                    status=c.status,
+                    from_e164=c.from_e164,
+                    to_e164=c.to_e164,
+                    duration_sec=c.duration_sec,
+                    intent=c.intent,
+                    was_voicemail=bool(c.was_voicemail),
+                    voicemail_summary=c.voicemail_summary,
+                    followup_suggestion=c.followup_suggestion,
+                    call_summary=c.recording_summary,
+                    has_recording=bool(c.recording_url),
+                    entity_type=c.entity_type or "",
+                    entity_id=c.entity_id or 0,
+                )
+            )
+
+    if kind in ("all", "sms"):
+        stmt = select(VoiceSms).where(
+            VoiceSms.entity_type.in_(scope), VoiceSms.entity_id.is_not(None)
+        )
+        if direction in ("inbound", "outbound"):
+            stmt = stmt.where(VoiceSms.direction == direction)
+        stmt = stmt.order_by(
+            func.coalesce(VoiceSms.received_at, VoiceSms.sent_at).desc()
+        ).limit(over)
+        for s in (await db.execute(stmt)).scalars().all():
+            items.append(
+                CommunicationFeedItem(
+                    kind="sms",
+                    id=s.id,
+                    at=s.received_at or s.sent_at,
+                    direction=s.direction,
+                    status=s.status,
+                    from_e164=s.from_e164,
+                    to_e164=s.to_e164,
+                    body=s.body,
+                    num_media=s.num_media or 0,
+                    entity_type=s.entity_type or "",
+                    entity_id=s.entity_id or 0,
+                )
+            )
+
+    # Résolution des noms d'entités (batch) pour l'affichage + le lien.
+    client_ids = {it.entity_id for it in items if it.entity_type == "client"}
+    cr_ids = {
+        it.entity_id for it in items if it.entity_type == "contact_request"
+    }
+    names: dict[tuple[str, int], str] = {}
+    if client_ids:
+        for cid, nm in (
+            await db.execute(
+                select(Client.id, Client.name).where(Client.id.in_(client_ids))
+            )
+        ).all():
+            names[("client", int(cid))] = nm
+    if cr_ids:
+        for cid, nm in (
+            await db.execute(
+                select(ContactRequest.id, ContactRequest.name).where(
+                    ContactRequest.id.in_(cr_ids)
+                )
+            )
+        ).all():
+            names[("contact_request", int(cid))] = nm
+    for it in items:
+        it.entity_name = names.get((it.entity_type, it.entity_id))
+
+    q = search.strip().lower()
+    if q:
+
+        def _hay(it: CommunicationFeedItem) -> str:
+            return " ".join(
+                x
+                for x in [
+                    it.subject,
+                    it.body,
+                    it.email_from,
+                    it.email_to,
+                    it.from_e164,
+                    it.to_e164,
+                    it.entity_name,
+                ]
+                if x
+            ).lower()
+
+        items = [it for it in items if q in _hay(it)]
+
+    items.sort(key=lambda e: e.at, reverse=True)
+    return items[:limit]
 
 
 class EmailComposeRequest(BaseModel):
