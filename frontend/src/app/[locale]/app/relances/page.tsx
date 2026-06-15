@@ -45,6 +45,7 @@ export default function RelancesPage() {
   const confirm = useConfirm();
   const [steps, setSteps] = useState<Step[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,19 +53,39 @@ export default function RelancesPage() {
     setLoading(true);
     setError(null);
     try {
-      const [sRes, tRes] = await Promise.all([
+      const [sRes, tRes, setRes] = await Promise.all([
         authedFetch("/api/v1/relances/cadence"),
-        authedFetch("/api/v1/email-templates")
+        authedFetch("/api/v1/email-templates"),
+        authedFetch("/api/v1/relances/settings")
       ]);
       if (!sRes.ok) throw new Error(`http_${sRes.status}`);
       const s = (await sRes.json()) as Step[];
       const t = tRes.ok ? ((await tRes.json()) as Template[]) : [];
       setSteps(s);
       setTemplates(t);
+      if (setRes.ok) {
+        const cfg = (await setRes.json()) as { enabled: boolean };
+        setEnabled(cfg.enabled);
+      }
     } catch {
       setError("Impossible de charger la séquence de relance.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function toggleEnabled() {
+    const next = !enabled;
+    setEnabled(next);
+    try {
+      const res = await authedFetch("/api/v1/relances/settings", {
+        method: "PUT",
+        body: JSON.stringify({ enabled: next })
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setEnabled(!next);
+      setError("Changement d'activation échoué.");
     }
   }
 
@@ -154,13 +175,37 @@ export default function RelancesPage() {
       />
 
       <div className="p-4 lg:p-6">
-        <h1 className="text-2xl font-bold text-white">Séquence de relance</h1>
-        <p className="mt-1 max-w-2xl text-sm text-white/60">
-          Une seule séquence, appliquée à tous les leads. Quand un contact ne
-          répond pas, les étapes s&apos;enchaînent automatiquement selon les
-          délais ci-dessous. Les étapes « courriel » partent automatiquement à
-          l&apos;échéance ; les appels apparaissent comme à faire.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-white">
+              Séquence de relance
+            </h1>
+            <p className="mt-1 max-w-2xl text-sm text-white/60">
+              Une seule séquence, appliquée à tous les leads. Quand un contact
+              ne répond pas, les étapes s&apos;enchaînent automatiquement selon
+              les délais ci-dessous. Les étapes « courriel » partent
+              automatiquement à l&apos;échéance ; les appels apparaissent comme
+              à faire.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void toggleEnabled()}
+            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold transition ${
+              enabled
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                : "border-brand-800 bg-brand-900 text-white/60"
+            }`}
+            title="Activer / couper le moteur de relances"
+          >
+            <span
+              className={`h-2.5 w-2.5 rounded-full ${
+                enabled ? "bg-emerald-400" : "bg-white/30"
+              }`}
+            />
+            {enabled ? "Moteur activé" : "Moteur désactivé"}
+          </button>
+        </div>
 
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">

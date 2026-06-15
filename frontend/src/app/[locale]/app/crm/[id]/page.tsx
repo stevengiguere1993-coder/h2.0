@@ -31,6 +31,7 @@ import { CallButton } from "@/components/call-button";
 import { CallHistoryDropdown } from "@/components/call-history-dropdown";
 import { CommunicationsTimeline } from "@/components/communications-timeline";
 import { FollowUpTimeline } from "@/components/follow-up-timeline";
+import { RelancePlanCard } from "@/components/relance-plan-card";
 import { MeasurementsPanel } from "@/components/measurements-panel";
 import { SalesTasksPanel } from "@/components/sales-tasks-panel";
 import { Link } from "@/i18n/navigation";
@@ -687,6 +688,9 @@ export default function ProspectDetailPage() {
                     ]}
                     onSave={(v) => patchProspect({ budget_range: v || null })}
                   />
+                  <div className="lg:col-span-3">
+                    <RelancePlanCard contactRequestId={p.id} />
+                  </div>
                   <div className="lg:col-span-3">
                     <FollowUpTimeline
                       subjectType="prospect"
