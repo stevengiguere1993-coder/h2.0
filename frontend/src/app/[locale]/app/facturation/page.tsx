@@ -365,7 +365,10 @@ function Card({
   projectName,
   dragging,
   onDragStart,
-  onDragEnd
+  onDragEnd,
+  onTouchDragStart,
+  onTouchDragMove,
+  onTouchDragEnd
 }: {
   fa: Facture;
   clientName: string | null;
