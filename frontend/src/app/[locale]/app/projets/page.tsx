@@ -1,7 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Briefcase, Loader2, MapPin, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Briefcase,
+  GripVertical,
+  Loader2,
+  MapPin,
+  Plus,
+  Trash2
+} from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
@@ -149,6 +156,27 @@ export default function ProjectsPage() {
     }
   }
 
+  // ── Glisser-déposer tactile (mobile) ──
+  // Le drag HTML5 ne marche pas au doigt : on gère le tactile via une
+  // poignée + Pointer Events. La colonne sous le doigt est retrouvée par
+  // `data-col-id` + elementFromPoint.
+  function columnIdAtPoint(x: number, y: number): string | null {
+    if (typeof document === "undefined") return null;
+    const el = document.elementFromPoint(x, y);
+    return el?.closest("[data-col-id]")?.getAttribute("data-col-id") ?? null;
+  }
+  function onTouchDragMove(x: number, y: number) {
+    setHoverCol(columnIdAtPoint(x, y));
+  }
+  function onTouchDragEnd(id: number, x: number, y: number) {
+    const cid = columnIdAtPoint(x, y);
+    const col = COLUMNS.find((c) => c.id === cid);
+    const item = items.find((p) => p.id === id);
+    if (col && item && item.status !== col.id) moveProject(id, col.id);
+    setDragging(null);
+    setHoverCol(null);
+  }
+
   async function deleteProject(id: number, name: string) {
     if (
       !(await confirm({
@@ -211,6 +239,7 @@ export default function ProjectsPage() {
               return (
                 <div
                   key={col.id}
+                  data-col-id={col.id}
                   onDragOver={(e) => {
                     e.preventDefault();
                     setHoverCol(col.id);
@@ -265,6 +294,9 @@ export default function ProjectsPage() {
                             setHoverCol(null);
                           }}
                           onDelete={() => deleteProject(p.id, p.name)}
+                          onTouchDragStart={() => setDragging(p.id)}
+                          onTouchDragMove={onTouchDragMove}
+                          onTouchDragEnd={(x, y) => onTouchDragEnd(p.id, x, y)}
                         />
                       ))
                     )}
@@ -285,7 +317,10 @@ function ProjectCard({
   dragging,
   onDragStart,
   onDragEnd,
-  onDelete
+  onDelete,
+  onTouchDragStart,
+  onTouchDragMove,
+  onTouchDragEnd
 }: {
   project: Project;
   clientName: string | null;
@@ -293,7 +328,11 @@ function ProjectCard({
   onDragStart: () => void;
   onDragEnd: () => void;
   onDelete: () => void;
+  onTouchDragStart: () => void;
+  onTouchDragMove: (x: number, y: number) => void;
+  onTouchDragEnd: (x: number, y: number) => void;
 }) {
+  const touch = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   return (
     <Link
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -301,12 +340,54 @@ function ProjectCard({
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`group relative block rounded-lg border bg-brand-950 p-3 transition ${
+      className={`group relative block rounded-lg border bg-brand-950 py-3 pl-7 pr-3 transition ${
         dragging
           ? "border-accent-500 opacity-60"
           : "border-brand-800 hover:border-accent-500"
       }`}
     >
+      {/* Poignée de glissement — fonctionne au doigt (Pointer Events).
+          touch-action:none pour que le glisser ne fasse pas défiler la
+          page. Le reste de la carte se tape pour ouvrir le projet. */}
+      <div
+        className="absolute left-0 top-0 flex h-full w-6 cursor-grab touch-none items-start justify-center pt-3 text-white/30 active:cursor-grabbing"
+        style={{ touchAction: "none" }}
+        aria-label="Glisser pour déplacer"
+        title="Glisser pour déplacer"
+        onPointerDown={(e) => {
+          if (e.pointerType === "mouse") return;
+          touch.current = { x: e.clientX, y: e.clientY, moved: false };
+          (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          const t = touch.current;
+          if (!t || e.pointerType === "mouse") return;
+          const dist = Math.hypot(e.clientX - t.x, e.clientY - t.y);
+          if (!t.moved && dist > 8) {
+            t.moved = true;
+            onTouchDragStart();
+          }
+          if (t.moved) {
+            e.preventDefault();
+            onTouchDragMove(e.clientX, e.clientY);
+          }
+        }}
+        onPointerUp={(e) => {
+          const t = touch.current;
+          touch.current = null;
+          if (!t || e.pointerType === "mouse") return;
+          if (t.moved) onTouchDragEnd(e.clientX, e.clientY);
+        }}
+        onPointerCancel={() => {
+          touch.current = null;
+        }}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+      >
+        <GripVertical className="h-4 w-4" />
+      </div>
       <button
         type="button"
         onClick={(e) => {

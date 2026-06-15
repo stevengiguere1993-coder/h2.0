@@ -1,7 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, DollarSign, Loader2, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  DollarSign,
+  GripVertical,
+  Loader2,
+  Plus
+} from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
@@ -192,6 +199,26 @@ export default function FacturationPage() {
     }
   }
 
+  // ── Glisser-déposer tactile (mobile) ──
+  // Le drag HTML5 ne fonctionne pas au doigt : on gère le tactile via une
+  // poignée + Pointer Events ; la colonne sous le doigt est retrouvée par
+  // `data-col-id` + elementFromPoint.
+  function columnIdAtPoint(x: number, y: number): string | null {
+    if (typeof document === "undefined") return null;
+    const el = document.elementFromPoint(x, y);
+    return el?.closest("[data-col-id]")?.getAttribute("data-col-id") ?? null;
+  }
+  function onTouchDragMove(x: number, y: number) {
+    setHoverCol(columnIdAtPoint(x, y));
+  }
+  function onTouchDragEnd(id: number, x: number, y: number) {
+    const cid = columnIdAtPoint(x, y);
+    const f = items.find((x2) => x2.id === id);
+    if (cid && f && f.status !== cid) move(id, cid);
+    setDragging(null);
+    setHoverCol(null);
+  }
+
   return (
     <>
       <AppTopbar
@@ -253,6 +280,7 @@ export default function FacturationPage() {
               return (
                 <div
                   key={col.id}
+                  data-col-id={col.id}
                   {...dropHandlers}
                   className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
                     isHover
@@ -313,6 +341,9 @@ export default function FacturationPage() {
                               setDragging(null);
                               setHoverCol(null);
                             }}
+                            onTouchDragStart={() => setDragging(f.id)}
+                            onTouchDragMove={onTouchDragMove}
+                            onTouchDragEnd={(x, y) => onTouchDragEnd(f.id, x, y)}
                           />
                         ))
                       )}
@@ -342,7 +373,11 @@ function Card({
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
+  onTouchDragStart: () => void;
+  onTouchDragMove: (x: number, y: number) => void;
+  onTouchDragEnd: (x: number, y: number) => void;
 }) {
+  const touch = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   return (
     <Link
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -350,12 +385,54 @@ function Card({
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`block rounded-lg border bg-brand-950 p-3 transition ${
+      className={`relative block rounded-lg border bg-brand-950 py-3 pl-7 pr-3 transition ${
         dragging
           ? "border-accent-500 opacity-60"
           : "border-brand-800 hover:border-accent-500"
       }`}
     >
+      {/* Poignée de glissement — fonctionne au doigt (Pointer Events).
+          touch-action:none pour que le glisser ne fasse pas défiler. Le
+          reste de la carte se tape pour ouvrir la facture. */}
+      <div
+        className="absolute left-0 top-0 flex h-full w-6 cursor-grab touch-none items-start justify-center pt-3 text-white/30 active:cursor-grabbing"
+        style={{ touchAction: "none" }}
+        aria-label="Glisser pour déplacer"
+        title="Glisser pour déplacer"
+        onPointerDown={(e) => {
+          if (e.pointerType === "mouse") return;
+          touch.current = { x: e.clientX, y: e.clientY, moved: false };
+          (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          const t = touch.current;
+          if (!t || e.pointerType === "mouse") return;
+          const dist = Math.hypot(e.clientX - t.x, e.clientY - t.y);
+          if (!t.moved && dist > 8) {
+            t.moved = true;
+            onTouchDragStart();
+          }
+          if (t.moved) {
+            e.preventDefault();
+            onTouchDragMove(e.clientX, e.clientY);
+          }
+        }}
+        onPointerUp={(e) => {
+          const t = touch.current;
+          touch.current = null;
+          if (!t || e.pointerType === "mouse") return;
+          if (t.moved) onTouchDragEnd(e.clientX, e.clientY);
+        }}
+        onPointerCancel={() => {
+          touch.current = null;
+        }}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+      >
+        <GripVertical className="h-4 w-4" />
+      </div>
       {/* Adresse du projet (top). Fallback sur la référence
           de la facture si pas de projet lié — pour ne jamais
           afficher une carte vide. */}
