@@ -7,9 +7,6 @@ Relances ; le moteur (cron) les exécute.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Optional
-
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -18,11 +15,16 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DBSession, RequireManager
 from app.models.automation_setting import AutomationSetting
 from app.models.cadence_step import CadenceStep
-from app.models.relance_plan import RelancePlan
+from app.models.relance_item import RelanceItem
 from app.schemas.cadence_step import (
     CadenceStepCreate,
     CadenceStepRead,
     CadenceStepUpdate,
+)
+from app.schemas.relance_item import (
+    RelanceItemCreate,
+    RelanceItemRead,
+    RelanceItemUpdate,
 )
 
 router = APIRouter(prefix="/relances", tags=["relances"])
@@ -173,86 +175,97 @@ async def put_settings(
     return RelanceSettings(enabled=bool(row.enabled))
 
 
-# ── Plan de relance d'un lead (étapes faites / en cours / à venir) ──
-class PlanStepView(BaseModel):
-    position: int
-    channel: str
-    label: str
-    delay_days: int
-    state: str  # done | current | upcoming
-
-
-class PlanView(BaseModel):
-    status: str  # none | active | done | stopped
-    next_at: Optional[datetime]
-    current_index: Optional[int]
-    steps: list[PlanStepView]
-
-
-@router.get("/plan/{contact_request_id}", response_model=PlanView)
-async def get_plan(
+# ── Relances planifiées d'un lead (modifiables une à une) ──
+@router.get(
+    "/plan/{contact_request_id}", response_model=list[RelanceItemRead]
+)
+async def list_items(
     contact_request_id: int, db: DBSession, _: CurrentUser
-) -> PlanView:
-    # On indexe sur les étapes ACTIVES (cohérent avec le moteur).
-    steps = list(
+) -> list[RelanceItemRead]:
+    rows = list(
         (
             await db.execute(
-                select(CadenceStep)
-                .where(CadenceStep.active.is_(True))
+                select(RelanceItem)
+                .where(
+                    RelanceItem.contact_request_id == contact_request_id
+                )
                 .order_by(
-                    CadenceStep.position.asc(), CadenceStep.id.asc()
+                    RelanceItem.scheduled_at.asc(),
+                    RelanceItem.position.asc(),
+                    RelanceItem.id.asc(),
                 )
             )
         )
         .scalars()
         .all()
     )
-    plan = (
-        await db.execute(
-            select(RelancePlan).where(
-                RelancePlan.contact_request_id == contact_request_id
+    return [RelanceItemRead.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/plan/{contact_request_id}",
+    response_model=RelanceItemRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_item(
+    contact_request_id: int,
+    data: RelanceItemCreate,
+    db: DBSession,
+    _: RequireManager,
+) -> RelanceItemRead:
+    pos = data.position
+    if pos is None:
+        existing = (
+            await db.execute(
+                select(RelanceItem.position).where(
+                    RelanceItem.contact_request_id == contact_request_id
+                )
             )
+        ).all()
+        pos = (max((p[0] for p in existing), default=-1)) + 1
+    item = RelanceItem(
+        contact_request_id=contact_request_id,
+        position=pos,
+        channel=data.channel,
+        label=data.label,
+        email_template_id=data.email_template_id,
+        scheduled_at=data.scheduled_at,
+        status="pending",
+    )
+    db.add(item)
+    await db.flush()
+    return RelanceItemRead.model_validate(item)
+
+
+@router.patch("/item/{item_id}", response_model=RelanceItemRead)
+async def update_item(
+    item_id: int, data: RelanceItemUpdate, db: DBSession, _: RequireManager
+) -> RelanceItemRead:
+    item = (
+        await db.execute(
+            select(RelanceItem).where(RelanceItem.id == item_id)
         )
     ).scalar_one_or_none()
-
-    if plan is None:
-        return PlanView(
-            status="none",
-            next_at=None,
-            current_index=None,
-            steps=[
-                PlanStepView(
-                    position=s.position,
-                    channel=s.channel,
-                    label=s.label,
-                    delay_days=s.delay_days,
-                    state="upcoming",
-                )
-                for s in steps
-            ],
+    if item is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Relance introuvable."
         )
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(item, field, value)
+    await db.flush()
+    return RelanceItemRead.model_validate(item)
 
-    cur = plan.step_index
-    views: list[PlanStepView] = []
-    for idx, s in enumerate(steps):
-        if plan.status == "done" or idx < cur:
-            state = "done"
-        elif idx == cur and plan.status == "active":
-            state = "current"
-        else:
-            state = "upcoming"
-        views.append(
-            PlanStepView(
-                position=s.position,
-                channel=s.channel,
-                label=s.label,
-                delay_days=s.delay_days,
-                state=state,
-            )
+
+@router.delete("/item/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_item(
+    item_id: int, db: DBSession, _: RequireManager
+) -> Response:
+    item = (
+        await db.execute(
+            select(RelanceItem).where(RelanceItem.id == item_id)
         )
-    return PlanView(
-        status=plan.status,
-        next_at=plan.next_at,
-        current_index=cur,
-        steps=views,
-    )
+    ).scalar_one_or_none()
+    if item is not None:
+        await db.delete(item)
+        await db.flush()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
