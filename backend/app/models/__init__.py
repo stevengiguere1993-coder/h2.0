@@ -88,6 +88,7 @@ from app.models.raci import (  # noqa: F401
     RaciActivity,
     RaciCell,
     RaciPerson,
+    RaciPole,
 )
 from app.models.qg_embedding import Embedding  # noqa: F401
 from app.models.rencontre import (  # noqa: F401
@@ -324,6 +325,7 @@ __all__ = [
     "SoldComparable",
     "TeamsMeetingImport",
     "RaciActivity",
+    "RaciPole",
     "RaciCell",
     "RaciPerson",
     "Subscription",
