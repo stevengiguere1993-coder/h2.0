@@ -90,6 +90,14 @@ class ContactRequest(Base, TimestampUpdateMixin):
     )
     internal_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Date/heure de rappel planifiée pour ce prospect. Quand l'échéance
+    # est atteinte/dépassée, le tableau CRM affiche un badge « à rappeler »
+    # sur le nom (notification temporaire, jusqu'à ce qu'on traite ou
+    # efface le rappel).
+    rappel_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Motif de perte — renseigné quand le lead passe en `lost` (Refusé).
     # Ex. « Information de contact erroné », « Pas intéressé ». Permet de
     # tracer POURQUOI le lead est perdu (reporting + filtrage). Remis à

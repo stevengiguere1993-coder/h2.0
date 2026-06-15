@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Bell,
   ChevronDown,
   ChevronRight,
   FileText,
@@ -36,8 +37,30 @@ type Prospect = {
   source: string | null;
   status: string;
   kanban_column: string | null;
+  rappel_at: string | null;
   created_at: string;
 };
+
+/** ISO (UTC) → valeur d'un <input type="datetime-local"> en heure
+ *  locale, ou "" si vide. */
+function toLocalInput(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` +
+    `T${p(d.getHours())}:${p(d.getMinutes())}`
+  );
+}
+
+function fmtRappel(iso: string): string {
+  return new Date(iso).toLocaleString("fr-CA", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
 
 type Column = { id: string; label: string; dot: string; custom?: boolean };
 
@@ -157,6 +180,13 @@ export default function CrmKanbanPage() {
     () => new Set(DEFAULT_COLLAPSED)
   );
   const [createOpen, setCreateOpen] = useState(false);
+  // Horloge rafraîchie chaque minute : permet au badge « à rappeler »
+  // d'apparaître au moment du rappel sans recharger la page.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     setCollapsedCols(loadCollapsedColumns());
@@ -304,6 +334,21 @@ export default function CrmKanbanPage() {
     } catch {
       setItems(prev);
       setError("Mise à jour échouée.");
+    }
+  }
+
+  async function setRappel(id: number, value: string | null) {
+    setItems((xs) =>
+      xs.map((x) => (x.id === id ? { ...x, rappel_at: value } : x))
+    );
+    try {
+      const res = await authedFetch(`/api/v1/contact/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ rappel_at: value })
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setError("Mise à jour du rappel échouée.");
     }
   }
 
@@ -581,6 +626,7 @@ export default function CrmKanbanPage() {
                           <ProspectCard
                             key={p.id}
                             prospect={p}
+                            now={now}
                             dragging={dragging === p.id}
                             onDragStart={() => onDragStart(p.id)}
                             onDragEnd={onDragEnd}
@@ -589,6 +635,7 @@ export default function CrmKanbanPage() {
                             onTouchDragEnd={(x, y) => onTouchDragEnd(p.id, x, y)}
                             onDelete={() => deleteProspect(p.id, p.name)}
                             onCreateSoumission={() => startSoumission(p)}
+                            onSetRappel={(v) => setRappel(p.id, v)}
                           />
                         ))
                       )}
@@ -616,6 +663,7 @@ export default function CrmKanbanPage() {
 
 function ProspectCard({
   prospect: p,
+  now,
   dragging,
   onDragStart,
   onDragEnd,
@@ -623,9 +671,11 @@ function ProspectCard({
   onTouchDragMove,
   onTouchDragEnd,
   onDelete,
-  onCreateSoumission
+  onCreateSoumission,
+  onSetRappel
 }: {
   prospect: Prospect;
+  now: number;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -634,9 +684,15 @@ function ProspectCard({
   onTouchDragEnd: (x: number, y: number) => void;
   onDelete: () => void;
   onCreateSoumission: () => void;
+  onSetRappel: (value: string | null) => void;
 }) {
   // Suivi du geste tactile sur la poignée (distingue tap vs glisser).
   const touch = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const [editRappel, setEditRappel] = useState(false);
+  // Rappel « dû » = échéance atteinte/dépassée (comparée à `now`, qui
+  // est rafraîchi chaque minute par le parent).
+  const rappelDue =
+    !!p.rappel_at && new Date(p.rappel_at).getTime() <= now;
 
   return (
     <div
@@ -685,7 +741,26 @@ function ProspectCard({
         <GripVertical className="h-4 w-4" />
       </div>
 
-      <div className="absolute right-2 top-2 flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+      <div className="absolute right-2 top-2 flex items-center gap-1">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setEditRappel((v) => !v);
+          }}
+          aria-label="Planifier un rappel"
+          title="Planifier un rappel"
+          className={`rounded-md p-1 transition ${
+            p.rappel_at
+              ? rappelDue
+                ? "text-rose-400 hover:bg-rose-500/15"
+                : "text-amber-400 hover:bg-amber-500/15"
+              : "text-white/40 opacity-0 hover:bg-accent-500/15 group-hover:opacity-100"
+          }`}
+        >
+          <Bell className="h-3.5 w-3.5" />
+        </button>
         <button
           type="button"
           onClick={(e) => {
@@ -695,7 +770,7 @@ function ProspectCard({
           }}
           aria-label="Créer une soumission"
           title="Créer une soumission"
-          className="rounded-md p-1 text-accent-400 hover:bg-accent-500/15"
+          className="rounded-md p-1 text-accent-400 opacity-0 transition hover:bg-accent-500/15 group-hover:opacity-100"
         >
           <FileText className="h-3.5 w-3.5" />
         </button>
@@ -707,7 +782,7 @@ function ProspectCard({
             onDelete();
           }}
           aria-label="Supprimer"
-          className="rounded-md p-1 text-white/40 hover:bg-rose-500/15 hover:text-rose-400"
+          className="rounded-md p-1 text-white/40 opacity-0 transition hover:bg-rose-500/15 hover:text-rose-400 group-hover:opacity-100"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
@@ -718,7 +793,15 @@ function ProspectCard({
         href={`/app/crm/${p.id}` as any}
         className="block pl-5 pr-12"
       >
-        <p className="truncate text-sm font-semibold text-white">{p.name}</p>
+        <p className="flex items-center gap-1.5 text-sm font-semibold text-white">
+          {rappelDue ? (
+            <span
+              title="Rappel dû — action requise"
+              className="inline-block h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-rose-500"
+            />
+          ) : null}
+          <span className="truncate">{p.name}</span>
+        </p>
         {p.phone ? (
           <p className="mt-1 flex items-center gap-1.5 text-xs text-white/60">
             <Phone className="h-3 w-3" />
@@ -741,6 +824,45 @@ function ProspectCard({
           </span>
         </div>
       </Link>
+
+      {/* Rappel : éditeur (date/heure) ou indicateur. Hors du Link pour
+          que le clic ne déclenche pas la navigation. */}
+      {editRappel ? (
+        <div className="mt-2 pl-5 pr-2" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-2">
+            <input
+              type="datetime-local"
+              defaultValue={toLocalInput(p.rappel_at)}
+              onChange={(e) => {
+                const v = e.target.value;
+                onSetRappel(v ? new Date(v).toISOString() : null);
+              }}
+              className="w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-xs text-white"
+            />
+            {p.rappel_at ? (
+              <button
+                type="button"
+                onClick={() => {
+                  onSetRappel(null);
+                  setEditRappel(false);
+                }}
+                className="whitespace-nowrap text-[11px] text-white/50 hover:text-rose-300"
+              >
+                Effacer
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : p.rappel_at ? (
+        <p
+          className={`mt-2 flex items-center gap-1 pl-5 text-[11px] ${
+            rappelDue ? "font-semibold text-rose-300" : "text-white/50"
+          }`}
+        >
+          <Bell className="h-3 w-3" />
+          {rappelDue ? "À rappeler" : "Rappel"} · {fmtRappel(p.rappel_at)}
+        </p>
+      ) : null}
     </div>
   );
 }
