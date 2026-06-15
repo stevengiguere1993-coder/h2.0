@@ -50,6 +50,7 @@ from app.api.v1.endpoints import (
     contacts,
     copilote,
     crm_columns,
+    relances,
     entreprise_extras,
     entreprise_partners_links,
     immobilier,
@@ -227,6 +228,7 @@ api_router.include_router(projects.router)
 api_router.include_router(contact.router)
 api_router.include_router(contacts.router)
 api_router.include_router(crm_columns.router)
+api_router.include_router(relances.router)
 api_router.include_router(copilote.router)
 api_router.include_router(blog.router)
 api_router.include_router(webhooks.router)
