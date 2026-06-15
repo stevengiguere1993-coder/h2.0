@@ -128,6 +128,7 @@ from app.api.v1.endpoints import (
     acquisition,
     numbering,
     qbo_account_map,
+    qbo_bulk,
     qbo_oauth,
     qbo_token,
     search,
@@ -258,6 +259,7 @@ api_router.include_router(public_offer.router)
 api_router.include_router(ndas.router)
 api_router.include_router(public_nda.router)
 api_router.include_router(qbo_token.router)
+api_router.include_router(qbo_bulk.router)
 api_router.include_router(qbo_oauth.router)
 # Drive OAuth Phase 1 (juin 2026) — connexion Google par utilisateur,
 # tokens chiffrés en BDD. Pré-requis pour les Phases 2-7 (wrapper Drive

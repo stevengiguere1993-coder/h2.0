@@ -144,6 +144,9 @@ async def ensure_critical_columns() -> None:
         # Type de projet ; DEFAULT backfille les lignes existantes en
         # 'construction' (Postgres) → les projets actuels restent visibles.
         ("projects", "kind", "VARCHAR(32) NOT NULL DEFAULT 'construction'"),
+        # ID du Job QuickBooks (sous-client) lié au projet — clé
+        # d'idempotence de la synchro QBO.
+        ("projects", "qbo_job_id", "VARCHAR(64)"),
         ("voice_calls", "dial_state_json", "TEXT"),
         # Hub Automatisations : config éditable (cadence, etc.). La table
         # a été créée sans cette colonne au 1er déploiement → on l'ajoute.
