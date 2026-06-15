@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select, update
 
@@ -404,12 +404,8 @@ class BulkWrite(BaseModel):
     items: List[BulkItem]
 
 
-@router.post("/activities/bulk")
-async def bulk_create_activities(
-    data: BulkWrite, db: DBSession, _: CurrentUser
-) -> dict:
-    """Crée plusieurs tâches d'un coup. Crée au passage les pôles et
-    sous-sections référencés s'ils n'existent pas encore."""
+async def _bulk_create(db, items: List[BulkItem]) -> int:
+    """Crée des tâches en masse + les pôles / sous-sections manquants."""
     poles = {
         p.label
         for p in (await db.execute(select(RaciPole))).scalars().all()
@@ -439,7 +435,7 @@ async def bulk_create_activities(
     ).scalars().first() or 0
 
     created = 0
-    for item in data.items:
+    for item in items:
         label = item.label.strip()
         if not label:
             continue
@@ -456,15 +452,107 @@ async def bulk_create_activities(
         act_pos += 1
         db.add(
             RaciActivity(
-                pole=pole,
-                subsection=sub,
-                label=label,
-                position=act_pos,
+                pole=pole, subsection=sub, label=label, position=act_pos
             )
         )
         created += 1
     await db.commit()
+    return created
+
+
+_HEADER_TOKENS = {
+    "pole", "pôle", "poles", "pôles", "sous-section", "sous-sections",
+    "subsection", "tache", "tâche", "taches", "tâches", "task", "tasks",
+    "label", "activite", "activité", "responsabilite", "responsabilité",
+}
+
+
+def _row_to_item(cells: list[str], default_pole: str) -> Optional[BulkItem]:
+    cells = [c.strip() for c in cells]
+    # retire les colonnes vides en fin de ligne
+    while cells and not cells[-1]:
+        cells.pop()
+    if not cells:
+        return None
+    if len(cells) >= 3:
+        pole, sub, label = cells[0] or default_pole, cells[1], cells[2]
+    elif len(cells) == 2:
+        pole, sub, label = cells[0] or default_pole, "", cells[1]
+    else:
+        pole, sub, label = default_pole, "", cells[0]
+    if not label.strip():
+        return None
+    return BulkItem(pole=pole, subsection=sub, label=label)
+
+
+def _parse_import(filename: str, raw: bytes, default_pole: str) -> List[BulkItem]:
+    name = (filename or "").lower()
+    rows: list[list[str]] = []
+    if name.endswith(".xlsx") or name.endswith(".xlsm"):
+        import io as _io
+
+        from openpyxl import load_workbook
+
+        wb = load_workbook(_io.BytesIO(raw), read_only=True, data_only=True)
+        ws = wb.active
+        for r in ws.iter_rows(values_only=True):
+            cells = ["" if c is None else str(c) for c in r]
+            if any(c.strip() for c in cells):
+                rows.append(cells)
+    else:
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("latin-1", errors="replace")
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            for sep in ("	", ";", ">", "|", ","):
+                if sep in line:
+                    rows.append(line.split(sep))
+                    break
+            else:
+                rows.append([line])
+    # Saute une éventuelle ligne d'en-tête.
+    if rows:
+        first = [c.strip().lower() for c in rows[0]]
+        if any(tok in _HEADER_TOKENS for tok in first):
+            rows = rows[1:]
+    items: List[BulkItem] = []
+    for cells in rows:
+        it = _row_to_item(cells, default_pole)
+        if it is not None:
+            items.append(it)
+    return items
+
+
+@router.post("/activities/bulk")
+async def bulk_create_activities(
+    data: BulkWrite, db: DBSession, _: CurrentUser
+) -> dict:
+    created = await _bulk_create(db, data.items)
     return {"created": created}
+
+
+@router.post("/activities/import-file")
+async def import_file(
+    db: DBSession,
+    _: CurrentUser,
+    file: UploadFile = File(...),
+    default_pole: str = Form(""),
+) -> dict:
+    """Importe des tâches depuis un fichier Excel (.xlsx) ou texte/CSV."""
+    raw = await file.read()
+    try:
+        items = _parse_import(file.filename or "", raw, default_pole.strip())
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"Fichier illisible : {str(exc)[:120]}",
+        )
+    created = await _bulk_create(db, items)
+    return {"created": created, "detected": len(items)}
 
 
 # ── Personnes (colonnes = comptes Kratos) ──────────────────────────────
