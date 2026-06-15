@@ -13,7 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import api_router
 from app.core.config import settings
-from app.db.session import close_db, ensure_critical_columns, init_db
+from app.db.session import (
+    close_db,
+    ensure_critical_columns,
+    ensure_raci_tables,
+    init_db,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +47,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await ensure_critical_columns()
     except Exception as exc:
         logger.warning("ensure_critical_columns failed during startup: %s", exc)
+
+    # Tables RACI (Distribution des tâches) — créées dans leur propre
+    # transaction pour survivre à un abort d'init_db.
+    try:
+        await ensure_raci_tables()
+    except Exception as exc:
+        logger.warning("ensure_raci_tables failed during startup: %s", exc)
 
     # Backfill : crée le projet (+ facture d'acompte DRAFT) pour les
     # soumissions ACCEPTED qui n'en ont pas encore. Rattrape les
