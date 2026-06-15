@@ -67,6 +67,21 @@ const RACI_META: Record<string, { bg: string; full: string }> = {
   I: { bg: "#64748b", full: "Informé" }
 };
 
+// Couleur distincte par pôle (cycle) pour séparer visuellement les groupes.
+const POLE_PALETTE = [
+  "#2563eb",
+  "#16a34a",
+  "#d97706",
+  "#db2777",
+  "#7c3aed",
+  "#0891b2",
+  "#dc2626",
+  "#0d9488",
+  "#9333ea",
+  "#ca8a04"
+];
+const PERSON_COL = "w-36 min-w-[9rem] max-w-[9rem]";
+
 export default function DistributionTachesPage() {
   const [board, setBoard] = useState<Board | null>(null);
   const [loading, setLoading] = useState(true);
@@ -78,6 +93,10 @@ export default function DistributionTachesPage() {
   >(null);
   const [poleManagerOpen, setPoleManagerOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [filterPersonId, setFilterPersonId] = useState<number | "">("");
+  const [filterRole, setFilterRole] = useState<
+    "" | "R" | "A" | "C" | "I"
+  >("");
 
   const [dragId, setDragId] = useState<number | null>(null);
 
@@ -203,6 +222,21 @@ export default function DistributionTachesPage() {
     );
   }
 
+  // ── Filtre : ne montrer que les tâches d'une personne / d'un rôle ──
+  const filtering = filterPersonId !== "";
+  function taskPasses(aId: number): boolean {
+    if (!filtering) return true;
+    const v = cellMap.get(cellKey(aId, filterPersonId as number)) || "";
+    if (!v) return false;
+    if (filterRole && v !== filterRole) return false;
+    return true;
+  }
+
+  function poleColor(label: string): string {
+    const i = poles.findIndex((p) => p.label === label);
+    return POLE_PALETTE[(i >= 0 ? i : poles.length) % POLE_PALETTE.length];
+  }
+
   // Construit l'ordre d'affichage : pôles → tâches directes → sous-sections.
   type Row =
     | { kind: "pole"; pole: string }
@@ -210,32 +244,41 @@ export default function DistributionTachesPage() {
     | { kind: "task"; activity: Activity };
   const rows: Row[] = [];
   const seenPoles = new Set<string>();
+
+  function emitPole(poleLabel: string) {
+    const direct = tasksOf(poleLabel, "").filter((a) => taskPasses(a.id));
+    const subGroups = subsections
+      .filter((su) => su.pole === poleLabel)
+      .map((su) => ({
+        label: su.label,
+        items: tasksOf(poleLabel, su.label).filter((a) => taskPasses(a.id))
+      }));
+    const visibleSubs = filtering
+      ? subGroups.filter((g) => g.items.length > 0)
+      : subGroups;
+    if (filtering && direct.length === 0 && visibleSubs.length === 0) return;
+    rows.push({ kind: "pole", pole: poleLabel });
+    direct.forEach((a) => rows.push({ kind: "task", activity: a }));
+    visibleSubs.forEach((g) => {
+      rows.push({ kind: "sub", pole: poleLabel, sub: g.label });
+      g.items.forEach((a) => rows.push({ kind: "task", activity: a }));
+    });
+  }
+
   poles.forEach((pl) => {
     seenPoles.add(pl.label);
-    rows.push({ kind: "pole", pole: pl.label });
-    tasksOf(pl.label, "").forEach((a) => rows.push({ kind: "task", activity: a }));
-    subsections
-      .filter((su) => su.pole === pl.label)
-      .forEach((su) => {
-        rows.push({ kind: "sub", pole: pl.label, sub: su.label });
-        tasksOf(pl.label, su.label).forEach((a) =>
-          rows.push({ kind: "task", activity: a })
-        );
-      });
+    emitPole(pl.label);
   });
   // Pôles orphelins (tâches dont le pôle n'existe plus dans la liste).
-  const orphanPoles = new Set(
-    (board?.activities || [])
-      .map((a) => a.pole)
-      .filter((pl) => pl && !seenPoles.has(pl))
-  );
-  orphanPoles.forEach((pl) => {
-    rows.push({ kind: "pole", pole: pl });
-    (board?.activities || [])
-      .filter((a) => a.pole === pl)
-      .forEach((a) => rows.push({ kind: "task", activity: a }));
-  });
+  Array.from(
+    new Set(
+      (board?.activities || [])
+        .map((a) => a.pole)
+        .filter((pl) => pl && !seenPoles.has(pl))
+    )
+  ).forEach((pl) => emitPole(pl));
 
+  const taskRowsCount = rows.filter((r) => r.kind === "task").length;
   const colCount = people.length + 1;
 
   return (
@@ -297,6 +340,53 @@ export default function DistributionTachesPage() {
         ))}
       </div>
 
+      {people.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-[var(--qg-text-muted)]">Filtrer :</span>
+          <select
+            value={filterPersonId}
+            onChange={(e) =>
+              setFilterPersonId(e.target.value ? Number(e.target.value) : "")
+            }
+            className="rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1.5 outline-none focus:border-[var(--qg-accent)]"
+          >
+            <option value="">Toutes les personnes</option>
+            {people.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          {filterPersonId !== "" ? (
+            <select
+              value={filterRole}
+              onChange={(e) =>
+                setFilterRole(e.target.value as "" | "R" | "A" | "C" | "I")
+              }
+              className="rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1.5 outline-none focus:border-[var(--qg-accent)]"
+            >
+              <option value="">Tous ses rôles</option>
+              <option value="R">Réalise (R)</option>
+              <option value="A">Autorité (A)</option>
+              <option value="C">Consulté (C)</option>
+              <option value="I">Informé (I)</option>
+            </select>
+          ) : null}
+          {filterPersonId !== "" ? (
+            <button
+              type="button"
+              onClick={() => {
+                setFilterPersonId("");
+                setFilterRole("");
+              }}
+              className="rounded-lg border border-[var(--qg-border)] px-2 py-1.5 text-[var(--qg-text-muted)] hover:border-[var(--qg-accent)]"
+            >
+              Réinitialiser
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       {loading ? (
         <div className="flex items-center gap-2 py-12 text-sm text-[var(--qg-text-muted)]">
           <Loader2 className="h-4 w-4 animate-spin" /> Chargement…
@@ -310,20 +400,22 @@ export default function DistributionTachesPage() {
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-[var(--qg-border)]">
-          <table className="w-full border-collapse text-sm">
+          <table className="w-full table-fixed border-collapse text-sm">
             <thead>
               <tr className="bg-[var(--qg-card-bg)]">
-                <th className="sticky left-0 z-20 min-w-[18rem] border-b border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-2 text-left text-xs font-semibold uppercase tracking-wider text-[var(--qg-text-muted)]">
+                <th className="sticky left-0 z-20 w-[22rem] min-w-[22rem] border-b border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-2.5 text-left text-xs font-semibold uppercase tracking-wider text-[var(--qg-text-muted)]">
                   Pôle / Tâche
                 </th>
                 {people.map((p) => (
                   <th
                     key={p.id}
-                    className="group min-w-[7rem] border-b border-l border-[var(--qg-border)] p-2 text-center align-top"
+                    className={"group border-b border-l border-[var(--qg-border)] p-2 text-center align-top " + PERSON_COL}
                   >
-                    <div className="font-semibold">{p.name}</div>
+                    <div className="truncate font-semibold" title={p.name}>
+                      {p.name}
+                    </div>
                     {p.subtitle ? (
-                      <div className="text-[10px] font-normal capitalize text-[var(--qg-text-muted)]">
+                      <div className="truncate text-[10px] font-normal capitalize text-[var(--qg-text-muted)]">
                         {p.subtitle}
                       </div>
                     ) : null}
@@ -342,8 +434,19 @@ export default function DistributionTachesPage() {
               </tr>
             </thead>
             <tbody>
+              {taskRowsCount === 0 && filtering ? (
+                <tr>
+                  <td
+                    colSpan={colCount}
+                    className="px-4 py-10 text-center text-sm text-[var(--qg-text-muted)]"
+                  >
+                    Aucune tâche pour ce filtre.
+                  </td>
+                </tr>
+              ) : null}
               {rows.map((row, ri) => {
                 if (row.kind === "pole") {
+                  const col = poleColor(row.pole);
                   return (
                     <tr
                       key={`pole-${row.pole}-${ri}`}
@@ -354,7 +457,12 @@ export default function DistributionTachesPage() {
                     >
                       <td
                         colSpan={colCount}
-                        className="sticky left-0 border-b border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--qg-accent)]"
+                        className="sticky left-0 border-y border-[var(--qg-border)] px-3 py-2 text-xs font-bold uppercase tracking-wider"
+                        style={{
+                          color: col,
+                          background: col + "14",
+                          borderLeft: "4px solid " + col
+                        }}
                       >
                         {row.pole || "Sans pôle"}
                       </td>
@@ -362,6 +470,7 @@ export default function DistributionTachesPage() {
                   );
                 }
                 if (row.kind === "sub") {
+                  const col = poleColor(row.pole);
                   return (
                     <tr
                       key={`sub-${row.pole}-${row.sub}-${ri}`}
@@ -372,7 +481,8 @@ export default function DistributionTachesPage() {
                     >
                       <td
                         colSpan={colCount}
-                        className="sticky left-0 border-b border-[var(--qg-border)] bg-[var(--qg-bg)] py-1 pl-6 pr-2 text-[11px] font-semibold text-[var(--qg-text-muted)]"
+                        className="sticky left-0 border-b border-[var(--qg-border)] bg-[var(--qg-bg)] py-1.5 pl-7 pr-2 text-[11px] font-semibold text-[var(--qg-text-muted)]"
+                        style={{ borderLeft: "4px solid " + col + "66" }}
                       >
                         ↳ {row.sub}
                       </td>
@@ -380,10 +490,11 @@ export default function DistributionTachesPage() {
                   );
                 }
                 const a = row.activity;
+                const col = poleColor(a.pole);
                 return (
                   <tr
                     key={a.id}
-                    className={`group ${dragId === a.id ? "opacity-40" : ""}`}
+                    className={"group transition hover:bg-[var(--qg-card-bg)] " + (dragId === a.id ? "opacity-40" : "")}
                     draggable
                     onDragStart={() => setDragId(a.id)}
                     onDragEnd={() => setDragId(null)}
@@ -392,7 +503,10 @@ export default function DistributionTachesPage() {
                     }}
                     onDrop={() => moveTo(a.pole, a.subsection || "", a.id)}
                   >
-                    <td className="sticky left-0 z-10 border-b border-r border-[var(--qg-border)] bg-[var(--qg-bg)] p-2 align-top">
+                    <td
+                      className="sticky left-0 z-10 border-b border-r border-[var(--qg-border)] bg-[var(--qg-bg)] p-2 align-top group-hover:bg-[var(--qg-card-bg)]"
+                      style={{ borderLeft: "4px solid " + col + "40" }}
+                    >
                       <div className="flex items-start gap-1.5">
                         <GripVertical className="mt-0.5 h-3.5 w-3.5 shrink-0 cursor-grab text-[var(--qg-text-faint)]" />
                         <span className="flex-1 leading-snug">{a.label}</span>
@@ -427,15 +541,15 @@ export default function DistributionTachesPage() {
                           <button
                             type="button"
                             onClick={() => void cycleCell(a.id, p.id)}
-                            className="mx-auto grid h-8 w-8 place-items-center rounded text-xs font-bold transition hover:ring-2 hover:ring-[var(--qg-accent)]/40"
-                            style={
-                              meta
-                                ? { background: meta.bg, color: "#fff" }
-                                : { background: "transparent" }
-                            }
-                            title={meta ? meta.full : "Vide — clique pour R"}
+                            className="mx-auto grid h-9 w-9 place-items-center rounded-md text-sm font-bold transition hover:bg-[var(--qg-card-bg)] hover:ring-2 hover:ring-[var(--qg-accent)]/40"
+                            style={meta ? { background: meta.bg, color: "#fff" } : {}}
+                            title={meta ? meta.full : "Clique pour assigner R, A, C ou I"}
                           >
-                            {v}
+                            {meta ? (
+                              v
+                            ) : (
+                              <span className="h-2.5 w-2.5 rounded-full border border-dashed border-[var(--qg-text-faint)] opacity-60" />
+                            )}
                           </button>
                         </td>
                       );
