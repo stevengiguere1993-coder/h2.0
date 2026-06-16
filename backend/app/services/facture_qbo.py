@@ -99,12 +99,30 @@ def _build_invoice_payload(
     existing_invoice_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not lines:
+        # Facture sans items : ligne de repli avec le MONTANT réel
+        # (sous-total HT) ET le code de taxe — sinon la taxe automatisée
+        # (AST) refuse (« toutes vos opérations comprennent un taux de
+        # TPS/TVH », erreur 6000) et le total serait à 0.
+        try:
+            _amt = float(
+                facture.subtotal
+                if facture.subtotal is not None
+                else (facture.total or 0)
+            )
+        except (TypeError, ValueError):
+            _amt = 0.0
+        _detail: Dict[str, Any] = {"Qty": 1, "UnitPrice": _amt}
+        _tax_code = (
+            settings.qbo_sales_tax_code or settings.qbo_purchase_tax_code
+        )
+        if _tax_code:
+            _detail["TaxCodeRef"] = {"value": str(_tax_code)}
         lines = [
             {
                 "DetailType": "SalesItemLineDetail",
-                "Amount": 0,
+                "Amount": _amt,
                 "Description": facture.reference,
-                "SalesItemLineDetail": {"Qty": 1, "UnitPrice": 0},
+                "SalesItemLineDetail": _detail,
             }
         ]
 
