@@ -1116,10 +1116,10 @@ export default function ProspectionSourcesPage() {
 
           <div className="mt-4 space-y-3">
             <label className="block">
-              <span className="label">Fichier CSV SCHL</span>
+              <span className="label">Fichier SCHL (CSV ou Excel)</span>
               <input
                 type="file"
-                accept=".csv,text/csv"
+                accept=".csv,.xlsx,.xlsm,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 disabled={!isOwner || cmhcBusy}
                 onChange={(e) =>
                   setCmhcFile(e.target.files?.[0] || null)
