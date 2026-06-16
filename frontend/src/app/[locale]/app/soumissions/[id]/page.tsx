@@ -19,7 +19,8 @@ import {
   RefreshCw,
   Save,
   Send,
-  Trash2
+  Trash2,
+  X
 } from "lucide-react";
 
 import { AddressInput } from "@/components/address-input";
@@ -195,6 +196,9 @@ export default function SoumissionDetailPage() {
   // (documents du prospect) pour consulter les photos pendant la
   // rédaction de la soumission.
   const [contactId, setContactId] = useState<number | null>(null);
+  // Galerie photos du client en superposition (modal) — pour consulter
+  // les photos sans quitter la page de soumission.
+  const [photosOpen, setPhotosOpen] = useState(false);
 
   // Signature de l'entrepreneur (Horizon) — on envoie au chargé de
   // projet un courriel avec un lien public pour signer le contrat
@@ -1048,24 +1052,17 @@ export default function SoumissionDetailPage() {
               </p>
             </div>
 
-            {/* Accès rapide aux PHOTOS du client (documents du prospect),
-                pour les consulter pendant la rédaction de la soumission.
-                Ouvre dans un nouvel onglet → on ne perd pas la soumission
-                en cours. */}
+            {/* Photos du client (documents du prospect) consultées EN
+                SUPERPOSITION, sans quitter la page de soumission. */}
             {contactId ? (
-              <Link
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={`/app/crm/${contactId}?tab=documents` as any}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-4 inline-flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm font-semibold text-blue-200 hover:bg-blue-500/20"
+              <button
+                type="button"
+                onClick={() => setPhotosOpen(true)}
+                className="btn-secondary mt-4 text-sm"
               >
-                <ImageIcon className="h-4 w-4" />
+                <ImageIcon className="mr-2 h-4 w-4" />
                 Voir les photos du client
-                <span className="text-xs font-normal text-blue-200/70">
-                  (documents — nouvel onglet)
-                </span>
-              </Link>
+              </button>
             ) : null}
 
             {kind === "quote" ? (
@@ -1640,6 +1637,13 @@ export default function SoumissionDetailPage() {
         ) : null}
       </div>
 
+
+      {photosOpen && contactId ? (
+        <ClientPhotosModal
+          contactId={contactId}
+          onClose={() => setPhotosOpen(false)}
+        />
+      ) : null}
 
       {templatePickerOpen ? (
         <ServiceTemplatePicker
@@ -2253,6 +2257,140 @@ type ServiceTemplate = {
   default_unit_price: number | null;
   is_active: boolean;
 };
+
+/** Galerie des photos du client (documents du prospect) en superposition.
+ *  On consulte les photos sans quitter la soumission. Les images sont
+ *  servies derrière un Bearer → on les charge via authedFetch + object URL. */
+function ClientPhotosModal({
+  contactId,
+  onClose
+}: {
+  contactId: number;
+  onClose: () => void;
+}) {
+  const [photos, setPhotos] = useState<
+    { id: number; content_type: string }[]
+  >([]);
+  const [urls, setUrls] = useState<Record<number, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [zoom, setZoom] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch(`/api/v1/contact/${contactId}/photos`);
+        if (!r.ok) throw new Error();
+        const all = (await r.json()) as {
+          id: number;
+          content_type: string;
+        }[];
+        const imgs = all.filter((f) => f.content_type.startsWith("image/"));
+        if (cancelled) return;
+        setPhotos(imgs);
+        for (const f of imgs) {
+          const ir = await authedFetch(
+            `/api/v1/contact/${contactId}/photos/${f.id}/image`
+          );
+          if (!ir.ok) continue;
+          const blob = await ir.blob();
+          const u = URL.createObjectURL(blob);
+          if (cancelled) {
+            URL.revokeObjectURL(u);
+            return;
+          }
+          setUrls((p) => ({ ...p, [f.id]: u }));
+        }
+      } catch {
+        /* ignore — affiche l'état vide */
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [contactId]);
+
+  useEffect(() => {
+    return () => {
+      for (const u of Object.values(urls)) URL.revokeObjectURL(u);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="max-h-[85vh] w-full max-w-4xl overflow-y-auto rounded-xl border border-brand-800 bg-brand-900 p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+            Photos du client
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fermer"
+            className="rounded-md p-1 text-white/70 hover:bg-white/10 hover:text-white"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        {loading ? (
+          <div className="flex min-h-[30vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
+          </div>
+        ) : photos.length === 0 ? (
+          <p className="py-12 text-center text-sm text-white/60">
+            Aucune photo dans les documents de ce client.
+          </p>
+        ) : (
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {photos.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => urls[f.id] && setZoom(urls[f.id])}
+                className="aspect-square overflow-hidden rounded-lg border border-brand-800 bg-brand-950"
+              >
+                {urls[f.id] ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={urls[f.id]}
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center">
+                    <Loader2 className="h-5 w-5 animate-spin text-white/40" />
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {zoom ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 p-4"
+          onClick={() => setZoom(null)}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={zoom}
+            alt=""
+            className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function ServiceTemplatePicker({
   soumissionId,
