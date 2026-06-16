@@ -361,6 +361,43 @@ class MaintenanceOrdreRead(MaintenanceOrdreBase):
     updated_at: datetime
 
 
+class MaintenanceOverviewRow(BaseModel):
+    """Ligne de la vue maintenance transversale (tous immeubles)."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    immeuble_id: int
+    immeuble_name: str
+    logement_id: Optional[int] = None
+    logement_numero: Optional[str] = None
+    titre: str
+    description: Optional[str] = None
+    priorite: str
+    status: str
+    fournisseur: Optional[str] = None
+    cout_estime: Optional[float] = None
+    cout_reel: Optional[float] = None
+    plannifie_pour: Optional[date] = None
+    complete_le: Optional[date] = None
+    created_at: datetime
+    jours_ouverts: Optional[int] = None  # depuis la création, si actif
+
+
+class MaintenanceOverview(BaseModel):
+    """Agrégat maintenance sur l'ensemble du portefeuille visible."""
+
+    rows: List[MaintenanceOverviewRow] = Field(default_factory=list)
+    nb_total: int = 0
+    nb_ouvert: int = 0
+    nb_en_cours: int = 0
+    nb_en_attente: int = 0
+    nb_termine: int = 0
+    nb_annule: int = 0
+    nb_urgences_actives: int = 0
+    total_cout_estime_actif: float = 0.0
+    total_cout_reel: float = 0.0
+
+
 # ─── KPIs financiers (calculés) ─────────────────────────────────────────
 
 
