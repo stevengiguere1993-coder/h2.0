@@ -214,6 +214,22 @@ async def sync_facture_payments_to_qbo(
         return []
     from app.models.payment import Payment
 
+    # CustomerRef du paiement = celui de la FACTURE QB elle-même (pas le
+    # qbo_job_id Kratos, qui peut pointer vers un sous-client erroné après
+    # un reset/doublon). Un paiement doit être sous le même client que la
+    # facture pour pouvoir s'y imputer. Repli sur customer_ref si échec.
+    pay_customer_ref = str(customer_ref)
+    try:
+        inv_fetch = await qbo.get_invoice(inv_id)
+        inv_obj = inv_fetch.get("Invoice") or inv_fetch
+        cref = (inv_obj.get("CustomerRef") or {}).get("value")
+        if cref:
+            pay_customer_ref = str(cref)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "get_invoice %s pour CustomerRef paiement: %s", inv_id, exc
+        )
+
     rows = (
         await db.execute(
             select(Payment)
@@ -225,7 +241,7 @@ async def sync_facture_payments_to_qbo(
     if not rows:
         # Pas de virements détaillés → repli legacy (1 paiement global).
         pid = await ensure_invoice_payment(
-            qbo, db, facture, customer_ref, {"Id": inv_id}
+            qbo, db, facture, pay_customer_ref, {"Id": inv_id}
         )
         return [pid] if pid else []
 
@@ -241,7 +257,7 @@ async def sync_facture_payments_to_qbo(
             continue
         payload: Dict[str, Any] = {
             "TotalAmt": amount,
-            "CustomerRef": {"value": str(customer_ref)},
+            "CustomerRef": {"value": pay_customer_ref},
             "Line": [
                 {
                     "Amount": amount,

@@ -313,34 +313,45 @@ async def run_migration(
 
 
 async def reset_links(
-    db: AsyncSession, *, client_id: Optional[int] = None
+    db: AsyncSession,
+    *,
+    client_id: Optional[int] = None,
+    payments_only: bool = False,
 ) -> dict:
-    """Efface les ID QBO côté Kratos (client / projets / factures) d'un
-    dossier, pour pouvoir RE-MIGRER proprement après correction.
+    """Efface les ID QBO côté Kratos d'un dossier pour RE-MIGRER après
+    correction.
+
+    `payments_only=True` : n'efface QUE les liens de PAIEMENT (facture.
+    qbo_payment_id + lignes de paiement) en GARDANT les liens client /
+    projet / facture. Sert à re-pousser les paiements (ex. après les avoir
+    supprimés dans QB) SANS recréer de doublon de facture/client.
 
     ⚠️ Ne touche PAS à QuickBooks : supprime d'abord les fiches
     correspondantes dans QB sinon la re-migration créera des doublons.
     """
+    from app.models.payment import Payment as _Payment
+
     cstmt = select(Client)
     if client_id is not None:
         cstmt = cstmt.where(Client.id == client_id)
     clients = list((await db.execute(cstmt)).scalars().all())
-    out = {"clients": 0, "projects": 0, "factures": 0}
+    out = {"clients": 0, "projects": 0, "factures": 0, "paiements": 0}
     for c in clients:
-        if c.qbo_customer_id:
+        if not payments_only and c.qbo_customer_id:
             c.qbo_customer_id = None
             out["clients"] += 1
-        projects = list(
-            (
-                await db.execute(
-                    select(Project).where(Project.client_id == c.id)
-                )
-            ).scalars().all()
-        )
-        for p in projects:
-            if p.qbo_job_id:
-                p.qbo_job_id = None
-                out["projects"] += 1
+        if not payments_only:
+            projects = list(
+                (
+                    await db.execute(
+                        select(Project).where(Project.client_id == c.id)
+                    )
+                ).scalars().all()
+            )
+            for p in projects:
+                if p.qbo_job_id:
+                    p.qbo_job_id = None
+                    out["projects"] += 1
         factures = list(
             (
                 await db.execute(
@@ -350,7 +361,11 @@ async def reset_links(
         )
         fac_ids = [f.id for f in factures]
         for f in factures:
-            if (
+            if payments_only:
+                if f.qbo_payment_id:
+                    f.qbo_payment_id = None
+                    out["factures"] += 1
+            elif (
                 f.qbo_invoice_id
                 or f.qbo_sync_token
                 or f.qbo_payment_id
@@ -359,15 +374,17 @@ async def reset_links(
                 f.qbo_sync_token = None
                 f.qbo_payment_id = None
                 out["factures"] += 1
-        # Délie aussi les virements (lignes de paiement) pour qu'une
-        # re-migration re-pousse chaque virement proprement vers QB.
+        # Délie les virements (lignes de paiement) → re-migration re-pousse
+        # chaque virement proprement vers QB. Vaut pour les deux modes.
         if fac_ids:
-            from app.models.payment import Payment as _Payment
-
-            await db.execute(
+            res = await db.execute(
                 _update(_Payment)
-                .where(_Payment.facture_id.in_(fac_ids))
+                .where(
+                    _Payment.facture_id.in_(fac_ids),
+                    _Payment.qbo_payment_id.is_not(None),
+                )
                 .values(qbo_payment_id=None)
             )
+            out["paiements"] += res.rowcount or 0
     await db.flush()
     return out
