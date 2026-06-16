@@ -40,6 +40,227 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/prospection", tags=["prospection"])
 
 
+# ─── Moyenne locative (lookup SCHL par adresse / secteur) ───────────────
+# Déclaré tôt pour passer AVANT la route /{lead_id} (sinon « moyenne-locative »
+# serait interprété comme un lead_id → 422).
+
+_MOY_QC = [
+    ("1½", 0, False),
+    ("2½", 1, False),
+    ("3½", 2, False),
+    ("4½", 3, False),
+    ("5½", 3, True),
+    ("6½", 3, True),
+]
+_MOY_SCHL_LABEL = {0: "Studio", 1: "1 chambre", 2: "2 chambres", 3: "3 chambres +"}
+
+
+class MoyenneZone(BaseModel):
+    cma: str
+    zone: Optional[str] = None
+    year: Optional[int] = None
+    label: str
+
+
+class MoyenneBracket(BaseModel):
+    qc_label: str
+    schl_label: str
+    bedrooms: int
+    avg_rent: Optional[float] = None
+    sample_size: Optional[int] = None
+    is_estimate: bool = False
+
+
+class MoyenneLocativeOut(BaseModel):
+    matched: bool = False
+    cma: Optional[str] = None
+    zone: Optional[str] = None
+    year: Optional[int] = None
+    vacancy_rate: Optional[float] = None
+    brackets: List[MoyenneBracket] = Field(default_factory=list)
+    cma_brackets: List[MoyenneBracket] = Field(default_factory=list)
+    suggestions: List[MoyenneZone] = Field(default_factory=list)
+    notes: List[str] = Field(default_factory=list)
+
+
+def _moy_build_brackets(by_bracket) -> List[MoyenneBracket]:
+    out: List[MoyenneBracket] = []
+    for qc_label, bedrooms, is_est in _MOY_QC:
+        r = by_bracket.get(bedrooms)
+        out.append(
+            MoyenneBracket(
+                qc_label=qc_label,
+                schl_label=_MOY_SCHL_LABEL.get(bedrooms, ""),
+                bedrooms=bedrooms,
+                avg_rent=(
+                    float(r.avg_rent)
+                    if (r is not None and r.avg_rent is not None)
+                    else None
+                ),
+                sample_size=(
+                    int(r.sample_size)
+                    if (r is not None and r.sample_size is not None)
+                    else None
+                ),
+                is_estimate=is_est,
+            )
+        )
+    return out
+
+
+@router.get("/moyenne-locative/zones", response_model=List[MoyenneZone])
+async def moyenne_locative_zones(
+    db: DBSession, user: CurrentUser
+) -> List[MoyenneZone]:
+    """Liste des secteurs SCHL disponibles (pour l'autocomplétion)."""
+    from app.models.market_rent import MarketRent
+
+    rows = (
+        await db.execute(
+            select(
+                MarketRent.cma, MarketRent.zone, MarketRent.year
+            ).distinct()
+        )
+    ).all()
+    seen = set()
+    out: List[MoyenneZone] = []
+    for cma, zone, year in rows:
+        if not cma:
+            continue
+        key = (cma, zone)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            MoyenneZone(
+                cma=cma,
+                zone=zone,
+                year=year,
+                label=zone if zone else f"{cma} — ensemble RMR",
+            )
+        )
+    out.sort(key=lambda z: (z.cma or "", z.zone or ""))
+    return out
+
+
+@router.get("/moyenne-locative", response_model=MoyenneLocativeOut)
+async def moyenne_locative(
+    db: DBSession,
+    user: CurrentUser,
+    cma: Optional[str] = None,
+    zone: Optional[str] = None,
+    q: Optional[str] = None,
+) -> MoyenneLocativeOut:
+    """Loyers moyens SCHL pour un secteur (par adresse libre, secteur ou RMR).
+
+    Renvoie les loyers par type (1½ → 6½), l'agrégat RMR pour comparaison,
+    et des suggestions de secteurs si la recherche est ambiguë.
+    """
+    from app.integrations.cmhc.rents import (
+        best_match_for_lead,
+        lookup_rents,
+        normalize_zone,
+    )
+    from app.models.market_rent import MarketRent
+
+    distinct = (
+        await db.execute(select(MarketRent.cma, MarketRent.zone).distinct())
+    ).all()
+    if not distinct:
+        return MoyenneLocativeOut(
+            notes=[
+                "Aucune donnée SCHL importée. Va dans Paramètres → Sources "
+                "pour importer le fichier SCHL."
+            ]
+        )
+
+    cma_by_zone = {}
+    zones_in_db: List[str] = []
+    cmas: List[str] = []
+    for c, z in distinct:
+        if not c:
+            continue
+        if c not in cmas:
+            cmas.append(c)
+        if z:
+            zones_in_db.append(z)
+            cma_by_zone[z] = c
+
+    if not cma and not zone and q:
+        m = best_match_for_lead(lead_city=q, available_zones=zones_in_db)
+        if m:
+            zone = m
+            cma = cma_by_zone.get(m)
+        else:
+            qn = normalize_zone(q)
+            for c in cmas:
+                cn = normalize_zone(c)
+                if cn and (cn in qn or qn in cn):
+                    cma = c
+                    break
+            if not cma:
+                toks = {t for t in qn.split() if len(t) >= 3}
+                scored = []
+                for z in zones_in_db:
+                    zn = normalize_zone(z)
+                    score = sum(1 for t in toks if t in zn)
+                    if score:
+                        scored.append((score, z))
+                scored.sort(key=lambda x: -x[0])
+                sugg = [
+                    MoyenneZone(
+                        cma=cma_by_zone.get(z, ""), zone=z, label=z
+                    )
+                    for _sc, z in scored[:8]
+                ]
+                return MoyenneLocativeOut(
+                    matched=False,
+                    suggestions=sugg,
+                    notes=[
+                        f"Aucun secteur ne correspond à « {q} ». "
+                        f"Choisis-en un dans la liste."
+                    ],
+                )
+
+    if zone and not cma:
+        cma = cma_by_zone.get(zone)
+    if not cma:
+        return MoyenneLocativeOut(
+            matched=False, notes=["Précise un secteur ou une adresse."]
+        )
+
+    schl_rows = await lookup_rents(db, cma=cma, zone=zone)
+    by_bracket = {r.bedrooms: r for r in schl_rows}
+    year = schl_rows[0].year if schl_rows else None
+    vacancy = (
+        float(schl_rows[0].vacancy_rate)
+        if (schl_rows and schl_rows[0].vacancy_rate is not None)
+        else None
+    )
+
+    cma_rows = await lookup_rents(db, cma=cma, zone=None)
+    cma_by_bracket = {r.bedrooms: r for r in cma_rows}
+
+    notes = []
+    if not zone:
+        notes.append(
+            f"Données pour l'ensemble de la RMR « {cma} » (pas de sous-secteur)."
+        )
+    if not by_bracket:
+        notes.append("Aucune donnée pour ce secteur.")
+
+    return MoyenneLocativeOut(
+        matched=bool(by_bracket),
+        cma=cma,
+        zone=zone,
+        year=year,
+        vacancy_rate=vacancy,
+        brackets=_moy_build_brackets(by_bracket),
+        cma_brackets=_moy_build_brackets(cma_by_bracket),
+        notes=notes,
+    )
+
+
 # ------------------------------ Schemas ------------------------------
 
 
