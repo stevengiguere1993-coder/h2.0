@@ -16,7 +16,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
@@ -211,6 +211,7 @@ async def public_accept(
     data: AcceptRequest,
     request: Request,
     db: DBSession,
+    bg: BackgroundTasks,
 ) -> PublicSoumission:
     sm = await _load_by_token(db, token)
     if sm.status in (
@@ -333,6 +334,13 @@ async def public_accept(
             "Provision projet échouée pour soumission %s", sm.id,
             exc_info=True,
         )
+
+    # Devis accepté en ligne → import QuickBooks (Customer + Estimate),
+    # fail-closed via l'interrupteur QBO auto-sync, idempotent. Lancé
+    # après le commit de la requête.
+    from app.services.qbo_auto_sync import autopush_soumission
+
+    bg.add_task(autopush_soumission, sm.id)
 
     # Contrat signé par le client → on archive le PDF signé (les deux
     # signatures) dans les documents de la fiche client. Best-effort.
