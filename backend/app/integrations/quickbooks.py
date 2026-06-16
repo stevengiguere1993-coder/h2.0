@@ -549,6 +549,14 @@ class QuickBooksClient:
             "POST", "/invoice", json_body=payload, params={"minorversion": "70"}
         )
 
+    async def create_payment(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Crée un Payment client (reçu de paiement) appliqué à une ou
+        plusieurs factures via Line[].LinkedTxn — solde la facture côté
+        QBO (passe de « En retard » à « Payée »)."""
+        return await self._request(
+            "POST", "/payment", json_body=payload, params={"minorversion": "70"}
+        )
+
     # ------------------------------------------------------------------
     # Vendors (= fournisseurs)
     # ------------------------------------------------------------------

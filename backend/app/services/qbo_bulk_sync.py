@@ -166,6 +166,7 @@ async def run_migration(
         _build_invoice_payload,
         _build_lines,
         _load_items,
+        ensure_invoice_payment,
     )
 
     qbo = get_qbo()
@@ -184,6 +185,7 @@ async def run_migration(
         "customers": {"created": 0, "already_linked": 0, "errors": 0},
         "projects": {"linked": 0, "errors": 0},
         "factures": {"pushed": 0, "errors": 0},
+        "payments": {"applied": 0},
         "details": [],
     }
 
@@ -225,9 +227,12 @@ async def run_migration(
         for p in projects:
             try:
                 if not p.qbo_job_id:
+                    # Le projet QBO (sous-client) est nommé par son
+                    # ADRESSE (identité du projet), pas par le nom interne
+                    # qui peut contenir le nom du client.
                     job = await qbo.ensure_project(
                         parent_customer_id=customer_id,
-                        project_name=p.name,
+                        project_name=(p.address or p.name),
                     )
                     jid = str(job.get("Id") or "")
                     if jid:
@@ -270,6 +275,10 @@ async def run_migration(
                 f.qbo_doc_number = str(inv.get("DocNumber") or "") or None
                 await db.flush()
                 res["factures"]["pushed"] += 1
+                # Facture payée dans Kratos → solder la facture côté QBO.
+                pid = await ensure_invoice_payment(qbo, db, f, ref, inv)
+                if pid:
+                    res["payments"]["applied"] += 1
             except Exception as exc:  # noqa: BLE001
                 res["factures"]["errors"] += 1
                 detail["errors"].append(f"facture {f.id}: {exc}")
@@ -277,3 +286,53 @@ async def run_migration(
         res["details"].append(detail)
 
     return res
+
+
+async def reset_links(
+    db: AsyncSession, *, client_id: Optional[int] = None
+) -> dict:
+    """Efface les ID QBO côté Kratos (client / projets / factures) d'un
+    dossier, pour pouvoir RE-MIGRER proprement après correction.
+
+    ⚠️ Ne touche PAS à QuickBooks : supprime d'abord les fiches
+    correspondantes dans QB sinon la re-migration créera des doublons.
+    """
+    cstmt = select(Client)
+    if client_id is not None:
+        cstmt = cstmt.where(Client.id == client_id)
+    clients = list((await db.execute(cstmt)).scalars().all())
+    out = {"clients": 0, "projects": 0, "factures": 0}
+    for c in clients:
+        if c.qbo_customer_id:
+            c.qbo_customer_id = None
+            out["clients"] += 1
+        projects = list(
+            (
+                await db.execute(
+                    select(Project).where(Project.client_id == c.id)
+                )
+            ).scalars().all()
+        )
+        for p in projects:
+            if p.qbo_job_id:
+                p.qbo_job_id = None
+                out["projects"] += 1
+        factures = list(
+            (
+                await db.execute(
+                    select(Facture).where(Facture.client_id == c.id)
+                )
+            ).scalars().all()
+        )
+        for f in factures:
+            if (
+                f.qbo_invoice_id
+                or f.qbo_sync_token
+                or f.qbo_payment_id
+            ):
+                f.qbo_invoice_id = None
+                f.qbo_sync_token = None
+                f.qbo_payment_id = None
+                out["factures"] += 1
+    await db.flush()
+    return out

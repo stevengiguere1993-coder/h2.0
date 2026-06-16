@@ -29,6 +29,7 @@ type MigrationResult = {
   customers: { created: number; already_linked: number; errors: number };
   projects: { linked: number; errors: number };
   factures: { pushed: number; errors: number };
+  payments: { applied: number };
   details: Array<{ client_id: number; name: string; errors: string[] }>;
 };
 
@@ -68,6 +69,41 @@ export default function QboMigrationPage() {
       setReport((await r.json()) as Report);
     } catch (e) {
       setError(`Aperçu échoué : ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runReset() {
+    const ok = await confirm({
+      title: "Réinitialiser le lien QBO de ce dossier ?",
+      description:
+        "Efface les ID QuickBooks côté Kratos (client / projets / factures) pour pouvoir re-migrer proprement. NE supprime PAS les fiches dans QuickBooks — supprime-les d'abord dans QB, sinon la re-migration créera des doublons.",
+      confirmLabel: "Réinitialiser",
+      destructive: true
+    });
+    if (!ok) return;
+    setBusy("migrate");
+    setError(null);
+    setResult(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/qbo/reset-links${
+          clientId ? `?client_id=${clientId}` : ""
+        }`,
+        { method: "POST" }
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as {
+        clients: number;
+        projects: number;
+        factures: number;
+      };
+      setError(
+        `Liens QBO réinitialisés : ${d.clients} client(s), ${d.projects} projet(s), ${d.factures} facture(s). Tu peux re-migrer.`
+      );
+    } catch (e) {
+      setError(`Réinitialisation échouée : ${(e as Error).message}`);
     } finally {
       setBusy(null);
     }
@@ -178,6 +214,15 @@ export default function QboMigrationPage() {
               ) : null}
               Migrer ce dossier (réel)
             </button>
+            <button
+              type="button"
+              onClick={() => void runReset()}
+              disabled={busy !== null}
+              className="text-xs text-white/50 underline decoration-dotted hover:text-rose-300"
+              title="Efface les liens QBO côté Kratos pour re-migrer (après avoir supprimé les fiches dans QB)."
+            >
+              Réinitialiser le lien QBO
+            </button>
           </div>
 
           {error ? (
@@ -233,6 +278,9 @@ export default function QboMigrationPage() {
               <li>
                 Factures : {result.factures.pushed} envoyées ·{" "}
                 {result.factures.errors} erreurs
+              </li>
+              <li>
+                Paiements soldés : {result.payments?.applied ?? 0}
               </li>
             </ul>
             {result.details.some((d) => d.errors.length > 0) ? (
