@@ -98,6 +98,20 @@ async def create_project(
     out.responsible_name = await _responsible_name(
         db, project.responsible_user_id
     )
+
+    # Alerte commis comptable : sous-client QBO à convertir en Projet.
+    try:
+        from app.services.project_qbo_notify import notify_new_project_for_qbo
+
+        await notify_new_project_for_qbo(db, project)
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "alerte projet QBO non bloquante a échoué pour le projet #%s",
+            project.id,
+        )
+
     return out
 
 

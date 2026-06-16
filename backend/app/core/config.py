@@ -80,6 +80,11 @@ class Settings(BaseSettings):
     # consentement OAuth peut faire ÉCHOUER la reconnexion. À passer à true
     # seulement une fois l'accès Premium accordé (puis se reconnecter).
     qbo_enable_projects_api: bool = False
+    # Courriel de la commis comptable : reçoit une alerte à chaque
+    # création de projet construction, avec le nom du sous-client QBO à
+    # convertir en « Projet » dans QuickBooks (l'API ne pouvant pas le
+    # faire sans accès Premium). Vide = pas d'envoi.
+    bookkeeper_email: Optional[str] = None
     # OAuth redirect URI — doit être enregistrée à l'identique dans
     # l'app Intuit (onglet Keys & credentials → Redirect URIs).
     # Pointe sur le backend (h2-0), pas sur le frontend (h2-0-web).

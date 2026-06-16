@@ -324,7 +324,7 @@ async def public_accept(
             from app.api.v1.endpoints.soumission_to_project import (
                 provision_project_for_soumission,
             )
-            await provision_project_for_soumission(db, sm)
+            await provision_project_for_soumission(db, sm, notify_qbo=True)
     except Exception:  # noqa: BLE001
         # Best-effort : ne pas bloquer la signature client si la
         # création du projet échoue. L'admin pourra relancer
