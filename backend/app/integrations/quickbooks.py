@@ -514,31 +514,33 @@ class QuickBooksClient:
         if existing:
             return existing
 
-        # 2) Vrai projet QBO via l'API Projets (GraphQL).
-        try:
-            await self.create_qbo_project(
-                parent_customer_id=parent_customer_id,
-                name=project_name,
-                start_date=start_date,
-            )
-            # Le projet créé est un sous-client sous le capot : on le
-            # résout en v3 pour obtenir l'Id (CustomerRef).
-            resolved = await self._find_subcustomer(
-                parent_customer_id=parent_customer_id,
-                project_name=project_name,
-            )
-            if resolved:
-                return resolved
-            # Créé mais introuvable en v3 (latence d'indexation) : on
-            # remonte quand même l'erreur pour fallback sûr.
-            raise QuickBooksError(
-                "Projet créé via l'API Projets mais sous-client v3 "
-                "introuvable immédiatement."
-            )
-        except QuickBooksError as exc:
-            log.warning(
-                "API Projets indisponible, fallback sous-client: %s", exc
-            )
+        # 2) Vrai projet QBO via l'API Projets (GraphQL) — seulement si
+        # activé (accès Premium accordé + scope obtenu à la reconnexion).
+        if settings.qbo_enable_projects_api:
+            try:
+                await self.create_qbo_project(
+                    parent_customer_id=parent_customer_id,
+                    name=project_name,
+                    start_date=start_date,
+                )
+                # Le projet créé est un sous-client sous le capot : on le
+                # résout en v3 pour obtenir l'Id (CustomerRef).
+                resolved = await self._find_subcustomer(
+                    parent_customer_id=parent_customer_id,
+                    project_name=project_name,
+                )
+                if resolved:
+                    return resolved
+                # Créé mais introuvable en v3 (latence d'indexation) : on
+                # remonte quand même l'erreur pour fallback sûr.
+                raise QuickBooksError(
+                    "Projet créé via l'API Projets mais sous-client v3 "
+                    "introuvable immédiatement."
+                )
+            except QuickBooksError as exc:
+                log.warning(
+                    "API Projets indisponible, fallback sous-client: %s", exc
+                )
 
         # 3) Fallback : sous-client v3 classique (pas d'onglet Projets).
         body: Dict[str, Any] = {

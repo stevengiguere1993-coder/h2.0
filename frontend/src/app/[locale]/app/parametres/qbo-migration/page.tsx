@@ -171,11 +171,12 @@ export default function QboMigrationPage() {
         </p>
         <p className="mt-2 max-w-2xl rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
           Prérequis création de projets : l&apos;API Projets QuickBooks
-          (GraphQL) exige le scope <code>project-management.project</code> +
-          un accès Premium API. Après mise à jour, <b>reconnecte QuickBooks</b>
-          pour accorder le nouveau scope. Sans cet accès, le projet est créé
-          comme sous-client (rattachement OK) mais n&apos;apparaît pas dans
-          l&apos;onglet Projets.
+          (GraphQL) exige un accès <b>Premium API</b> + le scope
+          <code>project-management.project</code>. Une fois l&apos;accès accordé,
+          mets <code>QBO_ENABLE_PROJECTS_API=true</code> côté serveur puis
+          <b>reconnecte QuickBooks</b>. Sans cet accès (défaut), le projet est
+          créé comme sous-client (rattachement facturation/coûts OK) mais
+          n&apos;apparaît pas dans l&apos;onglet Projets.
         </p>
 
         <div className="mt-6 max-w-2xl space-y-4 rounded-xl border border-brand-800 bg-brand-900/60 p-4">
