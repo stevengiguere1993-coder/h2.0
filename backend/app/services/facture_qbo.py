@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.integrations.quickbooks import QuickBooksError, get_qbo
 from app.models.client import Client
 from app.models.facture import Facture
@@ -68,6 +69,16 @@ async def _build_lines(
         }
         if item_id:
             sales_detail["ItemRef"] = {"value": item_id}
+        # Taxe de vente automatisée (AST) : chaque ligne porte le code de
+        # taxe ; QBO calcule la TPS/TVQ. Sans ça, la compagnie rejette la
+        # facture (« toutes vos opérations comprennent un taux de TPS/TVH »).
+        # On retombe sur le code d'achat si le code de vente n'est pas
+        # défini (souvent le même code TPS/TVQ QC sert aux deux).
+        _tax_code = (
+            settings.qbo_sales_tax_code or settings.qbo_purchase_tax_code
+        )
+        if _tax_code:
+            sales_detail["TaxCodeRef"] = {"value": str(_tax_code)}
         lines.append(
             {
                 "DetailType": "SalesItemLineDetail",
@@ -111,18 +122,25 @@ def _build_invoice_payload(
     # ce qui est stocké dans facture.tps/tvq (souvent null car calculé
     # au PDF). TPS 5 % + TVQ 9.975 %. GlobalTaxCalculation=TaxExcluded
     # dit à QBO que les lignes n'incluent pas la taxe.
-    subtotal = 0.0
-    for line in lines:
-        try:
-            subtotal += float(line.get("Amount") or 0)
-        except (TypeError, ValueError):
-            continue
-    tps = round(subtotal * 0.05, 2)
-    tvq = round(subtotal * 0.09975, 2)
-    total_tax = round(tps + tvq, 2)
-    if total_tax > 0:
+    if settings.qbo_sales_tax_code or settings.qbo_purchase_tax_code:
+        # Taxe AUTOMATISÉE (AST) : les lignes portent déjà le TaxCodeRef,
+        # QBO calcule la taxe. On NE fournit PAS de TxnTaxDetail manuel
+        # (la compagnie AST le refuse).
         payload["GlobalTaxCalculation"] = "TaxExcluded"
-        payload["TxnTaxDetail"] = {"TotalTax": total_tax}
+    else:
+        # Taxe MANUELLE (compagnies sans AST) : on fournit le total.
+        subtotal = 0.0
+        for line in lines:
+            try:
+                subtotal += float(line.get("Amount") or 0)
+            except (TypeError, ValueError):
+                continue
+        tps = round(subtotal * 0.05, 2)
+        tvq = round(subtotal * 0.09975, 2)
+        total_tax = round(tps + tvq, 2)
+        if total_tax > 0:
+            payload["GlobalTaxCalculation"] = "TaxExcluded"
+            payload["TxnTaxDetail"] = {"TotalTax": total_tax}
 
     if existing_invoice_id and existing_sync_token is not None:
         payload["Id"] = existing_invoice_id

@@ -389,11 +389,17 @@ class QuickBooksClient:
         par Job=true + ParentRef ; sinon on crée avec ParentRef +
         Job=true.
         """
+        # NB : `ParentRef` n'est PAS « queryable » côté QBO (erreur 4001
+        # « property ParentRef is not queryable »). On liste les Jobs et on
+        # filtre le parent + le nom en Python.
         rows = await self.query(
-            "SELECT * FROM Customer WHERE Job = true AND "
-            f"ParentRef = '{parent_customer_id}' MAXRESULTS 1000"
+            "SELECT * FROM Customer WHERE Job = true MAXRESULTS 1000"
         )
         for row in rows:
+            if str((row.get("ParentRef") or {}).get("value") or "") != str(
+                parent_customer_id
+            ):
+                continue
             # Le sous-client peut s'appeler « Projet » ou « Parent:Projet ».
             disp = (row.get("DisplayName") or "")
             fqn = (row.get("FullyQualifiedName") or "")
