@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { QGTopbar } from "../layout";
 
 type Pole = { id: number; label: string; position: number };
 type Subsection = { id: number; pole: string; label: string; position: number };
@@ -291,19 +292,17 @@ export default function DistributionTachesPage() {
   const colCount = people.length + 1;
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-bold">
-            <Grid3x3 className="h-5 w-5 text-[var(--qg-accent)]" />
+    <>
+      <QGTopbar
+        greeting={
+          <span className="inline-flex items-center gap-2">
+            <Grid3x3 className="h-4 w-4 text-accent-500" />
             Distribution des tâches
-          </h1>
-          <p className="text-sm text-[var(--qg-text-muted)]">
-            Matrice RACI — qui fait quoi, par pôle. Glisse une tâche pour la
-            déplacer ; clique une cellule pour cycler R → A → C → I.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
+          </span>
+        }
+        subtitle="Matrice RACI — qui fait quoi, par pôle. Glisse une tâche pour la déplacer ; clique une cellule pour cycler R → A → C → I."
+        rightSlot={
+          <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => setPoleManagerOpen(true)}
@@ -332,8 +331,10 @@ export default function DistributionTachesPage() {
           >
             <Plus className="h-4 w-4" /> Personne
           </button>
-        </div>
-      </div>
+          </div>
+        }
+      />
+      <div className="space-y-4 p-4 lg:p-6">
 
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-4 py-2.5 text-xs">
         {Object.entries(RACI_META).map(([k, m]) => (
@@ -629,7 +630,8 @@ export default function DistributionTachesPage() {
           }}
         />
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }
 
