@@ -105,10 +105,20 @@ async def reset_links_endpoint(
     db: DBSession,
     _: RequireAdminOrOwner,
     client_id: Optional[int] = Query(default=None),
+    payments_only: bool = Query(
+        default=False,
+        description=(
+            "true = n'efface QUE les liens de paiement (garde client / "
+            "projet / facture) → re-pousser les paiements sans recréer de "
+            "doublon."
+        ),
+    ),
 ) -> dict:
     # Efface les ID QBO côté Kratos pour re-migrer proprement (ne touche
     # pas QuickBooks — supprime d'abord les fiches dans QB).
-    return await reset_links(db, client_id=client_id)
+    return await reset_links(
+        db, client_id=client_id, payments_only=payments_only
+    )
 
 
 @router.get("/projects")

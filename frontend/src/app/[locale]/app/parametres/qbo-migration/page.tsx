@@ -189,6 +189,37 @@ export default function QboMigrationPage() {
     }
   }
 
+  async function runResetPayments() {
+    const ok = await confirm({
+      title: "Réinitialiser SEULEMENT les paiements de ce dossier ?",
+      description:
+        "Efface uniquement les liens de paiement côté Kratos (garde client / projet / factures). Sert à re-pousser les virements vers QuickBooks (après les avoir supprimés dans QB). Aucun doublon de facture. Clique « Migrer ce dossier » ensuite pour repousser les paiements.",
+      confirmLabel: "Réinitialiser les paiements",
+      destructive: true
+    });
+    if (!ok) return;
+    setBusy("migrate");
+    setError(null);
+    setResult(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/qbo/reset-links?payments_only=true${
+          clientId ? `&client_id=${clientId}` : ""
+        }`,
+        { method: "POST" }
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as { paiements: number };
+      setError(
+        `Liens de paiement réinitialisés : ${d.paiements ?? 0} virement(s) délié(s). Clique « Migrer ce dossier » pour les repousser vers QuickBooks.`
+      );
+    } catch (e) {
+      setError(`Réinitialisation paiements échouée : ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function runMigration() {
     const scopeLabel = clientId
       ? `le client sélectionné`
@@ -307,12 +338,21 @@ export default function QboMigrationPage() {
             </button>
             <button
               type="button"
+              onClick={() => void runResetPayments()}
+              disabled={busy !== null}
+              className="text-xs text-white/60 underline decoration-dotted hover:text-amber-300"
+              title="Délie SEULEMENT les paiements (garde factures/client) pour les repousser vers QB."
+            >
+              Réinitialiser les paiements
+            </button>
+            <button
+              type="button"
               onClick={() => void runReset()}
               disabled={busy !== null}
               className="text-xs text-white/50 underline decoration-dotted hover:text-rose-300"
-              title="Efface les liens QBO côté Kratos pour re-migrer (après avoir supprimé les fiches dans QB)."
+              title="Efface TOUS les liens QBO (client/projet/factures) pour re-migrer (après avoir supprimé les fiches dans QB)."
             >
-              Réinitialiser le lien QBO
+              Réinitialiser tout le lien QBO
             </button>
           </div>
 
