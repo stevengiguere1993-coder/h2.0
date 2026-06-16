@@ -65,7 +65,7 @@ type Report = {
 type MigrationResult = {
   customers: { created: number; already_linked: number; errors: number };
   projects: { linked: number; errors: number };
-  factures: { pushed: number; errors: number };
+  factures: { pushed: number; already_linked?: number; errors: number };
   payments: { applied: number };
   details: Array<{ client_id: number; name: string; errors: string[] }>;
 };
@@ -576,6 +576,7 @@ export default function QboMigrationPage() {
               </li>
               <li>
                 Factures : {result.factures.pushed} envoyées ·{" "}
+                {result.factures.already_linked ?? 0} déjà liées ·{" "}
                 {result.factures.errors} erreurs
               </li>
               <li>

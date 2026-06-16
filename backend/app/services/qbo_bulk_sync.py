@@ -184,7 +184,7 @@ async def run_migration(
         "scope": "client" if client_id is not None else "all",
         "customers": {"created": 0, "already_linked": 0, "errors": 0},
         "projects": {"linked": 0, "errors": 0},
-        "factures": {"pushed": 0, "errors": 0},
+        "factures": {"pushed": 0, "already_linked": 0, "errors": 0},
         "payments": {"applied": 0},
         "details": [],
     }
@@ -268,6 +268,18 @@ async def run_migration(
                 ref = customer_id
                 if f.project_id and job_by_project.get(f.project_id):
                     ref = job_by_project[f.project_id]
+                # Déjà dans QB → on NE re-pousse PAS la facture (un update
+                # avec un SyncToken périmé est refusé par QBO « Objet
+                # périmé » / code 5010, surtout si elle a été payée/modifiée
+                # dans QB depuis). On solde seulement le paiement si besoin.
+                if f.qbo_invoice_id:
+                    res["factures"]["already_linked"] += 1
+                    pid = await ensure_invoice_payment(
+                        qbo, db, f, ref, {"Id": f.qbo_invoice_id}
+                    )
+                    if pid:
+                        res["payments"]["applied"] += 1
+                    continue
                 items = await _load_items(db, f.id)
                 lines = await _build_lines(
                     qbo, items, fallback_name=f.reference
@@ -276,8 +288,8 @@ async def run_migration(
                     facture=f,
                     customer_id=ref,
                     lines=lines,
-                    existing_invoice_id=f.qbo_invoice_id,
-                    existing_sync_token=f.qbo_sync_token,
+                    existing_invoice_id=None,
+                    existing_sync_token=None,
                 )
                 invoice = await qbo.create_invoice(payload)
                 inv = invoice.get("Invoice") or invoice
