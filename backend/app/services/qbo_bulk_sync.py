@@ -166,6 +166,7 @@ async def run_migration(
         _build_invoice_payload,
         _build_lines,
         _load_items,
+        ensure_invoice_payment,
     )
 
     qbo = get_qbo()
@@ -184,6 +185,7 @@ async def run_migration(
         "customers": {"created": 0, "already_linked": 0, "errors": 0},
         "projects": {"linked": 0, "errors": 0},
         "factures": {"pushed": 0, "errors": 0},
+        "payments": {"applied": 0},
         "details": [],
     }
 
@@ -270,6 +272,10 @@ async def run_migration(
                 f.qbo_doc_number = str(inv.get("DocNumber") or "") or None
                 await db.flush()
                 res["factures"]["pushed"] += 1
+                # Facture payée dans Kratos → solder la facture côté QBO.
+                pid = await ensure_invoice_payment(qbo, db, f, ref, inv)
+                if pid:
+                    res["payments"]["applied"] += 1
             except Exception as exc:  # noqa: BLE001
                 res["factures"]["errors"] += 1
                 detail["errors"].append(f"facture {f.id}: {exc}")

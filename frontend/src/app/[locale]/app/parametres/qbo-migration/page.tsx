@@ -29,6 +29,7 @@ type MigrationResult = {
   customers: { created: number; already_linked: number; errors: number };
   projects: { linked: number; errors: number };
   factures: { pushed: number; errors: number };
+  payments: { applied: number };
   details: Array<{ client_id: number; name: string; errors: string[] }>;
 };
 
@@ -233,6 +234,9 @@ export default function QboMigrationPage() {
               <li>
                 Factures : {result.factures.pushed} envoyées ·{" "}
                 {result.factures.errors} erreurs
+              </li>
+              <li>
+                Paiements soldés : {result.payments?.applied ?? 0}
               </li>
             </ul>
             {result.details.some((d) => d.errors.length > 0) ? (

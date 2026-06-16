@@ -150,6 +150,51 @@ def _build_invoice_payload(
     return payload
 
 
+async def ensure_invoice_payment(
+    qbo,
+    db: AsyncSession,
+    facture: Facture,
+    customer_ref: str,
+    invoice_obj: Dict[str, Any],
+) -> Optional[str]:
+    """Crée le Payment QBO qui solde la facture si elle est PAYÉE dans
+    Kratos et pas déjà payée côté QBO. Idempotent via qbo_payment_id.
+    Best-effort : un échec ne casse pas la synchro de la facture."""
+    if facture.status != "paid":
+        return None
+    if getattr(facture, "qbo_payment_id", None):
+        return facture.qbo_payment_id
+    inv_id = str(invoice_obj.get("Id") or "")
+    if not inv_id:
+        return None
+    try:
+        amount = float(invoice_obj.get("TotalAmt") or facture.total or 0)
+    except (TypeError, ValueError):
+        amount = float(facture.total or 0)
+    if amount <= 0:
+        return None
+    payload = {
+        "TotalAmt": amount,
+        "CustomerRef": {"value": str(customer_ref)},
+        "Line": [
+            {
+                "Amount": amount,
+                "LinkedTxn": [{"TxnId": inv_id, "TxnType": "Invoice"}],
+            }
+        ],
+    }
+    try:
+        res = await qbo.create_payment(payload)
+        pay = res.get("Payment") or res
+        pid = str(pay.get("Id") or "") or None
+        facture.qbo_payment_id = pid
+        await db.flush()
+        return pid
+    except Exception as exc:  # noqa: BLE001
+        log.warning("create payment facture %s: %s", facture.id, exc)
+        return None
+
+
 async def sync_facture_to_qbo(
     db: AsyncSession, facture_id: int
 ) -> Dict[str, Any]:
@@ -208,6 +253,8 @@ async def sync_facture_to_qbo(
     fa.qbo_sync_token = str(inv.get("SyncToken") or "") or None
     fa.qbo_doc_number = str(inv.get("DocNumber") or "") or None
     await db.flush()
+    # Facture payée dans Kratos → on solde la facture côté QBO.
+    await ensure_invoice_payment(qbo, db, fa, customer_id, inv)
     await db.refresh(fa)
 
     return {

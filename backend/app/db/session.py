@@ -147,6 +147,8 @@ async def ensure_critical_columns() -> None:
         # ID du Job QuickBooks (sous-client) lié au projet — clé
         # d'idempotence de la synchro QBO.
         ("projects", "qbo_job_id", "VARCHAR(64)"),
+        # Id du Payment QBO d'une facture payée (dédup des paiements).
+        ("factures", "qbo_payment_id", "VARCHAR(64)"),
         ("voice_calls", "dial_state_json", "TEXT"),
         # Hub Automatisations : config éditable (cadence, etc.). La table
         # a été créée sans cette colonne au 1er déploiement → on l'ajoute.

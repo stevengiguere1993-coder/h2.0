@@ -56,6 +56,10 @@ class Facture(Base, TimestampUpdateMixin):
     qbo_invoice_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     qbo_doc_number: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     qbo_sync_token: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    # Id du Payment QBO créé quand la facture est payée dans Kratos
+    # (solde la facture côté QBO). Clé d'idempotence : on ne recrée pas
+    # un paiement déjà transféré.
+    qbo_payment_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     # Automatic reminders (cron). last_reminder_at is null until a
     # first reminder fires; reminder_count lets us escalate the tone
