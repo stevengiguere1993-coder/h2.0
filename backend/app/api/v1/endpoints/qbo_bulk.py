@@ -170,11 +170,15 @@ async def pull_invoices(
         ),
     ),
     since_days: int = Query(default=180, ge=1, le=3650),
+    client_id: Optional[int] = Query(
+        default=None,
+        description="Limiter à un client (aperçu détaillé). Vide = tous.",
+    ),
 ) -> dict:
     # Importe les factures QB rattachées à un projet (Job). Une facture QB
     # SANS projet n'est PAS importée.
     return await pull_invoices_from_qbo(
-        db, since_days=since_days, dry_run=dry_run
+        db, since_days=since_days, dry_run=dry_run, client_id=client_id
     )
 
 
@@ -187,6 +191,10 @@ async def pull_costs(
         description="true (défaut) = aperçu ; false = importe dans Kratos.",
     ),
     since_days: int = Query(default=180, ge=1, le=3650),
+    client_id: Optional[int] = Query(
+        default=None,
+        description="Limiter à un client (aperçu détaillé). Vide = tous.",
+    ),
 ) -> dict:
     # Importe les Bills (factures fournisseurs à payer) + Purchases
     # (dépenses) QB rattachés à un PROJET (sous-client). Sans projet → pas
@@ -194,5 +202,5 @@ async def pull_costs(
     from app.services.qbo_cost_pull import pull_project_costs_from_qbo
 
     return await pull_project_costs_from_qbo(
-        db, since_days=since_days, dry_run=dry_run
+        db, since_days=since_days, dry_run=dry_run, client_id=client_id
     )

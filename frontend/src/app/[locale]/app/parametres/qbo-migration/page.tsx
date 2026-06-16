@@ -11,6 +11,28 @@ import { useConfirm } from "@/components/confirm-dialog";
 
 type ClientLite = { id: number; name: string };
 
+// Une ligne de l'aperçu QB → Kratos (facture / bill / purchase) + son état.
+type PullItem = {
+  type: string;
+  qbo_id: string;
+  doc_number?: string;
+  vendor?: string;
+  total?: number;
+  amount?: number;
+  status: string;
+};
+
+// Libellé + couleur (lisibles en clair ET en sombre) par état d'import.
+const PULL_STATUS: Record<string, { label: string; cls: string }> = {
+  a_importer: { label: "À importer", cls: "bg-emerald-500/20 text-emerald-300" },
+  deja_importe: { label: "Déjà importé", cls: "bg-slate-500/25 text-slate-200" },
+  sans_projet: { label: "Sans projet", cls: "bg-amber-500/20 text-amber-300" },
+  paiement_synchro: {
+    label: "Paiement synchronisé",
+    cls: "bg-blue-500/20 text-blue-300"
+  }
+};
+
 type Summary = {
   clients_total: number;
   clients_unlinked: number;
@@ -133,7 +155,9 @@ export default function QboMigrationPage() {
     try {
       const path = kind === "invoices" ? "pull-invoices" : "pull-costs";
       const r = await authedFetch(
-        `/api/v1/qbo/${path}?dry_run=${dryRun ? "true" : "false"}`,
+        `/api/v1/qbo/${path}?dry_run=${dryRun ? "true" : "false"}${
+          clientId ? `&client_id=${clientId}` : ""
+        }`,
         { method: "POST" }
       );
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -292,7 +316,10 @@ export default function QboMigrationPage() {
             <p className="mt-1 text-xs text-white/50">
               Importe les factures et les coûts (factures fournisseurs + dépenses)
               QuickBooks <b>rattachés à un projet</b>. Sans projet → ignoré.
-              Idempotent. (Ne dépend pas du dossier choisi ci-dessus.)
+              Idempotent. <b>Choisis un dossier ci-dessus</b> pour un{" "}
+              <b>aperçu détaillé de ce client</b> (chaque facture/dépense + son
+              état : à importer, déjà importé, ou sans projet). Sans dossier =
+              tous les clients.
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -352,9 +379,91 @@ export default function QboMigrationPage() {
                     </li>
                   ))}
               </ul>
+              {Array.isArray(pullResult.data.preview) &&
+              pullResult.data.preview.length > 0 ? (
+                <div className="mt-3">
+                  <p className="text-xs font-semibold text-white/70">
+                    Détail ({(pullResult.data.preview as unknown[]).length})
+                  </p>
+                  <div className="mt-1 max-h-72 space-y-1 overflow-y-auto">
+                    {(pullResult.data.preview as PullItem[]).map((it, i) => (
+                      <div
+                        key={`${it.qbo_id}-${i}`}
+                        className="flex items-center justify-between gap-2 rounded border border-brand-800 bg-brand-950/40 px-2 py-1"
+                      >
+                        <span className="min-w-0 truncate text-white/80">
+                          {it.type === "facture"
+                            ? `Facture ${it.doc_number || it.qbo_id}`
+                            : `${it.type === "bill" ? "Facture fourn." : "Dépense"} ${
+                                it.vendor || it.qbo_id
+                              }`}
+                          {typeof it.total === "number"
+                            ? ` — ${it.total.toFixed(2)} $`
+                            : typeof it.amount === "number"
+                            ? ` — ${it.amount.toFixed(2)} $`
+                            : ""}
+                        </span>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${
+                            PULL_STATUS[it.status]?.cls ||
+                            "bg-white/10 text-white/70"
+                          }`}
+                        >
+                          {PULL_STATUS[it.status]?.label || it.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
+
+        <details className="mt-4 max-w-2xl rounded-xl border border-brand-800 bg-brand-900/60 p-4 text-sm">
+          <summary className="cursor-pointer font-semibold text-accent-500">
+            Comment convertir un sous-client en projet dans QuickBooks ?
+          </summary>
+          <div className="mt-3 space-y-2 text-white/80">
+            <p>
+              Sans accès Premium API, l&apos;API ne crée pas de projet dans
+              l&apos;onglet Projets : Kratos crée un <b>sous-client</b>, qu&apos;on
+              convertit en projet <b>une fois</b>, à la main, dans QuickBooks.
+            </p>
+            <p className="font-semibold text-white">Pré-requis sur le sous-client :</p>
+            <ul className="list-disc space-y-1 pl-5">
+              <li>un seul client parent ;</li>
+              <li>
+                case <b>« Facturer avec le client parent »</b> cochée (sinon il
+                n&apos;apparaît pas dans la liste de conversion ; désormais coché
+                automatiquement à la création par Kratos) ;
+              </li>
+              <li>pas de sous-client sous un autre sous-client.</li>
+            </ul>
+            <p className="font-semibold text-white">Conversion :</p>
+            <ol className="list-decimal space-y-1 pl-5">
+              <li>Menu de gauche → <b>Projets</b>.</li>
+              <li>
+                Flèche du bouton <b>« Nouveau projet ▾ »</b> →{" "}
+                <b>« Convertir à partir d&apos;un client rattaché »</b>.
+              </li>
+              <li>
+                Cocher le sous-client (nommé par l&apos;<b>adresse</b> du chantier,
+                pas par le nom du client) → <b>Convertir</b>.
+              </li>
+            </ol>
+            <p className="text-xs text-white/60">
+              Toutes les opérations liées (factures, paiements, dépenses) suivent
+              dans le projet.
+            </p>
+            <p className="rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs text-blue-200">
+              Rappel : à chaque création de projet dans Kratos, la commis
+              comptable reçoit un <b>courriel automatique</b> avec le nom du
+              sous-client à convertir — la conversion peut donc lui être
+              déléguée.
+            </p>
+          </div>
+        </details>
 
         {report ? (
           <div className="mt-4 max-w-2xl rounded-xl border border-brand-800 bg-brand-900/60 p-4 text-sm">
