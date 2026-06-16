@@ -38,8 +38,21 @@ def render_event_ics(
     *,
     organizer_email: str = "info@immohorizon.com",
     attendee_email: Optional[str] = None,
+    method: str = "REQUEST",
 ) -> bytes:
-    """Render a single VEVENT wrapped in a VCALENDAR."""
+    """Render a single VEVENT wrapped in a VCALENDAR.
+
+    `method` :
+      - "REQUEST" (défaut) : invitation de réunion classique (RSVP). Utile
+        pour un destinataire externe (prospect).
+      - "PUBLISH" : invitation INFORMATIVE « ajouter à l'agenda ». À
+        utiliser pour les boîtes internes Microsoft 365 : un .ics REQUEST y
+        est AUTO-TRAITÉ par l'assistant calendrier d'Exchange (ajouté au
+        calendrier + courriel retiré de la boîte de réception) → le
+        destinataire ne voit jamais le courriel. PUBLISH arrive comme un
+        vrai courriel avec le .ics joint, sans auto-traitement.
+    """
+    method = (method or "REQUEST").upper()
     end = event.end_at or event.start_at
     uid = f"agenda-{event.id}@immohorizon.com"
     now = datetime.now(timezone.utc)
@@ -47,7 +60,7 @@ def render_event_ics(
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
         "PRODID:-//Horizon Services Immobiliers//Agenda//FR",
-        "METHOD:REQUEST",
+        f"METHOD:{method}",
         "BEGIN:VEVENT",
         f"UID:{uid}",
         f"DTSTAMP:{_utc(now)}",
@@ -60,7 +73,9 @@ def render_event_ics(
     if event.description:
         lines.append(f"DESCRIPTION:{_escape(event.description)}")
     lines.append(f"ORGANIZER:mailto:{organizer_email}")
-    if attendee_email:
+    # PUBLISH = informatif, sans participant à inviter (sinon Exchange le
+    # ré-interprète en demande de réunion et auto-traite).
+    if attendee_email and method == "REQUEST":
         lines.append(
             f"ATTENDEE;RSVP=FALSE;PARTSTAT=NEEDS-ACTION:mailto:{attendee_email}"
         )
