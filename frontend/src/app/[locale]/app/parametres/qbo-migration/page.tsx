@@ -42,9 +42,24 @@ type Summary = {
   factures_unlinked: number;
 };
 
+type ProjectReport = {
+  id: number;
+  name: string | null;
+  address: string | null;
+  qbo_job_id: string | null;
+};
+
+type ClientReport = {
+  id: number;
+  name: string;
+  qbo_customer_id: string | null;
+  projects: ProjectReport[];
+};
+
 type Report = {
   qbo_connected: boolean;
   summary: Summary;
+  clients?: ClientReport[];
 };
 
 type MigrationResult = {
@@ -492,6 +507,57 @@ export default function QboMigrationPage() {
                 {report.summary.factures_unlinked} à envoyer)
               </li>
             </ul>
+
+            {/* Détail par projet : relié à un sous-client QB (qbo_job_id)
+                ou non. Sans liaison, l'import QB→Kratos ignore ses
+                factures/coûts (« sans projet »). */}
+            {report.clients && report.clients.length > 0 ? (
+              <div className="mt-3 border-t border-brand-800 pt-3">
+                <p className="text-xs font-semibold text-white/70">
+                  Liaison des projets au sous-client QuickBooks
+                </p>
+                <div className="mt-2 space-y-2">
+                  {report.clients.map((c) => (
+                    <div key={c.id}>
+                      <p className="text-xs text-white/55">
+                        {c.name}
+                        {c.qbo_customer_id ? "" : " — client non relié"}
+                      </p>
+                      {c.projects.length === 0 ? (
+                        <p className="pl-3 text-xs text-white/40">
+                          (aucun projet)
+                        </p>
+                      ) : (
+                        c.projects.map((p) => (
+                          <div
+                            key={p.id}
+                            className="flex items-center justify-between gap-2 pl-3"
+                          >
+                            <span className="min-w-0 truncate text-white/80">
+                              {p.address || p.name || `Projet #${p.id}`}
+                            </span>
+                            {p.qbo_job_id ? (
+                              <span className="shrink-0 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[11px] text-emerald-300">
+                                Relié ✓
+                              </span>
+                            ) : (
+                              <span className="shrink-0 rounded-full bg-amber-500/20 px-2 py-0.5 text-[11px] text-amber-300">
+                                Non relié ⚠
+                              </span>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] text-white/45">
+                  Un projet « Non relié » → ses factures/coûts QB sont ignorés
+                  à l&apos;import (« sans projet »). Relie-le en (re)migrant le
+                  dossier.
+                </p>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
