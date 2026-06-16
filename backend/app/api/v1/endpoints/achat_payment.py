@@ -86,13 +86,19 @@ async def mark_paid(
     # cree la BillPayment correspondante pour que le Bill QB passe
     # aussi en paye cote comptable. Fire-and-forget : on n'attend pas
     # la reponse QB pour repondre au frontend (la modal reste rapide).
+    # Fail-closed : inerte tant que l'interrupteur QBO auto-sync est OFF
+    # (cohérent avec factures/devis ; évite de pousser pendant la
+    # migration de masse).
     if achat.qbo_bill_id:
         import asyncio
 
         from app.db.session import AsyncSessionLocal
         from app.services.achat_qbo import push_bill_payment_to_qbo
+        from app.services.qbo_auto_sync import is_qbo_auto_sync_enabled
 
         async def _push_async(achat_id: int) -> None:
+            if not await is_qbo_auto_sync_enabled():
+                return
             async with AsyncSessionLocal() as fresh_db:
                 try:
                     await push_bill_payment_to_qbo(fresh_db, achat_id)
