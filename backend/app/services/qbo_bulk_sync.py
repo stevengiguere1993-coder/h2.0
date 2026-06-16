@@ -12,6 +12,7 @@ import logging
 from typing import Any, Optional
 
 from sqlalchemy import select
+from sqlalchemy import update as _update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.client import Client
@@ -166,7 +167,7 @@ async def run_migration(
         _build_invoice_payload,
         _build_lines,
         _load_items,
-        ensure_invoice_payment,
+        sync_facture_payments_to_qbo,
     )
 
     qbo = get_qbo()
@@ -274,11 +275,10 @@ async def run_migration(
                 # dans QB depuis). On solde seulement le paiement si besoin.
                 if f.qbo_invoice_id:
                     res["factures"]["already_linked"] += 1
-                    pid = await ensure_invoice_payment(
-                        qbo, db, f, ref, {"Id": f.qbo_invoice_id}
+                    pushed = await sync_facture_payments_to_qbo(
+                        qbo, db, f, ref, f.qbo_invoice_id
                     )
-                    if pid:
-                        res["payments"]["applied"] += 1
+                    res["payments"]["applied"] += len(pushed)
                     continue
                 items = await _load_items(db, f.id)
                 lines = await _build_lines(
@@ -298,10 +298,11 @@ async def run_migration(
                 f.qbo_doc_number = str(inv.get("DocNumber") or "") or None
                 await db.flush()
                 res["factures"]["pushed"] += 1
-                # Facture payée dans Kratos → solder la facture côté QBO.
-                pid = await ensure_invoice_payment(qbo, db, f, ref, inv)
-                if pid:
-                    res["payments"]["applied"] += 1
+                # Chaque virement Kratos → un Payment QBO distinct.
+                pushed = await sync_facture_payments_to_qbo(
+                    qbo, db, f, ref, str(inv.get("Id") or "")
+                )
+                res["payments"]["applied"] += len(pushed)
             except Exception as exc:  # noqa: BLE001
                 res["factures"]["errors"] += 1
                 detail["errors"].append(f"facture {f.id}: {exc}")
@@ -347,6 +348,7 @@ async def reset_links(
                 )
             ).scalars().all()
         )
+        fac_ids = [f.id for f in factures]
         for f in factures:
             if (
                 f.qbo_invoice_id
@@ -357,5 +359,15 @@ async def reset_links(
                 f.qbo_sync_token = None
                 f.qbo_payment_id = None
                 out["factures"] += 1
+        # Délie aussi les virements (lignes de paiement) pour qu'une
+        # re-migration re-pousse chaque virement proprement vers QB.
+        if fac_ids:
+            from app.models.payment import Payment as _Payment
+
+            await db.execute(
+                _update(_Payment)
+                .where(_Payment.facture_id.in_(fac_ids))
+                .values(qbo_payment_id=None)
+            )
     await db.flush()
     return out

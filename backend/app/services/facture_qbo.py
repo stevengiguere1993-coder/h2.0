@@ -195,6 +195,85 @@ async def ensure_invoice_payment(
         return None
 
 
+async def sync_facture_payments_to_qbo(
+    qbo,
+    db: AsyncSession,
+    facture: Facture,
+    customer_ref: str,
+    inv_id: str,
+) -> list[str]:
+    """Pousse CHAQUE virement (ligne de paiement Kratos) de la facture
+    comme un Payment QBO DISTINCT — pour qu'il corresponde à une opération
+    bancaire appariable dans QB. Idempotent par `Payment.qbo_payment_id`.
+
+    Repli : si la facture est payée mais sans ligne de paiement détaillée
+    (ancien flux « marquée payée »), on solde en un seul Payment.
+    Retourne la liste des IDs de Payment QBO créés."""
+    inv_id = str(inv_id or "")
+    if not inv_id:
+        return []
+    from app.models.payment import Payment
+
+    rows = (
+        await db.execute(
+            select(Payment)
+            .where(Payment.facture_id == facture.id)
+            .order_by(Payment.paid_at.asc(), Payment.id.asc())
+        )
+    ).scalars().all()
+
+    if not rows:
+        # Pas de virements détaillés → repli legacy (1 paiement global).
+        pid = await ensure_invoice_payment(
+            qbo, db, facture, customer_ref, {"Id": inv_id}
+        )
+        return [pid] if pid else []
+
+    pushed: list[str] = []
+    for p in rows:
+        if p.qbo_payment_id:
+            continue
+        try:
+            amount = float(p.amount or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        if amount <= 0:
+            continue
+        payload: Dict[str, Any] = {
+            "TotalAmt": amount,
+            "CustomerRef": {"value": str(customer_ref)},
+            "Line": [
+                {
+                    "Amount": amount,
+                    "LinkedTxn": [
+                        {"TxnId": inv_id, "TxnType": "Invoice"}
+                    ],
+                }
+            ],
+        }
+        if p.paid_at:
+            payload["TxnDate"] = str(p.paid_at)[:10]
+        if p.reference:
+            payload["PaymentRefNum"] = str(p.reference)[:21]
+        try:
+            res = await qbo.create_payment(payload)
+            pay = res.get("Payment") or res
+            qid = str(pay.get("Id") or "") or None
+            if qid:
+                p.qbo_payment_id = qid
+                # Garde le 1er id aussi au niveau facture (rétrocompat).
+                if not getattr(facture, "qbo_payment_id", None):
+                    facture.qbo_payment_id = qid
+                await db.flush()
+                pushed.append(qid)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "create payment (virement) facture %s ligne %s: %s",
+                facture.id, p.id, exc,
+            )
+    return pushed
+
+
 async def sync_facture_to_qbo(
     db: AsyncSession, facture_id: int
 ) -> Dict[str, Any]:
@@ -253,8 +332,11 @@ async def sync_facture_to_qbo(
     fa.qbo_sync_token = str(inv.get("SyncToken") or "") or None
     fa.qbo_doc_number = str(inv.get("DocNumber") or "") or None
     await db.flush()
-    # Facture payée dans Kratos → on solde la facture côté QBO.
-    await ensure_invoice_payment(qbo, db, fa, customer_id, inv)
+    # Chaque virement Kratos → un Payment QBO distinct (appariable à une
+    # opération bancaire). Repli sur 1 paiement global si pas de virement.
+    await sync_facture_payments_to_qbo(
+        qbo, db, fa, customer_id, str(inv.get("Id") or "")
+    )
     await db.refresh(fa)
 
     return {
