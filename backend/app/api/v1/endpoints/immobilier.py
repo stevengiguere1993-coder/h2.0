@@ -85,6 +85,8 @@ from app.schemas.immobilier import (
     MaintenanceOrdreCreate,
     MaintenanceOrdreRead,
     MaintenanceOrdreUpdate,
+    MaintenanceOverview,
+    MaintenanceOverviewRow,
     PaiementLoyerCreate,
     PaiementLoyerRead,
     PlexImportBuilding,
@@ -2433,6 +2435,137 @@ async def delete_maintenance(
         raise HTTPException(status_code=404, detail="Ordre introuvable.")
     await db.delete(obj)
     await db.commit()
+
+
+_MAINT_ACTIVE = {"ouvert", "en_cours", "en_attente"}
+_MAINT_STATUS_RANK = {
+    "ouvert": 0, "en_cours": 1, "en_attente": 2, "termine": 3, "annule": 4,
+}
+_MAINT_PRIO_RANK = {"urgence": 0, "haute": 1, "normale": 2, "basse": 3}
+
+
+@router.get("/maintenance/overview", response_model=MaintenanceOverview)
+async def maintenance_overview(
+    db: DBSession,
+    user: CurrentUser,
+    statut: Optional[str] = None,
+    priorite: Optional[str] = None,
+    immeuble_id: Optional[int] = None,
+    inclure_termines: bool = False,
+) -> MaintenanceOverview:
+    """Vue transversale des ordres de maintenance sur tout le portefeuille.
+
+    Les KPIs reflètent l'ensemble des ordres visibles ; les filtres
+    (statut / priorité / immeuble) ne s'appliquent qu'aux lignes affichées.
+    Tri : actifs d'abord, puis par priorité, puis du plus ancien (le plus
+    en retard) au plus récent.
+    """
+    _require_volet(user)
+
+    immeubles = (await db.execute(select(Immeuble))).scalars().all()
+    visible = await visible_immeuble_ids(db, user)
+    if visible is not None:
+        immeubles = [i for i in immeubles if i.id in visible]
+    if immeuble_id is not None:
+        immeubles = [i for i in immeubles if i.id == int(immeuble_id)]
+    imm_by_id = {i.id: i for i in immeubles}
+    if not imm_by_id:
+        return MaintenanceOverview(rows=[])
+
+    ordres = (
+        await db.execute(
+            select(MaintenanceOrdre).where(
+                MaintenanceOrdre.immeuble_id.in_(list(imm_by_id.keys()))
+            )
+        )
+    ).scalars().all()
+
+    log_ids = {o.logement_id for o in ordres if o.logement_id}
+    log_by_id = {}
+    if log_ids:
+        for lg in (
+            await db.execute(
+                select(Logement).where(Logement.id.in_(list(log_ids)))
+            )
+        ).scalars().all():
+            log_by_id[lg.id] = lg
+
+    today = datetime.now(timezone.utc).date()
+    kpi = {"ouvert": 0, "en_cours": 0, "en_attente": 0, "termine": 0, "annule": 0}
+    nb_urg = 0
+    tot_est = 0.0
+    tot_reel = 0.0
+    rows: List[MaintenanceOverviewRow] = []
+
+    for o in ordres:
+        if o.status in kpi:
+            kpi[o.status] += 1
+        active = o.status in _MAINT_ACTIVE
+        if active and o.priorite == "urgence":
+            nb_urg += 1
+        if active and o.cout_estime is not None:
+            tot_est += float(o.cout_estime)
+        if o.cout_reel is not None:
+            tot_reel += float(o.cout_reel)
+
+        # Filtres d'affichage.
+        if statut and o.status != statut:
+            continue
+        if priorite and o.priorite != priorite:
+            continue
+        if not inclure_termines and not statut and not active:
+            continue
+
+        jours = (
+            (today - o.created_at.date()).days
+            if (o.created_at and active)
+            else None
+        )
+        lg = log_by_id.get(o.logement_id) if o.logement_id else None
+        rows.append(
+            MaintenanceOverviewRow(
+                id=o.id,
+                immeuble_id=o.immeuble_id,
+                immeuble_name=imm_by_id[o.immeuble_id].name,
+                logement_id=o.logement_id,
+                logement_numero=(lg.numero if lg else None),
+                titre=o.titre,
+                description=o.description,
+                priorite=o.priorite,
+                status=o.status,
+                fournisseur=o.fournisseur,
+                cout_estime=(
+                    float(o.cout_estime) if o.cout_estime is not None else None
+                ),
+                cout_reel=(
+                    float(o.cout_reel) if o.cout_reel is not None else None
+                ),
+                plannifie_pour=o.plannifie_pour,
+                complete_le=o.complete_le,
+                created_at=o.created_at,
+                jours_ouverts=jours,
+            )
+        )
+
+    rows.sort(
+        key=lambda r: (
+            _MAINT_STATUS_RANK.get(r.status, 9),
+            _MAINT_PRIO_RANK.get(r.priorite, 9),
+            -(r.jours_ouverts or 0),
+        )
+    )
+    return MaintenanceOverview(
+        rows=rows,
+        nb_total=len(rows),
+        nb_ouvert=kpi["ouvert"],
+        nb_en_cours=kpi["en_cours"],
+        nb_en_attente=kpi["en_attente"],
+        nb_termine=kpi["termine"],
+        nb_annule=kpi["annule"],
+        nb_urgences_actives=nb_urg,
+        total_cout_estime_actif=round(tot_est, 2),
+        total_cout_reel=round(tot_reel, 2),
+    )
 
 
 # ── KPIs financiers d'un immeuble ──────────────────────────────────────
