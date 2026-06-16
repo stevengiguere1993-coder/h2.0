@@ -38,10 +38,16 @@ export default function QboMigrationPage() {
   const confirm = useConfirm();
   const [clients, setClients] = useState<ClientLite[]>([]);
   const [clientId, setClientId] = useState("");
-  const [busy, setBusy] = useState<null | "report" | "migrate">(null);
+  const [busy, setBusy] = useState<
+    null | "report" | "migrate" | "pull-inv" | "pull-cost"
+  >(null);
   const [report, setReport] = useState<Report | null>(null);
   const [result, setResult] = useState<MigrationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pullResult, setPullResult] = useState<{
+    title: string;
+    data: Record<string, unknown>;
+  } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -104,6 +110,41 @@ export default function QboMigrationPage() {
       );
     } catch (e) {
       setError(`Réinitialisation échouée : ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runPull(kind: "invoices" | "costs", dryRun: boolean) {
+    const label = kind === "invoices" ? "factures" : "coûts";
+    if (!dryRun) {
+      const ok = await confirm({
+        title: `Importer les ${label} QuickBooks → Kratos ?`,
+        description: `Écrit RÉELLEMENT dans Kratos les ${label} QuickBooks rattachés à un PROJET (sans projet = ignoré). Idempotent : aucun doublon au re-run.`,
+        confirmLabel: "Importer",
+        destructive: true
+      });
+      if (!ok) return;
+    }
+    setBusy(kind === "invoices" ? "pull-inv" : "pull-cost");
+    setError(null);
+    setPullResult(null);
+    setResult(null);
+    try {
+      const path = kind === "invoices" ? "pull-invoices" : "pull-costs";
+      const r = await authedFetch(
+        `/api/v1/qbo/${path}?dry_run=${dryRun ? "true" : "false"}`,
+        { method: "POST" }
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as Record<string, unknown>;
+      if (typeof d.error === "string") throw new Error(d.error);
+      setPullResult({
+        title: `${dryRun ? "Aperçu" : "Import"} ${label} (QB → Kratos)`,
+        data: d
+      });
+    } catch (e) {
+      setError(`Import ${label} échoué : ${(e as Error).message}`);
     } finally {
       setBusy(null);
     }
@@ -240,6 +281,78 @@ export default function QboMigrationPage() {
             <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
               {error}
             </p>
+          ) : null}
+        </div>
+
+        <div className="mt-4 max-w-2xl space-y-3 rounded-xl border border-brand-800 bg-brand-900/60 p-4">
+          <div>
+            <h2 className="text-sm font-semibold text-white">
+              Importer depuis QuickBooks (QB → Kratos)
+            </h2>
+            <p className="mt-1 text-xs text-white/50">
+              Importe les factures et les coûts (factures fournisseurs + dépenses)
+              QuickBooks <b>rattachés à un projet</b>. Sans projet → ignoré.
+              Idempotent. (Ne dépend pas du dossier choisi ci-dessus.)
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() => void runPull("invoices", true)}
+              disabled={busy !== null}
+              className="btn-secondary text-sm"
+            >
+              {busy === "pull-inv" ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              Factures : aperçu
+            </button>
+            <button
+              type="button"
+              onClick={() => void runPull("invoices", false)}
+              disabled={busy !== null}
+              className="btn-accent text-sm"
+            >
+              Factures : importer
+            </button>
+            <button
+              type="button"
+              onClick={() => void runPull("costs", true)}
+              disabled={busy !== null}
+              className="btn-secondary text-sm"
+            >
+              {busy === "pull-cost" ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              Coûts : aperçu
+            </button>
+            <button
+              type="button"
+              onClick={() => void runPull("costs", false)}
+              disabled={busy !== null}
+              className="btn-accent text-sm"
+            >
+              Coûts : importer
+            </button>
+          </div>
+          {pullResult ? (
+            <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm">
+              <p className="font-semibold text-white">{pullResult.title}</p>
+              <ul className="mt-2 space-y-1 text-white/80">
+                {Object.entries(pullResult.data)
+                  .filter(
+                    ([, v]) =>
+                      typeof v === "number" ||
+                      typeof v === "string" ||
+                      typeof v === "boolean"
+                  )
+                  .map(([k, v]) => (
+                    <li key={k}>
+                      <span className="text-white/55">{k} :</span> {String(v)}
+                    </li>
+                  ))}
+              </ul>
+            </div>
           ) : null}
         </div>
 
