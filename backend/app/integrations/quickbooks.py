@@ -419,6 +419,33 @@ class QuickBooksClient:
         )
         return data.get("Customer") or data
 
+    async def list_projects(self) -> List[Dict[str, Any]]:
+        """Liste tous les « projets » QBO (sous-clients / Jobs) pour le
+        flux de LIAISON : l'utilisateur relie un projet Kratos à un vrai
+        projet/sous-client QB existant (id stocké dans Project.qbo_job_id).
+
+        On retourne id, nom affiché, nom complet (« Parent:Projet ») et le
+        parent (id + nom) pour que l'UI puisse grouper par client.
+        """
+        rows = await self.query(
+            "SELECT * FROM Customer WHERE Job = true MAXRESULTS 1000"
+        )
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            parent = row.get("ParentRef") or {}
+            out.append(
+                {
+                    "id": str(row.get("Id") or ""),
+                    "display_name": row.get("DisplayName") or "",
+                    "full_name": row.get("FullyQualifiedName") or "",
+                    "parent_id": str(parent.get("value") or "") or None,
+                    "parent_name": parent.get("name") or None,
+                    "active": bool(row.get("Active", True)),
+                }
+            )
+        out.sort(key=lambda r: (r["full_name"] or r["display_name"]).lower())
+        return out
+
     async def ensure_class(self, *, name: str) -> Optional[Dict[str, Any]]:
         """Find-or-create une « Classe » QBO (suivi par classe, ex. par
         projet/chantier). Retourne None si le suivi des classes n'est pas

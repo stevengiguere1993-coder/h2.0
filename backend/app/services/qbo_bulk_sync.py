@@ -98,7 +98,7 @@ async def dry_run_report(
                     "name": p.name,
                     "address": p.address,
                     "qbo_job_id": p.qbo_job_id,
-                    "action": "already_linked" if p_linked else "create_or_reuse",
+                    "action": "already_linked" if p_linked else "needs_link",
                 }
             )
 
@@ -215,7 +215,13 @@ async def run_migration(
             continue
         customer_id = c.qbo_customer_id
 
-        # 2) Projets → Jobs (sous-clients du Customer).
+        # 2) Projets → vrais projets QBO (onglet Projets / sous-clients).
+        # On NE CRÉE PLUS de sous-client automatiquement : l'API publique
+        # QBO ne sait pas créer un « Projet » de l'onglet Projets (un
+        # sous-client créé par l'API n'y apparaît pas). On utilise donc
+        # UNIQUEMENT la liaison manuelle (Project.qbo_job_id, posée via
+        # POST /qbo/link-project). Un projet non lié → ses factures sont
+        # rattachées au client parent.
         projects = list(
             (
                 await db.execute(
@@ -223,26 +229,9 @@ async def run_migration(
                 )
             ).scalars().all()
         )
-        job_by_project: dict[int, Optional[str]] = {}
-        for p in projects:
-            try:
-                if not p.qbo_job_id:
-                    # Le projet QBO (sous-client) est nommé par son
-                    # ADRESSE (identité du projet), pas par le nom interne
-                    # qui peut contenir le nom du client.
-                    job = await qbo.ensure_project(
-                        parent_customer_id=customer_id,
-                        project_name=(p.address or p.name),
-                    )
-                    jid = str(job.get("Id") or "")
-                    if jid:
-                        p.qbo_job_id = jid
-                        await db.flush()
-                        res["projects"]["linked"] += 1
-                job_by_project[p.id] = p.qbo_job_id
-            except Exception as exc:  # noqa: BLE001
-                res["projects"]["errors"] += 1
-                detail["errors"].append(f"projet {p.id}: {exc}")
+        job_by_project: dict[int, Optional[str]] = {
+            p.id: p.qbo_job_id for p in projects
+        }
 
         # 3) Factures → Invoices (rattachées au Job du projet si dispo).
         factures = list(
