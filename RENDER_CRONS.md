@@ -34,6 +34,7 @@ Dashboard Render.
 | `follow-up-reminders` | `0 13 * * *` | `python -m app.jobs.follow_up_reminders` | `app/jobs/follow_up_reminders.py` |
 | `unassigned-day-alerts` | `0 21 * * 0-4` | `python -m app.jobs.unassigned_day_alerts` | la veille en fin de journée |
 | `soumission-reminders` | `0 13 * * 1-5` | `python -m app.jobs.soumission_reminders` | nudge clients |
+| `teams-sync-auto` | `0 * * * *` | `python -m app.jobs.teams_sync_auto` | capture auto des transcriptions Teams (toutes les heures) |
 
 ## Tester localement avant de déployer
 
