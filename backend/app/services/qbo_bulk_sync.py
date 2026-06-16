@@ -280,6 +280,31 @@ async def run_migration(
                     )
                     res["payments"]["applied"] += len(pushed)
                     continue
+                # Lien perdu (reset) mais la facture existe peut-être déjà
+                # dans QB sous ce numéro → on s'y RELIE au lieu de la
+                # recréer (sinon erreur 6140 « numéro en double »).
+                if f.reference:
+                    try:
+                        ex_inv = await qbo.find_invoice_by_docnumber(
+                            f.reference
+                        )
+                    except Exception:  # noqa: BLE001
+                        ex_inv = None
+                    if ex_inv and ex_inv.get("Id"):
+                        f.qbo_invoice_id = str(ex_inv.get("Id"))
+                        f.qbo_sync_token = (
+                            str(ex_inv.get("SyncToken") or "") or None
+                        )
+                        f.qbo_doc_number = (
+                            str(ex_inv.get("DocNumber") or "") or None
+                        )
+                        await db.flush()
+                        res["factures"]["already_linked"] += 1
+                        pushed = await sync_facture_payments_to_qbo(
+                            qbo, db, f, ref, f.qbo_invoice_id
+                        )
+                        res["payments"]["applied"] += len(pushed)
+                        continue
                 items = await _load_items(db, f.id)
                 lines = await _build_lines(
                     qbo, items, fallback_name=f.reference

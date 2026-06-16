@@ -710,6 +710,22 @@ class QuickBooksClient:
     async def get_invoice(self, invoice_id: str) -> Dict[str, Any]:
         return await self._request("GET", f"/invoice/{invoice_id}")
 
+    async def find_invoice_by_docnumber(
+        self, doc_number: str
+    ) -> Optional[Dict[str, Any]]:
+        """Retrouve une facture QB par son numéro de document (DocNumber).
+        Sert à se RELIER à une facture existante plutôt qu'en recréer une
+        en double (erreur 6140 « Numéro de document en double ») quand le
+        lien Kratos a été perdu (reset)."""
+        clean = (doc_number or "").strip()
+        if not clean:
+            return None
+        safe = clean.replace("'", "''")
+        rows = await self.query(
+            f"SELECT * FROM Invoice WHERE DocNumber = '{safe}' MAXRESULTS 1"
+        )
+        return rows[0] if rows else None
+
     async def create_invoice(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return await self._request(
             "POST", "/invoice", json_body=payload, params={"minorversion": "70"}
