@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Calendar,
   ChevronRight,
@@ -9,6 +9,7 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  Upload,
   Users,
   Video
 } from "lucide-react";
@@ -125,12 +126,10 @@ export default function RencontresListPage() {
         await loadTeamsStatus();
       } else if ((res.pending || 0) > 0) {
         setSyncMsg(
-          "Réunion(s) trouvée(s), mais sans transcription disponible. " +
-            (res.diagnostic
-              ? `Diagnostic : ${res.diagnostic}`
-              : "Soit Teams ne l'a pas encore publiée (réessaie dans " +
-                "quelques minutes), soit la transcription n'était pas " +
-                "activée pour ce meeting.") +
+          "Réunion(s) Teams trouvée(s), mais Microsoft n'a pas (encore) " +
+            "fourni la transcription automatiquement. Pas besoin d'attendre : " +
+            "clique « Importer une réunion » et dépose ton fichier (texte ou " +
+            "audio) — c'est instantané." +
             armedNote
         );
       } else {
@@ -152,6 +151,8 @@ export default function RencontresListPage() {
     filterEntId ? [filterEntId] : []
   );
   const [creating, setCreating] = useState(false);
+  const [importingMeeting, setImportingMeeting] = useState(false);
+  const meetingFileRef = useRef<HTMLInputElement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -222,6 +223,72 @@ export default function RencontresListPage() {
     }
   }
 
+  // Import « réunion » en UN clic depuis la liste : crée la rencontre +
+  // une section, y met la transcription (texte lu directement, audio/vidéo
+  // transcrit côté serveur), puis ouvre la fiche. C'est le chemin fiable
+  // qui ne dépend d'aucune config Microsoft.
+  async function importMeeting(file: File) {
+    setImportingMeeting(true);
+    setError(null);
+    setSyncMsg(null);
+    try {
+      const base =
+        file.name.replace(/\.[^.]+$/, "").trim().slice(0, 120) ||
+        "Réunion importée";
+      const rr = await authedFetch("/api/v1/rencontres", {
+        method: "POST",
+        body: JSON.stringify({
+          title: base,
+          meeting_date: null,
+          location: null,
+          attendees: null,
+          entreprise_ids: filterEntId ? [filterEntId] : null
+        })
+      });
+      if (!rr.ok) throw new Error(`HTTP ${rr.status}`);
+      const renc = (await rr.json()) as { id: number };
+
+      const sr = await authedFetch(`/api/v1/rencontres/${renc.id}/sections`, {
+        method: "POST",
+        body: JSON.stringify({ title: base })
+      });
+      if (!sr.ok) throw new Error(`HTTP ${sr.status}`);
+      const sec = (await sr.json()) as { id: number };
+
+      const isText =
+        /\.(txt|md|text|vtt|srt|rtf|log|csv)$/i.test(file.name) ||
+        file.type.startsWith("text/");
+      if (isText) {
+        const raw = (await file.text()).trim();
+        if (raw) {
+          await authedFetch(
+            `/api/v1/rencontres/${renc.id}/sections/${sec.id}`,
+            { method: "PATCH", body: JSON.stringify({ transcript: raw }) }
+          );
+        }
+      } else {
+        const form = new FormData();
+        form.append("file", file);
+        const tr = await authedFetch(
+          `/api/v1/rencontres/${renc.id}/sections/${sec.id}/transcribe`,
+          { method: "POST", body: form }
+        );
+        if (!tr.ok) {
+          const t = await tr.text();
+          setError(
+            `Transcription échouée : ${t.slice(0, 200)}. La rencontre est créée — réessaie l'audio depuis sa fiche.`
+          );
+        }
+      }
+      window.location.assign(`/entreprises/rencontres/${renc.id}`);
+    } catch (e) {
+      setError(`Import échoué : ${(e as Error).message}`);
+      setImportingMeeting(false);
+    } finally {
+      if (meetingFileRef.current) meetingFileRef.current.value = "";
+    }
+  }
+
   return (
     <>
       <QGTopbar
@@ -239,7 +306,7 @@ export default function RencontresListPage() {
                 type="button"
                 onClick={() => void runTeamsSync()}
                 disabled={syncing}
-                title="Importe les rencontres Teams transcrites en fiches pré-remplies (transcription + résumé IA)"
+                title="Tente de récupérer les transcriptions Teams (selon la config Microsoft). Si rien ne vient, utilise « Importer une réunion »."
                 className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm font-medium text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
               >
                 {syncing ? (
@@ -250,10 +317,35 @@ export default function RencontresListPage() {
                 {syncing ? "Synchro…" : "Synchroniser Teams"}
               </button>
             ) : null}
+            <input
+              ref={meetingFileRef}
+              type="file"
+              accept=".txt,.md,.vtt,.srt,.rtf,.log,.csv,text/*,audio/*,video/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void importMeeting(f);
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => meetingFileRef.current?.click()}
+              disabled={importingMeeting}
+              title="Dépose une transcription (texte) ou un audio : Kratos crée la rencontre et la remplit automatiquement."
+              className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
+            >
+              {importingMeeting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Upload className="h-4 w-4" />
+              )}
+              Importer une réunion
+            </button>
             <button
               type="button"
               onClick={() => setCreateOpen(true)}
-              className="btn-accent inline-flex items-center gap-1.5 text-sm"
+              className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition hover:bg-white/5"
+              style={{ borderColor: "var(--qg-border)", color: "var(--qg-text)" }}
             >
               <Plus className="h-4 w-4" />
               Nouvelle rencontre
@@ -311,14 +403,37 @@ export default function RencontresListPage() {
             <p className="mt-3 text-sm">
               Aucune rencontre encore.
             </p>
-            <button
-              type="button"
-              onClick={() => setCreateOpen(true)}
-              className="btn-accent mt-3 inline-flex items-center gap-1.5 text-sm"
-            >
-              <Plus className="h-4 w-4" />
-              Nouvelle rencontre
-            </button>
+            <p className="mx-auto mt-1 max-w-md text-xs">
+              Le plus rapide : <strong>importe ta réunion</strong> (transcription
+              texte ou audio) — Kratos crée la fiche et la remplit toute seule.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => meetingFileRef.current?.click()}
+                disabled={importingMeeting}
+                className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
+              >
+                {importingMeeting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4" />
+                )}
+                Importer une réunion
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition hover:bg-white/5"
+                style={{
+                  borderColor: "var(--qg-border)",
+                  color: "var(--qg-text)"
+                }}
+              >
+                <Plus className="h-4 w-4" />
+                Nouvelle rencontre
+              </button>
+            </div>
           </div>
         ) : (
           <ul className="space-y-2">
