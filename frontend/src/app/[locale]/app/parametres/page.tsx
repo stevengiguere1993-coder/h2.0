@@ -20,6 +20,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { ConnexionsSection } from "@/components/connexions-section";
+import { QboAutoSyncToggle } from "@/components/qbo-auto-sync-toggle";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { authedFetch, hasMinRole } from "@/lib/auth";
@@ -213,6 +214,8 @@ export default function ParametresPage() {
             <ChevronRight className="h-4 w-4 text-white/40" />
           </Link>
         ) : null}
+
+        {hasMinRole(me, "admin") ? <QboAutoSyncToggle /> : null}
 
         {hasMinRole(me, "admin") ? (
           <Link

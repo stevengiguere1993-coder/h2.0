@@ -133,6 +133,21 @@ def make_crud_router(
             from app.api.v1.endpoints.achat_qbo import autopush_achat
 
             asyncio.create_task(autopush_achat(int(obj.id)))
+        # Synchro QBO automatique (Facture / Soumission). Inerte tant que
+        # l'interrupteur `qbo_auto_sync` est OFF (fail-closed) : ne
+        # s'active qu'après validation de la migration de masse.
+        if model in (Facture, Soumission):
+            import asyncio
+
+            from app.services.qbo_auto_sync import (
+                autopush_facture,
+                autopush_soumission,
+            )
+
+            if model is Facture:
+                asyncio.create_task(autopush_facture(int(obj.id)))
+            else:
+                asyncio.create_task(autopush_soumission(int(obj.id)))
         # Auto-bump : tout Punch créé sur un projet bascule celui-ci
         # en « En cours » s'il ne l'est pas déjà.
         if model is Punch:
