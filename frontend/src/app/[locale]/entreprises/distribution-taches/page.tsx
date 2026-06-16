@@ -62,7 +62,7 @@ const CYCLE = ["", "R", "A", "C", "I"];
 
 const RACI_META: Record<string, { bg: string; full: string }> = {
   R: { bg: "#2563eb", full: "Réalise" },
-  A: { bg: "#e11d48", full: "Autorité" },
+  A: { bg: "#e11d48", full: "Autorise" },
   C: { bg: "#d97706", full: "Consulté" },
   I: { bg: "#64748b", full: "Informé" }
 };
@@ -590,11 +590,13 @@ export default function DistributionTachesPage() {
 
       {personOpen ? (
         <PersonPicker
+          people={people}
           onClose={() => setPersonOpen(false)}
           onSaved={() => {
             setPersonOpen(false);
             void load();
           }}
+          onChanged={() => void load()}
         />
       ) : null}
       {activityModal ? (
@@ -801,21 +803,27 @@ function ImportModal({
 }
 
 function PersonPicker({
+  people,
   onClose,
-  onSaved
+  onSaved,
+  onChanged
 }: {
+  people: Person[];
   onClose: () => void;
   onSaved: () => void;
+  onChanged: () => void;
 }) {
   const [users, setUsers] = useState<AvailableUser[] | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
 
-  useEffect(() => {
-    void (async () => {
-      const r = await authedFetch("/api/v1/raci/available-users");
-      setUsers(r.ok ? ((await r.json()) as AvailableUser[]) : []);
-    })();
+  const loadUsers = useCallback(async () => {
+    const r = await authedFetch("/api/v1/raci/available-users");
+    setUsers(r.ok ? ((await r.json()) as AvailableUser[]) : []);
   }, []);
+
+  useEffect(() => {
+    void loadUsers();
+  }, [loadUsers]);
 
   async function add(u: AvailableUser) {
     setBusy(u.user_id);
@@ -824,17 +832,73 @@ function PersonPicker({
         method: "POST",
         body: JSON.stringify({ user_id: u.user_id })
       });
-      onSaved();
+      onChanged();
+      await loadUsers();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function remove(per: Person) {
+    setBusy(-per.id);
+    try {
+      await authedFetch(`/api/v1/raci/people/${per.id}`, {
+        method: "DELETE"
+      });
+      onChanged();
+      await loadUsers();
     } finally {
       setBusy(null);
     }
   }
 
   return (
-    <Modal title="Ajouter une personne" onClose={onClose}>
+    <Modal title="Personnes (colonnes)" onClose={onClose}>
       <p className="mb-3 text-xs text-[var(--qg-text-muted)]">
         Seuls les détenteurs d'un compte Kratos peuvent être des colonnes.
       </p>
+
+      {people.length > 0 ? (
+        <div className="mb-3">
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--qg-text-muted)]">
+            Dans la matrice
+          </div>
+          <div className="space-y-1.5">
+            {people.map((per) => (
+              <div
+                key={per.id}
+                className="flex items-center justify-between rounded-lg border border-[var(--qg-border)] px-3 py-2 text-sm"
+              >
+                <span>
+                  <span className="font-medium">{per.name}</span>
+                  {per.subtitle ? (
+                    <span className="ml-2 text-xs capitalize text-[var(--qg-text-muted)]">
+                      {per.subtitle}
+                    </span>
+                  ) : null}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void remove(per)}
+                  disabled={busy !== null}
+                  className="rounded p-1 text-[var(--qg-text-faint)] hover:text-rose-400 disabled:opacity-50"
+                  title="Retirer cette colonne"
+                >
+                  {busy === -per.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--qg-text-muted)]">
+        Ajouter
+      </div>
       {users === null ? (
         <div className="flex items-center gap-2 py-6 text-sm text-[var(--qg-text-muted)]">
           <Loader2 className="h-4 w-4 animate-spin" /> Chargement…
@@ -844,7 +908,7 @@ function PersonPicker({
           Tous les comptes sont déjà dans la matrice.
         </p>
       ) : (
-        <div className="max-h-72 space-y-1.5 overflow-y-auto">
+        <div className="max-h-60 space-y-1.5 overflow-y-auto">
           {users.map((u) => (
             <button
               key={u.user_id}
