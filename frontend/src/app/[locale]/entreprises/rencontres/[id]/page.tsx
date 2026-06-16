@@ -97,6 +97,8 @@ export default function RencontreDetailPage() {
   const [generatingGlobal, setGeneratingGlobal] = useState(false);
   const [newSectionTitle, setNewSectionTitle] = useState("");
   const [creatingSection, setCreatingSection] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importFileRef = useRef<HTMLInputElement | null>(null);
   const [deletingRencontre, setDeletingRencontre] = useState(false);
   // ID de la section fraîchement créée par « Lancer un enregistrement ».
   // Sert à mettre en valeur son bouton « Dicter » (pulse) pendant
@@ -171,6 +173,68 @@ export default function RencontreDetailPage() {
       setData((d) => (d ? { ...d, sections: [...d.sections, sec] } : d));
     } finally {
       setCreatingSection(false);
+    }
+  }
+
+  // Importe un fichier en UN clic : crée une section nommée d'après le
+  // fichier, puis y met le contenu — texte (.txt/.vtt/.srt…) lu et collé
+  // directement, audio/vidéo transcrit côté serveur. Évite à l'usager de
+  // créer un sujet PUIS de chercher le bouton de téléversement.
+  async function importFile(file: File) {
+    setImporting(true);
+    try {
+      const base =
+        file.name.replace(/\.[^.]+$/, "").trim().slice(0, 80) ||
+        "Transcription importée";
+      const r = await authedFetch(`/api/v1/rencontres/${id}/sections`, {
+        method: "POST",
+        body: JSON.stringify({ title: base })
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      let sec = (await r.json()) as Section;
+
+      const isText =
+        /\.(txt|md|text|vtt|srt|rtf|log|csv)$/i.test(file.name) ||
+        file.type.startsWith("text/");
+      if (isText) {
+        const raw = (await file.text()).trim();
+        if (raw) {
+          const pr = await authedFetch(
+            `/api/v1/rencontres/${id}/sections/${sec.id}`,
+            { method: "PATCH", body: JSON.stringify({ transcript: raw }) }
+          );
+          if (pr.ok) sec = (await pr.json()) as Section;
+        } else {
+          alert("Le fichier texte est vide.");
+        }
+      } else {
+        const form = new FormData();
+        form.append("file", file);
+        const tr = await authedFetch(
+          `/api/v1/rencontres/${id}/sections/${sec.id}/transcribe`,
+          { method: "POST", body: form }
+        );
+        if (tr.ok) {
+          sec = (await tr.json()) as Section;
+        } else {
+          const t = await tr.text();
+          alert(t.slice(0, 300) || `Transcription échouée (HTTP ${tr.status}).`);
+        }
+      }
+
+      setData((d) => (d ? { ...d, sections: [...d.sections, sec] } : d));
+      setHighlightSectionId(sec.id);
+      setTimeout(() => {
+        document
+          .getElementById(`section-${sec.id}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 60);
+      setTimeout(() => setHighlightSectionId(null), 6000);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setImporting(false);
+      if (importFileRef.current) importFileRef.current.value = "";
     }
   }
 
@@ -405,6 +469,17 @@ export default function RencontreDetailPage() {
                 Sections ({data.sections.length})
               </h2>
 
+              <input
+                ref={importFileRef}
+                type="file"
+                accept=".txt,.md,.vtt,.srt,.rtf,.log,.csv,text/*,audio/*,video/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void importFile(f);
+                }}
+              />
+
               {/* Lance une nouvelle section + démarre la dictée en un
                   clic — pas besoin de taper un titre d'abord. */}
               <div
@@ -428,19 +503,39 @@ export default function RencontreDetailPage() {
                       {" "}dans la section pour démarrer l&apos;enregistrement.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void quickStartRecording()}
-                    disabled={creatingSection}
-                    className="btn-accent inline-flex items-center gap-2 text-sm disabled:opacity-50"
-                  >
-                    {creatingSection ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Mic className="h-4 w-4" />
-                    )}
-                    Lancer l&apos;enregistrement
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void quickStartRecording()}
+                      disabled={creatingSection}
+                      className="btn-accent inline-flex items-center gap-2 text-sm disabled:opacity-50"
+                    >
+                      {creatingSection ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Mic className="h-4 w-4" />
+                      )}
+                      Lancer l&apos;enregistrement
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => importFileRef.current?.click()}
+                      disabled={importing}
+                      className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold disabled:opacity-50"
+                      style={{
+                        borderColor: "var(--qg-border)",
+                        color: "var(--qg-text)"
+                      }}
+                      title="Importer une transcription (texte) ou un audio — crée la section automatiquement"
+                    >
+                      {importing ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Upload className="h-4 w-4" />
+                      )}
+                      Importer un fichier
+                    </button>
+                  </div>
                 </div>
                 <p
                   className="mt-2 border-t pt-2 text-[11px]"
@@ -468,22 +563,42 @@ export default function RencontreDetailPage() {
                     Aucun sujet pour l&apos;instant.
                   </p>
                   <p className="mx-auto mt-1 max-w-md text-xs">
-                    Pour <strong>téléverser ton audio ou ton texte</strong>{" "}
-                    (ou dicter / coller), crée d&apos;abord un sujet :
+                    <strong>Importe ton fichier</strong> (transcription texte ou
+                    audio) — la section est créée et remplie automatiquement.
+                    Ou crée un sujet vide pour dicter / coller.
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => void quickAddSection()}
-                    disabled={creatingSection}
-                    className="btn-accent mx-auto mt-3 inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
-                  >
-                    {creatingSection ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Plus className="h-4 w-4" />
-                    )}
-                    Créer un sujet
-                  </button>
+                  <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => importFileRef.current?.click()}
+                      disabled={importing}
+                      className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
+                    >
+                      {importing ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Upload className="h-4 w-4" />
+                      )}
+                      Importer un fichier
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void quickAddSection()}
+                      disabled={creatingSection}
+                      className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-semibold disabled:opacity-50"
+                      style={{
+                        borderColor: "var(--qg-border)",
+                        color: "var(--qg-text)"
+                      }}
+                    >
+                      {creatingSection ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Plus className="h-4 w-4" />
+                      )}
+                      Créer un sujet
+                    </button>
+                  </div>
                 </div>
               ) : null}
 
