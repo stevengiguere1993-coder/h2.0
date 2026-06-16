@@ -77,8 +77,11 @@ from app.schemas.immobilier import (
     ImmeubleRead,
     ImmeubleUpdate,
     LocataireCreate,
+    LocataireDossier,
     LocataireRead,
     LocataireUpdate,
+    DossierBail,
+    DossierPaiement,
     LogementCreate,
     LogementRead,
     LogementUpdate,
@@ -1424,6 +1427,108 @@ async def delete_locataire(
         raise HTTPException(status_code=404, detail="Locataire introuvable.")
     await db.delete(obj)
     await db.commit()
+
+
+@router.get(
+    "/locataires/{locataire_id}/dossier", response_model=LocataireDossier
+)
+async def locataire_dossier(
+    locataire_id: int, db: DBSession, user: CurrentUser
+) -> LocataireDossier:
+    """Fiche 360 d'un locataire : ses baux (avec immeuble/logement),
+    l'historique complet de ses paiements de loyer et des agrégats."""
+    _require_volet(user)
+    loc = await db.get(Locataire, locataire_id)
+    if loc is None:
+        raise HTTPException(status_code=404, detail="Locataire introuvable.")
+
+    baux = (
+        await db.execute(
+            select(Bail)
+            .where(Bail.locataire_id == locataire_id)
+            .order_by(Bail.date_debut.desc())
+        )
+    ).scalars().all()
+
+    log_ids = {b.logement_id for b in baux if b.logement_id}
+    log_by_id = {}
+    if log_ids:
+        for lg in (
+            await db.execute(
+                select(Logement).where(Logement.id.in_(list(log_ids)))
+            )
+        ).scalars().all():
+            log_by_id[lg.id] = lg
+    imm_ids = {lg.immeuble_id for lg in log_by_id.values()}
+    imm_by_id = {}
+    if imm_ids:
+        for im in (
+            await db.execute(
+                select(Immeuble).where(Immeuble.id.in_(list(imm_ids)))
+            )
+        ).scalars().all():
+            imm_by_id[im.id] = im
+
+    dossier_baux = []
+    for b in baux:
+        lg = log_by_id.get(b.logement_id)
+        im = imm_by_id.get(lg.immeuble_id) if lg else None
+        dossier_baux.append(
+            DossierBail(
+                id=b.id,
+                immeuble_id=(im.id if im else 0),
+                immeuble_name=(im.name if im else "—"),
+                logement_numero=(lg.numero if lg else None),
+                date_debut=b.date_debut,
+                date_fin=b.date_fin,
+                loyer_mensuel=float(b.loyer_mensuel or 0),
+                depot_garantie=(
+                    float(b.depot_garantie)
+                    if b.depot_garantie is not None
+                    else None
+                ),
+                status=b.status,
+            )
+        )
+
+    paiements = []
+    bail_ids = [b.id for b in baux]
+    if bail_ids:
+        for pmt in (
+            await db.execute(
+                select(PaiementLoyer)
+                .where(PaiementLoyer.bail_id.in_(bail_ids))
+                .order_by(PaiementLoyer.mois_couvert.desc())
+            )
+        ).scalars().all():
+            paiements.append(
+                DossierPaiement(
+                    id=pmt.id,
+                    bail_id=pmt.bail_id,
+                    mois_couvert=pmt.mois_couvert,
+                    montant=float(pmt.montant or 0),
+                    paye_le=pmt.paye_le,
+                    methode=pmt.methode,
+                    en_retard=bool(pmt.en_retard),
+                )
+            )
+
+    actifs = [b for b in baux if b.status == BailStatus.ACTIF.value]
+    return LocataireDossier(
+        locataire=LocataireRead.model_validate(loc),
+        baux=dossier_baux,
+        paiements=paiements,
+        nb_baux_actifs=len(actifs),
+        loyer_actuel=round(sum(float(b.loyer_mensuel or 0) for b in actifs), 2),
+        depot_total=round(
+            sum(float(b.depot_garantie or 0) for b in actifs), 2
+        ),
+        total_paye=round(
+            sum(p.montant for p in paiements if p.paye_le is not None), 2
+        ),
+        nb_paiements=sum(1 for p in paiements if p.paye_le is not None),
+        nb_retards=sum(1 for p in paiements if p.en_retard),
+    )
 
 
 # ── Baux ───────────────────────────────────────────────────────────────
