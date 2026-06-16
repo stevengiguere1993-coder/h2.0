@@ -496,13 +496,36 @@ async def import_cmhc_csv(
     """Le portail SCHL HMIP-PIMH exporte des CSV en plusieurs formats
     selon les filtres choisis. Cet endpoint accepte les deux formats
     courants (long = une ligne par bracket, wide = une colonne par
-    bracket).
+    bracket), en CSV **ou** en Excel (.xlsx — la 1re feuille est lue).
     """
-    if not (csv_file.filename or "").lower().endswith(".csv"):
-        raise HTTPException(415, "Le fichier doit être un CSV.")
+    name = (csv_file.filename or "").lower()
+    if not name.endswith((".csv", ".xlsx", ".xlsm")):
+        raise HTTPException(
+            415, "Le fichier doit être un CSV ou un Excel (.xlsx)."
+        )
     blob = await csv_file.read()
     if not blob:
         raise HTTPException(400, "Fichier vide.")
+    if name.endswith((".xlsx", ".xlsm")):
+        try:
+            import csv as _csv
+            import io as _io
+
+            from openpyxl import load_workbook
+
+            wb = load_workbook(
+                _io.BytesIO(blob), read_only=True, data_only=True
+            )
+            ws = wb.active
+            buf = _io.StringIO()
+            writer = _csv.writer(buf)
+            for row in ws.iter_rows(values_only=True):
+                writer.writerow(["" if c is None else c for c in row])
+            blob = buf.getvalue().encode("utf-8-sig")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                400, f"Fichier Excel illisible : {exc}"
+            ) from exc
     try:
         result = await ingest_cmhc_csv(
             db, blob, default_year=default_year
