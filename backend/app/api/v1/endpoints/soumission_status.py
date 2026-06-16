@@ -14,7 +14,7 @@ state):
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -56,6 +56,7 @@ async def change_soumission_status(
     soumission_id: int,
     data: StatusChangeRequest,
     db: DBSession,
+    bg: BackgroundTasks,
     _: CurrentUser,
 ) -> SoumissionRead:
     sm = (
@@ -140,6 +141,15 @@ async def change_soumission_status(
             # de statut. L'utilisateur pourra relancer manuellement
             # via /soumissions/{id}/convert-to-project.
             pass
+
+        # Devis accepté → import dans QuickBooks : crée le Customer (si
+        # absent) puis l'Estimate. Fail-closed via l'interrupteur QBO
+        # auto-sync (rien tant qu'il n'est pas activé) ; idempotent (pas
+        # de doublon si déjà poussé). Lancé APRÈS le commit de la requête
+        # (background task) pour que le client/lien soit bien persisté.
+        from app.services.qbo_auto_sync import autopush_soumission
+
+        bg.add_task(autopush_soumission, sm.id)
 
     await db.refresh(sm)
     return SoumissionRead.model_validate(sm)
