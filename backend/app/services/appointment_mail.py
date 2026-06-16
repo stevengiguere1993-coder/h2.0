@@ -249,7 +249,13 @@ async def send_appointment_owner_invite(
 </div>
 """
     try:
-        ics_bytes = render_event_ics(event, attendee_email=owner_email)
+        # PUBLISH (et non REQUEST) : la boîte agenda est une boîte interne
+        # Microsoft 365 ; un .ics REQUEST y serait auto-traité par Exchange
+        # (ajouté au calendrier + courriel retiré de la réception). PUBLISH
+        # arrive comme un vrai courriel avec le .ics « ajouter à l'agenda ».
+        ics_bytes = render_event_ics(
+            event, attendee_email=owner_email, method="PUBLISH"
+        )
         await mailer.send(
             to=[owner_email],
             subject=f"RDV agenda — {event.title}",
