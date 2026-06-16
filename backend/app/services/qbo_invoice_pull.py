@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.facture import Facture
+from app.models.payment import Payment
 from app.models.project import Project
 
 log = logging.getLogger(__name__)
@@ -37,6 +38,40 @@ def _parse_date(s: Any) -> Optional[datetime]:
         )
     except (TypeError, ValueError):
         return None
+
+
+async def _invoice_payments_index(qbo, cutoff: str) -> dict[str, list[dict]]:
+    """Index `invoice_id -> [{id, amount, txn_date}]` à partir des Payment
+    QB — pour refléter CHAQUE paiement QB en ligne de paiement Kratos. Une
+    seule requête (pas de martèlement de l'API)."""
+    try:
+        rows = await qbo.query(
+            f"SELECT * FROM Payment WHERE TxnDate >= '{cutoff}' "
+            "MAXRESULTS 1000"
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("QBO Payment query failed: %s", exc)
+        return {}
+    idx: dict[str, list[dict]] = {}
+    for p in rows:
+        pid = str(p.get("Id") or "")
+        if not pid:
+            continue
+        txn_date = p.get("TxnDate")
+        for line in p.get("Line") or []:
+            amt = _num(line.get("Amount"))
+            for lt in line.get("LinkedTxn") or []:
+                if str(lt.get("TxnType")) == "Invoice":
+                    inv = str(lt.get("TxnId") or "")
+                    if inv:
+                        idx.setdefault(inv, []).append(
+                            {
+                                "id": pid,
+                                "amount": amt or _num(p.get("TotalAmt")),
+                                "txn_date": txn_date,
+                            }
+                        )
+    return idx
 
 
 async def pull_invoices_from_qbo(
@@ -96,6 +131,20 @@ async def pull_invoices_from_qbo(
         if client and client.qbo_customer_id:
             client_refs.add(str(client.qbo_customer_id))
 
+    # Index des paiements QB par facture (pour le miroir par virement) +
+    # garde anti-doublon des virements déjà reflétés dans Kratos.
+    pay_idx = await _invoice_payments_index(qbo, cutoff)
+    existing_pay_ids: set[str] = {
+        str(r[0])
+        for r in (
+            await db.execute(
+                select(Payment.qbo_payment_id).where(
+                    Payment.qbo_payment_id.is_not(None)
+                )
+            )
+        ).all()
+    }
+
     now = datetime.now(timezone.utc)
     stats = {
         "dry_run": dry_run,
@@ -105,8 +154,33 @@ async def pull_invoices_from_qbo(
         "skipped_existing": 0,
         "skipped_no_project": 0,
         "paid_synced": 0,
+        "payments_mirrored": 0,
     }
     preview: list[dict] = []
+
+    async def _mirror_payments(facture_id: int, inv_id: str) -> int:
+        """Crée une ligne de paiement Kratos pour chaque Payment QB lié à
+        cette facture, pas encore reflété. Retourne le nombre créé."""
+        created = 0
+        for qp in pay_idx.get(inv_id, []):
+            if qp["id"] in existing_pay_ids or qp["amount"] <= 0:
+                continue
+            if not dry_run:
+                d = _parse_date(qp["txn_date"])
+                db.add(
+                    Payment(
+                        facture_id=facture_id,
+                        amount=qp["amount"],
+                        method="bank_transfer",
+                        paid_at=(d.date() if d else now.date()),
+                        qbo_payment_id=qp["id"],
+                        reference="QB",
+                    )
+                )
+                await db.flush()
+            existing_pay_ids.add(qp["id"])
+            created += 1
+        return created
 
     for inv in invoices:
         iid = str(inv.get("Id") or "")
@@ -123,15 +197,19 @@ async def pull_invoices_from_qbo(
 
         existing = existing_by_qid.get(iid)
         if existing is not None:
-            # Déjà dans Kratos : on reflète seulement un PAIEMENT QB
-            # (solde 0) sur une facture pas encore marquée payée.
-            if balance == 0 and existing.status != "paid":
-                if not dry_run:
-                    existing.status = "paid"
-                    existing.balance = 0
-                    existing.paid_at = existing.paid_at or now
-                    await db.flush()
+            # Déjà dans Kratos : on REFLÈTE chaque paiement QB (virement)
+            # en ligne de paiement Kratos, puis on solde si balance 0.
+            mirrored = await _mirror_payments(existing.id, iid)
+            stats["payments_mirrored"] += mirrored
+            newly_paid = balance == 0 and existing.status != "paid"
+            if newly_paid and not dry_run:
+                existing.status = "paid"
+                existing.balance = 0
+                existing.paid_at = existing.paid_at or now
+                await db.flush()
+            if newly_paid:
                 stats["paid_synced"] += 1
+            if mirrored or newly_paid:
                 pv_status = "paiement_synchro"
             else:
                 stats["skipped_existing"] += 1
@@ -161,22 +239,25 @@ async def pull_invoices_from_qbo(
              "project_id": proj.id, "status": "a_importer"}
         )
         if not dry_run:
-            db.add(
-                Facture(
-                    reference=f"QB-{iid}"[:32],
-                    client_id=proj.client_id,
-                    project_id=proj.id,
-                    total=total,
-                    balance=balance,
-                    status=status,
-                    issued_at=_parse_date(inv.get("TxnDate")),
-                    due_at=_parse_date(inv.get("DueDate")),
-                    qbo_invoice_id=iid,
-                    qbo_doc_number=doc or None,
-                    qbo_sync_token=str(inv.get("SyncToken") or "") or None,
-                )
+            new_fac = Facture(
+                reference=f"QB-{iid}"[:32],
+                client_id=proj.client_id,
+                project_id=proj.id,
+                total=total,
+                balance=balance,
+                status=status,
+                issued_at=_parse_date(inv.get("TxnDate")),
+                due_at=_parse_date(inv.get("DueDate")),
+                qbo_invoice_id=iid,
+                qbo_doc_number=doc or None,
+                qbo_sync_token=str(inv.get("SyncToken") or "") or None,
             )
+            db.add(new_fac)
             await db.flush()
+            # Reflète chaque paiement QB de cette nouvelle facture.
+            stats["payments_mirrored"] += await _mirror_payments(
+                new_fac.id, iid
+            )
         stats["imported"] += 1
 
     if dry_run:
