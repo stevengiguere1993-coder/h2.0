@@ -3182,10 +3182,10 @@ class OutboundCallResponse(BaseModel):
 @router.post(
     "/calls/outbound",
     response_model=OutboundCallResponse,
-    summary="Initie un appel sortant click-to-call (admin)",
+    summary="Initie un appel sortant click-to-call",
 )
 async def create_outbound_call(
-    payload: OutboundCallRequest, user: CurrentAdmin, db: DBSession
+    payload: OutboundCallRequest, user: CurrentUser, db: DBSession
 ) -> OutboundCallResponse:
     """Click-to-call : Twilio fait d'abord sonner le mobile de
     L'UTILISATEUR CONNECTÉ (son `phone_e164` défini dans le portail/profil,
@@ -3193,6 +3193,11 @@ async def create_outbound_call(
     qu'il a décroché. Ainsi, quand Philippe lance un appel, ça sonne sur
     SON téléphone — pas celui du propriétaire. Crée la ligne `Call` AVANT
     l'API call pour référencer `call_id` dans l'URL du bridge TwiML.
+
+    Ouvert à TOUT employé connecté (plus réservé aux admins) : comme la
+    jambe agent sonne sur SON propre mobile (refus si `phone_e164` absent
+    du profil), chacun appelle depuis sa propre ligne. L'appel sort
+    toujours du numéro d'entreprise Horizon côté destinataire.
     """
     target = _normalize_e164(payload.target_e164)
     if not target.startswith("+"):
