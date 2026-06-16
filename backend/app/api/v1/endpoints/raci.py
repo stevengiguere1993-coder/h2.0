@@ -100,6 +100,10 @@ class ReorderWrite(BaseModel):
     items: List[ReorderItem]
 
 
+class IdsOrder(BaseModel):
+    ids: List[int]
+
+
 class CellRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     activity_id: int
@@ -295,6 +299,18 @@ async def delete_pole(pole_id: int, db: DBSession, _: CurrentUser) -> None:
         await db.commit()
 
 
+@router.put("/poles/reorder", status_code=status.HTTP_204_NO_CONTENT)
+async def reorder_poles(
+    data: IdsOrder, db: DBSession, _: CurrentUser
+) -> None:
+    """Réordonne les pôles selon l'ordre des ids fournis."""
+    for i, pid in enumerate(data.ids):
+        pole = await db.get(RaciPole, pid)
+        if pole is not None:
+            pole.position = i
+    await db.commit()
+
+
 # ── Sous-sections ──────────────────────────────────────────────────────
 
 
@@ -369,6 +385,18 @@ async def delete_subsection(
         )
         await db.delete(s_)
         await db.commit()
+
+
+@router.put("/subsections/reorder", status_code=status.HTTP_204_NO_CONTENT)
+async def reorder_subsections(
+    data: IdsOrder, db: DBSession, _: CurrentUser
+) -> None:
+    """Réordonne les sous-sections d'un pôle selon l'ordre des ids."""
+    for i, sid in enumerate(data.ids):
+        su = await db.get(RaciSubsection, sid)
+        if su is not None:
+            su.position = i
+    await db.commit()
 
 
 # ── Réordonnancement (drag & drop des tâches) ──────────────────────────

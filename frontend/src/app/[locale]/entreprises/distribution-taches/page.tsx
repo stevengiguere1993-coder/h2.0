@@ -239,8 +239,11 @@ export default function DistributionTachesPage() {
   }
 
   function poleColor(label: string): string {
-    const i = poles.findIndex((p) => p.label === label);
-    return POLE_PALETTE[(i >= 0 ? i : poles.length) % POLE_PALETTE.length];
+    const pl = poles.find((p) => p.label === label);
+    const key = pl
+      ? pl.id
+      : Array.from(label).reduce((a, c) => a + c.charCodeAt(0), 0);
+    return POLE_PALETTE[key % POLE_PALETTE.length];
   }
 
   // Construit l'ordre d'affichage : pôles → tâches directes → sous-sections.
@@ -981,6 +984,16 @@ function PoleManager({
 }) {
   const [newPole, setNewPole] = useState("");
   const [newSub, setNewSub] = useState<Record<number, string>>({});
+  // Copies locales pour un glisser-déposer fluide (optimiste).
+  const [localPoles, setLocalPoles] = useState<Pole[]>(poles);
+  const [localSubs, setLocalSubs] = useState<Subsection[]>(subsections);
+  const [dragPole, setDragPole] = useState<number | null>(null);
+  const [dragSub, setDragSub] = useState<{ id: number; pole: string } | null>(
+    null
+  );
+
+  useEffect(() => setLocalPoles(poles), [poles]);
+  useEffect(() => setLocalSubs(subsections), [subsections]);
 
   async function addPole() {
     if (!newPole.trim()) return;
@@ -1005,6 +1018,23 @@ function PoleManager({
     await authedFetch(`/api/v1/raci/poles/${p.id}`, { method: "DELETE" });
     onChanged();
   }
+  function dropPole(targetId: number) {
+    if (dragPole == null || dragPole === targetId) return;
+    const arr = [...localPoles];
+    const from = arr.findIndex((p) => p.id === dragPole);
+    if (from < 0) return;
+    const moving = arr.splice(from, 1)[0];
+    let to = arr.findIndex((p) => p.id === targetId);
+    if (to < 0) to = arr.length;
+    arr.splice(to, 0, moving);
+    setLocalPoles(arr);
+    setDragPole(null);
+    void authedFetch("/api/v1/raci/poles/reorder", {
+      method: "PUT",
+      body: JSON.stringify({ ids: arr.map((p) => p.id) })
+    }).then(() => onChanged());
+  }
+
   async function addSub(pole: string, pid: number) {
     const v = (newSub[pid] || "").trim();
     if (!v) return;
@@ -1026,20 +1056,61 @@ function PoleManager({
   }
   async function deleteSub(s: Subsection) {
     if (!confirm(`Supprimer la sous-section « ${s.label} » ?`)) return;
-    await authedFetch(`/api/v1/raci/subsections/${s.id}`, { method: "DELETE" });
+    await authedFetch(`/api/v1/raci/subsections/${s.id}`, {
+      method: "DELETE"
+    });
     onChanged();
+  }
+  function dropSub(target: Subsection) {
+    if (
+      !dragSub ||
+      dragSub.pole !== target.pole ||
+      dragSub.id === target.id
+    )
+      return;
+    const inPole = localSubs.filter((s) => s.pole === target.pole);
+    const others = localSubs.filter((s) => s.pole !== target.pole);
+    const from = inPole.findIndex((s) => s.id === dragSub.id);
+    if (from < 0) return;
+    const moving = inPole.splice(from, 1)[0];
+    let to = inPole.findIndex((s) => s.id === target.id);
+    if (to < 0) to = inPole.length;
+    inPole.splice(to, 0, moving);
+    setLocalSubs([...others, ...inPole]);
+    setDragSub(null);
+    void authedFetch("/api/v1/raci/subsections/reorder", {
+      method: "PUT",
+      body: JSON.stringify({ ids: inPole.map((s) => s.id) })
+    }).then(() => onChanged());
   }
 
   return (
     <Modal title="Pôles & sous-sections" onClose={onClose}>
+      <p className="mb-2 text-xs text-[var(--qg-text-muted)]">
+        Glisse les pôles (et leurs sous-sections) pour changer l'ordre — il se
+        reflète aussitôt dans la matrice.
+      </p>
       <div className="max-h-[60vh] space-y-2 overflow-y-auto">
-        {poles.map((p) => (
+        {localPoles.map((p) => (
           <div
             key={p.id}
-            className="rounded-lg border border-[var(--qg-border)] p-2"
+            draggable
+            onDragStart={() => setDragPole(p.id)}
+            onDragEnd={() => setDragPole(null)}
+            onDragOver={(e) => {
+              if (dragPole != null) e.preventDefault();
+            }}
+            onDrop={() => dropPole(p.id)}
+            className={
+              "rounded-lg border border-[var(--qg-border)] p-2 " +
+              (dragPole === p.id ? "opacity-40" : "")
+            }
           >
             <div className="flex items-center justify-between text-sm font-semibold">
-              <span>{p.label}</span>
+              <span className="flex items-center gap-1.5">
+                <GripVertical className="h-4 w-4 cursor-grab text-[var(--qg-text-faint)]" />
+                {p.label}
+              </span>
               <span className="flex gap-1">
                 <button
                   type="button"
@@ -1060,14 +1131,36 @@ function PoleManager({
               </span>
             </div>
             <div className="mt-1.5 space-y-1 pl-3">
-              {subsections
+              {localSubs
                 .filter((s) => s.pole === p.label)
                 .map((s) => (
                   <div
                     key={s.id}
-                    className="flex items-center justify-between text-xs text-[var(--qg-text-muted)]"
+                    draggable
+                    onDragStart={(e) => {
+                      e.stopPropagation();
+                      setDragSub({ id: s.id, pole: s.pole });
+                    }}
+                    onDragEnd={() => setDragSub(null)}
+                    onDragOver={(e) => {
+                      if (dragSub) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.stopPropagation();
+                      dropSub(s);
+                    }}
+                    className={
+                      "flex items-center justify-between rounded text-xs text-[var(--qg-text-muted)] " +
+                      (dragSub?.id === s.id ? "opacity-40" : "")
+                    }
                   >
-                    <span>↳ {s.label}</span>
+                    <span className="flex items-center gap-1">
+                      <GripVertical className="h-3 w-3 cursor-grab text-[var(--qg-text-faint)]" />
+                      ↳ {s.label}
+                    </span>
                     <span className="flex gap-1">
                       <button
                         type="button"
