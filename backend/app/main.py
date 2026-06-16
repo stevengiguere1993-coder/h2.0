@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.db.session import (
     close_db,
     ensure_critical_columns,
+    ensure_immobilier_aux_tables,
     ensure_raci_tables,
     init_db,
 )
@@ -54,6 +55,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await ensure_raci_tables()
     except Exception as exc:
         logger.warning("ensure_raci_tables failed during startup: %s", exc)
+
+    # Tables auxiliaires immobilier (relances de loyer) — idem, isolées.
+    try:
+        await ensure_immobilier_aux_tables()
+    except Exception as exc:
+        logger.warning(
+            "ensure_immobilier_aux_tables failed during startup: %s", exc
+        )
 
     # Backfill : crée le projet (+ facture d'acompte DRAFT) pour les
     # soumissions ACCEPTED qui n'en ont pas encore. Rattrape les
