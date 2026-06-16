@@ -773,6 +773,36 @@ async def trigger_all_hourly(
 
     await _safe("calendar-feeds-sync", _run_calendar_sync, details)
 
+    # Import QB → Kratos (factures + coûts projet) à l'heure, pour une
+    # synchro quasi temps réel. Inerte tant que l'interrupteur
+    # `qbo_auto_sync` est OFF (fail-closed). Idempotent (clé = ID QBO).
+    async def _run_qbo_invoice_pull_hourly():
+        from app.services.qbo_auto_sync import is_qbo_auto_sync_enabled
+
+        if not await is_qbo_auto_sync_enabled():
+            return {"skipped": "qbo_auto_sync_off"}
+        from app.services.qbo_invoice_pull import pull_invoices_from_qbo
+
+        async with AsyncSessionLocal() as db:
+            r = await pull_invoices_from_qbo(db, dry_run=False)
+            await db.commit()
+            return r
+
+    async def _run_qbo_cost_pull_hourly():
+        from app.services.qbo_auto_sync import is_qbo_auto_sync_enabled
+
+        if not await is_qbo_auto_sync_enabled():
+            return {"skipped": "qbo_auto_sync_off"}
+        from app.services.qbo_cost_pull import pull_project_costs_from_qbo
+
+        async with AsyncSessionLocal() as db:
+            r = await pull_project_costs_from_qbo(db, dry_run=False)
+            await db.commit()
+            return r
+
+    await _safe("qbo-invoice-pull", _run_qbo_invoice_pull_hourly, details)
+    await _safe("qbo-cost-pull", _run_qbo_cost_pull_hourly, details)
+
     ok_count = sum(1 for v in details.values() if v.get("ok"))
     fail_count = sum(1 for v in details.values() if not v.get("ok"))
     return MegaCronResult(
