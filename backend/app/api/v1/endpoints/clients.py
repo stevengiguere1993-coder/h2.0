@@ -35,6 +35,12 @@ async def create_client(
     """Create a new client. Requires admin privileges."""
     service = ClientService(db)
     client = await service.create(data)
+    # Synchro QBO auto (inerte tant que l'interrupteur est OFF).
+    import asyncio
+
+    from app.services.qbo_auto_sync import autopush_client
+
+    asyncio.create_task(autopush_client(int(client.id)))
     return ClientRead.model_validate(client)
 
 

@@ -10,12 +10,54 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Query
+from pydantic import BaseModel
+from sqlalchemy import select
 
 from app.api.deps import DBSession, RequireAdminOrOwner
+from app.models.automation_setting import AutomationSetting
+from app.services.qbo_auto_sync import QBO_AUTO_SYNC_KEY
 from app.services.qbo_bulk_sync import dry_run_report, run_migration
 from app.services.qbo_invoice_pull import pull_invoices_from_qbo
 
 router = APIRouter(prefix="/qbo", tags=["qbo-bulk"])
+
+
+class QboAutoSync(BaseModel):
+    enabled: bool
+
+
+@router.get("/auto-sync", response_model=QboAutoSync)
+async def get_auto_sync(db: DBSession, _: RequireAdminOrOwner) -> QboAutoSync:
+    row = (
+        await db.execute(
+            select(AutomationSetting).where(
+                AutomationSetting.key == QBO_AUTO_SYNC_KEY
+            )
+        )
+    ).scalar_one_or_none()
+    # Fail-closed : désactivé par défaut.
+    return QboAutoSync(enabled=bool(row and row.enabled))
+
+
+@router.put("/auto-sync", response_model=QboAutoSync)
+async def set_auto_sync(
+    data: QboAutoSync, db: DBSession, user: RequireAdminOrOwner
+) -> QboAutoSync:
+    row = (
+        await db.execute(
+            select(AutomationSetting).where(
+                AutomationSetting.key == QBO_AUTO_SYNC_KEY
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = AutomationSetting(key=QBO_AUTO_SYNC_KEY, enabled=data.enabled)
+        db.add(row)
+    else:
+        row.enabled = data.enabled
+    row.updated_by_user_id = getattr(user, "id", None)
+    await db.flush()
+    return QboAutoSync(enabled=bool(row.enabled))
 
 
 @router.get("/bulk-report")
