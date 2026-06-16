@@ -56,6 +56,7 @@ from app.models.immobilier import (
     Locataire,
     MaintenanceOrdre,
     PaiementLoyer,
+    RelanceLoyer,
 )
 from app.models.montreal_property_unit import MontrealPropertyUnit
 from app.schemas.immobilier import (
@@ -1722,6 +1723,8 @@ class LoyerOverviewRow(BaseModel):
     paye_le: Optional[date] = None
     # "paye" | "retard" | "attente" (mois courant, pas encore au seuil)
     etat: str
+    nb_relances: int = 0
+    derniere_relance_le: Optional[date] = None
 
 
 class LoyerOverview(BaseModel):
@@ -1869,6 +1872,25 @@ async def loyers_overview(
             )
         )
 
+    # Relances de loyer envoyées ce mois (compteur + dernière) par bail.
+    if rows:
+        rel_rows = (
+            await db.execute(
+                select(RelanceLoyer).where(
+                    RelanceLoyer.bail_id.in_([r.bail_id for r in rows]),
+                    RelanceLoyer.mois_couvert == month_start,
+                )
+            )
+        ).scalars().all()
+        rel_by_bail: Dict[int, list] = {}
+        for rl in rel_rows:
+            rel_by_bail.setdefault(rl.bail_id, []).append(rl)
+        for r in rows:
+            rls = rel_by_bail.get(r.bail_id) or []
+            r.nb_relances = len(rls)
+            if rls:
+                r.derniere_relance_le = max(x.sent_at for x in rls).date()
+
     # Retards d'abord, puis attente, puis payés ; tri secondaire par
     # immeuble + logement pour une lecture stable.
     order = {"retard": 0, "attente": 1, "paye": 2}
@@ -1889,6 +1911,123 @@ async def loyers_overview(
         nb_retards=nb_retards,
         nb_attente=nb_attente,
     )
+
+
+class RelanceLoyerRequest(BaseModel):
+    bail_id: int
+    mois: Optional[str] = None  # YYYY-MM, défaut = mois courant
+
+
+class RelanceLoyerResult(BaseModel):
+    niveau: int
+    destinataire: str
+    mois: str
+
+
+@router.post("/loyers/relance", response_model=RelanceLoyerResult)
+async def relancer_loyer(
+    payload: RelanceLoyerRequest, db: DBSession, user: CurrentUser
+) -> RelanceLoyerResult:
+    """Envoie une relance de loyer par courriel au locataire + la journalise.
+
+    Le niveau s'incrémente par bail + mois (1er rappel, 2e rappel…). Sert de
+    preuve avant un recours (mise en demeure TAL disponible à part).
+    """
+    _require_volet(user)
+    bail = await db.get(Bail, payload.bail_id)
+    if bail is None:
+        raise HTTPException(status_code=404, detail="Bail introuvable.")
+    loc = (
+        await db.get(Locataire, bail.locataire_id)
+        if bail.locataire_id
+        else None
+    )
+    if loc is None or not (loc.email or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Ce locataire n'a pas de courriel — ajoute-le à sa fiche.",
+        )
+
+    today = datetime.now(timezone.utc).date()
+    if payload.mois:
+        try:
+            month_start = datetime.strptime(
+                payload.mois + "-01", "%Y-%m-%d"
+            ).date()
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="Format mois attendu : YYYY-MM."
+            )
+    else:
+        month_start = today.replace(day=1)
+    month_label = month_start.strftime("%Y-%m")
+    mois_fr = month_start.strftime("%m/%Y")
+
+    logement = (
+        await db.get(Logement, bail.logement_id)
+        if bail.logement_id
+        else None
+    )
+    immeuble = (
+        await db.get(Immeuble, logement.immeuble_id) if logement else None
+    )
+
+    existing = (
+        await db.execute(
+            select(RelanceLoyer).where(
+                RelanceLoyer.bail_id == bail.id,
+                RelanceLoyer.mois_couvert == month_start,
+            )
+        )
+    ).scalars().all()
+    niveau = len(existing) + 1
+
+    loyer = float(bail.loyer_mensuel or 0)
+    adresse = immeuble.name if immeuble else ""
+    if logement and logement.numero:
+        adresse = f"{adresse} — logement {logement.numero}"
+    label = {1: "Premier rappel", 2: "Deuxième rappel"}.get(
+        niveau, f"Rappel n°{niveau}"
+    )
+    dest = loc.email.strip()
+    html = (
+        f"<p>Bonjour {loc.full_name or ''},</p>"
+        f"<p>{label} : nous n'avons pas encore reçu votre loyer de "
+        f"<strong>{loyer:,.0f} $</strong> pour "
+        f"<strong>{mois_fr}</strong>"
+        + (f" ({adresse})" if adresse else "")
+        + ".</p>"
+        "<p>Si le paiement a déjà été effectué, "
+        "merci d'ignorer ce message. Sinon, nous vous remercions de "
+        "régulariser dans les meilleurs délais.</p>"
+        "<p>Cordialement,<br/>Horizon Services Immobiliers</p>"
+    )
+
+    from app.integrations.email_graph import get_mailer
+
+    try:
+        await get_mailer().send(
+            to=[dest],
+            subject=f"Rappel de loyer — {mois_fr}",
+            html_body=html,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502, detail=f"Envoi du courriel échoué : {exc}"
+        )
+
+    rl = RelanceLoyer(
+        bail_id=bail.id,
+        mois_couvert=month_start,
+        niveau=niveau,
+        canal="courriel",
+        destinataire=dest,
+        sent_at=_now(),
+        sent_by_email=getattr(user, "email", None),
+    )
+    db.add(rl)
+    await db.commit()
+    return RelanceLoyerResult(niveau=niveau, destinataire=dest, mois=month_label)
 
 
 # ── Échéances de bail (avis de renouvellement) ─────────────────────────
