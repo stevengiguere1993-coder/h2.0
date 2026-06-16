@@ -1532,6 +1532,342 @@ async def locataire_dossier(
     )
 
 
+def _fmt_money_pdf(n) -> str:
+    return f"{float(n or 0):,.0f} $".replace(",", "\u00a0")
+
+
+def _render_etat_de_compte(
+    loc, baux, log_by_id, imm_by_id, paiements,
+    loyer_actuel, depot_total, total_paye,
+):
+    """Rend l'état de compte d'un locataire en PDF (reportlab)."""
+    import io as _io
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import (
+        Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+    )
+
+    buf = _io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=letter,
+        topMargin=2 * cm, bottomMargin=2 * cm,
+        leftMargin=2 * cm, rightMargin=2 * cm,
+        title="État de compte",
+    )
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle(
+        "h1", parent=styles["Heading1"], fontSize=18,
+        textColor=colors.HexColor("#0f172a"),
+    )
+    h2 = ParagraphStyle(
+        "h2", parent=styles["Heading2"], fontSize=12, spaceBefore=10,
+        textColor=colors.HexColor("#0369a1"),
+    )
+    normal = styles["Normal"]
+    small = ParagraphStyle(
+        "small", parent=normal, fontSize=8,
+        textColor=colors.HexColor("#64748b"),
+    )
+    today = datetime.now(timezone.utc).date()
+    flow = [
+        Paragraph("État de compte locataire", h1),
+        Paragraph(
+            f"Horizon Services Immobiliers — généré le {today.isoformat()}",
+            small,
+        ),
+        Spacer(1, 0.4 * cm),
+        Paragraph(loc.full_name or "—", h2),
+    ]
+    coords = [x for x in (loc.email, loc.phone) if x]
+    if coords:
+        flow.append(Paragraph(" · ".join(coords), normal))
+    flow.append(Spacer(1, 0.3 * cm))
+
+    grid = colors.HexColor("#cbd5e1")
+    head_bg = colors.HexColor("#0369a1")
+
+    summary = Table(
+        [
+            ["Loyer mensuel actuel", _fmt_money_pdf(loyer_actuel)],
+            ["Dépôt de garantie détenu", _fmt_money_pdf(depot_total)],
+            ["Total des loyers encaissés", _fmt_money_pdf(total_paye)],
+        ],
+        colWidths=[9 * cm, 4 * cm],
+    )
+    summary.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.5, grid),
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f1f5f9")),
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    flow.append(summary)
+
+    # Baux
+    flow.append(Paragraph("Baux", h2))
+    bail_rows = [["Immeuble / logement", "Période", "Loyer", "Dépôt", "Statut"]]
+    for b in baux:
+        lg = log_by_id.get(b.logement_id)
+        im = imm_by_id.get(lg.immeuble_id) if lg else None
+        name = (im.name if im else "—")
+        if lg and lg.numero:
+            name = f"{name} · {lg.numero}"
+        bail_rows.append([
+            name,
+            f"{b.date_debut} → {b.date_fin}",
+            _fmt_money_pdf(b.loyer_mensuel),
+            _fmt_money_pdf(b.depot_garantie) if b.depot_garantie else "—",
+            b.status,
+        ])
+    bt = Table(bail_rows, colWidths=[6 * cm, 4 * cm, 2.5 * cm, 2.2 * cm, 2.3 * cm])
+    bt.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.4, grid),
+        ("BACKGROUND", (0, 0), (-1, 0), head_bg),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("ALIGN", (2, 1), (3, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    flow.append(bt)
+
+    # Paiements
+    flow.append(Paragraph("Historique de paiements", h2))
+    pay_rows = [["Mois couvert", "Montant", "Payé le", "Méthode", "État"]]
+    for pm in paiements[:36]:
+        if pm.paye_le is None:
+            etat = "Impayé"
+        elif pm.en_retard:
+            etat = "Payé en retard"
+        else:
+            etat = "Payé"
+        pay_rows.append([
+            pm.mois_couvert.strftime("%Y-%m"),
+            _fmt_money_pdf(pm.montant),
+            pm.paye_le.isoformat() if pm.paye_le else "—",
+            pm.methode or "—",
+            etat,
+        ])
+    if len(pay_rows) == 1:
+        pay_rows.append(["—", "—", "—", "—", "Aucun paiement"])
+    pt = Table(pay_rows, colWidths=[3 * cm, 2.6 * cm, 3 * cm, 3 * cm, 3.4 * cm])
+    pt.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.4, grid),
+        ("BACKGROUND", (0, 0), (-1, 0), head_bg),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("ALIGN", (1, 1), (1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    flow.append(pt)
+
+    flow.append(Spacer(1, 0.6 * cm))
+    flow.append(Paragraph(
+        "Document généré automatiquement par Kratos. Pour toute question, "
+        "communiquez avec votre gestionnaire.",
+        small,
+    ))
+    doc.build(flow)
+    return buf.getvalue()
+
+
+@router.get("/locataires/{locataire_id}/etat-de-compte.pdf")
+async def locataire_etat_de_compte_pdf(
+    locataire_id: int, db: DBSession, user: CurrentUser
+) -> Response:
+    """État de compte du locataire en PDF (baux, paiements, dépôt, solde)."""
+    _require_volet(user)
+    loc = await db.get(Locataire, locataire_id)
+    if loc is None:
+        raise HTTPException(status_code=404, detail="Locataire introuvable.")
+
+    baux = (
+        await db.execute(
+            select(Bail)
+            .where(Bail.locataire_id == locataire_id)
+            .order_by(Bail.date_debut.desc())
+        )
+    ).scalars().all()
+    log_ids = {b.logement_id for b in baux if b.logement_id}
+    log_by_id = {}
+    if log_ids:
+        for lg in (
+            await db.execute(
+                select(Logement).where(Logement.id.in_(list(log_ids)))
+            )
+        ).scalars().all():
+            log_by_id[lg.id] = lg
+    imm_ids = {lg.immeuble_id for lg in log_by_id.values()}
+    imm_by_id = {}
+    if imm_ids:
+        for im in (
+            await db.execute(
+                select(Immeuble).where(Immeuble.id.in_(list(imm_ids)))
+            )
+        ).scalars().all():
+            imm_by_id[im.id] = im
+
+    bail_ids = [b.id for b in baux]
+    paiements = []
+    if bail_ids:
+        paiements = (
+            await db.execute(
+                select(PaiementLoyer)
+                .where(PaiementLoyer.bail_id.in_(bail_ids))
+                .order_by(PaiementLoyer.mois_couvert.desc())
+            )
+        ).scalars().all()
+
+    actifs = [b for b in baux if b.status == BailStatus.ACTIF.value]
+    loyer_actuel = sum(float(b.loyer_mensuel or 0) for b in actifs)
+    depot_total = sum(float(b.depot_garantie or 0) for b in actifs)
+    total_paye = sum(
+        float(p.montant or 0) for p in paiements if p.paye_le is not None
+    )
+
+    pdf = _render_etat_de_compte(
+        loc, baux, log_by_id, imm_by_id, paiements,
+        loyer_actuel, depot_total, total_paye,
+    )
+    safe = "".join(
+        c if c.isalnum() else "-" for c in (loc.full_name or str(locataire_id))
+    ).strip("-") or str(locataire_id)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="etat-de-compte-{safe}.pdf"'
+        },
+    )
+
+
+# ── Dépôts de garantie ─────────────────────────────────────────────────
+
+
+class DepotRow(BaseModel):
+    bail_id: int
+    immeuble_id: int
+    immeuble_name: str
+    logement_numero: Optional[str] = None
+    locataire_id: Optional[int] = None
+    locataire_name: Optional[str] = None
+    montant: float
+    statut: str  # "detenu" | "a_rendre"
+    date_debut: date
+    date_fin: date
+
+
+class DepotOverview(BaseModel):
+    rows: List[DepotRow] = []
+    total_detenu: float = 0.0
+    total_a_rendre: float = 0.0
+    nb_a_rendre: int = 0
+
+
+@router.get("/depots/overview", response_model=DepotOverview)
+async def depots_overview(
+    db: DBSession, user: CurrentUser, entreprise_id: Optional[int] = None
+) -> DepotOverview:
+    """Suivi des dépôts de garantie : détenus (baux actifs) vs à rendre
+    (baux terminés/résiliés). Sert à ne pas oublier de rembourser."""
+    _require_volet(user)
+
+    imm_q = select(Immeuble)
+    if entreprise_id is not None:
+        imm_q = imm_q.where(Immeuble.owner_entreprise_id == int(entreprise_id))
+    immeubles = (await db.execute(imm_q)).scalars().all()
+    visible = await visible_immeuble_ids(db, user)
+    if visible is not None:
+        immeubles = [i for i in immeubles if i.id in visible]
+    imm_by_id = {i.id: i for i in immeubles}
+    if not imm_by_id:
+        return DepotOverview(rows=[])
+
+    logements = (
+        await db.execute(
+            select(Logement).where(
+                Logement.immeuble_id.in_(list(imm_by_id.keys()))
+            )
+        )
+    ).scalars().all()
+    log_by_id = {l.id: l for l in logements}
+    if not log_by_id:
+        return DepotOverview(rows=[])
+
+    baux = (
+        await db.execute(
+            select(Bail).where(
+                Bail.logement_id.in_(list(log_by_id.keys())),
+                Bail.depot_garantie.is_not(None),
+                Bail.depot_garantie > 0,
+            )
+        )
+    ).scalars().all()
+
+    loc_ids = {b.locataire_id for b in baux if b.locataire_id}
+    loc_by_id = {}
+    if loc_ids:
+        for lo in (
+            await db.execute(
+                select(Locataire).where(Locataire.id.in_(list(loc_ids)))
+            )
+        ).scalars().all():
+            loc_by_id[lo.id] = lo
+
+    a_rendre_status = {
+        BailStatus.TERMINE.value,
+        BailStatus.RESILIE.value,
+    }
+    rows: List[DepotRow] = []
+    total_detenu = 0.0
+    total_a_rendre = 0.0
+    for b in baux:
+        lg = log_by_id.get(b.logement_id)
+        im = imm_by_id.get(lg.immeuble_id) if lg else None
+        if im is None:
+            continue
+        montant = float(b.depot_garantie or 0)
+        statut = "a_rendre" if b.status in a_rendre_status else "detenu"
+        if statut == "a_rendre":
+            total_a_rendre += montant
+        elif b.status == BailStatus.ACTIF.value:
+            total_detenu += montant
+        loc = loc_by_id.get(b.locataire_id)
+        rows.append(DepotRow(
+            bail_id=b.id,
+            immeuble_id=im.id,
+            immeuble_name=im.name,
+            logement_numero=(lg.numero if lg else None),
+            locataire_id=loc.id if loc else None,
+            locataire_name=loc.full_name if loc else None,
+            montant=montant,
+            statut=statut,
+            date_debut=b.date_debut,
+            date_fin=b.date_fin,
+        ))
+
+    rank = {"a_rendre": 0, "detenu": 1}
+    rows.sort(key=lambda r: (rank.get(r.statut, 9), r.immeuble_name))
+    return DepotOverview(
+        rows=rows,
+        total_detenu=round(total_detenu, 2),
+        total_a_rendre=round(total_a_rendre, 2),
+        nb_a_rendre=sum(1 for r in rows if r.statut == "a_rendre"),
+    )
+
+
 # ── Baux ───────────────────────────────────────────────────────────────
 
 
