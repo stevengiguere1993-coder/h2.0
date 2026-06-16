@@ -74,6 +74,41 @@ export default function QboMigrationPage() {
     }
   }
 
+  async function runReset() {
+    const ok = await confirm({
+      title: "Réinitialiser le lien QBO de ce dossier ?",
+      description:
+        "Efface les ID QuickBooks côté Kratos (client / projets / factures) pour pouvoir re-migrer proprement. NE supprime PAS les fiches dans QuickBooks — supprime-les d'abord dans QB, sinon la re-migration créera des doublons.",
+      confirmLabel: "Réinitialiser",
+      destructive: true
+    });
+    if (!ok) return;
+    setBusy("migrate");
+    setError(null);
+    setResult(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/qbo/reset-links${
+          clientId ? `?client_id=${clientId}` : ""
+        }`,
+        { method: "POST" }
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as {
+        clients: number;
+        projects: number;
+        factures: number;
+      };
+      setError(
+        `Liens QBO réinitialisés : ${d.clients} client(s), ${d.projects} projet(s), ${d.factures} facture(s). Tu peux re-migrer.`
+      );
+    } catch (e) {
+      setError(`Réinitialisation échouée : ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function runMigration() {
     const scopeLabel = clientId
       ? `le client sélectionné`
@@ -178,6 +213,15 @@ export default function QboMigrationPage() {
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : null}
               Migrer ce dossier (réel)
+            </button>
+            <button
+              type="button"
+              onClick={() => void runReset()}
+              disabled={busy !== null}
+              className="text-xs text-white/50 underline decoration-dotted hover:text-rose-300"
+              title="Efface les liens QBO côté Kratos pour re-migrer (après avoir supprimé les fiches dans QB)."
+            >
+              Réinitialiser le lien QBO
             </button>
           </div>
 

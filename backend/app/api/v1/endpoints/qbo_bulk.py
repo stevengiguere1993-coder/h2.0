@@ -16,7 +16,11 @@ from sqlalchemy import select
 from app.api.deps import DBSession, RequireAdminOrOwner
 from app.models.automation_setting import AutomationSetting
 from app.services.qbo_auto_sync import QBO_AUTO_SYNC_KEY
-from app.services.qbo_bulk_sync import dry_run_report, run_migration
+from app.services.qbo_bulk_sync import (
+    dry_run_report,
+    reset_links,
+    run_migration,
+)
 from app.services.qbo_invoice_pull import pull_invoices_from_qbo
 
 router = APIRouter(prefix="/qbo", tags=["qbo-bulk"])
@@ -93,6 +97,17 @@ async def bulk_sync(
     # Écritures réelles : la session est committée en fin de requête par
     # la dépendance DB. Idempotent (clé = ID QBO stocké).
     return await run_migration(db, client_id=client_id)
+
+
+@router.post("/reset-links")
+async def reset_links_endpoint(
+    db: DBSession,
+    _: RequireAdminOrOwner,
+    client_id: Optional[int] = Query(default=None),
+) -> dict:
+    # Efface les ID QBO côté Kratos pour re-migrer proprement (ne touche
+    # pas QuickBooks — supprime d'abord les fiches dans QB).
+    return await reset_links(db, client_id=client_id)
 
 
 @router.post("/pull-invoices")
