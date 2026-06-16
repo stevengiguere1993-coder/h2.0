@@ -20,33 +20,9 @@ type Summary = {
   factures_unlinked: number;
 };
 
-type ProjectRow = {
-  id: number;
-  name: string;
-  address: string | null;
-  qbo_job_id: string | null;
-  action: string;
-};
-
-type ClientRow = {
-  id: number;
-  name: string;
-  projects: ProjectRow[];
-};
-
 type Report = {
   qbo_connected: boolean;
   summary: Summary;
-  clients: ClientRow[];
-};
-
-type QboProject = {
-  id: string;
-  display_name: string;
-  full_name: string;
-  parent_id: string | null;
-  parent_name: string | null;
-  active: boolean;
 };
 
 type MigrationResult = {
@@ -66,9 +42,6 @@ export default function QboMigrationPage() {
   const [report, setReport] = useState<Report | null>(null);
   const [result, setResult] = useState<MigrationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [qboProjects, setQboProjects] = useState<QboProject[]>([]);
-  const [linkBusy, setLinkBusy] = useState<number | null>(null);
-  const [jobChoice, setJobChoice] = useState<Record<number, string>>({});
 
   useEffect(() => {
     (async () => {
@@ -93,75 +66,11 @@ export default function QboMigrationPage() {
     try {
       const r = await authedFetch(`/api/v1/qbo/bulk-report${scopeQuery()}`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const rep = (await r.json()) as Report;
-      setReport(rep);
-      // Pré-remplir le choix de liaison avec l'existant.
-      const seed: Record<number, string> = {};
-      for (const cl of rep.clients ?? []) {
-        for (const p of cl.projects ?? []) {
-          seed[p.id] = p.qbo_job_id ?? "";
-        }
-      }
-      setJobChoice(seed);
-      // Charger la liste des vrais projets QBO pour les menus de liaison.
-      try {
-        const rp = await authedFetch("/api/v1/qbo/projects");
-        if (rp.ok) {
-          const d = (await rp.json()) as { projects?: QboProject[] };
-          setQboProjects(d.projects ?? []);
-        }
-      } catch {
-        /* la liaison reste possible plus tard */
-      }
+      setReport((await r.json()) as Report);
     } catch (e) {
       setError(`Aperçu échoué : ${(e as Error).message}`);
     } finally {
       setBusy(null);
-    }
-  }
-
-  async function linkProject(projectId: number) {
-    setLinkBusy(projectId);
-    setError(null);
-    try {
-      const r = await authedFetch("/api/v1/qbo/link-project", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          project_id: projectId,
-          qbo_job_id: jobChoice[projectId] || null
-        })
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const d = (await r.json()) as {
-        qbo_job_id: string | null;
-        error?: string;
-      };
-      if (d.error) throw new Error(d.error);
-      // Refléter la nouvelle liaison dans le rapport en mémoire.
-      setReport((prev) =>
-        prev
-          ? {
-              ...prev,
-              clients: prev.clients.map((cl) => ({
-                ...cl,
-                projects: cl.projects.map((p) =>
-                  p.id === projectId
-                    ? {
-                        ...p,
-                        qbo_job_id: d.qbo_job_id,
-                        action: d.qbo_job_id ? "already_linked" : "needs_link"
-                      }
-                    : p
-                )
-              }))
-            }
-          : prev
-      );
-    } catch (e) {
-      setError(`Liaison échouée : ${(e as Error).message}`);
-    } finally {
-      setLinkBusy(null);
     }
   }
 
@@ -254,12 +163,19 @@ export default function QboMigrationPage() {
           Migration QuickBooks
         </h1>
         <p className="mt-1 max-w-2xl text-sm text-white/60">
-          Envoie clients → factures vers QuickBooks. Les <b>projets</b> ne sont
-          plus créés automatiquement (l&apos;API QB ne sait pas créer un projet
-          de l&apos;onglet Projets) : tu <b>relies</b> chaque projet Kratos à un
-          vrai projet QB existant ci-dessous, puis ses factures et coûts s&apos;y
-          rattachent. Fais l&apos;aperçu, relie, puis migre <b>un dossier</b>
-          pour tester. Idempotent : aucun doublon au re-run.
+          Envoie clients → <b>vrais projets QB</b> (onglet Projets) → factures
+          vers QuickBooks. La création des projets <b>part de Kratos</b> : chaque
+          projet Kratos crée son projet dans QuickBooks automatiquement. Fais
+          l&apos;aperçu, puis migre <b>un seul dossier</b> pour tester avant la
+          totale. Idempotent : aucun doublon au re-run.
+        </p>
+        <p className="mt-2 max-w-2xl rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          Prérequis création de projets : l&apos;API Projets QuickBooks
+          (GraphQL) exige le scope <code>project-management.project</code> +
+          un accès Premium API. Après mise à jour, <b>reconnecte QuickBooks</b>
+          pour accorder le nouveau scope. Sans cet accès, le projet est créé
+          comme sous-client (rattachement OK) mais n&apos;apparaît pas dans
+          l&apos;onglet Projets.
         </p>
 
         <div className="mt-6 max-w-2xl space-y-4 rounded-xl border border-brand-800 bg-brand-900/60 p-4">
@@ -356,91 +272,6 @@ export default function QboMigrationPage() {
           </div>
         ) : null}
 
-        {report && report.clients?.some((c) => c.projects.length > 0) ? (
-          <div className="mt-4 max-w-2xl rounded-xl border border-brand-800 bg-brand-900/60 p-4 text-sm">
-            <h2 className="font-semibold text-white">
-              Relier les projets Kratos aux projets QuickBooks
-            </h2>
-            <p className="mt-1 text-xs text-white/60">
-              Choisis, pour chaque projet Kratos, le vrai projet QB
-              correspondant (onglet Projets). Une fois lié, factures et coûts
-              s&apos;y rattachent automatiquement.
-            </p>
-            {qboProjects.length === 0 ? (
-              <p className="mt-2 text-xs text-amber-300">
-                Aucun projet QB chargé (QB non connecté ou aucun projet créé
-                dans QuickBooks).
-              </p>
-            ) : null}
-            <div className="mt-3 space-y-3">
-              {report.clients.map((cl) =>
-                cl.projects.map((p) => {
-                  const linked = Boolean(p.qbo_job_id);
-                  return (
-                    <div
-                      key={p.id}
-                      className="rounded-lg border border-brand-800 bg-brand-950/40 p-3"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="truncate font-medium text-white">
-                            {p.address || p.name}
-                          </p>
-                          <p className="truncate text-xs text-white/50">
-                            {cl.name}
-                          </p>
-                        </div>
-                        {linked ? (
-                          <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-300">
-                            Lié
-                          </span>
-                        ) : (
-                          <span className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-300">
-                            À relier
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <select
-                          value={jobChoice[p.id] ?? ""}
-                          onChange={(e) =>
-                            setJobChoice((prev) => ({
-                              ...prev,
-                              [p.id]: e.target.value
-                            }))
-                          }
-                          className="input flex-1 text-sm"
-                        >
-                          <option value="">— Aucun (non relié) —</option>
-                          {qboProjects.map((q) => (
-                            <option key={q.id} value={q.id}>
-                              {q.full_name || q.display_name}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => void linkProject(p.id)}
-                          disabled={
-                            linkBusy !== null ||
-                            (jobChoice[p.id] ?? "") === (p.qbo_job_id ?? "")
-                          }
-                          className="btn-secondary text-sm"
-                        >
-                          {linkBusy === p.id ? (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          ) : null}
-                          Enregistrer
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        ) : null}
-
         {result ? (
           <div className="mt-4 max-w-2xl rounded-xl border border-emerald-500/40 bg-emerald-500/5 p-4 text-sm">
             <h2 className="font-semibold text-white">Migration effectuée</h2>
@@ -451,12 +282,12 @@ export default function QboMigrationPage() {
                 {result.customers.errors} erreurs
               </li>
               <li>
+                Projets QB : {result.projects.linked} créés/reliés ·{" "}
+                {result.projects.errors} erreurs
+              </li>
+              <li>
                 Factures : {result.factures.pushed} envoyées ·{" "}
                 {result.factures.errors} erreurs
-              </li>
-              <li className="text-xs text-white/50">
-                (Les projets se relient dans la section « Relier les projets »
-                ci-dessus, pas pendant la migration.)
               </li>
               <li>
                 Paiements soldés : {result.payments?.applied ?? 0}

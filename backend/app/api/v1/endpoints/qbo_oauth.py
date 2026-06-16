@@ -49,7 +49,12 @@ _INTUIT_TOKEN_URL = (
 _INTUIT_REVOKE_URL = (
     "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
 )
-_SCOPE = "com.intuit.quickbooks.accounting"
+# `com.intuit.quickbooks.accounting` : API comptable v3 (clients, factures,
+# achats…). `project-management.project` : API Projets (GraphQL) — permet de
+# CRÉER de vrais projets QBO (onglet Projets) depuis Kratos. Le 2e scope
+# requiert un accès Premium API (palier partenaire Silver+). Après ajout, il
+# faut SE RECONNECTER à QuickBooks pour que le consentement couvre ce scope.
+_SCOPE = "com.intuit.quickbooks.accounting project-management.project"
 _STATE_TTL_SECONDS = 300  # 5 minutes
 
 
