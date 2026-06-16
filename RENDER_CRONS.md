@@ -35,6 +35,7 @@ Dashboard Render.
 | `unassigned-day-alerts` | `0 21 * * 0-4` | `python -m app.jobs.unassigned_day_alerts` | la veille en fin de journée |
 | `soumission-reminders` | `0 13 * * 1-5` | `python -m app.jobs.soumission_reminders` | nudge clients |
 | `teams-sync-auto` | `0 * * * *` | `python -m app.jobs.teams_sync_auto` | capture auto des transcriptions Teams (toutes les heures) |
+| `loyer-relances` | `0 13 * * 1-5` | `python -m app.jobs.loyer_relances` | rappel cloche des loyers en retard du mois |
 
 ## Tester localement avant de déployer
 
