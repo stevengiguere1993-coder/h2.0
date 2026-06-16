@@ -90,6 +90,7 @@ async def provision_project_for_soumission(
     *,
     deposit_percentage: int = DEFAULT_DEPOSIT_PERCENTAGE,
     due_in_days: int = 0,
+    notify_qbo: bool = False,
 ) -> Tuple[Project, Optional[Facture]]:
     """Create the Project (+ optional deposit Facture in DRAFT) for an
     accepted Soumission. Idempotent : si un projet existe déjà pour
@@ -151,6 +152,24 @@ async def provision_project_for_soumission(
     db.add(project)
     await db.flush()
     await db.refresh(project)
+
+    # Projet RÉELLEMENT créé (pas le chemin idempotent) → alerte commis
+    # comptable pour convertir le sous-client QBO en Projet. Le backfill
+    # de démarrage passe notify_qbo=False : pas d'alerte rétroactive.
+    if notify_qbo:
+        try:
+            from app.services.project_qbo_notify import (
+                notify_new_project_for_qbo,
+            )
+
+            await notify_new_project_for_qbo(db, project)
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "alerte projet QBO non bloquante a échoué (projet #%s)",
+                project.id,
+            )
 
     facture: Optional[Facture] = None
     # Montant de l'acompte à facturer :
@@ -317,5 +336,6 @@ async def convert_soumission_to_project(
         db, sm,
         deposit_percentage=cfg.deposit_percentage,
         due_in_days=cfg.due_in_days,
+        notify_qbo=True,
     )
     return ProjectRead.model_validate(project)

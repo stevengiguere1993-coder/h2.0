@@ -132,7 +132,7 @@ async def change_soumission_status(
             provision_project_for_soumission,
         )
         try:
-            await provision_project_for_soumission(db, sm)
+            await provision_project_for_soumission(db, sm, notify_qbo=True)
             await db.flush()
         except Exception:  # noqa: BLE001
             # Best-effort : si la provision échoue (DB transient,
