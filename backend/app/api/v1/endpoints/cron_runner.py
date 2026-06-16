@@ -686,6 +686,22 @@ async def trigger_all_daily(
 
     await _safe("qbo-invoice-pull", _run_qbo_invoice_pull, details)
 
+    # Import QB→Kratos des coûts projet (Bills + Purchases). Inerte si
+    # l'interrupteur qbo_auto_sync est OFF.
+    async def _run_qbo_cost_pull():
+        from app.services.qbo_auto_sync import is_qbo_auto_sync_enabled
+
+        if not await is_qbo_auto_sync_enabled():
+            return {"skipped": "qbo_auto_sync_off"}
+        from app.services.qbo_cost_pull import pull_project_costs_from_qbo
+
+        async with AsyncSessionLocal() as db:
+            r = await pull_project_costs_from_qbo(db, dry_run=False)
+            await db.commit()
+            return r
+
+    await _safe("qbo-cost-pull", _run_qbo_cost_pull, details)
+
     # Insights weekly : on tente quand même daily, le service est
     # idempotent et skip si rien à faire.
     async def _run_qg_insights():

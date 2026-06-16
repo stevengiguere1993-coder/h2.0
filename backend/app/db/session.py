@@ -152,6 +152,8 @@ async def ensure_critical_columns() -> None:
         ("projects", "qbo_job_id", "VARCHAR(64)"),
         # Id du Payment QBO d'une facture payée (dédup des paiements).
         ("factures", "qbo_payment_id", "VARCHAR(64)"),
+        # Id de la Purchase (dépense) QB importée comme Achat.
+        ("achats", "qbo_purchase_id", "VARCHAR(64)"),
         ("voice_calls", "dial_state_json", "TEXT"),
         # Hub Automatisations : config éditable (cadence, etc.). La table
         # a été créée sans cette colonne au 1er déploiement → on l'ajoute.
