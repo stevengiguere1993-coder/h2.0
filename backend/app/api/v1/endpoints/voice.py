@@ -173,6 +173,24 @@ def _voicemail_transcribe_url() -> str:
     return f"{_secretary_base_url()}/api/v1/voice/twilio/voicemail-transcript"
 
 
+def _dial_followup_url(call_id: int) -> str:
+    """Filet de non-réponse d'un transfert direct : Twilio POST ici à la
+    fin du <Dial>. En cas de non-réponse, on bascule sur la boîte vocale
+    de l'app (enregistrée + transcrite) au lieu de laisser le message
+    tomber sur la messagerie perso du destinataire."""
+    return (
+        f"{_secretary_base_url()}/api/v1/voice/twilio/"
+        f"dial-followup?call_id={int(call_id)}"
+    )
+
+
+#: Durée de sonnerie (sec) d'un transfert direct vers un cellulaire AVANT
+#: bascule sur la boîte vocale de l'app. Volontairement court (~12 s, ≈ 2-3
+#: sonneries) pour reprendre la main avant que la messagerie du forfaitaire
+#: du destinataire ne décroche et ne capte le message hors de l'app.
+_DIRECT_FORWARD_TIMEOUT_SEC = 12
+
+
 def _transfer_whisper_url(call_id: int) -> str:
     return (
         f"{_secretary_base_url()}/api/v1/voice/twilio/"
@@ -1386,7 +1404,12 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
             )
             return Response(content=twiml, media_type="application/xml")
         # VIP : on sonne sans secrétaire, même si secretary_mode_active.
-        twiml = provider.build_forward_response(forward_to_e164=forward_to)
+        # Filet boîte vocale app si non-réponse (sinon → messagerie perso).
+        twiml = provider.build_forward_response(
+            forward_to_e164=forward_to,
+            timeout_sec=_DIRECT_FORWARD_TIMEOUT_SEC,
+            action_url=_dial_followup_url(existing.id),
+        )
         return Response(content=twiml, media_type="application/xml")
 
     if action == RoutingAction.VOICEMAIL:
@@ -1430,7 +1453,14 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
         )
         return Response(content=twiml, media_type="application/xml")
 
-    twiml = provider.build_forward_response(forward_to_e164=forward_to)
+    # Transfert direct + filet boîte vocale app si non-réponse : sans ce
+    # `action_url`, un appel non décroché tombe sur la messagerie perso du
+    # destinataire au lieu d'être enregistré dans Kratos.
+    twiml = provider.build_forward_response(
+        forward_to_e164=forward_to,
+        timeout_sec=_DIRECT_FORWARD_TIMEOUT_SEC,
+        action_url=_dial_followup_url(existing.id),
+    )
     return Response(content=twiml, media_type="application/xml")
 
 
@@ -2916,7 +2946,15 @@ async def _twilio_clients_fallback_impl(request: Request, db: DBSession) -> Resp
         )
         return Response(content=twiml, media_type="application/xml")
 
-    twiml = provider.build_forward_response(forward_to_e164=forward_to)
+    # Filet boîte vocale app si le mobile fallback ne répond pas non plus.
+    fb_action = (
+        _dial_followup_url(int(call_id_raw)) if call_id_raw.isdigit() else None
+    )
+    twiml = provider.build_forward_response(
+        forward_to_e164=forward_to,
+        timeout_sec=_DIRECT_FORWARD_TIMEOUT_SEC,
+        action_url=fb_action,
+    )
     return Response(content=twiml, media_type="application/xml")
 
 
