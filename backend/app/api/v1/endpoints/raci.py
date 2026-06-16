@@ -265,6 +265,18 @@ async def create_pole(
     return p
 
 
+@router.put("/poles/reorder", status_code=status.HTTP_204_NO_CONTENT)
+async def reorder_poles(
+    data: IdsOrder, db: DBSession, _: CurrentUser
+) -> None:
+    """Réordonne les pôles selon l'ordre des ids fournis."""
+    for i, pid in enumerate(data.ids):
+        pole = await db.get(RaciPole, pid)
+        if pole is not None:
+            pole.position = i
+    await db.commit()
+
+
 @router.put("/poles/{pole_id}", response_model=PoleRead)
 async def update_pole(
     pole_id: int, data: PoleWrite, db: DBSession, _: CurrentUser
@@ -299,18 +311,6 @@ async def delete_pole(pole_id: int, db: DBSession, _: CurrentUser) -> None:
         await db.commit()
 
 
-@router.put("/poles/reorder", status_code=status.HTTP_204_NO_CONTENT)
-async def reorder_poles(
-    data: IdsOrder, db: DBSession, _: CurrentUser
-) -> None:
-    """Réordonne les pôles selon l'ordre des ids fournis."""
-    for i, pid in enumerate(data.ids):
-        pole = await db.get(RaciPole, pid)
-        if pole is not None:
-            pole.position = i
-    await db.commit()
-
-
 # ── Sous-sections ──────────────────────────────────────────────────────
 
 
@@ -338,6 +338,18 @@ async def create_subsection(
     await db.commit()
     await db.refresh(s_)
     return s_
+
+
+@router.put("/subsections/reorder", status_code=status.HTTP_204_NO_CONTENT)
+async def reorder_subsections(
+    data: IdsOrder, db: DBSession, _: CurrentUser
+) -> None:
+    """Réordonne les sous-sections d'un pôle selon l'ordre des ids."""
+    for i, sid in enumerate(data.ids):
+        su = await db.get(RaciSubsection, sid)
+        if su is not None:
+            su.position = i
+    await db.commit()
 
 
 @router.put("/subsections/{sub_id}", response_model=SubsectionRead)
@@ -385,18 +397,6 @@ async def delete_subsection(
         )
         await db.delete(s_)
         await db.commit()
-
-
-@router.put("/subsections/reorder", status_code=status.HTTP_204_NO_CONTENT)
-async def reorder_subsections(
-    data: IdsOrder, db: DBSession, _: CurrentUser
-) -> None:
-    """Réordonne les sous-sections d'un pôle selon l'ordre des ids."""
-    for i, sid in enumerate(data.ids):
-        su = await db.get(RaciSubsection, sid)
-        if su is not None:
-            su.position = i
-    await db.commit()
 
 
 # ── Réordonnancement (drag & drop des tâches) ──────────────────────────
