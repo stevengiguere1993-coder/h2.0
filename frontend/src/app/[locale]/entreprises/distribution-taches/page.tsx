@@ -222,14 +222,20 @@ export default function DistributionTachesPage() {
     );
   }
 
-  // ── Filtre : ne montrer que les tâches d'une personne / d'un rôle ──
-  const filtering = filterPersonId !== "";
+  // ── Filtre : par personne ET/OU par rôle (global) ──
+  const filtering = filterPersonId !== "" || filterRole !== "";
   function taskPasses(aId: number): boolean {
     if (!filtering) return true;
-    const v = cellMap.get(cellKey(aId, filterPersonId as number)) || "";
-    if (!v) return false;
-    if (filterRole && v !== filterRole) return false;
-    return true;
+    if (filterPersonId !== "") {
+      const v = cellMap.get(cellKey(aId, filterPersonId as number)) || "";
+      if (!v) return false;
+      if (filterRole && v !== filterRole) return false;
+      return true;
+    }
+    // Aucune personne choisie + rôle choisi : tâches où QUELQU'UN a ce rôle.
+    return people.some(
+      (pp) => (cellMap.get(cellKey(aId, pp.id)) || "") === filterRole
+    );
   }
 
   function poleColor(label: string): string {
@@ -357,22 +363,22 @@ export default function DistributionTachesPage() {
               </option>
             ))}
           </select>
-          {filterPersonId !== "" ? (
-            <select
-              value={filterRole}
-              onChange={(e) =>
-                setFilterRole(e.target.value as "" | "R" | "A" | "C" | "I")
-              }
-              className="rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1.5 outline-none focus:border-[var(--qg-accent)]"
-            >
-              <option value="">Tous ses rôles</option>
-              <option value="R">Réalise (R)</option>
-              <option value="A">Autorité (A)</option>
-              <option value="C">Consulté (C)</option>
-              <option value="I">Informé (I)</option>
-            </select>
-          ) : null}
-          {filterPersonId !== "" ? (
+          <select
+            value={filterRole}
+            onChange={(e) =>
+              setFilterRole(e.target.value as "" | "R" | "A" | "C" | "I")
+            }
+            className="rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1.5 outline-none focus:border-[var(--qg-accent)]"
+          >
+            <option value="">
+              {filterPersonId !== "" ? "Tous ses rôles" : "Tous les rôles"}
+            </option>
+            <option value="R">Réalise (R)</option>
+            <option value="A">Autorité (A)</option>
+            <option value="C">Consulté (C)</option>
+            <option value="I">Informé (I)</option>
+          </select>
+          {filterPersonId !== "" || filterRole !== "" ? (
             <button
               type="button"
               onClick={() => {
@@ -403,13 +409,13 @@ export default function DistributionTachesPage() {
           <table className="w-full table-fixed border-collapse text-sm">
             <thead>
               <tr className="bg-[var(--qg-card-bg)]">
-                <th className="sticky left-0 z-20 w-[22rem] min-w-[22rem] border-b border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-2.5 text-left text-xs font-semibold uppercase tracking-wider text-[var(--qg-text-muted)]">
+                <th className="sticky left-0 z-20 w-[22rem] min-w-[22rem] border-b-2 border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-2.5 text-left text-xs font-semibold uppercase tracking-wider text-[var(--qg-text-muted)]">
                   Pôle / Tâche
                 </th>
                 {people.map((p) => (
                   <th
                     key={p.id}
-                    className={"group border-b border-l border-[var(--qg-border)] p-2 text-center align-top " + PERSON_COL}
+                    className={"group border-b-2 border-l border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-2 text-center align-top " + PERSON_COL}
                   >
                     <div className="truncate font-semibold" title={p.name}>
                       {p.name}
@@ -460,11 +466,17 @@ export default function DistributionTachesPage() {
                         className="sticky left-0 border-y border-[var(--qg-border)] px-3 py-2 text-xs font-bold uppercase tracking-wider"
                         style={{
                           color: col,
-                          background: col + "14",
+                          background: col + "1f",
                           borderLeft: "4px solid " + col
                         }}
                       >
-                        {row.pole || "Sans pôle"}
+                        <span className="inline-flex items-center gap-2">
+                          <span
+                            className="inline-block h-2 w-2 rounded-full"
+                            style={{ background: col }}
+                          />
+                          {row.pole || "Sans pôle"}
+                        </span>
                       </td>
                     </tr>
                   );
@@ -541,14 +553,21 @@ export default function DistributionTachesPage() {
                           <button
                             type="button"
                             onClick={() => void cycleCell(a.id, p.id)}
-                            className="mx-auto grid h-9 w-9 place-items-center rounded-md text-sm font-bold transition hover:bg-[var(--qg-card-bg)] hover:ring-2 hover:ring-[var(--qg-accent)]/40"
+                            className={
+                              "group/cell mx-auto grid h-9 w-9 place-items-center rounded-lg text-sm font-bold shadow-sm transition hover:scale-105 " +
+                              (meta
+                                ? ""
+                                : "border border-[var(--qg-border)] hover:border-[var(--qg-accent)] hover:bg-[var(--qg-accent)]/10")
+                            }
                             style={meta ? { background: meta.bg, color: "#fff" } : {}}
                             title={meta ? meta.full : "Clique pour assigner R, A, C ou I"}
                           >
                             {meta ? (
                               v
                             ) : (
-                              <span className="h-2.5 w-2.5 rounded-full border border-dashed border-[var(--qg-text-faint)] opacity-60" />
+                              <span className="text-base font-normal text-[var(--qg-text-faint)] opacity-0 transition group-hover/cell:opacity-100">
+                                +
+                              </span>
                             )}
                           </button>
                         </td>
