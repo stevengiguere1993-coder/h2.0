@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     # Récupère l'Id via le bouton « Lister codes de taxe » / endpoint
     # /qbo/tax-codes (ex. TPS/TVQ QC).
     qbo_purchase_tax_code: Optional[str] = None
+    # Id du code de taxe QBO à appliquer sur chaque ligne de FACTURE de
+    # vente. Requis si la compagnie utilise la taxe de vente automatisée
+    # (erreur 6000 « toutes vos opérations comprennent un taux de TPS/TVH »).
+    # Récupère l'Id via « Lister codes de taxe » (ex. TPS/TVQ QC).
+    qbo_sales_tax_code: Optional[str] = None
     # OAuth redirect URI — doit être enregistrée à l'identique dans
     # l'app Intuit (onglet Keys & credentials → Redirect URIs).
     # Pointe sur le backend (h2-0), pas sur le frontend (h2-0-web).
