@@ -10,6 +10,7 @@ import {
   X
 } from "lucide-react";
 
+import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../layout";
 
@@ -106,16 +107,20 @@ export default function LocatairesPage() {
               </thead>
               <tbody className="divide-y divide-brand-800">
                 {list.map((l) => (
-                  <tr key={l.id} className="hover:bg-brand-950/50">
+                  <tr key={l.id} className="group hover:bg-brand-950/50">
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={`/immobilier/locataires/${l.id}` as any}
+                        className="flex items-center gap-3"
+                      >
                         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-sky-500/15 text-sky-300">
                           <User className="h-4 w-4" />
                         </div>
-                        <span className="font-bold text-white">
+                        <span className="font-bold text-white group-hover:text-sky-300">
                           {l.full_name}
                         </span>
-                      </div>
+                      </Link>
                     </td>
                     <td className="px-4 py-3 text-xs text-white/60">
                       <div>{l.email || "—"}</div>

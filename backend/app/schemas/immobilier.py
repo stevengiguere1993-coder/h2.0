@@ -398,6 +398,44 @@ class MaintenanceOverview(BaseModel):
     total_cout_reel: float = 0.0
 
 
+class DossierBail(BaseModel):
+    """Bail tel qu'affiché dans la fiche 360 d'un locataire."""
+
+    id: int
+    immeuble_id: int
+    immeuble_name: str
+    logement_numero: Optional[str] = None
+    date_debut: date
+    date_fin: date
+    loyer_mensuel: float
+    depot_garantie: Optional[float] = None
+    status: str
+
+
+class DossierPaiement(BaseModel):
+    id: int
+    bail_id: int
+    mois_couvert: date
+    montant: float
+    paye_le: Optional[date] = None
+    methode: Optional[str] = None
+    en_retard: bool = False
+
+
+class LocataireDossier(BaseModel):
+    """Vue 360 d'un locataire : baux, historique de paiements, agrégats."""
+
+    locataire: LocataireRead
+    baux: List[DossierBail] = Field(default_factory=list)
+    paiements: List[DossierPaiement] = Field(default_factory=list)
+    nb_baux_actifs: int = 0
+    loyer_actuel: float = 0.0
+    depot_total: float = 0.0
+    total_paye: float = 0.0
+    nb_paiements: int = 0
+    nb_retards: int = 0
+
+
 # ─── KPIs financiers (calculés) ─────────────────────────────────────────
 
 
