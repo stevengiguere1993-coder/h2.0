@@ -59,7 +59,7 @@ type UserRead = {
 const STATUS_LABEL: Record<string, string> = {
   new: "Nouveau",
   contacted: "Contacté",
-  qualified: "Qualifié",
+  qualified: "Soumission en préparation",
   quoted: "Soumis",
   won: "Gagné",
   lost: "Perdu",
