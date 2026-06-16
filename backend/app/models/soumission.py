@@ -57,6 +57,13 @@ class Soumission(Base, TimestampUpdateMixin):
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     valid_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Archivage : la soumission quitte les colonnes actives du tableau
+    # pour la colonne « Archivée » (repliée). Drapeau SÉPARÉ du statut —
+    # on conserve le vrai statut (accepted/etc.). Posé automatiquement
+    # quand le projet lié est livré (terminé), ou à la main par drag.
+    archived_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     pdf_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     # Internal-only notes (staff annotations, refusal reasons, margin

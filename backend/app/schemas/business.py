@@ -184,6 +184,7 @@ class SoumissionRead(_Base):
     sent_at: Optional[datetime]
     accepted_at: Optional[datetime]
     valid_until: Optional[datetime]
+    archived_at: Optional[datetime] = None
     pdf_url: Optional[str]
     notes: Optional[str]
     client_note: Optional[str] = None

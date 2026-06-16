@@ -37,6 +37,10 @@ class StatusChangeRequest(BaseModel):
     status: SoumissionStatusLiteral
 
 
+class ArchiveRequest(BaseModel):
+    archived: bool
+
+
 _SOUMISSION_TO_CRM = {
     SoumissionStatus.SENT.value: ContactRequestStatus.QUOTED.value,
     SoumissionStatus.ACCEPTED.value: ContactRequestStatus.WON.value,
@@ -45,6 +49,31 @@ _SOUMISSION_TO_CRM = {
     # Soumission « spam » → le prospect lié est classé Refusé/Perdu.
     SoumissionStatus.SPAM.value: ContactRequestStatus.LOST.value,
 }
+
+
+@router.patch(
+    "/{soumission_id}/archive",
+    response_model=SoumissionRead,
+    summary="Archive / désarchive une soumission (colonne « Archivée »)",
+)
+async def archive_soumission(
+    soumission_id: int,
+    data: ArchiveRequest,
+    db: DBSession,
+    _: CurrentUser,
+) -> SoumissionRead:
+    """Pose/retire le drapeau d'archivage. Le STATUT (accepted/etc.) est
+    conservé tel quel — l'archivage ne fait que déplacer la carte dans la
+    colonne « Archivée » du tableau (et inversement)."""
+    sm = (
+        await db.execute(select(Soumission).where(Soumission.id == soumission_id))
+    ).scalar_one_or_none()
+    if sm is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Soumission not found")
+    sm.archived_at = datetime.now(timezone.utc) if data.archived else None
+    await db.flush()
+    await db.refresh(sm)
+    return SoumissionRead.model_validate(sm)
 
 
 @router.patch(

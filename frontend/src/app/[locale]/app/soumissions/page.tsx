@@ -30,6 +30,7 @@ type Soumission = {
   status: string;
   sent_at: string | null;
   accepted_at: string | null;
+  archived_at: string | null;
   valid_until: string | null;
   pdf_url: string | null;
   notes: string | null;
@@ -63,14 +64,21 @@ const COLUMNS: Column[] = [
   { id: "sent", label: "Envoyées", dot: "bg-blue-500", edge: "border-blue-500" },
   { id: "accepted", label: "Acceptées", dot: "bg-emerald-500", edge: "border-emerald-500" },
   { id: "rejected", label: "Refusées", dot: "bg-rose-500", edge: "border-rose-500" },
-  { id: "expired", label: "Expirées", dot: "bg-amber-500", edge: "border-amber-500" }
+  { id: "expired", label: "Expirées", dot: "bg-amber-500", edge: "border-amber-500" },
+  // « Archivée » : projets terminés (soumission archivée auto à la
+  // livraison du projet, ou par drag). Repliée par défaut.
+  { id: "archived", label: "Archivée", dot: "bg-slate-500", edge: "border-slate-500" }
 ];
 
-// Colonnes repliées par défaut : « Refusées » et « Expirées » (du bruit
-// la plupart du temps). Toutes les colonnes restent repliables/dépliables
-// au clic ; le choix est mémorisé par navigateur.
+// Id de la colonne d'archivage (drapeau `archived_at` côté API, et non un
+// statut) — traité à part dans le groupement et le drag.
+const ARCHIVED_COL = "archived";
+
+// Colonnes repliées par défaut : « Refusées », « Expirées » et
+// « Archivée » (du bruit la plupart du temps). Toutes les colonnes restent
+// repliables/dépliables au clic ; le choix est mémorisé par navigateur.
 const COLLAPSED_COLS_KEY = "hsi_soumissions_collapsed_columns_v1";
-const DEFAULT_COLLAPSED = ["rejected", "expired"];
+const DEFAULT_COLLAPSED = ["rejected", "expired", "archived"];
 
 function loadCollapsedColumns(): Set<string> {
   if (typeof window === "undefined") return new Set(DEFAULT_COLLAPSED);
@@ -283,26 +291,66 @@ export default function SoumissionsPage() {
       COLUMNS.map((c) => [c.id, [] as Soumission[]])
     );
     for (const s of filtered) {
-      const target = COLUMNS.find((c) => c.id === s.status) ? s.status : "draft";
+      // Une soumission archivée va dans « Archivée » quel que soit son
+      // statut réel (qu'on conserve). Sinon, on groupe par statut.
+      const target = s.archived_at
+        ? ARCHIVED_COL
+        : COLUMNS.find((c) => c.id === s.status)
+        ? s.status
+        : "draft";
       map[target].push(s);
     }
     return map;
   }, [filtered]);
 
-  async function moveSoumission(id: number, newStatus: string) {
+  // Drop d'une carte sur une colonne : gère l'archivage (drapeau séparé)
+  // ET le changement de statut (colonnes actives), avec mise à jour
+  // optimiste + rollback en cas d'échec.
+  async function moveToColumn(id: number, colId: string) {
+    const item = items.find((s) => s.id === id);
+    if (!item) return;
     const prev = items;
-    setItems((xs) => xs.map((x) => (x.id === id ? { ...x, status: newStatus } : x)));
-    try {
-      // Use the dedicated status endpoint so the CRM prospect card
-      // moves in sync (quoted / won / lost) — even on reversals or
-      // mistakes.
-      const res = await authedFetch(
-        `/api/v1/soumissions/${id}/status`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ status: newStatus })
-        }
+
+    if (colId === ARCHIVED_COL) {
+      if (item.archived_at) return; // déjà archivée
+      setItems((xs) =>
+        xs.map((x) =>
+          x.id === id ? { ...x, archived_at: new Date().toISOString() } : x
+        )
       );
+      try {
+        const res = await authedFetch(`/api/v1/soumissions/${id}/archive`, {
+          method: "PATCH",
+          body: JSON.stringify({ archived: true })
+        });
+        if (!res.ok) throw new Error();
+      } catch {
+        setItems(prev);
+        setError("Archivage échoué.");
+      }
+      return;
+    }
+
+    // Cible = colonne de statut. Si la carte était archivée, on la
+    // désarchive d'abord (drapeau), puis on applique le statut cible.
+    setItems((xs) =>
+      xs.map((x) =>
+        x.id === id ? { ...x, archived_at: null, status: colId } : x
+      )
+    );
+    try {
+      if (item.archived_at) {
+        const r1 = await authedFetch(`/api/v1/soumissions/${id}/archive`, {
+          method: "PATCH",
+          body: JSON.stringify({ archived: false })
+        });
+        if (!r1.ok) throw new Error();
+      }
+      // Endpoint dédié → la fiche CRM du prospect suit (quoted/won/lost).
+      const res = await authedFetch(`/api/v1/soumissions/${id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: colId })
+      });
       if (!res.ok) throw new Error();
     } catch {
       setItems(prev);
@@ -376,8 +424,14 @@ export default function SoumissionsPage() {
                   onDrop={() => {
                     if (dragging == null) return;
                     const item = items.find((s) => s.id === dragging);
-                    if (item && item.status !== col.id)
-                      moveSoumission(dragging, col.id);
+                    // Colonne d'origine de la carte (archivée ou par statut).
+                    const fromCol = item
+                      ? item.archived_at
+                        ? ARCHIVED_COL
+                        : item.status
+                      : null;
+                    if (item && fromCol !== col.id)
+                      moveToColumn(dragging, col.id);
                     setDragging(null);
                     setHoverCol(null);
                   }}

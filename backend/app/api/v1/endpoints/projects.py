@@ -248,6 +248,33 @@ async def update_project(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found or invalid client_id",
         )
+
+    # Projet livré (= terminé) → on archive la soumission liée : elle
+    # quitte la colonne « Acceptées » pour « Archivée » dans le tableau
+    # des soumissions. Idempotent (ne réécrit pas si déjà archivée).
+    from app.models.project import ProjectStatus
+
+    if (
+        project.status == ProjectStatus.DELIVERED.value
+        and project.soumission_id
+    ):
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+        from app.models.soumission import Soumission
+
+        sm = (
+            await db.execute(
+                select(Soumission).where(
+                    Soumission.id == project.soumission_id,
+                    Soumission.archived_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if sm is not None:
+            sm.archived_at = datetime.now(timezone.utc)
+            await db.flush()
+
     out = ProjectRead.model_validate(project)
     out.responsible_name = await _responsible_name(
         db, project.responsible_user_id
