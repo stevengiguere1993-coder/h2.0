@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     # (erreur 6000 « toutes vos opérations comprennent un taux de TPS/TVH »).
     # Récupère l'Id via « Lister codes de taxe » (ex. TPS/TVQ QC).
     qbo_sales_tax_code: Optional[str] = None
+    # Active l'API Projets QuickBooks (GraphQL) pour CRÉER de vrais projets
+    # (onglet Projets) depuis Kratos. Désactivé par défaut : tant que l'app
+    # Intuit n'a pas l'accès Premium API + le scope, demander ce scope au
+    # consentement OAuth peut faire ÉCHOUER la reconnexion. À passer à true
+    # seulement une fois l'accès Premium accordé (puis se reconnecter).
+    qbo_enable_projects_api: bool = False
     # OAuth redirect URI — doit être enregistrée à l'identique dans
     # l'app Intuit (onglet Keys & credentials → Redirect URIs).
     # Pointe sur le backend (h2-0), pas sur le frontend (h2-0-web).

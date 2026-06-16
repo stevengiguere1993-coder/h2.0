@@ -49,7 +49,21 @@ _INTUIT_TOKEN_URL = (
 _INTUIT_REVOKE_URL = (
     "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
 )
-_SCOPE = "com.intuit.quickbooks.accounting"
+# `com.intuit.quickbooks.accounting` : API comptable v3 (clients, factures,
+# achats…). `project-management.project` : API Projets (GraphQL) — permet de
+# CRÉER de vrais projets QBO (onglet Projets) depuis Kratos. Ce 2e scope
+# requiert un accès Premium API (palier partenaire Silver+) ET n'est ajouté
+# QUE si `QBO_ENABLE_PROJECTS_API=true` : sinon demander un scope non
+# accordé peut faire échouer la reconnexion OAuth. Après activation, il
+# faut SE RECONNECTER à QuickBooks pour couvrir ce scope.
+_BASE_SCOPE = "com.intuit.quickbooks.accounting"
+_PROJECTS_SCOPE = "project-management.project"
+
+
+def _oauth_scope() -> str:
+    if settings.qbo_enable_projects_api:
+        return f"{_BASE_SCOPE} {_PROJECTS_SCOPE}"
+    return _BASE_SCOPE
 _STATE_TTL_SECONDS = 300  # 5 minutes
 
 
@@ -128,7 +142,7 @@ async def qbo_connect(_: CurrentAdmin) -> ConnectResponse:
     params = {
         "client_id": settings.quickbooks_client_id,
         "response_type": "code",
-        "scope": _SCOPE,
+        "scope": _oauth_scope(),
         "redirect_uri": settings.quickbooks_redirect_uri,
         "state": state,
     }

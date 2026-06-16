@@ -37,6 +37,11 @@ log = logging.getLogger(__name__)
 _TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 _PROD_API = "https://quickbooks.api.intuit.com"
 _SANDBOX_API = "https://sandbox-quickbooks.api.intuit.com"
+# API Projets (GraphQL) — distincte de l'API comptable v3. Sert à créer de
+# vrais projets QBO (onglet Projets) depuis Kratos. Requiert le scope
+# `project-management.project` + un accès Premium API (palier partenaire).
+_PROD_GRAPHQL = "https://qb.api.intuit.com/graphql"
+_SANDBOX_GRAPHQL = "https://qb-sandbox.api.intuit.com/graphql"
 
 
 @dataclass
@@ -92,6 +97,12 @@ class QuickBooksClient:
             log.warning("Could not load QBO refresh token from DB: %s", exc)
         finally:
             self._db_loaded = True
+
+    @property
+    def graphql_url(self) -> str:
+        return (
+            _PROD_GRAPHQL if self.env == "production" else _SANDBOX_GRAPHQL
+        )
 
     @property
     def ready(self) -> bool:
@@ -317,6 +328,79 @@ class QuickBooksClient:
                 return val
         return []
 
+    async def graphql(
+        self,
+        query: str,
+        variables: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Appel à l'API GraphQL Intuit (Projets, etc.). Distincte de
+        l'API REST v3 : autre host, pas de /v3/company/{realm} dans l'URL
+        (le realm est porté par le token OAuth). Lève QuickBooksError sur
+        erreur HTTP ou erreur GraphQL (champ `errors`)."""
+        token = await self._access()
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            r = await http.post(
+                self.graphql_url,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={"query": query, "variables": variables or {}},
+            )
+            try:
+                payload = r.json()
+            except Exception:
+                payload = {"error": r.text}
+            if r.status_code >= 400:
+                log.warning(
+                    "QBO GraphQL -> %s payload=%s", r.status_code, payload
+                )
+                raise QuickBooksError(
+                    f"QBO GraphQL failed: {r.status_code} {payload}"
+                )
+            errs = payload.get("errors")
+            if errs:
+                msg = ""
+                try:
+                    msg = (errs[0].get("message") or "").strip()
+                except Exception:  # noqa: BLE001
+                    msg = ""
+                log.warning("QBO GraphQL errors=%s", errs)
+                raise QuickBooksError(
+                    f"QBO GraphQL erreur : {msg or errs}"
+                )
+            return payload.get("data") or {}
+
+    async def create_qbo_project(
+        self,
+        *,
+        parent_customer_id: str,
+        name: str,
+        start_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Crée un VRAI projet QBO (onglet Projets) sous le client parent,
+        via l'API Projets (GraphQL). Retourne le projet créé (id, name,
+        status). Requiert le scope `project-management.project` + accès
+        Premium API — sinon QBO renvoie une erreur (gérée en amont)."""
+        mutation = (
+            "mutation CreateProject("
+            "$name: String!, $customerId: String!, $start: String) { "
+            "projectManagementCreateProject(input: {"
+            "name: $name, customer: {id: $customerId}, startDate: $start"
+            "}) { project { id name status } } }"
+        )
+        variables = {
+            "name": (name or "Projet")[:100],
+            "customerId": str(parent_customer_id),
+            "start": start_date,
+        }
+        data = await self.graphql(mutation, variables)
+        node = (
+            data.get("projectManagementCreateProject") or {}
+        ).get("project") or {}
+        return node
+
     async def find_customer_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         safe = email.replace("'", "''")
         rows = await self.query(
@@ -374,24 +458,17 @@ class QuickBooksClient:
             billing_address=billing_address,
         )
 
-    async def ensure_project(
-        self,
-        *,
-        parent_customer_id: str,
-        project_name: str,
-    ) -> Dict[str, Any]:
-        """Find-or-create un « projet » QBO = sous-client (Job) rattaché
-        au client parent. Sert à rattacher des dépenses/coûts à un
-        chantier précis, sans le refacturer.
+    async def _find_subcustomer(
+        self, *, parent_customer_id: str, project_name: str
+    ) -> Optional[Dict[str, Any]]:
+        """Cherche le sous-client (Job) d'un projet par parent + nom.
 
-        QBO impose que le DisplayName d'un sous-client soit unique et
-        souvent préfixé du parent (« Parent:Projet »). On résout d'abord
-        par Job=true + ParentRef ; sinon on crée avec ParentRef +
-        Job=true.
+        `ParentRef` n'est PAS « queryable » côté QBO (erreur 4001) : on
+        liste les Jobs et on filtre en Python. Un projet QBO (onglet
+        Projets) est, sous le capot, un sous-client → on le retrouve ici
+        pour obtenir son Id v3 (utilisé comme CustomerRef sur factures /
+        coûts).
         """
-        # NB : `ParentRef` n'est PAS « queryable » côté QBO (erreur 4001
-        # « property ParentRef is not queryable »). On liste les Jobs et on
-        # filtre le parent + le nom en Python.
         rows = await self.query(
             "SELECT * FROM Customer WHERE Job = true MAXRESULTS 1000"
         )
@@ -400,7 +477,6 @@ class QuickBooksClient:
                 parent_customer_id
             ):
                 continue
-            # Le sous-client peut s'appeler « Projet » ou « Parent:Projet ».
             disp = (row.get("DisplayName") or "")
             fqn = (row.get("FullyQualifiedName") or "")
             if (
@@ -409,6 +485,64 @@ class QuickBooksClient:
                 or fqn.endswith(f":{project_name}")
             ):
                 return row
+        return None
+
+    async def ensure_project(
+        self,
+        *,
+        parent_customer_id: str,
+        project_name: str,
+        start_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Crée (ou retrouve) le projet QBO d'un chantier Kratos et
+        retourne son sous-client v3 (avec `Id` utilisable comme
+        CustomerRef sur les factures/coûts).
+
+        Stratégie :
+        1. Déjà existant comme sous-client (Job) → on le réutilise.
+        2. Sinon on tente de créer un VRAI projet QBO (onglet Projets) via
+           l'API Projets (GraphQL), puis on résout le sous-client v3
+           correspondant (par parent + nom) pour récupérer son Id.
+        3. Si l'API Projets est indisponible (scope/Premium non accordé),
+           on retombe sur la création d'un sous-client v3 classique — le
+           rattachement facturation/coûts marche, mais le projet
+           n'apparaît pas dans l'onglet Projets (l'utilisateur est averti).
+        """
+        existing = await self._find_subcustomer(
+            parent_customer_id=parent_customer_id, project_name=project_name
+        )
+        if existing:
+            return existing
+
+        # 2) Vrai projet QBO via l'API Projets (GraphQL) — seulement si
+        # activé (accès Premium accordé + scope obtenu à la reconnexion).
+        if settings.qbo_enable_projects_api:
+            try:
+                await self.create_qbo_project(
+                    parent_customer_id=parent_customer_id,
+                    name=project_name,
+                    start_date=start_date,
+                )
+                # Le projet créé est un sous-client sous le capot : on le
+                # résout en v3 pour obtenir l'Id (CustomerRef).
+                resolved = await self._find_subcustomer(
+                    parent_customer_id=parent_customer_id,
+                    project_name=project_name,
+                )
+                if resolved:
+                    return resolved
+                # Créé mais introuvable en v3 (latence d'indexation) : on
+                # remonte quand même l'erreur pour fallback sûr.
+                raise QuickBooksError(
+                    "Projet créé via l'API Projets mais sous-client v3 "
+                    "introuvable immédiatement."
+                )
+            except QuickBooksError as exc:
+                log.warning(
+                    "API Projets indisponible, fallback sous-client: %s", exc
+                )
+
+        # 3) Fallback : sous-client v3 classique (pas d'onglet Projets).
         body: Dict[str, Any] = {
             "DisplayName": project_name,
             "Job": True,
@@ -418,6 +552,33 @@ class QuickBooksClient:
             "POST", "/customer", json_body=body, params={"minorversion": "70"}
         )
         return data.get("Customer") or data
+
+    async def list_projects(self) -> List[Dict[str, Any]]:
+        """Liste tous les « projets » QBO (sous-clients / Jobs) pour le
+        flux de LIAISON : l'utilisateur relie un projet Kratos à un vrai
+        projet/sous-client QB existant (id stocké dans Project.qbo_job_id).
+
+        On retourne id, nom affiché, nom complet (« Parent:Projet ») et le
+        parent (id + nom) pour que l'UI puisse grouper par client.
+        """
+        rows = await self.query(
+            "SELECT * FROM Customer WHERE Job = true MAXRESULTS 1000"
+        )
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            parent = row.get("ParentRef") or {}
+            out.append(
+                {
+                    "id": str(row.get("Id") or ""),
+                    "display_name": row.get("DisplayName") or "",
+                    "full_name": row.get("FullyQualifiedName") or "",
+                    "parent_id": str(parent.get("value") or "") or None,
+                    "parent_name": parent.get("name") or None,
+                    "active": bool(row.get("Active", True)),
+                }
+            )
+        out.sort(key=lambda r: (r["full_name"] or r["display_name"]).lower())
+        return out
 
     async def ensure_class(self, *, name: str) -> Optional[Dict[str, Any]]:
         """Find-or-create une « Classe » QBO (suivi par classe, ex. par

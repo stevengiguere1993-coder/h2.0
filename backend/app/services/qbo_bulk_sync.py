@@ -98,7 +98,7 @@ async def dry_run_report(
                     "name": p.name,
                     "address": p.address,
                     "qbo_job_id": p.qbo_job_id,
-                    "action": "already_linked" if p_linked else "create_or_reuse",
+                    "action": "already_linked" if p_linked else "create",
                 }
             )
 
@@ -215,7 +215,13 @@ async def run_migration(
             continue
         customer_id = c.qbo_customer_id
 
-        # 2) Projets → Jobs (sous-clients du Customer).
+        # 2) Projets → vrais projets QBO (onglet Projets). La création
+        # PART DE KRATOS : pour chaque projet Kratos non encore lié, on
+        # crée le projet dans QuickBooks via l'API Projets (GraphQL), et
+        # on stocke l'Id du sous-client v3 sous-jacent (CustomerRef des
+        # factures/coûts). Si l'API Projets n'est pas accordée, ensure_
+        # project retombe sur un sous-client (rattachement OK, sans onglet
+        # Projets) — l'erreur éventuelle est collectée par dossier.
         projects = list(
             (
                 await db.execute(
@@ -227,12 +233,17 @@ async def run_migration(
         for p in projects:
             try:
                 if not p.qbo_job_id:
-                    # Le projet QBO (sous-client) est nommé par son
-                    # ADRESSE (identité du projet), pas par le nom interne
-                    # qui peut contenir le nom du client.
+                    # Identité du projet = son ADRESSE (pas le nom interne
+                    # qui peut contenir le nom du client).
+                    start = (
+                        p.created_at.date().isoformat()
+                        if getattr(p, "created_at", None)
+                        else None
+                    )
                     job = await qbo.ensure_project(
                         parent_customer_id=customer_id,
                         project_name=(p.address or p.name),
+                        start_date=start,
                     )
                     jid = str(job.get("Id") or "")
                     if jid:

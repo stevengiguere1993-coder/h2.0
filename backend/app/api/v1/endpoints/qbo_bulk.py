@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from app.api.deps import DBSession, RequireAdminOrOwner
 from app.models.automation_setting import AutomationSetting
+from app.models.project import Project
 from app.services.qbo_auto_sync import QBO_AUTO_SYNC_KEY
 from app.services.qbo_bulk_sync import (
     dry_run_report,
@@ -108,6 +109,53 @@ async def reset_links_endpoint(
     # Efface les ID QBO côté Kratos pour re-migrer proprement (ne touche
     # pas QuickBooks — supprime d'abord les fiches dans QB).
     return await reset_links(db, client_id=client_id)
+
+
+@router.get("/projects")
+async def list_qbo_projects(
+    db: DBSession, _: RequireAdminOrOwner
+) -> dict:
+    """Liste les vrais projets/sous-clients QBO existants (onglet Projets),
+    pour relier un projet Kratos à l'un d'eux. Lecture seule."""
+    from app.integrations.quickbooks import QuickBooksError, get_qbo
+
+    qbo = get_qbo()
+    await qbo._load_refresh_from_db()
+    if not qbo.ready:
+        return {"error": "QuickBooks non connecté (OAuth).", "projects": []}
+    try:
+        projects = await qbo.list_projects()
+    except QuickBooksError as exc:
+        return {"error": f"Requête QB échouée : {exc}", "projects": []}
+    return {"projects": projects}
+
+
+class LinkProject(BaseModel):
+    project_id: int
+    qbo_job_id: Optional[str] = None
+
+
+@router.post("/link-project")
+async def link_project(
+    data: LinkProject, db: DBSession, _: RequireAdminOrOwner
+) -> dict:
+    """Relie (ou délie) un projet Kratos à un vrai projet/sous-client QBO.
+
+    `qbo_job_id` = l'Id du projet QB (issu de GET /qbo/projects). Passer
+    `null`/absent pour défaire la liaison. Une fois lié, factures et coûts
+    se rattachent automatiquement à ce projet dans QB.
+    """
+    proj = (
+        await db.execute(
+            select(Project).where(Project.id == data.project_id)
+        )
+    ).scalar_one_or_none()
+    if proj is None:
+        return {"error": f"Projet {data.project_id} introuvable."}
+    jid = (data.qbo_job_id or "").strip() or None
+    proj.qbo_job_id = jid
+    await db.flush()
+    return {"project_id": proj.id, "qbo_job_id": proj.qbo_job_id}
 
 
 @router.post("/pull-invoices")
