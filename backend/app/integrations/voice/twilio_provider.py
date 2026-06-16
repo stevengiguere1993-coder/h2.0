@@ -247,10 +247,19 @@ class TwilioVoiceProvider(VoiceProvider):
         forward_to_e164: str,
         caller_id: Optional[str] = None,
         timeout_sec: int = 20,
+        action_url: Optional[str] = None,
     ) -> str:
-        attrs = f' timeout="{int(timeout_sec)}"'
+        # `answerOnBridge` : l'appelant entend la sonnerie (pas un "answer"
+        # prématuré) jusqu'au vrai pont. Combiné à un `timeout` court, ça
+        # permet de REPRENDRE LA MAIN avant que la messagerie du cellulaire
+        # cible ne décroche, puis de router vers `action_url` (boîte vocale
+        # de l'app) en cas de non-réponse — sinon le message se perd sur la
+        # messagerie perso du destinataire.
+        attrs = f' timeout="{int(timeout_sec)}" answerOnBridge="true"'
         if caller_id:
             attrs += f' callerId="{xml_escape(caller_id, {chr(34): "&quot;"})}"'
+        if action_url:
+            attrs += f' action="{xml_escape(action_url)}" method="POST"'
         return (
             '<?xml version="1.0" encoding="UTF-8"?>'
             "<Response>"
