@@ -55,8 +55,28 @@ def _project_for_txn(
     return None
 
 
+def _txn_customer_refs(txn: dict) -> set[str]:
+    """Tous les CustomerRef présents sur les lignes (pour savoir si une
+    dépense touche un client donné)."""
+    out: set[str] = set()
+    for line in txn.get("Line") or []:
+        for key in (
+            "AccountBasedExpenseLineDetail",
+            "ItemBasedExpenseLineDetail",
+        ):
+            d = line.get(key) or {}
+            cref = (d.get("CustomerRef") or {}).get("value")
+            if cref:
+                out.add(str(cref))
+    return out
+
+
 async def pull_project_costs_from_qbo(
-    db: AsyncSession, *, since_days: int = 180, dry_run: bool = False
+    db: AsyncSession,
+    *,
+    since_days: int = 180,
+    dry_run: bool = False,
+    client_id: Optional[int] = None,
 ) -> dict:
     from app.integrations.quickbooks import QuickBooksError, get_qbo
 
@@ -98,14 +118,25 @@ async def pull_project_costs_from_qbo(
             )
         ).all()
     }
+    pstmt = select(Project).where(Project.qbo_job_id.is_not(None))
+    if client_id is not None:
+        pstmt = pstmt.where(Project.client_id == client_id)
     proj_by_job: dict[str, Project] = {
         str(p.qbo_job_id): p
-        for p in (
-            await db.execute(
-                select(Project).where(Project.qbo_job_id.is_not(None))
-            )
-        ).scalars().all()
+        for p in (await db.execute(pstmt)).scalars().all()
     }
+    # Refs QB du client (parent + sous-clients) : ne garder que ses
+    # dépenses dans l'aperçu détaillé scopé.
+    client_refs: Optional[set[str]] = None
+    if client_id is not None:
+        from app.models.client import Client
+
+        client = (
+            await db.execute(select(Client).where(Client.id == client_id))
+        ).scalar_one_or_none()
+        client_refs = set(proj_by_job.keys())
+        if client and client.qbo_customer_id:
+            client_refs.add(str(client.qbo_customer_id))
     fourn_by_name: dict[str, int] = {
         (n or "").strip().lower(): i
         for i, n in (
@@ -146,6 +177,7 @@ async def pull_project_costs_from_qbo(
     now = datetime.now(timezone.utc)
     stats = {
         "dry_run": dry_run,
+        "scope": "client" if client_id is not None else "all",
         "total_qbo": len(bills) + len(purchases),
         "bills_imported": 0,
         "purchases_imported": 0,
@@ -159,21 +191,36 @@ async def pull_project_costs_from_qbo(
         bid = str(b.get("Id") or "")
         if not bid:
             continue
-        if bid in existing_bill:
-            stats["skipped_existing"] += 1
-            continue
-        proj = _project_for_txn(b, proj_by_job)
-        if proj is None:
-            stats["skipped_no_project"] += 1
+        # Scope client : ne garder que les dépenses qui touchent une de
+        # ses refs QB (parent / sous-clients).
+        if client_refs is not None and _txn_customer_refs(b).isdisjoint(
+            client_refs
+        ):
             continue
         total = _num(b.get("TotalAmt"))
         balance = _num(b.get("Balance"))
         paid = balance == 0
         vendor = (b.get("VendorRef") or {}).get("name")
         doc = str(b.get("DocNumber") or "")
+        if bid in existing_bill:
+            stats["skipped_existing"] += 1
+            preview.append(
+                {"type": "bill", "qbo_id": bid, "amount": total,
+                 "vendor": vendor, "status": "deja_importe"}
+            )
+            continue
+        proj = _project_for_txn(b, proj_by_job)
+        if proj is None:
+            stats["skipped_no_project"] += 1
+            preview.append(
+                {"type": "bill", "qbo_id": bid, "amount": total,
+                 "vendor": vendor, "status": "sans_projet"}
+            )
+            continue
         preview.append(
             {"type": "bill", "qbo_id": bid, "project_id": proj.id,
-             "amount": total, "paid": paid, "vendor": vendor}
+             "amount": total, "paid": paid, "vendor": vendor,
+             "status": "a_importer"}
         )
         if not dry_run:
             db.add(
@@ -202,16 +249,28 @@ async def pull_project_costs_from_qbo(
         pid = str(p.get("Id") or "")
         if not pid:
             continue
-        if pid in existing_purchase:
-            stats["skipped_existing"] += 1
-            continue
-        proj = _project_for_txn(p, proj_by_job)
-        if proj is None:
-            stats["skipped_no_project"] += 1
+        if client_refs is not None and _txn_customer_refs(p).isdisjoint(
+            client_refs
+        ):
             continue
         total = _num(p.get("TotalAmt"))
         vendor = (p.get("EntityRef") or {}).get("name")
         doc = str(p.get("DocNumber") or "")
+        if pid in existing_purchase:
+            stats["skipped_existing"] += 1
+            preview.append(
+                {"type": "purchase", "qbo_id": pid, "amount": total,
+                 "vendor": vendor, "status": "deja_importe"}
+            )
+            continue
+        proj = _project_for_txn(p, proj_by_job)
+        if proj is None:
+            stats["skipped_no_project"] += 1
+            preview.append(
+                {"type": "purchase", "qbo_id": pid, "amount": total,
+                 "vendor": vendor, "status": "sans_projet"}
+            )
+            continue
         ptype = str(p.get("PaymentType") or "")
         pm = {
             "Cash": "comptant",
@@ -220,7 +279,7 @@ async def pull_project_costs_from_qbo(
         }.get(ptype)
         preview.append(
             {"type": "purchase", "qbo_id": pid, "project_id": proj.id,
-             "amount": total, "vendor": vendor}
+             "amount": total, "vendor": vendor, "status": "a_importer"}
         )
         if not dry_run:
             db.add(
@@ -245,5 +304,11 @@ async def pull_project_costs_from_qbo(
         stats["purchases_imported"] += 1
 
     if dry_run:
-        stats["preview"] = preview[:200]
+        # Scopé client : on montre TOUT (à importer / déjà importé / sans
+        # projet). Global : seulement les lignes à importer (taille bornée).
+        stats["preview"] = (
+            preview[:300]
+            if client_id is not None
+            else [p for p in preview if p.get("status") == "a_importer"][:200]
+        )
     return stats

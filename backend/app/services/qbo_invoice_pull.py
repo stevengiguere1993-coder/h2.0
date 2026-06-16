@@ -40,7 +40,11 @@ def _parse_date(s: Any) -> Optional[datetime]:
 
 
 async def pull_invoices_from_qbo(
-    db: AsyncSession, *, since_days: int = 180, dry_run: bool = False
+    db: AsyncSession,
+    *,
+    since_days: int = 180,
+    dry_run: bool = False,
+    client_id: Optional[int] = None,
 ) -> dict:
     from app.integrations.quickbooks import QuickBooksError, get_qbo
 
@@ -70,36 +74,57 @@ async def pull_invoices_from_qbo(
             )
         ).scalars().all()
     }
-    # Projet par Job QBO (clé de rattachement).
+    # Projet par Job QBO (clé de rattachement). Scopé à un client si
+    # demandé (« importer tout d'un client »).
+    pstmt = select(Project).where(Project.qbo_job_id.is_not(None))
+    if client_id is not None:
+        pstmt = pstmt.where(Project.client_id == client_id)
     proj_by_job: dict[str, Project] = {
         str(p.qbo_job_id): p
-        for p in (
-            await db.execute(
-                select(Project).where(Project.qbo_job_id.is_not(None))
-            )
-        ).scalars().all()
+        for p in (await db.execute(pstmt)).scalars().all()
     }
+    # Refs QB du client (parent + sous-clients) : sert à NE GARDER que
+    # les transactions de ce client dans l'aperçu détaillé.
+    client_refs: Optional[set[str]] = None
+    if client_id is not None:
+        from app.models.client import Client
+
+        client = (
+            await db.execute(select(Client).where(Client.id == client_id))
+        ).scalar_one_or_none()
+        client_refs = set(proj_by_job.keys())
+        if client and client.qbo_customer_id:
+            client_refs.add(str(client.qbo_customer_id))
 
     now = datetime.now(timezone.utc)
     stats = {
         "dry_run": dry_run,
+        "scope": "client" if client_id is not None else "all",
         "total_qbo": len(invoices),
         "imported": 0,
         "skipped_existing": 0,
         "skipped_no_project": 0,
         "paid_synced": 0,
     }
-    to_import: list[dict] = []
+    preview: list[dict] = []
 
     for inv in invoices:
         iid = str(inv.get("Id") or "")
         if not iid:
             continue
+        cref = str((inv.get("CustomerRef") or {}).get("value") or "")
+        cname = (inv.get("CustomerRef") or {}).get("name") or ""
+        # Hors périmètre du client demandé → on ignore silencieusement.
+        if client_refs is not None and cref not in client_refs:
+            continue
+        total = _num(inv.get("TotalAmt"))
+        balance = _num(inv.get("Balance"))
+        doc = str(inv.get("DocNumber") or "")
+
         existing = existing_by_qid.get(iid)
         if existing is not None:
             # Déjà dans Kratos : on reflète seulement un PAIEMENT QB
             # (solde 0) sur une facture pas encore marquée payée.
-            balance = _num(inv.get("Balance"))
             if balance == 0 and existing.status != "paid":
                 if not dry_run:
                     existing.status = "paid"
@@ -107,30 +132,33 @@ async def pull_invoices_from_qbo(
                     existing.paid_at = existing.paid_at or now
                     await db.flush()
                 stats["paid_synced"] += 1
+                pv_status = "paiement_synchro"
             else:
                 stats["skipped_existing"] += 1
+                pv_status = "deja_importee"
+            preview.append(
+                {"type": "facture", "qbo_id": iid, "doc_number": doc,
+                 "customer": cname, "total": total, "balance": balance,
+                 "status": pv_status}
+            )
             continue
-        cref = (inv.get("CustomerRef") or {}).get("value")
-        proj = proj_by_job.get(str(cref)) if cref else None
+
+        proj = proj_by_job.get(cref)
         if proj is None:
             # RÈGLE : pas de projet rattaché → on n'importe pas.
             stats["skipped_no_project"] += 1
+            preview.append(
+                {"type": "facture", "qbo_id": iid, "doc_number": doc,
+                 "customer": cname, "total": total, "balance": balance,
+                 "status": "sans_projet"}
+            )
             continue
 
-        total = _num(inv.get("TotalAmt"))
-        balance = _num(inv.get("Balance"))
-        doc = str(inv.get("DocNumber") or "")
         status = "paid" if balance == 0 else "sent"
-        to_import.append(
-            {
-                "qbo_invoice_id": iid,
-                "doc_number": doc,
-                "project_id": proj.id,
-                "client_id": proj.client_id,
-                "total": total,
-                "balance": balance,
-                "status": status,
-            }
+        preview.append(
+            {"type": "facture", "qbo_id": iid, "doc_number": doc,
+             "customer": cname, "total": total, "balance": balance,
+             "project_id": proj.id, "status": "a_importer"}
         )
         if not dry_run:
             db.add(
@@ -152,5 +180,12 @@ async def pull_invoices_from_qbo(
         stats["imported"] += 1
 
     if dry_run:
-        stats["preview"] = to_import[:200]
+        # Scopé à un client : on montre TOUT (y compris déjà importé /
+        # sans projet) pour que l'utilisateur voie l'ensemble. Sinon, on
+        # se limite aux lignes à importer pour borner la taille.
+        stats["preview"] = (
+            preview[:300]
+            if client_id is not None
+            else [p for p in preview if p["status"] == "a_importer"][:200]
+        )
     return stats
