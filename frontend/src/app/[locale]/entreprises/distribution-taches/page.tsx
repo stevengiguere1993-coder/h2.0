@@ -493,10 +493,14 @@ export default function DistributionTachesPage() {
                     >
                       <td
                         colSpan={colCount}
-                        className="sticky left-0 border-b border-[var(--qg-border)] bg-[var(--qg-bg)] py-1.5 pl-7 pr-2 text-[11px] font-semibold text-[var(--qg-text-muted)]"
-                        style={{ borderLeft: "4px solid " + col + "66" }}
+                        className="sticky left-0 border-b border-[var(--qg-border)] py-1.5 pl-7 pr-2 text-[11px] font-bold uppercase tracking-wide"
+                        style={{
+                          borderLeft: "4px solid " + col + "99",
+                          background: col + "0d",
+                          color: col
+                        }}
                       >
-                        ↳ {row.sub}
+                        <span className="opacity-50">↳</span> {row.sub}
                       </td>
                     </tr>
                   );
