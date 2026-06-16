@@ -4,6 +4,7 @@ import { use, useEffect, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
+  Download,
   FileText,
   Loader2,
   Mail,
@@ -94,7 +95,26 @@ export default function LocataireDetailPage({
   const locataireId = Number(id);
   const [dossier, setDossier] = useState<Dossier | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
   const loc = dossier?.locataire ?? null;
+
+  async function etatDeCompte() {
+    setPdfLoading(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataireId}/etat-de-compte.pdf`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      setError(`État de compte : ${(e as Error).message}`);
+    } finally {
+      setPdfLoading(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -166,6 +186,20 @@ export default function LocataireDetailPage({
                   ) : null}
                 </div>
               </div>
+              <button
+                type="button"
+                onClick={() => void etatDeCompte()}
+                disabled={pdfLoading}
+                className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+                title="Générer l'état de compte (PDF) : loyers, paiements, dépôt"
+              >
+                {pdfLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Download className="h-4 w-4" />
+                )}
+                État de compte
+              </button>
             </header>
 
             <section className="grid gap-4 sm:grid-cols-2">
