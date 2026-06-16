@@ -60,16 +60,15 @@ async def pull_invoices_from_qbo(
     except QuickBooksError as exc:
         return {"error": f"Requête QB Invoices échouée : {exc}"}
 
-    # Factures déjà reliées (dédoublonnage par ID QBO).
-    existing_ids = {
-        r[0]
-        for r in (
+    # Factures déjà reliées, par ID QBO — sert au dédoublonnage ET à la
+    # mise à jour du statut « payé » (QB → Kratos).
+    existing_by_qid: dict[str, Facture] = {
+        str(f.qbo_invoice_id): f
+        for f in (
             await db.execute(
-                select(Facture.qbo_invoice_id).where(
-                    Facture.qbo_invoice_id.is_not(None)
-                )
+                select(Facture).where(Facture.qbo_invoice_id.is_not(None))
             )
-        ).all()
+        ).scalars().all()
     }
     # Projet par Job QBO (clé de rattachement).
     proj_by_job: dict[str, Project] = {
@@ -81,12 +80,14 @@ async def pull_invoices_from_qbo(
         ).scalars().all()
     }
 
+    now = datetime.now(timezone.utc)
     stats = {
         "dry_run": dry_run,
         "total_qbo": len(invoices),
         "imported": 0,
         "skipped_existing": 0,
         "skipped_no_project": 0,
+        "paid_synced": 0,
     }
     to_import: list[dict] = []
 
@@ -94,8 +95,20 @@ async def pull_invoices_from_qbo(
         iid = str(inv.get("Id") or "")
         if not iid:
             continue
-        if iid in existing_ids:
-            stats["skipped_existing"] += 1
+        existing = existing_by_qid.get(iid)
+        if existing is not None:
+            # Déjà dans Kratos : on reflète seulement un PAIEMENT QB
+            # (solde 0) sur une facture pas encore marquée payée.
+            balance = _num(inv.get("Balance"))
+            if balance == 0 and existing.status != "paid":
+                if not dry_run:
+                    existing.status = "paid"
+                    existing.balance = 0
+                    existing.paid_at = existing.paid_at or now
+                    await db.flush()
+                stats["paid_synced"] += 1
+            else:
+                stats["skipped_existing"] += 1
             continue
         cref = (inv.get("CustomerRef") or {}).get("value")
         proj = proj_by_job.get(str(cref)) if cref else None
@@ -136,7 +149,6 @@ async def pull_invoices_from_qbo(
                 )
             )
             await db.flush()
-            existing_ids.add(iid)
         stats["imported"] += 1
 
     if dry_run:
