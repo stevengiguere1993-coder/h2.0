@@ -128,3 +128,23 @@ async def pull_invoices(
     return await pull_invoices_from_qbo(
         db, since_days=since_days, dry_run=dry_run
     )
+
+
+@router.post("/pull-costs")
+async def pull_costs(
+    db: DBSession,
+    _: RequireAdminOrOwner,
+    dry_run: bool = Query(
+        default=True,
+        description="true (défaut) = aperçu ; false = importe dans Kratos.",
+    ),
+    since_days: int = Query(default=180, ge=1, le=3650),
+) -> dict:
+    # Importe les Bills (factures fournisseurs à payer) + Purchases
+    # (dépenses) QB rattachés à un PROJET (sous-client). Sans projet → pas
+    # d'import.
+    from app.services.qbo_cost_pull import pull_project_costs_from_qbo
+
+    return await pull_project_costs_from_qbo(
+        db, since_days=since_days, dry_run=dry_run
+    )

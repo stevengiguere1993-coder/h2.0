@@ -192,6 +192,11 @@ class Achat(Base, TimestampUpdateMixin):
     qbo_bill_id: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, index=True
     )
+    # Id de la « Purchase » QB (dépense cash/chèque/CC) quand l'achat
+    # provient d'une dépense QB importée. Clé d'idempotence du pull.
+    qbo_purchase_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     qbo_doc_number: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
     )
