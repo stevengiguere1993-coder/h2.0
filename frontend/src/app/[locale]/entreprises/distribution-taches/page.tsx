@@ -98,6 +98,7 @@ export default function DistributionTachesPage() {
   const [filterRole, setFilterRole] = useState<
     "" | "R" | "A" | "C" | "I"
   >("");
+  const [filterPole, setFilterPole] = useState<string>("");
 
   const [dragId, setDragId] = useState<number | null>(null);
 
@@ -256,6 +257,7 @@ export default function DistributionTachesPage() {
   const seenPoles = new Set<string>();
 
   function emitPole(poleLabel: string) {
+    if (filterPole !== "" && poleLabel !== filterPole) return;
     const direct = tasksOf(poleLabel, "").filter((a) => taskPasses(a.id));
     const subGroups = subsections
       .filter((su) => su.pole === poleLabel)
@@ -368,6 +370,18 @@ export default function DistributionTachesPage() {
             ))}
           </select>
           <select
+            value={filterPole}
+            onChange={(e) => setFilterPole(e.target.value)}
+            className="rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1.5 outline-none focus:border-[var(--qg-accent)]"
+          >
+            <option value="">Tous les pôles</option>
+            {poles.map((pl) => (
+              <option key={pl.id} value={pl.label}>
+                {pl.label}
+              </option>
+            ))}
+          </select>
+          <select
             value={filterRole}
             onChange={(e) =>
               setFilterRole(e.target.value as "" | "R" | "A" | "C" | "I")
@@ -378,16 +392,17 @@ export default function DistributionTachesPage() {
               {filterPersonId !== "" ? "Tous ses rôles" : "Tous les rôles"}
             </option>
             <option value="R">Réalise (R)</option>
-            <option value="A">Autorité (A)</option>
+            <option value="A">Autorise (A)</option>
             <option value="C">Consulté (C)</option>
             <option value="I">Informé (I)</option>
           </select>
-          {filterPersonId !== "" || filterRole !== "" ? (
+          {filterPersonId !== "" || filterRole !== "" || filterPole !== "" ? (
             <button
               type="button"
               onClick={() => {
                 setFilterPersonId("");
                 setFilterRole("");
+                setFilterPole("");
               }}
               className="rounded-lg border border-[var(--qg-border)] px-2 py-1.5 text-[var(--qg-text-muted)] hover:border-[var(--qg-accent)]"
             >
@@ -444,7 +459,7 @@ export default function DistributionTachesPage() {
               </tr>
             </thead>
             <tbody>
-              {taskRowsCount === 0 && filtering ? (
+              {taskRowsCount === 0 && (filtering || filterPole !== "") ? (
                 <tr>
                   <td
                     colSpan={colCount}
