@@ -628,3 +628,39 @@ class DepenseImmeuble(Base, TimestampUpdateMixin):
     created_by_email: Mapped[Optional[str]] = mapped_column(
         String(256), nullable=True
     )
+
+
+class RelanceLoyer(Base, TimestampUpdateMixin):
+    """Relance d'un loyer en retard envoyée à un locataire (courriel).
+
+    ``niveau`` = ordre de la relance pour ce bail + ce mois (1, 2, …).
+    Sert de journal/preuve avant un recours (mise en demeure TAL).
+    """
+
+    __tablename__ = "imm_relances_loyer"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    bail_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_baux.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    mois_couvert: Mapped[date] = mapped_column(
+        Date, nullable=False, index=True
+    )
+    niveau: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    canal: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="courriel",
+        server_default="courriel",
+    )
+    destinataire: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    sent_by_email: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True
+    )
