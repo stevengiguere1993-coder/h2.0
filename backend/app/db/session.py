@@ -231,9 +231,14 @@ async def init_db() -> None:
     from app.db.base import Base
     from sqlalchemy import text
 
+    # create_all dans sa PROPRE transaction → committé indépendamment des
+    # ALTER additifs ci-dessous. Sinon, un ALTER raté annule TOUTE la
+    # transaction, y compris la création des nouvelles tables (ex.
+    # cadence_steps, relance_items…), qui se retrouvent absentes en prod.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    async with engine.begin() as conn:
         # Idempotent column additions for schema evolutions where a new
         # column is added to an already-existing table. `create_all` only
         # creates missing tables, never alters existing ones, so we patch
