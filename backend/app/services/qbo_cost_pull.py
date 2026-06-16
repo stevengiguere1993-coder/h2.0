@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.achat import Achat
 from app.models.fournisseur import Fournisseur
 from app.models.project import Project
+from app.models.soumission import Soumission
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +112,36 @@ async def pull_project_costs_from_qbo(
             await db.execute(select(Fournisseur.id, Fournisseur.name))
         ).all()
     }
+    # Projets FORFAITAIRES (soumission forfaitaire) → coûts importés NON
+    # refacturables. Sinon (estimé / non forfaitaire / sans soumission) →
+    # facturable coché automatiquement. (Vaut seulement à l'import QB →
+    # Kratos ; on ne touche pas au sens Kratos → QB.)
+    soum_ids = {
+        p.soumission_id
+        for p in proj_by_job.values()
+        if p.soumission_id
+    }
+    pricing_by_soum: dict[int, str] = {}
+    if soum_ids:
+        pricing_by_soum = {
+            sid: (pk or "forfaitaire")
+            for sid, pk in (
+                await db.execute(
+                    select(Soumission.id, Soumission.pricing_kind).where(
+                        Soumission.id.in_(soum_ids)
+                    )
+                )
+            ).all()
+        }
+
+    def _is_billable(proj: Project) -> bool:
+        pk = (
+            pricing_by_soum.get(proj.soumission_id)
+            if proj.soumission_id
+            else None
+        )
+        # Forfaitaire → non refacturable ; tout le reste → refacturable.
+        return pk != "forfaitaire"
 
     now = datetime.now(timezone.utc)
     stats = {
@@ -151,6 +182,7 @@ async def pull_project_costs_from_qbo(
                         (vendor or "").strip().lower()
                     ),
                     project_id=proj.id,
+                    is_billable=_is_billable(proj),
                     amount=total,
                     status="paid" if paid else "received",
                     payment_method="bill_to_pay",
@@ -197,6 +229,7 @@ async def pull_project_costs_from_qbo(
                         (vendor or "").strip().lower()
                     ),
                     project_id=proj.id,
+                    is_billable=_is_billable(proj),
                     amount=total,
                     status="paid",
                     payment_method=pm,

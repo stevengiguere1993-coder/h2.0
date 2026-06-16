@@ -128,6 +128,19 @@ async def ensure_critical_columns() -> None:
     from sqlalchemy import text
 
     log = logging.getLogger("db.ensure_critical_columns")
+
+    # Filet de sécurité : (re)crée les TABLES manquantes dans une
+    # transaction dédiée, indépendamment d'init_db. Si init_db a échoué ou
+    # n'a pas créé une nouvelle table (ex. cadence_steps, relance_items),
+    # on la crée ici. create_all est idempotent (checkfirst).
+    try:
+        from app.db.base import Base
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_critical_columns create_all failed: %s", exc)
+
     critical_columns = (
         # Sans cette colonne, GET /api/v1/contact (pipeline construction)
         # plante → « Impossible de charger les prospects » (régression #785).
