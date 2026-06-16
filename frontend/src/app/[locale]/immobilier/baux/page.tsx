@@ -9,7 +9,9 @@ import {
   ChevronRight,
   ClipboardList,
   Clock,
+  Gavel,
   Loader2,
+  Mail,
   Phone
 } from "lucide-react";
 
@@ -38,6 +40,8 @@ type Row = {
   montant_paye: number | null;
   paye_le: string | null;
   etat: string; // "retard" | "attente" | "paye"
+  nb_relances: number;
+  derniere_relance_le: string | null;
 };
 
 type Overview = {
@@ -108,6 +112,7 @@ export default function BauxPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<number | null>(null);
+  const [relancingId, setRelancingId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [echeances, setEcheances] = useState<EcheanceData | null>(null);
 
@@ -183,6 +188,51 @@ export default function BauxPage() {
       setError(`Marquer payé a échoué : ${(e as Error).message}`);
     } finally {
       setPayingId(null);
+    }
+  }
+
+  async function relancer(row: Row) {
+    setRelancingId(row.bail_id);
+    try {
+      const r = await authedFetch("/api/v1/immobilier/loyers/relance", {
+        method: "POST",
+        body: JSON.stringify({ bail_id: row.bail_id, mois })
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      const res = (await r.json()) as { niveau: number; destinataire: string };
+      flash(
+        `Relance ${res.niveau} envoyée à ${res.destinataire}`
+      );
+      await load();
+    } catch (e) {
+      setError(`Relance échouée : ${(e as Error).message}`);
+    } finally {
+      setRelancingId(null);
+    }
+  }
+
+  async function miseEnDemeure(row: Row) {
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${row.bail_id}/tal/mise_en_demeure.pdf`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            montant_du: row.loyer_mensuel,
+            mois_concerne: `${mois}-01`
+          })
+        }
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      setError(`Mise en demeure : ${(e as Error).message}`);
     }
   }
 
@@ -374,19 +424,56 @@ export default function BauxPage() {
                       </td>
                       <td className="px-3 py-2.5 text-right">
                         {r.etat !== "paye" ? (
-                          <button
-                            type="button"
-                            onClick={() => void marquerPaye(r)}
-                            disabled={payingId === r.bail_id}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                          >
-                            {payingId === r.bail_id ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : (
-                              <Check className="h-3 w-3" />
-                            )}
-                            Marquer payé
-                          </button>
+                          <div className="flex flex-col items-end gap-1.5">
+                            <div className="flex flex-wrap items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => void marquerPaye(r)}
+                                disabled={payingId === r.bail_id}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                              >
+                                {payingId === r.bail_id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Check className="h-3 w-3" />
+                                )}
+                                Marquer payé
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void relancer(r)}
+                                disabled={relancingId === r.bail_id}
+                                title="Envoyer un rappel de loyer par courriel au locataire"
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
+                              >
+                                {relancingId === r.bail_id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Mail className="h-3 w-3" />
+                                )}
+                                Relancer
+                              </button>
+                              {r.etat === "retard" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => void miseEnDemeure(r)}
+                                  title="Générer la mise en demeure (TAL) en PDF"
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
+                                >
+                                  <Gavel className="h-3 w-3" />
+                                  Mise en demeure
+                                </button>
+                              ) : null}
+                            </div>
+                            {r.nb_relances > 0 ? (
+                              <span className="text-[10px] text-white/40">
+                                Relancé {r.nb_relances}×
+                                {r.derniere_relance_le
+                                  ? ` · dernière ${r.derniere_relance_le}`
+                                  : ""}
+                              </span>
+                            ) : null}
+                          </div>
                         ) : null}
                       </td>
                     </tr>
