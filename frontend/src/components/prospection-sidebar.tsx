@@ -7,6 +7,7 @@ import {
   Calendar,
   Home,
   KanbanSquare,
+  KeyRound,
   Layers,
   LogOut,
   Map as MapIcon,
@@ -83,6 +84,12 @@ const PROSPECTION_SECTIONS: NavSection[] = [
         href: "/prospection/pipeline",
         label: "Pipeline",
         icon: KanbanSquare,
+        minRole: "employee"
+      },
+      {
+        href: "/prospection/moyenne-locative",
+        label: "Moyenne locative",
+        icon: KeyRound,
         minRole: "employee"
       },
       {
