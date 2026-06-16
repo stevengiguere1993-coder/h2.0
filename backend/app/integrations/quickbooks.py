@@ -543,9 +543,14 @@ class QuickBooksClient:
                 )
 
         # 3) Fallback : sous-client v3 classique (pas d'onglet Projets).
+        # `BillWithParent: true` = « Facturer avec le client parent ».
+        # C'est REQUIS pour que QBO propose ensuite ce sous-client dans
+        # « Nouveau projet → Convertir à partir d'un client rattaché » ;
+        # sans ce drapeau, le sous-client n'apparaît pas dans la liste.
         body: Dict[str, Any] = {
             "DisplayName": project_name,
             "Job": True,
+            "BillWithParent": True,
             "ParentRef": {"value": str(parent_customer_id)},
         }
         data = await self._request(
