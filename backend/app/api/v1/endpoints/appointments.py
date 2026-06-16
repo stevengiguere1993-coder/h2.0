@@ -95,16 +95,15 @@ async def schedule_appointment(
     await db.flush()
     await db.refresh(event)
 
-    # Auto-transition vers "rdv_prevu" : planifier un RDV bascule le
-    # prospect AVANT l'etape soumission (new, contacted, qualified). On
-    # NE touche PAS une fois la soumission envoyee (quoted) ni les
-    # dossiers clos (won/lost/spam) : a partir du moment ou une
-    # soumission est sortie, on garde l'avancement commercial visible,
-    # un RDV de suivi ne doit pas masquer le "Soumission envoyee".
+    # Auto-transition vers "rdv_prevu" : planifier un RDV ne fait avancer
+    # que les prospects ENCORE AVANT l'etape RDV (new, contacted). On NE
+    # touche PAS a partir de "qualified" (= Soumission en preparation) ni
+    # au-dela : ces fiches sont DEJA plus avancees que le RDV dans le
+    # pipeline (new -> contacted -> rdv_prevu -> qualified -> quoted -> ...),
+    # un RDV de suivi ne doit pas les faire RECULER vers "Rendez-vous prevu".
     if prospect.status in (
         ContactRequestStatus.NEW.value,
         ContactRequestStatus.CONTACTED.value,
-        ContactRequestStatus.QUALIFIED.value,
     ):
         prospect.status = ContactRequestStatus.RDV_PREVU.value
 

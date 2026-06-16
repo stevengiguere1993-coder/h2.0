@@ -406,7 +406,7 @@ export default function ProspectDetailPage() {
                     <option value="new">Nouveau</option>
                     <option value="contacted">À rappeler</option>
                     <option value="rdv_prevu">Rendez-vous prévu</option>
-                    <option value="qualified">Qualifié</option>
+                    <option value="qualified">Soumission en préparation</option>
                     <option value="quoted">Soumission envoyée</option>
                     <option value="won">Soumission acceptée</option>
                     <optgroup label="Refusé / Perdu">
