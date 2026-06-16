@@ -155,6 +155,25 @@ export default function RencontreDetailPage() {
     }
   }
 
+  // Crée un sujet avec titre par défaut (1 clic) — pour faire apparaître
+  // tout de suite la zone de téléversement / collage / dictée.
+  async function quickAddSection() {
+    setCreatingSection(true);
+    try {
+      const now = new Date();
+      const title = `Sujet — ${now.toLocaleDateString("fr-CA")}`;
+      const r = await authedFetch(`/api/v1/rencontres/${id}/sections`, {
+        method: "POST",
+        body: JSON.stringify({ title })
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const sec = (await r.json()) as Section;
+      setData((d) => (d ? { ...d, sections: [...d.sections, sec] } : d));
+    } finally {
+      setCreatingSection(false);
+    }
+  }
+
   // Crée une nouvelle section avec un titre par défaut, scroll vers
   // elle, et met en surbrillance son bouton « Dicter » pour 6 s.
   // L'utilisateur clique ensuite sur Dicter — c'est OBLIGATOIRE pour
@@ -436,6 +455,37 @@ export default function RencontreDetailPage() {
                   fusionnée par le résumé global.
                 </p>
               </div>
+
+              {data.sections.length === 0 ? (
+                <div
+                  className="mt-3 rounded-2xl border border-dashed p-6 text-center"
+                  style={{
+                    borderColor: "var(--qg-border)",
+                    color: "var(--qg-text-muted)"
+                  }}
+                >
+                  <p className="text-sm font-medium">
+                    Aucun sujet pour l&apos;instant.
+                  </p>
+                  <p className="mx-auto mt-1 max-w-md text-xs">
+                    Pour <strong>téléverser ton audio ou ton texte</strong>{" "}
+                    (ou dicter / coller), crée d&apos;abord un sujet :
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void quickAddSection()}
+                    disabled={creatingSection}
+                    className="btn-accent mx-auto mt-3 inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
+                  >
+                    {creatingSection ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Plus className="h-4 w-4" />
+                    )}
+                    Créer un sujet
+                  </button>
+                </div>
+              ) : null}
 
               <div className="mt-3 space-y-3">
                 {data.sections.map((s) => (
