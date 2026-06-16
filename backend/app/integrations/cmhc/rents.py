@@ -84,13 +84,116 @@ def _parse_bedroom(label: str) -> Optional[int]:
 def _parse_float(v: Any) -> Optional[float]:
     if v is None:
         return None
-    s = str(v).strip().replace("$", "").replace(",", "").replace(" ", "")
+    # Retire TOUS les espaces, y compris insécables (SCHL : « 1 268 »).
+    s = re.sub(r"\s+", "", str(v)).replace("$", "").replace(",", "")
     if not s or s.lower() in ("n/a", "na", "**", "..", "-"):
         return None
     try:
         return float(s)
     except ValueError:
         return None
+
+
+def _parse_rent_loose(v: Any) -> Optional[float]:
+    """Extrait un loyer d'une cellule SCHL (« 1 268 », « 2 092 $ », « ** »)."""
+    if v is None:
+        return None
+    s = re.sub(r"\s+", "", str(v)).replace("$", "").replace(",", "")
+    if not s or s in ("**", "..", "-"):
+        return None
+    m = re.match(r"^(\d+(?:\.\d+)?)", s)
+    return float(m.group(1)) if m else None
+
+
+def _parse_matrix_format(
+    text: str, default_year: Optional[int]
+) -> Optional[List[Dict[str, Any]]]:
+    """Parse l'export HMIP « TableExport » : 1-2 lignes de titre, une
+    ligne d'en-tête large (Studio / 1 chambre / 2 chambres / 3 chambres +
+    / Total, avec une colonne de code de fiabilité après chaque valeur),
+    une zone par ligne, des notes/source en pied. Retourne ``None`` si le
+    fichier n'a pas cette forme (→ on tombe sur le parsing classique)."""
+    rows = list(csv.reader(io.StringIO(text)))
+    if not rows:
+        return None
+
+    # 1) Ligne d'en-tête : >= 2 libellés de chambres, et soit col0 vide,
+    # soit des lignes de titre avant (pour ne pas confondre avec un wide
+    # classique dont la 1re colonne est « CMA »).
+    header_idx = None
+    col_to_bed: Dict[int, int] = {}
+    for i, row in enumerate(rows[:20]):
+        beds = {
+            ci: b
+            for ci, cell in enumerate(row)
+            if (b := _parse_bedroom(cell or "")) is not None
+        }
+        first = (row[0] if row else "").strip()
+        if len(beds) >= 2 and (i >= 1 or not first):
+            header_idx, col_to_bed = i, beds
+            break
+    if header_idx is None:
+        return None
+
+    # 2) Année : depuis les lignes de titre, sinon défaut.
+    year = default_year
+    for row in rows[:header_idx]:
+        for cell in row:
+            m = re.search(r"\b(20\d{2})\b", str(cell or ""))
+            if m:
+                year = int(m.group(1))
+                break
+        if year is not None and year != default_year:
+            break
+    if year is None:
+        from datetime import datetime
+
+        year = datetime.now().year
+
+    # 3) CMA : depuis la 1re ligne de titre (avant un tiret), sinon Montréal.
+    cma = "Montréal"
+    if rows[0]:
+        title = str(rows[0][0] or "")
+        first = re.split(r"[–—\-]", title)[0].strip()
+        if first:
+            cma = first
+    cma_norm = normalize_zone(cma)
+
+    # 4) Données : zone en col0, valeurs aux colonnes de chambres.
+    out: List[Dict[str, Any]] = []
+    for row in rows[header_idx + 1:]:
+        if not row:
+            continue
+        zone = (row[0] or "").strip()
+        if not zone:
+            continue
+        zl = zone.lower()
+        if zl.startswith(("note", "source", "**", "©", "+")):
+            break  # pied de tableau
+        z_norm = normalize_zone(zone)
+        is_total = (
+            z_norm == cma_norm
+            or "ensemble" in zl
+            or zl.startswith("total")
+            or "rmr" in zl
+        )
+        zone_out = None if is_total else zone
+        for ci, bed in col_to_bed.items():
+            raw = row[ci] if ci < len(row) else ""
+            rent = _parse_rent_loose(raw)
+            if rent and 100 <= rent <= 10000:
+                out.append(
+                    {
+                        "cma": cma,
+                        "zone": zone_out,
+                        "bedrooms": bed,
+                        "avg_rent": rent,
+                        "vacancy_rate": None,
+                        "sample_size": None,
+                        "year": year,
+                    }
+                )
+    return out or None
 
 
 def _parse_int(v: Any) -> Optional[int]:
@@ -324,6 +427,18 @@ async def _bulk_upsert(
     return len(rows)
 
 
+def _decode_csv(b: bytes) -> str:
+    """Décode un CSV en essayant UTF-8 (BOM toléré) puis cp1252/latin-1.
+    Le décodage strict lève sur des octets invalides, ce qui fait basculer
+    proprement vers l'encodage SCHL (Windows-1252)."""
+    for enc in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            return b.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return b.decode("utf-8", errors="replace")
+
+
 async def ingest_csv(
     db: AsyncSession,
     csv_bytes: bytes,
@@ -337,13 +452,23 @@ async def ingest_csv(
         default_year : utilisé si la colonne Year est absente du CSV.
             Si None et absent → on prend l'année courante.
     """
-    # Detect encoding (CMHC files are sometimes UTF-8 BOM, sometimes
-    # Latin-1).
-    text = csv_bytes.decode("utf-8-sig", errors="replace")
+    # Detect encoding. Les exports SCHL/HMIP sont souvent en Windows-1252
+    # (cp1252), pas en UTF-8 : un décodage UTF-8 corromprait les « é » et
+    # surtout l'espace insécable des montants (« 1 268 » → loyer rejeté).
+    text = _decode_csv(csv_bytes)
 
     if default_year is None:
         from datetime import datetime
         default_year = datetime.now().year
+
+    # Format HMIP « TableExport » (titres + en-tête large valeur/code) ?
+    matrix = _parse_matrix_format(text, default_year)
+    if matrix:
+        for start in range(0, len(matrix), batch_size):
+            await _bulk_upsert(db, matrix[start:start + batch_size])
+            await db.commit()
+        log.info("CMHC ingest (matrix): rows=%d", len(matrix))
+        return {"rows_processed": len(matrix), "rows_upserted": len(matrix)}
 
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:
