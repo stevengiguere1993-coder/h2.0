@@ -892,6 +892,14 @@ function QuickBooksSection() {
               ) : null}
               Lister codes de taxe
             </button>
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/app/parametres/qbo-migration" as any}
+              className="btn-accent text-xs"
+              title="Envoyer en masse clients / projets / factures vers QBO (aperçu dry-run + migration d'un dossier de test)."
+            >
+              Migration de masse →
+            </Link>
           </div>
           {diag ? (
             <pre className="overflow-x-auto rounded-xl border border-brand-800 bg-brand-950 px-4 py-3 text-[11px] leading-relaxed text-white/80">
