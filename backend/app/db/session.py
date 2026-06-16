@@ -278,6 +278,26 @@ async def ensure_raci_tables() -> None:
         log.warning("ensure_raci_tables failed: %s", exc)
 
 
+async def ensure_immobilier_aux_tables() -> None:
+    """Crée les tables immobilier récentes (relances de loyer) dans leur
+    propre transaction, pour survivre à un abort d'``init_db``."""
+    import logging
+
+    log = logging.getLogger("db.ensure_immobilier_aux_tables")
+    try:
+        from app.db.base import Base
+        from app.models.immobilier import RelanceLoyer  # noqa: F401
+
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(
+                    c, tables=[RelanceLoyer.__table__]
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_immobilier_aux_tables failed: %s", exc)
+
+
 async def init_db() -> None:
     """
     Initialize database tables.
