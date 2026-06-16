@@ -100,13 +100,15 @@ async def pull_project_costs_from_qbo(
     except QuickBooksError as exc:
         return {"error": f"Requête QB échouée : {exc}"}
 
-    existing_bill = {
-        r[0]
-        for r in (
+    # Achats déjà liés par qbo_bill_id (objet complet → on peut refléter
+    # le PAIEMENT QB → Kratos sur un Bill déjà importé).
+    existing_bill: dict[str, Achat] = {
+        str(a.qbo_bill_id): a
+        for a in (
             await db.execute(
-                select(Achat.qbo_bill_id).where(Achat.qbo_bill_id.is_not(None))
+                select(Achat).where(Achat.qbo_bill_id.is_not(None))
             )
-        ).all()
+        ).scalars().all()
     }
     existing_purchase = {
         r[0]
@@ -183,6 +185,7 @@ async def pull_project_costs_from_qbo(
         "purchases_imported": 0,
         "skipped_existing": 0,
         "skipped_no_project": 0,
+        "paid_synced": 0,
     }
     preview: list[dict] = []
 
@@ -203,10 +206,22 @@ async def pull_project_costs_from_qbo(
         vendor = (b.get("VendorRef") or {}).get("name")
         doc = str(b.get("DocNumber") or "")
         if bid in existing_bill:
-            stats["skipped_existing"] += 1
+            # Déjà importé → on reflète seulement un PAIEMENT QB
+            # (Bill soldé, balance 0) sur un achat pas encore payé.
+            ach = existing_bill[bid]
+            if paid and ach.status != "paid":
+                if not dry_run:
+                    ach.status = "paid"
+                    ach.paid_at = ach.paid_at or now
+                    await db.flush()
+                stats["paid_synced"] += 1
+                pv_status = "paiement_synchro"
+            else:
+                stats["skipped_existing"] += 1
+                pv_status = "deja_importe"
             preview.append(
                 {"type": "bill", "qbo_id": bid, "amount": total,
-                 "vendor": vendor, "status": "deja_importe"}
+                 "vendor": vendor, "status": pv_status}
             )
             continue
         proj = _project_for_txn(b, proj_by_job)
