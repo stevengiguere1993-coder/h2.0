@@ -246,6 +246,13 @@ async def create_payment(
     await db.refresh(p)
     await _recompute_facture_status(db, fa)
     await db.flush()
+    # Paiement enregistré dans Kratos → on le pousse vers QuickBooks
+    # (crée le Payment QB qui solde la facture). Fail-closed via
+    # l'interrupteur QBO auto-sync ; idempotent (qbo_payment_id). Lancé
+    # après le commit pour que le statut « payé » soit bien persisté.
+    from app.services.qbo_auto_sync import autopush_facture
+
+    background.add_task(autopush_facture, facture_id)
     # Envoi optionnel de l'état de compte au client. On REND le PDF ici,
     # dans la session de la requête (le paiement est déjà flush → il
     # apparaît), puis on délègue seulement l'envoi SMTP à l'arrière-plan.
