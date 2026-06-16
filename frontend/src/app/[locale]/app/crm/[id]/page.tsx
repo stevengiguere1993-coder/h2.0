@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter as useNextRouter } from "next/navigation";
+import {
+  useParams,
+  useRouter as useNextRouter,
+  useSearchParams
+} from "next/navigation";
 import {
   ArrowLeft,
   Briefcase,
@@ -128,11 +132,17 @@ export default function ProspectDetailPage() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
   const router = useNextRouter();
+  const searchParams = useSearchParams();
 
   const [p, setP] = useState<Prospect | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabId>("apercu");
+  // Onglet initial : honore `?tab=` (ex. lien « photos » depuis une
+  // soumission ouvre directement l'onglet Documents).
+  const [tab, setTab] = useState<TabId>(() => {
+    const t = searchParams?.get("tab");
+    return TABS.some((x) => x.id === t) ? (t as TabId) : "apercu";
+  });
   const [notes, setNotes] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
   const [deleting, setDeleting] = useState(false);

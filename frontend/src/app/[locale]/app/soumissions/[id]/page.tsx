@@ -9,6 +9,7 @@ import {
   Eye,
   EyeOff,
   FileText,
+  Image as ImageIcon,
   Users,
   ChevronDown,
   Loader2,
@@ -190,6 +191,10 @@ export default function SoumissionDetailPage() {
   const [clientName, setClientName] = useState("");
   const [clientEmail, setClientEmail] = useState("");
   const [clientAddress, setClientAddress] = useState("");
+  // Contact (prospect) lié — sert au lien rapide « photos du client »
+  // (documents du prospect) pour consulter les photos pendant la
+  // rédaction de la soumission.
+  const [contactId, setContactId] = useState<number | null>(null);
 
   // Signature de l'entrepreneur (Horizon) — on envoie au chargé de
   // projet un courriel avec un lien public pour signer le contrat
@@ -310,6 +315,7 @@ export default function SoumissionDetailPage() {
         setClientName(cName);
         setClientEmail(cEmail);
         setClientAddress(cAddress);
+        setContactId(contactIdForMessage);
         if (cEmail) setSendTo(cEmail);
         // Données du contrat : parse contract_data si présent, sinon
         // défaut pré-rempli — chantier = adresse du client, et
@@ -1042,51 +1048,35 @@ export default function SoumissionDetailPage() {
               </p>
             </div>
 
+            {/* Accès rapide aux PHOTOS du client (documents du prospect),
+                pour les consulter pendant la rédaction de la soumission.
+                Ouvre dans un nouvel onglet → on ne perd pas la soumission
+                en cours. */}
+            {contactId ? (
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={`/app/crm/${contactId}?tab=documents` as any}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-4 inline-flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm font-semibold text-blue-200 hover:bg-blue-500/20"
+              >
+                <ImageIcon className="h-4 w-4" />
+                Voir les photos du client
+                <span className="text-xs font-normal text-blue-200/70">
+                  (documents — nouvel onglet)
+                </span>
+              </Link>
+            ) : null}
+
             {kind === "quote" ? (
             <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-800 px-5 py-4">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                   Items de la soumission
                 </h2>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setTemplatePickerOpen(true)}
-                    className="inline-flex items-center rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-200 hover:bg-blue-500/20"
-                  >
-                    <Briefcase className="mr-1.5 h-3.5 w-3.5" />
-                    Insérer un service du catalogue
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => addItem("service")}
-                    disabled={itemBusy === "new"}
-                    className="btn-accent text-xs"
-                  >
-                    {itemBusy === "new" ? (
-                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Plus className="mr-1.5 h-3.5 w-3.5" />
-                    )}
-                    Ajouter item
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => addItem("frais")}
-                    disabled={itemBusy === "new"}
-                    className="btn-secondary text-xs"
-                  >
-                    <Plus className="mr-1.5 h-3.5 w-3.5" /> Frais
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => addItem("rabais")}
-                    disabled={itemBusy === "new"}
-                    className="inline-flex items-center rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/20 disabled:opacity-60"
-                  >
-                    <Plus className="mr-1.5 h-3.5 w-3.5" /> Rabais
-                  </button>
-                </div>
+                {/* Boutons d'ajout déplacés SOUS la liste (toolbar de
+                    pied de tableau) pour rester à portée de main quand on
+                    fait défiler une longue liste d'items. */}
               </div>
 
               {items.length === 0 ? (
@@ -1118,7 +1108,7 @@ export default function SoumissionDetailPage() {
                     <option value="L" />
                     <option value="gal" />
                   </datalist>
-                  <table className="w-full text-sm">
+                  <table className="w-full text-sm" id="soumission-items-table">
                     <thead className="border-b border-brand-800 text-xs uppercase tracking-wider text-white/50">
                       <tr>
                         <th className="px-5 py-3 text-left font-semibold">Description</th>
@@ -1151,6 +1141,48 @@ export default function SoumissionDetailPage() {
                   </table>
                 </div>
               )}
+
+              {/* Toolbar d'ajout — SOUS la liste : on ajoute un item juste
+                  là où on a fini de scroller, sans remonter en haut. */}
+              <div className="flex flex-wrap items-center gap-2 border-t border-brand-800 px-5 py-4">
+                <button
+                  type="button"
+                  onClick={() => setTemplatePickerOpen(true)}
+                  className="inline-flex items-center rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-200 hover:bg-blue-500/20"
+                >
+                  <Briefcase className="mr-1.5 h-3.5 w-3.5" />
+                  Insérer un service du catalogue
+                </button>
+                <button
+                  type="button"
+                  onClick={() => addItem("service")}
+                  disabled={itemBusy === "new"}
+                  className="btn-accent text-xs"
+                >
+                  {itemBusy === "new" ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Plus className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Ajouter item
+                </button>
+                <button
+                  type="button"
+                  onClick={() => addItem("frais")}
+                  disabled={itemBusy === "new"}
+                  className="btn-secondary text-xs"
+                >
+                  <Plus className="mr-1.5 h-3.5 w-3.5" /> Frais
+                </button>
+                <button
+                  type="button"
+                  onClick={() => addItem("rabais")}
+                  disabled={itemBusy === "new"}
+                  className="inline-flex items-center rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/20 disabled:opacity-60"
+                >
+                  <Plus className="mr-1.5 h-3.5 w-3.5" /> Rabais
+                </button>
+              </div>
             </section>
             ) : contractData ? (
               <>
