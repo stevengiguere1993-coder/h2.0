@@ -89,7 +89,22 @@ const GRM_TIERS = [
   { max: Infinity, label: "Cher", cls: "text-rose-300" }
 ];
 
-type Filter = { quartier?: string; postal_code?: string; nom_rue?: string };
+type Filter = {
+  quartier?: string;
+  postal_code?: string;
+  city?: string;
+  nom_rue?: string;
+};
+
+function areaToFilter(a: Area): Filter {
+  if (a.kind === "fsa") return { postal_code: a.value };
+  if (a.kind === "city") return { city: a.value };
+  return { quartier: a.value };
+}
+function areaLabel(a: Area): string {
+  if (a.kind === "fsa") return `Code postal ${a.value}`;
+  return a.value;
+}
 
 export default function MoyenneLocativePage() {
   const { onOpenSidebar } = useProspectionLayout();
@@ -145,8 +160,9 @@ export default function MoyenneLocativePage() {
       const mp = new URLSearchParams();
       if (f.quartier) mp.set("quartier", f.quartier);
       else if (f.postal_code) mp.set("postal_code", f.postal_code);
+      else if (f.city) mp.set("city", f.city);
       else if (f.nom_rue) mp.set("nom_rue", f.nom_rue);
-      const schlQ = f.quartier || f.nom_rue || displayLabel;
+      const schlQ = f.quartier || f.city || f.nom_rue || displayLabel;
       const [mr, sr] = await Promise.all([
         authedFetch(
           `/api/v1/prospection/rental-comparables/summary?${mp.toString()}`
@@ -161,6 +177,29 @@ export default function MoyenneLocativePage() {
     },
     []
   );
+
+  // Vue par défaut : tout le marché récent (peu importe la catégorisation
+  // quartier/code postal des annonces), pour toujours afficher des chiffres.
+  const loadOverall = useCallback(async () => {
+    setOpen(false);
+    setLabel("Tout le marché récent (Grand Montréal)");
+    setLoading(true);
+    setMarket(null);
+    setSchl(null);
+    const [mr, sr] = await Promise.all([
+      authedFetch(
+        "/api/v1/prospection/rental-comparables/summary?tout=true&max_age_days=45"
+      ),
+      authedFetch("/api/v1/prospection/moyenne-locative?q=Montr%C3%A9al")
+    ]);
+    if (mr.ok) setMarket((await mr.json()) as Market);
+    if (sr.ok) setSchl((await sr.json()) as Schl);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void loadOverall();
+  }, [loadOverall]);
 
   function resolveFree(): { f: Filter; label: string } | null {
     const q = query.trim();
@@ -178,6 +217,14 @@ export default function MoyenneLocativePage() {
         (norm(a.value).includes(nq) || nq.includes(norm(a.value)))
     );
     if (partial) return { f: { quartier: partial.value }, label: partial.value };
+    const cityA =
+      areas.find((a) => a.kind === "city" && norm(a.value) === nq) ||
+      areas.find(
+        (a) =>
+          a.kind === "city" &&
+          (norm(a.value).includes(nq) || nq.includes(norm(a.value)))
+      );
+    if (cityA) return { f: { city: cityA.value }, label: cityA.value };
     const street = q.replace(/^\s*\d+\s*/, "").trim();
     if (street) return { f: { nom_rue: street }, label: q };
     return null;
@@ -228,7 +275,8 @@ export default function MoyenneLocativePage() {
   }, [rows, monLoyer, monBed]);
 
   const hasMarket = !!market && market.sample_size > 0;
-  const noData = areas.length === 0;
+  const trulyEmpty =
+    !loading && !!market && market.sample_size === 0 && areas.length === 0;
 
   return (
     <>
@@ -272,12 +320,7 @@ export default function MoyenneLocativePage() {
                     if (e.key === "Enter") {
                       if (matches.length > 0) {
                         const a = matches[0];
-                        void load(
-                          a.kind === "fsa"
-                            ? { postal_code: a.value }
-                            : { quartier: a.value },
-                          a.kind === "fsa" ? `Code postal ${a.value}` : a.value
-                        );
+                        void load(areaToFilter(a), areaLabel(a));
                       } else search();
                     }
                   }}
@@ -314,20 +357,11 @@ export default function MoyenneLocativePage() {
                   <button
                     key={`${a.kind}:${a.value}`}
                     type="button"
-                    onClick={() =>
-                      void load(
-                        a.kind === "fsa"
-                          ? { postal_code: a.value }
-                          : { quartier: a.value },
-                        a.kind === "fsa" ? `Code postal ${a.value}` : a.value
-                      )
-                    }
+                    onClick={() => void load(areaToFilter(a), areaLabel(a))}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-white/80 hover:bg-brand-800/60"
                   >
                     <MapPin className="h-3.5 w-3.5 text-emerald-400" />
-                    <span className="flex-1 truncate">
-                      {a.kind === "fsa" ? `Code postal ${a.value}` : a.value}
-                    </span>
+                    <span className="flex-1 truncate">{areaLabel(a)}</span>
                     <span className="text-[11px] text-white/30">
                       {a.count} annonce{a.count > 1 ? "s" : ""}
                     </span>
@@ -337,13 +371,26 @@ export default function MoyenneLocativePage() {
             ) : null}
           </div>
 
-          {noData ? (
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setQuery("");
+                void loadOverall();
+              }}
+              className="rounded-full border border-brand-800 bg-brand-900 px-3 py-1 text-xs text-white/60 hover:border-emerald-500/40 hover:text-emerald-300"
+            >
+              ↺ Tout le marché récent
+            </button>
+          </div>
+
+          {trulyEmpty ? (
             <p className="mt-2 max-w-2xl rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">
               <Database className="mr-1 inline h-3.5 w-3.5" />
               Le collecteur d&apos;annonces n&apos;a pas encore de données. Lance
               le cron Render <strong>rental-scrape-daily</strong> (ou attends son
-              prochain passage), puis reviens — la recherche par adresse
-              s&apos;activera. La référence SCHL reste disponible.
+              prochain passage), puis reviens. La référence SCHL reste
+              disponible.
             </p>
           ) : null}
         </section>
