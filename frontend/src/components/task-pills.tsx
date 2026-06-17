@@ -549,9 +549,15 @@ export function DatePill({
         )}
       </button>
       <input
+        // key + defaultValue → input NON contrôlé : un re-render du tableau
+        // (tri, refresh) pendant que le pop-up natif est ouvert ne ré-assigne
+        // plus la valeur, donc naviguer entre les mois ne ferme plus le
+        // calendrier ni ne sélectionne une date par accident. La key se met à
+        // jour quand la valeur change réellement (sélection), remontant l'input.
+        key={value || "empty"}
         ref={inputRef}
         type="date"
-        value={value || ""}
+        defaultValue={value || ""}
         onChange={(e) => onChange(e.target.value || null)}
         className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
       />
