@@ -253,6 +253,64 @@ def _has_inclusion(r: RentalListing, tag: str) -> bool:
     return tag in tags
 
 
+class AreaItem(BaseModel):
+    kind: str  # "quartier" | "fsa"
+    value: str
+    count: int
+
+
+@router.get("/areas", response_model=List[AreaItem])
+async def list_areas(
+    db: DBSession,
+    _: CurrentUser,
+    max_age_days: int = Query(default=45, ge=1, le=180),
+) -> List[AreaItem]:
+    """Secteurs (quartiers) et zones de code postal (FSA) ayant des annonces
+    récentes — alimente l'autocomplétion de la page Moyenne locative."""
+    from sqlalchemy import func as sa_func
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    out: List[AreaItem] = []
+
+    qrows = (
+        await db.execute(
+            select(RentalListing.quartier, sa_func.count(RentalListing.id))
+            .where(
+                RentalListing.scraped_at >= cutoff,
+                RentalListing.quartier.is_not(None),
+                RentalListing.price.is_not(None),
+            )
+            .group_by(RentalListing.quartier)
+        )
+    ).all()
+    for q, c in qrows:
+        if q and q.strip():
+            out.append(AreaItem(kind="quartier", value=q.strip(), count=int(c)))
+
+    frows = (
+        await db.execute(
+            select(
+                sa_func.upper(sa_func.substr(RentalListing.postal_code, 1, 3)),
+                sa_func.count(RentalListing.id),
+            )
+            .where(
+                RentalListing.scraped_at >= cutoff,
+                RentalListing.postal_code.is_not(None),
+                RentalListing.price.is_not(None),
+            )
+            .group_by(
+                sa_func.upper(sa_func.substr(RentalListing.postal_code, 1, 3))
+            )
+        )
+    ).all()
+    for f, c in frows:
+        if f and len(f.strip()) == 3:
+            out.append(AreaItem(kind="fsa", value=f.strip(), count=int(c)))
+
+    out.sort(key=lambda a: -a.count)
+    return out
+
+
 @router.get(
     "/list",
     summary="Annonces brutes (debug). Limité à 200 lignes.",
