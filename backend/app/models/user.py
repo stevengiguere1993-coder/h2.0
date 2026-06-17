@@ -52,6 +52,7 @@ VALID_VOLETS = (
     "immobilier",
     "investisseur",
     "developpement_logiciel",
+    "communication",
 )
 DEFAULT_VOLETS = ["construction", "prospection", "developpement_logiciel"]
 

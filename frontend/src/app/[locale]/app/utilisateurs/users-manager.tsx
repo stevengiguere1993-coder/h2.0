@@ -37,7 +37,8 @@ const VOLET_OPTIONS: { key: string; label: string }[] = [
   { key: "immobilier", label: "Gestion immobilière" },
   { key: "entreprises", label: "Gestion d'entreprises" },
   { key: "investisseur", label: "Investisseurs" },
-  { key: "developpement_logiciel", label: "Dév. logiciel" }
+  { key: "developpement_logiciel", label: "Dév. logiciel" },
+  { key: "communication", label: "Communication" }
 ];
 
 type Project = {
