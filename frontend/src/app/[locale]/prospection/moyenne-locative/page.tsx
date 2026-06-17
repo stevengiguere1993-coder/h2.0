@@ -164,7 +164,10 @@ export default function MoyenneLocativePage() {
       if (res.found && res.summary) {
         setMarket(res.summary);
         setLabel(a);
-        secteurForSchl = res.secteur || a;
+        secteurForSchl =
+          res.secteur_kind === "tout" || !res.secteur
+            ? "Montréal"
+            : res.secteur;
         setSecteurNote(
           res.notes?.[0] ||
             (res.secteur && res.secteur_kind !== "tout"
