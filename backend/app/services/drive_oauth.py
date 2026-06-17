@@ -426,18 +426,20 @@ async def _refresh(
     new_refresh = payload.get("refresh_token")
     enc_refresh = _encrypt(new_refresh) if new_refresh else None
 
-    # Mise à jour en mémoire pour la requête courante.
-    row.access_token = enc_access
-    row.expires_at = new_expires
-    if enc_refresh:
-        row.refresh_token = enc_refresh
-    await db.flush()
-
-    # Persistance dans une transaction DÉDIÉE : le token rafraîchi (et un
-    # refresh_token éventuellement renouvelé par Google) DOIT survivre même
-    # si la requête courante lève ensuite une exception — car get_db fait
-    # alors un rollback. Sans ça, le prochain refresh repartirait d'un
-    # refresh_token périmé → invalid_grant → « Connexion Drive requise ».
+    # Persistance dans une transaction DÉDIÉE, AVANT toute écriture sur la
+    # ligne via la session courante. Le token rafraîchi (et un refresh_token
+    # éventuellement renouvelé par Google) DOIT survivre même si la requête
+    # courante lève ensuite une exception — car get_db fait alors un rollback.
+    # Sans ça, le prochain refresh repartirait d'un refresh_token périmé →
+    # invalid_grant → « Connexion Drive requise ».
+    #
+    # ⚠️ L'ORDRE est critique. Si la session courante flushait d'abord la
+    # ligne, elle poserait un verrou exclusif détenu jusqu'au commit de la
+    # requête ; la session dédiée resterait alors bloquée à vouloir UPDATE la
+    # même ligne. Postgres ne voit aucun cycle de verrous (l'attente côté
+    # requête est un `await` Python, pas un verrou) → le détecteur de deadlock
+    # ne se déclenche pas et la requête se fige indéfiniment (« Chargement… »
+    # sans fin côté UI Drive). On persiste donc AVANT de toucher `row`.
     try:
         from app.db.session import AsyncSessionLocal
 
@@ -460,6 +462,14 @@ async def _refresh(
             "Drive: persistance du token rafraîchi échouée (best-effort): %s",
             exc,
         )
+
+    # Mise à jour en mémoire pour la requête courante (la ligne est déjà
+    # persistée par la session dédiée ci-dessus ; pas de flush explicite —
+    # un flush ici reposerait un verrou inutile sur la ligne).
+    row.access_token = enc_access
+    row.expires_at = new_expires
+    if enc_refresh:
+        row.refresh_token = enc_refresh
 
     await _audit(
         db,
