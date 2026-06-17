@@ -900,8 +900,9 @@ function QuickBooksSection() {
             </Link>
           </div>
           {/* Interrupteur d'auto-sync, ici dans la carte QB pour le
-              trouver facilement (à activer APRÈS la migration de masse). */}
-          {hasMinRole(me, "admin") ? <QboAutoSyncToggle /> : null}
+              trouver facilement (à activer APRÈS la migration de masse).
+              Le composant + son API sont réservés admin. */}
+          <QboAutoSyncToggle />
           {diag ? (
             <pre className="overflow-x-auto rounded-xl border border-brand-800 bg-brand-950 px-4 py-3 text-[11px] leading-relaxed text-white/80">
               {JSON.stringify(diag, null, 2)}
