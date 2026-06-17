@@ -11,7 +11,8 @@ import {
   CircleDollarSign,
   Loader2,
   Plus,
-  Trash2
+  Trash2,
+  TrendingUp
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -40,6 +41,31 @@ type PnlRow = {
 };
 
 type Pnl = { annee: number; rows: PnlRow[]; totaux: PnlRow };
+
+type PrevMois = {
+  mois: string;
+  revenus: number;
+  depenses_courantes: number;
+  hypotheque: number;
+  maintenance: number;
+  cashflow_net: number;
+  cashflow_cumule: number;
+};
+type Previsionnel = {
+  rows: PrevMois[];
+  revenus_mensuels: number;
+  depenses_mensuelles: number;
+  hypotheque_mensuelle: number;
+  cashflow_mensuel_base: number;
+  total_maintenance_planifiee: number;
+  cashflow_horizon: number;
+};
+
+function moisLabel(ym: string): string {
+  const [y, m] = ym.split("-").map(Number);
+  const dt = new Date(y, (m || 1) - 1, 1);
+  return dt.toLocaleDateString("fr-CA", { month: "short", year: "2-digit" });
+}
 
 type Depense = {
   id: number;
@@ -79,6 +105,24 @@ export default function FinancesPage() {
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [prev, setPrev] = useState<Previsionnel | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const params = new URLSearchParams({ mois: "12" });
+      if (currentEntrepriseId != null) {
+        params.set("entreprise_id", String(currentEntrepriseId));
+      }
+      const r = await authedFetch(
+        `/api/v1/immobilier/finances/previsionnel?${params.toString()}`
+      );
+      if (r.ok && !cancelled) setPrev((await r.json()) as Previsionnel);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentEntrepriseId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -185,7 +229,108 @@ export default function FinancesPage() {
           </div>
         ) : null}
 
-        <div className="mt-5 overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
+        {prev && prev.rows.length > 0 ? (
+          <section className="mt-6">
+            <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-white">
+              <TrendingUp className="h-4 w-4 text-emerald-400" />
+              Prévisionnel — 12 prochains mois
+            </h2>
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <Tile
+                label="Revenus / mois"
+                value={fmtMoney(prev.revenus_mensuels)}
+              />
+              <Tile
+                label="Charges / mois"
+                value={fmtMoney(
+                  prev.depenses_mensuelles + prev.hypotheque_mensuelle
+                )}
+                sub={`dont ${fmtMoney(prev.hypotheque_mensuelle)} hypothèque`}
+              />
+              <Tile
+                label="Cashflow / mois (base)"
+                value={fmtMoney(prev.cashflow_mensuel_base)}
+                tone={prev.cashflow_mensuel_base >= 0 ? "emerald" : "rose"}
+              />
+              <Tile
+                label="Cashflow projeté 12 mois"
+                value={fmtMoney(prev.cashflow_horizon)}
+                tone={prev.cashflow_horizon >= 0 ? "emerald" : "rose"}
+                sub={
+                  prev.total_maintenance_planifiee > 0
+                    ? `dont ${fmtMoney(
+                        prev.total_maintenance_planifiee
+                      )} maintenance planifiée`
+                    : undefined
+                }
+              />
+            </div>
+            <div className="mt-3 overflow-x-auto rounded-xl border border-brand-800 bg-brand-900">
+              <table className="w-full text-sm">
+                <thead className="bg-brand-950/60 text-left text-[11px] uppercase tracking-wider text-white/50">
+                  <tr>
+                    <th className="px-3 py-2.5">Mois</th>
+                    <th className="px-3 py-2.5 text-right">Revenus</th>
+                    <th className="px-3 py-2.5 text-right">Dépenses</th>
+                    <th className="px-3 py-2.5 text-right">Hypothèque</th>
+                    <th className="px-3 py-2.5 text-right">Maintenance</th>
+                    <th className="px-3 py-2.5 text-right">Cashflow</th>
+                    <th className="px-3 py-2.5 text-right">Cumulé</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-800">
+                  {prev.rows.map((m) => (
+                    <tr key={m.mois} className="hover:bg-brand-950/40">
+                      <td className="px-3 py-2 capitalize text-white/80">
+                        {moisLabel(m.mois)}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-white/70">
+                        {fmtMoney(m.revenus)}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-white/50">
+                        {fmtMoney(m.depenses_courantes)}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-white/50">
+                        {fmtMoney(m.hypotheque)}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-white/50">
+                        {m.maintenance > 0 ? fmtMoney(m.maintenance) : "—"}
+                      </td>
+                      <td
+                        className={`px-3 py-2 text-right font-semibold tabular-nums ${
+                          m.cashflow_net >= 0
+                            ? "text-emerald-300"
+                            : "text-rose-300"
+                        }`}
+                      >
+                        {fmtMoney(m.cashflow_net)}
+                      </td>
+                      <td
+                        className={`px-3 py-2 text-right tabular-nums ${
+                          m.cashflow_cumule >= 0
+                            ? "text-emerald-300/80"
+                            : "text-rose-300/80"
+                        }`}
+                      >
+                        {fmtMoney(m.cashflow_cumule)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-[11px] text-white/35">
+              Projection à partir des baux actifs, dépenses récurrentes,
+              hypothèques et maintenance planifiée. Suppose les loyers maintenus
+              (renouvellement).
+            </p>
+          </section>
+        ) : null}
+
+        <h2 className="mt-6 mb-2 text-sm font-semibold text-white">
+          Profits &amp; pertes {annee}
+        </h2>
+        <div className="mt-1 overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-emerald-400" />

@@ -2816,6 +2816,166 @@ async def finances_pnl(
     return PnlOverview(annee=year, rows=rows, totaux=tot)
 
 
+# ── Prévisionnel (cashflow projeté) ────────────────────────────────────
+
+
+class PrevisionnelMois(BaseModel):
+    mois: str  # "YYYY-MM"
+    revenus: float
+    depenses_courantes: float
+    hypotheque: float
+    maintenance: float
+    cashflow_net: float
+    cashflow_cumule: float
+
+
+class PrevisionnelOut(BaseModel):
+    rows: List[PrevisionnelMois] = []
+    revenus_mensuels: float = 0.0
+    depenses_mensuelles: float = 0.0
+    hypotheque_mensuelle: float = 0.0
+    cashflow_mensuel_base: float = 0.0
+    total_maintenance_planifiee: float = 0.0
+    cashflow_horizon: float = 0.0
+
+
+@router.get("/finances/previsionnel", response_model=PrevisionnelOut)
+async def finances_previsionnel(
+    db: DBSession,
+    user: CurrentUser,
+    mois: int = Query(default=12, ge=1, le=24),
+    entreprise_id: Optional[int] = None,
+    immeuble_id: Optional[int] = None,
+) -> PrevisionnelOut:
+    """Projection du cashflow sur N mois (déf. 12), à partir des données
+    réelles : loyers des baux ACTIFS, dépenses récurrentes (mensuel ×1,
+    annuel /12) + ponctuelles datées, paiements d'hypothèque, et maintenance
+    PLANIFIÉE (cout_estime imputé au mois de sa date)."""
+    _require_volet(user)
+
+    imm_q = select(Immeuble).where(Immeuble.is_active.is_(True))
+    if entreprise_id is not None:
+        imm_q = imm_q.where(Immeuble.owner_entreprise_id == int(entreprise_id))
+    if immeuble_id is not None:
+        imm_q = imm_q.where(Immeuble.id == int(immeuble_id))
+    immeubles = (await db.execute(imm_q)).scalars().all()
+    visible = await visible_immeuble_ids(db, user)
+    if visible is not None:
+        immeubles = [i for i in immeubles if i.id in visible]
+    imm_ids = [i.id for i in immeubles]
+    if not imm_ids:
+        return PrevisionnelOut()
+
+    logements = (
+        await db.execute(
+            select(Logement).where(Logement.immeuble_id.in_(imm_ids))
+        )
+    ).scalars().all()
+    log_ids = [lg.id for lg in logements]
+    baux = []
+    if log_ids:
+        baux = (
+            await db.execute(
+                select(Bail).where(
+                    Bail.logement_id.in_(log_ids),
+                    Bail.status == BailStatus.ACTIF.value,
+                )
+            )
+        ).scalars().all()
+    revenus_mensuels = sum(float(b.loyer_mensuel or 0) for b in baux)
+
+    depenses = (
+        await db.execute(
+            select(DepenseImmeuble).where(
+                DepenseImmeuble.immeuble_id.in_(imm_ids)
+            )
+        )
+    ).scalars().all()
+    dep_mensuelles = 0.0
+    pon_by_month: dict = {}
+    for d in depenses:
+        m = float(d.montant or 0)
+        if d.frequence == "mensuel":
+            dep_mensuelles += m
+        elif d.frequence == "annuel":
+            dep_mensuelles += m / 12.0
+        elif d.date_depense:
+            key = d.date_depense.strftime("%Y-%m")
+            pon_by_month[key] = pon_by_month.get(key, 0.0) + m
+
+    hypos = (
+        await db.execute(
+            select(Hypotheque).where(
+                Hypotheque.immeuble_id.in_(imm_ids),
+                Hypotheque.status.notin_(
+                    ["remboursee", "refinancee", "REMBOURSEE", "REFINANCEE"]
+                ),
+            )
+        )
+    ).scalars().all()
+    hyp_mensuelle = sum(float(h.paiement_mensuel or 0) for h in hypos)
+
+    maints = (
+        await db.execute(
+            select(MaintenanceOrdre).where(
+                MaintenanceOrdre.immeuble_id.in_(imm_ids),
+                MaintenanceOrdre.plannifie_pour.is_not(None),
+                MaintenanceOrdre.cout_estime.is_not(None),
+            )
+        )
+    ).scalars().all()
+    active_status = {"ouvert", "en_cours", "en_attente"}
+    maint_by_month: dict = {}
+    for mo in maints:
+        if mo.status not in active_status:
+            continue
+        key = mo.plannifie_pour.strftime("%Y-%m")
+        maint_by_month[key] = maint_by_month.get(key, 0.0) + float(
+            mo.cout_estime or 0
+        )
+
+    today = datetime.now(timezone.utc).date()
+    cur = today.replace(day=1)
+    rows: List[PrevisionnelMois] = []
+    cumule = 0.0
+    total_maint = 0.0
+    for _i in range(mois):
+        key = cur.strftime("%Y-%m")
+        maint = maint_by_month.get(key, 0.0)
+        pon = pon_by_month.get(key, 0.0)
+        dep_courantes = dep_mensuelles + pon
+        cf = revenus_mensuels - dep_courantes - hyp_mensuelle - maint
+        cumule += cf
+        total_maint += maint
+        rows.append(
+            PrevisionnelMois(
+                mois=key,
+                revenus=round(revenus_mensuels, 2),
+                depenses_courantes=round(dep_courantes, 2),
+                hypotheque=round(hyp_mensuelle, 2),
+                maintenance=round(maint, 2),
+                cashflow_net=round(cf, 2),
+                cashflow_cumule=round(cumule, 2),
+            )
+        )
+        if cur.month == 12:
+            cur = cur.replace(year=cur.year + 1, month=1)
+        else:
+            cur = cur.replace(month=cur.month + 1)
+
+    return PrevisionnelOut(
+        rows=rows,
+        revenus_mensuels=round(revenus_mensuels, 2),
+        depenses_mensuelles=round(dep_mensuelles, 2),
+        hypotheque_mensuelle=round(hyp_mensuelle, 2),
+        cashflow_mensuel_base=round(
+            revenus_mensuels - dep_mensuelles - hyp_mensuelle, 2
+        ),
+        total_maintenance_planifiee=round(total_maint, 2),
+        cashflow_horizon=round(cumule, 2),
+    )
+
+
 # ── Hypothèques ────────────────────────────────────────────────────────
 
 
