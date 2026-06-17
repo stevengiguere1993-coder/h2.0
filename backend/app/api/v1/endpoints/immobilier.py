@@ -3148,6 +3148,55 @@ async def maintenance_overview(
     )
 
 
+# ── Cockpit « À traiter » ──────────────────────────────────────────────
+
+
+class ATraiterOut(BaseModel):
+    loyers_retard_nb: int = 0
+    loyers_retard_total: float = 0.0
+    baux_a_renouveler_nb: int = 0
+    maintenance_urgente_nb: int = 0
+    depots_a_rendre_nb: int = 0
+    depots_a_rendre_total: float = 0.0
+
+
+@router.get("/a-traiter", response_model=ATraiterOut)
+async def a_traiter(db: DBSession, user: CurrentUser) -> ATraiterOut:
+    """Cockpit « À traiter » : agrège tout ce qui demande une action —
+    loyers en retard, baux à renouveler, maintenance urgente, dépôts à
+    rendre. Un coup d'œil pour ne rien échapper."""
+    _require_volet(user)
+    # Appels internes : on passe TOUS les paramètres optionnels
+    # explicitement (en appel direct, les défauts Query() ne valent pas None).
+    lo = await loyers_overview(
+        db=db, user=user, mois=None, entreprise_id=None
+    )
+    ech = await baux_echeances(
+        db=db, user=user, entreprise_id=None, horizon_jours=45
+    )
+    maint = await maintenance_overview(
+        db=db,
+        user=user,
+        statut=None,
+        priorite=None,
+        immeuble_id=None,
+        inclure_termines=False,
+    )
+    dep = await depots_overview(db=db, user=user, entreprise_id=None)
+
+    retard_total = sum(
+        float(r.loyer_mensuel or 0) for r in lo.rows if r.etat == "retard"
+    )
+    return ATraiterOut(
+        loyers_retard_nb=lo.nb_retards,
+        loyers_retard_total=round(retard_total, 2),
+        baux_a_renouveler_nb=ech.nb_a_envoyer + ech.nb_en_retard,
+        maintenance_urgente_nb=maint.nb_urgences_actives,
+        depots_a_rendre_nb=dep.nb_a_rendre,
+        depots_a_rendre_total=dep.total_a_rendre,
+    )
+
+
 # ── KPIs financiers d'un immeuble ──────────────────────────────────────
 
 
