@@ -332,6 +332,125 @@ async def list_areas(
     return out
 
 
+class ByAddressOut(BaseModel):
+    found: bool = False
+    address_label: Optional[str] = None
+    secteur: Optional[str] = None
+    secteur_kind: Optional[str] = None  # quartier | city | fsa | tout
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    summary: Optional[ComparablesSummary] = None
+    notes: List[str] = []
+
+
+@router.get("/by-address", response_model=ByAddressOut)
+async def by_address(
+    db: DBSession,
+    user: CurrentUser,
+    address: str = Query(..., min_length=2),
+    max_age_days: int = Query(default=45, ge=1, le=90),
+) -> ByAddressOut:
+    """Adresse libre → comparables du secteur. Géocode l'adresse, en déduit
+    quartier / ville / FSA, puis cascade quartier → FSA → ville → tout le
+    marché jusqu'à trouver des comparables."""
+    from app.integrations.cmhc.rents import normalize_zone
+    from app.integrations.nominatim import geocode_to_area
+
+    geo = await geocode_to_area(address)
+    if not geo:
+        return ByAddressOut(
+            found=False,
+            notes=[
+                "Adresse introuvable. Ajoute la ville "
+                "(ex. « 1234 rue Beaubien, Montréal »)."
+            ],
+        )
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    db_quartiers = [
+        q
+        for (q,) in (
+            await db.execute(
+                select(RentalListing.quartier)
+                .where(
+                    RentalListing.quartier.is_not(None),
+                    RentalListing.scraped_at >= cutoff,
+                )
+                .distinct()
+            )
+        ).all()
+        if q
+    ]
+
+    matched_quartier = None
+    borough = geo.get("borough")
+    if borough:
+        bn = normalize_zone(borough)
+        for q in db_quartiers:
+            qn = normalize_zone(q)
+            if qn and (qn == bn or qn in bn or bn in qn):
+                matched_quartier = q
+                break
+
+    cands: list[tuple[str, Optional[str]]] = []
+    if matched_quartier:
+        cands.append(("quartier", matched_quartier))
+    if geo.get("fsa"):
+        cands.append(("fsa", geo["fsa"]))
+    if geo.get("city"):
+        cands.append(("city", geo["city"]))
+    cands.append(("tout", None))
+
+    chosen_kind = None
+    chosen_val = None
+    summary = None
+    for kind, val in cands:
+        try:
+            sm = await get_summary(
+                db=db,
+                _=user,
+                quartier=val if kind == "quartier" else None,
+                postal_code=val if kind == "fsa" else None,
+                city=val if kind == "city" else None,
+                nom_rue=None,
+                tout=(kind == "tout"),
+                max_age_days=max_age_days,
+            )
+        except HTTPException:
+            continue
+        if summary is None:
+            chosen_kind, chosen_val, summary = kind, val, sm
+        if sm.sample_size > 0:
+            chosen_kind, chosen_val, summary = kind, val, sm
+            break
+
+    notes: List[str] = []
+    if chosen_kind == "tout":
+        notes.append(
+            "Peu de comparables précis pour cette adresse — on montre "
+            "l'ensemble du marché récent."
+        )
+    elif chosen_kind == "city":
+        notes.append(
+            f"Comparables pour la ville « {chosen_val} » "
+            f"(données insuffisantes au quartier)."
+        )
+
+    secteur = (
+        "Tout le marché récent" if chosen_kind == "tout" else chosen_val
+    )
+    return ByAddressOut(
+        found=True,
+        address_label=geo.get("display") or address,
+        secteur=secteur,
+        secteur_kind=chosen_kind,
+        lat=geo.get("lat"),
+        lng=geo.get("lng"),
+        summary=summary,
+        notes=notes,
+    )
+
+
 @router.get(
     "/list",
     summary="Annonces brutes (debug). Limité à 200 lignes.",
