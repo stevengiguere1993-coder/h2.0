@@ -185,7 +185,12 @@ async def run_migration(
         "scope": "client" if client_id is not None else "all",
         "customers": {"created": 0, "already_linked": 0, "errors": 0},
         "projects": {"linked": 0, "errors": 0},
-        "factures": {"pushed": 0, "already_linked": 0, "errors": 0},
+        "factures": {
+            "pushed": 0,
+            "already_linked": 0,
+            "skipped_draft": 0,
+            "errors": 0,
+        },
         "payments": {"applied": 0},
         "details": [],
     }
@@ -266,6 +271,11 @@ async def run_migration(
         )
         for f in factures:
             try:
+                # On ne pousse QUE les factures ENVOYÉES. Les brouillons
+                # (et annulées) ne sont pas des documents émis → ignorés.
+                if (f.status or "") in ("draft", "void"):
+                    res["factures"]["skipped_draft"] += 1
+                    continue
                 ref = customer_id
                 if f.project_id and job_by_project.get(f.project_id):
                     ref = job_by_project[f.project_id]

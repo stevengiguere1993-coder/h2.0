@@ -2265,6 +2265,22 @@ function FinancesTab({
         ) : null}
       </section>
 
+      {/* Total facturé — affiché AU-DESSUS des coûts. Basé UNIQUEMENT sur
+          les factures ENVOYÉES au client (les brouillons ne comptent pas). */}
+      <section className="rounded-xl border border-emerald-500/40 bg-emerald-500/5 p-5">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+            Total facturé
+          </h3>
+          <span className="text-2xl font-bold text-emerald-300">
+            {fmtMoney(data.invoiced_amount)}
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-white/50">
+          Factures envoyées au client — les brouillons ne sont pas comptés.
+        </p>
+      </section>
+
       {/* Service lines */}
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">

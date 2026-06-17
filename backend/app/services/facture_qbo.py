@@ -324,6 +324,17 @@ async def sync_facture_to_qbo(
     if fa is None:
         raise FactureSyncError(f"Facture {facture_id} introuvable")
 
+    # On NE pousse PAS une facture en BROUILLON vers QBO : seules les
+    # factures ENVOYÉES (sent / paid / overdue) deviennent des Invoice QB.
+    # Le brouillon n'est pas un document émis — il partira quand on
+    # cliquera « Envoyer au client ».
+    if (fa.status or "") in ("draft", "void"):
+        return {
+            "skipped": True,
+            "reason": "facture_draft_ou_annulee",
+            "status": fa.status,
+        }
+
     items = await _load_items(db, facture_id)
     client = await _load_client(db, fa.client_id)
     if client is None:
