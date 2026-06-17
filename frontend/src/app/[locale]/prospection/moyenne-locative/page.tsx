@@ -4,12 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Building2,
   Calculator,
+  Database,
   Info,
   Loader2,
   MapPin,
-  Minus,
   Search,
-  TrendingDown,
   TrendingUp,
   X
 } from "lucide-react";
@@ -18,32 +17,50 @@ import { authedFetch } from "@/lib/auth";
 import { AppTopbar } from "@/components/app-topbar";
 import { useProspectionLayout } from "../layout";
 
-type Zone = {
-  cma: string;
-  zone: string | null;
-  year: number | null;
-  label: string;
+type Area = { kind: string; value: string; count: number };
+
+type Stats = {
+  count: number;
+  median: number | null;
+  p25: number | null;
+  p75: number | null;
+  min: number | null;
+  max: number | null;
 };
 
-type Bracket = {
+type BedBreakdown = {
+  bedrooms: number;
+  pieces_label: string;
+  standard: Stats;
+  renovated: Stats;
+  with_heating: Stats;
+  with_electricity: Stats;
+};
+
+type Market = {
+  quartier: string | null;
+  fsa: string | null;
+  sample_size: number;
+  fresh_count: number;
+  oldest_at: string | null;
+  overall: Stats;
+  by_bedrooms: BedBreakdown[];
+  common_inclusions: { tag: string; count: number; pct: number }[];
+};
+
+type SchlBracket = {
   qc_label: string;
   schl_label: string;
   bedrooms: number;
   avg_rent: number | null;
-  sample_size: number | null;
   is_estimate: boolean;
 };
-
-type Result = {
+type Schl = {
   matched: boolean;
   cma: string | null;
   zone: string | null;
   year: number | null;
-  vacancy_rate: number | null;
-  brackets: Bracket[];
-  cma_brackets: Bracket[];
-  suggestions: Zone[];
-  notes: string[];
+  brackets: SchlBracket[];
 };
 
 function norm(s: string): string {
@@ -72,28 +89,31 @@ const GRM_TIERS = [
   { max: Infinity, label: "Cher", cls: "text-rose-300" }
 ];
 
+type Filter = { quartier?: string; postal_code?: string; nom_rue?: string };
+
 export default function MoyenneLocativePage() {
   const { onOpenSidebar } = useProspectionLayout();
 
-  const [zones, setZones] = useState<Zone[]>([]);
+  const [areas, setAreas] = useState<Area[]>([]);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<Result | null>(null);
+  const [market, setMarket] = useState<Market | null>(null);
+  const [schl, setSchl] = useState<Schl | null>(null);
+  const [label, setLabel] = useState("");
   const boxRef = useRef<HTMLDivElement | null>(null);
 
-  // Calculateur de revenus : nb de logements par type.
-  const [mix, setMix] = useState<Record<string, string>>({});
+  const [mix, setMix] = useState<Record<number, string>>({});
   const [prix, setPrix] = useState("");
-
-  // Compare ton loyer.
   const [monLoyer, setMonLoyer] = useState("");
-  const [monType, setMonType] = useState("4½");
+  const [monBed, setMonBed] = useState<number>(1);
 
   useEffect(() => {
     void (async () => {
-      const r = await authedFetch("/api/v1/prospection/moyenne-locative/zones");
-      if (r.ok) setZones((await r.json()) as Zone[]);
+      const r = await authedFetch(
+        "/api/v1/prospection/rental-comparables/areas"
+      );
+      if (r.ok) setAreas((await r.json()) as Area[]);
     })();
   }, []);
 
@@ -109,66 +129,89 @@ export default function MoyenneLocativePage() {
 
   const matches = useMemo(() => {
     const q = norm(query);
-    if (!q) return zones.slice(0, 12);
-    const toks = q.split(" ").filter(Boolean);
-    return zones
-      .map((z) => {
-        const nl = norm(z.label);
-        const score = toks.reduce((a, t) => a + (nl.includes(t) ? 1 : 0), 0);
-        return { z, score, starts: nl.startsWith(q) };
-      })
-      .filter((m) => m.score > 0)
-      .sort((a, b) => Number(b.starts) - Number(a.starts) || b.score - a.score)
-      .slice(0, 12)
-      .map((m) => m.z);
-  }, [query, zones]);
+    const base = q
+      ? areas.filter((a) => norm(a.value).includes(q))
+      : areas;
+    return base.slice(0, 12);
+  }, [query, areas]);
 
-  const loadByZone = useCallback(async (z: Zone) => {
-    setOpen(false);
-    setQuery(z.label);
-    setLoading(true);
-    setResult(null);
-    const params = new URLSearchParams({ cma: z.cma });
-    if (z.zone) params.set("zone", z.zone);
-    const r = await authedFetch(
-      `/api/v1/prospection/moyenne-locative?${params.toString()}`
+  const load = useCallback(
+    async (f: Filter, displayLabel: string) => {
+      setOpen(false);
+      setLoading(true);
+      setMarket(null);
+      setSchl(null);
+      setLabel(displayLabel);
+      const mp = new URLSearchParams();
+      if (f.quartier) mp.set("quartier", f.quartier);
+      else if (f.postal_code) mp.set("postal_code", f.postal_code);
+      else if (f.nom_rue) mp.set("nom_rue", f.nom_rue);
+      const schlQ = f.quartier || f.nom_rue || displayLabel;
+      const [mr, sr] = await Promise.all([
+        authedFetch(
+          `/api/v1/prospection/rental-comparables/summary?${mp.toString()}`
+        ),
+        authedFetch(
+          `/api/v1/prospection/moyenne-locative?q=${encodeURIComponent(schlQ)}`
+        )
+      ]);
+      if (mr.ok) setMarket((await mr.json()) as Market);
+      if (sr.ok) setSchl((await sr.json()) as Schl);
+      setLoading(false);
+    },
+    []
+  );
+
+  function resolveFree(): { f: Filter; label: string } | null {
+    const q = query.trim();
+    if (!q) return null;
+    const pc = q.match(/[A-Za-z]\d[A-Za-z]/);
+    if (pc) return { f: { postal_code: pc[0].toUpperCase() }, label: q };
+    const nq = norm(q);
+    const exact = areas.find(
+      (a) => a.kind === "quartier" && norm(a.value) === nq
     );
-    if (r.ok) setResult((await r.json()) as Result);
-    setLoading(false);
-  }, []);
-
-  const loadByQuery = useCallback(async () => {
-    if (!query.trim()) return;
-    setOpen(false);
-    setLoading(true);
-    setResult(null);
-    const r = await authedFetch(
-      `/api/v1/prospection/moyenne-locative?q=${encodeURIComponent(query.trim())}`
+    if (exact) return { f: { quartier: exact.value }, label: exact.value };
+    const partial = areas.find(
+      (a) =>
+        a.kind === "quartier" &&
+        (norm(a.value).includes(nq) || nq.includes(norm(a.value)))
     );
-    if (r.ok) setResult((await r.json()) as Result);
-    setLoading(false);
-  }, [query]);
+    if (partial) return { f: { quartier: partial.value }, label: partial.value };
+    const street = q.replace(/^\s*\d+\s*/, "").trim();
+    if (street) return { f: { nom_rue: street }, label: q };
+    return null;
+  }
 
-  // Map bracket par qc_label pour le calculateur / comparaison.
-  const cmaByBed = useMemo(() => {
+  function search() {
+    const r = resolveFree();
+    if (r) void load(r.f, r.label);
+  }
+
+  // SCHL average par nb de chambres (0..3), pour la colonne référence.
+  const schlByBed = useMemo(() => {
     const m: Record<number, number | null> = {};
-    result?.cma_brackets.forEach((b) => (m[b.bedrooms] = b.avg_rent));
+    schl?.brackets.forEach((b) => {
+      if (!(b.bedrooms in m)) m[b.bedrooms] = b.avg_rent;
+    });
     return m;
-  }, [result]);
+  }, [schl]);
+
+  const rows = market?.by_bedrooms ?? [];
 
   const calc = useMemo(() => {
-    if (!result) return { monthly: 0, annual: 0, units: 0 };
     let monthly = 0;
     let units = 0;
-    for (const b of result.brackets) {
-      const n = parseInt(mix[b.qc_label] || "0", 10);
-      if (n > 0 && b.avg_rent != null) {
-        monthly += n * b.avg_rent;
+    for (const b of rows) {
+      const n = parseInt(mix[b.bedrooms] || "0", 10);
+      const ref = b.standard.median;
+      if (n > 0 && ref) {
+        monthly += n * ref;
         units += n;
       }
     }
     return { monthly, annual: monthly * 12, units };
-  }, [result, mix]);
+  }, [rows, mix]);
 
   const grm = useMemo(() => {
     const p = parseFloat(prix.replace(/[^0-9.]/g, ""));
@@ -177,15 +220,15 @@ export default function MoyenneLocativePage() {
   }, [prix, calc.annual]);
 
   const compare = useMemo(() => {
-    if (!result) return null;
     const loyer = parseFloat(monLoyer.replace(/[^0-9.]/g, ""));
-    const target = result.brackets.find((b) => b.qc_label === monType);
-    if (!loyer || !target || target.avg_rent == null) return null;
-    const diff = (loyer - target.avg_rent) / target.avg_rent;
-    return { loyer, market: target.avg_rent, diff };
-  }, [result, monLoyer, monType]);
+    const target = rows.find((b) => b.bedrooms === monBed);
+    const market_med = target?.standard.median ?? null;
+    if (!loyer || market_med == null) return null;
+    return { loyer, market: market_med, diff: (loyer - market_med) / market_med };
+  }, [rows, monLoyer, monBed]);
 
-  const secteurLabel = result?.zone || (result?.cma ? `${result.cma} (RMR)` : "");
+  const hasMarket = !!market && market.sample_size > 0;
+  const noData = areas.length === 0;
 
   return (
     <>
@@ -205,8 +248,9 @@ export default function MoyenneLocativePage() {
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-bold text-white">Moyenne locative</h1>
             <p className="text-sm text-white/60">
-              Loyers moyens du marché par secteur (données SCHL). Tape une
-              adresse ou un secteur — ça sort tout, par type de logement.
+              Loyers du marché à partir des annonces réelles (Kijiji, LesPAC) —
+              médiane, fourchette inférieure/supérieure par type. Référence SCHL
+              en complément.
             </p>
           </div>
         </header>
@@ -226,11 +270,18 @@ export default function MoyenneLocativePage() {
                   onFocus={() => setOpen(true)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      if (matches.length > 0) void loadByZone(matches[0]);
-                      else void loadByQuery();
+                      if (matches.length > 0) {
+                        const a = matches[0];
+                        void load(
+                          a.kind === "fsa"
+                            ? { postal_code: a.value }
+                            : { quartier: a.value },
+                          a.kind === "fsa" ? `Code postal ${a.value}` : a.value
+                        );
+                      } else search();
                     }
                   }}
-                  placeholder="Adresse ou secteur (ex. Plateau-Mont-Royal, LaSalle, Longueuil…)"
+                  placeholder="Adresse, secteur ou code postal (ex. 1234 rue Beaubien, Verdun, H2W…)"
                   className="w-full rounded-xl border border-brand-800 bg-brand-900 py-3 pl-9 pr-3 text-sm text-white outline-none focus:border-emerald-500/60"
                 />
                 {query ? (
@@ -238,7 +289,8 @@ export default function MoyenneLocativePage() {
                     type="button"
                     onClick={() => {
                       setQuery("");
-                      setResult(null);
+                      setMarket(null);
+                      setSchl(null);
                       setOpen(false);
                     }}
                     className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-white/40 hover:text-white"
@@ -249,7 +301,7 @@ export default function MoyenneLocativePage() {
               </div>
               <button
                 type="button"
-                onClick={() => void loadByQuery()}
+                onClick={search}
                 className="shrink-0 rounded-xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
               >
                 Rechercher
@@ -258,26 +310,40 @@ export default function MoyenneLocativePage() {
 
             {open && matches.length > 0 ? (
               <div className="absolute z-20 mt-1 max-h-72 w-full overflow-y-auto rounded-xl border border-brand-800 bg-brand-900 py-1 shadow-2xl">
-                {matches.map((z) => (
+                {matches.map((a) => (
                   <button
-                    key={`${z.cma}::${z.zone ?? ""}`}
+                    key={`${a.kind}:${a.value}`}
                     type="button"
-                    onClick={() => void loadByZone(z)}
+                    onClick={() =>
+                      void load(
+                        a.kind === "fsa"
+                          ? { postal_code: a.value }
+                          : { quartier: a.value },
+                        a.kind === "fsa" ? `Code postal ${a.value}` : a.value
+                      )
+                    }
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-white/80 hover:bg-brand-800/60"
                   >
                     <MapPin className="h-3.5 w-3.5 text-emerald-400" />
-                    <span className="flex-1 truncate">{z.label}</span>
-                    <span className="text-[11px] text-white/30">{z.cma}</span>
+                    <span className="flex-1 truncate">
+                      {a.kind === "fsa" ? `Code postal ${a.value}` : a.value}
+                    </span>
+                    <span className="text-[11px] text-white/30">
+                      {a.count} annonce{a.count > 1 ? "s" : ""}
+                    </span>
                   </button>
                 ))}
               </div>
             ) : null}
           </div>
-          {zones.length === 0 ? (
+
+          {noData ? (
             <p className="mt-2 max-w-2xl rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">
-              <Info className="mr-1 inline h-3.5 w-3.5" />
-              Aucune donnée SCHL chargée. Importe le fichier dans{" "}
-              <strong>Paramètres → Sources</strong>, puis reviens ici.
+              <Database className="mr-1 inline h-3.5 w-3.5" />
+              Le collecteur d&apos;annonces n&apos;a pas encore de données. Lance
+              le cron Render <strong>rental-scrape-daily</strong> (ou attends son
+              prochain passage), puis reviens — la recherche par adresse
+              s&apos;activera. La référence SCHL reste disponible.
             </p>
           ) : null}
         </section>
@@ -287,293 +353,285 @@ export default function MoyenneLocativePage() {
           <div className="mt-10 flex items-center justify-center text-white/50">
             <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Recherche…
           </div>
-        ) : result && !result.matched ? (
-          <div className="mt-8 max-w-2xl rounded-2xl border border-brand-800 bg-brand-900 p-5">
-            <p className="text-sm text-white/70">
-              {result.notes[0] || "Aucun résultat."}
-            </p>
-            {result.suggestions.length > 0 ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {result.suggestions.map((z) => (
-                  <button
-                    key={`${z.cma}::${z.zone ?? ""}`}
-                    type="button"
-                    onClick={() => void loadByZone(z)}
-                    className="rounded-full border border-brand-800 bg-brand-950 px-3 py-1 text-xs text-emerald-300 hover:border-emerald-500/50"
-                  >
-                    {z.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : result && result.matched ? (
+        ) : market || schl ? (
           <div className="mt-8 grid gap-5 lg:grid-cols-3">
-            {/* Colonne gauche : données du secteur */}
             <div className="space-y-5 lg:col-span-2">
+              {/* Loyers du marché */}
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <MapPin className="h-4 w-4 text-emerald-400" />
-                      <h2 className="text-lg font-bold text-white">
-                        {secteurLabel}
-                      </h2>
-                    </div>
-                    <p className="mt-0.5 text-xs text-white/50">
-                      RMR : {result.cma}
-                      {result.vacancy_rate != null
-                        ? ` · Taux d'inoccupation ${(
-                            result.vacancy_rate * 100
-                          ).toFixed(1)} %`
-                        : ""}
-                    </p>
+                  <div className="flex items-center gap-2">
+                    <MapPin className="h-4 w-4 text-emerald-400" />
+                    <h2 className="text-lg font-bold text-white">{label}</h2>
                   </div>
-                  {result.year ? (
+                  {hasMarket ? (
                     <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300">
-                      Données SCHL {result.year}
+                      {market!.sample_size} annonce
+                      {market!.sample_size > 1 ? "s" : ""} ·{" "}
+                      {market!.fresh_count} récente
+                      {market!.fresh_count > 1 ? "s" : ""}
                     </span>
                   ) : null}
                 </div>
 
-                <div className="mt-4 overflow-x-auto">
-                  <table className="w-full min-w-[480px] text-sm">
-                    <thead>
-                      <tr className="border-b border-brand-800 text-left text-[11px] uppercase tracking-wider text-white/45">
-                        <th className="py-2 pr-3 font-semibold">Type</th>
-                        <th className="py-2 pr-3 font-semibold">Équivalent</th>
-                        <th className="py-2 pr-3 text-right font-semibold">
-                          Loyer moyen
-                        </th>
-                        <th className="py-2 text-right font-semibold">vs RMR</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.brackets.map((b) => {
-                        const cmaRent = cmaByBed[b.bedrooms];
-                        const diff =
-                          b.avg_rent != null && cmaRent
-                            ? (b.avg_rent - cmaRent) / cmaRent
-                            : null;
-                        return (
+                {hasMarket ? (
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="w-full min-w-[620px] text-sm">
+                      <thead>
+                        <tr className="border-b border-brand-800 text-left text-[11px] uppercase tracking-wider text-white/45">
+                          <th className="py-2 pr-3 font-semibold">Type</th>
+                          <th className="py-2 pr-3 text-right font-semibold">
+                            Médiane
+                          </th>
+                          <th className="py-2 pr-3 text-right font-semibold">
+                            Inférieur
+                          </th>
+                          <th className="py-2 pr-3 text-right font-semibold">
+                            Supérieur
+                          </th>
+                          <th className="py-2 pr-3 text-right font-semibold">
+                            Fourchette
+                          </th>
+                          <th className="py-2 pr-3 text-right font-semibold">
+                            n
+                          </th>
+                          <th className="py-2 text-right font-semibold">
+                            Réf. SCHL
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((b) => (
                           <tr
-                            key={b.qc_label}
+                            key={b.bedrooms}
                             className="border-b border-brand-800/50"
                           >
-                            <td className="py-2.5 pr-3">
-                              <span className="font-bold text-white">
-                                {b.qc_label}
-                              </span>
-                              {b.is_estimate ? (
-                                <span
-                                  className="ml-1 text-[10px] text-amber-300"
-                                  title="La SCHL regroupe 5½/6½ dans « 3 chambres et + »"
-                                >
-                                  ~est.
-                                </span>
-                              ) : null}
+                            <td className="py-2.5 pr-3 font-semibold text-white">
+                              {b.pieces_label}
                             </td>
-                            <td className="py-2.5 pr-3 text-xs text-white/50">
-                              {b.schl_label}
+                            <td className="py-2.5 pr-3 text-right text-base font-bold tabular-nums text-emerald-300">
+                              {money(b.standard.median)}
                             </td>
-                            <td className="py-2.5 pr-3 text-right font-semibold tabular-nums text-white">
-                              {b.avg_rent != null ? money(b.avg_rent) : "n/d"}
+                            <td className="py-2.5 pr-3 text-right tabular-nums text-white/60">
+                              {money(b.standard.p25)}
                             </td>
-                            <td className="py-2.5 text-right">
-                              {diff != null ? (
-                                <span
-                                  className={`inline-flex items-center gap-1 text-xs font-semibold ${
-                                    Math.abs(diff) < 0.005
-                                      ? "text-white/40"
-                                      : diff > 0
-                                        ? "text-rose-300"
-                                        : "text-emerald-300"
-                                  }`}
-                                >
-                                  {Math.abs(diff) < 0.005 ? (
-                                    <Minus className="h-3 w-3" />
-                                  ) : diff > 0 ? (
-                                    <TrendingUp className="h-3 w-3" />
-                                  ) : (
-                                    <TrendingDown className="h-3 w-3" />
-                                  )}
-                                  {diff > 0 ? "+" : ""}
-                                  {(diff * 100).toFixed(0)} %
-                                </span>
-                              ) : (
-                                <span className="text-white/30">—</span>
-                              )}
+                            <td className="py-2.5 pr-3 text-right tabular-nums text-white/60">
+                              {money(b.standard.p75)}
+                            </td>
+                            <td className="py-2.5 pr-3 text-right text-xs tabular-nums text-white/40">
+                              {money(b.standard.min)}–{money(b.standard.max)}
+                            </td>
+                            <td className="py-2.5 pr-3 text-right text-xs text-white/40">
+                              {b.standard.count}
+                            </td>
+                            <td className="py-2.5 text-right tabular-nums text-sky-300/80">
+                              {money(schlByBed[Math.min(b.bedrooms, 3)] ?? null)}
                             </td>
                           </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-3 text-sm text-amber-200">
+                    Pas encore d&apos;annonces pour ce secteur. Voici la
+                    référence SCHL ci-dessous en attendant que le collecteur
+                    passe.
+                  </div>
+                )}
 
-                {result.notes.length > 0 ? (
-                  <p className="mt-3 text-[11px] text-white/40">
-                    {result.notes.join(" ")}
-                  </p>
+                {/* Référence SCHL */}
+                {schl?.matched ? (
+                  <div className="mt-4 rounded-xl border border-sky-500/20 bg-sky-500/[0.04] p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-sky-300">
+                        Référence SCHL (officielle)
+                        {schl.zone ? ` — ${schl.zone}` : ""}
+                      </span>
+                      {schl.year ? (
+                        <span className="text-[11px] text-white/40">
+                          {schl.year}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-white/60">
+                      {schl.brackets
+                        .filter((x) => x.avg_rent != null && !x.is_estimate)
+                        .map((x) => (
+                          <span key={x.qc_label}>
+                            {x.schl_label} :{" "}
+                            <span className="font-semibold text-white">
+                              {money(x.avg_rent)}
+                            </span>
+                          </span>
+                        ))}
+                    </div>
+                  </div>
                 ) : null}
-                <p className="mt-1 text-[11px] text-white/30">
-                  « vs RMR » = écart du secteur par rapport à la moyenne de toute
-                  la région métropolitaine. ~est. : 5½/6½ estimés via le bracket
-                  « 3 chambres et + ».
+
+                <p className="mt-3 text-[11px] text-white/35">
+                  Source : annonces de location collectées par Kratos (Kijiji,
+                  LesPAC), valeurs aberrantes et doublons écartés — même méthode
+                  que Zipplex. « Réf. SCHL » = moyenne officielle du parc
+                  existant. Les chiffres exacts de Zipplex demandent leur
+                  abonnement (données propriétaires).
                 </p>
               </div>
 
-              {/* Compare ton loyer */}
-              <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
-                  <TrendingUp className="h-4 w-4 text-emerald-400" />
-                  Compare un loyer au marché
-                </h3>
-                <div className="mt-3 flex flex-wrap items-end gap-3">
-                  <div>
-                    <label className="mb-1 block text-[11px] text-white/50">
-                      Loyer actuel ($/mois)
-                    </label>
-                    <input
-                      value={monLoyer}
-                      onChange={(e) => setMonLoyer(e.target.value)}
-                      inputMode="numeric"
-                      placeholder="1 250"
-                      className="w-32 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/60"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-[11px] text-white/50">
-                      Type
-                    </label>
-                    <select
-                      value={monType}
-                      onChange={(e) => setMonType(e.target.value)}
-                      className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/60"
-                    >
-                      {result.brackets.map((b) => (
-                        <option key={b.qc_label} value={b.qc_label}>
-                          {b.qc_label} ({b.schl_label})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  {compare ? (
-                    <div
-                      className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                        compare.diff > 0.02
-                          ? "border-rose-500/40 bg-rose-500/10 text-rose-200"
-                          : compare.diff < -0.02
-                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-                            : "border-white/15 bg-white/5 text-white/70"
-                      }`}
-                    >
-                      {compare.diff > 0 ? "+" : ""}
-                      {(compare.diff * 100).toFixed(0)} % vs marché (
-                      {money(compare.market)})
+              {/* Compare un loyer */}
+              {hasMarket ? (
+                <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
+                    <TrendingUp className="h-4 w-4 text-emerald-400" />
+                    Compare un loyer au marché
+                  </h3>
+                  <div className="mt-3 flex flex-wrap items-end gap-3">
+                    <div>
+                      <label className="mb-1 block text-[11px] text-white/50">
+                        Loyer ($/mois)
+                      </label>
+                      <input
+                        value={monLoyer}
+                        onChange={(e) => setMonLoyer(e.target.value)}
+                        inputMode="numeric"
+                        placeholder="1 250"
+                        className="w-32 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/60"
+                      />
                     </div>
-                  ) : null}
+                    <div>
+                      <label className="mb-1 block text-[11px] text-white/50">
+                        Type
+                      </label>
+                      <select
+                        value={monBed}
+                        onChange={(e) => setMonBed(parseInt(e.target.value, 10))}
+                        className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/60"
+                      >
+                        {rows.map((b) => (
+                          <option key={b.bedrooms} value={b.bedrooms}>
+                            {b.pieces_label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {compare ? (
+                      <div
+                        className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                          compare.diff > 0.02
+                            ? "border-rose-500/40 bg-rose-500/10 text-rose-200"
+                            : compare.diff < -0.02
+                              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                              : "border-white/15 bg-white/5 text-white/70"
+                        }`}
+                      >
+                        {compare.diff > 0 ? "+" : ""}
+                        {(compare.diff * 100).toFixed(0)} % vs médiane (
+                        {money(compare.market)})
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
+              ) : null}
             </div>
 
-            {/* Colonne droite : calculateur de revenus */}
+            {/* Calculateur */}
             <div className="space-y-5">
-              <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
-                  <Calculator className="h-4 w-4 text-emerald-400" />
-                  Revenu potentiel d&apos;un immeuble
-                </h3>
-                <p className="mt-1 text-[11px] text-white/45">
-                  Entre le nombre de logements par type pour estimer le revenu
-                  locatif au prix du marché.
-                </p>
-                <div className="mt-3 space-y-2">
-                  {result.brackets
-                    .filter((b) => b.avg_rent != null)
-                    .map((b) => (
-                      <div
-                        key={b.qc_label}
-                        className="flex items-center justify-between gap-2"
-                      >
-                        <span className="text-sm text-white/70">
-                          {b.qc_label}
-                          <span className="ml-1 text-[11px] text-white/35">
-                            {money(b.avg_rent)}
-                          </span>
-                        </span>
-                        <input
-                          value={mix[b.qc_label] || ""}
-                          onChange={(e) =>
-                            setMix((m) => ({
-                              ...m,
-                              [b.qc_label]: e.target.value.replace(/[^0-9]/g, "")
-                            }))
-                          }
-                          inputMode="numeric"
-                          placeholder="0"
-                          className="w-16 rounded-lg border border-brand-800 bg-brand-950 px-2 py-1.5 text-right text-sm text-white outline-none focus:border-emerald-500/60"
-                        />
-                      </div>
-                    ))}
-                </div>
-                <div className="mt-3 space-y-1 border-t border-brand-800 pt-3 text-sm">
-                  <div className="flex justify-between text-white/60">
-                    <span>Logements</span>
-                    <span className="font-semibold text-white">
-                      {calc.units}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-white/60">
-                    <span>Revenu / mois</span>
-                    <span className="font-semibold text-emerald-300">
-                      {money(calc.monthly)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-white/60">
-                    <span>Revenu / an</span>
-                    <span className="font-bold text-emerald-300">
-                      {money(calc.annual)}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="mt-3 border-t border-brand-800 pt-3">
-                  <label className="mb-1 block text-[11px] text-white/50">
-                    Prix demandé / payé ($) — pour le multiplicateur (GRM)
-                  </label>
-                  <input
-                    value={prix}
-                    onChange={(e) => setPrix(e.target.value)}
-                    inputMode="numeric"
-                    placeholder="1 200 000"
-                    className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/60"
-                  />
-                  {grm ? (
-                    <div className="mt-2 flex items-center justify-between rounded-lg bg-brand-950 px-3 py-2 text-sm">
-                      <span className="text-white/60">GRM (prix / revenu)</span>
-                      <span className="font-bold text-white">
-                        {grm.toFixed(1)}{" "}
-                        <span
-                          className={
-                            GRM_TIERS.find((t) => grm < t.max)?.cls ??
-                            "text-white/60"
-                          }
+              {hasMarket ? (
+                <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
+                    <Calculator className="h-4 w-4 text-emerald-400" />
+                    Revenu potentiel d&apos;un immeuble
+                  </h3>
+                  <p className="mt-1 text-[11px] text-white/45">
+                    Nombre de logements par type → revenu au marché (médiane).
+                  </p>
+                  <div className="mt-3 space-y-2">
+                    {rows
+                      .filter((b) => b.standard.median != null)
+                      .map((b) => (
+                        <div
+                          key={b.bedrooms}
+                          className="flex items-center justify-between gap-2"
                         >
-                          ·{" "}
-                          {GRM_TIERS.find((t) => grm < t.max)?.label ?? ""}
-                        </span>
+                          <span className="text-sm text-white/70">
+                            {b.pieces_label}
+                            <span className="ml-1 text-[11px] text-white/35">
+                              {money(b.standard.median)}
+                            </span>
+                          </span>
+                          <input
+                            value={mix[b.bedrooms] || ""}
+                            onChange={(e) =>
+                              setMix((m) => ({
+                                ...m,
+                                [b.bedrooms]: e.target.value.replace(
+                                  /[^0-9]/g,
+                                  ""
+                                )
+                              }))
+                            }
+                            inputMode="numeric"
+                            placeholder="0"
+                            className="w-16 rounded-lg border border-brand-800 bg-brand-950 px-2 py-1.5 text-right text-sm text-white outline-none focus:border-emerald-500/60"
+                          />
+                        </div>
+                      ))}
+                  </div>
+                  <div className="mt-3 space-y-1 border-t border-brand-800 pt-3 text-sm">
+                    <div className="flex justify-between text-white/60">
+                      <span>Logements</span>
+                      <span className="font-semibold text-white">
+                        {calc.units}
                       </span>
                     </div>
-                  ) : null}
+                    <div className="flex justify-between text-white/60">
+                      <span>Revenu / mois</span>
+                      <span className="font-semibold text-emerald-300">
+                        {money(calc.monthly)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-white/60">
+                      <span>Revenu / an</span>
+                      <span className="font-bold text-emerald-300">
+                        {money(calc.annual)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mt-3 border-t border-brand-800 pt-3">
+                    <label className="mb-1 block text-[11px] text-white/50">
+                      Prix demandé / payé ($) — pour le GRM
+                    </label>
+                    <input
+                      value={prix}
+                      onChange={(e) => setPrix(e.target.value)}
+                      inputMode="numeric"
+                      placeholder="1 200 000"
+                      className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/60"
+                    />
+                    {grm ? (
+                      <div className="mt-2 flex items-center justify-between rounded-lg bg-brand-950 px-3 py-2 text-sm">
+                        <span className="text-white/60">GRM</span>
+                        <span className="font-bold text-white">
+                          {grm.toFixed(1)}{" "}
+                          <span
+                            className={
+                              GRM_TIERS.find((t) => grm < t.max)?.cls ??
+                              "text-white/60"
+                            }
+                          >
+                            · {GRM_TIERS.find((t) => grm < t.max)?.label ?? ""}
+                          </span>
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
+              ) : null}
 
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 text-[11px] text-white/45">
-                <Info className="mb-1 inline h-3.5 w-3.5 text-white/40" /> Les
-                loyers sont des <strong>moyennes SCHL</strong> du parc existant —
-                un logement rénové ou neuf se loue souvent au-dessus. Sers-t&apos;en
-                comme plancher de référence, pas comme plafond.
+                <Info className="mb-1 inline h-3.5 w-3.5 text-white/40" /> La
+                <strong> médiane</strong> est plus représentative que la moyenne
+                (moins sensible aux extrêmes). « Inférieur/Supérieur » = 25ᵉ et
+                75ᵉ centiles : la moitié des loyers tombe entre les deux.
               </div>
             </div>
           </div>
@@ -581,8 +639,8 @@ export default function MoyenneLocativePage() {
           <div className="mt-10 max-w-2xl rounded-2xl border border-dashed border-brand-800 p-8 text-center text-white/50">
             <Building2 className="mx-auto h-8 w-8 opacity-40" />
             <p className="mt-3 text-sm">
-              Tape une adresse ou un secteur ci-dessus pour voir les loyers
-              moyens du marché.
+              Tape une adresse, un secteur ou un code postal pour voir les loyers
+              du marché.
             </p>
           </div>
         )}
