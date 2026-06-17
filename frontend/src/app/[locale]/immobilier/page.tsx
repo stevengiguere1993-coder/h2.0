@@ -1,14 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   Building2,
+  CalendarClock,
   DollarSign,
   Home,
   Loader2,
   Plus,
+  ShieldCheck,
   TrendingUp,
-  Users
+  Users,
+  Wrench
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
@@ -45,10 +49,83 @@ function fmtPct(n: number): string {
   return `${(n * 100).toFixed(0)}%`;
 }
 
+function fmtCompact(n: number): string {
+  return n.toLocaleString("fr-CA", {
+    style: "currency",
+    currency: "CAD",
+    maximumFractionDigits: 0
+  });
+}
+
+function ATraiterTile({
+  href,
+  icon,
+  label,
+  count,
+  sub,
+  tone
+}: {
+  href: string;
+  icon: ReactNode;
+  label: string;
+  count: number;
+  sub: string;
+  tone: "rose" | "amber" | "orange" | "violet";
+}) {
+  const active = count > 0;
+  const toneCls = active
+    ? {
+        rose: "border-rose-500/40 bg-rose-500/10 text-rose-200",
+        amber: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+        orange: "border-orange-500/40 bg-orange-500/10 text-orange-200",
+        violet: "border-violet-500/40 bg-violet-500/10 text-violet-200"
+      }[tone]
+    : "border-brand-800 bg-brand-900 text-white/45";
+  return (
+    <Link
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      href={href as any}
+      className={`block rounded-2xl border p-4 transition hover:brightness-125 ${toneCls}`}
+    >
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider opacity-80">
+        {icon}
+        {label}
+      </div>
+      <div className="mt-1 text-3xl font-bold">{count}</div>
+      <div className="text-[11px] opacity-70">{sub}</div>
+    </Link>
+  );
+}
+
+type ATraiter = {
+  loyers_retard_nb: number;
+  loyers_retard_total: number;
+  baux_a_renouveler_nb: number;
+  maintenance_urgente_nb: number;
+  depots_a_rendre_nb: number;
+  depots_a_rendre_total: number;
+};
+
 export default function ImmobilierDashboard() {
   const { currentEntrepriseId } = useImmobilierLayout();
   const [list, setList] = useState<ImmeubleListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [aTraiter, setATraiter] = useState<ATraiter | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await authedFetch("/api/v1/immobilier/a-traiter");
+        if (r.ok && !cancelled) setATraiter((await r.json()) as ATraiter);
+      } catch {
+        /* silencieux : le cockpit est secondaire */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentEntrepriseId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,6 +203,64 @@ export default function ImmobilierDashboard() {
             </p>
           </div>
         </header>
+
+        {aTraiter ? (
+          <section className="mt-6">
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/45">
+              À traiter
+            </h2>
+            <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+              <ATraiterTile
+                href="/immobilier/baux"
+                icon={<AlertTriangle className="h-4 w-4" />}
+                label="Loyers en retard"
+                count={aTraiter.loyers_retard_nb}
+                sub={
+                  aTraiter.loyers_retard_nb > 0
+                    ? fmtCompact(aTraiter.loyers_retard_total)
+                    : "rien à relancer"
+                }
+                tone="rose"
+              />
+              <ATraiterTile
+                href="/immobilier/renouvellements"
+                icon={<CalendarClock className="h-4 w-4" />}
+                label="Baux à renouveler"
+                count={aTraiter.baux_a_renouveler_nb}
+                sub={
+                  aTraiter.baux_a_renouveler_nb > 0
+                    ? "avis à envoyer"
+                    : "à jour"
+                }
+                tone="amber"
+              />
+              <ATraiterTile
+                href="/immobilier/maintenance"
+                icon={<Wrench className="h-4 w-4" />}
+                label="Maintenance urgente"
+                count={aTraiter.maintenance_urgente_nb}
+                sub={
+                  aTraiter.maintenance_urgente_nb > 0
+                    ? "ordres ouverts"
+                    : "rien d'urgent"
+                }
+                tone="orange"
+              />
+              <ATraiterTile
+                href="/immobilier/depots"
+                icon={<ShieldCheck className="h-4 w-4" />}
+                label="Dépôts à rendre"
+                count={aTraiter.depots_a_rendre_nb}
+                sub={
+                  aTraiter.depots_a_rendre_nb > 0
+                    ? fmtCompact(aTraiter.depots_a_rendre_total)
+                    : "rien à rembourser"
+                }
+                tone="violet"
+              />
+            </div>
+          </section>
+        ) : null}
 
         <PageDriveSection
           pageKey="page:immobilier:vue-ensemble"
