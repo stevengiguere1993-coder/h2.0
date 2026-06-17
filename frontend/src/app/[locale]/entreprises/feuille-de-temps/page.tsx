@@ -1,0 +1,1184 @@
+"use client";
+
+/**
+ * Feuille de temps — pôle Gestion d'entreprise.
+ *
+ * Reproduit le fichier Excel « Heures employé » de façon scalable :
+ * grille bi-hebdomadaire (14 jours × compagnies), totaux par compagnie/jour,
+ * paie (heures × taux horaire) et refacturation par compagnie. Chaque employé
+ * ne voit que sa propre feuille ; les gestionnaires voient/approuvent celles
+ * de tout le monde et gèrent la liste des compagnies.
+ */
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Loader2,
+  Save,
+  Send,
+  CheckCircle2,
+  RotateCcw,
+  Users,
+  Building2,
+  Plus,
+  Pencil,
+  Trash2,
+  X,
+  DollarSign,
+  CalendarDays
+} from "lucide-react";
+
+import { authedFetch } from "@/lib/auth";
+import { QGTopbar } from "../layout";
+
+// ── Types ──────────────────────────────────────────────────────────────
+
+type Ligne = {
+  company_id: number;
+  label: string;
+  taux_refacturation: number;
+  jours: number[];
+  total: number;
+  refacturation: number;
+  note: string;
+};
+
+type Detail = {
+  id: number;
+  user_id: number;
+  employee_name: string;
+  employee_email?: string | null;
+  period_start: string;
+  period_end: string;
+  jours_dates: string[];
+  taux_horaire: number;
+  taux_refacturation: number;
+  status: string;
+  submitted_at?: string | null;
+  approved_at?: string | null;
+  approved_by?: string | null;
+  is_self: boolean;
+  can_edit: boolean;
+  can_approve: boolean;
+  is_manager: boolean;
+  lignes: Ligne[];
+  totaux_jour: number[];
+  total_heures: number;
+  montant_paie: number;
+  total_refacturation: number;
+};
+
+type Employee = { id: number; name: string; email?: string | null; role: string };
+type Company = {
+  id: number;
+  label: string;
+  position: number;
+  taux_refacturation?: number | null;
+  is_active: boolean;
+};
+type TeamRow = {
+  id: number | null;
+  user_id: number;
+  employee_name: string;
+  period_start: string;
+  period_end: string;
+  status: string;
+  total_heures: number;
+  montant_paie: number;
+  total_refacturation: number;
+  taux_horaire: number;
+};
+
+const DAYS = 14;
+const WEEKDAYS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
+const MONTHS = [
+  "janvier", "février", "mars", "avril", "mai", "juin",
+  "juillet", "août", "septembre", "octobre", "novembre", "décembre"
+];
+
+// ── Helpers ────────────────────────────────────────────────────────────
+
+function parseISO(d: string): Date {
+  const [y, m, day] = d.split("-").map((x) => parseInt(x, 10));
+  return new Date(y, m - 1, day);
+}
+
+function addDaysISO(d: string, n: number): string {
+  const dt = parseISO(d);
+  dt.setDate(dt.getDate() + n);
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, "0");
+  const day = String(dt.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function formatPeriod(start: string, end: string): string {
+  const s = parseISO(start);
+  const e = parseISO(end);
+  const sameYear = s.getFullYear() === e.getFullYear();
+  const sameMonth = sameYear && s.getMonth() === e.getMonth();
+  if (sameMonth) {
+    return `${s.getDate()} – ${e.getDate()} ${MONTHS[e.getMonth()]} ${e.getFullYear()}`;
+  }
+  if (sameYear) {
+    return `${s.getDate()} ${MONTHS[s.getMonth()]} – ${e.getDate()} ${MONTHS[e.getMonth()]} ${e.getFullYear()}`;
+  }
+  return `${s.getDate()} ${MONTHS[s.getMonth()]} ${s.getFullYear()} – ${e.getDate()} ${MONTHS[e.getMonth()]} ${e.getFullYear()}`;
+}
+
+function money(n: number): string {
+  return new Intl.NumberFormat("fr-CA", {
+    style: "currency",
+    currency: "CAD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(n || 0);
+}
+
+function num(s: string): number {
+  const v = parseFloat((s || "").replace(",", "."));
+  return isNaN(v) || v < 0 ? 0 : v;
+}
+
+const STATUS_META: Record<
+  string,
+  { label: string; cls: string }
+> = {
+  brouillon: {
+    label: "Brouillon",
+    cls: "bg-slate-500/15 text-slate-300 border-slate-500/30"
+  },
+  soumis: {
+    label: "Soumis",
+    cls: "bg-amber-500/15 text-amber-300 border-amber-500/30"
+  },
+  approuve: {
+    label: "Approuvé",
+    cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+  },
+  vide: {
+    label: "Vide",
+    cls: "bg-slate-500/10 text-slate-400 border-slate-500/20"
+  }
+};
+
+const BTN_PRIMARY =
+  "inline-flex items-center gap-2 rounded-lg bg-[var(--qg-accent)] px-3.5 py-2 " +
+  "text-sm font-medium text-white shadow-sm transition hover:opacity-90 " +
+  "disabled:cursor-not-allowed disabled:opacity-40";
+const BTN_GHOST =
+  "inline-flex items-center gap-2 rounded-lg border border-[var(--qg-border)] " +
+  "bg-[var(--qg-card-bg)] px-3.5 py-2 text-sm font-medium text-[var(--qg-text)] " +
+  "transition hover:border-[var(--qg-accent)] disabled:cursor-not-allowed " +
+  "disabled:opacity-40";
+const CARD =
+  "rounded-2xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-5";
+
+// ── Page ───────────────────────────────────────────────────────────────
+
+export default function FeuilleDeTempsPage() {
+  const [detail, setDetail] = useState<Detail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [periodStart, setPeriodStart] = useState<string | null>(null);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+  const [view, setView] = useState<"feuille" | "equipe" | "compagnies">(
+    "feuille"
+  );
+
+  // Grille éditable (raw strings pour permettre la saisie de décimales).
+  const [cells, setCells] = useState<Record<number, string[]>>({});
+  const [notes, setNotes] = useState<Record<number, string>>({});
+  const [dirty, setDirty] = useState(false);
+
+  const isManager = detail?.is_manager ?? false;
+
+  // — Chargement de la feuille (resolve = get-or-create) —
+  const loadSheet = useCallback(
+    async (opts?: { period?: string | null; userId?: number | null }) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const params = new URLSearchParams();
+        const p = opts?.period ?? periodStart;
+        const u = opts?.userId ?? selectedUserId;
+        if (p) params.set("period_start", p);
+        if (u) params.set("user_id", String(u));
+        const r = await authedFetch(
+          `/api/v1/timesheets/resolve?${params.toString()}`
+        );
+        if (!r.ok) {
+          throw new Error((await r.text()) || `Erreur ${r.status}`);
+        }
+        const d: Detail = await r.json();
+        setDetail(d);
+        setPeriodStart(d.period_start);
+        // Hydrater la grille.
+        const c: Record<number, string[]> = {};
+        const n: Record<number, string> = {};
+        for (const l of d.lignes) {
+          c[l.company_id] = l.jours.map((h) => (h ? String(h) : ""));
+          n[l.company_id] = l.note || "";
+        }
+        setCells(c);
+        setNotes(n);
+        setDirty(false);
+      } catch (e: any) {
+        setError(e?.message || "Chargement impossible");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [periodStart, selectedUserId]
+  );
+
+  // — Init : employés (si gestionnaire) + feuille courante —
+  useEffect(() => {
+    void loadSheet({ period: null, userId: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!detail?.is_manager) return;
+    void (async () => {
+      try {
+        const r = await authedFetch("/api/v1/timesheets/employees");
+        if (r.ok) setEmployees(await r.json());
+      } catch {
+        /* noop */
+      }
+    })();
+  }, [detail?.is_manager]);
+
+  // — Totaux calculés en direct depuis la grille —
+  const computed = useMemo(() => {
+    if (!detail) {
+      return {
+        perCompany: {} as Record<number, number>,
+        perDay: new Array(DAYS).fill(0) as number[],
+        totalHeures: 0,
+        montantPaie: 0,
+        refacByCompany: {} as Record<number, number>,
+        totalRefac: 0
+      };
+    }
+    const perCompany: Record<number, number> = {};
+    const refacByCompany: Record<number, number> = {};
+    const perDay = new Array(DAYS).fill(0) as number[];
+    let totalHeures = 0;
+    let totalRefac = 0;
+    for (const l of detail.lignes) {
+      const arr = cells[l.company_id] || [];
+      let tot = 0;
+      for (let i = 0; i < DAYS; i++) {
+        const h = num(arr[i] || "");
+        tot += h;
+        perDay[i] += h;
+      }
+      perCompany[l.company_id] = tot;
+      const refac = tot * (l.taux_refacturation || 0);
+      refacByCompany[l.company_id] = refac;
+      totalHeures += tot;
+      totalRefac += refac;
+    }
+    return {
+      perCompany,
+      perDay,
+      totalHeures: Math.round(totalHeures * 100) / 100,
+      montantPaie:
+        Math.round(totalHeures * (detail.taux_horaire || 0) * 100) / 100,
+      refacByCompany,
+      totalRefac: Math.round(totalRefac * 100) / 100
+    };
+  }, [cells, detail]);
+
+  // — Sauvegarde de la grille —
+  const save = useCallback(async (): Promise<boolean> => {
+    if (!detail) return false;
+    setSaving(true);
+    setError(null);
+    try {
+      const entries: { company_id: number; day_index: number; hours: number }[] =
+        [];
+      for (const l of detail.lignes) {
+        const arr = cells[l.company_id] || [];
+        for (let i = 0; i < DAYS; i++) {
+          const h = num(arr[i] || "");
+          if (h > 0) entries.push({ company_id: l.company_id, day_index: i, hours: h });
+        }
+      }
+      const notesPayload: Record<string, string> = {};
+      for (const [cid, txt] of Object.entries(notes)) {
+        if (txt && txt.trim()) notesPayload[cid] = txt.trim();
+      }
+      const r = await authedFetch(
+        `/api/v1/timesheets/${detail.id}/entries`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entries, notes: notesPayload })
+        }
+      );
+      if (!r.ok) throw new Error((await r.text()) || `Erreur ${r.status}`);
+      const d: Detail = await r.json();
+      setDetail(d);
+      setDirty(false);
+      return true;
+    } catch (e: any) {
+      setError(e?.message || "Sauvegarde impossible");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [detail, cells, notes]);
+
+  // — Navigation période / employé (sauvegarde d'abord si modifié) —
+  const navigate = useCallback(
+    async (nextPeriod: string | null, nextUser: number | null) => {
+      if (dirty && detail?.can_edit) {
+        const ok = await save();
+        if (!ok) return;
+      }
+      await loadSheet({ period: nextPeriod, userId: nextUser });
+    },
+    [dirty, detail, save, loadSheet]
+  );
+
+  const changePeriod = (delta: number) => {
+    if (!periodStart) return;
+    void navigate(addDaysISO(periodStart, delta * DAYS), selectedUserId);
+  };
+
+  const changeEmployee = (uid: number | null) => {
+    setSelectedUserId(uid);
+    void navigate(periodStart, uid);
+  };
+
+  // — Actions de statut —
+  const doAction = useCallback(
+    async (action: "submit" | "approve" | "reopen") => {
+      if (!detail) return;
+      if (action === "submit" && dirty) {
+        const ok = await save();
+        if (!ok) return;
+      }
+      setSaving(true);
+      setError(null);
+      try {
+        const r = await authedFetch(
+          `/api/v1/timesheets/${detail.id}/${action}`,
+          { method: "POST" }
+        );
+        if (!r.ok) throw new Error((await r.text()) || `Erreur ${r.status}`);
+        const d: Detail = await r.json();
+        setDetail(d);
+        setDirty(false);
+      } catch (e: any) {
+        setError(e?.message || "Action impossible");
+      } finally {
+        setSaving(false);
+      }
+    },
+    [detail, dirty, save]
+  );
+
+  const setCell = (companyId: number, dayIdx: number, value: string) => {
+    if (!/^[0-9]*[.,]?[0-9]*$/.test(value)) return;
+    setCells((prev) => {
+      const arr = (prev[companyId] || new Array(DAYS).fill("")).slice();
+      arr[dayIdx] = value;
+      return { ...prev, [companyId]: arr };
+    });
+    setDirty(true);
+  };
+
+  const setNote = (companyId: number, value: string) => {
+    setNotes((prev) => ({ ...prev, [companyId]: value }));
+    setDirty(true);
+  };
+
+  const canEdit = detail?.can_edit ?? false;
+  const statusMeta = STATUS_META[detail?.status || "brouillon"] || STATUS_META.brouillon;
+
+  // — Topbar : actions —
+  const topbarActions = (
+    <div className="flex flex-wrap items-center gap-2">
+      {dirty && canEdit && (
+        <span className="text-xs font-medium text-amber-400">
+          Modifications non enregistrées
+        </span>
+      )}
+      {canEdit && (
+        <button
+          className={BTN_GHOST}
+          onClick={() => void save()}
+          disabled={saving || !dirty}
+        >
+          {saving ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Save className="h-4 w-4" />
+          )}
+          Enregistrer
+        </button>
+      )}
+      {detail?.is_self && detail?.status !== "approuve" && (
+        <button
+          className={BTN_PRIMARY}
+          onClick={() => void doAction("submit")}
+          disabled={saving}
+        >
+          <Send className="h-4 w-4" />
+          Soumettre
+        </button>
+      )}
+      {detail?.can_approve && detail?.status !== "approuve" && (
+        <button
+          className={BTN_PRIMARY}
+          onClick={() => void doAction("approve")}
+          disabled={saving}
+        >
+          <CheckCircle2 className="h-4 w-4" />
+          Approuver
+        </button>
+      )}
+      {detail?.can_approve && detail?.status === "approuve" && (
+        <button
+          className={BTN_GHOST}
+          onClick={() => void doAction("reopen")}
+          disabled={saving}
+        >
+          <RotateCcw className="h-4 w-4" />
+          Rouvrir
+        </button>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen">
+      <QGTopbar
+        greeting="Feuille de temps"
+        subtitle={
+          detail
+            ? `${detail.employee_name} · ${formatPeriod(
+                detail.period_start,
+                detail.period_end
+              )}`
+            : "Heures par compagnie · période de paie bi-hebdomadaire"
+        }
+        rightSlot={view === "feuille" ? topbarActions : undefined}
+      />
+
+      <div className="mx-auto max-w-[1400px] space-y-5 px-4 pb-16 pt-2 sm:px-6">
+        {/* Barre de contrôle */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Onglets (gestionnaire) */}
+            {isManager && (
+              <div className="flex items-center gap-1 rounded-xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-1">
+                <TabBtn active={view === "feuille"} onClick={() => setView("feuille")} icon={Clock}>
+                  Feuille
+                </TabBtn>
+                <TabBtn active={view === "equipe"} onClick={() => setView("equipe")} icon={Users}>
+                  Équipe
+                </TabBtn>
+                <TabBtn active={view === "compagnies"} onClick={() => setView("compagnies")} icon={Building2}>
+                  Compagnies
+                </TabBtn>
+              </div>
+            )}
+
+            {/* Sélecteur d'employé (gestionnaire, vue feuille) */}
+            {isManager && view === "feuille" && employees.length > 0 && (
+              <select
+                value={selectedUserId ?? detail?.user_id ?? ""}
+                onChange={(e) => changeEmployee(Number(e.target.value))}
+                className="rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
+              >
+                {employees.map((emp) => (
+                  <option key={emp.id} value={emp.id}>
+                    {emp.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Navigation période */}
+          {view !== "compagnies" && (
+            <div className="flex items-center gap-2">
+              <button className={BTN_GHOST} onClick={() => changePeriod(-1)} aria-label="Période précédente">
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <div className="min-w-[200px] rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-4 py-2 text-center text-sm font-medium">
+                <CalendarDays className="mr-2 inline h-4 w-4 opacity-60" />
+                {periodStart
+                  ? formatPeriod(periodStart, addDaysISO(periodStart, DAYS - 1))
+                  : "—"}
+              </div>
+              <button className={BTN_GHOST} onClick={() => changePeriod(1)} aria-label="Période suivante">
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex items-center justify-center py-24 text-[var(--qg-text-muted)]">
+            <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Chargement…
+          </div>
+        ) : view === "equipe" ? (
+          <TeamView periodStart={periodStart} onOpen={(uid) => { setView("feuille"); changeEmployee(uid); }} />
+        ) : view === "compagnies" ? (
+          <CompaniesManager />
+        ) : detail ? (
+          <>
+            {/* Bandeau statut + taux */}
+            <div className="flex flex-wrap items-center gap-3">
+              <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold ${statusMeta.cls}`}>
+                {statusMeta.label}
+              </span>
+              <RateField
+                label="Taux horaire"
+                value={detail.taux_horaire}
+                editable={isManager}
+                onCommit={async (v) => {
+                  await authedFetch(`/api/v1/timesheets/${detail.id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ taux_horaire: v })
+                  });
+                  await loadSheet();
+                }}
+              />
+              <RateField
+                label="Taux refacturation (défaut)"
+                value={detail.taux_refacturation}
+                editable={isManager}
+                onCommit={async (v) => {
+                  await authedFetch(`/api/v1/timesheets/${detail.id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ taux_refacturation: v })
+                  });
+                  await loadSheet();
+                }}
+              />
+              {detail.approved_by && (
+                <span className="text-xs text-[var(--qg-text-faint)]">
+                  Approuvé par {detail.approved_by}
+                </span>
+              )}
+            </div>
+
+            {/* Grille */}
+            <Grille
+              detail={detail}
+              cells={cells}
+              notes={notes}
+              perCompany={computed.perCompany}
+              perDay={computed.perDay}
+              totalHeures={computed.totalHeures}
+              refacByCompany={computed.refacByCompany}
+              canEdit={canEdit}
+              onCell={setCell}
+              onNote={setNote}
+            />
+
+            {/* Tuiles paie + refacturation */}
+            <div className="grid gap-4 lg:grid-cols-3">
+              <div className={`${CARD} lg:col-span-1`}>
+                <div className="flex items-center gap-2 text-sm font-medium text-[var(--qg-text-muted)]">
+                  <DollarSign className="h-4 w-4" /> Montant à verser
+                </div>
+                <div className="mt-2 text-3xl font-semibold tracking-tight">
+                  {money(computed.montantPaie)}
+                </div>
+                <div className="mt-1 text-sm text-[var(--qg-text-faint)]">
+                  {computed.totalHeures.toLocaleString("fr-CA")} h ×{" "}
+                  {money(detail.taux_horaire)} — {detail.employee_name}
+                </div>
+              </div>
+
+              <div className={`${CARD} lg:col-span-2`}>
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-sm font-medium text-[var(--qg-text-muted)]">
+                    Refacturation par compagnie
+                  </div>
+                  <div className="text-sm font-semibold">
+                    Total : {money(computed.totalRefac)}
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  {detail.lignes
+                    .filter((l) => (computed.perCompany[l.company_id] || 0) > 0)
+                    .map((l) => (
+                      <div
+                        key={l.company_id}
+                        className="flex items-center justify-between border-b border-[var(--qg-border)]/50 pb-1.5 text-sm last:border-0"
+                      >
+                        <span className="truncate pr-3">{l.label}</span>
+                        <span className="shrink-0 text-[var(--qg-text-faint)]">
+                          {(computed.perCompany[l.company_id] || 0).toLocaleString("fr-CA")} h ×{" "}
+                          {money(l.taux_refacturation)} ={" "}
+                          <span className="font-medium text-[var(--qg-text)]">
+                            {money(computed.refacByCompany[l.company_id] || 0)}
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  {detail.lignes.every(
+                    (l) => (computed.perCompany[l.company_id] || 0) === 0
+                  ) && (
+                    <div className="py-3 text-sm text-[var(--qg-text-faint)]">
+                      Aucune heure saisie pour cette période.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// ── Sous-composants ────────────────────────────────────────────────────
+
+function TabBtn({
+  active,
+  onClick,
+  icon: Icon,
+  children
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ComponentType<{ className?: string }>;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+        active
+          ? "bg-[var(--qg-accent)] text-white"
+          : "text-[var(--qg-text-muted)] hover:text-[var(--qg-text)]"
+      }`}
+    >
+      <Icon className="h-4 w-4" />
+      {children}
+    </button>
+  );
+}
+
+function RateField({
+  label,
+  value,
+  editable,
+  onCommit
+}: {
+  label: string;
+  value: number;
+  editable: boolean;
+  onCommit: (v: number) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [raw, setRaw] = useState(String(value));
+  useEffect(() => setRaw(String(value)), [value]);
+  return (
+    <div className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-1.5 text-sm">
+      <span className="text-[var(--qg-text-faint)]">{label} :</span>
+      {editable && editing ? (
+        <input
+          autoFocus
+          value={raw}
+          onChange={(e) => setRaw(e.target.value)}
+          onBlur={async () => {
+            setEditing(false);
+            const v = num(raw);
+            if (v !== value) await onCommit(v);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
+          className="w-16 rounded border border-[var(--qg-border)] bg-transparent px-1 py-0.5 text-right outline-none focus:border-[var(--qg-accent)]"
+        />
+      ) : (
+        <button
+          disabled={!editable}
+          onClick={() => setEditing(true)}
+          className={`font-medium ${editable ? "cursor-pointer hover:text-[var(--qg-accent)]" : "cursor-default"}`}
+        >
+          {money(value)}/h
+        </button>
+      )}
+    </div>
+  );
+}
+
+function Grille({
+  detail,
+  cells,
+  notes,
+  perCompany,
+  perDay,
+  totalHeures,
+  refacByCompany,
+  canEdit,
+  onCell,
+  onNote
+}: {
+  detail: Detail;
+  cells: Record<number, string[]>;
+  notes: Record<number, string>;
+  perCompany: Record<number, number>;
+  perDay: number[];
+  totalHeures: number;
+  refacByCompany: Record<number, number>;
+  canEdit: boolean;
+  onCell: (companyId: number, dayIdx: number, value: string) => void;
+  onNote: (companyId: number, value: string) => void;
+}) {
+  const dates = detail.jours_dates.map(parseISO);
+  const isWeekend = (i: number) => {
+    const dow = dates[i].getDay();
+    return dow === 0 || dow === 6;
+  };
+  const dayHeader = (i: number) => {
+    const d = dates[i];
+    const dow = (d.getDay() + 6) % 7; // 0 = Lundi
+    return { wd: WEEKDAYS[dow], day: d.getDate() };
+  };
+
+  const cellBase =
+    "w-12 text-center text-sm tabular-nums outline-none transition";
+  const weekendBg = "bg-[var(--qg-bg)]/40";
+
+  return (
+    <div className="overflow-x-auto rounded-2xl border border-[var(--qg-border)]">
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          {/* Ligne groupes semaine */}
+          <tr className="bg-[var(--qg-bg)]/60">
+            <th
+              rowSpan={2}
+              className="sticky left-0 z-20 min-w-[200px] border-b border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-4 py-2 text-left font-semibold"
+            >
+              Compagnie
+            </th>
+            <th
+              colSpan={7}
+              className="border-b border-r border-[var(--qg-border)] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-[var(--qg-text-muted)]"
+            >
+              Semaine 1
+            </th>
+            <th
+              colSpan={7}
+              className="border-b border-r border-[var(--qg-border)] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-[var(--qg-text-muted)]"
+            >
+              Semaine 2
+            </th>
+            <th
+              rowSpan={2}
+              className="border-b border-r border-[var(--qg-border)] bg-amber-500/5 px-3 py-2 text-center font-semibold"
+            >
+              Total
+            </th>
+            <th
+              rowSpan={2}
+              className="min-w-[180px] border-b border-[var(--qg-border)] px-3 py-2 text-left font-semibold"
+            >
+              Notes
+            </th>
+          </tr>
+          {/* Ligne jours */}
+          <tr className="bg-[var(--qg-bg)]/60">
+            {Array.from({ length: DAYS }).map((_, i) => {
+              const h = dayHeader(i);
+              return (
+                <th
+                  key={i}
+                  className={`border-b border-[var(--qg-border)] px-1 py-1.5 text-center text-xs font-medium ${
+                    isWeekend(i) ? weekendBg + " text-[var(--qg-text-faint)]" : "text-[var(--qg-text-muted)]"
+                  } ${i === 6 ? "border-r border-[var(--qg-border)]" : ""}`}
+                >
+                  <div>{h.wd}</div>
+                  <div className="text-[var(--qg-text-faint)]">{h.day}</div>
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {detail.lignes.map((l) => {
+            const arr = cells[l.company_id] || [];
+            const tot = perCompany[l.company_id] || 0;
+            return (
+              <tr key={l.company_id} className="group border-b border-[var(--qg-border)]/60">
+                <td className="sticky left-0 z-10 min-w-[200px] border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-4 py-1.5 font-medium group-hover:bg-[var(--qg-bg)]/30">
+                  {l.label}
+                </td>
+                {Array.from({ length: DAYS }).map((_, i) => (
+                  <td
+                    key={i}
+                    className={`border-[var(--qg-border)]/40 px-0.5 py-1 ${
+                      isWeekend(i) ? weekendBg : ""
+                    } ${i === 6 ? "border-r border-[var(--qg-border)]" : ""}`}
+                  >
+                    {canEdit ? (
+                      <input
+                        inputMode="decimal"
+                        value={arr[i] || ""}
+                        onChange={(e) => onCell(l.company_id, i, e.target.value)}
+                        className={`${cellBase} rounded border border-transparent bg-transparent px-1 py-1 hover:border-[var(--qg-border)] focus:border-[var(--qg-accent)] focus:bg-[var(--qg-bg)]/40`}
+                        placeholder="·"
+                      />
+                    ) : (
+                      <div className={`${cellBase} py-1`}>{arr[i] || ""}</div>
+                    )}
+                  </td>
+                ))}
+                <td className="border-l border-[var(--qg-border)] bg-amber-500/5 px-3 py-1.5 text-center font-semibold tabular-nums">
+                  {tot ? tot.toLocaleString("fr-CA") : ""}
+                </td>
+                <td className="px-2 py-1">
+                  {canEdit ? (
+                    <input
+                      value={notes[l.company_id] || ""}
+                      onChange={(e) => onNote(l.company_id, e.target.value)}
+                      placeholder="—"
+                      className="w-full rounded border border-transparent bg-transparent px-2 py-1 text-sm outline-none hover:border-[var(--qg-border)] focus:border-[var(--qg-accent)]"
+                    />
+                  ) : (
+                    <span className="text-sm text-[var(--qg-text-faint)]">
+                      {notes[l.company_id] || ""}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+        <tfoot>
+          <tr className="bg-[var(--qg-bg)]/70 font-semibold">
+            <td className="sticky left-0 z-10 border-r border-t-2 border-[var(--qg-border)] bg-[var(--qg-bg)]/90 px-4 py-2">
+              Total / jour
+            </td>
+            {perDay.map((d, i) => (
+              <td
+                key={i}
+                className={`border-t-2 border-[var(--qg-border)] px-1 py-2 text-center tabular-nums ${
+                  isWeekend(i) ? weekendBg : ""
+                } ${i === 6 ? "border-r border-[var(--qg-border)]" : ""}`}
+              >
+                {d ? d.toLocaleString("fr-CA") : ""}
+              </td>
+            ))}
+            <td className="border-l border-t-2 border-[var(--qg-border)] bg-amber-500/10 px-3 py-2 text-center tabular-nums">
+              {totalHeures ? totalHeures.toLocaleString("fr-CA") : "0"}
+            </td>
+            <td className="border-t-2 border-[var(--qg-border)]" />
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
+function TeamView({
+  periodStart,
+  onOpen
+}: {
+  periodStart: string | null;
+  onOpen: (userId: number) => void;
+}) {
+  const [rows, setRows] = useState<TeamRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    void (async () => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (periodStart) params.set("period_start", periodStart);
+        const r = await authedFetch(`/api/v1/timesheets/team?${params.toString()}`);
+        if (r.ok) setRows(await r.json());
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [periodStart]);
+
+  const totals = rows.reduce(
+    (a, r) => ({
+      h: a.h + r.total_heures,
+      paie: a.paie + r.montant_paie,
+      refac: a.refac + r.total_refacturation
+    }),
+    { h: 0, paie: 0, refac: 0 }
+  );
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16 text-[var(--qg-text-muted)]">
+        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Chargement…
+      </div>
+    );
+  }
+
+  return (
+    <div className={CARD}>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-[var(--qg-border)] text-left text-xs uppercase tracking-wide text-[var(--qg-text-muted)]">
+            <th className="px-3 py-2">Employé</th>
+            <th className="px-3 py-2">Statut</th>
+            <th className="px-3 py-2 text-right">Heures</th>
+            <th className="px-3 py-2 text-right">À verser</th>
+            <th className="px-3 py-2 text-right">Refacturation</th>
+            <th className="px-3 py-2" />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const sm = STATUS_META[r.status] || STATUS_META.vide;
+            return (
+              <tr key={r.user_id} className="border-b border-[var(--qg-border)]/50">
+                <td className="px-3 py-2.5 font-medium">{r.employee_name}</td>
+                <td className="px-3 py-2.5">
+                  <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${sm.cls}`}>
+                    {sm.label}
+                  </span>
+                </td>
+                <td className="px-3 py-2.5 text-right tabular-nums">
+                  {r.total_heures ? r.total_heures.toLocaleString("fr-CA") : "—"}
+                </td>
+                <td className="px-3 py-2.5 text-right tabular-nums">
+                  {r.montant_paie ? money(r.montant_paie) : "—"}
+                </td>
+                <td className="px-3 py-2.5 text-right tabular-nums">
+                  {r.total_refacturation ? money(r.total_refacturation) : "—"}
+                </td>
+                <td className="px-3 py-2.5 text-right">
+                  <button className={BTN_GHOST} onClick={() => onOpen(r.user_id)}>
+                    Ouvrir
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={6} className="px-3 py-8 text-center text-[var(--qg-text-faint)]">
+                Aucun employé actif.
+              </td>
+            </tr>
+          )}
+        </tbody>
+        {rows.length > 0 && (
+          <tfoot>
+            <tr className="border-t-2 border-[var(--qg-border)] font-semibold">
+              <td className="px-3 py-2.5" colSpan={2}>
+                Total équipe
+              </td>
+              <td className="px-3 py-2.5 text-right tabular-nums">
+                {totals.h.toLocaleString("fr-CA")}
+              </td>
+              <td className="px-3 py-2.5 text-right tabular-nums">{money(totals.paie)}</td>
+              <td className="px-3 py-2.5 text-right tabular-nums">{money(totals.refac)}</td>
+              <td />
+            </tr>
+          </tfoot>
+        )}
+      </table>
+    </div>
+  );
+}
+
+function CompaniesManager() {
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<Company | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await authedFetch("/api/v1/timesheets/companies?include_inactive=true");
+      if (r.ok) setCompanies(await r.json());
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const saveCompany = async (c: Partial<Company>, id?: number) => {
+    if (id) {
+      await authedFetch(`/api/v1/timesheets/companies/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(c)
+      });
+    } else {
+      await authedFetch("/api/v1/timesheets/companies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(c)
+      });
+    }
+    setEditing(null);
+    setAdding(false);
+    await load();
+  };
+
+  const removeCompany = async (id: number) => {
+    await authedFetch(`/api/v1/timesheets/companies/${id}`, { method: "DELETE" });
+    await load();
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16 text-[var(--qg-text-muted)]">
+        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Chargement…
+      </div>
+    );
+  }
+
+  return (
+    <div className={CARD}>
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <div className="text-base font-semibold">Compagnies</div>
+          <div className="text-sm text-[var(--qg-text-faint)]">
+            Liste partagée par tous les employés. Le taux fixe la refacturation
+            par défaut de chaque compagnie.
+          </div>
+        </div>
+        <button className={BTN_PRIMARY} onClick={() => setAdding(true)}>
+          <Plus className="h-4 w-4" /> Ajouter
+        </button>
+      </div>
+
+      {adding && (
+        <CompanyEditor
+          company={null}
+          onCancel={() => setAdding(false)}
+          onSave={(c) => saveCompany(c)}
+        />
+      )}
+
+      <div className="divide-y divide-[var(--qg-border)]/60">
+        {companies.map((c) =>
+          editing?.id === c.id ? (
+            <CompanyEditor
+              key={c.id}
+              company={c}
+              onCancel={() => setEditing(null)}
+              onSave={(patch) => saveCompany(patch, c.id)}
+            />
+          ) : (
+            <div key={c.id} className="flex items-center justify-between py-2.5">
+              <div className="flex items-center gap-3">
+                <span className={`font-medium ${c.is_active ? "" : "text-[var(--qg-text-faint)] line-through"}`}>
+                  {c.label}
+                </span>
+                {!c.is_active && (
+                  <span className="rounded-full bg-slate-500/15 px-2 py-0.5 text-xs text-slate-400">
+                    inactive
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-sm tabular-nums text-[var(--qg-text-muted)]">
+                  {c.taux_refacturation != null ? `${money(c.taux_refacturation)}/h` : "défaut"}
+                </span>
+                <button className="text-[var(--qg-text-faint)] hover:text-[var(--qg-accent)]" onClick={() => setEditing(c)}>
+                  <Pencil className="h-4 w-4" />
+                </button>
+                {c.is_active && (
+                  <button className="text-[var(--qg-text-faint)] hover:text-red-400" onClick={() => removeCompany(c.id)}>
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CompanyEditor({
+  company,
+  onCancel,
+  onSave
+}: {
+  company: Company | null;
+  onCancel: () => void;
+  onSave: (c: Partial<Company>) => void;
+}) {
+  const [label, setLabel] = useState(company?.label || "");
+  const [taux, setTaux] = useState(
+    company?.taux_refacturation != null ? String(company.taux_refacturation) : ""
+  );
+  const [active, setActive] = useState(company?.is_active ?? true);
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--qg-accent)]/40 bg-[var(--qg-bg)]/40 p-3">
+      <input
+        autoFocus
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        placeholder="Nom de la compagnie"
+        className="flex-1 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
+      />
+      <div className="flex items-center gap-1.5 text-sm">
+        <span className="text-[var(--qg-text-faint)]">Taux refac.</span>
+        <input
+          inputMode="decimal"
+          value={taux}
+          onChange={(e) => setTaux(e.target.value)}
+          placeholder="33"
+          className="w-20 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-2 text-right text-sm outline-none focus:border-[var(--qg-accent)]"
+        />
+      </div>
+      {company && (
+        <label className="flex items-center gap-1.5 text-sm">
+          <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
+          Active
+        </label>
+      )}
+      <button
+        className={BTN_PRIMARY}
+        disabled={!label.trim()}
+        onClick={() =>
+          onSave({
+            label: label.trim(),
+            taux_refacturation: taux.trim() ? num(taux) : null,
+            ...(company ? { is_active: active } : {})
+          })
+        }
+      >
+        <Save className="h-4 w-4" /> Enregistrer
+      </button>
+      <button className={BTN_GHOST} onClick={onCancel}>
+        <X className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
