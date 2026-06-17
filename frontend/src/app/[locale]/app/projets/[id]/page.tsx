@@ -114,7 +114,7 @@ export default function ProjectDetailPage() {
   const [includeHours, setIncludeHours] = useState(false);
   const [includeAchats, setIncludeAchats] = useState(false);
   const [onlyApproved, setOnlyApproved] = useState(true);
-  const [dueInDays, setDueInDays] = useState("30");
+  const [dueInDays, setDueInDays] = useState("0");
   const [tab, setTab] = useState<TabId>("summary");
   // #25 — Phase ciblée par un clic depuis le Gantt / la liste agenda :
   // on ouvre l'onglet Planification ET on défile/surligne cette phase
@@ -308,7 +308,7 @@ export default function ProjectDetailPage() {
     setIncludeHours(!p.soumission_id);
     setIncludeAchats(false);
     setOnlyApproved(true);
-    setDueInDays("30");
+    setDueInDays("0");
     setFactureModalOpen(true);
   }
 
@@ -340,7 +340,7 @@ export default function ProjectDetailPage() {
             include_hours: includeHours,
             only_approved: onlyApproved,
             include_achats: includeAchats,
-            due_in_days: Number(dueInDays) || 30
+            due_in_days: Number(dueInDays) || 0
           })
         }
       );
@@ -790,7 +790,8 @@ export default function ProjectDetailPage() {
 
               <div className="pt-2">
                 <label htmlFor="due_days" className="label">
-                  Échéance (jours à partir d&apos;aujourd&apos;hui)
+                  Échéance (jours à partir d&apos;aujourd&apos;hui) — 0 =
+                  payable sur réception
                 </label>
                 <input
                   id="due_days"

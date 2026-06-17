@@ -97,8 +97,11 @@ class ConvertToFactureRequest(BaseModel):
         ),
     )
     due_in_days: Optional[int] = Field(
-        default=30, ge=0, le=365,
-        description="Days from today to the invoice due date.",
+        default=0, ge=0, le=365,
+        description=(
+            "Jours avant l'échéance. 0 (défaut) = « Payable sur "
+            "réception »."
+        ),
     )
 
 
