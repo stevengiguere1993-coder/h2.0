@@ -26,11 +26,8 @@ export default function NewFacturePage() {
 
   const [clientId, setClientId] = useState("");
   const [projectId, setProjectId] = useState("");
-  const [dueAt, setDueAt] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 30);
-    return yyyyMmDd(d);
-  });
+  // Défaut : « Payable sur réception » (échéance = aujourd'hui), pas net 30.
+  const [dueAt, setDueAt] = useState(() => yyyyMmDd(new Date()));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
