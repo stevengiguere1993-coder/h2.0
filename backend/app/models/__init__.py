@@ -230,6 +230,11 @@ from app.models.crm_column import CrmColumn  # noqa: F401
 from app.models.cadence_step import CadenceStep  # noqa: F401
 from app.models.relance_plan import RelancePlan  # noqa: F401
 from app.models.relance_item import RelanceItem  # noqa: F401
+from app.models.timesheet import (  # noqa: F401
+    Timesheet,
+    TimesheetCompany,
+    TimesheetEntry,
+)
 from app.models.user import User
 from app.models.user_immeuble import UserImmeuble  # noqa: F401
 from app.models.user_business_role import (  # noqa: F401

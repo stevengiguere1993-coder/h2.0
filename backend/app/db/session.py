@@ -301,6 +301,33 @@ async def ensure_immobilier_aux_tables() -> None:
         log.warning("ensure_immobilier_aux_tables failed: %s", exc)
 
 
+async def ensure_timesheet_tables() -> None:
+    """Crée les tables Feuille de temps (Gestion d'entreprise) dans leur
+    propre transaction, pour survivre à un abort d'``init_db``."""
+    import logging
+
+    log = logging.getLogger("db.ensure_timesheet_tables")
+    try:
+        from app.db.base import Base
+        from app.models.timesheet import (  # noqa: F401
+            Timesheet,
+            TimesheetCompany,
+            TimesheetEntry,
+        )
+
+        tables = [
+            TimesheetCompany.__table__,
+            Timesheet.__table__,
+            TimesheetEntry.__table__,
+        ]
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(c, tables=tables)
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_timesheet_tables failed: %s", exc)
+
+
 async def init_db() -> None:
     """
     Initialize database tables.

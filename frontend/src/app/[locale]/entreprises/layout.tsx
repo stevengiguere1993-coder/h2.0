@@ -15,6 +15,7 @@ import {
   Calendar,
   ChevronDown,
   ChevronRight,
+  Clock,
   Compass,
   Contact as ContactIcon,
   CreditCard,
@@ -271,6 +272,7 @@ export default function EntreprisesLayout({
     },
     { href: "/entreprises/kratos", label: "Kratos · Cerveau", icon: Brain },
     { href: "/entreprises/rencontres", label: "Rencontres", icon: Calendar },
+    { href: "/entreprises/feuille-de-temps", label: "Feuille de temps", icon: Clock },
     { href: "/entreprises/organigramme", label: "Organigramme", icon: Users },
     {
       href: "/entreprises/distribution-taches",
