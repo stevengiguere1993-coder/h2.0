@@ -114,8 +114,10 @@ async def get_summary(
     _: CurrentUser,
     quartier: Optional[str] = Query(default=None),
     postal_code: Optional[str] = Query(default=None),
+    city: Optional[str] = Query(default=None),
     nom_rue: Optional[str] = Query(default=None),
-    max_age_days: int = Query(default=30, ge=1, le=90),
+    tout: bool = Query(default=False),
+    max_age_days: int = Query(default=45, ge=1, le=90),
 ) -> ComparablesSummary:
     """Retourne les stats agrégées par chambres × état × inclusions
     pour une zone donnée. À utiliser dans le calculateur d'analyse
@@ -126,10 +128,10 @@ async def get_summary(
     2. postal_code (FSA 3 char : « H2W »)
     3. nom_rue (contient)
     """
-    if not (quartier or postal_code or nom_rue):
+    if not (quartier or postal_code or city or nom_rue or tout):
         raise HTTPException(
             400,
-            "Au moins un de quartier, postal_code, nom_rue est requis.",
+            "Au moins un de quartier, postal_code, city, nom_rue ou tout=true.",
         )
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
@@ -139,7 +141,9 @@ async def get_summary(
     )
 
     fsa_used: Optional[str] = None
-    if quartier:
+    if tout:
+        pass  # aucun filtre de localisation : tout le marché récent
+    elif quartier:
         stmt = stmt.where(RentalListing.quartier == quartier)
     elif postal_code:
         fsa_used = postal_code.replace(" ", "")[:3].upper()
@@ -148,6 +152,8 @@ async def get_summary(
         stmt = stmt.where(
             sa_func.upper(RentalListing.postal_code).like(f"{fsa_used}%")
         )
+    elif city:
+        stmt = stmt.where(RentalListing.city.ilike(f"%{city.strip()}%"))
     elif nom_rue:
         stmt = stmt.where(
             RentalListing.nom_rue.ilike(f"%{nom_rue.strip()}%")
@@ -306,6 +312,21 @@ async def list_areas(
     for f, c in frows:
         if f and len(f.strip()) == 3:
             out.append(AreaItem(kind="fsa", value=f.strip(), count=int(c)))
+
+    crows = (
+        await db.execute(
+            select(RentalListing.city, sa_func.count(RentalListing.id))
+            .where(
+                RentalListing.scraped_at >= cutoff,
+                RentalListing.city.is_not(None),
+                RentalListing.price.is_not(None),
+            )
+            .group_by(RentalListing.city)
+        )
+    ).all()
+    for c2, n2 in crows:
+        if c2 and c2.strip():
+            out.append(AreaItem(kind="city", value=c2.strip(), count=int(n2)))
 
     out.sort(key=lambda a: -a.count)
     return out
