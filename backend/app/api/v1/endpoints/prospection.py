@@ -187,8 +187,20 @@ async def moyenne_locative(
             cma_by_zone[z] = c
 
     if not cma and not zone and q:
-        m = best_match_for_lead(lead_city=q, available_zones=zones_in_db)
-        if m:
+        # 1) q correspond EXACTEMENT à une RMR (ex. « Montréal ») → agrégat
+        # RMR (zone=None), et NON une sous-zone dont le nom contient « Montréal »
+        # (ex. « Centre-ville de Montréal/Île-des-Soeurs »).
+        qn0 = normalize_zone(q)
+        cma_exact = next(
+            (c for c in cmas if normalize_zone(c) == qn0), None
+        )
+        if cma_exact:
+            cma = cma_exact  # zone reste None → agrégat RMR
+        elif (
+            m := best_match_for_lead(
+                lead_city=q, available_zones=zones_in_db
+            )
+        ):
             zone = m
             cma = cma_by_zone.get(m)
         else:

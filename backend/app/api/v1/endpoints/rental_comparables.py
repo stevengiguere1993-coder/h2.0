@@ -353,16 +353,51 @@ async def by_address(
     """Adresse libre → comparables du secteur. Géocode l'adresse, en déduit
     quartier / ville / FSA, puis cascade quartier → FSA → ville → tout le
     marché jusqu'à trouver des comparables."""
+    import re
+
     from app.integrations.cmhc.rents import normalize_zone
     from app.integrations.nominatim import geocode_to_area
 
-    geo = await geocode_to_area(address)
+    # Les libellés des rôles fonciers utilisent des abréviations
+    # (« RU » = rue, « BOUL » = boulevard…) + un tiret
+    # long ; Nominatim les géocode mal. On normalise avant.
+    _ABBR = {
+        "RU": "rue", "RUE": "rue", "BOUL": "boulevard", "BLVD": "boulevard",
+        "AV": "avenue", "AVE": "avenue", "CH": "chemin", "MTEE": "montée",
+        "MTÉE": "montée", "PL": "place", "CROIS": "croissant",
+        "IMP": "impasse", "TSSE": "terrasse",
+    }
+    cleaned = address.replace("—", ", ").replace("–", ", ")
+    cleaned = " ".join(
+        _ABBR.get(w.upper().strip("."), w) for w in cleaned.split()
+    )
+
+    geo = await geocode_to_area(cleaned)
     if not geo:
+        # Réessaie avec la portion « ville » (après virgule).
+        parts = [
+            p.strip()
+            for p in re.split(r"[,—–]", address)
+            if p.strip()
+        ]
+        if len(parts) > 1:
+            geo = await geocode_to_area(parts[-1])
+
+    if not geo:
+        # Dernier recours : on affiche quand même le marché global
+        # récent (le beau tableau) plutôt qu'une page vide.
+        sm_all = await get_summary(
+            db=db, _=user, tout=True, max_age_days=max_age_days
+        )
         return ByAddressOut(
-            found=False,
+            found=True,
+            address_label=address,
+            secteur="Tout le marché récent",
+            secteur_kind="tout",
+            summary=sm_all,
             notes=[
-                "Adresse introuvable. Ajoute la ville "
-                "(ex. « 1234 rue Beaubien, Montréal »)."
+                "Adresse non localisée précisément — vue "
+                "d'ensemble du marché récent (Grand Montréal)."
             ],
         )
 
