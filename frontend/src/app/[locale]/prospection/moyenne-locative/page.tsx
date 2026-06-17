@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Building2,
   Calculator,
-  Database,
   Info,
   Loader2,
   MapPin,
@@ -17,7 +16,13 @@ import { authedFetch } from "@/lib/auth";
 import { AppTopbar } from "@/components/app-topbar";
 import { useProspectionLayout } from "../layout";
 
-type Area = { kind: string; value: string; count: number };
+type AddressSuggestion = {
+  matricule: string;
+  civique: string | null;
+  nom_rue: string | null;
+  municipalite: string | null;
+  label: string;
+};
 
 type Stats = {
   count: number;
@@ -63,16 +68,6 @@ type Schl = {
   brackets: SchlBracket[];
 };
 
-function norm(s: string): string {
-  return s
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function money(n: number | null | undefined): string {
   if (n == null) return "—";
   return n.toLocaleString("fr-CA", {
@@ -89,28 +84,11 @@ const GRM_TIERS = [
   { max: Infinity, label: "Cher", cls: "text-rose-300" }
 ];
 
-type Filter = {
-  quartier?: string;
-  postal_code?: string;
-  city?: string;
-  nom_rue?: string;
-};
-
-function areaToFilter(a: Area): Filter {
-  if (a.kind === "fsa") return { postal_code: a.value };
-  if (a.kind === "city") return { city: a.value };
-  return { quartier: a.value };
-}
-function areaLabel(a: Area): string {
-  if (a.kind === "fsa") return `Code postal ${a.value}`;
-  return a.value;
-}
-
 export default function MoyenneLocativePage() {
   const { onOpenSidebar } = useProspectionLayout();
 
-  const [areas, setAreas] = useState<Area[]>([]);
   const [query, setQuery] = useState("");
+  const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [market, setMarket] = useState<Market | null>(null);
@@ -124,14 +102,30 @@ export default function MoyenneLocativePage() {
   const [monLoyer, setMonLoyer] = useState("");
   const [monBed, setMonBed] = useState<number>(1);
 
+  // Autocomplétion d'adresses (rôles fonciers — adresses civiques réelles).
   useEffect(() => {
-    void (async () => {
-      const r = await authedFetch(
-        "/api/v1/prospection/rental-comparables/areas"
-      );
-      if (r.ok) setAreas((await r.json()) as Area[]);
-    })();
-  }, []);
+    const q = query.trim();
+    if (q.length < 3) {
+      setSuggestions([]);
+      return;
+    }
+    const handle = setTimeout(async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/prospection/mtl-properties/address-search?q=${encodeURIComponent(
+            q
+          )}&limit=8`
+        );
+        if (r.ok) {
+          setSuggestions((await r.json()) as AddressSuggestion[]);
+          setOpen(true);
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 350);
+    return () => clearTimeout(handle);
+  }, [query]);
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -143,68 +137,6 @@ export default function MoyenneLocativePage() {
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  const matches = useMemo(() => {
-    const q = norm(query);
-    const base = q
-      ? areas.filter((a) => norm(a.value).includes(q))
-      : areas;
-    return base.slice(0, 12);
-  }, [query, areas]);
-
-  const load = useCallback(
-    async (f: Filter, displayLabel: string) => {
-      setOpen(false);
-      setLoading(true);
-      setMarket(null);
-      setSchl(null);
-      setSecteurNote(null);
-      setLabel(displayLabel);
-      const mp = new URLSearchParams();
-      if (f.quartier) mp.set("quartier", f.quartier);
-      else if (f.postal_code) mp.set("postal_code", f.postal_code);
-      else if (f.city) mp.set("city", f.city);
-      else if (f.nom_rue) mp.set("nom_rue", f.nom_rue);
-      const schlQ = f.quartier || f.city || f.nom_rue || displayLabel;
-      const [mr, sr] = await Promise.all([
-        authedFetch(
-          `/api/v1/prospection/rental-comparables/summary?${mp.toString()}`
-        ),
-        authedFetch(
-          `/api/v1/prospection/moyenne-locative?q=${encodeURIComponent(schlQ)}`
-        )
-      ]);
-      if (mr.ok) setMarket((await mr.json()) as Market);
-      if (sr.ok) setSchl((await sr.json()) as Schl);
-      setLoading(false);
-    },
-    []
-  );
-
-  // Vue par défaut : tout le marché récent (peu importe la catégorisation
-  // quartier/code postal des annonces), pour toujours afficher des chiffres.
-  const loadOverall = useCallback(async () => {
-    setOpen(false);
-    setLabel("Tout le marché récent (Grand Montréal)");
-    setLoading(true);
-    setMarket(null);
-    setSchl(null);
-    setSecteurNote(null);
-    const [mr, sr] = await Promise.all([
-      authedFetch(
-        "/api/v1/prospection/rental-comparables/summary?tout=true&max_age_days=45"
-      ),
-      authedFetch("/api/v1/prospection/moyenne-locative?q=Montr%C3%A9al")
-    ]);
-    if (mr.ok) setMarket((await mr.json()) as Market);
-    if (sr.ok) setSchl((await sr.json()) as Schl);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    void loadOverall();
-  }, [loadOverall]);
-
-  // Recherche par ADRESSE libre : géocodage → secteur → comparables.
   const loadByAddress = useCallback(async (addr: string) => {
     const a = addr.trim();
     if (!a) return;
@@ -231,12 +163,12 @@ export default function MoyenneLocativePage() {
       };
       if (res.found && res.summary) {
         setMarket(res.summary);
-        setLabel(res.address_label || res.secteur || a);
+        setLabel(a);
         secteurForSchl = res.secteur || a;
         setSecteurNote(
           res.notes?.[0] ||
             (res.secteur && res.secteur_kind !== "tout"
-              ? `Secteur : ${res.secteur}`
+              ? `Secteur retenu : ${res.secteur}`
               : null)
         );
       } else {
@@ -252,11 +184,34 @@ export default function MoyenneLocativePage() {
     setLoading(false);
   }, []);
 
-  function search() {
-    if (query.trim()) void loadByAddress(query);
+  const loadOverall = useCallback(async () => {
+    setOpen(false);
+    setLabel("Tout le marché récent (Grand Montréal)");
+    setSecteurNote(null);
+    setLoading(true);
+    setMarket(null);
+    setSchl(null);
+    const [mr, sr] = await Promise.all([
+      authedFetch(
+        "/api/v1/prospection/rental-comparables/summary?tout=true&max_age_days=45"
+      ),
+      authedFetch("/api/v1/prospection/moyenne-locative?q=Montr%C3%A9al")
+    ]);
+    if (mr.ok) setMarket((await mr.json()) as Market);
+    if (sr.ok) setSchl((await sr.json()) as Schl);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void loadOverall();
+  }, [loadOverall]);
+
+  function pickSuggestion(s: AddressSuggestion) {
+    setQuery(s.label);
+    setOpen(false);
+    void loadByAddress(s.label);
   }
 
-  // SCHL average par nb de chambres (0..3), pour la colonne référence.
   const schlByBed = useMemo(() => {
     const m: Record<number, number | null> = {};
     schl?.brackets.forEach((b) => {
@@ -292,12 +247,14 @@ export default function MoyenneLocativePage() {
     const target = rows.find((b) => b.bedrooms === monBed);
     const market_med = target?.standard.median ?? null;
     if (!loyer || market_med == null) return null;
-    return { loyer, market: market_med, diff: (loyer - market_med) / market_med };
+    return {
+      loyer,
+      market: market_med,
+      diff: (loyer - market_med) / market_med
+    };
   }, [rows, monLoyer, monBed]);
 
   const hasMarket = !!market && market.sample_size > 0;
-  const trulyEmpty =
-    !loading && !!market && market.sample_size === 0 && areas.length === 0;
 
   return (
     <>
@@ -332,20 +289,17 @@ export default function MoyenneLocativePage() {
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
                 <input
                   value={query}
-                  onChange={(e) => {
-                    setQuery(e.target.value);
-                    setOpen(true);
+                  onChange={(e) => setQuery(e.target.value)}
+                  onFocus={() => {
+                    if (suggestions.length > 0) setOpen(true);
                   }}
-                  onFocus={() => setOpen(true)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      if (matches.length > 0) {
-                        const a = matches[0];
-                        void load(areaToFilter(a), areaLabel(a));
-                      } else search();
+                      if (suggestions.length > 0) pickSuggestion(suggestions[0]);
+                      else if (query.trim()) void loadByAddress(query);
                     }
                   }}
-                  placeholder="Adresse, secteur ou code postal (ex. 1234 rue Beaubien, Verdun, H2W…)"
+                  placeholder="Tape une adresse (ex. 1660 rue Saint-Clément…)"
                   className="w-full rounded-xl border border-brand-800 bg-brand-900 py-3 pl-9 pr-3 text-sm text-white outline-none focus:border-emerald-500/60"
                 />
                 {query ? (
@@ -353,8 +307,7 @@ export default function MoyenneLocativePage() {
                     type="button"
                     onClick={() => {
                       setQuery("");
-                      setMarket(null);
-                      setSchl(null);
+                      setSuggestions([]);
                       setOpen(false);
                     }}
                     className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-white/40 hover:text-white"
@@ -365,27 +318,26 @@ export default function MoyenneLocativePage() {
               </div>
               <button
                 type="button"
-                onClick={search}
+                onClick={() => {
+                  if (query.trim()) void loadByAddress(query);
+                }}
                 className="shrink-0 rounded-xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
               >
                 Rechercher
               </button>
             </div>
 
-            {open && matches.length > 0 ? (
+            {open && suggestions.length > 0 ? (
               <div className="absolute z-20 mt-1 max-h-72 w-full overflow-y-auto rounded-xl border border-brand-800 bg-brand-900 py-1 shadow-2xl">
-                {matches.map((a) => (
+                {suggestions.map((s) => (
                   <button
-                    key={`${a.kind}:${a.value}`}
+                    key={s.matricule}
                     type="button"
-                    onClick={() => void load(areaToFilter(a), areaLabel(a))}
+                    onClick={() => pickSuggestion(s)}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-white/80 hover:bg-brand-800/60"
                   >
-                    <MapPin className="h-3.5 w-3.5 text-emerald-400" />
-                    <span className="flex-1 truncate">{areaLabel(a)}</span>
-                    <span className="text-[11px] text-white/30">
-                      {a.count} annonce{a.count > 1 ? "s" : ""}
-                    </span>
+                    <MapPin className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                    <span className="flex-1 truncate">{s.label}</span>
                   </button>
                 ))}
               </div>
@@ -403,17 +355,11 @@ export default function MoyenneLocativePage() {
             >
               ↺ Tout le marché récent
             </button>
+            <span className="text-[11px] text-white/35">
+              Adresses de Montréal en autocomplétion ; ailleurs, tape la ville et
+              « Rechercher ».
+            </span>
           </div>
-
-          {trulyEmpty ? (
-            <p className="mt-2 max-w-2xl rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">
-              <Database className="mr-1 inline h-3.5 w-3.5" />
-              Le collecteur d&apos;annonces n&apos;a pas encore de données. Lance
-              le cron Render <strong>rental-scrape-daily</strong> (ou attends son
-              prochain passage), puis reviens. La référence SCHL reste
-              disponible.
-            </p>
-          ) : null}
         </section>
 
         {/* Résultats */}
@@ -424,7 +370,6 @@ export default function MoyenneLocativePage() {
         ) : market || schl ? (
           <div className="mt-8 grid gap-5 lg:grid-cols-3">
             <div className="space-y-5 lg:col-span-2">
-              {/* Loyers du marché */}
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -446,56 +391,53 @@ export default function MoyenneLocativePage() {
                 ) : null}
 
                 {hasMarket ? (
-                  <div className="mt-4 overflow-x-auto">
-                    <table className="w-full min-w-[620px] text-sm">
-                      <thead>
-                        <tr className="border-b border-brand-800 text-left text-[11px] uppercase tracking-wider text-white/45">
-                          <th className="py-2 pr-3 font-semibold">Type</th>
-                          <th className="py-2 pr-3 text-right font-semibold">
+                  <div className="mt-4 overflow-hidden rounded-xl border border-brand-800">
+                    <table className="w-full text-sm">
+                      <thead className="bg-brand-950 text-left text-[11px] uppercase tracking-wider text-white/60">
+                        <tr>
+                          <th className="px-3 py-2.5 font-semibold">Type</th>
+                          <th className="px-3 py-2.5 text-right font-semibold">
                             Médiane
                           </th>
-                          <th className="py-2 pr-3 text-right font-semibold">
+                          <th className="px-3 py-2.5 text-right font-semibold">
                             Inférieur
                           </th>
-                          <th className="py-2 pr-3 text-right font-semibold">
+                          <th className="px-3 py-2.5 text-right font-semibold">
                             Supérieur
                           </th>
-                          <th className="py-2 pr-3 text-right font-semibold">
+                          <th className="px-3 py-2.5 text-right font-semibold">
                             Fourchette
                           </th>
-                          <th className="py-2 pr-3 text-right font-semibold">
-                            n
+                          <th className="px-3 py-2.5 text-right font-semibold">
+                            Nb
                           </th>
-                          <th className="py-2 text-right font-semibold">
+                          <th className="px-3 py-2.5 text-right font-semibold">
                             Réf. SCHL
                           </th>
                         </tr>
                       </thead>
-                      <tbody>
+                      <tbody className="divide-y divide-brand-800">
                         {rows.map((b) => (
-                          <tr
-                            key={b.bedrooms}
-                            className="border-b border-brand-800/50"
-                          >
-                            <td className="py-2.5 pr-3 font-semibold text-white">
+                          <tr key={b.bedrooms} className="hover:bg-brand-950/40">
+                            <td className="px-3 py-2.5 font-semibold text-white">
                               {b.pieces_label}
                             </td>
-                            <td className="py-2.5 pr-3 text-right text-base font-bold tabular-nums text-emerald-300">
+                            <td className="px-3 py-2.5 text-right text-base font-bold tabular-nums text-emerald-300">
                               {money(b.standard.median)}
                             </td>
-                            <td className="py-2.5 pr-3 text-right tabular-nums text-white/60">
+                            <td className="px-3 py-2.5 text-right tabular-nums text-white/60">
                               {money(b.standard.p25)}
                             </td>
-                            <td className="py-2.5 pr-3 text-right tabular-nums text-white/60">
+                            <td className="px-3 py-2.5 text-right tabular-nums text-white/60">
                               {money(b.standard.p75)}
                             </td>
-                            <td className="py-2.5 pr-3 text-right text-xs tabular-nums text-white/40">
+                            <td className="px-3 py-2.5 text-right text-xs tabular-nums text-white/40">
                               {money(b.standard.min)}–{money(b.standard.max)}
                             </td>
-                            <td className="py-2.5 pr-3 text-right text-xs text-white/40">
+                            <td className="px-3 py-2.5 text-right text-xs text-white/40">
                               {b.standard.count}
                             </td>
-                            <td className="py-2.5 text-right tabular-nums text-sky-300/80">
+                            <td className="px-3 py-2.5 text-right tabular-nums text-sky-300/90">
                               {money(schlByBed[Math.min(b.bedrooms, 3)] ?? null)}
                             </td>
                           </tr>
@@ -511,9 +453,8 @@ export default function MoyenneLocativePage() {
                   </div>
                 )}
 
-                {/* Référence SCHL */}
                 {schl?.matched ? (
-                  <div className="mt-4 rounded-xl border border-sky-500/20 bg-sky-500/[0.04] p-3">
+                  <div className="mt-4 rounded-xl border border-sky-500/30 bg-sky-500/[0.06] p-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-sky-300">
                         Référence SCHL (officielle)
@@ -540,16 +481,15 @@ export default function MoyenneLocativePage() {
                   </div>
                 ) : null}
 
-                <p className="mt-3 text-[11px] text-white/35">
-                  Source : annonces de location collectées par Kratos (Kijiji,
-                  LesPAC), valeurs aberrantes et doublons écartés — même méthode
-                  que Zipplex. « Réf. SCHL » = moyenne officielle du parc
-                  existant. Les chiffres exacts de Zipplex demandent leur
-                  abonnement (données propriétaires).
+                <p className="mt-3 text-[11px] text-white/40">
+                  « Inférieur / Supérieur » = 25ᵉ et 75ᵉ centiles (la moitié des
+                  loyers tombe entre les deux). Source : annonces réelles
+                  collectées par Kratos (Kijiji, LesPAC), valeurs aberrantes et
+                  doublons écartés — même méthode que Zipplex. Données exactes de
+                  Zipplex = leur abonnement (base propriétaire).
                 </p>
               </div>
 
-              {/* Compare un loyer */}
               {hasMarket ? (
                 <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
                   <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
@@ -700,10 +640,10 @@ export default function MoyenneLocativePage() {
               ) : null}
 
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 text-[11px] text-white/45">
-                <Info className="mb-1 inline h-3.5 w-3.5 text-white/40" /> La
-                <strong> médiane</strong> est plus représentative que la moyenne
-                (moins sensible aux extrêmes). « Inférieur/Supérieur » = 25ᵉ et
-                75ᵉ centiles : la moitié des loyers tombe entre les deux.
+                <Info className="mb-1 inline h-3.5 w-3.5 text-white/40" /> La{" "}
+                <strong>médiane</strong> est plus représentative que la moyenne
+                (moins sensible aux extrêmes). Un logement rénové ou neuf se loue
+                souvent au-dessus.
               </div>
             </div>
           </div>
@@ -711,8 +651,7 @@ export default function MoyenneLocativePage() {
           <div className="mt-10 max-w-2xl rounded-2xl border border-dashed border-brand-800 p-8 text-center text-white/50">
             <Building2 className="mx-auto h-8 w-8 opacity-40" />
             <p className="mt-3 text-sm">
-              Tape une adresse, un secteur ou un code postal pour voir les loyers
-              du marché.
+              Tape une adresse pour voir les loyers du marché.
             </p>
           </div>
         )}
