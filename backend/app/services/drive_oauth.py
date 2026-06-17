@@ -420,14 +420,47 @@ async def _refresh(
             "Reconnecte ton compte dans Paramètres → Drive."
         )
 
-    row.access_token = _encrypt(new_access)
-    row.expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-    # Google peut occasionnellement renvoyer un nouveau refresh_token —
-    # le persister pour rester aligné.
+    enc_access = _encrypt(new_access)
+    new_expires = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+    # Google peut renvoyer un nouveau refresh_token (rotation) — le persister.
     new_refresh = payload.get("refresh_token")
-    if new_refresh:
-        row.refresh_token = _encrypt(new_refresh)
+    enc_refresh = _encrypt(new_refresh) if new_refresh else None
+
+    # Mise à jour en mémoire pour la requête courante.
+    row.access_token = enc_access
+    row.expires_at = new_expires
+    if enc_refresh:
+        row.refresh_token = enc_refresh
     await db.flush()
+
+    # Persistance dans une transaction DÉDIÉE : le token rafraîchi (et un
+    # refresh_token éventuellement renouvelé par Google) DOIT survivre même
+    # si la requête courante lève ensuite une exception — car get_db fait
+    # alors un rollback. Sans ça, le prochain refresh repartirait d'un
+    # refresh_token périmé → invalid_grant → « Connexion Drive requise ».
+    try:
+        from app.db.session import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as s2:
+            r2 = (
+                await s2.execute(
+                    select(DriveUserToken).where(
+                        DriveUserToken.user_id == row.user_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if r2 is not None:
+                r2.access_token = enc_access
+                r2.expires_at = new_expires
+                if enc_refresh:
+                    r2.refresh_token = enc_refresh
+                await s2.commit()
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Drive: persistance du token rafraîchi échouée (best-effort): %s",
+            exc,
+        )
+
     await _audit(
         db,
         user_id=row.user_id,
