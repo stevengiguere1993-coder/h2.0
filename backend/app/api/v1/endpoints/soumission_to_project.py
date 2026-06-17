@@ -42,7 +42,7 @@ TVQ_RATE = 0.09975
 
 #: Pourcentage par défaut de la facture d'acompte créée à
 #: l'acceptation d'une soumission.
-DEFAULT_DEPOSIT_PERCENTAGE = 25
+DEFAULT_DEPOSIT_PERCENTAGE = 30
 
 
 class ConvertToProjectRequest(BaseModel):

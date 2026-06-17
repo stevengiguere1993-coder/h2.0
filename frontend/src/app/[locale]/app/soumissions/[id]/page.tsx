@@ -1008,8 +1008,7 @@ export default function SoumissionDetailPage() {
                 </button>
                 <p className="w-full text-xs text-white/50">
                   Crée le projet et génère automatiquement une facture
-                  d&apos;acompte de 25 % (TPS + TVQ incluses) en
-                  <span className="text-accent-300"> brouillon</span> dans la
+                  d&apos;acompte de 30 % du sous-total (+ TPS + TVQ) dans la
                   facturation.
                 </p>
               </div>

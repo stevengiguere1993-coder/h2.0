@@ -201,6 +201,63 @@ async def public_pdf(token: str, db: DBSession) -> Response:
     )
 
 
+async def _auto_send_deposit_facture(facture_id: int) -> None:
+    """Envoie au client la facture d'acompte générée à la signature :
+    status → sent + courriel + PDF, puis push QBO (si auto-sync). Best-
+    effort — n'interrompt jamais le flux de signature."""
+    from app.db.session import AsyncSessionLocal
+    from app.models.client import Client
+    from app.models.facture import Facture, FactureStatus
+    from app.services.facture_send import send_facture
+
+    try:
+        async with AsyncSessionLocal() as db:
+            fa = (
+                await db.execute(
+                    select(Facture).where(Facture.id == facture_id)
+                )
+            ).scalar_one_or_none()
+            if fa is None or fa.status != FactureStatus.DRAFT.value:
+                return
+            email = None
+            if fa.client_id:
+                cl = (
+                    await db.execute(
+                        select(Client).where(Client.id == fa.client_id)
+                    )
+                ).scalar_one_or_none()
+                email = (cl.email or "").strip() if cl and cl.email else None
+            if not email:
+                log.info(
+                    "Acompte %s : pas de courriel client → non envoyé",
+                    facture_id,
+                )
+                return
+            await send_facture(
+                db,
+                facture_id,
+                to=[email],
+                message=(
+                    "Bonjour, voici votre facture d'acompte suite à "
+                    "l'acceptation de votre soumission. Merci !"
+                ),
+            )
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "Auto-envoi facture d'acompte %s échoué", facture_id,
+            exc_info=True,
+        )
+        return
+    # Facture maintenant ENVOYÉE → on la pousse vers QBO (si auto-sync ON).
+    try:
+        from app.services.qbo_auto_sync import autopush_facture
+
+        await autopush_facture(facture_id)
+    except Exception:  # noqa: BLE001
+        log.warning("Autopush QBO acompte %s échoué", facture_id)
+
+
 @router.post(
     "/{token}/accept",
     response_model=PublicSoumission,
@@ -317,15 +374,20 @@ async def public_accept(
             exc_info=True,
         )
 
-    # Auto-création du projet + facture d'acompte DRAFT dès la
-    # signature en ligne. La facture reste en DRAFT dans /facturation
-    # — l'admin clique « Envoyer au client » plus tard.
+    # Auto-création du projet + facture d'acompte dès la signature en
+    # ligne. La facture est ensuite ENVOYÉE automatiquement au client
+    # (status sent + courriel) — plus besoin de cliquer « Envoyer ».
+    deposit_facture_id: Optional[int] = None
     try:
         async with db.begin_nested():
             from app.api.v1.endpoints.soumission_to_project import (
                 provision_project_for_soumission,
             )
-            await provision_project_for_soumission(db, sm, notify_qbo=True)
+            _proj, _dep = await provision_project_for_soumission(
+                db, sm, notify_qbo=True
+            )
+            if _dep is not None:
+                deposit_facture_id = _dep.id
     except Exception:  # noqa: BLE001
         # Best-effort : ne pas bloquer la signature client si la
         # création du projet échoue. L'admin pourra relancer
@@ -334,6 +396,10 @@ async def public_accept(
             "Provision projet échouée pour soumission %s", sm.id,
             exc_info=True,
         )
+
+    # Envoi automatique de la facture d'acompte au client, à la signature.
+    if deposit_facture_id is not None:
+        bg.add_task(_auto_send_deposit_facture, deposit_facture_id)
 
     # Devis accepté en ligne → import QuickBooks (Customer + Estimate),
     # fail-closed via l'interrupteur QBO auto-sync, idempotent. Lancé
