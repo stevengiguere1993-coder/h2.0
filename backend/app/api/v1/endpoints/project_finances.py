@@ -579,19 +579,33 @@ async def _compute_finances(
             )
         ).scalars().all()
 
+    # Factures qui COMPTENT dans le « facturé » et le profit : seulement
+    # celles RÉELLEMENT ENVOYÉES au client (sent / paid / overdue). Les
+    # BROUILLONS (draft) et annulées (void) ne sont pas du revenu → exclues
+    # des totaux et du calcul de profit. (La liste détaillée, elle, montre
+    # quand même tout, brouillons inclus.)
+    _BILLED_STATUSES = {
+        FactureStatus.SENT.value,
+        FactureStatus.PAID.value,
+        FactureStatus.OVERDUE.value,
+    }
+    billed_factures = [
+        f for f in factures if (f.status or "") in _BILLED_STATUSES
+    ]
+
     # Sépare l'invoiced en 2 buckets : « contrat » (items kind=service|
     # rabais|frais) et « extras » (items kind=extra). Les extras n'ont
     # pas à compter dans le « reste à facturer » du contrat car ils
     # sont hors-soumission.
     extras_subtotal = 0.0
     contract_subtotal = 0.0
-    if factures:
+    if billed_factures:
         from app.models.facture_item import FactureItem as _FI
 
         items_rows = (
             await db.execute(
                 select(_FI.facture_id, _FI.total, _FI.kind).where(
-                    _FI.facture_id.in_([f.id for f in factures])
+                    _FI.facture_id.in_([f.id for f in billed_factures])
                 )
             )
         ).all()
@@ -604,15 +618,15 @@ async def _compute_finances(
     # Les taxes ne changent pas la répartition contrat/extras au
     # niveau sous-total ; on calcule l'invoiced TTC total comme avant
     # pour les KPI cash-flow (Facturé / Reçu / Solde).
-    invoiced = sum(float(f.total or 0) for f in factures)
+    invoiced = sum(float(f.total or 0) for f in billed_factures)
 
     # Facturé HT et taxes collectées — séparés pour calcul du profit
     # (HT) et pour afficher l'obligation fiscale (à remettre au gouv).
     invoiced_ex_tax = round(
-        sum(float(f.subtotal or 0) for f in factures), 2
+        sum(float(f.subtotal or 0) for f in billed_factures), 2
     )
-    tps_collected = round(sum(float(f.tps or 0) for f in factures), 2)
-    tvq_collected = round(sum(float(f.tvq or 0) for f in factures), 2)
+    tps_collected = round(sum(float(f.tps or 0) for f in billed_factures), 2)
+    tvq_collected = round(sum(float(f.tvq or 0) for f in billed_factures), 2)
     taxes_collected = round(tps_collected + tvq_collected, 2)
 
     # Extras facturés (avant taxes) — exposé séparément à l'UI.
