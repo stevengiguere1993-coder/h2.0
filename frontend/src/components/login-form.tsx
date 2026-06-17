@@ -9,7 +9,6 @@ import {
   EyeOff,
   Loader2,
   MapPin,
-  MessagesSquare,
   Monitor,
   Phone,
   Smartphone,
@@ -211,9 +210,11 @@ export function LoginForm() {
     const role = (userRole || "").toLowerCase().trim();
     const isOwner = role === "owner";
     const isAdminOrOwner = role === "owner" || role === "admin";
-    // Owner & admin = accès total ; sinon whitelist email héritée.
+    // Owner & admin = accès total ; sinon volet « communication »
+    // explicite, ou whitelist email héritée.
     const showTelephonie =
       isAdminOrOwner ||
+      has("communication") ||
       (!!userEmail &&
         TELEPHONIE_ALLOWED_EMAILS.includes(
           userEmail.toLowerCase().trim()
@@ -324,30 +325,6 @@ export function LoginForm() {
               </span>
               <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
                 En développement
-              </span>
-            </button>
-          ) : null}
-
-          {has("communication") ? (
-            <button
-              type="button"
-              onClick={() => {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                router.replace("/app/communications" as any);
-              }}
-              className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-accent-500 hover:bg-brand-800"
-            >
-              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-sky-500/15 text-sky-400 group-hover:bg-sky-500 group-hover:text-white">
-                <MessagesSquare className="h-6 w-6" />
-              </span>
-              <span className="flex-1">
-                <span className="block text-base font-bold text-white">
-                  Communication
-                </span>
-                <span className="mt-0.5 block text-xs text-white/60">
-                  Appels, courriels et messages — historique et suivi des
-                  échanges clients.
-                </span>
               </span>
             </button>
           ) : null}
