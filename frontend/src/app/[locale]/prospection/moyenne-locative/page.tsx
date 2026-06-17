@@ -116,6 +116,7 @@ export default function MoyenneLocativePage() {
   const [market, setMarket] = useState<Market | null>(null);
   const [schl, setSchl] = useState<Schl | null>(null);
   const [label, setLabel] = useState("");
+  const [secteurNote, setSecteurNote] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
 
   const [mix, setMix] = useState<Record<number, string>>({});
@@ -156,6 +157,7 @@ export default function MoyenneLocativePage() {
       setLoading(true);
       setMarket(null);
       setSchl(null);
+      setSecteurNote(null);
       setLabel(displayLabel);
       const mp = new URLSearchParams();
       if (f.quartier) mp.set("quartier", f.quartier);
@@ -186,6 +188,7 @@ export default function MoyenneLocativePage() {
     setLoading(true);
     setMarket(null);
     setSchl(null);
+    setSecteurNote(null);
     const [mr, sr] = await Promise.all([
       authedFetch(
         "/api/v1/prospection/rental-comparables/summary?tout=true&max_age_days=45"
@@ -201,38 +204,56 @@ export default function MoyenneLocativePage() {
     void loadOverall();
   }, [loadOverall]);
 
-  function resolveFree(): { f: Filter; label: string } | null {
-    const q = query.trim();
-    if (!q) return null;
-    const pc = q.match(/[A-Za-z]\d[A-Za-z]/);
-    if (pc) return { f: { postal_code: pc[0].toUpperCase() }, label: q };
-    const nq = norm(q);
-    const exact = areas.find(
-      (a) => a.kind === "quartier" && norm(a.value) === nq
+  // Recherche par ADRESSE libre : géocodage → secteur → comparables.
+  const loadByAddress = useCallback(async (addr: string) => {
+    const a = addr.trim();
+    if (!a) return;
+    setOpen(false);
+    setLoading(true);
+    setMarket(null);
+    setSchl(null);
+    setSecteurNote(null);
+    setLabel(a);
+    let secteurForSchl = a;
+    const r = await authedFetch(
+      `/api/v1/prospection/rental-comparables/by-address?address=${encodeURIComponent(
+        a
+      )}`
     );
-    if (exact) return { f: { quartier: exact.value }, label: exact.value };
-    const partial = areas.find(
-      (a) =>
-        a.kind === "quartier" &&
-        (norm(a.value).includes(nq) || nq.includes(norm(a.value)))
+    if (r.ok) {
+      const res = (await r.json()) as {
+        found: boolean;
+        address_label: string | null;
+        secteur: string | null;
+        secteur_kind: string | null;
+        summary: Market | null;
+        notes: string[];
+      };
+      if (res.found && res.summary) {
+        setMarket(res.summary);
+        setLabel(res.address_label || res.secteur || a);
+        secteurForSchl = res.secteur || a;
+        setSecteurNote(
+          res.notes?.[0] ||
+            (res.secteur && res.secteur_kind !== "tout"
+              ? `Secteur : ${res.secteur}`
+              : null)
+        );
+      } else {
+        setSecteurNote(res.notes?.[0] || "Adresse introuvable.");
+      }
+    }
+    const sr = await authedFetch(
+      `/api/v1/prospection/moyenne-locative?q=${encodeURIComponent(
+        secteurForSchl
+      )}`
     );
-    if (partial) return { f: { quartier: partial.value }, label: partial.value };
-    const cityA =
-      areas.find((a) => a.kind === "city" && norm(a.value) === nq) ||
-      areas.find(
-        (a) =>
-          a.kind === "city" &&
-          (norm(a.value).includes(nq) || nq.includes(norm(a.value)))
-      );
-    if (cityA) return { f: { city: cityA.value }, label: cityA.value };
-    const street = q.replace(/^\s*\d+\s*/, "").trim();
-    if (street) return { f: { nom_rue: street }, label: q };
-    return null;
-  }
+    if (sr.ok) setSchl((await sr.json()) as Schl);
+    setLoading(false);
+  }, []);
 
   function search() {
-    const r = resolveFree();
-    if (r) void load(r.f, r.label);
+    if (query.trim()) void loadByAddress(query);
   }
 
   // SCHL average par nb de chambres (0..3), pour la colonne référence.
@@ -419,6 +440,10 @@ export default function MoyenneLocativePage() {
                     </span>
                   ) : null}
                 </div>
+
+                {secteurNote ? (
+                  <p className="mt-1 text-xs text-white/50">{secteurNote}</p>
+                ) : null}
 
                 {hasMarket ? (
                   <div className="mt-4 overflow-x-auto">
