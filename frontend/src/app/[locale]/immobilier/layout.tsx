@@ -26,6 +26,7 @@ import {
   ShieldCheck,
   Sparkles,
   Unlink,
+  Users,
   Wrench,
   X
 } from "lucide-react";
@@ -49,9 +50,7 @@ type NavItem = {
 const NAV: NavItem[] = [
   { href: "/immobilier", label: "Vue d'ensemble", icon: Building2 },
   { href: "/immobilier/immeubles", label: "Immeubles", icon: Building2 },
-  // « Locataires » volontairement hors du menu : on les retrouve dans la
-  // fiche immeuble (onglets Logements / Baux). La page /immobilier/locataires
-  // reste accessible directement au besoin.
+  { href: "/immobilier/locataires", label: "Locataires", icon: Users },
   { href: "/immobilier/baux", label: "Baux & paiements", icon: ClipboardList },
   { href: "/immobilier/finances", label: "Finances", icon: CircleDollarSign },
   { href: "/immobilier/renouvellements", label: "Renouvellements", icon: ClipboardList },
