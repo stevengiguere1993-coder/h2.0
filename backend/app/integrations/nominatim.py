@@ -69,6 +69,72 @@ async def geocode_address(query: str) -> Optional[Dict[str, float]]:
         return None
 
 
+async def geocode_to_area(query: str) -> Optional[Dict[str, Any]]:
+    """Forward-geocode + composantes : ville, quartier/arrondissement, FSA.
+
+    Transforme une adresse libre en secteur exploitable pour chercher des
+    comparables. Renvoie ``{lat, lng, borough, city, postcode, fsa, display}``
+    ou ``None``. Une seule requête Nominatim (addressdetails=1)."""
+    q = (query or "").strip()
+    if not q:
+        return None
+    params = {
+        "format": "jsonv2",
+        "q": q,
+        "limit": "1",
+        "countrycodes": "ca",
+        "addressdetails": "1",
+        "accept-language": "fr-CA,fr;q=0.9,en;q=0.7",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            r = await http.get(
+                NOMINATIM_SEARCH_URL,
+                params=params,
+                headers={"User-Agent": USER_AGENT},
+            )
+            if r.status_code != 200:
+                log.warning("Nominatim area '%s' -> %s", q, r.status_code)
+                return None
+            data = r.json()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Nominatim area exception '%s': %s", q, exc)
+        return None
+    if not isinstance(data, list) or not data:
+        return None
+    first = data[0]
+    try:
+        lat = float(first["lat"])
+        lng = float(first["lon"])
+    except (KeyError, ValueError, TypeError):
+        return None
+    addr = first.get("address") or {}
+    borough = (
+        addr.get("borough")
+        or addr.get("city_district")
+        or addr.get("suburb")
+        or addr.get("quarter")
+        or addr.get("neighbourhood")
+    )
+    city = (
+        addr.get("city")
+        or addr.get("town")
+        or addr.get("municipality")
+        or addr.get("village")
+    )
+    postcode = (addr.get("postcode") or "").strip() or None
+    fsa = postcode.replace(" ", "")[:3].upper() if postcode else None
+    return {
+        "lat": lat,
+        "lng": lng,
+        "borough": borough,
+        "city": city,
+        "postcode": postcode,
+        "fsa": fsa,
+        "display": first.get("display_name"),
+    }
+
+
 async def reverse_geocode(
     lat: float, lng: float
 ) -> Optional[Dict[str, Any]]:
