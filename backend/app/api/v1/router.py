@@ -66,6 +66,7 @@ from app.api.v1.endpoints import (
     org_seed_canonical,
     rencontres,
     rencontres_teams,
+    timesheets,
     achat_receipt,
     bon_items,
     bon_send,
@@ -396,6 +397,7 @@ api_router.include_router(org_seed_canonical.router)
 # être avalé par /rencontres/{id}.
 api_router.include_router(rencontres_teams.router)
 api_router.include_router(rencontres.router)
+api_router.include_router(timesheets.router)
 api_router.include_router(ai.router)
 api_router.include_router(entreprises.router)
 # entreprise_extras DOIT être registered avant entreprises.router pour que
