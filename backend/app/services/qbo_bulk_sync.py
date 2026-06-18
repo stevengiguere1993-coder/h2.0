@@ -379,6 +379,14 @@ async def run_migration(
                     detail["errors"].append(f"achat {aid}: {exc}")
 
         res["details"].append(detail)
+        # Commit PAR CLIENT : on persiste au fur et à mesure. Ainsi, si la
+        # requête timeout sur « Tous les clients » (beaucoup d'appels QB,
+        # surtout avec les achats), les clients déjà traités sont sauvés et
+        # un re-run reprend là où ça s'est arrêté (idempotent).
+        try:
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            await db.rollback()
 
     return res
 
