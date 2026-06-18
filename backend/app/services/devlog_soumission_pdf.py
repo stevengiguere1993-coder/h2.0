@@ -363,13 +363,36 @@ async def _load(
             )
         ).scalars().all()
     )
-    client: Optional[DevlogClient] = None
+    client: Optional[Any] = None
     if soumission.client_id is not None:
         client = (
             await db.execute(
                 select(DevlogClient).where(DevlogClient.id == soumission.client_id)
             )
         ).scalar_one_or_none()
+    # Repli : soumission liée à un LEAD (prospect) pas encore converti en
+    # client mature (client_id NULL). On affiche alors le contact du lead
+    # au lieu de « À confirmer ». Le bloc CLIENT du PDF ne lit que
+    # name / company / address → un objet léger suffit.
+    if (client is None or not getattr(client, "name", None)) and getattr(
+        soumission, "lead_id", None
+    ) is not None:
+        from types import SimpleNamespace
+
+        from app.models.devlog_lead import DevlogLead
+
+        lead = (
+            await db.execute(
+                select(DevlogLead).where(DevlogLead.id == soumission.lead_id)
+            )
+        ).scalar_one_or_none()
+        if lead is not None and getattr(lead, "name", None):
+            client = SimpleNamespace(
+                name=lead.name,
+                company=(getattr(client, "company", None) if client else None)
+                or getattr(lead, "company", None),
+                address=(getattr(client, "address", None) if client else None),
+            )
     return soumission, items, client, modules
 
 
