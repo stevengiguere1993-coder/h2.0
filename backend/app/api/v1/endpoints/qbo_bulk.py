@@ -14,7 +14,6 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import DBSession, RequireAdminOrOwner
-from app.models.automation_setting import AutomationSetting
 from app.models.project import Project
 from app.services.qbo_auto_sync import QBO_AUTO_SYNC_KEY
 from app.services.qbo_bulk_sync import (
@@ -33,36 +32,42 @@ class QboAutoSync(BaseModel):
 
 @router.get("/auto-sync", response_model=QboAutoSync)
 async def get_auto_sync(db: DBSession, _: RequireAdminOrOwner) -> QboAutoSync:
+    # Lecture MINIMALE (key/enabled) en SQL brut : robuste même si la
+    # table prod n'a pas encore les colonnes updated_at /
+    # updated_by_user_id (l'ORM les sélectionnerait toutes → 500).
+    from sqlalchemy import text
+
     row = (
         await db.execute(
-            select(AutomationSetting).where(
-                AutomationSetting.key == QBO_AUTO_SYNC_KEY
-            )
+            text(
+                "SELECT enabled FROM automation_settings WHERE key = :k"
+            ),
+            {"k": QBO_AUTO_SYNC_KEY},
         )
-    ).scalar_one_or_none()
+    ).first()
     # Fail-closed : désactivé par défaut.
-    return QboAutoSync(enabled=bool(row and row.enabled))
+    return QboAutoSync(enabled=bool(row[0]) if row else False)
 
 
 @router.put("/auto-sync", response_model=QboAutoSync)
 async def set_auto_sync(
     data: QboAutoSync, db: DBSession, user: RequireAdminOrOwner
 ) -> QboAutoSync:
-    row = (
-        await db.execute(
-            select(AutomationSetting).where(
-                AutomationSetting.key == QBO_AUTO_SYNC_KEY
-            )
-        )
-    ).scalar_one_or_none()
-    if row is None:
-        row = AutomationSetting(key=QBO_AUTO_SYNC_KEY, enabled=data.enabled)
-        db.add(row)
-    else:
-        row.enabled = data.enabled
-    row.updated_by_user_id = getattr(user, "id", None)
+    # UPSERT MINIMAL (key/enabled) en SQL brut : ne touche PAS aux colonnes
+    # updated_at / updated_by_user_id, qui peuvent manquer en prod et
+    # faisaient échouer l'activation (l'interrupteur se redésactivait).
+    from sqlalchemy import text
+
+    await db.execute(
+        text(
+            "INSERT INTO automation_settings (key, enabled) "
+            "VALUES (:k, :e) "
+            "ON CONFLICT (key) DO UPDATE SET enabled = EXCLUDED.enabled"
+        ),
+        {"k": QBO_AUTO_SYNC_KEY, "e": bool(data.enabled)},
+    )
     await db.flush()
-    return QboAutoSync(enabled=bool(row.enabled))
+    return QboAutoSync(enabled=bool(data.enabled))
 
 
 @router.get("/bulk-report")
