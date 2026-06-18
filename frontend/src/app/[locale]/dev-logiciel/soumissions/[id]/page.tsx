@@ -601,6 +601,10 @@ export default function SoumissionDetailPage() {
   // adminView pour legacy, ownerView pour devis_dev (sémantique inverse,
   // mais l'UX est la même).
   const [adminView, setAdminView] = useState(true);
+  // Sélection de modules courante de l'aperçu client (remontée depuis
+  // AdminClientPreview) — pour que le PDF téléchargé reflète ce qui est
+  // coché. ``null`` => aperçu jamais ouvert : on garde l'état persisté.
+  const [pdfSelection, setPdfSelection] = useState<number[] | null>(null);
 
   const isDevisDev = s?.is_devis_dev === true;
 
@@ -1173,8 +1177,13 @@ export default function SoumissionDetailPage() {
 
   async function downloadPdf() {
     try {
+      // Reflète dans le PDF la sélection de modules de l'aperçu client.
+      const qs =
+        pdfSelection !== null
+          ? `?selected=${pdfSelection.join(",")}`
+          : "";
       const r = await authedFetch(
-        `/api/v1/devlog/soumissions/${id}/pdf`
+        `/api/v1/devlog/soumissions/${id}/pdf${qs}`
       );
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const blob = await r.blob();
@@ -1497,6 +1506,7 @@ export default function SoumissionDetailPage() {
                 onReorderModules={reorderModules}
                 onAddModuleItem={addModuleItem}
                 onReorderItems={reorderItems}
+                onSelectionChange={setPdfSelection}
               />
             ) : (
               <LegacyView
@@ -1685,13 +1695,15 @@ function AdminClientPreview({
   soumission,
   preview,
   modules,
-  itemsByModule
+  itemsByModule,
+  onSelectionChange
 }: {
   soumissionId: number;
   soumission: Soumission;
   preview: DevisPreview | null;
   modules: ModuleRow[];
   itemsByModule: Map<number, Item[]>;
+  onSelectionChange: (ids: number[] | null) => void;
 }) {
   // Aperçu vivant : initialisé sur le preview persisté, remplacé par le
   // recalcul à chaque bascule de module.
@@ -1708,13 +1720,16 @@ function AdminClientPreview({
   // Initialise / resynchronise les cases sur l'état persisté des modules.
   useEffect(() => {
     if (modules.length > 0) {
-      setSelectedIds(
-        new Set(modules.filter((m) => m.selected).map((m) => m.id))
+      const sel = new Set(
+        modules.filter((m) => m.selected).map((m) => m.id)
       );
+      setSelectedIds(sel);
+      onSelectionChange(Array.from(sel));
     } else {
       setSelectedIds(null);
+      onSelectionChange(null);
     }
-  }, [modules]);
+  }, [modules, onSelectionChange]);
 
   // Recalcul à la volée (sélection simulée, sans persistance).
   const recalc = useCallback(
@@ -1739,13 +1754,12 @@ function AdminClientPreview({
   );
 
   function toggleModule(mid: number) {
-    setSelectedIds((prev) => {
-      const base = prev ? new Set(prev) : new Set<number>();
-      if (base.has(mid)) base.delete(mid);
-      else base.add(mid);
-      void recalc(base);
-      return base;
-    });
+    const base = selectedIds ? new Set(selectedIds) : new Set<number>();
+    if (base.has(mid)) base.delete(mid);
+    else base.add(mid);
+    setSelectedIds(base);
+    void recalc(base);
+    onSelectionChange(Array.from(base));
   }
 
   const clientData = buildClientViewData(
@@ -1799,7 +1813,8 @@ function DevisDevEditor({
   onMoveModule,
   onReorderModules,
   onAddModuleItem,
-  onReorderItems
+  onReorderItems,
+  onSelectionChange
 }: {
   soumission: Soumission;
   preview: DevisPreview | null;
@@ -1824,6 +1839,7 @@ function DevisDevEditor({
   // Un module ne porte QUE des fonctionnalités désormais.
   onAddModuleItem: (moduleId: number, kind: "feature") => void;
   onReorderItems: (orderedIds: number[]) => void;
+  onSelectionChange: (ids: number[] | null) => void;
 }) {
   const rec = preview?.recurring;
   const init = preview?.initial;
@@ -1855,6 +1871,7 @@ function DevisDevEditor({
         preview={preview}
         modules={modules}
         itemsByModule={itemsByModule}
+        onSelectionChange={onSelectionChange}
       />
     );
   }
