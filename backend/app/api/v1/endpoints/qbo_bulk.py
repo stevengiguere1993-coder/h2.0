@@ -118,15 +118,21 @@ async def bulk_sync(
 ) -> dict:
     if dry_run:
         return await dry_run_report(db, client_id=client_id)
-    # Écritures réelles : la session est committée en fin de requête par
-    # la dépendance DB. Idempotent (clé = ID QBO stocké). On REMONTE
-    # l'erreur réelle si la migration plante (au lieu d'un 500 opaque).
+    # Écritures réelles. On COMMITTE ICI (dans le try) pour capturer la
+    # VRAIE cause si le commit échoue — sinon le commit de la dépendance DB
+    # lève hors de notre try → « Internal Server Error » opaque.
     try:
-        return await run_migration(db, client_id=client_id)
+        result = await run_migration(db, client_id=client_id)
+        await db.commit()
+        return result
     except Exception as exc:  # noqa: BLE001
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
         raise HTTPException(
             status_code=500,
-            detail=f"Migration: {type(exc).__name__}: {exc}",
+            detail=f"Migration: {type(exc).__name__}: {str(exc)[:600]}",
         )
 
 
