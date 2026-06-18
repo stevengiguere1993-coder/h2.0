@@ -391,27 +391,20 @@ def compute_devis(
                 }
             )
 
-    # Absorption du résidu d'arrondi sur la dernière ligne payante pour
-    # garantir Σ(prix client) == total_final au cent près.
-    if not is_invalid and (features_client or frais_fixes_client):
-        sum_client = sum(f["prix_client"] for f in features_client) + sum(
-            ff["prix_client"] for ff in frais_fixes_client
+    # INVARIANT au cent près : le total affiché = SOMME EXACTE des prix de
+    # ligne arrondis. Chaque prix de ligne ne dépend que de ses propres
+    # heures (constantes pm_factor / K) ; décocher un module retire donc
+    # EXACTEMENT son prix affiché et ne bouge AUCUNE autre ligne. On ne
+    # « colle » plus le résidu d'arrondi (base×K − Σ lignes) sur une ligne
+    # payante — ce résidu se déplaçait d'une ligne à l'autre selon la
+    # sélection et brisait l'invariant de quelques cents.
+    if not is_invalid:
+        total_final = _round(
+            sum(f["prix_client"] for f in features_client)
+            + sum(ff["prix_client"] for ff in frais_fixes_client)
         )
-        delta = _round(total_final - sum_client)
-        if abs(delta) > 0:
-            payable = [
-                f
-                for f in features_client
-                if not f.get("offert") and f["prix_client"] > 0
-            ]
-            if payable:
-                payable[-1]["prix_client"] = _round(
-                    payable[-1]["prix_client"] + delta
-                )
-            elif frais_fixes_client:
-                frais_fixes_client[-1]["prix_client"] = _round(
-                    frais_fixes_client[-1]["prix_client"] + delta
-                )
+        total_apres_marge = total_final
+        marge_init_amount = _round(total_final - total_avant_marge)
 
     tps_initiale = total_final * TPS_RATE
     tvq_initiale = total_final * TVQ_RATE
