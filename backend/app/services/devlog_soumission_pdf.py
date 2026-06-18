@@ -1233,10 +1233,32 @@ def _render_bytes(
     return buf.getvalue()
 
 
+def _override_pdf_selection(
+    modules: Optional[list[Any]],
+    selected_module_ids: Optional[list[int]],
+) -> None:
+    """Aligne en mémoire (sans commit) l'état ``selected`` des modules sur
+    la sélection fournie, pour que le PDF reflète EXACTEMENT ce que le
+    client a coché au moment de la génération. ``None`` => on garde l'état
+    ``selected`` persisté en base (rétrocompat)."""
+    if selected_module_ids is None or not modules:
+        return
+    wanted = {int(x) for x in selected_module_ids}
+    for m in modules:
+        m.selected = getattr(m, "id", None) in wanted
+
+
 async def generate_devis_pdf(
-    db: AsyncSession, soumission_id: int
+    db: AsyncSession,
+    soumission_id: int,
+    selected_module_ids: Optional[list[int]] = None,
 ) -> bytes:
-    """Rend le PDF de la soumission devis_dev (vue client uniquement)."""
+    """Rend le PDF de la soumission devis_dev (vue client uniquement).
+
+    ``selected_module_ids`` (optionnel) : si fourni, le PDF est rendu avec
+    CETTE sélection de modules (ce que le client a coché au moment de la
+    génération), au lieu de l'état ``selected`` persisté en base.
+    """
     soumission, items, client, modules = await _load(db, soumission_id)
     if soumission is None:
         raise ValueError(f"Soumission {soumission_id} introuvable.")
@@ -1245,6 +1267,7 @@ async def generate_devis_pdf(
             "Seules les soumissions au nouveau format devis_dev "
             "peuvent générer un PDF."
         )
+    _override_pdf_selection(modules, selected_module_ids)
     return _render_bytes(soumission, items, client, modules)
 
 

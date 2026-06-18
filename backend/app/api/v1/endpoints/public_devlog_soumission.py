@@ -215,6 +215,23 @@ def _client_ip(request: Request) -> Optional[str]:
     return None
 
 
+def _parse_selected_ids(raw: Optional[str]) -> Optional[list[int]]:
+    """Parse une liste d'ids de modules « 1,2,3 » (query string du PDF).
+    ``None`` / vide => None (le PDF garde l'état ``selected`` persisté)."""
+    if not raw or not raw.strip():
+        return None
+    out: list[int] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except ValueError:
+            continue
+    return out
+
+
 async def _load_by_token(
     db: AsyncSession, token: str
 ) -> DevlogSoumission:
@@ -518,10 +535,12 @@ async def select_public_soumission(
     summary="PDF inline (page publique)",
 )
 async def public_soumission_pdf(
-    token: str, db: DBSession
+    token: str, db: DBSession, selected: Optional[str] = None
 ) -> Response:
     soumission = await _load_by_token(db, token)
-    pdf_bytes = await generate_devis_pdf(db, soumission.id)
+    pdf_bytes = await generate_devis_pdf(
+        db, soumission.id, _parse_selected_ids(selected)
+    )
     filename = f"soumission-devlog-{soumission.id}.pdf"
     return Response(
         content=pdf_bytes,
