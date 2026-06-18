@@ -346,35 +346,37 @@ async def run_migration(
         # 4) Achats (coûts) des projets du client → Bills/Purchases QB
         # rattachés au SOUS-CLIENT du projet (pour qu'ils apparaissent dans
         # l'onglet Projets de QB). Idempotent (clé = qbo_bill_id).
+        #
+        # BLINDAGE : chaque achat est poussé dans sa PROPRE session DB
+        # (commit indépendant). Ainsi un achat en erreur ne peut PAS
+        # empoisonner la transaction de la migration (cause du HTTP 500).
+        from app.db.session import AsyncSessionLocal
         from app.models.achat import Achat
         from app.services.achat_qbo import sync_achat_to_qbo
 
         proj_ids = [p.id for p in projects]
         if proj_ids:
-            achats = list(
-                (
+            achat_ids = [
+                r[0]
+                for r in (
                     await db.execute(
-                        select(Achat).where(
+                        select(Achat.id).where(
                             Achat.project_id.in_(proj_ids),
                             Achat.status != "cancelled",
                             Achat.amount.is_not(None),
                         )
                     )
-                ).scalars().all()
-            )
-            for a in achats:
-                if not a.amount or float(a.amount) <= 0:
-                    continue
+                ).all()
+            ]
+            for aid in achat_ids:
                 try:
-                    # SAVEPOINT par achat : si l'un échoue (erreur QBO ou
-                    # DB), on annule SEULEMENT cet achat sans empoisonner la
-                    # transaction → le reste de la migration aboutit.
-                    async with db.begin_nested():
-                        await sync_achat_to_qbo(db, a.id)
+                    async with AsyncSessionLocal() as adb:
+                        await sync_achat_to_qbo(adb, aid)
+                        await adb.commit()
                     res["achats"]["pushed"] += 1
                 except Exception as exc:  # noqa: BLE001
                     res["achats"]["errors"] += 1
-                    detail["errors"].append(f"achat {a.id}: {exc}")
+                    detail["errors"].append(f"achat {aid}: {exc}")
 
         res["details"].append(detail)
 
