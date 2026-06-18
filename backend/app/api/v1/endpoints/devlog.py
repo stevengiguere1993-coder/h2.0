@@ -1555,7 +1555,10 @@ async def send_soumission(
     summary="PDF de la soumission devis_dev (vue client uniquement)",
 )
 async def get_soumission_pdf(
-    soumission_id: int, db: DBSession, user: CurrentUser
+    soumission_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    selected: Optional[str] = None,
 ):
     soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
     if soumission is None:
@@ -1568,7 +1571,19 @@ async def get_soumission_pdf(
                 "généré. Utilise une soumission « devis_dev »."
             ),
         )
-    pdf_bytes = await generate_devis_pdf(db, soumission_id)
+    # ``selected`` (query « 1,2,3 ») => rend le PDF avec cette sélection de
+    # modules ; absent => état ``selected`` persisté.
+    sel_ids: Optional[list[int]] = None
+    if selected and selected.strip():
+        sel_ids = []
+        for _p in selected.split(","):
+            _p = _p.strip()
+            if _p:
+                try:
+                    sel_ids.append(int(_p))
+                except ValueError:
+                    continue
+    pdf_bytes = await generate_devis_pdf(db, soumission_id, sel_ids)
     filename = f"soumission-devlog-{soumission_id}.pdf"
 
     # Phase 6 — auto-classement Drive (best-effort, NON bloquant). Dépose
