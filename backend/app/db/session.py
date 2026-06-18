@@ -169,8 +169,16 @@ async def ensure_critical_columns() -> None:
         ("achats", "qbo_purchase_id", "VARCHAR(64)"),
         ("voice_calls", "dial_state_json", "TEXT"),
         # Hub Automatisations : config éditable (cadence, etc.). La table
-        # a été créée sans cette colonne au 1er déploiement → on l'ajoute.
+        # a été créée sans ces colonnes au 1er déploiement → on les ajoute.
+        # Sans updated_at / updated_by_user_id, le PUT /qbo/auto-sync
+        # échoue (impossible d'activer l'interrupteur → il se redésactive).
         ("automation_settings", "config_json", "TEXT"),
+        (
+            "automation_settings",
+            "updated_at",
+            "TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()",
+        ),
+        ("automation_settings", "updated_by_user_id", "INTEGER"),
         # Bon de travail unifié : assignable + demande interne sans signature.
         ("bons_travail", "assignee_user_id", "INTEGER"),
         ("bons_travail", "requires_signature", "BOOLEAN NOT NULL DEFAULT true"),
