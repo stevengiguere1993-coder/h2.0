@@ -527,6 +527,12 @@ async def select_public_soumission(
     modules = await _load_modules(db, soumission.id)
     _apply_selection_override(modules, data.selected_module_ids)
     await db.flush()
+    # Rafraîchit le cache ``amount`` (total one-shot affiché dans le CRM /
+    # listes) pour qu'il reflète la sélection RETENUE par le client, et non
+    # l'état initial « tout coché ».
+    from app.api.v1.endpoints.devlog import _refresh_soumission_amount
+
+    await _refresh_soumission_amount(db, soumission.id)
     return await _to_public(db, soumission)
 
 
@@ -573,6 +579,10 @@ async def sign_public_soumission(
         modules = await _load_modules(db, soumission.id)
         _apply_selection_override(modules, data.selected_module_ids)
         await db.flush()
+        # Le cache ``amount`` doit refléter la sélection finale signée.
+        from app.api.v1.endpoints.devlog import _refresh_soumission_amount
+
+        await _refresh_soumission_amount(db, soumission.id)
 
     soumission.signed_name = data.signed_name.strip()[:255]
     soumission.signed_at = datetime.now(timezone.utc)

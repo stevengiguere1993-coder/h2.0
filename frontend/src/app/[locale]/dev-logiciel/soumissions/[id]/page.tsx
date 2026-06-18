@@ -2176,6 +2176,9 @@ function DevisDevOwnerInitial({
   onReorderItems: (orderedIds: number[]) => void;
 }) {
   const init = preview?.initial;
+  // Soumission figée (acceptée/refusée) = contrat signé : la sélection de
+  // modules (et le contenu) ne doit plus être modifiable.
+  const locked = s.status === "acceptee" || s.status === "refusee";
   // Détail calculé par module (prix client, heures, état) indexé par id.
   const moduleCalcById = useMemo(() => {
     const m = new Map<number, NonNullable<DevisPreview["initial"]["modules"]>[number]>();
@@ -2221,6 +2224,16 @@ function DevisDevOwnerInitial({
 
   return (
     <div className="space-y-4">
+      {locked ? (
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">
+          🔒 <span className="font-semibold">Soumission figée</span> — elle a
+          été {s.status === "acceptee" ? "acceptée et signée" : "refusée"} par
+          le client. La sélection ci-dessous est{" "}
+          <span className="font-semibold">verrouillée</span> et reflète
+          exactement ce que le client a retenu. Pour la modifier, change
+          d'abord son statut (en haut) pour la rouvrir.
+        </div>
+      ) : null}
       {/* Gestionnaire de projet — bloc UNIQUE et GLOBAL (refonte
           2026-06). Le chargé de projet n'est plus rattaché aux modules :
           c'est une liste de tâches (description + heures) propre à la
@@ -2421,6 +2434,7 @@ function DevisDevOwnerInitial({
                   onReorderItems={onReorderItems}
                   onPatchItem={onPatchItem}
                   onDeleteItem={onDeleteItem}
+                  locked={locked}
                 />
               </div>
             ))}
@@ -2720,7 +2734,8 @@ function ModuleCard({
   onAddModuleItem,
   onReorderItems,
   onPatchItem,
-  onDeleteItem
+  onDeleteItem,
+  locked
 }: {
   module: ModuleRow;
   index: number;
@@ -2743,6 +2758,8 @@ function ModuleCard({
   onReorderItems: (orderedIds: number[]) => void;
   onPatchItem: (itemId: number, patch: Partial<Item>) => void;
   onDeleteItem: (itemId: number) => void;
+  // Soumission figée (acceptée/refusée) : la sélection n'est plus modifiable.
+  locked: boolean;
 }) {
   // Un module ne contient QUE des fonctionnalités (les tâches du chargé
   // de projet sont centralisées dans le bloc « Gestionnaire de projet »).
@@ -2771,16 +2788,23 @@ function ModuleCard({
       <div className="flex flex-wrap items-center gap-2">
         <DragHandle {...dragHandleProps} />
         <label
-          className="inline-flex items-center gap-1.5 text-xs text-white/80"
-          title="Inclure ce module dans la soumission"
+          className={`inline-flex items-center gap-1.5 text-xs text-white/80 ${
+            locked ? "cursor-not-allowed opacity-60" : ""
+          }`}
+          title={
+            locked
+              ? "Soumission figée — sélection verrouillée"
+              : "Inclure ce module dans la soumission"
+          }
         >
           <input
             type="checkbox"
             checked={selected}
+            disabled={locked}
             onChange={(e) =>
               onPatchModule(md.id, { selected: e.target.checked })
             }
-            className="h-4 w-4 rounded border-white/30 bg-brand-950 accent-blue-500"
+            className="h-4 w-4 rounded border-white/30 bg-brand-950 accent-blue-500 disabled:cursor-not-allowed"
           />
           Inclure
         </label>
