@@ -12,6 +12,7 @@ export function QboAutoSyncToggle() {
   // null — sinon la carte est invisible si l'API est lente ou échoue.
   const [enabled, setEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,19 +38,24 @@ export function QboAutoSyncToggle() {
     if (loading) return;
     const next = !enabled;
     setEnabled(next);
+    setErr(null);
     try {
       const r = await authedFetch("/api/v1/qbo/auto-sync", {
         method: "PUT",
         body: JSON.stringify({ enabled: next })
       });
-      if (!r.ok) throw new Error();
-    } catch {
+      if (!r.ok) {
+        const body = await r.text().catch(() => "");
+        throw new Error(`HTTP ${r.status} — ${body.slice(0, 400)}`);
+      }
+    } catch (e) {
       setEnabled(!next);
+      setErr((e as Error).message || "Échec de l'enregistrement.");
     }
   }
 
   return (
-    <div className="mt-3 flex items-center gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+    <div className="mt-3 flex flex-wrap items-center gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5">
       <div className="min-w-0 flex-1">
         <h2 className="text-base font-bold text-white">
           Synchro QuickBooks automatique
@@ -60,6 +66,11 @@ export function QboAutoSyncToggle() {
           reviennent dans Kratos (cron). À n&apos;activer qu&apos;APRÈS la
           migration de masse validée.
         </p>
+        {err ? (
+          <p className="mt-2 break-words rounded-lg border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">
+            {err}
+          </p>
+        ) : null}
       </div>
       <button
         type="button"

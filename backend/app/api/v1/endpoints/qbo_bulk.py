@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -32,41 +32,59 @@ class QboAutoSync(BaseModel):
 
 @router.get("/auto-sync", response_model=QboAutoSync)
 async def get_auto_sync(db: DBSession, _: RequireAdminOrOwner) -> QboAutoSync:
-    # Lecture MINIMALE (key/enabled) en SQL brut : robuste même si la
-    # table prod n'a pas encore les colonnes updated_at /
-    # updated_by_user_id (l'ORM les sélectionnerait toutes → 500).
+    # SQL minimal + tolérant : si la table n'existe pas / autre souci, on
+    # renvoie « désactivé » (fail-closed) sans 500.
     from sqlalchemy import text
 
-    row = (
-        await db.execute(
-            text(
-                "SELECT enabled FROM automation_settings WHERE key = :k"
-            ),
-            {"k": QBO_AUTO_SYNC_KEY},
-        )
-    ).first()
-    # Fail-closed : désactivé par défaut.
-    return QboAutoSync(enabled=bool(row[0]) if row else False)
+    try:
+        row = (
+            await db.execute(
+                text(
+                    "SELECT enabled FROM automation_settings WHERE key = :k"
+                ),
+                {"k": QBO_AUTO_SYNC_KEY},
+            )
+        ).first()
+        return QboAutoSync(enabled=bool(row[0]) if row else False)
+    except Exception:  # noqa: BLE001
+        return QboAutoSync(enabled=False)
 
 
 @router.put("/auto-sync", response_model=QboAutoSync)
 async def set_auto_sync(
     data: QboAutoSync, db: DBSession, user: RequireAdminOrOwner
 ) -> QboAutoSync:
-    # UPSERT MINIMAL (key/enabled) en SQL brut : ne touche PAS aux colonnes
-    # updated_at / updated_by_user_id, qui peuvent manquer en prod et
-    # faisaient échouer l'activation (l'interrupteur se redésactivait).
+    # Robuste : garantit la table (au cas où create_all ne l'aurait pas
+    # créée en prod), puis UPSERT minimal sur key/enabled — sans toucher
+    # aux colonnes de timestamp. En cas d'échec, on REMONTE l'erreur réelle
+    # (au lieu d'un 500 opaque) pour pouvoir diagnostiquer.
     from sqlalchemy import text
 
-    await db.execute(
-        text(
-            "INSERT INTO automation_settings (key, enabled) "
-            "VALUES (:k, :e) "
-            "ON CONFLICT (key) DO UPDATE SET enabled = EXCLUDED.enabled"
-        ),
-        {"k": QBO_AUTO_SYNC_KEY, "e": bool(data.enabled)},
-    )
-    await db.flush()
+    try:
+        await db.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS automation_settings ("
+                "key VARCHAR(64) PRIMARY KEY, "
+                "enabled BOOLEAN NOT NULL DEFAULT true, "
+                "config_json TEXT, "
+                "updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "
+                "updated_by_user_id INTEGER)"
+            )
+        )
+        await db.execute(
+            text(
+                "INSERT INTO automation_settings (key, enabled) "
+                "VALUES (:k, :e) "
+                "ON CONFLICT (key) DO UPDATE SET enabled = EXCLUDED.enabled"
+            ),
+            {"k": QBO_AUTO_SYNC_KEY, "e": bool(data.enabled)},
+        )
+        await db.flush()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"auto-sync write failed: {type(exc).__name__}: {exc}",
+        )
     return QboAutoSync(enabled=bool(data.enabled))
 
 
