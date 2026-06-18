@@ -242,7 +242,17 @@ export default function QboMigrationPage() {
         }`,
         { method: "POST" }
       );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) {
+        const body = await r.text().catch(() => "");
+        let msg = body;
+        try {
+          const j = JSON.parse(body) as { detail?: string };
+          if (j.detail) msg = j.detail;
+        } catch {
+          /* garde le texte brut */
+        }
+        throw new Error(`HTTP ${r.status} — ${msg.slice(0, 500)}`);
+      }
       setResult((await r.json()) as MigrationResult);
     } catch (e) {
       setError(`Migration échouée : ${(e as Error).message}`);
