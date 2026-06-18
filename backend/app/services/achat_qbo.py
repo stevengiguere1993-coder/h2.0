@@ -428,7 +428,14 @@ async def sync_achat_to_qbo(
         #   - Classe (ClassRef)    = le projet (nom/adresse du chantier),
         #     créée si absente (si le suivi des classes est activé).
         if project:
-            if project.client_id:
+            # RATTACHEMENT AU PROJET QBO : le coût doit pointer vers le
+            # SOUS-CLIENT du projet (project.qbo_job_id) pour apparaître
+            # dans l'onglet Projets (Revenu/Coût/Marge). Sans ça, le coût
+            # va sur le client parent et le projet affiche 0 $.
+            if getattr(project, "qbo_job_id", None):
+                customer_id = str(project.qbo_job_id)
+            elif project.client_id:
+                # Repli : projet non relié → on rattache au client parent.
                 from app.models.client import Client
 
                 client = (

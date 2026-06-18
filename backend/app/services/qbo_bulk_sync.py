@@ -192,6 +192,7 @@ async def run_migration(
             "errors": 0,
         },
         "payments": {"applied": 0},
+        "achats": {"pushed": 0, "errors": 0},
         "details": [],
     }
 
@@ -341,6 +342,35 @@ async def run_migration(
             except Exception as exc:  # noqa: BLE001
                 res["factures"]["errors"] += 1
                 detail["errors"].append(f"facture {f.id}: {exc}")
+
+        # 4) Achats (coûts) des projets du client → Bills/Purchases QB
+        # rattachés au SOUS-CLIENT du projet (pour qu'ils apparaissent dans
+        # l'onglet Projets de QB). Idempotent (clé = qbo_bill_id).
+        from app.models.achat import Achat
+        from app.services.achat_qbo import sync_achat_to_qbo
+
+        proj_ids = [p.id for p in projects]
+        if proj_ids:
+            achats = list(
+                (
+                    await db.execute(
+                        select(Achat).where(
+                            Achat.project_id.in_(proj_ids),
+                            Achat.status != "cancelled",
+                            Achat.amount.is_not(None),
+                        )
+                    )
+                ).scalars().all()
+            )
+            for a in achats:
+                try:
+                    if not a.amount or float(a.amount) <= 0:
+                        continue
+                    await sync_achat_to_qbo(db, a.id)
+                    res["achats"]["pushed"] += 1
+                except Exception as exc:  # noqa: BLE001
+                    res["achats"]["errors"] += 1
+                    detail["errors"].append(f"achat {a.id}: {exc}")
 
         res["details"].append(detail)
 
