@@ -2170,6 +2170,29 @@ async def _refresh_section_items(db, section_id: int) -> None:
     await db.flush()
 
 
+def _ensure_soumission_open(soumission) -> None:
+    """Refuse toute modification du CONTENU d'une soumission finalisée
+    (``acceptee`` / ``refusee``). Une soumission acceptée = contrat signé :
+    sa sélection de modules et ses items sont FIGÉS (le PDF signé fait
+    foi). Pour la modifier, il faut d'abord rouvrir son statut."""
+    if soumission is not None and getattr(soumission, "status", None) in (
+        "acceptee",
+        "refusee",
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Soumission finalisée (signée) — son contenu est figé. "
+                "Change son statut pour la rouvrir avant de la modifier."
+            ),
+        )
+
+
+async def _ensure_soumission_open_by_id(db, soumission_id: int) -> None:
+    soum = await GenericCrud(db, DevlogSoumission).get(soumission_id)
+    _ensure_soumission_open(soum)
+
+
 async def _refresh_soumission_amount(db, soumission_id: int) -> None:
     """Recalcule `DevlogSoumission.amount` à partir de ses items
     `initial` (frais one-shot). Le total mensuel est exposé séparément
@@ -2273,6 +2296,7 @@ async def create_soumission_item(
     soumission = await GenericCrud(db, DevlogSoumission).get(data.soumission_id)
     if soumission is None:
         raise HTTPException(status_code=404, detail="Soumission introuvable")
+    _ensure_soumission_open(soumission)
     payload = data.model_dump(exclude_unset=True)
 
     # Position globale par défaut = nombre d'items déjà présents dans la
@@ -2344,6 +2368,7 @@ async def update_soumission_item(
     obj = await crud.get(item_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Item introuvable")
+    await _ensure_soumission_open_by_id(db, obj.soumission_id)
     update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(obj, field, value)
@@ -2384,6 +2409,7 @@ async def delete_soumission_item(
     obj = await crud.get(item_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Item introuvable")
+    await _ensure_soumission_open_by_id(db, obj.soumission_id)
     soumission_id = obj.soumission_id
     await crud.delete(obj)
     await _refresh_soumission_amount(db, soumission_id)
@@ -2766,6 +2792,7 @@ async def update_soumission_module(
     obj = await crud.get(module_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Module introuvable")
+    await _ensure_soumission_open_by_id(db, obj.soumission_id)
     if data.section_id is not None:
         section = await GenericCrud(db, DevlogSoumissionSection).get(
             data.section_id
@@ -2796,6 +2823,7 @@ async def delete_soumission_module(
     obj = await crud.get(module_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Module introuvable")
+    await _ensure_soumission_open_by_id(db, obj.soumission_id)
     soumission_id = obj.soumission_id
     # Les items du module sont détachés (module_id → NULL) via le
     # ON DELETE SET NULL du modèle ; ils restent dans la soumission et
