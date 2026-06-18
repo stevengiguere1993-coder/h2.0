@@ -7,7 +7,11 @@ import { authedFetch } from "@/lib/auth";
 /** Interrupteur de la synchro QuickBooks automatique (OFF par défaut).
  *  À n'activer qu'après la migration de masse validée. */
 export function QboAutoSyncToggle() {
-  const [enabled, setEnabled] = useState<boolean | null>(null);
+  // Défaut « désactivé » (fail-closed, comme le backend). On corrige avec
+  // la vraie valeur dès que l'API répond. IMPORTANT : on NE retourne JAMAIS
+  // null — sinon la carte est invisible si l'API est lente ou échoue.
+  const [enabled, setEnabled] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -16,10 +20,12 @@ export function QboAutoSyncToggle() {
         const r = await authedFetch("/api/v1/qbo/auto-sync");
         if (r.ok && !cancelled) {
           const d = (await r.json()) as { enabled: boolean };
-          setEnabled(d.enabled);
+          setEnabled(!!d.enabled);
         }
       } catch {
-        /* ignore */
+        /* ignore — reste désactivé (fail-closed) */
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => {
@@ -28,7 +34,7 @@ export function QboAutoSyncToggle() {
   }, []);
 
   async function toggle() {
-    if (enabled === null) return;
+    if (loading) return;
     const next = !enabled;
     setEnabled(next);
     try {
@@ -41,8 +47,6 @@ export function QboAutoSyncToggle() {
       setEnabled(!next);
     }
   }
-
-  if (enabled === null) return null;
 
   return (
     <div className="mt-3 flex items-center gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5">
@@ -60,7 +64,8 @@ export function QboAutoSyncToggle() {
       <button
         type="button"
         onClick={() => void toggle()}
-        className={`flex flex-shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold transition ${
+        disabled={loading}
+        className={`flex flex-shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold transition disabled:opacity-60 ${
           enabled
             ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
             : "border-brand-800 bg-brand-950 text-white/60"
@@ -71,7 +76,7 @@ export function QboAutoSyncToggle() {
             enabled ? "bg-emerald-400" : "bg-white/30"
           }`}
         />
-        {enabled ? "Activée" : "Désactivée"}
+        {loading ? "…" : enabled ? "Activée" : "Désactivée"}
       </button>
     </div>
   );
