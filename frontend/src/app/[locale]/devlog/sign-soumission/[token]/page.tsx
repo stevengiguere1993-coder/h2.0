@@ -280,7 +280,11 @@ export default function SignSoumissionPage() {
           {/* Lien PDF */}
           <div className="mt-6">
             <a
-              href={`/api/v1/public/devlog/soumissions/${token}/pdf`}
+              href={`/api/v1/public/devlog/soumissions/${token}/pdf${
+                selectedIds
+                  ? `?selected=${Array.from(selectedIds).join(",")}`
+                  : ""
+              }`}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
