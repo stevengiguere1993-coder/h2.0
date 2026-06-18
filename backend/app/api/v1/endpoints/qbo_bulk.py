@@ -119,8 +119,15 @@ async def bulk_sync(
     if dry_run:
         return await dry_run_report(db, client_id=client_id)
     # Écritures réelles : la session est committée en fin de requête par
-    # la dépendance DB. Idempotent (clé = ID QBO stocké).
-    return await run_migration(db, client_id=client_id)
+    # la dépendance DB. Idempotent (clé = ID QBO stocké). On REMONTE
+    # l'erreur réelle si la migration plante (au lieu d'un 500 opaque).
+    try:
+        return await run_migration(db, client_id=client_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Migration: {type(exc).__name__}: {exc}",
+        )
 
 
 @router.post("/reset-links")

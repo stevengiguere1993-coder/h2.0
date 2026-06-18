@@ -363,10 +363,14 @@ async def run_migration(
                 ).scalars().all()
             )
             for a in achats:
+                if not a.amount or float(a.amount) <= 0:
+                    continue
                 try:
-                    if not a.amount or float(a.amount) <= 0:
-                        continue
-                    await sync_achat_to_qbo(db, a.id)
+                    # SAVEPOINT par achat : si l'un échoue (erreur QBO ou
+                    # DB), on annule SEULEMENT cet achat sans empoisonner la
+                    # transaction → le reste de la migration aboutit.
+                    async with db.begin_nested():
+                        await sync_achat_to_qbo(db, a.id)
                     res["achats"]["pushed"] += 1
                 except Exception as exc:  # noqa: BLE001
                     res["achats"]["errors"] += 1
