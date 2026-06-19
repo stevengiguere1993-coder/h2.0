@@ -140,9 +140,14 @@ async def send_appointment_assignee_invite(
 ) -> bool:
     """Send the assigned employee a calendar invite (.ics attached).
 
-    The .ics contains ORGANIZER + ATTENDEE so Outlook/Gmail/Apple Mail
-    offer a native "Add to calendar" button. The employee's calendar
-    app keeps a copy so they see the RDV in their own calendar.
+    Le .ics est émis en **PUBLISH** (et non REQUEST). L'employé assigné
+    est presque toujours une boîte interne Microsoft 365 : un .ics
+    REQUEST y est AUTO-TRAITÉ par l'assistant calendrier d'Exchange
+    (ajouté au calendrier PUIS courriel retiré de la boîte de réception)
+    → l'employé ne voit jamais le courriel. PUBLISH arrive comme un vrai
+    courriel « ajouter à l'agenda », sans auto-traitement — identique au
+    comportement de l'invite propriétaire. Fonctionne aussi pour un
+    partenaire externe (Gmail/Apple proposent « Ajouter au calendrier »).
     """
     mailer = get_mailer()
     if not mailer.ready or not assignee.email:
@@ -179,7 +184,9 @@ async def send_appointment_assignee_invite(
 </div>
 """
     try:
-        ics_bytes = render_event_ics(event, attendee_email=assignee.email)
+        ics_bytes = render_event_ics(
+            event, attendee_email=assignee.email, method="PUBLISH"
+        )
         await mailer.send(
             to=[assignee.email],
             subject=f"Assignation — {event.title}",
