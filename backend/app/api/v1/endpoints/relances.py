@@ -176,6 +176,13 @@ async def put_settings(
 
 
 # ── Relances planifiées d'un lead (modifiables une à une) ──
+# Accès : TOUT le staff authentifié (CurrentUser). Gérer les relances
+# d'un prospect précis (ajouter/replanifier/sauter/supprimer) est du
+# travail opérationnel quotidien — pas de la configuration. Seule la
+# SÉQUENCE GLOBALE (cadence + settings ci-dessus) reste réservée aux
+# managers. Avant, ces mutations exigeaient RequireManager alors que la
+# lecture était ouverte → un commercial voyait la carte mais obtenait
+# « Ajout échoué » (403) en cliquant « + Relance ».
 @router.get(
     "/plan/{contact_request_id}", response_model=list[RelanceItemRead]
 )
@@ -211,7 +218,7 @@ async def add_item(
     contact_request_id: int,
     data: RelanceItemCreate,
     db: DBSession,
-    _: RequireManager,
+    _: CurrentUser,
 ) -> RelanceItemRead:
     pos = data.position
     if pos is None:
@@ -239,7 +246,7 @@ async def add_item(
 
 @router.patch("/item/{item_id}", response_model=RelanceItemRead)
 async def update_item(
-    item_id: int, data: RelanceItemUpdate, db: DBSession, _: RequireManager
+    item_id: int, data: RelanceItemUpdate, db: DBSession, _: CurrentUser
 ) -> RelanceItemRead:
     item = (
         await db.execute(
@@ -258,7 +265,7 @@ async def update_item(
 
 @router.delete("/item/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_item(
-    item_id: int, db: DBSession, _: RequireManager
+    item_id: int, db: DBSession, _: CurrentUser
 ) -> Response:
     item = (
         await db.execute(
