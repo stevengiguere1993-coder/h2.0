@@ -49,6 +49,22 @@ function statusTone(s: ItemStatus): string {
   return "bg-white/10 text-white/60";
 }
 
+/** Message d'erreur lisible à partir d'une réponse non-OK : on remonte le
+ *  `detail` renvoyé par l'API (ex. « Permissions insuffisantes. ») au lieu
+ *  d'un « échoué » opaque, pour que la cause soit diagnosticable. */
+async function errText(res: Response, action: string): Promise<string> {
+  let detail = "";
+  try {
+    const d = (await res.json()) as { detail?: unknown };
+    if (typeof d?.detail === "string") detail = d.detail;
+  } catch {
+    /* corps non-JSON — on garde le statut */
+  }
+  if (res.status === 401) return "Session expirée — reconnecte-toi.";
+  if (res.status === 403) return detail || "Permissions insuffisantes.";
+  return detail ? `${action} : ${detail}` : `${action} (HTTP ${res.status}).`;
+}
+
 function toLocalInput(iso: string): string {
   const d = new Date(iso);
   const p = (n: number) => String(n).padStart(2, "0");
@@ -93,19 +109,23 @@ export function RelancePlanCard({
 
   async function patchItem(id: number, patch: Partial<Item>) {
     setItems((xs) => xs.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+    setError(null);
     try {
       const res = await authedFetch(`/api/v1/relances/item/${id}`, {
         method: "PATCH",
         body: JSON.stringify(patch)
       });
-      if (!res.ok) throw new Error();
-    } catch {
-      setError("Enregistrement échoué.");
+      if (!res.ok) throw new Error(await errText(res, "Enregistrement échoué"));
+    } catch (e) {
+      setError(
+        e instanceof Error && e.message ? e.message : "Enregistrement échoué."
+      );
       load();
     }
   }
 
   async function addItem() {
+    setError(null);
     const when = new Date();
     when.setDate(when.getDate() + 1);
     try {
@@ -120,25 +140,29 @@ export function RelancePlanCard({
           })
         }
       );
-      if (!res.ok) throw new Error();
+      if (!res.ok) throw new Error(await errText(res, "Ajout échoué"));
       const created = (await res.json()) as Item;
       setItems((xs) => [...xs, created]);
-    } catch {
-      setError("Ajout échoué.");
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : "Ajout échoué.");
     }
   }
 
   async function removeItem(id: number) {
+    setError(null);
     const prev = items;
     setItems((xs) => xs.filter((x) => x.id !== id));
     try {
       const res = await authedFetch(`/api/v1/relances/item/${id}`, {
         method: "DELETE"
       });
-      if (!res.ok && res.status !== 204) throw new Error();
-    } catch {
+      if (!res.ok && res.status !== 204)
+        throw new Error(await errText(res, "Suppression échouée"));
+    } catch (e) {
       setItems(prev);
-      setError("Suppression échouée.");
+      setError(
+        e instanceof Error && e.message ? e.message : "Suppression échouée."
+      );
     }
   }
 
