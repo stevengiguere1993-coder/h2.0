@@ -314,10 +314,9 @@ export default function ProjectDetailPage() {
 
   async function createFacture() {
     if (!p) return;
-    if (!includeSoumission && !includeHours && !includeAchats) {
-      setError("Choisis au moins une source d'items.");
-      return;
-    }
+    // Aucune source cochée = facture VIERGE : on crée une facture vide
+    // (brouillon) et l'utilisateur saisit lui-même toutes les lignes sur
+    // la fiche. Le backend gère l'import à zéro sans souci.
     setConvertingToFacture(true);
     setError(null);
     try {
@@ -608,8 +607,10 @@ export default function ProjectDetailPage() {
           >
             <h3 className="text-lg font-bold text-white">Créer une facture</h3>
             <p className="mt-1 text-xs text-white/60">
-              Sélectionne les sources d&apos;items à inclure. Tu pourras
-              ensuite ajuster manuellement sur la fiche facture.
+              Sélectionne les sources d&apos;items à inclure — ou laisse tout
+              décoché pour créer une <strong>facture vierge</strong> et saisir
+              toi-même chaque ligne. Tu pourras de toute façon ajuster
+              manuellement sur la fiche.
             </p>
 
             <div className="mt-5 space-y-3">
@@ -823,16 +824,15 @@ export default function ProjectDetailPage() {
               <button
                 type="button"
                 onClick={createFacture}
-                disabled={
-                  convertingToFacture ||
-                  (!includeSoumission && !includeHours && !includeAchats)
-                }
+                disabled={convertingToFacture}
                 className="btn-accent text-sm disabled:opacity-60"
               >
                 {convertingToFacture ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Création…
                   </>
+                ) : !includeSoumission && !includeHours && !includeAchats ? (
+                  "Créer une facture vierge"
                 ) : (
                   "Créer la facture"
                 )}
