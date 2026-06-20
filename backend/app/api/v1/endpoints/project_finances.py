@@ -206,9 +206,20 @@ async def _compute_finances(
     elif items:
         projected_revenue = sum(float(it.total) for it in items)
 
-    # Revenu HORS TAXES (assiette du profit) : subtotal de la soumission
-    # si dispo, sinon on dérive du TTC via 1.14975.
-    if sm is not None and sm.subtotal is not None:
+    # Revenu HORS TAXES (assiette du profit). ATTENTION : le sous-total
+    # STOCKÉ de la soumission peut avoir dérivé et contenir un montant
+    # TAXES INCLUSES (bug observé : la carte « Soumission acceptée (HT) »
+    # affichait le total TTC, p. ex. 30 112,65 au lieu du HT ~26 190).
+    # La source de vérité est donc les ITEMS : le sous-total HT = somme
+    # des lignes (prix de vente HT, déjà net des rabais), exactement ce
+    # qu'affiche la fiche soumission. On ne retombe sur le sous-total
+    # stocké, puis sur une dérivation 1.14975, QUE si la soumission n'a
+    # pas d'items (forfait / contrat / import legacy).
+    if items:
+        projected_revenue_ex_tax = round(
+            sum(float(it.total or 0) for it in items), 2
+        )
+    elif sm is not None and sm.subtotal is not None:
         projected_revenue_ex_tax = float(sm.subtotal)
     elif projected_revenue > 0:
         projected_revenue_ex_tax = round(projected_revenue / 1.14975, 2)

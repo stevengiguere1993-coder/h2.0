@@ -167,11 +167,16 @@ async def convert_project_to_facture(
                 )
             ).scalars().all()
 
-            sm_base = float(sm.subtotal or 0)
+            # Base HT de référence pour la facturation par étapes. On la
+            # recalcule depuis les ITEMS (somme des lignes de vente HT) et
+            # NON depuis sm.subtotal STOCKÉ : ce dernier peut avoir dérivé
+            # vers un montant TAXES INCLUSES (même cause que le KPI projet).
+            # Si la base était en échelle TTC alors que le « déjà facturé »
+            # (already_billed) est en HT, la cible cumulative et les ratios
+            # seraient faux → sur-facturation en facturation progressive.
+            sm_base = round(sum(float(it.total or 0) for it in sm_items), 2)
             if sm_base <= 0:
-                sm_base = sum(
-                    float(it.quantity) * float(it.unit_price) for it in sm_items
-                )
+                sm_base = float(sm.subtotal or 0)
 
             # Progressive billing : combien a déjà été facturé pour ce
             # projet AU TITRE DE LA SOUMISSION DE BASE. On exclut
