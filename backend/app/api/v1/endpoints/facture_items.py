@@ -104,7 +104,10 @@ class FactureItemUpdate(BaseModel):
     description: Optional[str] = Field(default=None, min_length=1, max_length=500)
     unit: Optional[str] = Field(default=None, max_length=32)
     quantity: Optional[float] = Field(default=None, ge=0)
-    unit_price: Optional[float] = Field(default=None, ge=0)
+    # Pas de ge=0 ici : une ligne « rabais » est stockée en négatif et
+    # l'UI renvoie ce prix négatif tel quel. Le signe est normalisé
+    # côté serveur selon le type de la ligne (voir update_item).
+    unit_price: Optional[float] = Field(default=None)
     kind: Optional[str] = Field(default=None, pattern=_KIND_PATTERN)
 
 
@@ -226,7 +229,15 @@ async def update_item(
     update = data.model_dump(exclude_unset=True)
     for field, value in update.items():
         setattr(item, field, value)
-    if "quantity" in update or "unit_price" in update:
+    # Normalise le signe du prix selon le type EFFECTIF de la ligne : un
+    # « rabais » est toujours stocké en négatif, les autres en positif.
+    # Sans ça, éditer une ligne rabais (prix négatif renvoyé par l'UI) ou
+    # basculer une ligne vers/depuis « rabais » laissait un signe
+    # incohérent — et l'ancien validateur ge=0 rejetait carrément le PATCH
+    # (→ « Mise à jour échouée » côté UI).
+    if {"quantity", "unit_price", "kind"} & update.keys():
+        base = abs(float(item.unit_price or 0))
+        item.unit_price = -base if item.kind == "rabais" else base
         item.total = round(float(item.quantity) * float(item.unit_price), 2)
     await db.flush()
     await _recompute_facture_totals(db, facture_id)
