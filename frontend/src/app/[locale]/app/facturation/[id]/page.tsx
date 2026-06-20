@@ -1872,21 +1872,24 @@ function ItemRow({
   const [description, setDescription] = useState(item.description);
   const [unit, setUnit] = useState(item.unit || "");
   const [quantity, setQuantity] = useState(String(item.quantity));
-  const [unitPrice, setUnitPrice] = useState(String(item.unit_price));
+  // Le prix est saisi/affiché en magnitude positive ; pour un « rabais »
+  // le signe négatif est appliqué côté serveur (et reflété dans le total).
+  const [unitPrice, setUnitPrice] = useState(String(Math.abs(item.unit_price)));
   const [kind, setKind] = useState<string>(item.kind || "service");
 
   useEffect(() => {
     setDescription(item.description);
     setUnit(item.unit || "");
     setQuantity(String(item.quantity));
-    setUnitPrice(String(item.unit_price));
+    setUnitPrice(String(Math.abs(item.unit_price)));
     setKind(item.kind || "service");
   }, [item.id, item.description, item.unit, item.quantity, item.unit_price, item.kind]);
 
-  const computedTotal = useMemo(
-    () => +(Number(quantity || 0) * Number(unitPrice || 0)).toFixed(2),
-    [quantity, unitPrice]
-  );
+  const computedTotal = useMemo(() => {
+    const magnitude = Math.abs(Number(quantity || 0) * Number(unitPrice || 0));
+    // Une ligne « rabais » réduit la facture → total affiché en négatif.
+    return +((kind === "rabais" ? -magnitude : magnitude).toFixed(2));
+  }, [quantity, unitPrice, kind]);
 
   function persist(field: keyof Item, value: unknown) {
     onPatch({ [field]: value } as Partial<Item>);
@@ -2003,7 +2006,9 @@ function ItemRow({
           value={unitPrice}
           onChange={(e) => setUnitPrice(e.target.value)}
           onBlur={() => {
-            if (Number(unitPrice) !== item.unit_price)
+            // Magnitude positive saisie ; le backend applique le signe
+            // selon le type (négatif pour un rabais).
+            if (Number(unitPrice) !== Math.abs(item.unit_price))
               persist("unit_price", Number(unitPrice));
           }}
           disabled={busy}
