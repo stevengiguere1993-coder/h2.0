@@ -566,7 +566,10 @@ export default function FactureDetailPage() {
           body: JSON.stringify(patch)
         }
       );
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} ${t.slice(0, 200)}`);
+      }
       const updated = (await res.json()) as Item;
       if ("kind" in patch) {
         // Changement de type : la ligne change de groupe — on recharge
@@ -575,8 +578,8 @@ export default function FactureDetailPage() {
       } else {
         setItems((xs) => xs.map((x) => (x.id === item_id ? updated : x)));
       }
-    } catch {
-      setError("Mise à jour échouée.");
+    } catch (e) {
+      setError(`Mise à jour échouée : ${(e as Error).message}`);
     } finally {
       setItemBusy(null);
     }
