@@ -258,12 +258,23 @@ export default function ProjectDetailPage() {
         method: "PUT",
         body: JSON.stringify({ status: newStatus })
       });
-      if (!res.ok) throw new Error();
-      const updated = (await res.json()) as Project;
-      setP(updated);
-    } catch {
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} ${t.slice(0, 200)}`);
+      }
+      // On RELIT le projet depuis le serveur (source de vérité unique) au
+      // lieu de se fier au corps de la réponse : garantit que la fiche
+      // affiche le statut réellement persisté — donc cohérent avec le
+      // tableau kanban (qui lit le même champ).
+      const reload = await authedFetch(`/api/v1/projects/${id}`);
+      if (reload.ok) {
+        setP((await reload.json()) as Project);
+      } else {
+        setP((await res.json()) as Project);
+      }
+    } catch (e) {
       setP(prev);
-      setError("Changement de statut échoué.");
+      setError(`Changement de statut échoué : ${(e as Error).message}`);
     }
   }
 
