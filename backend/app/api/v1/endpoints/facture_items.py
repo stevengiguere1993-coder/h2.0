@@ -25,9 +25,8 @@ from app.models.facture_item import FactureItem
 router = APIRouter(prefix="/factures", tags=["facture-items"])
 
 
-# Taux taxes québécoises 2026.
-TPS_RATE = 0.05
-TVQ_RATE = 0.09975
+# Taux taxes québécoises — source unique de vérité (app.core.taxes).
+from app.core.taxes import TPS_RATE, TVQ_RATE  # noqa: E402,F401
 
 
 async def _recompute_facture_totals(db, facture_id: int) -> None:

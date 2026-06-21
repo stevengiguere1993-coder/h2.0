@@ -28,9 +28,8 @@ from app.models.soumission_item import SoumissionItem
 router = APIRouter(prefix="/soumissions", tags=["soumission-items"])
 
 
-# Taux taxes québécoises 2026 — alignés avec le calcul frontend.
-TPS_RATE = 0.05
-TVQ_RATE = 0.09975
+# Taux taxes québécoises — source unique de vérité (app.core.taxes).
+from app.core.taxes import TPS_RATE, TVQ_RATE  # noqa: E402,F401
 
 
 async def _recompute_soumission_totals(db, soumission_id: int) -> None:
