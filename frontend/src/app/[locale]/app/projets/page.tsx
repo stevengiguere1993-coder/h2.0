@@ -294,6 +294,7 @@ export default function ProjectsPage() {
                             setHoverCol(null);
                           }}
                           onDelete={() => deleteProject(p.id, p.name)}
+                          onSetStatus={(s) => moveProject(p.id, s)}
                           onTouchDragStart={() => setDragging(p.id)}
                           onTouchDragMove={onTouchDragMove}
                           onTouchDragEnd={(x, y) => onTouchDragEnd(p.id, x, y)}
@@ -318,6 +319,7 @@ function ProjectCard({
   onDragStart,
   onDragEnd,
   onDelete,
+  onSetStatus,
   onTouchDragStart,
   onTouchDragMove,
   onTouchDragEnd
@@ -328,6 +330,7 @@ function ProjectCard({
   onDragStart: () => void;
   onDragEnd: () => void;
   onDelete: () => void;
+  onSetStatus: (status: string) => void;
   onTouchDragStart: () => void;
   onTouchDragMove: (x: number, y: number) => void;
   onTouchDragEnd: (x: number, y: number) => void;
@@ -427,6 +430,29 @@ function ProjectCard({
           {fmtMoney(p.budget, p.soumission_total)}
         </span>
       </div>
+      {/* Sélecteur de statut — alternative au glisser-déposer (essentiel
+          sur mobile où la colonne « Livré » est souvent hors écran). On
+          stoppe la propagation pour ne pas ouvrir la fiche projet. */}
+      <select
+        value={p.status}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onChange={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onSetStatus(e.target.value);
+        }}
+        className="mt-2 w-full rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-xs text-white"
+        aria-label="Changer le statut du projet"
+      >
+        {COLUMNS.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.label}
+          </option>
+        ))}
+      </select>
     </Link>
   );
 }
