@@ -508,14 +508,23 @@ async def _compute_finances(
     if fournisseur_ids:
         from app.models.fournisseur import Fournisseur
 
-        rows = (
-            await db.execute(
-                select(Fournisseur.id, Fournisseur.tax_registered).where(
-                    Fournisseur.id.in_(fournisseur_ids)
-                )
-            )
-        ).all()
-        registered_by_fid = {fid: bool(reg) for fid, reg in rows}
+        # Savepoint : si la colonne `tax_registered` n'existe pas encore
+        # (déploiement en cours, migration additive pas passée), on évite
+        # de polluer la transaction de la requête et on retombe sur
+        # « tous inscrits » plutôt que de planter le chargement des finances.
+        try:
+            async with db.begin_nested():
+                rows = (
+                    await db.execute(
+                        select(
+                            Fournisseur.id, Fournisseur.tax_registered
+                        ).where(Fournisseur.id.in_(fournisseur_ids))
+                    )
+                ).all()
+            registered_by_fid = {fid: bool(reg) for fid, reg in rows}
+        except Exception as exc:  # noqa: BLE001
+            log.warning("tax_registered lookup failed (defaulting True): %s", exc)
+            registered_by_fid = {}
 
     def _is_taxed(a) -> bool:
         # Sans fournisseur (achat libre / sous-traitant) → présumé taxé.
