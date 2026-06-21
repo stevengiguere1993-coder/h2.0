@@ -86,8 +86,6 @@ class FournisseurCreate(BaseModel):
     notes: Optional[str] = None
     payment_terms_days: Optional[int] = Field(default=None, ge=0, le=365)
     qbo_expense_account: Optional[str] = Field(default=None, max_length=255)
-    # Inscrit à la TPS/TVQ (défaut Oui). Non → achats sans taxe récupérable.
-    tax_registered: bool = True
 
 
 class FournisseurUpdate(BaseModel):
@@ -102,7 +100,6 @@ class FournisseurUpdate(BaseModel):
     notes: Optional[str] = None
     payment_terms_days: Optional[int] = Field(default=None, ge=0, le=365)
     qbo_expense_account: Optional[str] = Field(default=None, max_length=255)
-    tax_registered: Optional[bool] = None
 
 
 class FournisseurRead(_Base):
@@ -119,7 +116,6 @@ class FournisseurRead(_Base):
     payment_terms_days: Optional[int] = None
     qbo_expense_account: Optional[str] = None
     qbo_vendor_id: Optional[str] = None
-    tax_registered: bool = True
     created_at: datetime
 
 

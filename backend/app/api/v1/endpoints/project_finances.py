@@ -500,38 +500,6 @@ async def _compute_finances(
     achats_stmt = select(Achat).where(Achat.project_id == project_id)
     achats = (await db.execute(achats_stmt)).scalars().all()
 
-    # Statut « inscrit aux taxes » par fournisseur (défaut OUI). Un
-    # fournisseur NON inscrit ne facture pas de taxe récupérable : son
-    # achat n'est ni divisé par 1.14975 ni source de CTI/RTI.
-    fournisseur_ids = {a.fournisseur_id for a in achats if a.fournisseur_id}
-    registered_by_fid: dict[int, bool] = {}
-    if fournisseur_ids:
-        from app.models.fournisseur import Fournisseur
-
-        # Savepoint : si la colonne `tax_registered` n'existe pas encore
-        # (déploiement en cours, migration additive pas passée), on évite
-        # de polluer la transaction de la requête et on retombe sur
-        # « tous inscrits » plutôt que de planter le chargement des finances.
-        try:
-            async with db.begin_nested():
-                rows = (
-                    await db.execute(
-                        select(
-                            Fournisseur.id, Fournisseur.tax_registered
-                        ).where(Fournisseur.id.in_(fournisseur_ids))
-                    )
-                ).all()
-            registered_by_fid = {fid: bool(reg) for fid, reg in rows}
-        except Exception as exc:  # noqa: BLE001
-            log.warning("tax_registered lookup failed (defaulting True): %s", exc)
-            registered_by_fid = {}
-
-    def _is_taxed(a) -> bool:
-        # Sans fournisseur (achat libre / sous-traitant) → présumé taxé.
-        if a.fournisseur_id is None:
-            return True
-        return registered_by_fid.get(a.fournisseur_id, True)
-
     # Coût réel matériel = HT + taxes payées au fournisseur (TTC) — on
     # affiche ce qui a vraiment été déboursé sur le compte de la compagnie.
     material_lines = [
@@ -543,30 +511,15 @@ async def _compute_finances(
         )
         for a in achats
     ]
-    # Ventile les achats payés (TTC) entre fournisseurs INSCRITS (taxe
-    # récupérable) et NON inscrits (pas de taxe). Pour les inscrits, le
-    # coût réel HT = TTC / 1.14975 (la taxe est récupérée via CTI/RTI et
-    # n'est donc pas un coût). Pour les non inscrits, le montant est déjà
-    # un coût net (aucune division, aucun CTI/RTI).
-    registered_ttc = 0.0
-    nonregistered_ttc = 0.0
-    for a in achats:
-        ttc_i = float(a.amount or 0) + float(a.amount_taxes or 0)
-        if _is_taxed(a):
-            registered_ttc += ttc_i
-        else:
-            nonregistered_ttc += ttc_i
-    registered_ttc = round(registered_ttc, 2)
-    nonregistered_ttc = round(nonregistered_ttc, 2)
-
-    actual_material_cost = round(registered_ttc + nonregistered_ttc, 2)  # TTC
-    # Matériel HT récupérable = portion taxée convertie en HT (source des
-    # CTI/RTI). Coût réel matériel HT (profit) = ce HT + le coût net des
-    # fournisseurs non inscrits.
-    recoverable_materials_ht = ht_from_ttc(registered_ttc)
-    actual_material_cost_ht = round(
-        recoverable_materials_ht + nonregistered_ttc, 2
-    )
+    actual_material_cost = round(
+        sum(m.total for m in material_lines), 2
+    )  # TTC affiché
+    # Nos fournisseurs sont TOUS inscrits aux taxes : la taxe payée sur les
+    # matériaux est récupérable (CTI/RTI) et n'est donc PAS un coût. Le
+    # coût réel matériel HORS TAXES = TTC / 1.14975 ; il sert aussi de base
+    # aux CTI/RTI récupérables dans le bloc « taxes à remettre ».
+    actual_material_cost_ht = ht_from_ttc(actual_material_cost)
+    recoverable_materials_ht = actual_material_cost_ht
 
     # Labour — sum of approved punches on this project
     punches = (
