@@ -252,6 +252,14 @@ async def update_project(
     # Projet livré (= terminé) → on archive la soumission liée : elle
     # quitte la colonne « Acceptées » pour « Archivée » dans le tableau
     # des soumissions. Idempotent (ne réécrit pas si déjà archivée).
+    #
+    # IMPORTANT : c'est un effet SECONDAIRE. Il est isolé dans un savepoint
+    # + try/except pour qu'un éventuel échec (ex. colonne Soumission
+    # manquante en prod → SELECT qui plante) n'annule JAMAIS le passage du
+    # projet en « livré ». Avant, un échec ici faisait rollback toute la
+    # requête → le statut « revenait en cours » côté UI (régression vue sur
+    # « 30 Quevillon »). On cible aussi des colonnes précises (pas SELECT *)
+    # via un UPDATE direct, pour ne pas dépendre du reste du schéma.
     from app.models.project import ProjectStatus
 
     if (
@@ -260,20 +268,34 @@ async def update_project(
     ):
         from datetime import datetime, timezone
 
-        from sqlalchemy import select
+        from sqlalchemy import select, update as _sql_update
         from app.models.soumission import Soumission
 
-        sm = (
-            await db.execute(
-                select(Soumission).where(
-                    Soumission.id == project.soumission_id,
-                    Soumission.archived_at.is_(None),
-                )
+        try:
+            async with db.begin_nested():
+                sm_id = (
+                    await db.execute(
+                        select(Soumission.id).where(
+                            Soumission.id == project.soumission_id,
+                            Soumission.archived_at.is_(None),
+                        )
+                    )
+                ).scalar_one_or_none()
+                if sm_id is not None:
+                    await db.execute(
+                        _sql_update(Soumission)
+                        .where(Soumission.id == sm_id)
+                        .values(archived_at=datetime.now(timezone.utc))
+                    )
+        except Exception as exc:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Archivage soumission (projet %s livré) échoué — "
+                "le statut « livré » est conservé : %s",
+                project_id,
+                exc,
             )
-        ).scalar_one_or_none()
-        if sm is not None:
-            sm.archived_at = datetime.now(timezone.utc)
-            await db.flush()
 
     out = ProjectRead.model_validate(project)
     out.responsible_name = await _responsible_name(
