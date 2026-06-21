@@ -4,6 +4,7 @@ Construction Management API - Main Application Entry Point
 FastAPI application for Horizon Services Immobiliers.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -25,15 +26,15 @@ from app.db.session import (
 logger = logging.getLogger(__name__)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """
-    Application lifespan handler.
+async def _run_startup_tasks() -> None:
+    """Travail de démarrage : créations de tables idempotentes
+    (create_all), colonnes critiques, backfills et seeders.
 
-    On startup, run a best-effort idempotent table creation
-    (create_all only creates tables that don't exist — never drops
-    or alters existing ones). Real schema changes will be shipped
-    via Alembic once we introduce a baseline migration.
+    Exécuté EN ARRIÈRE-PLAN (cf. ``lifespan``) pour ne PAS bloquer la
+    liaison du port. uvicorn lance le startup AVANT de lier le socket :
+    sur un cold start Render (BDD free qui se réveille), ce travail
+    dépassait le délai de scan de port → « no open ports » → déploiement
+    échoué. Tout est déjà best-effort (try/except par étape).
     """
     try:
         import app.models  # noqa: F401
@@ -169,8 +170,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.warning("twilio bootstrap failed: %s", exc)
 
-    yield
-    await close_db()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Lie le port IMMÉDIATEMENT et lance le travail de démarrage
+    (migrations idempotentes + backfills + seeders) en ARRIÈRE-PLAN.
+
+    Sinon, sur un cold start Render, ce travail bloque la liaison du port
+    → Render ne détecte « aucun port ouvert » → le déploiement échoue.
+    ``/health`` ne touche pas la BDD, donc la sonde de santé passe dès le
+    bind. Filet : pendant quelques secondes après un déploiement, une
+    requête pourrait tomber sur une colonne pas encore créée — négligeable
+    sur une BDD déjà à jour (les migrations sont idempotentes / no-op)."""
+    startup_task = asyncio.create_task(_run_startup_tasks())
+    try:
+        yield
+    finally:
+        if not startup_task.done():
+            startup_task.cancel()
+        await close_db()
 
 
 def create_application() -> FastAPI:
