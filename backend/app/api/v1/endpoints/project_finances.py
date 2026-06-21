@@ -95,6 +95,11 @@ class FinancesResponse(BaseModel):
     # compte pas dans le « reste à facturer » du contrat. Sert de
     # revenu additionnel dans le calcul du profit réel.
     extras_billed_amount: float = 0.0
+    # Rabais facturé sur la base (HT et TTC, valeurs absolues). Réduit le
+    # « reste à facturer » : un rabais est une baisse volontaire du prix,
+    # pas du travail non facturé.
+    rabais_billed_amount: float = 0.0
+    rabais_billed_amount_ttc: float = 0.0
     paid_amount: float
     balance_due: float
     # Taxes COLLECTÉES sur les factures émises (à remettre au
@@ -631,6 +636,7 @@ async def _compute_finances(
     # sont hors-soumission.
     extras_subtotal = 0.0
     contract_subtotal = 0.0
+    rabais_subtotal = 0.0  # lignes « rabais » (négatives) sur la base
     if billed_factures:
         from app.models.facture_item import FactureItem as _FI
 
@@ -647,6 +653,14 @@ async def _compute_finances(
                 extras_subtotal += v
             else:
                 contract_subtotal += v
+                if _it_kind == "rabais":
+                    rabais_subtotal += v
+    # Rabais facturé sur la base (valeur absolue, HT). Un rabais est une
+    # réduction VOLONTAIRE du prix : il ne doit pas créer un faux « reste
+    # à facturer ». On l'expose pour que le reste à facturer le déduise
+    # (le rabais réduit le montant à facturer / la soumission).
+    rabais_billed_amount = round(abs(rabais_subtotal), 2)
+    rabais_billed_amount_ttc = round(rabais_billed_amount * TAX_FACTOR, 2)
     # Les taxes ne changent pas la répartition contrat/extras au
     # niveau sous-total ; on calcule l'invoiced TTC total comme avant
     # pour les KPI cash-flow (Facturé / Reçu / Solde).
@@ -768,6 +782,8 @@ async def _compute_finances(
         invoiced_amount=round(invoiced, 2),
         invoiced_amount_ex_tax=invoiced_ex_tax,
         extras_billed_amount=extras_billed_amount,
+        rabais_billed_amount=rabais_billed_amount,
+        rabais_billed_amount_ttc=rabais_billed_amount_ttc,
         paid_amount=round(paid_sum, 2),
         balance_due=round(balance, 2),
         tps_collected=tps_collected,
