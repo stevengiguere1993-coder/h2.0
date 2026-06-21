@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
@@ -249,11 +249,18 @@ async def _build_statement(
     db: AsyncSession,
     project: Project,
     force_lang: Optional[str] = None,
+    include_facture_id: Optional[int] = None,
 ) -> Statement:
     """État de compte d'un projet : ses factures envoyées + les
     paiements reçus, en ordre chronologique, avec les totaux. La langue
     suit celle du client, sauf si `force_lang` l'impose (le relevé
-    annexé aux factures reste en français)."""
+    annexé aux factures reste en français).
+
+    ``include_facture_id`` : id d'une facture à inclure MÊME si elle est
+    encore en brouillon. Utilisé quand le relevé accompagne une facture
+    qu'on est en train d'envoyer : son statut ne passe à « sent » qu'APRÈS
+    le rendu du PDF, donc sans ça la facture envoyée serait absente de son
+    propre état de compte (total facturé et solde dû sous-évalués)."""
     sm: Optional[Soumission] = None
     if project.soumission_id:
         sm = (
@@ -285,7 +292,10 @@ async def _build_statement(
                 select(Facture)
                 .where(
                     Facture.project_id == project.id,
-                    Facture.status.in_(_CLIENT_FACTURE_STATUSES),
+                    or_(
+                        Facture.status.in_(_CLIENT_FACTURE_STATUSES),
+                        Facture.id == include_facture_id,
+                    ),
                 )
                 .order_by(Facture.issued_at.asc(), Facture.id.asc())
             )
@@ -311,9 +321,13 @@ async def _build_statement(
     lines: List[StatementLine] = []
     for f in factures:
         when = (f.issued_at.date() if f.issued_at else f.created_at.date())
-        status = status_labels.get(
-            (f.status or "").lower(), (f.status or "").upper() or None
-        )
+        raw_status = (f.status or "").lower()
+        # La facture en cours d'envoi est encore « draft » en base au
+        # moment du rendu (le statut passe à « sent » juste après) : on
+        # l'affiche « Envoyée » dans le relevé qui l'accompagne.
+        if include_facture_id is not None and f.id == include_facture_id and raw_status == "draft":
+            raw_status = FactureStatus.SENT.value
+        status = status_labels.get(raw_status, raw_status.upper() or None)
         lines.append(
             StatementLine(
                 kind="facture",
@@ -433,7 +447,11 @@ async def _load_statement(
         return None
     # Le relevé annexé à une facture reste en français (la facture
     # elle-même l'est) ; seul le relevé autonome suit la langue client.
-    return await _build_statement(db, project, force_lang="fr")
+    # On inclut la facture courante même si elle est encore en brouillon
+    # (son statut ne passe à « sent » qu'après le rendu du PDF à l'envoi).
+    return await _build_statement(
+        db, project, force_lang="fr", include_facture_id=fa.id
+    )
 
 
 def _render_bytes(
