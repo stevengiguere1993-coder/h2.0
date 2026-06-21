@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 log = logging.getLogger(__name__)
 
 from app.api.deps import CurrentUser, DBSession
+from app.core.taxes import TPS_RATE, TVQ_RATE, TAX_FACTOR, ht_from_ttc
 from app.models.achat import Achat
 from app.models.employe import Employe
 from app.models.facture import Facture, FactureStatus
@@ -27,6 +28,7 @@ from app.models.punch import Punch
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
 from app.models.user import User
+from app.core.finance_math import net_taxes_to_remit
 
 
 router = APIRouter(prefix="/projects", tags=["project-finances"])
@@ -100,6 +102,13 @@ class FinancesResponse(BaseModel):
     tps_collected: float = 0.0
     tvq_collected: float = 0.0
     taxes_collected: float = 0.0
+    # Taxes payées sur les achats (CTI/RTI récupérables) et taxes NETTES
+    # réellement à remettre au gouvernement = perçues − payées.
+    tps_paid_on_purchases: float = 0.0
+    tvq_paid_on_purchases: float = 0.0
+    net_tps_to_remit: float = 0.0
+    net_tvq_to_remit: float = 0.0
+    net_taxes_to_remit: float = 0.0
     invoices: List[InvoiceLine]
 
 
@@ -167,9 +176,9 @@ async def _compute_finances(
             cpu = float(it.cost_per_unit or 0)  # coût interne unitaire HT
             factor = 1.0
             if bool(it.tps_applicable):
-                factor += 0.05
+                factor += TPS_RATE
             if bool(it.tvq_applicable):
-                factor += 0.09975
+                factor += TVQ_RATE
             line_ht = qty * cpu
             line_ttc = round(line_ht * factor, 2)
             service_cost_ht += line_ht
@@ -222,7 +231,7 @@ async def _compute_finances(
     elif sm is not None and sm.subtotal is not None:
         projected_revenue_ex_tax = float(sm.subtotal)
     elif projected_revenue > 0:
-        projected_revenue_ex_tax = round(projected_revenue / 1.14975, 2)
+        projected_revenue_ex_tax = ht_from_ttc(projected_revenue)
     else:
         projected_revenue_ex_tax = 0.0
 
@@ -496,9 +505,16 @@ async def _compute_finances(
         )
         for a in achats
     ]
-    actual_material_cost = sum(m.total for m in material_lines)  # TTC affiché
-    # Matériel HORS TAXES — pour le calcul du profit (hors taxes).
-    actual_material_cost_ht = sum(float(a.amount or 0) for a in achats)
+    actual_material_cost = round(
+        sum(m.total for m in material_lines), 2
+    )  # TTC affiché
+    # Matériel HORS TAXES — pour le calcul du profit (hors taxes). On le
+    # dérive du TTC via le facteur de taxe PLUTÔT que de sommer a.amount :
+    # certains achats (import QBO, saisie rapide) stockent le TTC dans
+    # `amount` sans ventiler les taxes → a.amount inclut alors « en partie »
+    # les taxes et gonfle le coût réel. Les taxes payées sont récupérables
+    # (CTI/RTI), donc le coût réel matériel = TTC / 1.14975.
+    actual_material_cost_ht = ht_from_ttc(actual_material_cost)
 
     # Labour — sum of approved punches on this project
     punches = (
@@ -640,6 +656,16 @@ async def _compute_finances(
     tvq_collected = round(sum(float(f.tvq or 0) for f in billed_factures), 2)
     taxes_collected = round(tps_collected + tvq_collected, 2)
 
+    # Taxes NETTES à remettre = perçues sur les ventes − payées sur les
+    # achats (CTI/RTI récupérables). Les taxes payées sont dérivées du
+    # matériel HT (matériaux pleinement taxés).
+    _net = net_taxes_to_remit(tps_collected, tvq_collected, actual_material_cost)
+    tps_paid_on_purchases = _net["tps_paid"]
+    tvq_paid_on_purchases = _net["tvq_paid"]
+    net_tps_to_remit = _net["net_tps"]
+    net_tvq_to_remit = _net["net_tvq"]
+    net_taxes_to_remit_total = _net["total"]
+
     # Extras facturés (avant taxes) — exposé séparément à l'UI.
     extras_billed_amount = round(extras_subtotal, 2)
 
@@ -736,6 +762,11 @@ async def _compute_finances(
         tps_collected=tps_collected,
         tvq_collected=tvq_collected,
         taxes_collected=taxes_collected,
+        tps_paid_on_purchases=tps_paid_on_purchases,
+        tvq_paid_on_purchases=tvq_paid_on_purchases,
+        net_tps_to_remit=net_tps_to_remit,
+        net_tvq_to_remit=net_tvq_to_remit,
+        net_taxes_to_remit=net_taxes_to_remit_total,
         invoices=invoices_out,
     )
 

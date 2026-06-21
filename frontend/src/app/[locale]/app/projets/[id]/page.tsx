@@ -1644,6 +1644,11 @@ type Finances = {
   tps_collected: number;
   tvq_collected: number;
   taxes_collected: number;
+  tps_paid_on_purchases?: number;
+  tvq_paid_on_purchases?: number;
+  net_tps_to_remit?: number;
+  net_tvq_to_remit?: number;
+  net_taxes_to_remit?: number;
   invoices?: InvoiceLine[];
 };
 
@@ -2453,7 +2458,7 @@ function FinancesTab({
                 🏛️ Taxes à remettre au gouvernement
               </h4>
               <span className="text-[10px] text-white/40">
-                Sur le facturé · hors CTI/RTI
+                Perçu sur ventes − payé sur achats (CTI/RTI)
               </span>
             </div>
             <dl className="mt-2 space-y-1 text-sm">
@@ -2462,7 +2467,10 @@ function FinancesTab({
                   TPS (5 %) <span className="text-[10px] text-white/40">— Receveur général</span>
                 </dt>
                 <dd className="font-mono text-white/90">
-                  {fmtMoney(data.tps_collected)}
+                  {fmtMoney(data.net_tps_to_remit ?? data.tps_collected)}
+                  <span className="ml-1.5 text-[10px] font-normal text-white/40">
+                    ({fmtMoney(data.tps_collected)} − {fmtMoney(data.tps_paid_on_purchases ?? 0)})
+                  </span>
                 </dd>
               </div>
               <div className="flex justify-between">
@@ -2470,22 +2478,25 @@ function FinancesTab({
                   TVQ (9,975 %) <span className="text-[10px] text-white/40">— Revenu Québec</span>
                 </dt>
                 <dd className="font-mono text-white/90">
-                  {fmtMoney(data.tvq_collected)}
+                  {fmtMoney(data.net_tvq_to_remit ?? data.tvq_collected)}
+                  <span className="ml-1.5 text-[10px] font-normal text-white/40">
+                    ({fmtMoney(data.tvq_collected)} − {fmtMoney(data.tvq_paid_on_purchases ?? 0)})
+                  </span>
                 </dd>
               </div>
               <div className="flex justify-between border-t border-blue-500/20 pt-1">
                 <dt className="font-semibold text-blue-300">
-                  Total à remettre
+                  Net à remettre
                 </dt>
                 <dd className="font-mono font-bold text-blue-300">
-                  {fmtMoney(data.taxes_collected)}
+                  {fmtMoney(data.net_taxes_to_remit ?? data.taxes_collected)}
                 </dd>
               </div>
             </dl>
             <p className="mt-2 text-[10px] text-white/40">
-              Ces montants ne sont pas du revenu — ils sont perçus pour
-              le compte du gouvernement et n&apos;entrent pas dans le
-              calcul du profit.
+              Net = taxes perçues sur les ventes − taxes payées sur les
+              achats (récupérables en CTI/RTI). Ces montants ne sont pas
+              du revenu et n&apos;entrent pas dans le calcul du profit.
             </p>
           </div>
         ) : null}
