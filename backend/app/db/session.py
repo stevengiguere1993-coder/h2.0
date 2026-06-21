@@ -371,6 +371,7 @@ async def init_db() -> None:
             ("fournisseurs", "payment_terms_days", "INTEGER"),
             ("fournisseurs", "address", "VARCHAR(500)"),
             ("fournisseurs", "qbo_vendor_id", "VARCHAR(64)"),
+            ("fournisseurs", "tax_registered", "BOOLEAN NOT NULL DEFAULT TRUE"),
             ("achats", "due_at", "TIMESTAMP WITH TIME ZONE"),
             ("achats", "qbo_bill_payment_id", "VARCHAR(64)"),
             ("factures", "next_reminder_at", "TIMESTAMP WITH TIME ZONE"),

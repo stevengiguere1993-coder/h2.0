@@ -19,6 +19,13 @@ class Fournisseur(Base, TimestampUpdateMixin):
     category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # e.g. plumbing, lumber, tiles
     website: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    # Fournisseur inscrit à la TPS/TVQ ? Par défaut OUI (cas normal au
+    # Québec). Si NON, ses achats ne portent pas de taxe récupérable :
+    # on ne divise pas leur montant par 1.14975 et on ne réclame aucun
+    # CTI/RTI dessus (cf. calcul de rentabilité projet).
+    tax_registered: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     notes: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
     # Delai de paiement par defaut (net-N jours) sur les achats payes
     # par facture fournisseur (payment_method = bill_to_pay). NULL =

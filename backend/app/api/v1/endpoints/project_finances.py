@@ -28,7 +28,7 @@ from app.models.punch import Punch
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
 from app.models.user import User
-from app.core.finance_math import net_taxes_to_remit
+from app.core.finance_math import taxes_to_remit
 
 
 router = APIRouter(prefix="/projects", tags=["project-finances"])
@@ -70,6 +70,8 @@ class FinancesResponse(BaseModel):
     projected_margin_pct: float
 
     actual_material_cost: float
+    # Matériel HORS TAXES (taxes récupérables retirées) — sert au profit.
+    actual_material_cost_ht: float = 0.0
     actual_labour_cost: float
     actual_labour_hours: float
     actual_total_cost: float
@@ -102,10 +104,14 @@ class FinancesResponse(BaseModel):
     tps_collected: float = 0.0
     tvq_collected: float = 0.0
     taxes_collected: float = 0.0
-    # Taxes payées sur les achats (CTI/RTI récupérables) et taxes NETTES
-    # réellement à remettre au gouvernement = perçues − payées.
-    tps_paid_on_purchases: float = 0.0
-    tvq_paid_on_purchases: float = 0.0
+    # Bloc « taxes à remettre » — base = montant FACTURÉ HT (pas le contrat).
+    # perçue = facturé HT × taux ; CTI/RTI = matériel HT taxé × taux ;
+    # net = perçue − récupérée. Se recalcule à chaque facture/avenant/rabais.
+    facture_ht_base: float = 0.0
+    tps_percue: float = 0.0
+    tvq_percue: float = 0.0
+    tps_paid_on_purchases: float = 0.0   # CTI (TPS récupérée sur achats)
+    tvq_paid_on_purchases: float = 0.0   # RTI (TVQ récupérée sur achats)
     net_tps_to_remit: float = 0.0
     net_tvq_to_remit: float = 0.0
     net_taxes_to_remit: float = 0.0
@@ -493,9 +499,32 @@ async def _compute_finances(
     # --- Actuals ---
     achats_stmt = select(Achat).where(Achat.project_id == project_id)
     achats = (await db.execute(achats_stmt)).scalars().all()
+
+    # Statut « inscrit aux taxes » par fournisseur (défaut OUI). Un
+    # fournisseur NON inscrit ne facture pas de taxe récupérable : son
+    # achat n'est ni divisé par 1.14975 ni source de CTI/RTI.
+    fournisseur_ids = {a.fournisseur_id for a in achats if a.fournisseur_id}
+    registered_by_fid: dict[int, bool] = {}
+    if fournisseur_ids:
+        from app.models.fournisseur import Fournisseur
+
+        rows = (
+            await db.execute(
+                select(Fournisseur.id, Fournisseur.tax_registered).where(
+                    Fournisseur.id.in_(fournisseur_ids)
+                )
+            )
+        ).all()
+        registered_by_fid = {fid: bool(reg) for fid, reg in rows}
+
+    def _is_taxed(a) -> bool:
+        # Sans fournisseur (achat libre / sous-traitant) → présumé taxé.
+        if a.fournisseur_id is None:
+            return True
+        return registered_by_fid.get(a.fournisseur_id, True)
+
     # Coût réel matériel = HT + taxes payées au fournisseur (TTC) — on
-    # affiche ce qui a vraiment été déboursé sur le compte de la
-    # compagnie, pas seulement la portion HT utilisée pour le markup.
+    # affiche ce qui a vraiment été déboursé sur le compte de la compagnie.
     material_lines = [
         CostLine(
             label=(a.description or a.reference or f"Achat #{a.id}"),
@@ -505,16 +534,30 @@ async def _compute_finances(
         )
         for a in achats
     ]
-    actual_material_cost = round(
-        sum(m.total for m in material_lines), 2
-    )  # TTC affiché
-    # Matériel HORS TAXES — pour le calcul du profit (hors taxes). On le
-    # dérive du TTC via le facteur de taxe PLUTÔT que de sommer a.amount :
-    # certains achats (import QBO, saisie rapide) stockent le TTC dans
-    # `amount` sans ventiler les taxes → a.amount inclut alors « en partie »
-    # les taxes et gonfle le coût réel. Les taxes payées sont récupérables
-    # (CTI/RTI), donc le coût réel matériel = TTC / 1.14975.
-    actual_material_cost_ht = ht_from_ttc(actual_material_cost)
+    # Ventile les achats payés (TTC) entre fournisseurs INSCRITS (taxe
+    # récupérable) et NON inscrits (pas de taxe). Pour les inscrits, le
+    # coût réel HT = TTC / 1.14975 (la taxe est récupérée via CTI/RTI et
+    # n'est donc pas un coût). Pour les non inscrits, le montant est déjà
+    # un coût net (aucune division, aucun CTI/RTI).
+    registered_ttc = 0.0
+    nonregistered_ttc = 0.0
+    for a in achats:
+        ttc_i = float(a.amount or 0) + float(a.amount_taxes or 0)
+        if _is_taxed(a):
+            registered_ttc += ttc_i
+        else:
+            nonregistered_ttc += ttc_i
+    registered_ttc = round(registered_ttc, 2)
+    nonregistered_ttc = round(nonregistered_ttc, 2)
+
+    actual_material_cost = round(registered_ttc + nonregistered_ttc, 2)  # TTC
+    # Matériel HT récupérable = portion taxée convertie en HT (source des
+    # CTI/RTI). Coût réel matériel HT (profit) = ce HT + le coût net des
+    # fournisseurs non inscrits.
+    recoverable_materials_ht = ht_from_ttc(registered_ttc)
+    actual_material_cost_ht = round(
+        recoverable_materials_ht + nonregistered_ttc, 2
+    )
 
     # Labour — sum of approved punches on this project
     punches = (
@@ -656,15 +699,20 @@ async def _compute_finances(
     tvq_collected = round(sum(float(f.tvq or 0) for f in billed_factures), 2)
     taxes_collected = round(tps_collected + tvq_collected, 2)
 
-    # Taxes NETTES à remettre = perçues sur les ventes − payées sur les
-    # achats (CTI/RTI récupérables). Les taxes payées sont dérivées du
-    # matériel HT (matériaux pleinement taxés).
-    _net = net_taxes_to_remit(tps_collected, tvq_collected, actual_material_cost)
-    tps_paid_on_purchases = _net["tps_paid"]
-    tvq_paid_on_purchases = _net["tvq_paid"]
-    net_tps_to_remit = _net["net_tps"]
-    net_tvq_to_remit = _net["net_tvq"]
-    net_taxes_to_remit_total = _net["total"]
+    # Taxes NETTES à remettre — base = montant FACTURÉ HT (factures émises,
+    # hors brouillons), PAS le total du contrat. Perçue = facturé HT × taux ;
+    # récupérée (CTI/RTI) = matériel HT taxé × taux ; net = perçue − récupérée.
+    # Se recalcule à chaque facture / avenant / rabais. N'entre jamais dans
+    # le profit.
+    _tx = taxes_to_remit(invoiced_ex_tax, recoverable_materials_ht)
+    facture_ht_base = _tx["facture_ht"]
+    tps_percue = _tx["tps_percue"]
+    tvq_percue = _tx["tvq_percue"]
+    tps_paid_on_purchases = _tx["cti"]
+    tvq_paid_on_purchases = _tx["rti"]
+    net_tps_to_remit = _tx["net_tps"]
+    net_tvq_to_remit = _tx["net_tvq"]
+    net_taxes_to_remit_total = _tx["total"]
 
     # Extras facturés (avant taxes) — exposé séparément à l'UI.
     extras_billed_amount = round(extras_subtotal, 2)
@@ -745,6 +793,7 @@ async def _compute_finances(
         projected_profit=projected_profit,
         projected_margin_pct=projected_margin_pct,
         actual_material_cost=round(actual_material_cost, 2),
+        actual_material_cost_ht=round(actual_material_cost_ht, 2),
         actual_labour_cost=actual_labour_cost,
         actual_labour_hours=round(actual_labour_hours, 2),
         actual_total_cost=actual_total_cost,
@@ -762,6 +811,9 @@ async def _compute_finances(
         tps_collected=tps_collected,
         tvq_collected=tvq_collected,
         taxes_collected=taxes_collected,
+        facture_ht_base=facture_ht_base,
+        tps_percue=tps_percue,
+        tvq_percue=tvq_percue,
         tps_paid_on_purchases=tps_paid_on_purchases,
         tvq_paid_on_purchases=tvq_paid_on_purchases,
         net_tps_to_remit=net_tps_to_remit,
