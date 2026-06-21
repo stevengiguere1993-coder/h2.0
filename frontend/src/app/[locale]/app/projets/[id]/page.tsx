@@ -5,6 +5,7 @@ import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
   Calendar,
+  ChevronRight,
   DollarSign,
   FileText,
   Loader2,
@@ -1880,6 +1881,9 @@ function FinancesTab({
   const [savingHours, setSavingHours] = useState(false);
   const [sendingStatement, setSendingStatement] = useState(false);
   const [statementMsg, setStatementMsg] = useState<string | null>(null);
+  // Section « Coûts réels (achats) » repliée par défaut — souvent une
+  // longue liste ; on l'ouvre au clic sur l'en-tête.
+  const [achatsOpen, setAchatsOpen] = useState(false);
 
   async function loadAll() {
     setLoading(true);
@@ -2326,12 +2330,35 @@ function FinancesTab({
         )}
       </section>
 
-      {/* Material (achats) */}
+      {/* Material (achats) — repliée par défaut, on déplie au clic. */}
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-          Coûts réels (achats)
-        </h3>
-        {data.material_lines.length === 0 ? (
+        <button
+          type="button"
+          onClick={() => setAchatsOpen((v) => !v)}
+          aria-expanded={achatsOpen}
+          className="flex w-full items-center justify-between gap-2 text-left"
+        >
+          <span className="flex items-center gap-2">
+            <ChevronRight
+              className={`h-4 w-4 text-white/50 transition-transform ${
+                achatsOpen ? "rotate-90" : ""
+              }`}
+            />
+            <span className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+              Coûts réels (achats)
+            </span>
+          </span>
+          <span className="flex items-center gap-2 text-xs text-white/50">
+            <span>
+              {data.material_lines.length}{" "}
+              {data.material_lines.length > 1 ? "achats" : "achat"}
+            </span>
+            <span className="font-mono text-sm font-bold text-white">
+              {fmtMoney(data.actual_material_cost)}
+            </span>
+          </span>
+        </button>
+        {!achatsOpen ? null : data.material_lines.length === 0 ? (
           <p className="mt-3 text-xs text-white/50">
             Aucun achat enregistré sur ce projet.
           </p>
