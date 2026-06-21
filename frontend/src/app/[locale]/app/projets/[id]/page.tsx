@@ -1628,6 +1628,7 @@ type Finances = {
   projected_profit: number;
   projected_margin_pct: number;
   actual_material_cost: number;
+  actual_material_cost_ht?: number;
   actual_labour_cost: number;
   actual_labour_hours: number;
   actual_total_cost: number;
@@ -1645,6 +1646,9 @@ type Finances = {
   tps_collected: number;
   tvq_collected: number;
   taxes_collected: number;
+  facture_ht_base?: number;
+  tps_percue?: number;
+  tvq_percue?: number;
   tps_paid_on_purchases?: number;
   tvq_paid_on_purchases?: number;
   net_tps_to_remit?: number;
@@ -2125,6 +2129,78 @@ function FinancesTab({
         />
       </div>
 
+      {/* Décomposition du profit réel — TOUT en HT, taxes retirées.
+          Séparé du bloc taxes pour éviter toute confusion. */}
+      <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+            Profit réel
+          </h3>
+          <span
+            className={`text-base font-bold ${
+              data.actual_profit >= 0 ? "text-emerald-300" : "text-rose-300"
+            }`}
+          >
+            {fmtMoney(data.actual_profit)}{" "}
+            <span className="text-xs font-normal text-white/50">
+              ({data.actual_margin_pct.toFixed(1)} %)
+            </span>
+          </span>
+        </div>
+        <dl className="mt-3 space-y-1 text-sm">
+          <div className="flex justify-between">
+            <dt className="text-white/60">Revenu (HT)</dt>
+            <dd className="font-mono text-white/90">
+              {fmtMoney(
+                data.billing_kind === "forfaitaire"
+                  ? data.projected_revenue_ex_tax +
+                      (data.extras_billed_amount || 0)
+                  : data.invoiced_amount_ex_tax
+              )}
+            </dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-white/60">
+              − Matériaux{" "}
+              <span className="text-[10px] text-white/40">
+                (HT, taxes retirées)
+              </span>
+            </dt>
+            <dd className="font-mono text-white/90">
+              {fmtMoney(
+                data.actual_material_cost_ht ?? data.actual_material_cost
+              )}
+            </dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-white/60">
+              − Main-d&apos;œuvre{" "}
+              <span className="text-[10px] text-white/40">
+                ({data.actual_labour_hours.toFixed(1)} h)
+              </span>
+            </dt>
+            <dd className="font-mono text-white/90">
+              {fmtMoney(data.actual_labour_cost)}
+            </dd>
+          </div>
+          <div className="flex justify-between border-t border-brand-800 pt-1">
+            <dt className="font-semibold text-white">= Profit réel</dt>
+            <dd
+              className={`font-mono font-bold ${
+                data.actual_profit >= 0 ? "text-emerald-300" : "text-rose-300"
+              }`}
+            >
+              {fmtMoney(data.actual_profit)}
+            </dd>
+          </div>
+        </dl>
+        <p className="mt-2 text-[10px] text-white/40">
+          Calcul 100 % hors taxes. Les taxes payées sur les matériaux sont
+          récupérées (CTI/RTI) → exclues du coût. Indépendant du montant
+          facturé.
+        </p>
+      </div>
+
       {/* Avancement du contrat — coût réel vs soumission acceptée
           (synthèse importée du Récap). */}
       <RecapContractProgressCard
@@ -2475,40 +2551,43 @@ function FinancesTab({
           </div>
         </dl>
 
-        {/* Taxes collectées sur les factures émises — somme à remettre
-            au Receveur général (TPS) et à Revenu Québec (TVQ). N'entre
-            jamais dans le calcul du profit du projet. */}
-        {data.taxes_collected > 0 ? (
+        {/* Taxes à remettre — base = montant FACTURÉ (pas le contrat).
+            Perçue sur ventes − récupérée sur achats (CTI/RTI). N'entre
+            JAMAIS dans le calcul du profit. Se recalcule à chaque
+            facture / avenant / rabais. */}
+        {data.taxes_collected > 0 || (data.tps_percue ?? 0) > 0 ? (
           <div className="mt-5 rounded-lg border border-blue-500/30 bg-blue-500/5 p-3">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <h4 className="text-[11px] font-semibold uppercase tracking-wider text-blue-300">
                 🏛️ Taxes à remettre au gouvernement
               </h4>
-              <span className="text-[10px] text-white/40">
-                Perçu sur ventes − payé sur achats (CTI/RTI)
+              <span className="text-[10px] text-white/50">
+                Basé sur le FACTURÉ ({fmtMoney(data.facture_ht_base ?? data.invoiced_amount_ex_tax)} HT)
               </span>
             </div>
-            <dl className="mt-2 space-y-1 text-sm">
-              <div className="flex justify-between">
+            <dl className="mt-2 space-y-1.5 text-sm">
+              <div className="flex flex-wrap items-baseline justify-between gap-1">
                 <dt className="text-white/60">
-                  TPS (5 %) <span className="text-[10px] text-white/40">— Receveur général</span>
+                  TPS (5 %){" "}
+                  <span className="text-[10px] text-white/40">
+                    perçue {fmtMoney(data.tps_percue ?? data.tps_collected)} − CTI{" "}
+                    {fmtMoney(data.tps_paid_on_purchases ?? 0)}
+                  </span>
                 </dt>
                 <dd className="font-mono text-white/90">
                   {fmtMoney(data.net_tps_to_remit ?? data.tps_collected)}
-                  <span className="ml-1.5 text-[10px] font-normal text-white/40">
-                    ({fmtMoney(data.tps_collected)} − {fmtMoney(data.tps_paid_on_purchases ?? 0)})
-                  </span>
                 </dd>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-wrap items-baseline justify-between gap-1">
                 <dt className="text-white/60">
-                  TVQ (9,975 %) <span className="text-[10px] text-white/40">— Revenu Québec</span>
+                  TVQ (9,975 %){" "}
+                  <span className="text-[10px] text-white/40">
+                    perçue {fmtMoney(data.tvq_percue ?? data.tvq_collected)} − RTI{" "}
+                    {fmtMoney(data.tvq_paid_on_purchases ?? 0)}
+                  </span>
                 </dt>
                 <dd className="font-mono text-white/90">
                   {fmtMoney(data.net_tvq_to_remit ?? data.tvq_collected)}
-                  <span className="ml-1.5 text-[10px] font-normal text-white/40">
-                    ({fmtMoney(data.tvq_collected)} − {fmtMoney(data.tvq_paid_on_purchases ?? 0)})
-                  </span>
                 </dd>
               </div>
               <div className="flex justify-between border-t border-blue-500/20 pt-1">
@@ -2521,9 +2600,9 @@ function FinancesTab({
               </div>
             </dl>
             <p className="mt-2 text-[10px] text-white/40">
-              Net = taxes perçues sur les ventes − taxes payées sur les
-              achats (récupérables en CTI/RTI). Ces montants ne sont pas
-              du revenu et n&apos;entrent pas dans le calcul du profit.
+              ↳ Se recalcule à chaque facture / avenant / rabais. Ces
+              montants ne sont PAS du revenu et n&apos;entrent pas dans le
+              calcul du profit (taxes payées récupérées en CTI/RTI).
             </p>
           </div>
         ) : null}
