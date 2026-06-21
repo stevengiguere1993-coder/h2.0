@@ -670,8 +670,11 @@ export default function FactureDetailPage() {
   async function openStatement() {
     if (!f?.project_id) return;
     try {
+      // On inclut la facture courante (même en brouillon) pour que le
+      // relevé reflète bien cette facture — cohérent avec ce qui sera
+      // réellement transmis au client lors de l'envoi.
       const res = await authedFetch(
-        `/api/v1/projects/${f.project_id}/statement.pdf`
+        `/api/v1/projects/${f.project_id}/statement.pdf?include_facture_id=${id}`
       );
       if (!res.ok) throw new Error(`http_${res.status}`);
       const blob = await res.blob();

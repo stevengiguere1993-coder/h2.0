@@ -779,13 +779,20 @@ async def get_project_statement_pdf(
     project_id: int,
     db: DBSession,
     _: CurrentUser,
+    include_facture_id: Optional[int] = None,
 ) -> Response:
     """Relevé autonome consultable à tout moment : factures envoyées,
     paiements reçus, total des factures et solde dû — le même état de
-    compte que celui transmis au client."""
+    compte que celui transmis au client.
+
+    ``?include_facture_id=`` inclut une facture précise même en brouillon
+    (prévisualisation depuis la fiche de cette facture, p. ex. la facture
+    finale qu'on s'apprête à envoyer)."""
     from app.services.facture_pdf import render_statement_pdf
 
-    rendered = await render_statement_pdf(db, project_id)
+    rendered = await render_statement_pdf(
+        db, project_id, include_facture_id=include_facture_id
+    )
     if rendered is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Projet introuvable"

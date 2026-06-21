@@ -1148,14 +1148,25 @@ def _render_statement_bytes(statement: Statement) -> bytes:
 
 
 async def render_statement_pdf(
-    db: AsyncSession, project_id: int
+    db: AsyncSession,
+    project_id: int,
+    include_facture_id: Optional[int] = None,
 ) -> Optional[tuple[Project, bytes]]:
     """Génère le PDF autonome « État de compte » d'un projet. None si
-    le projet est introuvable."""
+    le projet est introuvable.
+
+    ``include_facture_id`` : inclut cette facture même en brouillon —
+    utilisé quand on prévisualise/transmet l'état de compte DEPUIS une
+    facture précise (ex. la facture finale qu'on s'apprête à envoyer),
+    pour que le relevé reflète bien cette facture. Laissé à None pour le
+    relevé « pur » (envoi autonome, déclenché par un paiement), qui ne
+    montre que les factures réellement transmises."""
     project = (
         await db.execute(select(Project).where(Project.id == project_id))
     ).scalar_one_or_none()
     if project is None:
         return None
-    statement = await _build_statement(db, project)
+    statement = await _build_statement(
+        db, project, include_facture_id=include_facture_id
+    )
     return project, _render_statement_bytes(statement)
