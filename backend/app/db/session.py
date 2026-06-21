@@ -206,6 +206,13 @@ async def ensure_critical_columns() -> None:
         ("bons_travail", "signature_ip", "VARCHAR(64)"),
         ("bons_travail", "signature_image", "BYTEA"),
         ("bons_travail", "signature_image_content_type", "VARCHAR(100)"),
+        # Fournisseur inscrit aux taxes (défaut TRUE). Le modèle Fournisseur
+        # déclare cette colonne → tout SELECT (liste fournisseurs, achats,
+        # PO, KPI projet) plante en HTTP 500 si elle manque. Elle n'était
+        # que dans le bloc transactionnel d'init_db (qui peut aborter) →
+        # on l'isole ici pour qu'elle existe toujours (régression : finances
+        # projet « column fournisseurs.tax_registered does not exist »).
+        ("fournisseurs", "tax_registered", "BOOLEAN NOT NULL DEFAULT TRUE"),
     )
     for table, column, col_type in critical_columns:
         try:
