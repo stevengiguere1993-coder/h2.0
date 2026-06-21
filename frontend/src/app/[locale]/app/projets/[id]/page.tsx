@@ -1641,6 +1641,8 @@ type Finances = {
   invoiced_amount: number;
   invoiced_amount_ex_tax: number;
   extras_billed_amount: number;
+  rabais_billed_amount?: number;
+  rabais_billed_amount_ttc?: number;
   paid_amount: number;
   balance_due: number;
   tps_collected: number;
@@ -1743,13 +1745,15 @@ function RecapContractProgressCard({
   contractRevenueExTax,
   invoicedExTax,
   paidAmount,
-  invoicedAmount
+  invoicedAmount,
+  rabaisBilled = 0
 }: {
   actualCost: number;
   contractRevenueExTax: number;
   invoicedExTax: number;
   paidAmount: number;
   invoicedAmount: number;
+  rabaisBilled?: number;
 }) {
   // Avancement = part du contrat de BASE consommée par les coûts réels.
   // L'idée : voir d'un coup d'œil si on a déjà brûlé 90 % du budget
@@ -1762,7 +1766,12 @@ function RecapContractProgressCard({
   // Base facturée vs extras facturés (au-delà du contrat initial).
   const baseInvoiced = Math.min(invoicedExTax, contractRevenueExTax);
   const extrasInvoiced = Math.max(0, invoicedExTax - contractRevenueExTax);
-  const baseRemaining = Math.max(0, contractRevenueExTax - baseInvoiced);
+  // Un rabais réduit le montant à facturer : il ne reste rien à facturer
+  // pour la part « offerte ». On le déduit donc du reste à facturer.
+  const baseRemaining = Math.max(
+    0,
+    contractRevenueExTax - baseInvoiced - rabaisBilled
+  );
   const balanceDue = Math.max(0, invoicedAmount - paidAmount);
   const overRun = actualCost > contractRevenueExTax;
 
@@ -1843,6 +1852,14 @@ function RecapContractProgressCard({
             {fmtMoney(baseInvoiced)}
           </span>
         </div>
+        {rabaisBilled > 0 ? (
+          <div className="flex justify-between">
+            <span className="text-white/60">Rabais appliqué</span>
+            <span className="font-mono text-rose-300">
+              −{fmtMoney(rabaisBilled)}
+            </span>
+          </div>
+        ) : null}
         {extrasInvoiced > 0 ? (
           <div className="flex justify-between">
             <span className="text-white/60">Facturé en extras</span>
@@ -2209,6 +2226,7 @@ function FinancesTab({
         invoicedExTax={data.invoiced_amount_ex_tax}
         paidAmount={data.paid_amount}
         invoicedAmount={data.invoiced_amount}
+        rabaisBilled={data.rabais_billed_amount ?? 0}
       />
 
       {/* Labour budget vs actual */}
@@ -2511,10 +2529,14 @@ function FinancesTab({
           {data.projected_revenue > 0 ? (() => {
             // Le « reste à facturer » porte uniquement sur le contrat
             // (soumission). On retire la part extras du facturé pour
-            // ne pas fausser le calcul.
+            // ne pas fausser le calcul. Un rabais (réduction volontaire
+            // du prix) déduit aussi le reste : on l'ajoute donc au
+            // facturé contrat (TTC) pour ne pas créer de faux reste.
             const contractInvoiced = Math.max(
               0,
-              data.invoiced_amount - (data.extras_billed_amount || 0)
+              data.invoiced_amount -
+                (data.extras_billed_amount || 0) +
+                (data.rabais_billed_amount_ttc || 0)
             );
             const remaining = Math.max(
               0,
