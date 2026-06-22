@@ -545,10 +545,11 @@ async def sync_achat_to_qbo(
 
         # Anti-doublon : si cet Achat n'est pas encore lie a un objet QB,
         # on verifie qu'un Bill/Purchase equivalent (meme fournisseur,
-        # meme total TTC, ~meme date) n'existe pas deja cote QuickBooks.
-        # Si oui, on s'y rattache (sans rien recreer ni ecraser) pour ne
-        # pas pousser de doublon. Critere choisi : fournisseur + montant
-        # + date.
+        # meme total TTC, ~meme date) existe deja cote QuickBooks. Si oui,
+        # on s'y RATTACHE (qbo_bill_id) PUIS on le MET A JOUR plus bas pour
+        # le classer dans le bon PROJET (CustomerRef + ClassRef) — comme les
+        # factures. Avant, on retournait ici sans classer → l'achat restait
+        # dans QB mais hors du projet.
         if not achat.qbo_bill_id:
             total_ttc = float(achat.amount or 0) + float(achat.amount_taxes or 0)
             try:
@@ -579,21 +580,13 @@ async def sync_achat_to_qbo(
                     achat.qbo_doc_number = str(dup["DocNumber"])
                 await db.flush()
                 log.info(
-                    "Achat %s rattache a un %s QB existant %s "
-                    "(anti-doublon fournisseur+montant+date)",
+                    "Achat %s rattache a un %s QB existant %s → MAJ projet",
                     achat.id,
                     "Purchase" if as_purchase else "Bill",
                     achat.qbo_bill_id,
                 )
-                return {
-                    "ok": True,
-                    "qbo_bill_id": achat.qbo_bill_id,
-                    "qbo_doc_number": achat.qbo_doc_number or "",
-                    "qbo_vendor_id": vendor_id,
-                    "receipt_attached": False,
-                    "receipt_error": None,
-                    "linked_existing": True,
-                }
+                # PAS de return : on continue vers la MAJ (sparse) pour
+                # classer la transaction existante sous le projet.
 
         if as_purchase:
             # Achat déjà payé (carte de crédit, comptant, interac) →
