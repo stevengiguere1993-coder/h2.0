@@ -1168,6 +1168,25 @@ async def _provision_project_for_soumission(
     await db.flush()
     await db.refresh(project)
 
+    # Auto-import depuis la soumission acceptée (refonte projet 2026-06) :
+    # une phase par module avec budget + heures prévues, services récurrents
+    # au prix client, budget total. Idempotent. Donne au projet sa structure
+    # dès l'acceptation (avant même la signature du contrat). Best-effort.
+    try:
+        from app.services.devlog_project_provision import (
+            build_planning_for_project,
+        )
+
+        await build_planning_for_project(db, project, user=user)
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "auto-import planning du projet #%s depuis la soumission a "
+            "échoué (non bloquant)",
+            project.id,
+        )
+
     # Phase 5 — hook Drive Conventions sur la création auto d'un
     # projet depuis le passage en acceptee d'une soumission. Best-effort.
     if user is not None and getattr(user, "id", None) is not None:
