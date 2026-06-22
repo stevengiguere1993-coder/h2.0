@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 
 from app.api.deps import CurrentUser, DBSession
 from app.core.taxes import TPS_RATE, TVQ_RATE, TAX_FACTOR, ht_from_ttc
-from app.models.achat import Achat
+from app.models.achat import Achat, AchatStatus
 from app.models.employe import Employe
 from app.models.facture import Facture, FactureStatus
 from app.models.payment import Payment
@@ -502,7 +502,13 @@ async def _compute_finances(
     )
 
     # --- Actuals ---
-    achats_stmt = select(Achat).where(Achat.project_id == project_id)
+    # Coût réel = comptabilité d'ENGAGEMENT : un achat compte dès qu'il est
+    # reçu/facturé, MÊME s'il est encore « à payer » (bill_to_pay, statut
+    # received). Seuls les achats ANNULÉS sont exclus.
+    achats_stmt = select(Achat).where(
+        Achat.project_id == project_id,
+        Achat.status != AchatStatus.CANCELLED.value,
+    )
     achats = (await db.execute(achats_stmt)).scalars().all()
 
     # Coût réel matériel = HT + taxes payées au fournisseur (TTC) — on
