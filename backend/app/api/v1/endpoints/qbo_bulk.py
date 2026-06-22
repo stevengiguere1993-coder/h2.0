@@ -136,6 +136,57 @@ async def bulk_sync(
         )
 
 
+@router.post("/push-payments")
+async def push_payments(
+    db: DBSession,
+    _: RequireAdminOrOwner,
+    client_id: Optional[int] = Query(
+        default=None,
+        description="Limiter à un client. Vide = toutes les factures.",
+    ),
+) -> dict:
+    """Pousse vers QuickBooks TOUS les paiements enregistrés dans Kratos qui
+    n'y sont pas encore (rattrapage post-migration).
+
+    Pour chaque facture portant au moins un paiement, on ré-synchronise la
+    facture : `sync_facture_to_qbo` crée la facture QB si besoin PUIS chaque
+    Payment manquant (idempotent via `Payment.qbo_payment_id`). Aucune
+    création de doublon : un paiement déjà poussé est ignoré.
+    """
+    from app.db.session import AsyncSessionLocal
+    from app.models.facture import Facture
+    from app.models.payment import Payment
+    from app.services.facture_qbo import sync_facture_to_qbo
+
+    out: dict = {"factures_pushed": 0, "factures_failed": 0, "errors": []}
+
+    # Factures (non brouillon/annulée) ayant au moins un paiement Kratos.
+    stmt = (
+        select(Payment.facture_id)
+        .join(Facture, Facture.id == Payment.facture_id)
+        .where(Facture.status.not_in(("draft", "void")))
+        .distinct()
+    )
+    if client_id is not None:
+        stmt = stmt.where(Facture.client_id == client_id)
+    facture_ids = [
+        int(i) for i in (await db.execute(stmt)).scalars().all() if i
+    ]
+
+    for fid in facture_ids:
+        try:
+            async with AsyncSessionLocal() as s:
+                await sync_facture_to_qbo(s, fid)
+                await s.commit()
+            out["factures_pushed"] += 1
+        except Exception as exc:  # noqa: BLE001
+            out["factures_failed"] += 1
+            if len(out["errors"]) < 40:
+                out["errors"].append(f"facture {fid}: {str(exc)[:160]}")
+
+    return out
+
+
 @router.post("/reclass-projects")
 async def reclass_projects(
     db: DBSession,
