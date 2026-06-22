@@ -104,10 +104,9 @@ async def sync_project_labour_to_qbo(
     exp_name = (getattr(row, "labour_expense_account", None) or "").strip()
     clr_name = (getattr(row, "labour_clearing_account", None) or "").strip()
     if not exp_name or not clr_name:
-        raise LabourSyncError(
-            "Comptes « Main-d'œuvre » non configurés (dépense + "
-            "contrepartie) dans Paramètres → Comptes QuickBooks."
-        )
+        # Comptes non configurés → on n'échoue pas (la main-d'œuvre est
+        # optionnelle) : on saute simplement.
+        return {"skipped": True, "reason": "comptes_main_doeuvre_non_configures"}
     exp_acc = await qbo.find_account_by_name(exp_name)
     clr_acc = await qbo.find_account_by_name(clr_name)
     if not exp_acc or not exp_acc.get("Id"):

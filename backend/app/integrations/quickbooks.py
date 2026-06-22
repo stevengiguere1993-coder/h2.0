@@ -460,28 +460,29 @@ class QuickBooksClient:
     async def _find_subcustomer(
         self, *, parent_customer_id: str, project_name: str
     ) -> Optional[Dict[str, Any]]:
-        """Cherche le sous-client (Job) d'un projet par parent + nom.
+        """Cherche le sous-client / PROJET d'un projet par parent + nom.
 
-        `ParentRef` n'est PAS « queryable » côté QBO (erreur 4001) : on
-        liste les Jobs et on filtre en Python. Un projet QBO (onglet
-        Projets) est, sous le capot, un sous-client → on le retrouve ici
-        pour obtenir son Id v3 (utilisé comme CustomerRef sur factures /
-        coûts).
+        `ParentRef` n'est PAS « queryable » côté QBO (erreur 4001) : on liste
+        les clients et on filtre en Python. IMPORTANT : un sous-client
+        CONVERTI en « Projet » QB n'est plus forcément `Job = true` → on ne
+        filtre donc PAS sur Job (sinon on rate les projets convertis et le
+        coût retombe sur le client parent). On compare nom / nom complet.
         """
-        rows = await self.query(
-            "SELECT * FROM Customer WHERE Job = true MAXRESULTS 1000"
-        )
+        rows = await self.query("SELECT * FROM Customer MAXRESULTS 1000")
+        target = (project_name or "").strip().lower()
+        if not target:
+            return None
         for row in rows:
             if str((row.get("ParentRef") or {}).get("value") or "") != str(
                 parent_customer_id
             ):
                 continue
-            disp = (row.get("DisplayName") or "")
-            fqn = (row.get("FullyQualifiedName") or "")
+            disp = (row.get("DisplayName") or "").strip().lower()
+            fqn = (row.get("FullyQualifiedName") or "").strip().lower()
             if (
-                disp == project_name
-                or disp.endswith(f":{project_name}")
-                or fqn.endswith(f":{project_name}")
+                disp == target
+                or disp.endswith(f":{target}")
+                or fqn.endswith(f":{target}")
             ):
                 return row
         return None
