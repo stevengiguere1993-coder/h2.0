@@ -505,37 +505,49 @@ async def sync_facture_to_qbo(
             existing_sync_token=fa.qbo_sync_token,
         )
 
-        # Rattachement à une Invoice QB existante du même numéro déjà géré
-        # ci-dessus via qbo_invoice_id. On crée (ou met à jour si Id présent).
-        try:
-            invoice = await qbo.create_invoice(payload)
-        except QuickBooksError as exc:
-            msg = str(exc).lower()
-            stale = payload.get("Id") and any(
-                k in msg
-                for k in (
-                    "not found",
-                    "object not found",
-                    "introuvable",
-                    "deleted",
-                    "stale",
-                    "invalid reference",
-                    "5010",
-                    "610",
-                    "2010",
-                )
-            )
-            if stale:
-                # La facture QB a été SUPPRIMÉE/obsolète → on la recrée à
-                # neuf (le lien Kratos pointait sur un document disparu).
-                payload.pop("Id", None)
-                payload.pop("SyncToken", None)
-                payload.pop("sparse", None)
-                fa.qbo_invoice_id = None
-                fa.qbo_sync_token = None
-                invoice = await qbo.create_invoice(payload)
-            else:
+        # Création/MAJ robuste : si QB refuse un DOUBLON de DocNumber, on se
+        # RELIE à la facture existante (même numéro) et on la MET À JOUR pour
+        # la corriger (projet/classe) — au lieu d'en créer une 2e. Si l'Id
+        # stocké est obsolète/supprimé, on repart sans Id (puis le doublon
+        # éventuel sera relié).
+        _DUP_KEYS = (
+            "duplicate document number",
+            "numéro de document en double",
+            "numero de document en double",
+            "6140",
+        )
+        _STALE_KEYS = (
+            "not found", "object not found", "introuvable", "deleted",
+            "stale", "invalid reference", "5010", "610", "2010",
+        )
+
+        async def _push_invoice(p: Dict[str, Any]) -> Dict[str, Any]:
+            try:
+                return await qbo.create_invoice(p)
+            except QuickBooksError as exc:
+                m = str(exc).lower()
+                # Doublon de numéro → relier à la facture existante + MAJ.
+                if not p.get("Id") and any(k in m for k in _DUP_KEYS):
+                    docnum = str(p.get("DocNumber") or "").strip()
+                    found = (
+                        await qbo.find_invoice_by_docnumber(docnum)
+                        if docnum
+                        else None
+                    )
+                    if found and found.get("Id"):
+                        p["Id"] = str(found["Id"])
+                        p["SyncToken"] = str(found.get("SyncToken") or "0")
+                        p["sparse"] = True
+                        return await qbo.create_invoice(p)
+                # Id obsolète/supprimé → recréer à neuf.
+                if p.get("Id") and any(k in m for k in _STALE_KEYS):
+                    p.pop("Id", None)
+                    p.pop("SyncToken", None)
+                    p.pop("sparse", None)
+                    return await _push_invoice(p)
                 raise
+
+        invoice = await _push_invoice(payload)
 
     except QuickBooksError as exc:
         raise FactureSyncError(str(exc)) from exc
