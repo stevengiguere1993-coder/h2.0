@@ -1172,6 +1172,8 @@ type QboAccountMap = {
   cc_michael_account: string | null;
   cc_olivier_account: string | null;
   cc_christian_account: string | null;
+  labour_expense_account: string | null;
+  labour_clearing_account: string | null;
 };
 
 const ACCOUNT_FIELDS: Array<{
@@ -1215,6 +1217,18 @@ const ACCOUNT_FIELDS: Array<{
     label: "Carte de crédit Christian Villiard",
     hint: "Compte de carte de crédit dans QB pour Christian.",
     placeholder: "Ex. CC Horizon Christian Villiard"
+  },
+  {
+    key: "labour_expense_account",
+    label: "Main-d'œuvre — compte de dépense",
+    hint: "Compte de DÉPENSE débité pour le coût de main-d'œuvre poussé sur chaque projet (heures × coût réel). Ex. « Coût de main-d'œuvre ».",
+    placeholder: "Ex. Coût de main-d'œuvre"
+  },
+  {
+    key: "labour_clearing_account",
+    label: "Main-d'œuvre — compte de contrepartie",
+    hint: "Compte CRÉDITÉ en contrepartie (répartition / salaires à payer), à réconcilier ensuite avec la paie. À remplir SEULEMENT si la paie n'est pas déjà dans QuickBooks. Ex. « Main-d'œuvre à répartir ».",
+    placeholder: "Ex. Main-d'œuvre à répartir"
   }
 ];
 
@@ -1229,7 +1243,9 @@ function QboAccountMapSection() {
     cc_steven_account: "",
     cc_michael_account: "",
     cc_olivier_account: "",
-    cc_christian_account: ""
+    cc_christian_account: "",
+    labour_expense_account: "",
+    labour_clearing_account: ""
   });
   const [err, setErr] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -1247,7 +1263,9 @@ function QboAccountMapSection() {
         cc_steven_account: d.cc_steven_account || "",
         cc_michael_account: d.cc_michael_account || "",
         cc_olivier_account: d.cc_olivier_account || "",
-        cc_christian_account: d.cc_christian_account || ""
+        cc_christian_account: d.cc_christian_account || "",
+        labour_expense_account: d.labour_expense_account || "",
+        labour_clearing_account: d.labour_clearing_account || ""
       });
     } catch {
       setErr("Chargement échoué.");
@@ -1393,7 +1411,11 @@ function QboAccountMapSection() {
                     cc_michael_account: data.cc_michael_account || "",
                     cc_olivier_account: data.cc_olivier_account || "",
                     cc_christian_account:
-                      data.cc_christian_account || ""
+                      data.cc_christian_account || "",
+                    labour_expense_account:
+                      data.labour_expense_account || "",
+                    labour_clearing_account:
+                      data.labour_clearing_account || ""
                   });
                 }
                 setErr(null);

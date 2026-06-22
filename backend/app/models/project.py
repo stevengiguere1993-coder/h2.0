@@ -83,6 +83,12 @@ class Project(Base):
     qbo_job_id: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, index=True
     )
+    # Id de la Purchase QB qui porte le COÛT DE MAIN-D'ŒUVRE Kratos de ce
+    # projet (heures × coût réel). Clé d'idempotence : on met à jour cette
+    # dépense au lieu d'en recréer une à chaque synchro.
+    qbo_labour_purchase_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
 
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)

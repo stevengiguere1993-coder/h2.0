@@ -46,6 +46,16 @@ class QboAccountMap(Base):
     cc_christian_account: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
+    # Coût de MAIN-D'ŒUVRE poussé sur le projet QB (heures Kratos × coût réel) :
+    # - labour_expense_account  = compte de DÉPENSE débité (le coût du projet) ;
+    # - labour_clearing_account = compte de CONTREPARTIE crédité (compte de
+    #   répartition / salaires à payer), réconcilié ensuite avec la paie.
+    labour_expense_account: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    labour_clearing_account: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
