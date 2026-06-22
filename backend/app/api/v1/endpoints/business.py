@@ -70,6 +70,45 @@ from app.schemas.note_template import (
 )
 
 
+# Anti-doublon opportuniste : on déclenche une déduplication des achats au
+# plus une fois toutes les N secondes quand la liste est consultée, en
+# arrière-plan (session fraîche). Pas de bouton : les doublons disparaissent
+# « tout seuls » dès qu'on ouvre la page Achats.
+_ACHAT_DEDUPE_THROTTLE_S = 30.0
+_last_achat_dedupe_at = 0.0
+
+
+def _maybe_dedupe_achats_bg() -> None:
+    import asyncio
+    import time
+
+    global _last_achat_dedupe_at
+    now = time.monotonic()
+    if now - _last_achat_dedupe_at < _ACHAT_DEDUPE_THROTTLE_S:
+        return
+    _last_achat_dedupe_at = now
+
+    async def _run() -> None:
+        from app.db.session import AsyncSessionLocal
+        from app.services.achat_dedupe import dedupe_achats
+
+        try:
+            async with AsyncSessionLocal() as s:
+                removed = await dedupe_achats(s)
+                if removed:
+                    await s.commit()
+                else:
+                    await s.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        asyncio.create_task(_run())
+    except RuntimeError:
+        # Pas de boucle asyncio active (contexte sync) : on ignore.
+        pass
+
+
 def make_crud_router(
     *,
     prefix: str,
@@ -187,6 +226,10 @@ def make_crud_router(
     ):
         crud = GenericCrud(db, model)
         items = await crud.list(skip=skip, limit=limit)
+        # Ouvrir la liste des achats nettoie les doublons en tâche de fond
+        # (au plus 1×/30 s) — sans bouton, comme demandé.
+        if model is Achat:
+            _maybe_dedupe_achats_bg()
         return [read_schema.model_validate(i) for i in items]
 
     @router.get("/{item_id}")
