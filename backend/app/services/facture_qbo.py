@@ -445,12 +445,19 @@ async def sync_facture_to_qbo(
             raise FactureSyncError("QBO customer creation did not return an Id.")
 
         # CustomerRef = PROJET (sous-client) si relié, sinon client parent.
+        # On RÉSOUT le bon id même si le sous-client a été converti en projet
+        # QB (ancien qbo_job_id supprimé → « client supprimé »).
         # ClassRef = chantier (adresse / nom du projet).
         invoice_customer_id = customer_id
         class_id: Optional[str] = None
         if project is not None:
-            if getattr(project, "qbo_job_id", None):
-                invoice_customer_id = str(project.qbo_job_id)
+            from app.services.qbo_project_resolve import (
+                resolve_project_customer_id,
+            )
+
+            invoice_customer_id = await resolve_project_customer_id(
+                qbo, db, project, customer_id
+            )
             class_name = (
                 (getattr(project, "address", None) or "").strip()
                 or (project.name or "").strip()
