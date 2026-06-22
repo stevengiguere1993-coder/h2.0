@@ -279,24 +279,18 @@ async def reclass_projects(
         description="Limiter à un client. Vide = toutes les factures.",
     ),
 ) -> dict:
-    """Ré-attribue dans QuickBooks les factures (et coûts) déjà liés à QB
-    au bon PROJET — CustomerRef = sous-client (Job), ClassRef = chantier.
+    """Pousse / ré-attribue dans QuickBooks les COÛTS d'un projet (achats +
+    main-d'œuvre) au bon PROJET — CustomerRef = projet, ClassRef = chantier.
 
-    Utile quand des projets ont été créés APRÈS l'envoi des factures. Lancé
-    en ARRIÈRE-PLAN (sparse update idempotent, aucun doublon) ; suivre via
-    GET /qbo/backfill-status. Ne touche QUE les enregistrements ayant à la
-    fois un projet ET un id QB.
+    On NE touche PAS aux factures clients (gérées dans QB) : seuls les achats
+    et la main-d'œuvre sont concernés. Lancé en ARRIÈRE-PLAN (idempotent) ;
+    suivre via GET /qbo/backfill-status.
     """
     from app.models.achat import Achat
-    from app.models.facture import Facture
 
-    fstmt = select(Facture.id).where(
-        Facture.project_id.is_not(None),
-        Facture.qbo_invoice_id.is_not(None),
-    )
-    if client_id is not None:
-        fstmt = fstmt.where(Facture.client_id == client_id)
-    facture_ids = [int(i) for i in (await db.execute(fstmt)).scalars().all()]
+    # On ne pousse PAS les factures clients ici (demande : ce sont les achats
+    # du projet qu'on veut dans QB, pas les factures de vente).
+    facture_ids: list[int] = []
 
     # Achats d'un projet : on POUSSE vers QB ceux pas encore envoyés (QB = «—»)
     # ET on met à jour ceux déjà liés via un Bill (Class/Customer). On EXCLUT
