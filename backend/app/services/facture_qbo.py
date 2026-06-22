@@ -183,12 +183,54 @@ def _build_invoice_payload(
     return payload
 
 
+# Mode de paiement Kratos (côté facture client) → nom du PaymentMethod QB
+# (libellés FR de QuickBooks). Le Payment QB portera le MÊME mode que celui
+# choisi dans Kratos.
+_QBO_PAYMENT_METHOD_NAME = {
+    "cash": "Espèces",
+    "credit_card": "Carte de crédit",
+    "debit_card": "Carte de débit",
+    "check": "Chèque",
+    "bank_transfer": "Virement",
+}
+
+
+async def _resolve_deposit_account_id(qbo, db: AsyncSession) -> Optional[str]:
+    """Compte « Déposer sur » des paiements client = TOUJOURS le compte
+    chèque Horizon (configuré dans qbo_account_maps)."""
+    from app.models.qbo_account_map import QboAccountMap
+
+    row = (
+        await db.execute(select(QboAccountMap).where(QboAccountMap.id == 1))
+    ).scalar_one_or_none()
+    name = (getattr(row, "cheque_horizon_account", None) or "").strip()
+    if not name:
+        return None
+    try:
+        acc = await qbo.find_account_by_name(name)
+        return str(acc.get("Id")) if acc and acc.get("Id") else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _resolve_payment_method_id(qbo, method: Optional[str]) -> Optional[str]:
+    name = _QBO_PAYMENT_METHOD_NAME.get((method or "").strip().lower())
+    if not name:
+        return None
+    try:
+        pm = await qbo.ensure_payment_method(name=name)
+        return str(pm.get("Id")) if pm and pm.get("Id") else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def ensure_invoice_payment(
     qbo,
     db: AsyncSession,
     facture: Facture,
     customer_ref: str,
     invoice_obj: Dict[str, Any],
+    deposit_account_id: Optional[str] = None,
 ) -> Optional[str]:
     """Crée le Payment QBO qui solde la facture si elle est PAYÉE dans
     Kratos et pas déjà payée côté QBO. Idempotent via qbo_payment_id.
@@ -216,6 +258,9 @@ async def ensure_invoice_payment(
             }
         ],
     }
+    # Déposer TOUJOURS sur le compte chèque Horizon.
+    if deposit_account_id:
+        payload["DepositToAccountRef"] = {"value": str(deposit_account_id)}
     try:
         res = await qbo.create_payment(payload)
         pay = res.get("Payment") or res
@@ -263,6 +308,9 @@ async def sync_facture_payments_to_qbo(
             "get_invoice %s pour CustomerRef paiement: %s", inv_id, exc
         )
 
+    # « Déposer sur » = toujours le compte chèque Horizon (résolu 1×).
+    deposit_account_id = await _resolve_deposit_account_id(qbo, db)
+
     rows = (
         await db.execute(
             select(Payment)
@@ -274,9 +322,13 @@ async def sync_facture_payments_to_qbo(
     if not rows:
         # Pas de virements détaillés → repli legacy (1 paiement global).
         pid = await ensure_invoice_payment(
-            qbo, db, facture, pay_customer_ref, {"Id": inv_id}
+            qbo, db, facture, pay_customer_ref, {"Id": inv_id},
+            deposit_account_id=deposit_account_id,
         )
         return [pid] if pid else []
+
+    # Cache des PaymentMethod QB par mode Kratos (évite les requêtes répétées).
+    pm_cache: dict[str, Optional[str]] = {}
 
     pushed: list[str] = []
     for p in rows:
@@ -304,6 +356,15 @@ async def sync_facture_payments_to_qbo(
             payload["TxnDate"] = str(p.paid_at)[:10]
         if p.reference:
             payload["PaymentRefNum"] = str(p.reference)[:21]
+        # Mode de paiement QB = celui choisi dans Kratos.
+        mkey = (p.method or "").strip().lower()
+        if mkey not in pm_cache:
+            pm_cache[mkey] = await _resolve_payment_method_id(qbo, mkey)
+        if pm_cache[mkey]:
+            payload["PaymentMethodRef"] = {"value": pm_cache[mkey]}
+        # Déposer toujours sur le compte chèque Horizon.
+        if deposit_account_id:
+            payload["DepositToAccountRef"] = {"value": str(deposit_account_id)}
         try:
             res = await qbo.create_payment(payload)
             pay = res.get("Payment") or res
