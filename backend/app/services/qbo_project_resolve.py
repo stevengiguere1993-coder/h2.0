@@ -50,27 +50,51 @@ async def resolve_project_customer_id(
     if jid and await _is_active_customer(qbo, jid):
         return jid
 
-    # Re-résolution : retrouver le sous-client / projet converti sous le
-    # parent, par adresse (nom de migration) puis par nom de projet.
-    for nm in (
-        (getattr(project, "address", None) or "").strip(),
-        (project.name or "").strip(),
-    ):
-        if not nm:
-            continue
-        try:
-            sub = await qbo._find_subcustomer(
-                parent_customer_id=parent_customer_id, project_name=nm
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("resolve job projet %s (%s): %s", project.id, nm, exc)
-            sub = None
-        if sub and sub.get("Id"):
-            new_id = str(sub["Id"])
-            if new_id != jid:
-                project.qbo_job_id = new_id
-                await db.flush()
-            return new_id
+    # Liste des sous-clients / projets sous le parent.
+    try:
+        subs = await qbo.find_subcustomers(parent_customer_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("find_subcustomers projet %s: %s", project.id, exc)
+        subs = []
 
-    # Rien trouvé → parent (le projet reste suivi via la ClassRef).
+    def _local_name(row) -> str:
+        fqn = row.get("FullyQualifiedName") or ""
+        seg = fqn.split(":")[-1] if fqn else (row.get("DisplayName") or "")
+        return seg.strip().lower()
+
+    targets = [
+        t
+        for t in (
+            (getattr(project, "address", None) or "").strip().lower(),
+            (project.name or "").strip().lower(),
+        )
+        if t
+    ]
+
+    async def _adopt(row) -> str:
+        new_id = str(row["Id"])
+        if new_id != jid:
+            project.qbo_job_id = new_id
+            await db.flush()
+        return new_id
+
+    # 1) Match par NOM (adresse / nom de projet), tolérant aux renommages :
+    # égalité, préfixe, ou inclusion (scopé au même parent → sûr).
+    for row in subs:
+        if not row.get("Id"):
+            continue
+        ln = _local_name(row)
+        if not ln:
+            continue
+        for t in targets:
+            if ln == t or ln.startswith(t) or t.startswith(ln) or t in ln or ln in t:
+                return await _adopt(row)
+
+    # 2) Un SEUL sous-client / projet sous ce parent → c'est forcément lui
+    # (cas courant : 1 client = 1 projet), même s'il a été renommé.
+    usable = [r for r in subs if r.get("Id")]
+    if len(usable) == 1:
+        return await _adopt(usable[0])
+
+    # 3) Rien d'identifiable → client parent (suivi assuré par la ClassRef).
     return str(parent_customer_id)
