@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
   CloudDownload,
+  Copy,
   Loader2,
   Plus,
   ShoppingCart
@@ -12,6 +13,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 import { Link } from "@/i18n/navigation";
 import { projectLabel } from "@/lib/project";
 
@@ -121,6 +123,7 @@ export default function AchatsPage() {
   const [payTarget, setPayTarget] = useState<Achat | null>(null);
   const [pulling, setPulling] = useState(false);
   const [pullResult, setPullResult] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   async function pullFromQbo() {
     if (pulling) return;
@@ -164,6 +167,51 @@ export default function AchatsPage() {
       if (aRes.ok) {
         setItems((await aRes.json()) as Achat[]);
       }
+    } catch (e) {
+      setPullResult(`Échec : ${(e as Error).message}`);
+    } finally {
+      setPulling(false);
+    }
+  }
+
+  async function dedupeAchats() {
+    if (pulling) return;
+    setPulling(true);
+    setPullResult(null);
+    try {
+      // 1) Aperçu (dry-run) : rien n'est supprimé.
+      const prev = await authedFetch("/api/v1/achats/dedupe", {
+        method: "POST"
+      });
+      if (!prev.ok) throw new Error((await prev.text()).slice(0, 240));
+      const pv = (await prev.json()) as {
+        groups_found: number;
+        duplicates_removed: number;
+      };
+      if (pv.duplicates_removed === 0) {
+        setPullResult("Aucun doublon détecté.");
+        return;
+      }
+      const ok = await confirm(
+        `${pv.duplicates_removed} achat(s) en double détecté(s) ` +
+          `(${pv.groups_found} groupe(s)). Les supprimer ? On conserve ` +
+          `l'original (facturé / le plus ancien).`
+      );
+      if (!ok) {
+        setPullResult(
+          `${pv.duplicates_removed} doublon(s) détecté(s) — suppression annulée.`
+        );
+        return;
+      }
+      // 2) Suppression réelle.
+      const res = await authedFetch("/api/v1/achats/dedupe?confirm=true", {
+        method: "POST"
+      });
+      if (!res.ok) throw new Error((await res.text()).slice(0, 240));
+      const r = (await res.json()) as { duplicates_removed: number };
+      setPullResult(`${r.duplicates_removed} doublon(s) supprimé(s).`);
+      const aRes = await authedFetch("/api/v1/achats?limit=500");
+      if (aRes.ok) setItems((await aRes.json()) as Achat[]);
     } catch (e) {
       setPullResult(`Échec : ${(e as Error).message}`);
     } finally {
@@ -275,6 +323,20 @@ export default function AchatsPage() {
                 <CloudDownload className="h-4 w-4" />
               )}
               Importer de QB
+            </button>
+            <button
+              type="button"
+              onClick={dedupeAchats}
+              disabled={pulling}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
+              title="Détecter et supprimer les achats en double (ex. saisi puis ré-importé de QB). Aperçu avant suppression."
+            >
+              {pulling ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Copy className="h-4 w-4" />
+              )}
+              Nettoyer doublons
             </button>
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
