@@ -565,6 +565,24 @@ export default function QboMigrationPage() {
                     </li>
                   ))}
               </ul>
+              {Array.isArray(pullResult.data.errors) &&
+              pullResult.data.errors.length > 0 ? (
+                <div className="mt-3">
+                  <p className="text-xs font-semibold text-rose-300">
+                    Erreurs ({(pullResult.data.errors as unknown[]).length})
+                  </p>
+                  <div className="mt-1 max-h-72 space-y-1 overflow-y-auto">
+                    {(pullResult.data.errors as string[]).map((e, i) => (
+                      <div
+                        key={i}
+                        className="rounded border border-rose-500/30 bg-rose-500/5 px-2 py-1 text-[11px] text-rose-200"
+                      >
+                        {e}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               {Array.isArray(pullResult.data.preview) &&
               pullResult.data.preview.length > 0 ? (
                 <div className="mt-3">
