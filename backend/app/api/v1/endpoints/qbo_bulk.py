@@ -155,12 +155,13 @@ async def reclass_projects(
     aucune création de doublon). Ne touche QUE les enregistrements ayant à
     la fois un projet ET un id QB.
     """
+    from app.db.session import AsyncSessionLocal
     from app.models.achat import Achat
     from app.models.facture import Facture
-    from app.services.achat_qbo import AchatSyncError, sync_achat_to_qbo
-    from app.services.facture_qbo import FactureSyncError, sync_facture_to_qbo
+    from app.services.achat_qbo import sync_achat_to_qbo
+    from app.services.facture_qbo import sync_facture_to_qbo
 
-    out = {
+    out: dict = {
         "factures_repushed": 0,
         "factures_failed": 0,
         "achats_repushed": 0,
@@ -168,29 +169,23 @@ async def reclass_projects(
         "errors": [],
     }
 
-    # Factures déjà dans QB et rattachées à un projet → MAJ Class/Customer.
-    fstmt = select(Facture).where(
+    # On ne lit que des IDs sur la session de la requête (lecture seule) ;
+    # chaque push se fait dans une session FRAÎCHE dédiée. Évite de mélanger
+    # des commits manuels avec la session de requête (dont le teardown
+    # committait à son tour → 500).
+    fstmt = select(Facture.id).where(
         Facture.project_id.is_not(None),
         Facture.qbo_invoice_id.is_not(None),
     )
     if client_id is not None:
         fstmt = fstmt.where(Facture.client_id == client_id)
-    for fa in (await db.execute(fstmt)).scalars().all():
-        try:
-            await sync_facture_to_qbo(db, int(fa.id))
-            await db.commit()
-            out["factures_repushed"] += 1
-        except (FactureSyncError, Exception) as exc:  # noqa: BLE001
-            await db.rollback()
-            out["factures_failed"] += 1
-            if len(out["errors"]) < 20:
-                out["errors"].append(f"facture {fa.id}: {str(exc)[:160]}")
+    facture_ids = [int(i) for i in (await db.execute(fstmt)).scalars().all()]
 
     # Achats liés via un BILL QB (qbo_bill_id) → MAJ Class/Customer par
     # sparse update propre. On EXCLUT les Purchases importés (qbo_purchase_id
     # seul) : un re-push les recréerait en doublon (mode de paiement non
     # mappé). Ceux-là restent à corriger côté QB.
-    astmt = select(Achat).where(
+    astmt = select(Achat.id).where(
         Achat.project_id.is_not(None),
         Achat.qbo_bill_id.is_not(None),
     )
@@ -203,16 +198,29 @@ async def reclass_projects(
             )
         ).scalars().all()
         astmt = astmt.where(Achat.project_id.in_(list(proj_ids) or [-1]))
-    for ach in (await db.execute(astmt)).scalars().all():
+    achat_ids = [int(i) for i in (await db.execute(astmt)).scalars().all()]
+
+    for fid in facture_ids:
         try:
-            await sync_achat_to_qbo(db, int(ach.id))
-            await db.commit()
+            async with AsyncSessionLocal() as s:
+                await sync_facture_to_qbo(s, fid)
+                await s.commit()
+            out["factures_repushed"] += 1
+        except Exception as exc:  # noqa: BLE001
+            out["factures_failed"] += 1
+            if len(out["errors"]) < 20:
+                out["errors"].append(f"facture {fid}: {str(exc)[:160]}")
+
+    for aid in achat_ids:
+        try:
+            async with AsyncSessionLocal() as s:
+                await sync_achat_to_qbo(s, aid)
+                await s.commit()
             out["achats_repushed"] += 1
-        except (AchatSyncError, Exception) as exc:  # noqa: BLE001
-            await db.rollback()
+        except Exception as exc:  # noqa: BLE001
             out["achats_failed"] += 1
             if len(out["errors"]) < 40:
-                out["errors"].append(f"achat {ach.id}: {str(exc)[:160]}")
+                out["errors"].append(f"achat {aid}: {str(exc)[:160]}")
 
     return out
 
