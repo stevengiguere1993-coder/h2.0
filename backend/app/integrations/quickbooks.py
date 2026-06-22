@@ -487,6 +487,21 @@ class QuickBooksClient:
                 return row
         return None
 
+    async def find_subcustomers(
+        self, parent_customer_id: str
+    ) -> list[Dict[str, Any]]:
+        """Liste TOUS les sous-clients / projets sous un client parent
+        (ParentRef non queryable → filtre Python). Sert à retrouver le projet
+        converti même s'il a été RENOMMÉ (le nom ne correspond plus à
+        l'adresse/au nom Kratos)."""
+        rows = await self.query("SELECT * FROM Customer MAXRESULTS 1000")
+        return [
+            row
+            for row in rows
+            if str((row.get("ParentRef") or {}).get("value") or "")
+            == str(parent_customer_id)
+        ]
+
     async def ensure_project(
         self,
         *,
