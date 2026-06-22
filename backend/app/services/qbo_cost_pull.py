@@ -100,6 +100,17 @@ async def pull_project_costs_from_qbo(
     except QuickBooksError as exc:
         return {"error": f"Requête QB échouée : {exc}"}
 
+    # Mode de paiement réel des Bills payés (chèque / carte) déduit des
+    # BillPayments QB → on ne laisse jamais un Bill payé en « Sur compte ».
+    try:
+        from app.services.qbo_payment_classify import (
+            build_paid_bill_method_index,
+        )
+
+        paid_bill_methods = await build_paid_bill_method_index(qbo, db)
+    except Exception:  # noqa: BLE001
+        paid_bill_methods = {}
+
     # Achats déjà liés par qbo_bill_id (objet complet → on peut refléter
     # le PAIEMENT QB → Kratos sur un Bill déjà importé).
     existing_bill: dict[str, Achat] = {
@@ -221,6 +232,14 @@ async def pull_project_costs_from_qbo(
                 if not dry_run:
                     ach.status = "paid"
                     ach.paid_at = ach.paid_at or now
+                    # Classe selon le paiement réel : un Bill payé ne reste
+                    # pas « Sur compte ».
+                    real_pm = paid_bill_methods.get(bid)
+                    if real_pm and (ach.payment_method or "bill_to_pay") in (
+                        "",
+                        "bill_to_pay",
+                    ):
+                        ach.payment_method = real_pm
                     await db.flush()
                 stats["paid_synced"] += 1
                 pv_status = "paiement_synchro"
@@ -255,7 +274,13 @@ async def pull_project_costs_from_qbo(
                     is_billable=_is_billable(proj),
                     amount=total,
                     status="paid" if paid else "received",
-                    payment_method="bill_to_pay",
+                    # Bill payé → mode réel (chèque/carte) déduit de QB ;
+                    # sinon « Sur compte » (à payer).
+                    payment_method=(
+                        paid_bill_methods.get(bid) or "bill_to_pay"
+                        if paid
+                        else "bill_to_pay"
+                    ),
                     received_at=now,
                     paid_at=now if paid else None,
                     invoice_date=_parse_date(b.get("TxnDate")),
