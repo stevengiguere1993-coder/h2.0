@@ -2183,7 +2183,8 @@ function FinancesTab({
               {fmtMoney(
                 data.billing_kind === "forfaitaire"
                   ? data.projected_revenue_ex_tax +
-                      (data.extras_billed_amount || 0)
+                      (data.extras_billed_amount || 0) -
+                      (data.rabais_billed_amount || 0)
                   : data.invoiced_amount_ex_tax
               )}
             </dd>

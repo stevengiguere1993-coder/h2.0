@@ -756,7 +756,15 @@ async def _compute_finances(
     # gouvernement, exposées séparément via `taxes_collected`. Coût pris
     # hors taxes (CTI/RTI récupérables).
     if billing_kind == "forfaitaire":
-        revenue_base = projected_revenue_ex_tax + extras_billed_amount
+        # Revenu = prix forfaitaire HT + extras facturés − RABAIS accordé :
+        # le profit doit refléter le montant RÉELLEMENT facturé au client
+        # (un rabais réduit ce qu'on encaisse). Sans ça, le revenu restait
+        # au prix de soumission et ignorait la remise.
+        revenue_base = (
+            projected_revenue_ex_tax
+            + extras_billed_amount
+            - rabais_billed_amount
+        )
     else:
         revenue_base = invoiced_ex_tax
     actual_profit = round(revenue_base - actual_total_cost_ht, 2)
