@@ -648,14 +648,26 @@ class QuickBooksClient:
         )
         return rows[0] if rows else None
 
+    @staticmethod
+    def _clean_item_name(name: str) -> str:
+        """Nom d'Item QB SÛR pour une requête et une création.
+
+        Le langage de requête QBO casse sur les sauts de ligne ET sur les
+        apostrophes/guillemets contenus dans le libellé (la chaîne se ferme
+        trop tôt → « Encountered <STRING> … »). Le vrai texte détaillé reste
+        dans la Description de la ligne (envoyée en JSON, pas en requête) ;
+        le NOM d'Item est donc nettoyé : espaces/retours-ligne aplatis,
+        apostrophes/guillemets retirés, ':' retiré (réservé aux sous-items),
+        borné à 100 car. (limite QBO)."""
+        s = " ".join((name or "").split())
+        for ch in ("'", "’", "‘", "‛", "`", '"', ":"):
+            s = s.replace(ch, " ")
+        return " ".join(s.split())[:100]
+
     async def find_item_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        # IMPORTANT : le langage de requête QBO refuse les sauts de ligne
-        # (erreur lexicale « Encountered \n ») et exige les apostrophes
-        # DOUBLÉES (''). On nettoie donc le nom : on aplatit les espaces /
-        # retours ligne, on retire ':' (réservé aux sous-items) et on borne
-        # à 100 car. (limite QBO).
-        cleaned = " ".join((name or "").split()).replace(":", " ")[:100]
-        safe = cleaned.replace("'", "''")
+        safe = self._clean_item_name(name)
+        if not safe:
+            return None
         rows = await self.query(
             f"SELECT * FROM Item WHERE Name = '{safe}' MAXRESULTS 1"
         )
@@ -669,10 +681,9 @@ class QuickBooksClient:
             raise QuickBooksError(
                 "No QBO Income account available to link the new Item."
             )
-        # Même nettoyage qu'à la recherche : sans saut de ligne ni ':' et
-        # ≤100 car., sinon QBO refuse le Name (et la recherche ne le
-        # retrouverait pas ensuite).
-        clean_name = " ".join((name or "").split()).replace(":", " ")[:100]
+        # Même nettoyage qu'à la recherche (sinon QBO refuse le Name et la
+        # recherche ne le retrouverait pas ensuite).
+        clean_name = self._clean_item_name(name)
         payload: Dict[str, Any] = {
             "Name": clean_name or "Item",
             "Type": "Service",
