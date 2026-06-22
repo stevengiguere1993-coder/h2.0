@@ -649,7 +649,13 @@ class QuickBooksClient:
         return rows[0] if rows else None
 
     async def find_item_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        safe = name.replace("'", "\\'")
+        # IMPORTANT : le langage de requête QBO refuse les sauts de ligne
+        # (erreur lexicale « Encountered \n ») et exige les apostrophes
+        # DOUBLÉES (''). On nettoie donc le nom : on aplatit les espaces /
+        # retours ligne, on retire ':' (réservé aux sous-items) et on borne
+        # à 100 car. (limite QBO).
+        cleaned = " ".join((name or "").split()).replace(":", " ")[:100]
+        safe = cleaned.replace("'", "''")
         rows = await self.query(
             f"SELECT * FROM Item WHERE Name = '{safe}' MAXRESULTS 1"
         )
@@ -663,8 +669,12 @@ class QuickBooksClient:
             raise QuickBooksError(
                 "No QBO Income account available to link the new Item."
             )
+        # Même nettoyage qu'à la recherche : sans saut de ligne ni ':' et
+        # ≤100 car., sinon QBO refuse le Name (et la recherche ne le
+        # retrouverait pas ensuite).
+        clean_name = " ".join((name or "").split()).replace(":", " ")[:100]
         payload: Dict[str, Any] = {
-            "Name": name[:100],
+            "Name": clean_name or "Item",
             "Type": "Service",
             "IncomeAccountRef": {"value": str(income["Id"])},
         }

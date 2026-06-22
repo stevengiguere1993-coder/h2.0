@@ -408,19 +408,15 @@ async def sync_facture_to_qbo(
         # (cas migration), on s'y RATTACHE pour la METTRE À JOUR et pour que
         # le PAIEMENT s'y enregistre — au lieu de créer une facture en double.
         if not fa.qbo_invoice_id and (fa.reference or "").strip():
-            docnum = (fa.reference or "").strip().replace("'", "")
             try:
-                found = await qbo.query(
-                    f"SELECT * FROM Invoice WHERE DocNumber = '{docnum}'"
-                )
+                inv0 = await qbo.find_invoice_by_docnumber(fa.reference)
             except QuickBooksError as exc:
                 log.warning(
                     "QBO lookup Invoice DocNumber=%s (facture %s): %s",
-                    docnum, fa.id, exc,
+                    fa.reference, fa.id, exc,
                 )
-                found = []
-            if found:
-                inv0 = found[0]
+                inv0 = None
+            if inv0:
                 fa.qbo_invoice_id = str(inv0.get("Id") or "") or None
                 fa.qbo_sync_token = str(inv0.get("SyncToken") or "") or None
                 await db.flush()
@@ -437,7 +433,37 @@ async def sync_facture_to_qbo(
             existing_sync_token=fa.qbo_sync_token,
         )
 
-        invoice = await qbo.create_invoice(payload)  # même endpoint = update si Id+SyncToken
+        # Rattachement à une Invoice QB existante du même numéro déjà géré
+        # ci-dessus via qbo_invoice_id. On crée (ou met à jour si Id présent).
+        try:
+            invoice = await qbo.create_invoice(payload)
+        except QuickBooksError as exc:
+            msg = str(exc).lower()
+            stale = payload.get("Id") and any(
+                k in msg
+                for k in (
+                    "not found",
+                    "object not found",
+                    "introuvable",
+                    "deleted",
+                    "stale",
+                    "invalid reference",
+                    "5010",
+                    "610",
+                    "2010",
+                )
+            )
+            if stale:
+                # La facture QB a été SUPPRIMÉE/obsolète → on la recrée à
+                # neuf (le lien Kratos pointait sur un document disparu).
+                payload.pop("Id", None)
+                payload.pop("SyncToken", None)
+                payload.pop("sparse", None)
+                fa.qbo_invoice_id = None
+                fa.qbo_sync_token = None
+                invoice = await qbo.create_invoice(payload)
+            else:
+                raise
 
     except QuickBooksError as exc:
         raise FactureSyncError(str(exc)) from exc
@@ -489,21 +515,18 @@ async def push_facture_payments_only(
 
     inv_id = (fa.qbo_invoice_id or "").strip()
     if not inv_id and (fa.reference or "").strip():
-        docnum = (fa.reference or "").strip().replace("'", "")
         try:
-            found = await qbo.query(
-                f"SELECT * FROM Invoice WHERE DocNumber = '{docnum}'"
-            )
+            inv0 = await qbo.find_invoice_by_docnumber(fa.reference)
         except QuickBooksError as exc:
             log.warning(
                 "push_payments lookup Invoice DocNumber=%s (facture %s): %s",
-                docnum, fa.id, exc,
+                fa.reference, fa.id, exc,
             )
-            found = []
-        if found:
-            inv_id = str(found[0].get("Id") or "")
+            inv0 = None
+        if inv0:
+            inv_id = str(inv0.get("Id") or "")
             fa.qbo_invoice_id = inv_id or None
-            fa.qbo_sync_token = str(found[0].get("SyncToken") or "") or None
+            fa.qbo_sync_token = str(inv0.get("SyncToken") or "") or None
             await db.flush()
 
     if not inv_id:
