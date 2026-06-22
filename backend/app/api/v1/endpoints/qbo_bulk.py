@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -24,6 +24,77 @@ from app.services.qbo_bulk_sync import (
 from app.services.qbo_invoice_pull import pull_invoices_from_qbo
 
 router = APIRouter(prefix="/qbo", tags=["qbo-bulk"])
+
+
+# État (best-effort, en mémoire process) des rattrapages lancés en
+# arrière-plan, exposé par GET /qbo/backfill-status pour le suivi côté UI.
+_BACKFILL: dict[str, dict] = {}
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _worker_push_payments(facture_ids: list[int]) -> None:
+    """Pousse en arrière-plan chaque facture (→ ses paiements) vers QB."""
+    from app.db.session import AsyncSessionLocal
+    from app.services.facture_qbo import sync_facture_to_qbo
+
+    st = _BACKFILL.get("payments")
+    if st is None:
+        return
+    for fid in facture_ids:
+        try:
+            async with AsyncSessionLocal() as s:
+                await sync_facture_to_qbo(s, fid)
+                await s.commit()
+            st["processed"] += 1
+        except Exception as exc:  # noqa: BLE001
+            st["failed"] += 1
+            if len(st["errors"]) < 40:
+                st["errors"].append(f"facture {fid}: {str(exc)[:160]}")
+        st["updated_at"] = _now_iso()
+    st["running"] = False
+    st["updated_at"] = _now_iso()
+
+
+async def _worker_reclass(
+    facture_ids: list[int], achat_ids: list[int]
+) -> None:
+    """Ré-attribue en arrière-plan factures puis achats au bon projet QB."""
+    from app.db.session import AsyncSessionLocal
+    from app.services.achat_qbo import sync_achat_to_qbo
+    from app.services.facture_qbo import sync_facture_to_qbo
+
+    st = _BACKFILL.get("reclass")
+    if st is None:
+        return
+    for fid in facture_ids:
+        try:
+            async with AsyncSessionLocal() as s:
+                await sync_facture_to_qbo(s, fid)
+                await s.commit()
+            st["processed"] += 1
+        except Exception as exc:  # noqa: BLE001
+            st["failed"] += 1
+            if len(st["errors"]) < 40:
+                st["errors"].append(f"facture {fid}: {str(exc)[:160]}")
+        st["updated_at"] = _now_iso()
+    for aid in achat_ids:
+        try:
+            async with AsyncSessionLocal() as s:
+                await sync_achat_to_qbo(s, aid)
+                await s.commit()
+            st["processed"] += 1
+        except Exception as exc:  # noqa: BLE001
+            st["failed"] += 1
+            if len(st["errors"]) < 40:
+                st["errors"].append(f"achat {aid}: {str(exc)[:160]}")
+        st["updated_at"] = _now_iso()
+    st["running"] = False
+    st["updated_at"] = _now_iso()
 
 
 class QboAutoSync(BaseModel):
@@ -139,6 +210,7 @@ async def bulk_sync(
 @router.post("/push-payments")
 async def push_payments(
     db: DBSession,
+    background: BackgroundTasks,
     _: RequireAdminOrOwner,
     client_id: Optional[int] = Query(
         default=None,
@@ -148,19 +220,14 @@ async def push_payments(
     """Pousse vers QuickBooks TOUS les paiements enregistrés dans Kratos qui
     n'y sont pas encore (rattrapage post-migration).
 
-    Pour chaque facture portant au moins un paiement, on ré-synchronise la
-    facture : `sync_facture_to_qbo` crée la facture QB si besoin PUIS chaque
-    Payment manquant (idempotent via `Payment.qbo_payment_id`). Aucune
-    création de doublon : un paiement déjà poussé est ignoré.
+    Lancé en ARRIÈRE-PLAN (chaque facture = plusieurs appels QB → trop long
+    pour une requête HTTP, qui expirait en 500 sur « tous les clients »).
+    Suivre l'avancement via GET /qbo/backfill-status. Idempotent
+    (`Payment.qbo_payment_id`) : aucun doublon, re-lançable sans risque.
     """
-    from app.db.session import AsyncSessionLocal
     from app.models.facture import Facture
     from app.models.payment import Payment
-    from app.services.facture_qbo import sync_facture_to_qbo
 
-    out: dict = {"factures_pushed": 0, "factures_failed": 0, "errors": []}
-
-    # Factures (non brouillon/annulée) ayant au moins un paiement Kratos.
     stmt = (
         select(Payment.facture_id)
         .join(Facture, Facture.id == Payment.facture_id)
@@ -173,23 +240,22 @@ async def push_payments(
         int(i) for i in (await db.execute(stmt)).scalars().all() if i
     ]
 
-    for fid in facture_ids:
-        try:
-            async with AsyncSessionLocal() as s:
-                await sync_facture_to_qbo(s, fid)
-                await s.commit()
-            out["factures_pushed"] += 1
-        except Exception as exc:  # noqa: BLE001
-            out["factures_failed"] += 1
-            if len(out["errors"]) < 40:
-                out["errors"].append(f"facture {fid}: {str(exc)[:160]}")
-
-    return out
+    _BACKFILL["payments"] = {
+        "running": True,
+        "total": len(facture_ids),
+        "processed": 0,
+        "failed": 0,
+        "errors": [],
+        "updated_at": _now_iso(),
+    }
+    background.add_task(_worker_push_payments, facture_ids)
+    return {"started": True, **_BACKFILL["payments"]}
 
 
 @router.post("/reclass-projects")
 async def reclass_projects(
     db: DBSession,
+    background: BackgroundTasks,
     _: RequireAdminOrOwner,
     client_id: Optional[int] = Query(
         default=None,
@@ -199,31 +265,14 @@ async def reclass_projects(
     """Ré-attribue dans QuickBooks les factures (et coûts) déjà liés à QB
     au bon PROJET — CustomerRef = sous-client (Job), ClassRef = chantier.
 
-    Utile quand des projets ont été créés APRÈS l'envoi des factures : les
-    Invoices QB pointaient sur le client parent (sans classe), donc le
-    revenu n'apparaissait pas dans l'onglet Projets et les montants QB ≠
-    Kratos. Ré-pousse chaque enregistrement (sparse update idempotent —
-    aucune création de doublon). Ne touche QUE les enregistrements ayant à
-    la fois un projet ET un id QB.
+    Utile quand des projets ont été créés APRÈS l'envoi des factures. Lancé
+    en ARRIÈRE-PLAN (sparse update idempotent, aucun doublon) ; suivre via
+    GET /qbo/backfill-status. Ne touche QUE les enregistrements ayant à la
+    fois un projet ET un id QB.
     """
-    from app.db.session import AsyncSessionLocal
     from app.models.achat import Achat
     from app.models.facture import Facture
-    from app.services.achat_qbo import sync_achat_to_qbo
-    from app.services.facture_qbo import sync_facture_to_qbo
 
-    out: dict = {
-        "factures_repushed": 0,
-        "factures_failed": 0,
-        "achats_repushed": 0,
-        "achats_failed": 0,
-        "errors": [],
-    }
-
-    # On ne lit que des IDs sur la session de la requête (lecture seule) ;
-    # chaque push se fait dans une session FRAÎCHE dédiée. Évite de mélanger
-    # des commits manuels avec la session de requête (dont le teardown
-    # committait à son tour → 500).
     fstmt = select(Facture.id).where(
         Facture.project_id.is_not(None),
         Facture.qbo_invoice_id.is_not(None),
@@ -251,29 +300,24 @@ async def reclass_projects(
         astmt = astmt.where(Achat.project_id.in_(list(proj_ids) or [-1]))
     achat_ids = [int(i) for i in (await db.execute(astmt)).scalars().all()]
 
-    for fid in facture_ids:
-        try:
-            async with AsyncSessionLocal() as s:
-                await sync_facture_to_qbo(s, fid)
-                await s.commit()
-            out["factures_repushed"] += 1
-        except Exception as exc:  # noqa: BLE001
-            out["factures_failed"] += 1
-            if len(out["errors"]) < 20:
-                out["errors"].append(f"facture {fid}: {str(exc)[:160]}")
+    _BACKFILL["reclass"] = {
+        "running": True,
+        "total": len(facture_ids) + len(achat_ids),
+        "processed": 0,
+        "failed": 0,
+        "errors": [],
+        "updated_at": _now_iso(),
+    }
+    background.add_task(_worker_reclass, facture_ids, achat_ids)
+    return {"started": True, **_BACKFILL["reclass"]}
 
-    for aid in achat_ids:
-        try:
-            async with AsyncSessionLocal() as s:
-                await sync_achat_to_qbo(s, aid)
-                await s.commit()
-            out["achats_repushed"] += 1
-        except Exception as exc:  # noqa: BLE001
-            out["achats_failed"] += 1
-            if len(out["errors"]) < 40:
-                out["errors"].append(f"achat {aid}: {str(exc)[:160]}")
 
-    return out
+@router.get("/backfill-status")
+async def backfill_status(_: RequireAdminOrOwner) -> dict:
+    """État des rattrapages QB lancés en arrière-plan (push-payments /
+    reclass-projects). Best-effort : en mémoire process, remis à zéro au
+    redéploiement."""
+    return _BACKFILL
 
 
 @router.post("/reset-links")

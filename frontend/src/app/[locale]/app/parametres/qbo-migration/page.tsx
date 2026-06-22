@@ -227,11 +227,34 @@ export default function QboMigrationPage() {
     }
   }
 
+  // Suit un rattrapage lancé en arrière-plan (push-payments / reclass) en
+  // interrogeant /qbo/backfill-status jusqu'à la fin, et reflète la
+  // progression dans l'encart résultat.
+  async function pollBackfill(jobKey: "payments" | "reclass", title: string) {
+    for (let i = 0; i < 600; i++) {
+      await new Promise((res) => setTimeout(res, 3000));
+      try {
+        const r = await authedFetch("/api/v1/qbo/backfill-status");
+        if (!r.ok) continue;
+        const all = (await r.json()) as Record<
+          string,
+          Record<string, unknown>
+        >;
+        const st = all[jobKey];
+        if (!st) continue;
+        setPullResult({ title, data: st });
+        if (st.running === false) return;
+      } catch {
+        /* on réessaie */
+      }
+    }
+  }
+
   async function runPushPayments() {
     const ok = await confirm({
       title: "Pousser les paiements vers QuickBooks ?",
       description:
-        "Envoie dans QuickBooks tous les paiements enregistrés dans Kratos qui n'y sont pas encore (rattrapage des paiements saisis depuis la migration). Idempotent : un paiement déjà présent dans QB est ignoré, aucun doublon.",
+        "Envoie dans QuickBooks tous les paiements enregistrés dans Kratos qui n'y sont pas encore (rattrapage des paiements saisis depuis la migration). Tourne en arrière-plan (peut prendre quelques minutes). Idempotent : un paiement déjà présent dans QB est ignoré, aucun doublon.",
       confirmLabel: "Pousser les paiements",
       destructive: false
     });
@@ -246,15 +269,12 @@ export default function QboMigrationPage() {
         { method: "POST" }
       );
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const d = (await r.json()) as {
-        factures_pushed: number;
-        factures_failed: number;
-        errors: string[];
-      };
+      const d = (await r.json()) as { total: number };
       setPullResult({
-        title: "Paiements poussés (Kratos → QuickBooks)",
+        title: "Paiements → QuickBooks (en cours…)",
         data: d as unknown as Record<string, unknown>
       });
+      await pollBackfill("payments", "Paiements poussés (Kratos → QuickBooks)");
     } catch (e) {
       setError(`Envoi des paiements échoué : ${(e as Error).message}`);
     } finally {
@@ -266,7 +286,7 @@ export default function QboMigrationPage() {
     const ok = await confirm({
       title: "Ré-attribuer les projets dans QuickBooks ?",
       description:
-        "Ré-pousse vers QuickBooks les factures (et factures fournisseurs) déjà liées à QB pour leur remettre le bon PROJET : revenu/coût rattaché au sous-client (Job) + classe = chantier. À utiliser quand des projets ont été créés APRÈS l'envoi des factures (revenu absent de l'onglet Projets, montants QB ≠ Kratos). Idempotent : aucun doublon, mise à jour seulement.",
+        "Ré-pousse vers QuickBooks les factures (et factures fournisseurs) déjà liées à QB pour leur remettre le bon PROJET : revenu/coût rattaché au sous-client (Job) + classe = chantier. À utiliser quand des projets ont été créés APRÈS l'envoi des factures (revenu absent de l'onglet Projets, montants QB ≠ Kratos). Tourne en arrière-plan (peut prendre quelques minutes). Idempotent : aucun doublon, mise à jour seulement.",
       confirmLabel: "Ré-attribuer",
       destructive: false
     });
@@ -281,17 +301,15 @@ export default function QboMigrationPage() {
         { method: "POST" }
       );
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const d = (await r.json()) as {
-        factures_repushed: number;
-        factures_failed: number;
-        achats_repushed: number;
-        achats_failed: number;
-        errors: string[];
-      };
+      const d = (await r.json()) as { total: number };
       setPullResult({
-        title: "Ré-attribution des projets (Kratos → QuickBooks)",
+        title: "Ré-attribution des projets (en cours…)",
         data: d as unknown as Record<string, unknown>
       });
+      await pollBackfill(
+        "reclass",
+        "Ré-attribution des projets (Kratos → QuickBooks)"
+      );
     } catch (e) {
       setError(`Ré-attribution échouée : ${(e as Error).message}`);
     } finally {
