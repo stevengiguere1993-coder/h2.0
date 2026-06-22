@@ -80,9 +80,22 @@ async def dedupe_achats(db: AsyncSession) -> int:
     for members in groups:
         keeper = max(members, key=_keeper_score)
         for a in members:
-            if a.id != keeper.id:
-                await db.delete(a)
-                removed += 1
+            if a.id == keeper.id:
+                continue
+            # Conserver le LIEN QB sur l'achat gardé : si le doublon
+            # supprimé portait l'Id QB (Bill/Purchase/paiement) et pas le
+            # gardé, on le recopie → la case « QB » reste cochée et le
+            # re-pull ne recréera pas l'achat.
+            if not keeper.qbo_bill_id and a.qbo_bill_id:
+                keeper.qbo_bill_id = a.qbo_bill_id
+                keeper.qbo_sync_token = a.qbo_sync_token
+                keeper.qbo_doc_number = a.qbo_doc_number or keeper.qbo_doc_number
+            if not keeper.qbo_purchase_id and a.qbo_purchase_id:
+                keeper.qbo_purchase_id = a.qbo_purchase_id
+            if not keeper.qbo_bill_payment_id and a.qbo_bill_payment_id:
+                keeper.qbo_bill_payment_id = a.qbo_bill_payment_id
+            await db.delete(a)
+            removed += 1
     if removed:
         await db.flush()
         log.info("dedupe_achats: %d doublon(s) supprimé(s)", removed)
