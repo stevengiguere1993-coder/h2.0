@@ -330,6 +330,12 @@ async def pull_project_costs_from_qbo(
             await db.flush()
         stats["purchases_imported"] += 1
 
+    if not dry_run:
+        # Filet automatique : supprime tout doublon résiduel après import.
+        from app.services.achat_dedupe import dedupe_achats
+
+        stats["deduped"] = await dedupe_achats(db)
+
     if dry_run:
         # Scopé client : on montre TOUT (à importer / déjà importé / sans
         # projet). Global : seulement les lignes à importer (taille bornée).
