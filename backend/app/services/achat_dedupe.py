@@ -30,12 +30,14 @@ log = logging.getLogger(__name__)
 
 
 def _keeper_score(a: Achat) -> tuple:
-    """Plus haut = plus « riche » → à conserver. On garde l'achat
-    facturé / le plus complet (fournisseur, description, ventilation des
-    taxes), à défaut le plus ancien."""
+    """Plus haut = plus « riche » → à conserver. Règle voulue : on garde
+    l'achat PAYÉ qui porte le PLUS d'information sur la ligne (fournisseur,
+    description, ventilation des taxes). On préserve aussi en priorité un
+    achat déjà refacturé (facture_item) pour ne pas casser ce lien."""
     return (
-        1 if a.facture_item_id is not None else 0,
+        1 if a.facture_item_id is not None else 0,  # déjà refacturé → garder
         1 if a.invoiced_at is not None else 0,
+        1 if a.status == "paid" else 0,             # payé > non payé
         1 if a.fournisseur_id is not None else 0,
         1 if a.sous_traitant_id is not None else 0,
         1 if (a.description or "").strip() else 0,
