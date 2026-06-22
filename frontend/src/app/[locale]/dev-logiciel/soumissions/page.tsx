@@ -35,6 +35,7 @@ type Soumission = {
   total: number | null;
   status: string;
   sent_at: string | null;
+  opened_at: string | null;
   accepted_at: string | null;
   valid_until: string | null;
   pdf_url: string | null;
@@ -529,6 +530,18 @@ function SoumissionCard({
             </span>
           ) : null}
         </p>
+        {/* Accusé de lecture : le client a-t-il ouvert le lien public ? */}
+        {s.opened_at ? (
+          <p className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-violet-300">
+            <span className="h-1.5 w-1.5 rounded-full bg-violet-400" />
+            Ouverte par le client
+          </p>
+        ) : s.sent_at ? (
+          <p className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-white/35">
+            <span className="h-1.5 w-1.5 rounded-full bg-white/25" />
+            Pas encore ouverte
+          </p>
+        ) : null}
         {/* Numéro de la soumission, en bas — bumpé en text-xs pour
             la lisibilité. */}
         <div className="mt-1.5 flex items-center justify-between">

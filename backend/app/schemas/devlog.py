@@ -273,6 +273,10 @@ class DevlogSoumissionRead(BaseModel):
     # --- Envoi PDF + signature (vague 1) -----------------------------
     signature_token: Optional[str] = None
     sent_at: Optional[datetime] = None
+    # --- Accusé de lecture (le client a-t-il ouvert le lien ?) -------
+    opened_at: Optional[datetime] = None
+    last_opened_at: Optional[datetime] = None
+    open_count: int = 0
     signed_at: Optional[datetime] = None
     signed_name: Optional[str] = None
     signed_ip: Optional[str] = None

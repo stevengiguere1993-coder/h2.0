@@ -477,6 +477,18 @@ async def read_public_soumission(
     token: str, db: DBSession
 ) -> PublicSoumission:
     soumission = await _load_by_token(db, token)
+    # Accusé de lecture : on note la 1re ouverture du lien public, la
+    # dernière, et on incrémente le compteur. Best-effort — ne doit jamais
+    # empêcher l'affichage de la soumission au client.
+    try:
+        now = datetime.now(timezone.utc)
+        if getattr(soumission, "opened_at", None) is None:
+            soumission.opened_at = now
+        soumission.last_opened_at = now
+        soumission.open_count = int(getattr(soumission, "open_count", 0) or 0) + 1
+        await db.flush()
+    except Exception:  # noqa: BLE001
+        pass
     return await _to_public(db, soumission)
 
 

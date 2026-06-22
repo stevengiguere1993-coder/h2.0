@@ -71,6 +71,10 @@ type Soumission = {
   // Envoi PDF + signature publique (vague 1, mai 2026)
   signature_token: string | null;
   sent_at: string | null;
+  // Accusé de lecture (le client a-t-il ouvert le lien ?)
+  opened_at: string | null;
+  last_opened_at: string | null;
+  open_count: number;
   signed_at: string | null;
   signed_name: string | null;
   signed_ip: string | null;
@@ -1368,6 +1372,25 @@ export default function SoumissionDetailPage() {
                   <span className="rounded bg-blue-500/15 px-2 py-0.5 font-semibold text-blue-300">
                     Envoyée le{" "}
                     {new Date(s.sent_at).toLocaleDateString("fr-CA")}
+                  </span>
+                ) : null}
+                {s.opened_at ? (
+                  <span
+                    className="inline-flex items-center gap-1 rounded bg-violet-500/15 px-2 py-0.5 font-semibold text-violet-300"
+                    title={`Dernière ouverture : ${new Date(
+                      s.last_opened_at ?? s.opened_at
+                    ).toLocaleString("fr-CA")} · ${
+                      s.open_count ?? 1
+                    } ouverture(s)`}
+                  >
+                    <Eye className="h-3 w-3" />
+                    Ouverte le{" "}
+                    {new Date(s.opened_at).toLocaleDateString("fr-CA")}
+                  </span>
+                ) : s.sent_at ? (
+                  <span className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-0.5 font-semibold text-white/40">
+                    <EyeOff className="h-3 w-3" />
+                    Pas encore ouverte
                   </span>
                 ) : null}
                 {s.signed_at && s.status === "acceptee" ? (

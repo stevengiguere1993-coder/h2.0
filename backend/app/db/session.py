@@ -167,23 +167,10 @@ async def ensure_critical_columns() -> None:
         ("factures", "qbo_payment_id", "VARCHAR(64)"),
         # Id de la Purchase (dépense) QB importée comme Achat.
         ("achats", "qbo_purchase_id", "VARCHAR(64)"),
-        # Coût de main-d'œuvre poussé sur le projet QB (Purchase dédiée).
-        ("projects", "qbo_labour_purchase_id", "VARCHAR(64)"),
-        # Comptes QB pour la dépense de main-d'œuvre (coût + contrepartie).
-        ("qbo_account_maps", "labour_expense_account", "VARCHAR(255)"),
-        ("qbo_account_maps", "labour_clearing_account", "VARCHAR(255)"),
         ("voice_calls", "dial_state_json", "TEXT"),
         # Hub Automatisations : config éditable (cadence, etc.). La table
-        # a été créée sans ces colonnes au 1er déploiement → on les ajoute.
-        # Sans updated_at / updated_by_user_id, le PUT /qbo/auto-sync
-        # échoue (impossible d'activer l'interrupteur → il se redésactive).
+        # a été créée sans cette colonne au 1er déploiement → on l'ajoute.
         ("automation_settings", "config_json", "TEXT"),
-        (
-            "automation_settings",
-            "updated_at",
-            "TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()",
-        ),
-        ("automation_settings", "updated_by_user_id", "INTEGER"),
         # Bon de travail unifié : assignable + demande interne sans signature.
         ("bons_travail", "assignee_user_id", "INTEGER"),
         ("bons_travail", "requires_signature", "BOOLEAN NOT NULL DEFAULT true"),
@@ -205,6 +192,12 @@ async def ensure_critical_columns() -> None:
         # Archivage (colonne « Archivée » du tableau des soumissions) —
         # posé quand le projet lié est livré/terminé, ou à la main.
         ("soumissions", "archived_at", "TIMESTAMP WITH TIME ZONE"),
+        # Accusé de lecture des soumissions devlog (le client a-t-il ouvert
+        # le lien public ?). Colonnes ajoutées 2026-06 ; la table existait
+        # avant → create_all ne les pose pas.
+        ("devlog_soumissions", "opened_at", "TIMESTAMP WITH TIME ZONE"),
+        ("devlog_soumissions", "last_opened_at", "TIMESTAMP WITH TIME ZONE"),
+        ("devlog_soumissions", "open_count", "INTEGER NOT NULL DEFAULT 0"),
         ("bons_travail", "signature_token", "VARCHAR(64)"),
         ("bons_travail", "signed_at", "TIMESTAMP WITH TIME ZONE"),
         ("bons_travail", "signed_by_name", "VARCHAR(255)"),
