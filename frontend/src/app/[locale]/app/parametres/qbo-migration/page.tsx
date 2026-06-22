@@ -77,7 +77,7 @@ export default function QboMigrationPage() {
   const [clients, setClients] = useState<ClientLite[]>([]);
   const [clientId, setClientId] = useState("");
   const [busy, setBusy] = useState<
-    null | "report" | "migrate" | "pull-inv" | "pull-cost"
+    null | "report" | "migrate" | "pull-inv" | "pull-cost" | "reclass"
   >(null);
   const [report, setReport] = useState<Report | null>(null);
   const [result, setResult] = useState<MigrationResult | null>(null);
@@ -221,6 +221,43 @@ export default function QboMigrationPage() {
     }
   }
 
+  async function runReclass() {
+    const ok = await confirm({
+      title: "Ré-attribuer les projets dans QuickBooks ?",
+      description:
+        "Ré-pousse vers QuickBooks les factures (et factures fournisseurs) déjà liées à QB pour leur remettre le bon PROJET : revenu/coût rattaché au sous-client (Job) + classe = chantier. À utiliser quand des projets ont été créés APRÈS l'envoi des factures (revenu absent de l'onglet Projets, montants QB ≠ Kratos). Idempotent : aucun doublon, mise à jour seulement.",
+      confirmLabel: "Ré-attribuer",
+      destructive: false
+    });
+    if (!ok) return;
+    setBusy("reclass");
+    setError(null);
+    setResult(null);
+    setPullResult(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/qbo/reclass-projects${scopeQuery()}`,
+        { method: "POST" }
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as {
+        factures_repushed: number;
+        factures_failed: number;
+        achats_repushed: number;
+        achats_failed: number;
+        errors: string[];
+      };
+      setPullResult({
+        title: "Ré-attribution des projets (Kratos → QuickBooks)",
+        data: d as unknown as Record<string, unknown>
+      });
+    } catch (e) {
+      setError(`Ré-attribution échouée : ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function runMigration() {
     const scopeLabel = clientId
       ? `le client sélectionné`
@@ -346,6 +383,18 @@ export default function QboMigrationPage() {
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : null}
               Migrer ce dossier (réel)
+            </button>
+            <button
+              type="button"
+              onClick={() => void runReclass()}
+              disabled={busy !== null}
+              className="btn-secondary text-sm"
+              title="Ré-pousse les factures/coûts déjà dans QB pour leur remettre le bon projet (sous-client + classe). Idempotent."
+            >
+              {busy === "reclass" ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              Ré-attribuer les projets (QB)
             </button>
             <button
               type="button"

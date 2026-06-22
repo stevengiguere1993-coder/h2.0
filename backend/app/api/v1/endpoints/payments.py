@@ -247,12 +247,13 @@ async def create_payment(
     await _recompute_facture_status(db, fa)
     await db.flush()
     # Paiement enregistré dans Kratos → on le pousse vers QuickBooks
-    # (crée le Payment QB qui solde la facture). Fail-closed via
-    # l'interrupteur QBO auto-sync ; idempotent (qbo_payment_id). Lancé
-    # après le commit pour que le statut « payé » soit bien persisté.
-    from app.services.qbo_auto_sync import autopush_facture
+    # (crée le Payment QB qui solde la facture). Action DÉLIBÉRÉE sur UNE
+    # facture → push direct (PAS conditionné à l'interrupteur de migration ;
+    # sinon le paiement saisi n'arrivait jamais dans QB). Idempotent via
+    # qbo_invoice_id / qbo_payment_id.
+    from app.services.qbo_auto_sync import push_facture_now
 
-    background.add_task(autopush_facture, facture_id)
+    background.add_task(push_facture_now, facture_id)
     # Envoi optionnel de l'état de compte au client. On REND le PDF ici,
     # dans la session de la requête (le paiement est déjà flush → il
     # apparaît), puis on délègue seulement l'envoi SMTP à l'arrière-plan.
@@ -276,6 +277,7 @@ async def update_payment(
     payment_id: int,
     data: PaymentUpdate,
     db: DBSession,
+    background: BackgroundTasks,
     _: CurrentUser,
 ) -> PaymentRead:
     fa = await _ensure_facture(db, facture_id)
@@ -296,6 +298,11 @@ async def update_payment(
     await _recompute_facture_status(db, fa)
     await db.flush()
     await db.refresh(p)
+    # Reflète l'état à jour des paiements dans QB (push délibéré, non
+    # conditionné à l'interrupteur de migration).
+    from app.services.qbo_auto_sync import push_facture_now
+
+    background.add_task(push_facture_now, facture_id)
     return PaymentRead.model_validate(p)
 
 
