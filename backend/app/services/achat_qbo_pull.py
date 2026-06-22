@@ -413,5 +413,11 @@ async def pull_new_bills_from_qbo(
             stats["imported_paid"] += 1
 
     await db.flush()
+    # Filet automatique : supprime tout doublon (ex. achat saisi dans
+    # Kratos puis ré-importé). Garantit « 1 facture = 1 achat » sans
+    # action manuelle.
+    from app.services.achat_dedupe import dedupe_achats
+
+    stats["deduped"] = await dedupe_achats(db)
     log.info("QBO pull terminated: %s", stats)
     return stats
