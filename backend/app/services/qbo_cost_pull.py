@@ -205,6 +205,14 @@ async def pull_project_costs_from_qbo(
         paid = balance == 0
         vendor = (b.get("VendorRef") or {}).get("name")
         doc = str(b.get("DocNumber") or "")
+        if bid in existing_purchase and bid not in existing_bill:
+            # Garde symétrique : déjà présent via `qbo_purchase_id`.
+            stats["skipped_existing"] += 1
+            preview.append(
+                {"type": "bill", "qbo_id": bid, "amount": total,
+                 "vendor": vendor, "status": "deja_importe"}
+            )
+            continue
         if bid in existing_bill:
             # Déjà importé → on reflète seulement un PAIEMENT QB
             # (Bill soldé, balance 0) sur un achat pas encore payé.
@@ -271,7 +279,11 @@ async def pull_project_costs_from_qbo(
         total = _num(p.get("TotalAmt"))
         vendor = (p.get("EntityRef") or {}).get("name")
         doc = str(p.get("DocNumber") or "")
-        if pid in existing_purchase:
+        # Anti-doublon : un Achat poussé DEPUIS Kratos vers QB stocke
+        # l'Id de la Purchase dans `qbo_bill_id` (cf. achat_qbo.py), PAS
+        # dans `qbo_purchase_id`. On vérifie donc les DEUX champs, sinon
+        # la dépense ré-importée crée un doublon de l'achat d'origine.
+        if pid in existing_purchase or pid in existing_bill:
             stats["skipped_existing"] += 1
             preview.append(
                 {"type": "purchase", "qbo_id": pid, "amount": total,

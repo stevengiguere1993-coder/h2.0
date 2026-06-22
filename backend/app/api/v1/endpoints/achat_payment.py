@@ -15,6 +15,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 
 from app.api.deps import DBSession, RequireManager
 from app.models.achat import Achat, AchatStatus, PaymentMethod
@@ -146,3 +147,122 @@ async def sync_from_qbo(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
         )
     return QboPullResult(**stats)
+
+
+# ── Déduplication des achats ────────────────────────────────────────
+# Cas typique : un achat saisi dans Kratos est poussé vers QB (Bill /
+# Purchase) puis RÉ-IMPORTÉ par le pull → un 2e achat « QB » identique.
+# Dans le calcul de coût projet, les DEUX sont comptés → coût gonflé.
+class DedupeGroup(BaseModel):
+    key: str
+    reference: Optional[str] = None
+    fournisseur_id: Optional[int] = None
+    kept_id: int
+    removed_ids: list[int]
+
+
+class DedupeResult(BaseModel):
+    dry_run: bool
+    groups_found: int
+    duplicates_removed: int
+    details: list[DedupeGroup]
+
+
+def _keeper_score(a: Achat) -> tuple:
+    """Plus le score est haut, plus l'achat est « riche » → à conserver.
+    On garde celui qui est facturé / a une pièce jointe / un paiement QB,
+    et à défaut le plus ancien (id le plus petit)."""
+    return (
+        1 if a.facture_item_id is not None else 0,
+        1 if a.invoiced_at is not None else 0,
+        1 if a.has_receipt_image else 0,
+        1 if a.qbo_bill_payment_id else 0,
+        -a.id,  # tie-break : garder le plus ancien (id min)
+    )
+
+
+@router.post(
+    "/dedupe",
+    response_model=DedupeResult,
+    summary="Détecte (et supprime si confirm) les achats en double",
+)
+async def dedupe_achats(
+    db: DBSession,
+    _: RequireManager,
+    confirm: bool = False,
+) -> DedupeResult:
+    """Détecte les achats en double et, si ``confirm=true``, supprime les
+    redondants en gardant le plus complet (facturé / pièce jointe / le
+    plus ancien). PAR DÉFAUT (``confirm=false``) : APERÇU seul, rien n'est
+    supprimé.
+
+    Deux clés de regroupement, toutes deux sûres :
+      1. Même transaction QuickBooks — un Id présent dans ``qbo_bill_id``
+         OU ``qbo_purchase_id`` de plusieurs achats (cas saisie→QB→ré-import,
+         où l'Id de la Purchase poussée est stocké dans qbo_bill_id).
+      2. Même (fournisseur, n° de facture fournisseur) — un n° de facture
+         identifie un seul document fournisseur.
+    """
+    from collections import defaultdict
+
+    achats = list((await db.execute(select(Achat))).scalars().all())
+
+    grouped_ids: set[int] = set()
+    groups: list[tuple[str, list[Achat]]] = []
+
+    # 1) Même transaction QB (cross-champ qbo_bill_id / qbo_purchase_id).
+    by_qb: dict[str, dict[int, Achat]] = defaultdict(dict)
+    for a in achats:
+        for qid in (a.qbo_bill_id, a.qbo_purchase_id):
+            if qid:
+                by_qb[str(qid)][a.id] = a
+    for qid, members in by_qb.items():
+        if len(members) > 1:
+            groups.append((f"qb:{qid}", list(members.values())))
+            grouped_ids.update(members.keys())
+
+    # 2) Même (fournisseur, n° facture fournisseur) — pour les doublons
+    #    pas reliés par un Id QB. n° de facture vide → ignoré.
+    by_inv: dict[tuple, dict[int, Achat]] = defaultdict(dict)
+    for a in achats:
+        if a.id in grouped_ids:
+            continue
+        inv = (a.supplier_invoice_number or "").strip().lower()
+        if inv and a.fournisseur_id:
+            by_inv[(a.fournisseur_id, inv)][a.id] = a
+    for (fid, inv), members in by_inv.items():
+        if len(members) > 1:
+            groups.append((f"inv:{fid}:{inv}", list(members.values())))
+            grouped_ids.update(members.keys())
+
+    details: list[DedupeGroup] = []
+    removed = 0
+    for key, members in groups:
+        keeper = max(members, key=_keeper_score)
+        to_remove = [a for a in members if a.id != keeper.id]
+        if not to_remove:
+            continue
+        details.append(
+            DedupeGroup(
+                key=key,
+                reference=(
+                    keeper.supplier_invoice_number or keeper.reference
+                ),
+                fournisseur_id=keeper.fournisseur_id,
+                kept_id=keeper.id,
+                removed_ids=[a.id for a in to_remove],
+            )
+        )
+        removed += len(to_remove)
+        if confirm:
+            for a in to_remove:
+                await db.delete(a)
+    if confirm and removed:
+        await db.flush()
+
+    return DedupeResult(
+        dry_run=not confirm,
+        groups_found=len(details),
+        duplicates_removed=removed,
+        details=details,
+    )
