@@ -773,6 +773,20 @@ async def trigger_all_hourly(
 
     await _safe("calendar-feeds-sync", _run_calendar_sync, details)
 
+    # Déduplication des achats — TOUJOURS (pas de gating QB) : c'est une
+    # opération purement DB qui collapse les doublons (même réf + montant,
+    # même transaction QB). Indispensable car le pull QB qui la déclenchait
+    # est inerte quand l'auto-sync est OFF → sinon les doublons restent.
+    async def _run_achat_dedupe():
+        from app.services.achat_dedupe import dedupe_achats
+
+        async with AsyncSessionLocal() as db:
+            n = await dedupe_achats(db)
+            await db.commit()
+            return {"deduped": n}
+
+    await _safe("achat-dedupe", _run_achat_dedupe, details)
+
     # Import QB → Kratos (factures + coûts projet) à l'heure, pour une
     # synchro quasi temps réel. Inerte tant que l'interrupteur
     # `qbo_auto_sync` est OFF (fail-closed). Idempotent (clé = ID QBO).
