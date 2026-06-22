@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
-import { AddressInput } from "@/components/address-input";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useDevlogLayout } from "../../layout";
@@ -66,13 +65,10 @@ const STATUS_CLASS: Record<string, string> = {
 type TabId =
   | "summary"
   | "planification"
-  | "achats"
-  | "photos"
-  | "tasks"
-  | "finances"
+  | "members"
   | "recurring"
-  | "recap"
-  | "members";
+  | "achats"
+  | "finances";
 
 // Refonte Dev Logiciel 2026-05-25 — onglets dédiés au pôle, ré-alignés
 // sur la dualité « investissement initial / services récurrents » du
@@ -81,14 +77,11 @@ type TabId =
 // pour le MRR (DevlogProjectRecurringService).
 const TABS: { id: TabId; label: string; available: boolean }[] = [
   { id: "summary", label: "Résumé", available: true },
-  { id: "planification", label: "Phases du projet", available: true },
-  { id: "tasks", label: "Tâches", available: true },
+  { id: "planification", label: "Modules & échéancier", available: true },
   { id: "members", label: "Équipe", available: true },
-  { id: "achats", label: "Outils & licences", available: true },
-  { id: "photos", label: "Captures & documents", available: true },
-  { id: "finances", label: "Finances", available: true },
-  { id: "recurring", label: "Services récurrents", available: true },
-  { id: "recap", label: "Récap", available: true }
+  { id: "recurring", label: "Frais récurrents", available: true },
+  { id: "achats", label: "Frais imprévus", available: true },
+  { id: "finances", label: "Finances", available: true }
 ];
 
 function fmtMoney(n: number | string | null): string {
@@ -138,13 +131,10 @@ export default function ProjectDetailPage() {
     const valid: TabId[] = [
       "summary",
       "planification",
-      "achats",
-      "photos",
-      "tasks",
-      "finances",
+      "members",
       "recurring",
-      "recap",
-      "members"
+      "achats",
+      "finances"
     ];
     if (valid.includes(hash)) setTab(hash);
   }, []);
@@ -592,22 +582,16 @@ export default function ProjectDetailPage() {
                   saving={saving}
                   onSave={saveAll}
                 />
-              ) : tab === "tasks" ? (
-                <DevlogTasksTab projectId={id} />
               ) : tab === "finances" ? (
                 <DevlogFinancesTab projectId={id} />
               ) : tab === "members" ? (
                 <DevlogMembersTab projectId={id} />
               ) : tab === "planification" ? (
                 <DevlogPlanificationTab projectId={id} />
-              ) : tab === "photos" ? (
-                <DevlogPhotosTab projectId={id} />
               ) : tab === "achats" ? (
                 <DevlogAchatsTab projectId={id} />
               ) : tab === "recurring" ? (
                 <DevlogRecurringServicesTab projectId={id} />
-              ) : tab === "recap" ? (
-                <DevlogRecapTab projectId={id} />
               ) : null}
             </div>
           </>
@@ -902,55 +886,19 @@ function SummaryTab(props: {
               courriel).
             </p>
           </div>
-          <div>
-            <div className="flex items-center justify-between gap-2">
-              <label className="label" htmlFor="p_address">
-                Adresse du chantier
-              </label>
-              {(() => {
-                const selectedClient = props.clients.find(
-                  (c) => String(c.id) === props.clientId
-                );
-                const clientAddress = selectedClient?.address?.trim() || "";
-                if (!clientAddress) return null;
-                if (props.address.trim() === clientAddress) {
-                  return (
-                    <span className="text-[10px] uppercase tracking-wider text-emerald-400">
-                      ✓ Adresse du client
-                    </span>
-                  );
-                }
-                return (
-                  <button
-                    type="button"
-                    onClick={() => props.onAddress(clientAddress)}
-                    className="text-[10px] uppercase tracking-wider text-blue-300 underline decoration-dotted hover:text-blue-300"
-                    title={`Importer : ${clientAddress}`}
-                  >
-                    ↩ Utiliser l&apos;adresse du client
-                  </button>
-                );
-              })()}
-            </div>
-            <AddressInput
-              id="p_address"
-              value={props.address}
-              onChange={props.onAddress}
-            />
-            <p className="mt-1 text-[11px] text-white/50">
-              Adresse du chantier (peut différer de l&apos;adresse du
-              client). Tape pour autocomplete ou clique sur «&nbsp;Utiliser
-              l&apos;adresse du client&nbsp;» pour importer celle-ci.
-            </p>
-          </div>
         </div>
       </section>
 
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
-          Calendrier & budget
+          Calendrier
         </h2>
-        <div className="mt-4 grid gap-4 sm:grid-cols-3">
+        <p className="mt-1 text-[11px] text-white/40">
+          Le budget et les heures prévues sont importés automatiquement de
+          la soumission acceptée — détail par module dans l&apos;onglet
+          «&nbsp;Modules &amp; échéancier&nbsp;».
+        </p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
             <label className="label" htmlFor="p_start">Début</label>
             <input
@@ -971,53 +919,7 @@ function SummaryTab(props: {
               className="input"
             />
           </div>
-          <div>
-            <label className="label" htmlFor="p_budget">Budget (CAD)</label>
-            <input
-              id="p_budget"
-              type="number"
-              step="0.01"
-              min="0"
-              value={props.budget}
-              onChange={(e) => props.onBudget(e.target.value)}
-              className="input"
-            />
-          </div>
-          <div>
-            <label className="label" htmlFor="p_hours_override">
-              Heures main-d&apos;œuvre (override)
-            </label>
-            <input
-              id="p_hours_override"
-              type="number"
-              step="0.5"
-              min="0"
-              value={props.estimatedHoursOverride}
-              onChange={(e) =>
-                props.onEstimatedHoursOverride(e.target.value)
-              }
-              placeholder="Auto si vide"
-              className="input"
-            />
-            <p className="mt-1 text-[11px] text-white/40">
-              Laisse vide pour le calcul automatique (somme des phases ×
-              personnes assignées). Saisis un total pour forcer.
-            </p>
-          </div>
         </div>
-      </section>
-
-      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
-          Description des travaux
-        </h2>
-        <textarea
-          rows={4}
-          value={props.description}
-          onChange={(e) => props.onDescription(e.target.value)}
-          placeholder="Portée, contraintes, détails clés…"
-          className="input mt-3"
-        />
       </section>
 
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
@@ -6165,6 +6067,11 @@ type DevlogPhase = {
   start_date: string | null;
   end_date: string | null;
   status: string;
+  // Budget & heures importés de la soumission (refonte projet 2026-06).
+  source_module_id: number | null;
+  budget_cents: number;
+  heures_dev_prevues: number;
+  heures_manager_prevues: number;
   created_at: string;
   updated_at: string;
 };
@@ -6465,12 +6372,30 @@ function DevlogPlanificationTab({ projectId }: { projectId: number }) {
                       placeholder="Nom de la phase"
                     />
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-white/50">
+                      {ph.budget_cents > 0 ? (
+                        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-semibold text-emerald-300">
+                          {fmtMoney(ph.budget_cents / 100)}
+                        </span>
+                      ) : null}
+                      {ph.heures_dev_prevues > 0 ? (
+                        <span className="rounded bg-blue-500/15 px-1.5 py-0.5 font-semibold text-blue-300">
+                          {ph.heures_dev_prevues} h prévues
+                        </span>
+                      ) : null}
                       <span>
                         Durée :{" "}
                         <span className="text-white/70">
                           {durationLabel(ph.start_date, ph.end_date)}
                         </span>
                       </span>
+                      {ph.source_module_id ? (
+                        <span
+                          className="rounded bg-white/5 px-1.5 py-0.5 text-white/40"
+                          title="Importé d'un module de la soumission"
+                        >
+                          ↳ module
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                   <div className="grid w-full grid-cols-2 gap-2 sm:w-auto sm:grid-cols-[140px_140px_140px_auto]">
