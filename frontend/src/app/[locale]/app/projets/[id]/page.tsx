@@ -1766,9 +1766,10 @@ function RecapContractProgressCard({
   invoicedAmount: number;
   rabaisBilled?: number;
 }) {
-  // Avancement = part du contrat de BASE consommée par les coûts réels.
-  // L'idée : voir d'un coup d'œil si on a déjà brûlé 90 % du budget
-  // contracté en n'ayant fait que 60 % du job → signal d'alerte.
+  // Montant utilisé sur la soumission = part du total soumissionné (HT)
+  // déjà consommée par les coûts réels. L'idée : voir d'un coup d'œil si on
+  // a déjà brûlé 90 % du montant soumissionné → signal d'alerte. (Ce n'est
+  // PAS un avancement d'exécution du contrat, juste coût réel / soumission.)
   const pctSpent =
     contractRevenueExTax > 0
       ? Math.min(200, (actualCost / contractRevenueExTax) * 100)
@@ -1792,7 +1793,7 @@ function RecapContractProgressCard({
     <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
       <div className="flex items-center justify-between">
         <h3 className="text-[10px] uppercase tracking-wider text-white/50">
-          Avancement du contrat
+          Montant utilisé sur la soumission
         </h3>
         <span
           className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
@@ -2229,8 +2230,8 @@ function FinancesTab({
         </p>
       </div>
 
-      {/* Avancement du contrat — coût réel vs soumission acceptée
-          (synthèse importée du Récap). */}
+      {/* Montant utilisé sur la soumission — coût réel vs soumission
+          acceptée (synthèse importée du Récap). */}
       <RecapContractProgressCard
         actualCost={data.actual_total_cost_ht}
         contractRevenueExTax={data.projected_revenue_ex_tax}
