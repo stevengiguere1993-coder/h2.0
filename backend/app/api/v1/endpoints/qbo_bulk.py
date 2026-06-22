@@ -283,13 +283,14 @@ async def reclass_projects(
         fstmt = fstmt.where(Facture.client_id == client_id)
     facture_ids = [int(i) for i in (await db.execute(fstmt)).scalars().all()]
 
-    # Achats liés via un BILL QB (qbo_bill_id) → MAJ Class/Customer par
-    # sparse update propre. On EXCLUT les Purchases importés (qbo_purchase_id
-    # seul) : un re-push les recréerait en doublon (mode de paiement non
-    # mappé). Ceux-là restent à corriger côté QB.
+    # Achats d'un projet : on POUSSE vers QB ceux pas encore envoyés (QB = «—»)
+    # ET on met à jour ceux déjà liés via un Bill (Class/Customer). On EXCLUT
+    # seulement les Purchases IMPORTÉS de QB (qbo_purchase_id renseigné), dont
+    # un re-push créerait un doublon. sync_achat_to_qbo a sa propre garde
+    # anti-doublon (fournisseur + montant + date) pour les créations.
     astmt = select(Achat.id).where(
         Achat.project_id.is_not(None),
-        Achat.qbo_bill_id.is_not(None),
+        Achat.qbo_purchase_id.is_(None),
     )
     if client_id is not None:
         from app.models.project import Project as _Project
