@@ -25,6 +25,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Integer,
     LargeBinary,
     Numeric,
     String,
@@ -121,6 +122,17 @@ class DevlogSoumission(Base, TimestampUpdateMixin):
     # historique) et par l'audit interne.
     sent_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # Accusé de lecture : 1re ouverture du lien public par le client,
+    # dernière ouverture, et nombre total d'ouvertures.
+    opened_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_opened_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    open_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
     signed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
