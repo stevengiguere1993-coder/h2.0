@@ -216,6 +216,15 @@ def make_crud_router(
         prev_project_id = (
             getattr(obj, "project_id", None) if model is Punch else None
         )
+        # Capture pre-update project_id de l'Achat / Facture — si on
+        # (re)classe le document dans un projet, on doit pousser la mise à
+        # jour vers QB (CustomerRef = sous-client du projet, ClassRef =
+        # chantier) pour que le coût / revenu soit attribué au bon projet.
+        prev_doc_project_id = (
+            getattr(obj, "project_id", None)
+            if model in (Achat, Facture)
+            else None
+        )
         # Capture pre-update total Soumission — si le total change,
         # on propage au budget du projet lié pour que la kanban, le
         # header projet (« Budget » pill) et le champ « Budget (CAD) »
@@ -266,7 +275,24 @@ def make_crud_router(
                 )
         if model is Achat:
             new_status = getattr(obj, "status", None)
-            if prev_status != "received" and new_status == "received":
+            new_proj = getattr(obj, "project_id", None)
+            # Push QB si : (a) l'achat passe « received » (1ʳᵉ sync), OU
+            # (b) on le (re)classe dans un autre projet (met à jour le
+            # CustomerRef/ClassRef du Bill/Purchase QB existant).
+            became_received = (
+                prev_status != "received" and new_status == "received"
+            )
+            project_changed = new_proj != prev_doc_project_id
+            # Garde anti-doublon : un achat IMPORTÉ de QB comme Purchase ne
+            # porte que `qbo_purchase_id` (pas `qbo_bill_id`) et un mode de
+            # paiement non mappé → un re-push le recréerait en Bill doublon.
+            # On ne re-pousse sur changement de projet que les achats sans
+            # lien QB (création propre) ou liés via `qbo_bill_id`
+            # (mise à jour sparse propre).
+            safe_for_repush = bool(getattr(obj, "qbo_bill_id", None)) or not (
+                getattr(obj, "qbo_purchase_id", None)
+            )
+            if became_received or (project_changed and safe_for_repush):
                 import asyncio
 
                 from app.api.v1.endpoints.achat_qbo import autopush_achat
@@ -310,6 +336,25 @@ def make_crud_router(
             ):
                 obj.issued_at = datetime.now(timezone.utc)
                 await db.flush()
+            # (Re)classement dans un projet → on pousse vers QB pour
+            # rattacher le REVENU au bon projet (CustomerRef = sous-client,
+            # ClassRef = chantier). Push délibéré (non conditionné à
+            # l'interrupteur de migration). On ne pousse que si la facture
+            # est déjà dans QB (qbo_invoice_id) OU sortie de brouillon, pour
+            # ne pas créer une Invoice à partir d'un brouillon.
+            new_proj = getattr(obj, "project_id", None)
+            already_in_qbo = bool(getattr(obj, "qbo_invoice_id", None))
+            if (
+                new_proj != prev_doc_project_id
+                and (obj.status or "") not in ("draft", "void")
+                and (already_in_qbo or new_proj is not None)
+            ):
+                await db.flush()
+                import asyncio
+
+                from app.services.qbo_auto_sync import push_facture_now
+
+                asyncio.create_task(push_facture_now(int(obj.id)))
         return read_schema.model_validate(obj)
 
     @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)

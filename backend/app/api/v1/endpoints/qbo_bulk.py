@@ -136,6 +136,87 @@ async def bulk_sync(
         )
 
 
+@router.post("/reclass-projects")
+async def reclass_projects(
+    db: DBSession,
+    _: RequireAdminOrOwner,
+    client_id: Optional[int] = Query(
+        default=None,
+        description="Limiter à un client. Vide = toutes les factures.",
+    ),
+) -> dict:
+    """Ré-attribue dans QuickBooks les factures (et coûts) déjà liés à QB
+    au bon PROJET — CustomerRef = sous-client (Job), ClassRef = chantier.
+
+    Utile quand des projets ont été créés APRÈS l'envoi des factures : les
+    Invoices QB pointaient sur le client parent (sans classe), donc le
+    revenu n'apparaissait pas dans l'onglet Projets et les montants QB ≠
+    Kratos. Ré-pousse chaque enregistrement (sparse update idempotent —
+    aucune création de doublon). Ne touche QUE les enregistrements ayant à
+    la fois un projet ET un id QB.
+    """
+    from app.models.achat import Achat
+    from app.models.facture import Facture
+    from app.services.achat_qbo import AchatSyncError, sync_achat_to_qbo
+    from app.services.facture_qbo import FactureSyncError, sync_facture_to_qbo
+
+    out = {
+        "factures_repushed": 0,
+        "factures_failed": 0,
+        "achats_repushed": 0,
+        "achats_failed": 0,
+        "errors": [],
+    }
+
+    # Factures déjà dans QB et rattachées à un projet → MAJ Class/Customer.
+    fstmt = select(Facture).where(
+        Facture.project_id.is_not(None),
+        Facture.qbo_invoice_id.is_not(None),
+    )
+    if client_id is not None:
+        fstmt = fstmt.where(Facture.client_id == client_id)
+    for fa in (await db.execute(fstmt)).scalars().all():
+        try:
+            await sync_facture_to_qbo(db, int(fa.id))
+            await db.commit()
+            out["factures_repushed"] += 1
+        except (FactureSyncError, Exception) as exc:  # noqa: BLE001
+            await db.rollback()
+            out["factures_failed"] += 1
+            if len(out["errors"]) < 20:
+                out["errors"].append(f"facture {fa.id}: {str(exc)[:160]}")
+
+    # Achats liés via un BILL QB (qbo_bill_id) → MAJ Class/Customer par
+    # sparse update propre. On EXCLUT les Purchases importés (qbo_purchase_id
+    # seul) : un re-push les recréerait en doublon (mode de paiement non
+    # mappé). Ceux-là restent à corriger côté QB.
+    astmt = select(Achat).where(
+        Achat.project_id.is_not(None),
+        Achat.qbo_bill_id.is_not(None),
+    )
+    if client_id is not None:
+        from app.models.project import Project as _Project
+
+        proj_ids = (
+            await db.execute(
+                select(_Project.id).where(_Project.client_id == client_id)
+            )
+        ).scalars().all()
+        astmt = astmt.where(Achat.project_id.in_(list(proj_ids) or [-1]))
+    for ach in (await db.execute(astmt)).scalars().all():
+        try:
+            await sync_achat_to_qbo(db, int(ach.id))
+            await db.commit()
+            out["achats_repushed"] += 1
+        except (AchatSyncError, Exception) as exc:  # noqa: BLE001
+            await db.rollback()
+            out["achats_failed"] += 1
+            if len(out["errors"]) < 40:
+                out["errors"].append(f"achat {ach.id}: {str(exc)[:160]}")
+
+    return out
+
+
 @router.post("/reset-links")
 async def reset_links_endpoint(
     db: DBSession,

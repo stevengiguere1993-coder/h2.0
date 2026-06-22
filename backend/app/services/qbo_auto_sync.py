@@ -41,6 +41,19 @@ async def is_qbo_auto_sync_enabled() -> bool:
 async def autopush_facture(facture_id: int) -> None:
     if not await is_qbo_auto_sync_enabled():
         return
+    await push_facture_now(facture_id)
+
+
+async def push_facture_now(facture_id: int) -> None:
+    """Push DÉLIBÉRÉ d'une facture vers QB — PAS conditionné à
+    l'interrupteur de migration `qbo_auto_sync`.
+
+    Sert aux actions explicites de l'utilisateur sur UNE facture précise :
+    enregistrement d'un paiement, rattachement à un projet. Ce ne sont pas
+    des créations de masse (migration), donc on les reflète TOUJOURS dans
+    QuickBooks. Idempotent : `qbo_invoice_id` / `qbo_payment_id` évitent
+    tout doublon (création la 1ʳᵉ fois, mise à jour ensuite).
+    """
     try:
         from app.services.facture_qbo import sync_facture_to_qbo
 
@@ -48,7 +61,7 @@ async def autopush_facture(facture_id: int) -> None:
             await sync_facture_to_qbo(db, facture_id)
             await db.commit()
     except Exception as exc:  # noqa: BLE001
-        log.warning("autopush facture %s: %s", facture_id, exc)
+        log.warning("push_facture_now %s: %s", facture_id, exc)
 
 
 async def autopush_soumission(soumission_id: int) -> None:

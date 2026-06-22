@@ -95,6 +95,7 @@ def _build_invoice_payload(
     facture: Facture,
     customer_id: str,
     lines: list[Dict[str, Any]],
+    class_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
     existing_invoice_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -126,12 +127,26 @@ def _build_invoice_payload(
             }
         ]
 
+    # Classe = chantier (projet). On la pose sur CHAQUE ligne (comme les
+    # coûts) pour que le suivi par classe / l'onglet Projets QB attribue le
+    # revenu au bon projet, quel que soit le réglage « une classe par
+    # opération / par ligne » de la compagnie.
+    if class_id:
+        for line in lines:
+            detail = line.get("SalesItemLineDetail")
+            if isinstance(detail, dict):
+                detail["ClassRef"] = {"value": str(class_id)}
+
     payload: Dict[str, Any] = {
         "CustomerRef": {"value": str(customer_id)},
         "DocNumber": facture.reference[:21],
         "TxnDate": date.today().isoformat(),
         "Line": lines,
     }
+    if class_id:
+        # Repli : aussi au niveau transaction si la compagnie est en mode
+        # « une classe pour toute l'opération ».
+        payload["ClassRef"] = {"value": str(class_id)}
     if facture.due_at:
         payload["DueDate"] = facture.due_at.date().isoformat()
 
@@ -342,6 +357,21 @@ async def sync_facture_to_qbo(
             "La facture doit être liée à un client avant d'être envoyée dans QBO."
         )
 
+    # Projet rattaché : la facture doit pointer vers le SOUS-CLIENT (Job)
+    # du projet pour que le REVENU apparaisse dans l'onglet Projets de QB
+    # (et non sur le client parent → projet à 0 $). On porte aussi la
+    # CLASSE = chantier, comme les coûts. C'est ce rattachement qui manquait
+    # et qui faisait diverger revenu QB / Kratos.
+    project = None
+    if fa.project_id:
+        from app.models.project import Project
+
+        project = (
+            await db.execute(
+                select(Project).where(Project.id == fa.project_id)
+            )
+        ).scalar_one_or_none()
+
     try:
         customer = await qbo.ensure_customer(
             display_name=client.name,
@@ -353,13 +383,38 @@ async def sync_facture_to_qbo(
         if not customer_id:
             raise FactureSyncError("QBO customer creation did not return an Id.")
 
+        # CustomerRef de la facture = sous-client (Job) du projet si relié,
+        # sinon le client parent. ClassRef = adresse (ou nom) du chantier.
+        invoice_customer_id = customer_id
+        class_id: Optional[str] = None
+        if project is not None:
+            if getattr(project, "qbo_job_id", None):
+                invoice_customer_id = str(project.qbo_job_id)
+            class_name = (
+                (getattr(project, "address", None) or "").strip()
+                or (project.name or "").strip()
+            )
+            if class_name:
+                try:
+                    klass = await qbo.ensure_class(name=class_name)
+                    class_id = (
+                        str(klass.get("Id"))
+                        if klass and klass.get("Id")
+                        else None
+                    )
+                except QuickBooksError as exc:
+                    log.warning(
+                        "QBO ensure_class facture %s: %s", fa.id, exc
+                    )
+
         lines = await _build_lines(
             qbo, items, fallback_name=fa.reference
         )
         payload = _build_invoice_payload(
             facture=fa,
-            customer_id=customer_id,
+            customer_id=invoice_customer_id,
             lines=lines,
+            class_id=class_id,
             existing_invoice_id=fa.qbo_invoice_id,
             existing_sync_token=fa.qbo_sync_token,
         )
