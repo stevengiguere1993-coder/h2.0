@@ -8,7 +8,16 @@ travail de développement est suivi comme un projet : statut,
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, ForeignKey, String, Text, event
+from sqlalchemy import (
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    event,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -49,6 +58,26 @@ class DevlogProject(Base, TimestampUpdateMixin):
     )
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    # --- Budget & heures importés de la soumission acceptée -----------
+    # Snapshot posé à l'auto-import (refonte projet 2026-06). ``budget_cents``
+    # = total de l'investissement initial (prix client one-shot), somme des
+    # budgets de phase. Les heures prévues servent au suivi prévu vs réel.
+    # ``taux_horaire_defaut`` = taux dev de la soumission, repère pour
+    # valoriser les heures réelles (remplace le 75 $/h codé en dur).
+    budget_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    heures_dev_prevues: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
+    heures_manager_prevues: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
+    taux_horaire_defaut: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Horodatage du démarrage effectif. Posé automatiquement par le
     # service ``devlog_project_provision.start_project_from_contract``

@@ -44,7 +44,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.devlog_client import DevlogClient
@@ -57,6 +57,7 @@ from app.models.devlog_project_recurring_service import (
 from app.models.devlog_project_task import DevlogProjectTask
 from app.models.devlog_soumission import DevlogSoumission
 from app.models.devlog_soumission_item import DevlogSoumissionItem
+from app.models.devlog_soumission_module import DevlogSoumissionModule
 from app.models.devlog_soumission_section import DevlogSoumissionSection
 from app.services.audit import log_action
 
@@ -234,6 +235,182 @@ async def _create_recurring_service_from_item(
     return svc
 
 
+async def _build_planning_from_modules(
+    db: AsyncSession,
+    project: DevlogProject,
+    soumission: DevlogSoumission,
+    items: list[DevlogSoumissionItem],
+    modules: list[DevlogSoumissionModule],
+) -> tuple[int, int, int]:
+    """Mode devis_dev avec MODULES : auto-import structuré.
+
+    Crée UNE phase par module sélectionné (budget = prix client, heures
+    prévues dev/manager figées), une phase agrégée pour les fonctionnalités
+    directes + frais fixes, et les services récurrents au PRIX CLIENT. Pose
+    aussi le budget total + les heures prévues + le taux repère sur le
+    projet. Retourne ``(nb_phases, 0, nb_recurring)``.
+    """
+    from app.services.devlog_devis_calc import compute_devis
+
+    devis = compute_devis(soumission, items, modules)
+    initial = devis.get("initial", {}) or {}
+    is_delivered = project.delivered_at is not None
+
+    nb_phases = 0
+    nb_recurring = 0
+    pos = 0
+    total_heures_dev = 0.0
+    total_heures_manager = 0.0
+
+    async def _add_phase(name, budget_dollars, hdev, hmgr, source_module_id):
+        nonlocal nb_phases, pos
+        phase = DevlogProjectPhase(
+            project_id=project.id,
+            name=(name or "Module")[:255] or "Module",
+            position=pos,
+            status="planifie",
+            source_module_id=source_module_id,
+            budget_cents=max(0, int(round(float(budget_dollars or 0.0) * 100.0))),
+            heures_dev_prevues=float(hdev or 0.0),
+            heures_manager_prevues=float(hmgr or 0.0),
+        )
+        db.add(phase)
+        await db.flush()
+        await db.refresh(phase)
+        nb_phases += 1
+        pos += 1
+        await log_action(
+            db,
+            user=None,
+            action="devlog_phase_auto_created",
+            entity_type="devlog_project_phase",
+            entity_id=phase.id,
+            details={
+                "project_id": project.id,
+                "name": phase.name,
+                "source_module_id": source_module_id,
+                "budget_cents": phase.budget_cents,
+                "heures_dev_prevues": phase.heures_dev_prevues,
+            },
+        )
+
+    # 1. Une phase par module sélectionné (inclut les offerts : scope réel).
+    for m in initial.get("modules", []) or []:
+        if not m.get("selected"):
+            continue
+        hdev = float(m.get("total_heures_dev") or 0.0)
+        hmgr = float(m.get("total_heures_manager") or 0.0)
+        budget = float(m.get("prix_client") or 0.0)
+        if hdev <= 0 and hmgr <= 0 and budget <= 0:
+            continue
+        total_heures_dev += hdev
+        total_heures_manager += hmgr
+        await _add_phase(
+            (m.get("name") or "Module").strip(), budget, hdev, hmgr, m.get("id")
+        )
+
+    # 2. Fonctionnalités directes (sans module) + frais fixes → phase agrégée.
+    direct = [
+        f
+        for f in (initial.get("features_client") or [])
+        if f.get("module_id") is None and not f.get("offert")
+    ]
+    fixed = initial.get("frais_fixes_client") or []
+    direct_budget = sum(
+        float(f.get("prix_client") or 0.0) for f in direct
+    ) + sum(float(ff.get("prix_client") or 0.0) for ff in fixed)
+    direct_heures = sum(float(f.get("heures") or 0.0) for f in direct)
+    if direct or fixed:
+        total_heures_dev += direct_heures
+        await _add_phase(
+            "Fonctionnalités directes & mise en place",
+            direct_budget,
+            direct_heures,
+            0.0,
+            None,
+        )
+
+    # 3. Services récurrents au PRIX CLIENT (coût interne × (1 + marge réc)).
+    marge_rec = (
+        float(getattr(soumission, "marge_recurrente_pct", None) or 0.0) / 100.0
+    )
+    for it in items:
+        if getattr(it, "item_kind", None) != "recurring_cost":
+            continue
+        cost = float(it.cost_per_unit or 0.0)
+        client_monthly = cost * (1.0 + marge_rec)
+        name = (it.description or "Service récurrent").strip()[:255]
+        svc = DevlogProjectRecurringService(
+            project_id=project.id,
+            name=name or "Service récurrent",
+            monthly_amount_cents=max(0, int(round(client_monthly * 100.0))),
+            status=("active" if is_delivered else "pending"),
+            start_date=(
+                project.delivered_at.date()
+                if (is_delivered and project.delivered_at)
+                else None
+            ),
+            source_soumission_item_id=it.id,
+        )
+        db.add(svc)
+        await db.flush()
+        await db.refresh(svc)
+        nb_recurring += 1
+        await log_action(
+            db,
+            user=None,
+            action="devlog_project_recurring_service.auto_created",
+            entity_type="devlog_project_recurring_service",
+            entity_id=svc.id,
+            details={
+                "project_id": project.id,
+                "source_item_id": it.id,
+                "monthly_amount_cents": svc.monthly_amount_cents,
+                "client_price": True,
+            },
+        )
+
+    # 4. Totaux projet (budget one-shot + heures prévues + taux repère).
+    total_final = float(initial.get("total_final") or 0.0)
+    project.budget_cents = max(0, int(round(total_final * 100.0)))
+    project.heures_dev_prevues = round(total_heures_dev, 2)
+    project.heures_manager_prevues = round(total_heures_manager, 2)
+    taux = float(getattr(soumission, "taux_dev_horaire", None) or 0.0)
+    if taux > 0:
+        project.taux_horaire_defaut = taux
+    await db.flush()
+
+    return nb_phases, 0, nb_recurring
+
+
+async def build_planning_for_project(
+    db: AsyncSession, project: DevlogProject, *, user=None
+) -> tuple[int, int, int]:
+    """Génère le planning d'un projet depuis sa soumission. IDEMPOTENT :
+    no-op si le projet a déjà des phases ou n'a pas de soumission. Utilisé
+    à l'ACCEPTATION (pour peupler le projet tout de suite) et réutilisable
+    pour un re-sync. Retourne ``(nb_phases, nb_tasks, nb_recurring)``."""
+    if project.soumission_id is None:
+        return 0, 0, 0
+    existing = (
+        await db.execute(
+            select(func.count())
+            .select_from(DevlogProjectPhase)
+            .where(DevlogProjectPhase.project_id == project.id)
+        )
+    ).scalar_one()
+    if existing and int(existing) > 0:
+        return 0, 0, 0
+    soumission, sections, items = await _load_soumission_with_planning(
+        db, project.soumission_id
+    )
+    if soumission is None:
+        return 0, 0, 0
+    return await _build_planning_from_soumission(
+        db, project, soumission, sections, items
+    )
+
+
 async def _build_planning_from_soumission(
     db: AsyncSession,
     project: DevlogProject,
@@ -257,6 +434,26 @@ async def _build_planning_from_soumission(
     nb_recurring = 0
 
     is_delivered = project.delivered_at is not None
+
+    # Refonte projet 2026-06 : mode devis_dev AVEC modules → import
+    # structuré (une phase par module, budget + heures figés). Sinon, on
+    # garde la logique sections/items historique ci-dessous.
+    if soumission is not None and getattr(soumission, "is_devis_dev", False):
+        modules = list(
+            (
+                await db.execute(
+                    select(DevlogSoumissionModule).where(
+                        DevlogSoumissionModule.soumission_id == soumission.id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if modules:
+            return await _build_planning_from_modules(
+                db, project, soumission, items, modules
+            )
 
     # Index pour retrouver la section parente d'un item rapidement.
     section_by_id: dict[int, DevlogSoumissionSection] = {

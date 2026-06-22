@@ -9,7 +9,7 @@ l'ordonnancement manuel.
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import Date, ForeignKey, Integer, String, Text
+from sqlalchemy import Date, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -40,6 +40,26 @@ class DevlogProjectPhase(Base, TimestampUpdateMixin):
         default="planifie",
         server_default="planifie",
         index=True,
+    )
+
+    # --- Snapshot du chiffrage (refonte projet 2026-06) ---------------
+    # Une phase correspond souvent à un MODULE de la soumission acceptée :
+    # on fige ici son budget (prix client) et ses heures prévues pour que
+    # le projet porte l'info sans dépendre de la soumission (qui peut être
+    # modifiée). NULL/0 pour une phase créée manuellement.
+    source_module_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("devlog_soumission_modules.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    budget_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    heures_dev_prevues: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
+    heures_manager_prevues: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
     )
 
     def __repr__(self) -> str:
