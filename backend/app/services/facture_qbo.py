@@ -418,11 +418,11 @@ async def sync_facture_to_qbo(
             "La facture doit être liée à un client avant d'être envoyée dans QBO."
         )
 
-    # Modèle QB du client : c'est le CLIENT PARENT qui est FACTURÉ
-    # (CustomerRef = parent), et le PROJET (sous-client converti en projet)
-    # est porté en CLASSE sur les lignes d'opération. On ne met donc PAS le
-    # Job en CustomerRef (sinon la facture/le paiement ne se rattachent pas
-    # au bon endroit). La classe suffit à ventiler le revenu par projet.
+    # Modèle QB : la facture est rattachée au PROJET (sous-client converti
+    # en projet QB, ex. « 30 Boul. Quévillon — Projet de Gabrielle Lauzon »).
+    # CustomerRef = qbo_job_id du projet → le revenu apparaît dans l'onglet
+    # Projets et roule sous le client parent. À défaut de projet relié, on
+    # facture le client parent. On porte aussi la CLASSE = chantier.
     project = None
     if fa.project_id:
         from app.models.project import Project
@@ -444,9 +444,13 @@ async def sync_facture_to_qbo(
         if not customer_id:
             raise FactureSyncError("QBO customer creation did not return an Id.")
 
-        # CustomerRef = client PARENT. ClassRef = chantier (projet).
+        # CustomerRef = PROJET (sous-client) si relié, sinon client parent.
+        # ClassRef = chantier (adresse / nom du projet).
+        invoice_customer_id = customer_id
         class_id: Optional[str] = None
         if project is not None:
+            if getattr(project, "qbo_job_id", None):
+                invoice_customer_id = str(project.qbo_job_id)
             class_name = (
                 (getattr(project, "address", None) or "").strip()
                 or (project.name or "").strip()
@@ -487,7 +491,7 @@ async def sync_facture_to_qbo(
         )
         payload = _build_invoice_payload(
             facture=fa,
-            customer_id=customer_id,
+            customer_id=invoice_customer_id,
             lines=lines,
             class_id=class_id,
             existing_invoice_id=fa.qbo_invoice_id,
