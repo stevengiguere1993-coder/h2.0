@@ -38,9 +38,11 @@ def _now_iso() -> str:
 
 
 async def _worker_push_payments(facture_ids: list[int]) -> None:
-    """Pousse en arrière-plan chaque facture (→ ses paiements) vers QB."""
+    """Pousse en arrière-plan les PAIEMENTS de chaque facture vers QB —
+    sans re-pousser le corps de la facture (fiable même sur facture migrée).
+    """
     from app.db.session import AsyncSessionLocal
-    from app.services.facture_qbo import sync_facture_to_qbo
+    from app.services.facture_qbo import push_facture_payments_only
 
     st = _BACKFILL.get("payments")
     if st is None:
@@ -48,7 +50,7 @@ async def _worker_push_payments(facture_ids: list[int]) -> None:
     for fid in facture_ids:
         try:
             async with AsyncSessionLocal() as s:
-                await sync_facture_to_qbo(s, fid)
+                await push_facture_payments_only(s, fid)
                 await s.commit()
             st["processed"] += 1
         except Exception as exc:  # noqa: BLE001
