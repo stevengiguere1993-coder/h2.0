@@ -121,6 +121,11 @@ async def pull_invoices_from_qbo(
     # Refs QB du client (parent + sous-clients) : sert à NE GARDER que
     # les transactions de ce client dans l'aperçu détaillé.
     client_refs: Optional[set[str]] = None
+    parent_customer_id: Optional[str] = None
+    # Repli mono-projet : si le client n'a QU'UN projet relié, on peut
+    # rattacher à ce projet une facture QB émise au PARENT (et non au
+    # sous-client) — sinon on ne saurait pas à quel projet l'imputer.
+    sole_project: Optional[Project] = None
     if client_id is not None:
         from app.models.client import Client
 
@@ -129,7 +134,10 @@ async def pull_invoices_from_qbo(
         ).scalar_one_or_none()
         client_refs = set(proj_by_job.keys())
         if client and client.qbo_customer_id:
-            client_refs.add(str(client.qbo_customer_id))
+            parent_customer_id = str(client.qbo_customer_id)
+            client_refs.add(parent_customer_id)
+        if len(proj_by_job) == 1:
+            sole_project = next(iter(proj_by_job.values()))
 
     # Index des paiements QB par facture (pour le miroir par virement) +
     # garde anti-doublon des virements déjà reflétés dans Kratos.
@@ -222,6 +230,10 @@ async def pull_invoices_from_qbo(
             continue
 
         proj = proj_by_job.get(cref)
+        if proj is None and sole_project is not None and cref == parent_customer_id:
+            # Facture émise au client PARENT et client mono-projet → on
+            # l'impute à son unique projet (sinon « sans projet »).
+            proj = sole_project
         if proj is None:
             # RÈGLE : pas de projet rattaché → on n'importe pas.
             stats["skipped_no_project"] += 1

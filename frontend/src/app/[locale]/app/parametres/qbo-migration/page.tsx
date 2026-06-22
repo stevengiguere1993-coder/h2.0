@@ -176,8 +176,10 @@ export default function QboMigrationPage() {
     setResult(null);
     try {
       const path = kind === "invoices" ? "pull-invoices" : "pull-costs";
+      // Fenêtre large (10 ans) : sinon l'import ignore silencieusement les
+      // factures/coûts QB plus vieux que 180 jours.
       const r = await authedFetch(
-        `/api/v1/qbo/${path}?dry_run=${dryRun ? "true" : "false"}${
+        `/api/v1/qbo/${path}?dry_run=${dryRun ? "true" : "false"}&since_days=3650${
           clientId ? `&client_id=${clientId}` : ""
         }`,
         { method: "POST" }
