@@ -32,6 +32,8 @@ class QboAccountMapRead(BaseModel):
     cc_michael_account: Optional[str] = None
     cc_olivier_account: Optional[str] = None
     cc_christian_account: Optional[str] = None
+    labour_expense_account: Optional[str] = None
+    labour_clearing_account: Optional[str] = None
 
 
 class QboAccountMapUpdate(BaseModel):
@@ -41,6 +43,8 @@ class QboAccountMapUpdate(BaseModel):
     cc_michael_account: Optional[str] = Field(default=None, max_length=255)
     cc_olivier_account: Optional[str] = Field(default=None, max_length=255)
     cc_christian_account: Optional[str] = Field(default=None, max_length=255)
+    labour_expense_account: Optional[str] = Field(default=None, max_length=255)
+    labour_clearing_account: Optional[str] = Field(default=None, max_length=255)
 
 
 async def _ensure_row(db) -> QboAccountMap:

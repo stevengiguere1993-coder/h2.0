@@ -63,12 +63,16 @@ async def _worker_push_payments(facture_ids: list[int]) -> None:
 
 
 async def _worker_reclass(
-    facture_ids: list[int], achat_ids: list[int]
+    facture_ids: list[int],
+    achat_ids: list[int],
+    labour_project_ids: list[int] | None = None,
 ) -> None:
-    """Ré-attribue en arrière-plan factures puis achats au bon projet QB."""
+    """Ré-attribue en arrière-plan factures, achats, puis pousse le coût de
+    main-d'œuvre par projet au bon projet QB."""
     from app.db.session import AsyncSessionLocal
     from app.services.achat_qbo import sync_achat_to_qbo
     from app.services.facture_qbo import sync_facture_to_qbo
+    from app.services.labour_qbo import sync_project_labour_to_qbo
 
     st = _BACKFILL.get("reclass")
     if st is None:
@@ -94,6 +98,17 @@ async def _worker_reclass(
             st["failed"] += 1
             if len(st["errors"]) < 40:
                 st["errors"].append(f"achat {aid}: {str(exc)[:160]}")
+        st["updated_at"] = _now_iso()
+    for pid in labour_project_ids or []:
+        try:
+            async with AsyncSessionLocal() as s:
+                await sync_project_labour_to_qbo(s, pid)
+                await s.commit()
+            st["processed"] += 1
+        except Exception as exc:  # noqa: BLE001
+            st["failed"] += 1
+            if len(st["errors"]) < 40:
+                st["errors"].append(f"main-d'œuvre projet {pid}: {str(exc)[:160]}")
         st["updated_at"] = _now_iso()
     st["running"] = False
     st["updated_at"] = _now_iso()
@@ -303,15 +318,27 @@ async def reclass_projects(
         astmt = astmt.where(Achat.project_id.in_(list(proj_ids) or [-1]))
     achat_ids = [int(i) for i in (await db.execute(astmt)).scalars().all()]
 
+    # Projets (reliés à un Job QB) dont on pousse le COÛT DE MAIN-D'ŒUVRE.
+    from app.models.project import Project as _Proj
+
+    lstmt = select(_Proj.id).where(_Proj.qbo_job_id.is_not(None))
+    if client_id is not None:
+        lstmt = lstmt.where(_Proj.client_id == client_id)
+    labour_project_ids = [
+        int(i) for i in (await db.execute(lstmt)).scalars().all()
+    ]
+
     _BACKFILL["reclass"] = {
         "running": True,
-        "total": len(facture_ids) + len(achat_ids),
+        "total": len(facture_ids) + len(achat_ids) + len(labour_project_ids),
         "processed": 0,
         "failed": 0,
         "errors": [],
         "updated_at": _now_iso(),
     }
-    background.add_task(_worker_reclass, facture_ids, achat_ids)
+    background.add_task(
+        _worker_reclass, facture_ids, achat_ids, labour_project_ids
+    )
     return {"started": True, **_BACKFILL["reclass"]}
 
 

@@ -167,6 +167,11 @@ async def ensure_critical_columns() -> None:
         ("factures", "qbo_payment_id", "VARCHAR(64)"),
         # Id de la Purchase (dépense) QB importée comme Achat.
         ("achats", "qbo_purchase_id", "VARCHAR(64)"),
+        # Coût de main-d'œuvre poussé sur le projet QB (Purchase dédiée).
+        ("projects", "qbo_labour_purchase_id", "VARCHAR(64)"),
+        # Comptes QB pour la dépense de main-d'œuvre (coût + contrepartie).
+        ("qbo_account_maps", "labour_expense_account", "VARCHAR(255)"),
+        ("qbo_account_maps", "labour_clearing_account", "VARCHAR(255)"),
         ("voice_calls", "dial_state_json", "TEXT"),
         # Hub Automatisations : config éditable (cadence, etc.). La table
         # a été créée sans ces colonnes au 1er déploiement → on les ajoute.
