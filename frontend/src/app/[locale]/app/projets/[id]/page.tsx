@@ -26,6 +26,10 @@ import { authedFetch } from "@/lib/auth";
 import { TAX_FACTOR } from "@/lib/tax";
 import { useConfirm } from "@/components/confirm-dialog";
 import { MultiSelectDropdown } from "@/components/multi-select-dropdown";
+import {
+  AchatMarkPaidModal,
+  type MarkPaidAchat
+} from "@/components/achat-mark-paid-modal";
 
 type Project = {
   id: number;
@@ -5402,7 +5406,7 @@ const PO_STATUS_BG: Record<string, string> = {
 };
 
 const ACHAT_STATUS_LABEL: Record<string, string> = {
-  received: "Reçu",
+  received: "À payer",
   paid: "Payé",
   cancelled: "Annulé"
 };
@@ -5432,6 +5436,8 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
   const [fournisseurs, setFournisseurs] = useState<ProjectFournisseur[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Achat ciblé par le modal « marquer payé » (clic sur le badge « À payer »).
+  const [payTarget, setPayTarget] = useState<MarkPaidAchat | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -5703,14 +5709,38 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                             {fmt(amt)}
                           </td>
                           <td className="px-3 py-2 text-center">
-                            <span
-                              className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                                ACHAT_STATUS_BG[a.status] ||
-                                "border-white/20 bg-white/10 text-white/70"
-                              }`}
-                            >
-                              {ACHAT_STATUS_LABEL[a.status] || a.status}
-                            </span>
+                            {a.status === "received" ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setPayTarget({
+                                    id: a.id,
+                                    reference:
+                                      a.supplier_invoice_number ||
+                                      a.reference ||
+                                      `A-${a.id}`,
+                                    description: a.description,
+                                    payment_method: a.payment_method
+                                  })
+                                }
+                                title="Cliquer pour marquer payé"
+                                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold transition hover:ring-2 hover:ring-emerald-400/60 ${
+                                  ACHAT_STATUS_BG[a.status] ||
+                                  "border-white/20 bg-white/10 text-white/70"
+                                }`}
+                              >
+                                {ACHAT_STATUS_LABEL[a.status] || a.status}
+                              </button>
+                            ) : (
+                              <span
+                                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                                  ACHAT_STATUS_BG[a.status] ||
+                                  "border-white/20 bg-white/10 text-white/70"
+                                }`}
+                              >
+                                {ACHAT_STATUS_LABEL[a.status] || a.status}
+                              </span>
+                            )}
                           </td>
                           <td className="px-3 py-2 text-center">
                             {a.qbo_bill_id ? (
@@ -5733,6 +5763,26 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
           </section>
         </>
       )}
+      {payTarget ? (
+        <AchatMarkPaidModal
+          achat={payTarget}
+          onClose={() => setPayTarget(null)}
+          onSaved={(u) => {
+            setAchats((prev) =>
+              prev.map((x) =>
+                x.id === u.id
+                  ? {
+                      ...x,
+                      status: u.status ?? "paid",
+                      payment_method: u.payment_method ?? x.payment_method
+                    }
+                  : x
+              )
+            );
+            setPayTarget(null);
+          }}
+        />
+      ) : null}
     </section>
   );
 }
