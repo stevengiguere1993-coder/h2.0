@@ -402,11 +402,10 @@ class QuickBooksClient:
         return node
 
     async def find_customer_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        safe = email.replace("'", "''")
-        rows = await self.query(
-            f"SELECT * FROM Customer WHERE PrimaryEmailAddr='{safe}' MAXRESULTS 1"
-        )
-        return rows[0] if rows else None
+        # PrimaryEmailAddr n'est PAS un champ queryable dans QBO (« property
+        # 'PrimaryEmailAddr' is not queryable », erreur 400). On résout donc
+        # toujours par DisplayName — l'appelant retombe dessus.
+        return None
 
     async def find_customer_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         safe = name.replace("'", "''")
@@ -771,11 +770,9 @@ class QuickBooksClient:
         return rows[0] if rows else None
 
     async def find_vendor_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        safe = email.replace("'", "''")
-        rows = await self.query(
-            f"SELECT * FROM Vendor WHERE PrimaryEmailAddr='{safe}' MAXRESULTS 1"
-        )
-        return rows[0] if rows else None
+        # PrimaryEmailAddr n'est PAS queryable dans QBO (erreur 400) → on
+        # résout par DisplayName (l'appelant retombe dessus).
+        return None
 
     async def create_vendor(
         self,

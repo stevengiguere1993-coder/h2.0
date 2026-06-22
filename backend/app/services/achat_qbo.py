@@ -432,10 +432,12 @@ async def sync_achat_to_qbo(
             # SOUS-CLIENT du projet (project.qbo_job_id) pour apparaître
             # dans l'onglet Projets (Revenu/Coût/Marge). Sans ça, le coût
             # va sur le client parent et le projet affiche 0 $.
-            if getattr(project, "qbo_job_id", None):
-                customer_id = str(project.qbo_job_id)
-            elif project.client_id:
-                # Repli : projet non relié → on rattache au client parent.
+            # On résout d'ABORD le client parent (nécessaire pour retrouver
+            # le sous-client/projet converti), puis le bon CustomerRef du
+            # projet — y compris si le sous-client a été converti en projet
+            # QB (ancien qbo_job_id supprimé → « client supprimé »).
+            parent_customer_id: Optional[str] = None
+            if project.client_id:
                 from app.models.client import Client
 
                 client = (
@@ -451,14 +453,23 @@ async def sync_achat_to_qbo(
                             phone=client.phone,
                             billing_address=client.address,
                         )
-                        customer_id = str(cust.get("Id") or "") or None
+                        parent_customer_id = str(cust.get("Id") or "") or None
                     except QuickBooksError as exc:
                         log.warning(
                             "QBO: client introuvable/échec (achat %s): %s",
                             achat.id,
                             exc,
                         )
-                        customer_id = None
+            if parent_customer_id:
+                from app.services.qbo_project_resolve import (
+                    resolve_project_customer_id,
+                )
+
+                customer_id = await resolve_project_customer_id(
+                    qbo, db, project, parent_customer_id
+                )
+            elif getattr(project, "qbo_job_id", None):
+                customer_id = str(project.qbo_job_id)
             # Classe = adresse du chantier (repli sur le nom du projet
             # si l'adresse est vide).
             class_name = (
