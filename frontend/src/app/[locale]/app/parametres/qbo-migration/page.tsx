@@ -286,7 +286,7 @@ export default function QboMigrationPage() {
     const ok = await confirm({
       title: "Ré-attribuer les projets dans QuickBooks ?",
       description:
-        "Ré-pousse vers QuickBooks les factures (et factures fournisseurs) déjà liées à QB pour leur remettre le bon PROJET : revenu/coût rattaché au sous-client (Job) + classe = chantier. À utiliser quand des projets ont été créés APRÈS l'envoi des factures (revenu absent de l'onglet Projets, montants QB ≠ Kratos). Tourne en arrière-plan (peut prendre quelques minutes). Idempotent : aucun doublon, mise à jour seulement.",
+        "Envoie vers QuickBooks les factures ET les achats d'un projet : ceux pas encore dans QB sont créés, ceux déjà liés sont remis sur le bon PROJET (sous-client = Job + classe = chantier). À utiliser quand des dépenses saisies dans Kratos n'apparaissent pas dans le projet QB, ou quand des projets ont été créés après l'envoi des factures. Tourne en arrière-plan (quelques minutes). Idempotent : aucun doublon (garde fournisseur + montant + date).",
       confirmLabel: "Ré-attribuer",
       destructive: false
     });
