@@ -77,7 +77,13 @@ export default function QboMigrationPage() {
   const [clients, setClients] = useState<ClientLite[]>([]);
   const [clientId, setClientId] = useState("");
   const [busy, setBusy] = useState<
-    null | "report" | "migrate" | "pull-inv" | "pull-cost" | "reclass"
+    | null
+    | "report"
+    | "migrate"
+    | "pull-inv"
+    | "pull-cost"
+    | "reclass"
+    | "push-pay"
   >(null);
   const [report, setReport] = useState<Report | null>(null);
   const [result, setResult] = useState<MigrationResult | null>(null);
@@ -216,6 +222,41 @@ export default function QboMigrationPage() {
       );
     } catch (e) {
       setError(`Réinitialisation paiements échouée : ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runPushPayments() {
+    const ok = await confirm({
+      title: "Pousser les paiements vers QuickBooks ?",
+      description:
+        "Envoie dans QuickBooks tous les paiements enregistrés dans Kratos qui n'y sont pas encore (rattrapage des paiements saisis depuis la migration). Idempotent : un paiement déjà présent dans QB est ignoré, aucun doublon.",
+      confirmLabel: "Pousser les paiements",
+      destructive: false
+    });
+    if (!ok) return;
+    setBusy("push-pay");
+    setError(null);
+    setResult(null);
+    setPullResult(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/qbo/push-payments${scopeQuery()}`,
+        { method: "POST" }
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as {
+        factures_pushed: number;
+        factures_failed: number;
+        errors: string[];
+      };
+      setPullResult({
+        title: "Paiements poussés (Kratos → QuickBooks)",
+        data: d as unknown as Record<string, unknown>
+      });
+    } catch (e) {
+      setError(`Envoi des paiements échoué : ${(e as Error).message}`);
     } finally {
       setBusy(null);
     }
@@ -395,6 +436,18 @@ export default function QboMigrationPage() {
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : null}
               Ré-attribuer les projets (QB)
+            </button>
+            <button
+              type="button"
+              onClick={() => void runPushPayments()}
+              disabled={busy !== null}
+              className="btn-secondary text-sm"
+              title="Envoie vers QuickBooks tous les paiements saisis dans Kratos absents de QB. Idempotent."
+            >
+              {busy === "push-pay" ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              Pousser les paiements (QB)
             </button>
             <button
               type="button"
