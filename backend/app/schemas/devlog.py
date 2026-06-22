@@ -708,6 +708,12 @@ class DevlogProjectUpdate(BaseModel):
     status: Optional[str] = None
     start_date: Optional[date] = None
     due_date: Optional[date] = None
+    # Budget & heures (refonte projet 2026-06).
+    budget_cents: Optional[int] = None
+    heures_dev_prevues: Optional[float] = None
+    heures_manager_prevues: Optional[float] = None
+    taux_horaire_defaut: Optional[float] = None
+    notes: Optional[str] = None
 
 
 class DevlogProjectRead(BaseModel):
@@ -723,6 +729,12 @@ class DevlogProjectRead(BaseModel):
     due_date: Optional[date]
     started_at: Optional[datetime] = None
     delivered_at: Optional[datetime] = None
+    # Budget & heures importés de la soumission (refonte projet 2026-06).
+    budget_cents: int = 0
+    heures_dev_prevues: float = 0.0
+    heures_manager_prevues: float = 0.0
+    taux_horaire_defaut: Optional[float] = None
+    notes: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -957,6 +969,9 @@ class DevlogProjectPhaseCreate(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     status: str = Field(default="planifie", max_length=16)
+    budget_cents: Optional[int] = None
+    heures_dev_prevues: Optional[float] = None
+    heures_manager_prevues: Optional[float] = None
 
 
 class DevlogProjectPhaseUpdate(BaseModel):
@@ -966,6 +981,10 @@ class DevlogProjectPhaseUpdate(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     status: Optional[str] = Field(default=None, max_length=16)
+    # Budget & heures prévues éditables (refonte projet 2026-06).
+    budget_cents: Optional[int] = None
+    heures_dev_prevues: Optional[float] = None
+    heures_manager_prevues: Optional[float] = None
 
 
 class DevlogProjectPhaseRead(BaseModel):
@@ -979,6 +998,11 @@ class DevlogProjectPhaseRead(BaseModel):
     start_date: Optional[date]
     end_date: Optional[date]
     status: str
+    # Snapshot du chiffrage (refonte projet 2026-06).
+    source_module_id: Optional[int] = None
+    budget_cents: int = 0
+    heures_dev_prevues: float = 0.0
+    heures_manager_prevues: float = 0.0
     created_at: datetime
     updated_at: datetime
 
