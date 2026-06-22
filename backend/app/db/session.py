@@ -198,6 +198,22 @@ async def ensure_critical_columns() -> None:
         ("devlog_soumissions", "opened_at", "TIMESTAMP WITH TIME ZONE"),
         ("devlog_soumissions", "last_opened_at", "TIMESTAMP WITH TIME ZONE"),
         ("devlog_soumissions", "open_count", "INTEGER NOT NULL DEFAULT 0"),
+        # Refonte projet devlog 2026-06 : budget + heures importés de la
+        # soumission acceptée (phase = module). Tables préexistantes →
+        # create_all ne pose pas les colonnes.
+        ("devlog_project_phases", "source_module_id", "INTEGER"),
+        ("devlog_project_phases", "budget_cents", "INTEGER NOT NULL DEFAULT 0"),
+        ("devlog_project_phases", "heures_dev_prevues",
+         "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+        ("devlog_project_phases", "heures_manager_prevues",
+         "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+        ("devlog_projects", "budget_cents", "INTEGER NOT NULL DEFAULT 0"),
+        ("devlog_projects", "heures_dev_prevues",
+         "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+        ("devlog_projects", "heures_manager_prevues",
+         "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+        ("devlog_projects", "taux_horaire_defaut", "DOUBLE PRECISION"),
+        ("devlog_projects", "notes", "TEXT"),
         ("bons_travail", "signature_token", "VARCHAR(64)"),
         ("bons_travail", "signed_at", "TIMESTAMP WITH TIME ZONE"),
         ("bons_travail", "signed_by_name", "VARCHAR(255)"),
