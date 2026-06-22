@@ -324,20 +324,6 @@ export default function AchatsPage() {
               )}
               Importer de QB
             </button>
-            <button
-              type="button"
-              onClick={dedupeAchats}
-              disabled={pulling}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
-              title="Détecter et supprimer les achats en double (ex. saisi puis ré-importé de QB). Aperçu avant suppression."
-            >
-              {pulling ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Copy className="h-4 w-4" />
-              )}
-              Nettoyer doublons
-            </button>
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/app/achats/new" as any}
@@ -449,6 +435,21 @@ export default function AchatsPage() {
               </option>
             ))}
           </select>
+
+          <button
+            type="button"
+            onClick={dedupeAchats}
+            disabled={pulling}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
+            title="Détecter et supprimer les achats en double (ex. saisi puis ré-importé de QB). Aperçu avant suppression."
+          >
+            {pulling ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Copy className="h-4 w-4" />
+            )}
+            Nettoyer doublons
+          </button>
 
           <div className="ml-auto rounded-md bg-brand-900 px-3 py-2 text-sm">
             <span className="text-white/50">Total filtré </span>
