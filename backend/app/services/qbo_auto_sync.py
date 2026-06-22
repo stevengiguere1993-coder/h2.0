@@ -44,6 +44,21 @@ async def autopush_facture(facture_id: int) -> None:
     await push_facture_now(facture_id)
 
 
+async def push_facture_payments_now(facture_id: int) -> None:
+    """Push DÉLIBÉRÉ des PAIEMENTS d'une facture vers QB (enregistrement
+    d'un paiement). Ne re-pousse pas le corps de la facture → fiable même
+    sur une facture migrée. Non conditionné à l'interrupteur de migration.
+    """
+    try:
+        from app.services.facture_qbo import push_facture_payments_only
+
+        async with AsyncSessionLocal() as db:
+            await push_facture_payments_only(db, facture_id)
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("push_facture_payments_now %s: %s", facture_id, exc)
+
+
 async def push_facture_now(facture_id: int) -> None:
     """Push DÉLIBÉRÉ d'une facture vers QB — PAS conditionné à
     l'interrupteur de migration `qbo_auto_sync`.

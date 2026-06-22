@@ -357,11 +357,11 @@ async def sync_facture_to_qbo(
             "La facture doit être liée à un client avant d'être envoyée dans QBO."
         )
 
-    # Projet rattaché : la facture doit pointer vers le SOUS-CLIENT (Job)
-    # du projet pour que le REVENU apparaisse dans l'onglet Projets de QB
-    # (et non sur le client parent → projet à 0 $). On porte aussi la
-    # CLASSE = chantier, comme les coûts. C'est ce rattachement qui manquait
-    # et qui faisait diverger revenu QB / Kratos.
+    # Modèle QB du client : c'est le CLIENT PARENT qui est FACTURÉ
+    # (CustomerRef = parent), et le PROJET (sous-client converti en projet)
+    # est porté en CLASSE sur les lignes d'opération. On ne met donc PAS le
+    # Job en CustomerRef (sinon la facture/le paiement ne se rattachent pas
+    # au bon endroit). La classe suffit à ventiler le revenu par projet.
     project = None
     if fa.project_id:
         from app.models.project import Project
@@ -383,13 +383,9 @@ async def sync_facture_to_qbo(
         if not customer_id:
             raise FactureSyncError("QBO customer creation did not return an Id.")
 
-        # CustomerRef de la facture = sous-client (Job) du projet si relié,
-        # sinon le client parent. ClassRef = adresse (ou nom) du chantier.
-        invoice_customer_id = customer_id
+        # CustomerRef = client PARENT. ClassRef = chantier (projet).
         class_id: Optional[str] = None
         if project is not None:
-            if getattr(project, "qbo_job_id", None):
-                invoice_customer_id = str(project.qbo_job_id)
             class_name = (
                 (getattr(project, "address", None) or "").strip()
                 or (project.name or "").strip()
@@ -407,22 +403,41 @@ async def sync_facture_to_qbo(
                         "QBO ensure_class facture %s: %s", fa.id, exc
                     )
 
+        # Si la facture Kratos n'est pas encore liée à une Invoice QB mais
+        # qu'une Invoice du MÊME numéro (DocNumber) existe déjà dans QB
+        # (cas migration), on s'y RATTACHE pour la METTRE À JOUR et pour que
+        # le PAIEMENT s'y enregistre — au lieu de créer une facture en double.
+        if not fa.qbo_invoice_id and (fa.reference or "").strip():
+            docnum = (fa.reference or "").strip().replace("'", "")
+            try:
+                found = await qbo.query(
+                    f"SELECT * FROM Invoice WHERE DocNumber = '{docnum}'"
+                )
+            except QuickBooksError as exc:
+                log.warning(
+                    "QBO lookup Invoice DocNumber=%s (facture %s): %s",
+                    docnum, fa.id, exc,
+                )
+                found = []
+            if found:
+                inv0 = found[0]
+                fa.qbo_invoice_id = str(inv0.get("Id") or "") or None
+                fa.qbo_sync_token = str(inv0.get("SyncToken") or "") or None
+                await db.flush()
+
         lines = await _build_lines(
             qbo, items, fallback_name=fa.reference
         )
         payload = _build_invoice_payload(
             facture=fa,
-            customer_id=invoice_customer_id,
+            customer_id=customer_id,
             lines=lines,
             class_id=class_id,
             existing_invoice_id=fa.qbo_invoice_id,
             existing_sync_token=fa.qbo_sync_token,
         )
 
-        if payload.get("Id"):
-            invoice = await qbo.create_invoice(payload)  # same endpoint updates w/ Id+SyncToken
-        else:
-            invoice = await qbo.create_invoice(payload)
+        invoice = await qbo.create_invoice(payload)  # même endpoint = update si Id+SyncToken
 
     except QuickBooksError as exc:
         raise FactureSyncError(str(exc)) from exc
@@ -443,3 +458,76 @@ async def sync_facture_to_qbo(
         "qbo_invoice_id": fa.qbo_invoice_id or "",
         "qbo_doc_number": fa.qbo_doc_number or "",
     }
+
+
+async def push_facture_payments_only(
+    db: AsyncSession, facture_id: int
+) -> Dict[str, Any]:
+    """Enregistre les PAIEMENTS d'une facture sur l'Invoice QB SANS toucher
+    au corps de la facture.
+
+    Conçu pour le flux « j'enregistre un paiement » : on ne re-pousse PAS
+    l'Invoice (modifier une facture migrée — lignes, client — est risqué et
+    peut échouer côté QB, ce qui empêchait alors le paiement de partir). On
+    se contente de :
+      1. retrouver l'Invoice QB (qbo_invoice_id, sinon par DocNumber = n° de
+         facture — les numéros correspondent entre Kratos et QB) ;
+      2. créer les Payment manquants liés à cette Invoice (idempotent via
+         Payment.qbo_payment_id).
+    Si l'Invoice n'existe pas encore dans QB, on retombe sur la synchro
+    complète (qui la crée puis pousse les paiements).
+    """
+    qbo = get_qbo()
+    await qbo._load_refresh_from_db()
+    if not qbo.ready:
+        raise FactureSyncError("QuickBooks n'est pas configuré.")
+    fa = await _load_facture(db, facture_id)
+    if fa is None:
+        raise FactureSyncError(f"Facture {facture_id} introuvable")
+    if (fa.status or "") in ("draft", "void"):
+        return {"skipped": True, "reason": "facture_draft_ou_annulee"}
+
+    inv_id = (fa.qbo_invoice_id or "").strip()
+    if not inv_id and (fa.reference or "").strip():
+        docnum = (fa.reference or "").strip().replace("'", "")
+        try:
+            found = await qbo.query(
+                f"SELECT * FROM Invoice WHERE DocNumber = '{docnum}'"
+            )
+        except QuickBooksError as exc:
+            log.warning(
+                "push_payments lookup Invoice DocNumber=%s (facture %s): %s",
+                docnum, fa.id, exc,
+            )
+            found = []
+        if found:
+            inv_id = str(found[0].get("Id") or "")
+            fa.qbo_invoice_id = inv_id or None
+            fa.qbo_sync_token = str(found[0].get("SyncToken") or "") or None
+            await db.flush()
+
+    if not inv_id:
+        # Facture pas encore dans QB → synchro complète (crée + paiements).
+        return await sync_facture_to_qbo(db, facture_id)
+
+    # CustomerRef de repli pour les Payment ; sync_facture_payments_to_qbo
+    # relit de toute façon le vrai CustomerRef de l'Invoice.
+    customer_ref = ""
+    client = await _load_client(db, fa.client_id)
+    if client is not None:
+        try:
+            cust = await qbo.ensure_customer(
+                display_name=client.name,
+                email=client.email,
+                phone=client.phone,
+                billing_address=client.address,
+            )
+            customer_ref = str(cust.get("Id") or "")
+        except QuickBooksError:
+            customer_ref = ""
+
+    pushed = await sync_facture_payments_to_qbo(
+        qbo, db, fa, customer_ref, inv_id
+    )
+    await db.flush()
+    return {"qbo_invoice_id": inv_id, "payments_pushed": len(pushed)}
