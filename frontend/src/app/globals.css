@@ -483,6 +483,7 @@ html[data-portal-theme="light"] .bg-cyan-500\/20 { background-color: rgb(165 243
 /* Vue « Cartes » (Mes tâches, mobile) façon Google Keep : on masque le
  * bouton flottant « Demander à Kratos » pour une expérience épurée. La
  * vue pose `data-hide-kratos="1"` sur <body> tant qu'elle est montée. */
-body[data-hide-kratos="1"] [aria-label="Ouvrir Kratos"] {
+body[data-hide-kratos="1"] [aria-label="Ouvrir Kratos"],
+body[data-hide-kratos="1"] [aria-label="Ouvrir la barre de commande"] {
   display: none !important;
 }
