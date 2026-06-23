@@ -42,6 +42,7 @@ import type { ImmeubleMini } from "@/components/immeuble-picker";
 type TacheEnt = {
   id: number;
   entreprise_id: number;
+  created_at?: string;
   title: string;
   description: string | null;
   departement: string | null;
@@ -62,6 +63,7 @@ type TacheEnt = {
 type TacheDeal = {
   id: number;
   deal_id: number;
+  created_at?: string;
   name: string;
   notes: string | null;
   assignee_user_id: number | null;
@@ -460,6 +462,7 @@ export default function MesTachesPage() {
       const owner: TaskOwner = { kind: "entreprise", id: t.entreprise_id };
       items.push({
         id: toBoardId(owner, t.id),
+        created_at: t.created_at,
         title: t.title,
         status: t.status,
         priority: t.priority || "non_assigne",
@@ -485,6 +488,7 @@ export default function MesTachesPage() {
       const owner: TaskOwner = { kind: "deal", id: t.deal_id };
       items.push({
         id: toBoardId(owner, t.id),
+        created_at: t.created_at,
         title: t.name,
         status: t.status,
         priority: t.priority || "non_assigne",
@@ -607,7 +611,6 @@ export default function MesTachesPage() {
           <TaskBoard
             tasks={boardItems}
             users={users}
-            defaultView="cartes"
             currentUserId={currentUser?.id ?? null}
             immeubles={immeubles}
             onImmeublesChanged={() => void reloadImmeubles()}
