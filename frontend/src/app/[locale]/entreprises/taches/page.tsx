@@ -43,6 +43,7 @@ type TacheEnt = {
   id: number;
   entreprise_id: number;
   created_at?: string;
+  completed_at?: string | null;
   title: string;
   description: string | null;
   departement: string | null;
@@ -517,6 +518,7 @@ export default function MesTachesPage() {
       items.push({
         id: toBoardId(owner, t.id),
         created_at: t.created_at,
+        completed_at: t.completed_at,
         dbPosition: t.position,
         title: t.title,
         status: t.status,
