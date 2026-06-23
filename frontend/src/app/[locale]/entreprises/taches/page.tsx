@@ -133,7 +133,8 @@ export default function MesTachesPage() {
   // chargement (donc window est dispo) → defaultView correct d'entrée.
   const forceCartes =
     typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get("view") === "cartes";
+    (new URLSearchParams(window.location.search).get("view") === "cartes" ||
+      window.location.pathname.endsWith("/mes-taches"));
 
   // App « Mes tâches » : en vue Cartes (raccourci / app), on bascule le
   // <link rel="manifest"> vers le manifest dédié (id « /mes-taches »

@@ -1,27 +1,13 @@
 "use client";
 
-// Page d'entrée du raccourci « Mes tâches ». Redirige immédiatement vers
-// la vue Cartes de Mes tâches (Gestion d'entreprise). Existe surtout pour
-// porter un manifest PWA dédié (cf. layout.tsx) → installable comme une
-// app à part entière qui ouvre DIRECTEMENT le tableau de cartes.
+// Page de l'app « Mes tâches » : rend directement l'expérience Mes tâches
+// (la même page que /entreprises/taches). Le manifest dédié (cf. layout)
+// est servi sur cette route → le navigateur l'installe comme une app à
+// part entière qui ouvre directement la vue Cartes (la page bascule en
+// Cartes car le pathname se termine par /mes-taches).
 
-import { useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import MesTachesExperience from "../entreprises/taches/page";
 
-export default function MesTachesShortcutPage() {
-  const router = useRouter();
-  const params = useParams();
-
-  useEffect(() => {
-    const locale =
-      typeof params?.locale === "string" && params.locale ? params.locale : "fr";
-    router.replace(`/${locale}/entreprises/taches?view=cartes`);
-  }, [router, params]);
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-white">
-      <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
-    </div>
-  );
+export default function MesTachesAppPage() {
+  return <MesTachesExperience />;
 }

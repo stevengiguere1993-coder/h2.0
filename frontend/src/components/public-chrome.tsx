@@ -23,6 +23,7 @@ const PORTAL_PREFIXES = [
   "/dev",
   "/dev-logiciel",
   "/telephonie",
+  "/mes-taches",
   "/changer-mot-de-passe",
   "/profil",
   // Pages publiques tokenisées : pas de chrome public (pas de header/
