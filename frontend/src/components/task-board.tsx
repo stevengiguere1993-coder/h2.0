@@ -75,6 +75,9 @@ export type TaskBoardItem = TaskCardData & {
   /** Horodatage de création (ISO) — utilisé pour trier la vue Cartes
    *  par ordre de création (la plus récente en haut). */
   created_at?: string | null;
+  /** Horodatage de complétion (ISO) — trie les cartes terminées (dernière
+   *  cochée en haut). */
+  completed_at?: string | null;
   /** Position DB réelle (≠ `position` qui est dérivé du score pour le
    *  kanban). Porte l'ordre manuel du drag & drop de la vue Cartes. */
   dbPosition?: number | null;
@@ -1554,6 +1557,18 @@ function TaskKeepView({
     if (tb !== ta) return tb - ta;
     return (Number(b.id) || 0) - (Number(a.id) || 0);
   };
+  // Terminées : triées par date de complétion décroissante → la dernière
+  // cochée (marquée terminée) tout en haut, pour la retrouver/décocher vite
+  // (ex. clic accidentel sur la case). Fallback création desc si pas de date.
+  const byCompletedDesc = (a: TaskBoardItem, b: TaskBoardItem) => {
+    const ca = a.completed_at ? Date.parse(a.completed_at) : 0;
+    const cb = b.completed_at ? Date.parse(b.completed_at) : 0;
+    if (cb !== ca) return cb - ca;
+    const ta = a.created_at ? Date.parse(a.created_at) : 0;
+    const tb = b.created_at ? Date.parse(b.created_at) : 0;
+    if (tb !== ta) return tb - ta;
+    return (Number(b.id) || 0) - (Number(a.id) || 0);
+  };
   const activeBase = tasks
     .filter((t) => t.status !== "done")
     .slice()
@@ -1561,7 +1576,7 @@ function TaskKeepView({
   const done = tasks
     .filter((t) => t.status === "done")
     .slice()
-    .sort(sortForCartes);
+    .sort(byCompletedDesc);
 
   // ── Drag & drop (réordonner façon Keep) ────────────────────────────
   // Pointer Events (tactile + souris) → pas de lib. Pendant le drag on
