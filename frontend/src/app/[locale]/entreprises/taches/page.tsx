@@ -128,6 +128,12 @@ export default function MesTachesPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [scope, setScope] = useState<"all" | "mine">("mine");
+  // Ouverture directe en vue Cartes via ?view=cartes (raccourci / app
+  // « Mes tâches »). Lu côté client ; le TaskBoard ne monte qu'après le
+  // chargement (donc window est dispo) → defaultView correct d'entrée.
+  const forceCartes =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("view") === "cartes";
   // Modale de choix entreprise / deal lors de la création d'une
   // tâche depuis le bouton « + Nouvelle tâche » du TaskBoard.
   // Quand non-null, contient le statut cible (todo / a_faire …) et
@@ -611,6 +617,7 @@ export default function MesTachesPage() {
           <TaskBoard
             tasks={boardItems}
             users={users}
+            defaultView={forceCartes ? "cartes" : "kanban"}
             currentUserId={currentUser?.id ?? null}
             immeubles={immeubles}
             onImmeublesChanged={() => void reloadImmeubles()}

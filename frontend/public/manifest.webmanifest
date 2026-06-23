@@ -33,6 +33,13 @@
   ],
   "shortcuts": [
     {
+      "name": "Mes tâches",
+      "short_name": "Tâches",
+      "description": "Mes tâches en vue Cartes",
+      "url": "/entreprises/taches?view=cartes&source=shortcut",
+      "icons": [{ "src": "/pwa/icon-192.png", "sizes": "192x192" }]
+    },
+    {
       "name": "Téléphonie",
       "short_name": "Téléphone",
       "description": "Voir les appels et SMS",
