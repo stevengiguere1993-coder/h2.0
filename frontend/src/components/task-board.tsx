@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import { usePathname } from "next/navigation";
 import {
   Building2,
@@ -1380,6 +1386,8 @@ function KeepCard({
   /** Fourni → carte réordonnable (poignée affichée). Démarre le drag. */
   onDragStart?: (id: number, e: React.PointerEvent) => void;
   isDragging?: boolean;
+  /** Enregistre l'élément DOM de la carte (pour l'animation FLIP). */
+  registerRef?: (id: number, el: HTMLElement | null) => void;
 }) {
   const done = task.status === "done";
   const hue = keepHue(task.departement);
@@ -1401,14 +1409,23 @@ function KeepCard({
   return (
     <div
       data-keep-id={task.id}
+      ref={registerRef ? (el) => registerRef(Number(task.id), el) : undefined}
       style={{
         // Teinte du département en fond + bordure ; le texte passe par
         // les variables --qg-* qui basculent clair/sombre → lisible dans
         // les deux thèmes (le portail entreprises tourne en clair).
         background: hue + "24",
         border: "1px solid " + hue + (isDragging ? "" : "55"),
-        boxShadow: isDragging ? "0 6px 18px rgba(0,0,0,0.18)" : "none",
-        opacity: isDragging ? 0.85 : 1,
+        // Carte « soulevée » qui flotte au-dessus + suit le doigt
+        // (transform posé impérativement). pointerEvents:none → la carte
+        // sous le doigt est détectable. Pas de transition pendant le drag.
+        boxShadow: isDragging
+          ? "0 10px 24px rgba(0,0,0,0.28)"
+          : "none",
+        zIndex: isDragging ? 50 : undefined,
+        position: isDragging ? "relative" : undefined,
+        pointerEvents: isDragging ? "none" : undefined,
+        transition: isDragging ? "none" : undefined,
         borderRadius: 12,
         padding: "10px 12px",
         marginBottom: 10,
@@ -1543,6 +1560,16 @@ function TaskKeepView({
   // la `position` (index) des cartes déplacées.
   const [dragId, setDragId] = useState<number | null>(null);
   const [dragOrder, setDragOrder] = useState<number[] | null>(null);
+  // Refs DOM des cartes (pour l'animation FLIP) + état impératif du drag.
+  const cardEls = useRef<Map<number, HTMLElement>>(new Map());
+  const firstTops = useRef<Map<number, number>>(new Map());
+  const grabOffset = useRef(0); // doigt ↔ haut de la carte au grab
+  const dragTranslate = useRef(0); // translateY courant de la carte tenue
+
+  const registerCard = (id: number, el: HTMLElement | null) => {
+    if (el) cardEls.current.set(id, el);
+    else cardEls.current.delete(id);
+  };
 
   let activeDisplayed = activeBase;
   if (dragOrder) {
@@ -1558,7 +1585,42 @@ function TaskKeepView({
     activeDisplayed = ordered;
   }
 
+  // FLIP : avant un réordonnancement on mémorise la position de chaque carte
+  // (sauf celle qu'on tient), puis on les anime de l'ancienne vers la
+  // nouvelle position → elles glissent au lieu de sauter d'un coup.
+  function captureFirstTops() {
+    firstTops.current.clear();
+    cardEls.current.forEach((el, id) => {
+      if (id === dragId) return;
+      firstTops.current.set(id, el.getBoundingClientRect().top);
+    });
+  }
+  useLayoutEffect(() => {
+    if (firstTops.current.size === 0) return;
+    const moved: HTMLElement[] = [];
+    cardEls.current.forEach((el, id) => {
+      const firstTop = firstTops.current.get(id);
+      if (firstTop == null) return;
+      const delta = firstTop - el.getBoundingClientRect().top;
+      if (!delta) return;
+      el.style.transition = "none";
+      el.style.transform = `translateY(${delta}px)`;
+      moved.push(el);
+    });
+    if (moved.length) {
+      void document.body.offsetHeight; // un seul reflow forcé
+      for (const el of moved) {
+        el.style.transition = "transform 170ms ease";
+        el.style.transform = "";
+      }
+    }
+    firstTops.current.clear();
+  }, [dragOrder]);
+
   function handleDragStart(id: number, e: React.PointerEvent) {
+    const el = cardEls.current.get(id);
+    grabOffset.current = el ? e.clientY - el.getBoundingClientRect().top : 0;
+    dragTranslate.current = 0;
     setDragId(id);
     setDragOrder(activeBase.map((t) => Number(t.id)));
     try {
@@ -1569,26 +1631,39 @@ function TaskKeepView({
   }
   function handleDragMove(e: React.PointerEvent) {
     if (dragId == null) return;
-    const el = document.elementFromPoint(
-      e.clientX,
-      e.clientY
-    ) as HTMLElement | null;
-    const cardEl = el?.closest("[data-keep-id]") as HTMLElement | null;
-    if (!cardEl) return;
-    const overId = Number(cardEl.getAttribute("data-keep-id"));
+    // 1) La carte tenue suit le doigt. flowTop = sa position réelle sans le
+    //    transform courant → recalculée à chaque move, ce qui corrige
+    //    automatiquement le saut de créneau après un réordonnancement.
+    const dEl = cardEls.current.get(dragId);
+    if (dEl) {
+      const flowTop = dEl.getBoundingClientRect().top - dragTranslate.current;
+      const t = e.clientY - grabOffset.current - flowTop;
+      dragTranslate.current = t;
+      dEl.style.transform = `translateY(${t}px)`;
+    }
+    // 2) Carte sous le doigt (la carte tenue est en pointer-events:none →
+    //    elementFromPoint la traverse) → réordonne + anime les autres (FLIP).
+    const overEl = document
+      .elementFromPoint(e.clientX, e.clientY)
+      ?.closest("[data-keep-id]") as HTMLElement | null;
+    if (!overEl || !dragOrder) return;
+    const overId = Number(overEl.getAttribute("data-keep-id"));
     if (!overId || overId === dragId) return;
-    setDragOrder((prev) => {
-      if (!prev) return prev;
-      const from = prev.indexOf(dragId);
-      const to = prev.indexOf(overId);
-      if (from < 0 || to < 0 || from === to) return prev;
-      const next = prev.slice();
-      next.splice(from, 1);
-      next.splice(to, 0, dragId);
-      return next;
-    });
+    const from = dragOrder.indexOf(dragId);
+    const to = dragOrder.indexOf(overId);
+    if (from < 0 || to < 0 || from === to) return;
+    captureFirstTops();
+    const next = dragOrder.slice();
+    next.splice(from, 1);
+    next.splice(to, 0, dragId);
+    setDragOrder(next);
   }
   function handleDragEnd() {
+    const dEl = dragId != null ? cardEls.current.get(dragId) : null;
+    if (dEl) {
+      dEl.style.transition = "";
+      dEl.style.transform = "";
+    }
     if (dragId != null && dragOrder) {
       dragOrder.forEach((id, idx) => {
         const t = activeBase.find((x) => Number(x.id) === id);
@@ -1597,6 +1672,8 @@ function TaskKeepView({
         }
       });
     }
+    dragTranslate.current = 0;
+    firstTops.current.clear();
     setDragId(null);
     setDragOrder(null);
   }
@@ -1662,6 +1739,7 @@ function TaskKeepView({
               currentUserId={currentUserId}
               onDragStart={handleDragStart}
               isDragging={dragId === Number(t.id)}
+              registerRef={registerCard}
             />
           ))}
         </div>
