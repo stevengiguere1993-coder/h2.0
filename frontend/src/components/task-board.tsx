@@ -65,6 +65,9 @@ import type {
 
 export type TaskBoardItem = TaskCardData & {
   position?: number;
+  /** Horodatage de création (ISO) — utilisé pour trier la vue Cartes
+   *  par ordre de création (la plus récente en haut). */
+  created_at?: string | null;
   /** Notes / description complète — alimente la TaskDetailsModal. */
   notes?: string | null;
   /** Liste brute des immeubles liés à la tâche — alimente le picker
@@ -164,6 +167,19 @@ export function TaskBoard({
   currentUserId?: number | null;
 }) {
   const [view, setView] = useState<"kanban" | "list" | "cartes">(defaultView);
+  // La vue « Cartes » (façon Keep) est réservée au mobile. Sur desktop on
+  // n'affiche pas le bouton et on retombe sur Kanban (la vue prioritaire),
+  // même si defaultView="cartes" (ex. raccourci « Mes tâches »).
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 768px)");
+    const sync = () => setIsMobile(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  const effectiveView =
+    view === "cartes" && !isMobile ? "kanban" : view;
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
   // Recherche libre (titre / notes / immeuble / département) — filtre
   // textuel additif aux pickers.
@@ -307,17 +323,19 @@ export function TaskBoard({
           {headerSlot}
         </div>
         <div className="inline-flex rounded-lg border border-brand-800 bg-brand-900 p-0.5">
-          <button
-            type="button"
-            onClick={() => setView("cartes")}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-              view === "cartes"
-                ? "bg-violet-400 text-brand-950 shadow"
-                : "border border-brand-700 bg-brand-950/40 text-white hover:bg-brand-950/70"
-            }`}
-          >
-            Cartes
-          </button>
+          {isMobile ? (
+            <button
+              type="button"
+              onClick={() => setView("cartes")}
+              className={`mr-0.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                view === "cartes"
+                  ? "bg-violet-400 text-brand-950 shadow"
+                  : "border border-brand-700 bg-brand-950/40 text-white hover:bg-brand-950/70"
+              }`}
+            >
+              Cartes
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => setView("list")}
@@ -393,7 +411,7 @@ export function TaskBoard({
         ) : null}
       </div>
 
-      {view === "cartes" ? (
+      {effectiveView === "cartes" ? (
         <TaskKeepView
           tasks={sortedTasks}
           users={users}
@@ -402,7 +420,7 @@ export function TaskBoard({
           onCreate={onCreate}
           currentUserId={currentUserId ?? null}
         />
-      ) : view === "kanban" ? (
+      ) : effectiveView === "kanban" ? (
         <KanbanView
           tasks={sortedTasks}
           users={users}
@@ -1376,8 +1394,11 @@ function KeepCard({
   return (
     <div
       style={{
-        background: hue + "14",
-        border: "0.5px solid " + hue + "40",
+        // Teinte du département en fond + bordure ; le texte passe par
+        // les variables --qg-* qui basculent clair/sombre → lisible dans
+        // les deux thèmes (le portail entreprises tourne en clair).
+        background: hue + "24",
+        border: "1px solid " + hue + "55",
         borderRadius: 12,
         padding: "10px 12px",
         marginBottom: 10,
@@ -1405,7 +1426,7 @@ function KeepCard({
           style={{
             flex: 1, textAlign: "left", background: "none", border: "none",
             padding: 0, cursor: "pointer", fontSize: 14, lineHeight: 1.35,
-            color: done ? "rgba(255,255,255,0.4)" : "#fff",
+            color: done ? "var(--qg-text-soft)" : "var(--qg-text)",
             textDecoration: done ? "line-through" : "none"
           }}
         >
@@ -1420,13 +1441,13 @@ function KeepCard({
           }}
         >
           {prio ? (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: prio.c }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, color: prio.c }}>
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: prio.c }} />
               {prio.l}
             </span>
           ) : null}
           {task.due_date ? (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--qg-text-muted)" }}>
               <Calendar className="h-3 w-3" />
               {keepDueLabel(task.due_date)}
             </span>
@@ -1459,8 +1480,22 @@ function TaskKeepView({
     () => new Map(users.map((u) => [u.id, u])),
     [users]
   );
-  const active = tasks.filter((t) => t.status !== "done");
-  const done = tasks.filter((t) => t.status === "done");
+  // Ordre de création — la plus récente en haut. created_at est un ISO ;
+  // fallback sur l'id (numérique, croissant avec la création) si absent.
+  const byCreatedDesc = (a: TaskBoardItem, b: TaskBoardItem) => {
+    const ta = a.created_at ? Date.parse(a.created_at) : 0;
+    const tb = b.created_at ? Date.parse(b.created_at) : 0;
+    if (tb !== ta) return tb - ta;
+    return (Number(b.id) || 0) - (Number(a.id) || 0);
+  };
+  const active = tasks
+    .filter((t) => t.status !== "done")
+    .slice()
+    .sort(byCreatedDesc);
+  const done = tasks
+    .filter((t) => t.status === "done")
+    .slice()
+    .sort(byCreatedDesc);
 
   async function quickAdd() {
     const name = draft.trim();
@@ -1477,8 +1512,8 @@ function TaskKeepView({
       <div
         style={{
           display: "flex", alignItems: "center", gap: 10,
-          background: "rgba(255,255,255,0.03)",
-          border: "0.5px solid rgba(255,255,255,0.1)",
+          background: "var(--qg-card-bg)",
+          border: "1px solid var(--qg-border)",
           borderRadius: 12, padding: "10px 14px", marginBottom: 16
         }}
       >
@@ -1492,17 +1527,19 @@ function TaskKeepView({
               void quickAdd();
             }
           }}
-          placeholder="Prendre une note… (Entree pour ajouter)"
+          enterKeyHint="done"
+          placeholder="Prendre une note… (Entrée pour ajouter)"
+          className="placeholder:text-brand-300"
           style={{
             flex: 1, background: "none", border: "none", outline: "none",
-            color: "#fff", fontSize: 14
+            color: "var(--qg-text)", fontSize: 14
           }}
         />
       </div>
 
       {active.length === 0 ? (
         <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/50">
-          Aucune tache en cours. Ecris une note ci-dessus pour commencer.
+          Aucune tâche en cours. Écris une note ci-dessus pour commencer.
         </p>
       ) : (
         <div style={{ columnWidth: "240px", columnGap: "12px" }}>
@@ -1531,7 +1568,7 @@ function TaskKeepView({
             ) : (
               <ChevronRight className="h-4 w-4" />
             )}
-            Termine · {done.length}
+            Terminé · {done.length}
           </button>
           {showDone ? (
             <div style={{ columnWidth: "240px", columnGap: "12px", marginTop: 12 }}>
