@@ -1376,7 +1376,8 @@ function KeepAvatar({ u }: { u: TaskUserMini }) {
 }
 
 function KeepCard({
-  task, userById, onPatch, onOpenDetails, currentUserId, onDragStart, isDragging
+  task, userById, onPatch, onOpenDetails, currentUserId, onDragStart,
+  isDragging, registerRef
 }: {
   task: TaskBoardItem;
   userById: Map<number, TaskUserMini>;
