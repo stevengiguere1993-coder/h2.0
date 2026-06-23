@@ -192,6 +192,14 @@ async def _recompute_facture_status(db, facture: Facture) -> None:
                 and proj.status != ProjectStatus.DELIVERED.value
             ):
                 proj.status = ProjectStatus.DELIVERED.value
+                # Transition « livré » → on archive la soumission liée
+                # (colonne « Archivée »), comme depuis l'édition projet.
+                from app.services.project_auto_status import (
+                    archive_soumission_on_delivery,
+                )
+
+                await db.flush()
+                await archive_soumission_on_delivery(db, proj.id)
     else:
         # Not fully paid anymore — revert to SENT if it was PAID, keep
         # OVERDUE / DRAFT otherwise so we don't mask a prior state.
