@@ -1561,7 +1561,7 @@ function TaskKeepView({
           <button
             type="button"
             onClick={() => setShowDone((v) => !v)}
-            className="inline-flex items-center gap-1.5 text-sm text-white/55 hover:text-white/80"
+            className="inline-flex items-center gap-1.5 text-sm text-white/60 hover:text-white/90"
           >
             {showDone ? (
               <ChevronDown className="h-4 w-4" />
