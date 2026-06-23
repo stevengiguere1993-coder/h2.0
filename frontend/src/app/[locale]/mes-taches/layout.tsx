@@ -1,17 +1,21 @@
-// Layout du raccourci « Mes tâches » — server component pour exposer
+// Layout de l'app « Mes tâches » — server component pour exposer
 // `metadata` (la metadata API de Next ne marche pas dans un Client
 // Component).
 //
-// PWA dédiée INSTALLABLE comme une application distincte : son manifest
-// (/mes-taches/manifest.webmanifest) déclare son propre nom (« Mes
-// tâches ») et son icône. La page cliente redirige immédiatement vers
-// la vue Cartes de Mes tâches (/<locale>/entreprises/taches?view=cartes),
-// si bien qu'ouvrir l'app mène DIRECTEMENT au tableau de cartes.
+// PWA dédiée INSTALLABLE comme une application distincte (pattern de
+// /telephonie) : son manifest (/mes-taches/manifest.webmanifest) a un
+// `id`/`scope` propres (« /mes-taches ») → le navigateur la voit comme
+// une app séparée d'Horizon, avec sa propre icône. La page rend
+// directement la vue Cartes de Mes tâches.
 //
-// Le manifest est calqué sur le pattern de /telephonie (sous-app
-// installable séparée du portail Horizon principal).
+// On enveloppe dans ThemeProvider (thème clair du portail) + ConfirmProvider
+// (utilisé par le TaskBoard) car ce volet n'hérite pas du layout
+// /entreprises.
 
 import type { Metadata, Viewport } from "next";
+
+import { ConfirmProvider } from "@/components/confirm-dialog";
+import { ThemeProvider } from "@/components/theme-provider";
 
 export const metadata: Metadata = {
   title: "Mes tâches",
@@ -36,5 +40,9 @@ export default function MesTachesAppLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return <>{children}</>;
+  return (
+    <ThemeProvider>
+      <ConfirmProvider>{children}</ConfirmProvider>
+    </ThemeProvider>
+  );
 }
