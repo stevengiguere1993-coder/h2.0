@@ -314,7 +314,7 @@ export function TaskBoard({
           <h2 className="text-sm font-semibold uppercase tracking-wider text-white/50">
             {title}
           </h2>
-          {showNewTaskButton ? (
+          {showNewTaskButton && effectiveView !== "cartes" ? (
             <button
               type="button"
               onClick={() => void handleNewTask()}
@@ -1506,6 +1506,16 @@ function TaskKeepView({
     () => new Map(users.map((u) => [u.id, u])),
     [users]
   );
+
+  // Vue Cartes (mobile) → masque le bouton flottant « Demander à Kratos »
+  // pour une expérience épurée façon Keep. Règle CSS dans globals.css
+  // (body[data-hide-kratos] cible [aria-label="Ouvrir Kratos"]).
+  useEffect(() => {
+    document.body.dataset.hideKratos = "1";
+    return () => {
+      delete document.body.dataset.hideKratos;
+    };
+  }, []);
   // Ordre des cartes : position manuelle (drag & drop) ascendante, puis
   // création décroissante (la plus récente en haut). Les tâches jamais
   // déplacées partagent la position par défaut → triées par date.
