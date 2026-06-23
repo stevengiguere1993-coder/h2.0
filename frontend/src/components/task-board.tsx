@@ -35,8 +35,7 @@ import {
   AssigneePicker,
   DatePill,
   PillPicker,
-  userInitials,
-  userDisplayName,
+  UserInitialDot,
   type TaskUserMini
 } from "@/components/task-pills";
 import {
@@ -1367,22 +1366,6 @@ function keepDueLabel(s: string): string {
   return d.toLocaleDateString("fr-CA", { day: "numeric", month: "short" });
 }
 
-function KeepAvatar({ u }: { u: TaskUserMini }) {
-  return (
-    <span
-      title={userDisplayName(u)}
-      style={{
-        width: 19, height: 19, borderRadius: "50%",
-        background: u.profile_color || "#5F5E5A", color: "#fff",
-        fontSize: 10, fontWeight: 500, display: "inline-flex",
-        alignItems: "center", justifyContent: "center", flex: "0 0 auto"
-      }}
-    >
-      {(userInitials(u) || "?").slice(0, 2)}
-    </span>
-  );
-}
-
 function KeepCard({
   task, userById, onPatch, onOpenDetails, currentUserId, onDragStart,
   isDragging, registerRef
@@ -1508,7 +1491,7 @@ function KeepCard({
             </span>
           ) : null}
           {assignees.map((u) => (
-            <KeepAvatar key={u.id} u={u} />
+            <UserInitialDot key={u.id} user={u} size={19} />
           ))}
         </div>
       ) : null}

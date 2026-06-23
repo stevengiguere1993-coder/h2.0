@@ -137,43 +137,11 @@ export default function MesTachesPage() {
     (new URLSearchParams(window.location.search).get("view") === "cartes" ||
       window.location.pathname.endsWith("/mes-taches"));
 
-  // App « Mes tâches » : en vue Cartes (raccourci / app), on bascule le
-  // <link rel="manifest"> vers le manifest dédié (id « /mes-taches »
-  // distinct de celui d'Horizon → installable comme une app séparée) +
-  // theme-color violet + titre iOS. Restauré en quittant. Même pattern
-  // que /telephonie.
-  useEffect(() => {
-    if (!forceCartes) return;
-    const link = document.querySelector<HTMLLinkElement>(
-      'link[rel="manifest"]'
-    );
-    const prevHref = link?.getAttribute("href") ?? null;
-    link?.setAttribute("href", "/mes-taches/manifest.webmanifest");
-    const theme = document.querySelector<HTMLMetaElement>(
-      'meta[name="theme-color"]'
-    );
-    const prevTheme = theme?.getAttribute("content") ?? null;
-    theme?.setAttribute("content", "#7c3aed");
-    let apple = document.querySelector<HTMLMetaElement>(
-      'meta[name="apple-mobile-web-app-title"]'
-    );
-    let appleCreated = false;
-    if (!apple) {
-      apple = document.createElement("meta");
-      apple.setAttribute("name", "apple-mobile-web-app-title");
-      document.head.appendChild(apple);
-      appleCreated = true;
-    }
-    const prevApple = apple.getAttribute("content");
-    apple.setAttribute("content", "Mes tâches");
-    return () => {
-      if (link && prevHref !== null) link.setAttribute("href", prevHref);
-      if (theme && prevTheme !== null) theme.setAttribute("content", prevTheme);
-      if (appleCreated) apple?.remove();
-      else if (apple && prevApple !== null)
-        apple.setAttribute("content", prevApple);
-    };
-  }, [forceCartes]);
+  // NB : on ne bascule PLUS le <link rel="manifest"> en vue Cartes. Sur
+  // /entreprises/taches, déclarer un manifest scopé « /mes-taches » sortait
+  // la page de son propre scope → Android ouvrait le raccourci dans Chrome
+  // au lieu de rester dans l'app Horizon. La page garde donc le manifest
+  // Horizon (scope « / ») → navigation in-app préservée.
 
   // Modale de choix entreprise / deal lors de la création d'une
   // tâche depuis le bouton « + Nouvelle tâche » du TaskBoard.
