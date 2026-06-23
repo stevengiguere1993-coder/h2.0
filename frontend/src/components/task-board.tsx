@@ -330,7 +330,7 @@ export function TaskBoard({
               {newTaskLabel}
             </button>
           ) : null}
-          {headerSlot}
+          {effectiveView !== "cartes" ? headerSlot : null}
         </div>
         <div className="inline-flex rounded-lg border border-brand-800 bg-brand-900 p-0.5">
           {isMobile ? (
@@ -371,6 +371,7 @@ export function TaskBoard({
         </div>
       </div>
 
+      {effectiveView === "cartes" ? null : (
       <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-brand-800 bg-brand-900/40 px-3 py-2">
         <label className="relative inline-flex items-center">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
@@ -420,6 +421,7 @@ export function TaskBoard({
           />
         ) : null}
       </div>
+      )}
 
       {effectiveView === "cartes" ? (
         <TaskKeepView
@@ -1642,21 +1644,32 @@ function TaskKeepView({
       dragTranslate.current = t;
       dEl.style.transform = `translateY(${t}px)`;
     }
-    // 2) Carte sous le doigt (la carte tenue est en pointer-events:none →
-    //    elementFromPoint la traverse) → réordonne + anime les autres (FLIP).
-    const overEl = document
-      .elementFromPoint(e.clientX, e.clientY)
-      ?.closest("[data-keep-id]") as HTMLElement | null;
-    if (!overEl || !dragOrder) return;
-    const overId = Number(overEl.getAttribute("data-keep-id"));
-    if (!overId || overId === dragId) return;
-    const from = dragOrder.indexOf(dragId);
-    const to = dragOrder.indexOf(overId);
-    if (from < 0 || to < 0 || from === to) return;
+    // 2) Index d'insertion = nombre de cartes (HORS celle qu'on tient) dont
+    //    le milieu vertical est au-dessus du doigt. Stable car indépendant de
+    //    la position de la carte tenue → pas d'oscillation/flash. On ne
+    //    réordonne (et anime via FLIP) que si l'ordre change réellement.
+    if (!dragOrder) return;
+    const others = dragOrder.filter((id) => id !== dragId);
+    let insertAt = others.length;
+    for (let i = 0; i < others.length; i++) {
+      const el = cardEls.current.get(others[i]);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (e.clientY < r.top + r.height / 2) {
+        insertAt = i;
+        break;
+      }
+    }
+    const next = [
+      ...others.slice(0, insertAt),
+      dragId,
+      ...others.slice(insertAt)
+    ];
+    const changed =
+      next.length !== dragOrder.length ||
+      next.some((id, i) => id !== dragOrder[i]);
+    if (!changed) return;
     captureFirstTops();
-    const next = dragOrder.slice();
-    next.splice(from, 1);
-    next.splice(to, 0, dragId);
     setDragOrder(next);
   }
   function handleDragEnd() {
