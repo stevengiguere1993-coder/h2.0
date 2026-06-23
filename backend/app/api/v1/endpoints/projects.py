@@ -242,6 +242,18 @@ async def update_project(
 ) -> ProjectRead:
     """Update a project. Requires admin privileges."""
     service = ProjectService(db)
+    # Statut AVANT mise à jour : on n'archive la soumission liée QUE sur la
+    # TRANSITION vers « livré ». Sinon, sauvegarder un projet DÉJÀ livré
+    # ré-archiverait une soumission qu'on aurait sortie à la main de la
+    # colonne « Archivée » → la carte « changeait de colonne toute seule ».
+    from sqlalchemy import select as _sel
+    from app.models.project import Project as _Proj
+
+    prev_status = (
+        await db.execute(
+            _sel(_Proj.status).where(_Proj.id == project_id)
+        )
+    ).scalar_one_or_none()
     project = await service.update(project_id, data)
     if project is None:
         raise HTTPException(
@@ -263,39 +275,15 @@ async def update_project(
     from app.models.project import ProjectStatus
 
     if (
-        project.status == ProjectStatus.DELIVERED.value
+        prev_status != ProjectStatus.DELIVERED.value
+        and project.status == ProjectStatus.DELIVERED.value
         and project.soumission_id
     ):
-        from datetime import datetime, timezone
+        from app.services.project_auto_status import (
+            archive_soumission_on_delivery,
+        )
 
-        from sqlalchemy import select, update as _sql_update
-        from app.models.soumission import Soumission
-
-        try:
-            async with db.begin_nested():
-                sm_id = (
-                    await db.execute(
-                        select(Soumission.id).where(
-                            Soumission.id == project.soumission_id,
-                            Soumission.archived_at.is_(None),
-                        )
-                    )
-                ).scalar_one_or_none()
-                if sm_id is not None:
-                    await db.execute(
-                        _sql_update(Soumission)
-                        .where(Soumission.id == sm_id)
-                        .values(archived_at=datetime.now(timezone.utc))
-                    )
-        except Exception as exc:  # noqa: BLE001
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "Archivage soumission (projet %s livré) échoué — "
-                "le statut « livré » est conservé : %s",
-                project_id,
-                exc,
-            )
+        await archive_soumission_on_delivery(db, project.id)
 
     out = ProjectRead.model_validate(project)
     out.responsible_name = await _responsible_name(
