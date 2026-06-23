@@ -40,13 +40,6 @@
       "icons": [{ "src": "/pwa/icon-192.png", "sizes": "192x192" }]
     },
     {
-      "name": "Téléphonie",
-      "short_name": "Téléphone",
-      "description": "Voir les appels et SMS",
-      "url": "/telephonie?source=shortcut",
-      "icons": [{ "src": "/pwa/icon-192.png", "sizes": "192x192" }]
-    },
-    {
       "name": "Poinçonner",
       "short_name": "Punch",
       "description": "Démarrer ou arrêter un punch",
