@@ -1342,17 +1342,20 @@ function TaskListView({
 // un collegue habitue a Keep ne voit qu'un titre + une case. Les terminees
 // se replient en bas.
 
-const KEEP_PALETTE = [
-  "#378ADD", "#1D9E75", "#7F77DD", "#D85A30",
-  "#D4537E", "#EF9F27", "#5BA82F"
-];
+// Couleur de la carte = STATUT (fond très pâle, non dominant). Alignée sur
+// les pastilles de TASK_STATUS_OPTIONS (À venir / À faire / En traitement /
+// En attente / Terminé).
+const STATUS_COLORS: Record<string, string> = {
+  todo: "#8B5CF6", // À venir — violet
+  a_faire: "#0EA5E9", // À faire — sky
+  in_progress: "#F59E0B", // En traitement — amber
+  waiting: "#D946EF", // En attente — fuchsia
+  done: "#10B981", // Terminé — emerald
+  backlog: "#64748B" // (legacy) — slate
+};
 
-function keepHue(dept?: string | null): string {
-  const d = (dept || "").trim();
-  if (!d) return "#8A8A85";
-  let h = 0;
-  for (let i = 0; i < d.length; i++) h = (h * 31 + d.charCodeAt(i)) >>> 0;
-  return KEEP_PALETTE[h % KEEP_PALETTE.length];
+function statusHue(status?: string | null): string {
+  return STATUS_COLORS[(status || "").trim()] || "#64748B";
 }
 
 function keepDueLabel(s: string): string {
@@ -1393,19 +1396,22 @@ function KeepCard({
   registerRef?: (id: number, el: HTMLElement | null) => void;
 }) {
   const done = task.status === "done";
-  const hue = keepHue(task.departement);
+  const hue = statusHue(task.status);
   // On masque son propre avatar (comme Keep : tes notes n'affichent pas ton
   // visage). En vue « Toutes », seuls les avatars des autres restent → signal.
   const assignees = (task.assignee_user_ids || [])
     .filter((id) => id !== currentUserId)
     .map((id) => userById.get(id))
     .filter((u): u is TaskUserMini => Boolean(u));
-  const prio =
-    task.priority === "urgent"
-      ? { c: "#E24B4A", l: "Urgent" }
-      : task.priority === "eleve"
-      ? { c: "#EF9F27", l: "Élevé" }
-      : null;
+  // Pastille de priorité — pour toute priorité réelle (urgent → faible),
+  // pas seulement urgent/élevé. Rien pour « non assigné ».
+  const PRIO: Record<string, { c: string; l: string }> = {
+    urgent: { c: "#F43F5E", l: "Urgent" },
+    eleve: { c: "#F97316", l: "Élevé" },
+    moyenne: { c: "#EAB308", l: "Moyenne" },
+    faible: { c: "#84CC16", l: "Faible" }
+  };
+  const prio = PRIO[(task.priority || "").trim()] || null;
   const hasChips =
     Boolean(task.due_date) || Boolean(prio) || assignees.length > 0;
 
@@ -1414,11 +1420,11 @@ function KeepCard({
       data-keep-id={task.id}
       ref={registerRef ? (el) => registerRef(Number(task.id), el) : undefined}
       style={{
-        // Teinte du département en fond + bordure ; le texte passe par
-        // les variables --qg-* qui basculent clair/sombre → lisible dans
-        // les deux thèmes (le portail entreprises tourne en clair).
-        background: hue + "24",
-        border: "1px solid " + hue + (isDragging ? "" : "55"),
+        // Fond TRÈS pâle selon le statut (non dominant) + fine bordure ; le
+        // texte passe par les variables --qg-* qui basculent clair/sombre →
+        // lisible dans les deux thèmes (le portail entreprises tourne clair).
+        background: hue + "14",
+        border: "1px solid " + hue + (isDragging ? "" : "29"),
         // Carte « soulevée » qui flotte au-dessus + suit le doigt
         // (transform posé impérativement). pointerEvents:none → la carte
         // sous le doigt est détectable. Pas de transition pendant le drag.
@@ -1487,7 +1493,7 @@ function KeepCard({
           }}
         >
           {prio ? (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, color: prio.c }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 500, color: "var(--qg-text-muted)" }}>
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: prio.c }} />
               {prio.l}
             </span>
