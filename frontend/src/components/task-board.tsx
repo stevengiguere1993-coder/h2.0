@@ -4,7 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   Building2,
+  Calendar,
+  Check,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Plus,
   Search
@@ -25,6 +28,8 @@ import {
   AssigneePicker,
   DatePill,
   PillPicker,
+  userInitials,
+  userDisplayName,
   type TaskUserMini
 } from "@/components/task-pills";
 import {
@@ -113,7 +118,9 @@ export function TaskBoard({
   title = "Tâches",
   newTaskLabel = "Nouvelle tâche",
   showNewTaskButton = true,
-  headerSlot
+  headerSlot,
+  defaultView = "kanban",
+  currentUserId
 }: {
   tasks: TaskBoardItem[];
   users: TaskUserMini[];
@@ -150,8 +157,13 @@ export function TaskBoard({
    *  le header de la section. Utilisé par la fiche entreprise pour
    *  afficher un raccourci vers les modèles récurrents. */
   headerSlot?: React.ReactNode;
+  /** Vue par défaut. « cartes » = vue façon Google Keep (Mes tâches). */
+  defaultView?: "kanban" | "list" | "cartes";
+  /** Utilisateur courant — pour auto-assigner les notes créées en vue
+   *  Cartes (ajout zéro friction). */
+  currentUserId?: number | null;
 }) {
-  const [view, setView] = useState<"kanban" | "list">("kanban");
+  const [view, setView] = useState<"kanban" | "list" | "cartes">(defaultView);
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
   // Recherche libre (titre / notes / immeuble / département) — filtre
   // textuel additif aux pickers.
@@ -297,8 +309,19 @@ export function TaskBoard({
         <div className="inline-flex rounded-lg border border-brand-800 bg-brand-900 p-0.5">
           <button
             type="button"
-            onClick={() => setView("list")}
+            onClick={() => setView("cartes")}
             className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+              view === "cartes"
+                ? "bg-violet-400 text-brand-950 shadow"
+                : "border border-brand-700 bg-brand-950/40 text-white hover:bg-brand-950/70"
+            }`}
+          >
+            Cartes
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("list")}
+            className={`ml-0.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
               view === "list"
                 ? "bg-violet-400 text-brand-950 shadow"
                 : "border border-brand-700 bg-brand-950/40 text-white hover:bg-brand-950/70"
@@ -370,7 +393,16 @@ export function TaskBoard({
         ) : null}
       </div>
 
-      {view === "kanban" ? (
+      {view === "cartes" ? (
+        <TaskKeepView
+          tasks={sortedTasks}
+          users={users}
+          onPatch={onPatch}
+          onOpenDetails={(id) => setDetailTaskId(id)}
+          onCreate={onCreate}
+          currentUserId={currentUserId ?? null}
+        />
+      ) : view === "kanban" ? (
         <KanbanView
           tasks={sortedTasks}
           users={users}
@@ -1269,6 +1301,254 @@ function TaskListView({
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ── Vue « Cartes » (façon Google Keep) ─────────────────────────────────
+// Cartes colorées par DEPARTEMENT, case ronde a faire/fait, ajout zero
+// friction (« Prendre une note… » → auto-assignee au createur). Les chips
+// (priorite / echeance / assigne) n'apparaissent QUE s'ils sont remplis →
+// un collegue habitue a Keep ne voit qu'un titre + une case. Les terminees
+// se replient en bas.
+
+const KEEP_PALETTE = [
+  "#378ADD", "#1D9E75", "#7F77DD", "#D85A30",
+  "#D4537E", "#EF9F27", "#5BA82F"
+];
+
+function keepHue(dept?: string | null): string {
+  const d = (dept || "").trim();
+  if (!d) return "#8A8A85";
+  let h = 0;
+  for (let i = 0; i < d.length; i++) h = (h * 31 + d.charCodeAt(i)) >>> 0;
+  return KEEP_PALETTE[h % KEEP_PALETTE.length];
+}
+
+function keepDueLabel(s: string): string {
+  const d = new Date(s + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleDateString("fr-CA", { day: "numeric", month: "short" });
+}
+
+function KeepAvatar({ u }: { u: TaskUserMini }) {
+  return (
+    <span
+      title={userDisplayName(u)}
+      style={{
+        width: 19, height: 19, borderRadius: "50%",
+        background: u.profile_color || "#5F5E5A", color: "#fff",
+        fontSize: 10, fontWeight: 500, display: "inline-flex",
+        alignItems: "center", justifyContent: "center", flex: "0 0 auto"
+      }}
+    >
+      {(userInitials(u) || "?").slice(0, 2)}
+    </span>
+  );
+}
+
+function KeepCard({
+  task, userById, onPatch, onOpenDetails, currentUserId
+}: {
+  task: TaskBoardItem;
+  userById: Map<number, TaskUserMini>;
+  onPatch: (taskId: number, patch: TaskBoardPatch) => void;
+  onOpenDetails: (id: number) => void;
+  currentUserId: number | null;
+}) {
+  const done = task.status === "done";
+  const hue = keepHue(task.departement);
+  // On masque son propre avatar (comme Keep : tes notes n'affichent pas ton
+  // visage). En vue « Toutes », seuls les avatars des autres restent → signal.
+  const assignees = (task.assignee_user_ids || [])
+    .filter((id) => id !== currentUserId)
+    .map((id) => userById.get(id))
+    .filter((u): u is TaskUserMini => Boolean(u));
+  const prio =
+    task.priority === "urgent"
+      ? { c: "#E24B4A", l: "Urgent" }
+      : task.priority === "eleve"
+      ? { c: "#EF9F27", l: "Élevé" }
+      : null;
+  const hasChips =
+    Boolean(task.due_date) || Boolean(prio) || assignees.length > 0;
+
+  return (
+    <div
+      style={{
+        background: hue + "14",
+        border: "0.5px solid " + hue + "40",
+        borderRadius: 12,
+        padding: "10px 12px",
+        marginBottom: 10,
+        breakInside: "avoid"
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <button
+          type="button"
+          onClick={() => onPatch(task.id, { status: done ? "a_faire" : "done" })}
+          aria-label={done ? "Marquer a faire" : "Marquer termine"}
+          style={{
+            width: 18, height: 18, borderRadius: "50%",
+            border: "1.5px solid " + hue,
+            background: done ? hue : "transparent",
+            flex: "0 0 auto", marginTop: 2, padding: 0, cursor: "pointer",
+            display: "inline-flex", alignItems: "center", justifyContent: "center"
+          }}
+        >
+          {done ? <Check className="h-3 w-3" style={{ color: "#fff" }} /> : null}
+        </button>
+        <button
+          type="button"
+          onClick={() => onOpenDetails(task.id)}
+          style={{
+            flex: 1, textAlign: "left", background: "none", border: "none",
+            padding: 0, cursor: "pointer", fontSize: 14, lineHeight: 1.35,
+            color: done ? "rgba(255,255,255,0.4)" : "#fff",
+            textDecoration: done ? "line-through" : "none"
+          }}
+        >
+          {task.title || "Sans titre"}
+        </button>
+      </div>
+      {hasChips ? (
+        <div
+          style={{
+            display: "flex", flexWrap: "wrap", alignItems: "center",
+            gap: 10, marginTop: 8, paddingLeft: 28
+          }}
+        >
+          {prio ? (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: prio.c }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: prio.c }} />
+              {prio.l}
+            </span>
+          ) : null}
+          {task.due_date ? (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
+              <Calendar className="h-3 w-3" />
+              {keepDueLabel(task.due_date)}
+            </span>
+          ) : null}
+          {assignees.map((u) => (
+            <KeepAvatar key={u.id} u={u} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TaskKeepView({
+  tasks, users, onPatch, onOpenDetails, onCreate, currentUserId
+}: {
+  tasks: TaskBoardItem[];
+  users: TaskUserMini[];
+  onPatch: (taskId: number, patch: TaskBoardPatch) => void;
+  onOpenDetails: (id: number) => void;
+  onCreate: (
+    status: string,
+    name: string
+  ) => Promise<number | null> | number | null;
+  currentUserId: number | null;
+}) {
+  const [draft, setDraft] = useState("");
+  const [showDone, setShowDone] = useState(false);
+  const userById = useMemo(
+    () => new Map(users.map((u) => [u.id, u])),
+    [users]
+  );
+  const active = tasks.filter((t) => t.status !== "done");
+  const done = tasks.filter((t) => t.status === "done");
+
+  async function quickAdd() {
+    const name = draft.trim();
+    if (!name) return;
+    setDraft("");
+    const id = await onCreate("a_faire", name);
+    if (typeof id === "number" && currentUserId) {
+      onPatch(id, { assignee_user_ids: [currentUserId] });
+    }
+  }
+
+  return (
+    <div>
+      <div
+        style={{
+          display: "flex", alignItems: "center", gap: 10,
+          background: "rgba(255,255,255,0.03)",
+          border: "0.5px solid rgba(255,255,255,0.1)",
+          borderRadius: 12, padding: "10px 14px", marginBottom: 16
+        }}
+      >
+        <Plus className="h-4 w-4 text-white/40" />
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void quickAdd();
+            }
+          }}
+          placeholder="Prendre une note… (Entree pour ajouter)"
+          style={{
+            flex: 1, background: "none", border: "none", outline: "none",
+            color: "#fff", fontSize: 14
+          }}
+        />
+      </div>
+
+      {active.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/50">
+          Aucune tache en cours. Ecris une note ci-dessus pour commencer.
+        </p>
+      ) : (
+        <div style={{ columnWidth: "240px", columnGap: "12px" }}>
+          {active.map((t) => (
+            <KeepCard
+              key={t.id}
+              task={t}
+              userById={userById}
+              onPatch={onPatch}
+              onOpenDetails={onOpenDetails}
+              currentUserId={currentUserId}
+            />
+          ))}
+        </div>
+      )}
+
+      {done.length > 0 ? (
+        <div style={{ marginTop: 18 }}>
+          <button
+            type="button"
+            onClick={() => setShowDone((v) => !v)}
+            className="inline-flex items-center gap-1.5 text-sm text-white/55 hover:text-white/80"
+          >
+            {showDone ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )}
+            Termine · {done.length}
+          </button>
+          {showDone ? (
+            <div style={{ columnWidth: "240px", columnGap: "12px", marginTop: 12 }}>
+              {done.map((t) => (
+                <KeepCard
+                  key={t.id}
+                  task={t}
+                  userById={userById}
+                  onPatch={onPatch}
+                  onOpenDetails={onOpenDetails}
+                  currentUserId={currentUserId}
+                />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
