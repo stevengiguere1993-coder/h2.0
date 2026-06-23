@@ -348,7 +348,11 @@ export default function MesTachesPage() {
           body: JSON.stringify({
             entreprise_id: owner.id,
             title: name,
-            status
+            status,
+            // Auto-assignation au créateur (« Mes tâches »). Fait à la
+            // création — un patch après-coup échouerait car ownerByBoardId
+            // n'a pas encore la nouvelle tâche (state pas re-rendu).
+            assignee_user_ids: currentUser?.id ? [currentUser.id] : undefined
           })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -361,7 +365,11 @@ export default function MesTachesPage() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, status })
+          body: JSON.stringify({
+            name,
+            status,
+            assignee_user_ids: currentUser?.id ? [currentUser.id] : undefined
+          })
         }
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -576,8 +584,11 @@ export default function MesTachesPage() {
       <div className="px-5 py-6 lg:px-8">
         {/* Briefing IA — bascule entre vue globale (toutes entreprises)
             et vue scopée à l'utilisateur connecté selon le toggle
-            « Toutes / Mes tâches » ci-dessous. */}
-        <GlobalBriefingCard entreprises={entreprises} scope={scope} />
+            « Toutes / Mes tâches » ci-dessous. Masqué sur mobile : la vue
+            Cartes y est épurée façon Keep. */}
+        <div className="hidden md:block">
+          <GlobalBriefingCard entreprises={entreprises} scope={scope} />
+        </div>
 
         {/* Bandeau filtres niveau page : portée. Le filtre par
             entreprise/deal est dans la barre d'outils du TaskBoard. */}
