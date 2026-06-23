@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  GripVertical,
   Plus,
   Search
 } from "lucide-react";
@@ -68,6 +69,9 @@ export type TaskBoardItem = TaskCardData & {
   /** Horodatage de création (ISO) — utilisé pour trier la vue Cartes
    *  par ordre de création (la plus récente en haut). */
   created_at?: string | null;
+  /** Position DB réelle (≠ `position` qui est dérivé du score pour le
+   *  kanban). Porte l'ordre manuel du drag & drop de la vue Cartes. */
+  dbPosition?: number | null;
   /** Notes / description complète — alimente la TaskDetailsModal. */
   notes?: string | null;
   /** Liste brute des immeubles liés à la tâche — alimente le picker
@@ -1366,13 +1370,16 @@ function KeepAvatar({ u }: { u: TaskUserMini }) {
 }
 
 function KeepCard({
-  task, userById, onPatch, onOpenDetails, currentUserId
+  task, userById, onPatch, onOpenDetails, currentUserId, onDragStart, isDragging
 }: {
   task: TaskBoardItem;
   userById: Map<number, TaskUserMini>;
   onPatch: (taskId: number, patch: TaskBoardPatch) => void;
   onOpenDetails: (id: number) => void;
   currentUserId: number | null;
+  /** Fourni → carte réordonnable (poignée affichée). Démarre le drag. */
+  onDragStart?: (id: number, e: React.PointerEvent) => void;
+  isDragging?: boolean;
 }) {
   const done = task.status === "done";
   const hue = keepHue(task.departement);
@@ -1393,12 +1400,15 @@ function KeepCard({
 
   return (
     <div
+      data-keep-id={task.id}
       style={{
         // Teinte du département en fond + bordure ; le texte passe par
         // les variables --qg-* qui basculent clair/sombre → lisible dans
         // les deux thèmes (le portail entreprises tourne en clair).
         background: hue + "24",
-        border: "1px solid " + hue + "55",
+        border: "1px solid " + hue + (isDragging ? "" : "55"),
+        boxShadow: isDragging ? "0 6px 18px rgba(0,0,0,0.18)" : "none",
+        opacity: isDragging ? 0.85 : 1,
         borderRadius: 12,
         padding: "10px 12px",
         marginBottom: 10,
@@ -1432,6 +1442,22 @@ function KeepCard({
         >
           {task.title || "Sans titre"}
         </button>
+        {onDragStart ? (
+          <button
+            type="button"
+            aria-label="Réordonner"
+            onPointerDown={(e) => onDragStart(Number(task.id), e)}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              flex: "0 0 auto", marginTop: 1, padding: 2,
+              background: "none", border: "none", cursor: "grab",
+              touchAction: "none", color: "var(--qg-text-soft)",
+              display: "inline-flex"
+            }}
+          >
+            <GripVertical className="h-4 w-4" />
+          </button>
+        ) : null}
       </div>
       {hasChips ? (
         <div
@@ -1480,22 +1506,90 @@ function TaskKeepView({
     () => new Map(users.map((u) => [u.id, u])),
     [users]
   );
-  // Ordre de création — la plus récente en haut. created_at est un ISO ;
-  // fallback sur l'id (numérique, croissant avec la création) si absent.
-  const byCreatedDesc = (a: TaskBoardItem, b: TaskBoardItem) => {
+  // Ordre des cartes : position manuelle (drag & drop) ascendante, puis
+  // création décroissante (la plus récente en haut). Les tâches jamais
+  // déplacées partagent la position par défaut → triées par date.
+  const sortForCartes = (a: TaskBoardItem, b: TaskBoardItem) => {
+    const pa = a.dbPosition ?? 0;
+    const pb = b.dbPosition ?? 0;
+    if (pa !== pb) return pa - pb;
     const ta = a.created_at ? Date.parse(a.created_at) : 0;
     const tb = b.created_at ? Date.parse(b.created_at) : 0;
     if (tb !== ta) return tb - ta;
     return (Number(b.id) || 0) - (Number(a.id) || 0);
   };
-  const active = tasks
+  const activeBase = tasks
     .filter((t) => t.status !== "done")
     .slice()
-    .sort(byCreatedDesc);
+    .sort(sortForCartes);
   const done = tasks
     .filter((t) => t.status === "done")
     .slice()
-    .sort(byCreatedDesc);
+    .sort(sortForCartes);
+
+  // ── Drag & drop (réordonner façon Keep) ────────────────────────────
+  // Pointer Events (tactile + souris) → pas de lib. Pendant le drag on
+  // suit un ordre local (`dragOrder` = liste d'ids) ; au drop on persiste
+  // la `position` (index) des cartes déplacées.
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [dragOrder, setDragOrder] = useState<number[] | null>(null);
+
+  let activeDisplayed = activeBase;
+  if (dragOrder) {
+    const byId = new Map(activeBase.map((t) => [Number(t.id), t]));
+    const ordered: TaskBoardItem[] = [];
+    for (const id of dragOrder) {
+      const t = byId.get(id);
+      if (t) ordered.push(t);
+    }
+    for (const t of activeBase) {
+      if (!dragOrder.includes(Number(t.id))) ordered.push(t);
+    }
+    activeDisplayed = ordered;
+  }
+
+  function handleDragStart(id: number, e: React.PointerEvent) {
+    setDragId(id);
+    setDragOrder(activeBase.map((t) => Number(t.id)));
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  }
+  function handleDragMove(e: React.PointerEvent) {
+    if (dragId == null) return;
+    const el = document.elementFromPoint(
+      e.clientX,
+      e.clientY
+    ) as HTMLElement | null;
+    const cardEl = el?.closest("[data-keep-id]") as HTMLElement | null;
+    if (!cardEl) return;
+    const overId = Number(cardEl.getAttribute("data-keep-id"));
+    if (!overId || overId === dragId) return;
+    setDragOrder((prev) => {
+      if (!prev) return prev;
+      const from = prev.indexOf(dragId);
+      const to = prev.indexOf(overId);
+      if (from < 0 || to < 0 || from === to) return prev;
+      const next = prev.slice();
+      next.splice(from, 1);
+      next.splice(to, 0, dragId);
+      return next;
+    });
+  }
+  function handleDragEnd() {
+    if (dragId != null && dragOrder) {
+      dragOrder.forEach((id, idx) => {
+        const t = activeBase.find((x) => Number(x.id) === id);
+        if (t && (t.dbPosition ?? 0) !== idx) {
+          onPatch(id, { position: idx });
+        }
+      });
+    }
+    setDragId(null);
+    setDragOrder(null);
+  }
 
   async function quickAdd() {
     const name = draft.trim();
@@ -1537,13 +1631,18 @@ function TaskKeepView({
         />
       </div>
 
-      {active.length === 0 ? (
+      {activeBase.length === 0 ? (
         <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/50">
           Aucune tâche en cours. Écris une note ci-dessus pour commencer.
         </p>
       ) : (
-        <div style={{ columnWidth: "240px", columnGap: "12px" }}>
-          {active.map((t) => (
+        <div
+          onPointerMove={handleDragMove}
+          onPointerUp={handleDragEnd}
+          onPointerCancel={handleDragEnd}
+          style={{ display: "flex", flexDirection: "column" }}
+        >
+          {activeDisplayed.map((t) => (
             <KeepCard
               key={t.id}
               task={t}
@@ -1551,6 +1650,8 @@ function TaskKeepView({
               onPatch={onPatch}
               onOpenDetails={onOpenDetails}
               currentUserId={currentUserId}
+              onDragStart={handleDragStart}
+              isDragging={dragId === Number(t.id)}
             />
           ))}
         </div>

@@ -477,6 +477,7 @@ export default function MesTachesPage() {
       items.push({
         id: toBoardId(owner, t.id),
         created_at: t.created_at,
+        dbPosition: t.position,
         title: t.title,
         status: t.status,
         priority: t.priority || "non_assigne",
@@ -503,6 +504,7 @@ export default function MesTachesPage() {
       items.push({
         id: toBoardId(owner, t.id),
         created_at: t.created_at,
+        dbPosition: t.position,
         title: t.name,
         status: t.status,
         priority: t.priority || "non_assigne",
@@ -673,6 +675,8 @@ export default function MesTachesPage() {
                 if (patch.confidence !== undefined)
                   out.confidence = patch.confidence;
                 if (patch.effort !== undefined) out.effort = patch.effort;
+                if (patch.position !== undefined)
+                  out.position = patch.position;
                 void patchTache(owner, realId, out);
               } else {
                 // Côté deal le titre est `name` (pas `title`).
@@ -697,6 +701,8 @@ export default function MesTachesPage() {
                 if (patch.confidence !== undefined)
                   out.confidence = patch.confidence;
                 if (patch.effort !== undefined) out.effort = patch.effort;
+                if (patch.position !== undefined)
+                  out.position = patch.position;
                 void patchTache(owner, realId, out);
               }
             }}
