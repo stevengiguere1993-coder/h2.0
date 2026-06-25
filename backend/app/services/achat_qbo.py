@@ -638,14 +638,23 @@ async def sync_achat_to_qbo(
                         )
                         qbo_obj = await qbo.update_purchase(payload)
                     elif _is_stale_ref(exc):
-                        # L'objet QBO référencé a été supprimé/inactivé
-                        # côté QuickBooks : on recrée un nouveau Purchase.
+                        # L'objet QBO référencé n'est pas une Purchase
+                        # (souvent : l'achat était un Bill « sur compte »
+                        # puis est passé payé → Purchase). On SUPPRIME
+                        # l'ancien Bill pour ne pas laisser de doublon
+                        # orphelin, puis on recrée la Purchase.
                         log.warning(
-                            "QBO purchase %s introuvable → recréation "
-                            "(achat %s)",
+                            "QBO purchase %s introuvable → suppression de "
+                            "l'ancien Bill + recréation (achat %s)",
                             payload.get("Id"),
                             achat.id,
                         )
+                        _old_id = str(payload.get("Id") or "")
+                        if _old_id:
+                            try:
+                                await qbo.delete_bill(_old_id)
+                            except Exception:  # noqa: BLE001
+                                pass
                         payload.pop("Id", None)
                         payload.pop("SyncToken", None)
                         payload.pop("sparse", None)
@@ -680,11 +689,21 @@ async def sync_achat_to_qbo(
                         )
                         qbo_obj = await qbo.update_bill(payload)
                     elif _is_stale_ref(exc):
+                        # Pas un Bill (souvent : l'achat était payé →
+                        # Purchase, puis repassé « sur compte » → Bill). On
+                        # supprime l'ancienne Purchase pour éviter le doublon.
                         log.warning(
-                            "QBO bill %s introuvable → recréation (achat %s)",
+                            "QBO bill %s introuvable → suppression de "
+                            "l'ancienne Purchase + recréation (achat %s)",
                             payload.get("Id"),
                             achat.id,
                         )
+                        _old_id = str(payload.get("Id") or "")
+                        if _old_id:
+                            try:
+                                await qbo.delete_purchase(_old_id)
+                            except Exception:  # noqa: BLE001
+                                pass
                         payload.pop("Id", None)
                         payload.pop("SyncToken", None)
                         payload.pop("sparse", None)
