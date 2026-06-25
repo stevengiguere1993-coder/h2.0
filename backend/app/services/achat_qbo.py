@@ -361,25 +361,35 @@ async def _resolve_payment_account(
 
 
 async def _resolve_expense_account(
-    db, qbo, fournisseur: Optional[Fournisseur] = None
+    db, qbo, fournisseur: Optional[Fournisseur] = None,
+    is_sous_traitant: bool = False,
 ) -> Optional[str]:
     """Compte de dépense à utiliser pour la ligne d'achat.
 
     Priorité :
+    0. Si c'est une facture de SOUS-TRAITANT (kind == 'sub_invoice' ou
+       sous_traitant_id renseigné) → QboAccountMap.sous_traitant_account
+       (compte « Sous-traitant »). Prioritaire sur tout le reste pour que
+       les factures de sous-traitant soient toujours catégorisées comme
+       telles, peu importe le fournisseur.
     1. fournisseur.qbo_expense_account (auto-classification par
        fournisseur — ex. Rona → Matériaux)
     2. QboAccountMap.default_expense_account (fallback global)
     3. Premier compte d'expense disponible côté QB (dernier recours)
     """
-    if fournisseur and fournisseur.qbo_expense_account:
-        acc = await qbo.find_account_by_name(fournisseur.qbo_expense_account)
-        if acc:
-            return str(acc.get("Id"))
     map_row = (
         await db.execute(
             select(QboAccountMap).where(QboAccountMap.id == 1)
         )
     ).scalar_one_or_none()
+    if is_sous_traitant and map_row and map_row.sous_traitant_account:
+        acc = await qbo.find_account_by_name(map_row.sous_traitant_account)
+        if acc:
+            return str(acc.get("Id"))
+    if fournisseur and fournisseur.qbo_expense_account:
+        acc = await qbo.find_account_by_name(fournisseur.qbo_expense_account)
+        if acc:
+            return str(acc.get("Id"))
     if map_row and map_row.default_expense_account:
         acc = await qbo.find_account_by_name(map_row.default_expense_account)
         if acc:
@@ -529,8 +539,15 @@ async def sync_achat_to_qbo(
             if qbo_addr:
                 fournisseur.address = qbo_addr
 
+        # Facture de sous-traitant → compte « Sous-traitant » dédié
+        # (kind == 'sub_invoice' OU un sous-traitant est rattaché).
+        is_sous_traitant = (
+            (achat.kind or "").lower() == "sub_invoice"
+            or achat.sous_traitant_id is not None
+        )
         expense_account_id = await _resolve_expense_account(
-            db, qbo, fournisseur=fournisseur
+            db, qbo, fournisseur=fournisseur,
+            is_sous_traitant=is_sous_traitant,
         )
         if not expense_account_id:
             raise AchatSyncError(
