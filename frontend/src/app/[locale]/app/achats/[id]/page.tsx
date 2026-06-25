@@ -920,6 +920,13 @@ function AchatQboPushButton({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [justSynced, setJustSynced] = useState(false);
+  // Type QB réel : un achat payé (chèque/CC) est une DÉPENSE (Purchase) ;
+  // « sur compte / à payer » (bill_to_pay) est une FACTURE FOURNISSEUR (Bill).
+  // Le champ qbo_bill_id stocke l'Id dans les deux cas → on déduit le libellé
+  // du mode de paiement pour ne pas afficher « Bill » sur une dépense payée.
+  const _pm = (achat.payment_method || "").trim();
+  const qbLabel =
+    _pm && _pm !== "bill_to_pay" ? "QB Dépense" : "QB Facture fourn.";
 
   async function push() {
     setBusy(true);
@@ -952,7 +959,7 @@ function AchatQboPushButton({
       <div className="flex flex-col items-start gap-1">
         <div className="inline-flex items-center gap-2 self-start rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-sm font-medium text-emerald-300">
           <CheckCircle2 className="h-4 w-4" />
-          QB Bill ✓ #{achat.qbo_bill_id}
+          {qbLabel} ✓ #{achat.qbo_bill_id}
         </div>
         <button
           type="button"
@@ -984,7 +991,8 @@ function AchatQboPushButton({
       </button>
       {justSynced ? (
         <p className="text-[11px] text-emerald-300">
-          Bill créée dans QuickBooks.
+          {qbLabel === "QB Dépense" ? "Dépense créée" : "Facture fournisseur créée"}{" "}
+          dans QuickBooks.
         </p>
       ) : null}
       {err ? <p className="text-[11px] text-rose-300">{err}</p> : null}
