@@ -197,9 +197,14 @@ def make_crud_router(
 
             await apply_payment_defaults(db, obj)
             await db.flush()
-        # Auto-push QBO pour tout Achat créé en statut « received »
-        # (cas usuel : facture fournisseur saisie en différé).
-        if model is Achat and getattr(obj, "status", None) == "received":
+        # Auto-push QBO pour tout Achat créé « actif » (reçu OU déjà payé) →
+        # il part dans QB et se classe dans le bon projet. Avant, seuls les
+        # achats « received » partaient ; un achat saisi DÉJÀ payé (chèque/CC)
+        # était oublié.
+        if model is Achat and getattr(obj, "status", None) in (
+            "received",
+            "paid",
+        ):
             import asyncio
 
             from app.api.v1.endpoints.achat_qbo import autopush_achat
@@ -385,11 +390,11 @@ def make_crud_router(
         if model is Achat:
             new_status = getattr(obj, "status", None)
             new_proj = getattr(obj, "project_id", None)
-            # Push QB si : (a) l'achat passe « received » (1ʳᵉ sync), OU
-            # (b) on le (re)classe dans un autre projet (met à jour le
-            # CustomerRef/ClassRef du Bill/Purchase QB existant).
-            became_received = (
-                prev_status != "received" and new_status == "received"
+            # Push QB si : (a) l'achat devient « actif » (received OU paid)
+            # pour la 1ʳᵉ fois, OU (b) on le (re)classe dans un autre projet
+            # (met à jour le CustomerRef/ClassRef du Bill/Purchase QB).
+            became_active = prev_status not in ("received", "paid") and (
+                new_status in ("received", "paid")
             )
             project_changed = new_proj != prev_doc_project_id
             # Garde anti-doublon : un achat IMPORTÉ de QB comme Purchase ne
@@ -401,7 +406,7 @@ def make_crud_router(
             safe_for_repush = bool(getattr(obj, "qbo_bill_id", None)) or not (
                 getattr(obj, "qbo_purchase_id", None)
             )
-            if became_received or (project_changed and safe_for_repush):
+            if became_active or (project_changed and safe_for_repush):
                 import asyncio
 
                 from app.api.v1.endpoints.achat_qbo import autopush_achat
