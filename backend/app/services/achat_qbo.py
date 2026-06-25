@@ -650,6 +650,16 @@ async def sync_achat_to_qbo(
                             achat.id,
                         )
                         _old_id = str(payload.get("Id") or "")
+                        # Supprimer d'abord le PAIEMENT de facture lié (sinon
+                        # QB refuse de supprimer le Bill), puis le Bill.
+                        if achat.qbo_bill_payment_id:
+                            try:
+                                await qbo.delete_bill_payment(
+                                    str(achat.qbo_bill_payment_id)
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
+                            achat.qbo_bill_payment_id = None
                         if _old_id:
                             try:
                                 await qbo.delete_bill(_old_id)
