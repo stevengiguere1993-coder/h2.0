@@ -935,6 +935,27 @@ class QuickBooksClient:
         )
         return data.get("Bill") or data
 
+    async def delete_bill(self, bill_id: str) -> bool:
+        """Supprime un Bill QB (best-effort). Sert à enlever l'ancien objet
+        quand un achat change de type (Bill ↔ Purchase) pour ne pas laisser
+        de doublon orphelin. Renvoie False sans lever si l'objet n'existe
+        pas / n'est pas un Bill."""
+        try:
+            cur = await self.get_bill(str(bill_id))
+            tok = str(cur.get("SyncToken") or "0")
+        except Exception:  # noqa: BLE001
+            return False
+        try:
+            await self._request(
+                "POST",
+                "/bill",
+                json_body={"Id": str(bill_id), "SyncToken": tok},
+                params={"operation": "delete", "minorversion": "70"},
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     # ------------------------------------------------------------------
     # Purchases (= achats déjà payés, charge dépense + paiement direct)
     # ------------------------------------------------------------------
@@ -948,6 +969,24 @@ class QuickBooksClient:
             params={"minorversion": "70"},
         )
         return data.get("Purchase") or data
+
+    async def delete_purchase(self, purchase_id: str) -> bool:
+        """Supprime une Purchase QB (best-effort) — cf. delete_bill."""
+        try:
+            cur = await self.get_purchase(str(purchase_id))
+            tok = str(cur.get("SyncToken") or "0")
+        except Exception:  # noqa: BLE001
+            return False
+        try:
+            await self._request(
+                "POST",
+                "/purchase",
+                json_body={"Id": str(purchase_id), "SyncToken": tok},
+                params={"operation": "delete", "minorversion": "70"},
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     async def update_purchase(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         data = await self._request(
