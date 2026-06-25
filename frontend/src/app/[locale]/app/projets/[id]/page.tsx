@@ -5503,6 +5503,15 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
       (a.amount_taxes != null ? Number(a.amount_taxes) : 0),
     0
   );
+  // Détail HT / taxes pour l'en-tête (« sans taxes + taxes = total »).
+  const achatHT = achats.reduce(
+    (s, a) => s + (a.amount != null ? Number(a.amount) : 0),
+    0
+  );
+  const achatTaxes = achats.reduce(
+    (s, a) => s + (a.amount_taxes != null ? Number(a.amount_taxes) : 0),
+    0
+  );
 
   // POs actifs (pas annulés ni convertis) → les pertinents pour le suivi.
   const activePos = pos.filter(
@@ -5627,7 +5636,8 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
           <section>
             <header className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
               <h3 className="text-sm font-semibold uppercase tracking-wider text-emerald-400">
-                💸 Achats / dépenses ({achats.length} · {fmt(achatTotal)})
+                💸 Achats / dépenses ({achats.length} · {fmt(achatHT)} +{" "}
+                {fmt(achatTaxes)} taxes = {fmt(achatTotal)})
               </h3>
               <Link
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
