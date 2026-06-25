@@ -142,6 +142,43 @@ def _maybe_dedupe_factures_bg() -> None:
         pass
 
 
+_last_billable_correct_at = 0.0
+
+
+def _maybe_correct_billable_bg() -> None:
+    """Remet « à refacturer » les dépenses des projets contrat/estimé.
+
+    Automatisme DB-only déclenché à l'ouverture de la liste des achats
+    (au plus 1×/30 s), en miroir de l'hourly cron, pour que le statut
+    REFACT se corrige sans attendre l'heure pleine.
+    """
+    import asyncio
+    import time
+
+    global _last_billable_correct_at
+    now = time.monotonic()
+    if now - _last_billable_correct_at < _ACHAT_DEDUPE_THROTTLE_S:
+        return
+    _last_billable_correct_at = now
+
+    async def _run() -> None:
+        from app.db.session import AsyncSessionLocal
+        from app.services.achat_billable_correct import (
+            correct_billable_for_contract_projects,
+        )
+
+        try:
+            async with AsyncSessionLocal() as s:
+                await correct_billable_for_contract_projects(s)
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        asyncio.create_task(_run())
+    except RuntimeError:
+        pass
+
+
 def make_crud_router(
     *,
     prefix: str,
@@ -268,6 +305,7 @@ def make_crud_router(
         # (au plus 1×/30 s) — sans bouton, comme demandé.
         if model is Achat:
             _maybe_dedupe_achats_bg()
+            _maybe_correct_billable_bg()
         elif model is Facture:
             _maybe_dedupe_factures_bg()
         return [read_schema.model_validate(i) for i in items]

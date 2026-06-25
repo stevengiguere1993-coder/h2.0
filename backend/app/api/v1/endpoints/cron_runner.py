@@ -797,6 +797,23 @@ async def trigger_all_hourly(
 
     await _safe("facture-dedupe", _run_facture_dedupe, details)
 
+    # Automatisme « à refacturer » : toute dépense d'un projet à CONTRAT /
+    # ESTIMÉ doit afficher « À refacturer » (is_billable=True) tant qu'elle
+    # n'est pas refacturée. Purement DB (aucun appel QB), donc NON gardé par
+    # l'interrupteur d'auto-sync. Idempotent.
+    async def _run_achat_billable_correct():
+        from app.services.achat_billable_correct import (
+            correct_billable_for_contract_projects,
+        )
+
+        async with AsyncSessionLocal() as db:
+            n = await correct_billable_for_contract_projects(db)
+            return {"corrected": n}
+
+    await _safe(
+        "achat-billable-correct", _run_achat_billable_correct, details
+    )
+
     # Import QB → Kratos (factures + coûts projet) à l'heure, pour une
     # synchro quasi temps réel. Inerte tant que l'interrupteur
     # `qbo_auto_sync` est OFF (fail-closed). Idempotent (clé = ID QBO).

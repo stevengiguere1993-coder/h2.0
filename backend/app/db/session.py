@@ -220,6 +220,12 @@ async def ensure_critical_columns() -> None:
         ("bons_travail", "signature_ip", "VARCHAR(64)"),
         ("bons_travail", "signature_image", "BYTEA"),
         ("bons_travail", "signature_image_content_type", "VARCHAR(100)"),
+        # Mapping comptes QBO (table qbo_account_maps existait avant l'ajout
+        # de ces colonnes → create_all ne les pose pas sur une table déjà
+        # créée). On les ajoute ici, idempotent.
+        ("qbo_account_maps", "sous_traitant_account", "VARCHAR(255)"),
+        ("qbo_account_maps", "labour_expense_account", "VARCHAR(255)"),
+        ("qbo_account_maps", "labour_clearing_account", "VARCHAR(255)"),
     )
     for table, column, col_type in critical_columns:
         try:

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
   CloudDownload,
@@ -22,6 +22,8 @@ type Achat = {
   qbo_doc_number?: string | null;
   qbo_bill_id?: string | null;
   fournisseur_id: number | null;
+  sous_traitant_id?: number | null;
+  kind?: string | null;
   project_id: number | null;
   description: string | null;
   amount: number | string | null;
@@ -75,6 +77,7 @@ function daysBetween(a: Date, b: Date): number {
 
 type Project = { id: number; name: string; address?: string | null };
 type Fournisseur = { id: number; name: string };
+type SousTraitant = { id: number; full_name: string };
 
 const STATUS_LABELS: Record<string, string> = {
   received: "À payer",
@@ -112,6 +115,7 @@ export default function AchatsPage() {
   const [items, setItems] = useState<Achat[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
+  const [sousTraitants, setSousTraitants] = useState<SousTraitant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -177,19 +181,24 @@ export default function AchatsPage() {
       setLoading(true);
       setError(null);
       try {
-        const [aRes, pRes, frRes] = await Promise.all([
+        const [aRes, pRes, frRes, stRes] = await Promise.all([
           authedFetch("/api/v1/achats?limit=500"),
           authedFetch("/api/v1/projects?limit=500"),
-          authedFetch("/api/v1/fournisseurs?limit=500")
+          authedFetch("/api/v1/fournisseurs?limit=500"),
+          authedFetch("/api/v1/sous-traitants?limit=500")
         ]);
         if (!aRes.ok) throw new Error(`http_${aRes.status}`);
         const as = (await aRes.json()) as Achat[];
         const ps = pRes.ok ? ((await pRes.json()) as Project[]) : [];
         const frs = frRes.ok ? ((await frRes.json()) as Fournisseur[]) : [];
+        const sts = stRes.ok
+          ? ((await stRes.json()) as SousTraitant[])
+          : [];
         if (cancelled) return;
         setItems(as);
         setProjects(ps);
         setFournisseurs(frs);
+        setSousTraitants(sts);
       } catch {
         if (!cancelled) setError("Impossible de charger les achats.");
       } finally {
@@ -212,6 +221,25 @@ export default function AchatsPage() {
     fournisseurs.forEach((f) => m.set(f.id, f));
     return m;
   }, [fournisseurs]);
+  const stById = useMemo(() => {
+    const m = new Map<number, SousTraitant>();
+    sousTraitants.forEach((s) => m.set(s.id, s));
+    return m;
+  }, [sousTraitants]);
+
+  // Nom du fournisseur OU du sous-traitant rattaché à l'achat (pour
+  // l'affichage et la recherche). « Plomberie Boston » est un
+  // sous-traitant, donc taper « boston » ou « plomberie » doit le
+  // retrouver.
+  const partyName = useCallback(
+    (a: Achat): string => {
+      if (a.fournisseur_id) return frById.get(a.fournisseur_id)?.name || "";
+      if (a.sous_traitant_id)
+        return stById.get(a.sous_traitant_id)?.full_name || "";
+      return "";
+    },
+    [frById, stById]
+  );
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -224,7 +252,10 @@ export default function AchatsPage() {
         q &&
         !refLabel(a).toLowerCase().includes(q) &&
         !(a.description || "").toLowerCase().includes(q) &&
-        !(a.supplier_invoice_number || "").toLowerCase().includes(q)
+        !(a.supplier_invoice_number || "").toLowerCase().includes(q) &&
+        // Recherche aussi par NOM du fournisseur / sous-traitant (ex.
+        // « boston » trouve « Plomberie Boston »).
+        !partyName(a).toLowerCase().includes(q)
       )
         return false;
       return true;
@@ -239,7 +270,7 @@ export default function AchatsPage() {
       });
     }
     return list;
-  }, [items, search, fStatus, fProject, fFournisseur]);
+  }, [items, search, fStatus, fProject, fFournisseur, partyName]);
 
   const total = useMemo(
     () =>
@@ -437,7 +468,7 @@ export default function AchatsPage() {
                         ) : null}
                       </td>
                       <td className="px-4 py-3 text-white/70">
-                        {fr?.name || "—"}
+                        {fr?.name || partyName(a) || "—"}
                       </td>
                       <td className="px-4 py-3 text-white/70">
                         {projectLabel(pr)}
