@@ -27,13 +27,6 @@ class QboAccountMap(Base):
     default_expense_account: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
-    # Compte de dépense pour les factures de SOUS-TRAITANT (achat.kind ==
-    # 'sub_invoice' ou achat.sous_traitant_id renseigné). Quand une facture
-    # de sous-traitant est poussée vers QB, sa ligne est classée sur ce
-    # compte (« Sous-traitant ») plutôt que sur le compte matériaux.
-    sous_traitant_account: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True
-    )
     # Compte chèque Horizon — pour paiements immédiats par chèque
     # (Purchase QB, crédite ce compte directement).
     cheque_horizon_account: Mapped[Optional[str]] = mapped_column(

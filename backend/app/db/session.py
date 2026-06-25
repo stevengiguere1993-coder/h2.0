@@ -223,7 +223,6 @@ async def ensure_critical_columns() -> None:
         # Mapping comptes QBO (table qbo_account_maps existait avant l'ajout
         # de ces colonnes → create_all ne les pose pas sur une table déjà
         # créée). On les ajoute ici, idempotent.
-        ("qbo_account_maps", "sous_traitant_account", "VARCHAR(255)"),
         ("qbo_account_maps", "labour_expense_account", "VARCHAR(255)"),
         ("qbo_account_maps", "labour_clearing_account", "VARCHAR(255)"),
     )
