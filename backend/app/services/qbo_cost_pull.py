@@ -156,39 +156,42 @@ async def pull_project_costs_from_qbo(
             await db.execute(select(Fournisseur.id, Fournisseur.name))
         ).all()
     }
-    # Projets FORFAITAIRES (soumission forfaitaire) → coûts importés NON
-    # refacturables. Sinon (estimé / non forfaitaire / sans soumission) →
-    # facturable coché automatiquement. (Vaut seulement à l'import QB →
-    # Kratos ; on ne touche pas au sens Kratos → QB.)
+    # Type de facturation par soumission → défaut « refacturable » des coûts
+    # importés. Un CONTRAT (kind=contract, prix coûtant majoré) ou un devis
+    # ESTIMÉ → refacturable. Forfaitaire ou inconnu → non refacturable.
+    # (Vaut seulement à l'import QB → Kratos.)
     soum_ids = {
         p.soumission_id
         for p in proj_by_job.values()
         if p.soumission_id
     }
-    pricing_by_soum: dict[int, str] = {}
+    billing_by_soum: dict[int, str] = {}
     if soum_ids:
-        pricing_by_soum = {
-            sid: (pk or "forfaitaire")
-            for sid, pk in (
-                await db.execute(
-                    select(Soumission.id, Soumission.pricing_kind).where(
-                        Soumission.id.in_(soum_ids)
-                    )
-                )
-            ).all()
-        }
+        for sid, kind, pk in (
+            await db.execute(
+                select(
+                    Soumission.id,
+                    Soumission.kind,
+                    Soumission.pricing_kind,
+                ).where(Soumission.id.in_(soum_ids))
+            )
+        ).all():
+            # Aligné sur _billing_kind (endpoints/projects.py) : contrat
+            # l'emporte, sinon le pricing_kind.
+            billing_by_soum[sid] = (
+                "contrat" if kind == "contract" else (pk or "forfaitaire")
+            )
 
     def _is_billable(proj: Project) -> bool:
-        pk = (
-            pricing_by_soum.get(proj.soumission_id)
+        bk = (
+            billing_by_soum.get(proj.soumission_id)
             if proj.soumission_id
             else None
         )
-        # Refacturable UNIQUEMENT pour un contrat explicitement « estimé »
-        # (coût majoré / temps & matériel). Forfaitaire OU type inconnu
-        # (pas de soumission liée) → NON refacturable : sur un prix fixe, les
-        # dépenses ne se refacturent pas au client.
-        return pk not in (None, "forfaitaire")
+        # Refacturable pour un CONTRAT (coût majoré) ou un ESTIMÉ. Forfaitaire
+        # OU type inconnu (pas de soumission liée) → NON refacturable : sur un
+        # prix fixe, les dépenses ne se refacturent pas au client.
+        return bk not in (None, "forfaitaire")
 
     now = datetime.now(timezone.utc)
     stats = {
@@ -359,6 +362,31 @@ async def pull_project_costs_from_qbo(
         stats["purchases_imported"] += 1
 
     if not dry_run:
+        # Correction « refacturable » : sur un projet à CONTRAT / ESTIMÉ, les
+        # coûts liés à QB et PAS encore refacturés doivent être « à
+        # refacturer » (et le rester jusqu'à la refacturation). Rattrape les
+        # coûts importés avec l'ancien défaut erroné.
+        from sqlalchemy import update as _upd
+
+        billable_proj_ids = [
+            p.id for p in proj_by_job.values() if _is_billable(p)
+        ]
+        if billable_proj_ids:
+            await db.execute(
+                _upd(Achat)
+                .where(
+                    Achat.project_id.in_(billable_proj_ids),
+                    Achat.invoiced_at.is_(None),
+                    Achat.is_billable.is_(False),
+                    (
+                        Achat.qbo_bill_id.is_not(None)
+                        | Achat.qbo_purchase_id.is_not(None)
+                    ),
+                )
+                .values(is_billable=True)
+            )
+            await db.flush()
+
         # Filet automatique : supprime tout doublon résiduel après import.
         from app.services.achat_dedupe import dedupe_achats
 
