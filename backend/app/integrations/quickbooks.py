@@ -1007,6 +1007,26 @@ class QuickBooksClient:
         )
         return data.get("BillPayment") or data
 
+    async def delete_bill_payment(self, bp_id: str) -> bool:
+        """Supprime un Paiement de facture QB (best-effort). À supprimer
+        AVANT le Bill associé quand un achat change de type."""
+        try:
+            data = await self._request("GET", f"/billpayment/{bp_id}")
+            obj = data.get("BillPayment") or data
+            tok = str(obj.get("SyncToken") or "0")
+        except Exception:  # noqa: BLE001
+            return False
+        try:
+            await self._request(
+                "POST",
+                "/billpayment",
+                json_body={"Id": str(bp_id), "SyncToken": tok},
+                params={"operation": "delete", "minorversion": "70"},
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     # ------------------------------------------------------------------
     # Account lookup by Name (utilisé pour le mapping mode paiement)
     # ------------------------------------------------------------------
