@@ -868,6 +868,25 @@ class QuickBooksClient:
             day_window=day_window,
         )
 
+    async def find_txn_by_docnumber(
+        self, entity: str, doc_number: str
+    ) -> Optional[Dict[str, Any]]:
+        """Cherche un Bill / Purchase QB par son DocNumber (n° de facture
+        fournisseur / PO). Signal le PLUS FORT pour éviter de re-créer un
+        coût qui existe déjà dans QB (cas migration) → on s'y relie."""
+        clean = (doc_number or "").strip()
+        if not clean or entity not in ("Bill", "Purchase"):
+            return None
+        safe = clean.replace("'", "''")
+        try:
+            rows = await self.query(
+                f"SELECT * FROM {entity} WHERE DocNumber = '{safe}' "
+                "MAXRESULTS 1"
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        return rows[0] if rows else None
+
     async def _find_existing_txn(
         self,
         entity: str,
