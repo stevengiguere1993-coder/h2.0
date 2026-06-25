@@ -787,6 +787,16 @@ async def trigger_all_hourly(
 
     await _safe("achat-dedupe", _run_achat_dedupe, details)
 
+    async def _run_facture_dedupe():
+        from app.services.facture_dedupe import dedupe_factures
+
+        async with AsyncSessionLocal() as db:
+            n = await dedupe_factures(db)
+            await db.commit()
+            return {"deduped": n}
+
+    await _safe("facture-dedupe", _run_facture_dedupe, details)
+
     # Import QB → Kratos (factures + coûts projet) à l'heure, pour une
     # synchro quasi temps réel. Inerte tant que l'interrupteur
     # `qbo_auto_sync` est OFF (fail-closed). Idempotent (clé = ID QBO).

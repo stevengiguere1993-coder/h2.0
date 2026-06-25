@@ -109,6 +109,39 @@ def _maybe_dedupe_achats_bg() -> None:
         pass
 
 
+_last_facture_dedupe_at = 0.0
+
+
+def _maybe_dedupe_factures_bg() -> None:
+    import asyncio
+    import time
+
+    global _last_facture_dedupe_at
+    now = time.monotonic()
+    if now - _last_facture_dedupe_at < _ACHAT_DEDUPE_THROTTLE_S:
+        return
+    _last_facture_dedupe_at = now
+
+    async def _run() -> None:
+        from app.db.session import AsyncSessionLocal
+        from app.services.facture_dedupe import dedupe_factures
+
+        try:
+            async with AsyncSessionLocal() as s:
+                removed = await dedupe_factures(s)
+                if removed:
+                    await s.commit()
+                else:
+                    await s.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        asyncio.create_task(_run())
+    except RuntimeError:
+        pass
+
+
 def make_crud_router(
     *,
     prefix: str,
@@ -230,6 +263,8 @@ def make_crud_router(
         # (au plus 1×/30 s) — sans bouton, comme demandé.
         if model is Achat:
             _maybe_dedupe_achats_bg()
+        elif model is Facture:
+            _maybe_dedupe_factures_bg()
         return [read_schema.model_validate(i) for i in items]
 
     @router.get("/{item_id}")

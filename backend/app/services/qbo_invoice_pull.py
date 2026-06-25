@@ -328,6 +328,13 @@ async def pull_invoices_from_qbo(
             )
         stats["imported"] += 1
 
+    if not dry_run:
+        # Filet anti-doublon : supprime toute facture en double (même n° /
+        # même Invoice QB ré-importée) après l'import.
+        from app.services.facture_dedupe import dedupe_factures
+
+        stats["deduped"] = await dedupe_factures(db)
+
     if dry_run:
         # Scopé à un client : on montre TOUT (y compris déjà importé /
         # sans projet) pour que l'utilisateur voie l'ensemble. Sinon, on
