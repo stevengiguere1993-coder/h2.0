@@ -272,17 +272,24 @@ export default function AchatsPage() {
     return list;
   }, [items, search, fStatus, fProject, fFournisseur, partyName]);
 
-  const total = useMemo(
+  const totalHT = useMemo(
     () =>
       filtered.reduce(
-        (sum, a) =>
-          sum +
-          (a.amount != null ? Number(a.amount) : 0) +
-          (a.amount_taxes != null ? Number(a.amount_taxes) : 0),
+        (sum, a) => sum + (a.amount != null ? Number(a.amount) : 0),
         0
       ),
     [filtered]
   );
+  const totalTaxes = useMemo(
+    () =>
+      filtered.reduce(
+        (sum, a) =>
+          sum + (a.amount_taxes != null ? Number(a.amount_taxes) : 0),
+        0
+      ),
+    [filtered]
+  );
+  const total = totalHT + totalTaxes;
 
   return (
     <>
@@ -421,7 +428,10 @@ export default function AchatsPage() {
 
           <div className="ml-auto rounded-md bg-brand-900 px-3 py-2 text-sm">
             <span className="text-white/50">Total filtré </span>
-            <span className="font-bold text-white">{fmtMoney(total)}</span>
+            <span className="font-bold text-white">
+              {fmtMoney(totalHT)} + {fmtMoney(totalTaxes)} taxes ={" "}
+              {fmtMoney(total)}
+            </span>
           </div>
         </div>
 
