@@ -552,19 +552,28 @@ async def sync_achat_to_qbo(
         # dans QB mais hors du projet.
         if not achat.qbo_bill_id:
             total_ttc = float(achat.amount or 0) + float(achat.amount_taxes or 0)
+            entity = "Purchase" if as_purchase else "Bill"
+            docnum = _doc_number(achat, po_reference)
             try:
-                if as_purchase:
-                    dup = await qbo.find_existing_purchase(
-                        vendor_id=vendor_id,
-                        total=total_ttc,
-                        txn_date=_txn_date(achat),
-                    )
-                else:
-                    dup = await qbo.find_existing_bill(
-                        vendor_id=vendor_id,
-                        total=total_ttc,
-                        txn_date=_txn_date(achat),
-                    )
+                # 1) Signal FORT : un Bill/Purchase QB avec le MÊME numéro de
+                #    document (n° facture fournisseur / PO) existe déjà → on
+                #    s'y relie au lieu de recréer (cas migration : la facture
+                #    était déjà dans QB).
+                dup = await qbo.find_txn_by_docnumber(entity, docnum)
+                # 2) Repli : même fournisseur + même total TTC + ~même date.
+                if not (dup and dup.get("Id")):
+                    if as_purchase:
+                        dup = await qbo.find_existing_purchase(
+                            vendor_id=vendor_id,
+                            total=total_ttc,
+                            txn_date=_txn_date(achat),
+                        )
+                    else:
+                        dup = await qbo.find_existing_bill(
+                            vendor_id=vendor_id,
+                            total=total_ttc,
+                            txn_date=_txn_date(achat),
+                        )
             except QuickBooksError as exc:
                 # Recherche best-effort : si la query echoue, on continue
                 # le push normal plutot que de bloquer.
