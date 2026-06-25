@@ -30,6 +30,10 @@ const PULL_STATUS: Record<string, { label: string; cls: string }> = {
   paiement_synchro: {
     label: "Paiement synchronisé",
     cls: "bg-blue-500/20 text-blue-300"
+  },
+  reliee_par_numero: {
+    label: "Reliée (même n°)",
+    cls: "bg-blue-500/20 text-blue-300"
   }
 };
 
