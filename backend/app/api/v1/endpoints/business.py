@@ -246,6 +246,37 @@ def make_crud_router(
         obj = await crud.get(item_id)
         if obj is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+        # Renumérotation : la référence Soumission/Facture/PO est UNIQUE.
+        # On vérifie AVANT l'update qu'aucun autre enregistrement ne porte
+        # déjà ce numéro → message clair (409) au lieu d'un 500 opaque
+        # (violation de contrainte) qui bloquait l'utilisateur.
+        if model in (Soumission, Facture, PurchaseOrder):
+            try:
+                _new_ref = data.model_dump(exclude_unset=True).get("reference")
+            except Exception:  # noqa: BLE001
+                _new_ref = None
+            if (
+                isinstance(_new_ref, str)
+                and _new_ref.strip()
+                and _new_ref.strip() != (getattr(obj, "reference", None) or "")
+            ):
+                from sqlalchemy import select as _sel_ref
+
+                clash = (
+                    await db.execute(
+                        _sel_ref(model.id).where(
+                            model.reference == _new_ref.strip(),
+                            model.id != item_id,
+                        )
+                    )
+                ).first()
+                if clash is not None:
+                    raise HTTPException(
+                        status.HTTP_409_CONFLICT,
+                        f"Le numéro « {_new_ref.strip()} » est déjà utilisé "
+                        "par un autre document. Choisis-en un autre ou "
+                        "supprime le doublon.",
+                    )
         # Capture pre-update status pour détecter la transition
         # vers received sur les achats → autopush QBO en background.
         prev_status = (

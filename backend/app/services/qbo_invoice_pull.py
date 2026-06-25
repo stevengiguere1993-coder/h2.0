@@ -109,6 +109,21 @@ async def pull_invoices_from_qbo(
             )
         ).scalars().all()
     }
+    # Références Kratos déjà utilisées (la colonne est UNIQUE) → pour
+    # adopter le N° de facture QB (DocNumber) sans collision.
+    existing_refs: set[str] = set()
+    # Factures Kratos PAS encore reliées à QB, indexées par référence : si
+    # une facture QB porte le même numéro (DocNumber), on relie l'existante
+    # au lieu d'en créer un DOUBLON (« QB doit prendre le même numéro »).
+    unlinked_by_ref: dict[str, Facture] = {}
+    for f in (
+        await db.execute(select(Facture))
+    ).scalars().all():
+        ref = (f.reference or "").strip()
+        if ref:
+            existing_refs.add(ref)
+            if not f.qbo_invoice_id:
+                unlinked_by_ref.setdefault(ref, f)
     # Projet par Job QBO (clé de rattachement). Scopé à un client si
     # demandé (« importer tout d'un client »).
     pstmt = select(Project).where(Project.qbo_job_id.is_not(None))
@@ -229,6 +244,38 @@ async def pull_invoices_from_qbo(
             )
             continue
 
+        # Pas reliée par ID QB, mais une facture Kratos porte DÉJÀ ce numéro
+        # (DocNumber) → on RELIE l'existante (au lieu d'un doublon), on
+        # reflète ses paiements et on solde si besoin.
+        doc_clean = (doc or "").strip()
+        existing_same_num = (
+            unlinked_by_ref.get(doc_clean) if doc_clean else None
+        )
+        if existing_same_num is not None:
+            if not dry_run:
+                existing_same_num.qbo_invoice_id = iid
+                existing_same_num.qbo_doc_number = doc or None
+                existing_same_num.qbo_sync_token = (
+                    str(inv.get("SyncToken") or "") or None
+                )
+                await db.flush()
+            existing_by_qid[iid] = existing_same_num
+            unlinked_by_ref.pop(doc_clean, None)
+            mirrored = await _mirror_payments(existing_same_num.id, iid)
+            stats["payments_mirrored"] += mirrored
+            if balance == 0 and existing_same_num.status != "paid" and not dry_run:
+                existing_same_num.status = "paid"
+                existing_same_num.balance = 0
+                existing_same_num.paid_at = existing_same_num.paid_at or now
+                await db.flush()
+            stats["skipped_existing"] += 1
+            preview.append(
+                {"type": "facture", "qbo_id": iid, "doc_number": doc,
+                 "customer": cname, "total": total, "balance": balance,
+                 "status": "reliee_par_numero"}
+            )
+            continue
+
         proj = proj_by_job.get(cref)
         if proj is None and sole_project is not None and cref == parent_customer_id:
             # Facture émise au client PARENT et client mono-projet → on
@@ -251,8 +298,17 @@ async def pull_invoices_from_qbo(
              "project_id": proj.id, "status": "a_importer"}
         )
         if not dry_run:
+            # Référence Kratos = N° de facture QB (DocNumber) pour que les
+            # deux systèmes portent le MÊME numéro. Repli sur « QB-{id} »
+            # seulement si pas de DocNumber ou si ce numéro est déjà pris
+            # dans Kratos (contrainte d'unicité).
+            ref = (doc or "").strip()
+            if not ref or ref in existing_refs:
+                ref = f"QB-{iid}"
+            ref = ref[:32]
+            existing_refs.add(ref)
             new_fac = Facture(
-                reference=f"QB-{iid}"[:32],
+                reference=ref,
                 client_id=proj.client_id,
                 project_id=proj.id,
                 total=total,
