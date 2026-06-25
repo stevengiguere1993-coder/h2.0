@@ -27,7 +27,6 @@ router = APIRouter(prefix="/settings/qbo-accounts", tags=["qbo-account-map"])
 class QboAccountMapRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     default_expense_account: Optional[str] = None
-    sous_traitant_account: Optional[str] = None
     cheque_horizon_account: Optional[str] = None
     cc_steven_account: Optional[str] = None
     cc_michael_account: Optional[str] = None
@@ -39,7 +38,6 @@ class QboAccountMapRead(BaseModel):
 
 class QboAccountMapUpdate(BaseModel):
     default_expense_account: Optional[str] = Field(default=None, max_length=255)
-    sous_traitant_account: Optional[str] = Field(default=None, max_length=255)
     cheque_horizon_account: Optional[str] = Field(default=None, max_length=255)
     cc_steven_account: Optional[str] = Field(default=None, max_length=255)
     cc_michael_account: Optional[str] = Field(default=None, max_length=255)

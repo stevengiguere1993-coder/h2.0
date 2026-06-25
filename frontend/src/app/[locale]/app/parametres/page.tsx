@@ -1167,7 +1167,6 @@ function NumberingSection() {
 
 type QboAccountMap = {
   default_expense_account: string | null;
-  sous_traitant_account: string | null;
   cheque_horizon_account: string | null;
   cc_steven_account: string | null;
   cc_michael_account: string | null;
@@ -1188,12 +1187,6 @@ const ACCOUNT_FIELDS: Array<{
     label: "Compte de dépense par défaut",
     hint: "Compte d'expense (Cost of Goods Sold ou Expense) utilisé pour la ligne de coût des Bills/Purchases. Ex. « Matériaux et fournitures ».",
     placeholder: "Ex. Matériaux et fournitures"
-  },
-  {
-    key: "sous_traitant_account",
-    label: "Compte sous-traitant",
-    hint: "Compte d'expense utilisé pour les factures de sous-traitant (kind « sous-traitant » ou sous-traitant rattaché). Ces factures y sont classées plutôt que sur le compte matériaux. Ex. « Sous-traitant ».",
-    placeholder: "Ex. Sous-traitant"
   },
   {
     key: "cheque_horizon_account",
@@ -1246,7 +1239,6 @@ function QboAccountMapSection() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<QboAccountMap>({
     default_expense_account: "",
-    sous_traitant_account: "",
     cheque_horizon_account: "",
     cc_steven_account: "",
     cc_michael_account: "",
@@ -1267,7 +1259,6 @@ function QboAccountMapSection() {
       setData(d);
       setDraft({
         default_expense_account: d.default_expense_account || "",
-        sous_traitant_account: d.sous_traitant_account || "",
         cheque_horizon_account: d.cheque_horizon_account || "",
         cc_steven_account: d.cc_steven_account || "",
         cc_michael_account: d.cc_michael_account || "",
@@ -1414,8 +1405,6 @@ function QboAccountMapSection() {
                   setDraft({
                     default_expense_account:
                       data.default_expense_account || "",
-                    sous_traitant_account:
-                      data.sous_traitant_account || "",
                     cheque_horizon_account:
                       data.cheque_horizon_account || "",
                     cc_steven_account: data.cc_steven_account || "",

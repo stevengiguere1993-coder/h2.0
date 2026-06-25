@@ -360,36 +360,51 @@ async def _resolve_payment_account(
     return str(acc.get("Id")) if acc else None
 
 
+# Catégorie QuickBooks (= compte du plan comptable) sur laquelle classer
+# une facture de SOUS-TRAITANT. « Sous-traitants » est la catégorie
+# standard de QBO ; on essaie quelques variantes d'orthographe par
+# robustesse. Ce n'est PAS un réglage : on cible directement la catégorie
+# QB existante.
+_SOUS_TRAITANT_CATEGORIES = (
+    "Sous-traitants",
+    "Sous-traitant",
+    "Sous-traitance",
+    "Subcontractors",
+)
+
+
 async def _resolve_expense_account(
     db, qbo, fournisseur: Optional[Fournisseur] = None,
     is_sous_traitant: bool = False,
 ) -> Optional[str]:
-    """Compte de dépense à utiliser pour la ligne d'achat.
+    """Compte de dépense (= « catégorie » QB) pour la ligne d'achat.
 
     Priorité :
-    0. Si c'est une facture de SOUS-TRAITANT (kind == 'sub_invoice' ou
-       sous_traitant_id renseigné) → QboAccountMap.sous_traitant_account
-       (compte « Sous-traitant »). Prioritaire sur tout le reste pour que
-       les factures de sous-traitant soient toujours catégorisées comme
-       telles, peu importe le fournisseur.
+    0. Facture de SOUS-TRAITANT (kind == 'sub_invoice' ou sous_traitant_id
+       renseigné) → catégorie QB « Sous-traitants » (compte standard du
+       plan comptable). Prioritaire pour que ces factures soient toujours
+       catégorisées comme telles, peu importe le fournisseur.
     1. fournisseur.qbo_expense_account (auto-classification par
        fournisseur — ex. Rona → Matériaux)
     2. QboAccountMap.default_expense_account (fallback global)
     3. Premier compte d'expense disponible côté QB (dernier recours)
     """
+    if is_sous_traitant:
+        for name in _SOUS_TRAITANT_CATEGORIES:
+            acc = await qbo.find_account_by_name(name)
+            if acc:
+                return str(acc.get("Id"))
+        # Catégorie introuvable côté QB → on retombe sur la logique
+        # standard plutôt que d'échouer (ne bloque pas l'envoi).
+    if fournisseur and fournisseur.qbo_expense_account:
+        acc = await qbo.find_account_by_name(fournisseur.qbo_expense_account)
+        if acc:
+            return str(acc.get("Id"))
     map_row = (
         await db.execute(
             select(QboAccountMap).where(QboAccountMap.id == 1)
         )
     ).scalar_one_or_none()
-    if is_sous_traitant and map_row and map_row.sous_traitant_account:
-        acc = await qbo.find_account_by_name(map_row.sous_traitant_account)
-        if acc:
-            return str(acc.get("Id"))
-    if fournisseur and fournisseur.qbo_expense_account:
-        acc = await qbo.find_account_by_name(fournisseur.qbo_expense_account)
-        if acc:
-            return str(acc.get("Id"))
     if map_row and map_row.default_expense_account:
         acc = await qbo.find_account_by_name(map_row.default_expense_account)
         if acc:
