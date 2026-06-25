@@ -184,8 +184,11 @@ async def pull_project_costs_from_qbo(
             if proj.soumission_id
             else None
         )
-        # Forfaitaire → non refacturable ; tout le reste → refacturable.
-        return pk != "forfaitaire"
+        # Refacturable UNIQUEMENT pour un contrat explicitement « estimé »
+        # (coût majoré / temps & matériel). Forfaitaire OU type inconnu
+        # (pas de soumission liée) → NON refacturable : sur un prix fixe, les
+        # dépenses ne se refacturent pas au client.
+        return pk not in (None, "forfaitaire")
 
     now = datetime.now(timezone.utc)
     stats = {
