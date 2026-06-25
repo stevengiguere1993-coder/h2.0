@@ -640,31 +640,17 @@ async def sync_achat_to_qbo(
                     elif _is_stale_ref(exc):
                         # L'objet QBO référencé n'est pas une Purchase
                         # (souvent : l'achat était un Bill « sur compte »
-                        # puis est passé payé → Purchase). On SUPPRIME
-                        # l'ancien Bill pour ne pas laisser de doublon
-                        # orphelin, puis on recrée la Purchase.
+                        # puis est passé payé → Purchase). On recrée la
+                        # Purchase. NB : on NE SUPPRIME PAS automatiquement
+                        # l'ancien Bill (+ paiement) — suppression mise en
+                        # attente tant que la comptabilité n'a pas validé
+                        # l'approche (cf. delete_bill/_payment disponibles).
                         log.warning(
-                            "QBO purchase %s introuvable → suppression de "
-                            "l'ancien Bill + recréation (achat %s)",
+                            "QBO purchase %s introuvable → recréation "
+                            "(ancien Bill conservé) (achat %s)",
                             payload.get("Id"),
                             achat.id,
                         )
-                        _old_id = str(payload.get("Id") or "")
-                        # Supprimer d'abord le PAIEMENT de facture lié (sinon
-                        # QB refuse de supprimer le Bill), puis le Bill.
-                        if achat.qbo_bill_payment_id:
-                            try:
-                                await qbo.delete_bill_payment(
-                                    str(achat.qbo_bill_payment_id)
-                                )
-                            except Exception:  # noqa: BLE001
-                                pass
-                            achat.qbo_bill_payment_id = None
-                        if _old_id:
-                            try:
-                                await qbo.delete_bill(_old_id)
-                            except Exception:  # noqa: BLE001
-                                pass
                         payload.pop("Id", None)
                         payload.pop("SyncToken", None)
                         payload.pop("sparse", None)
@@ -701,19 +687,14 @@ async def sync_achat_to_qbo(
                     elif _is_stale_ref(exc):
                         # Pas un Bill (souvent : l'achat était payé →
                         # Purchase, puis repassé « sur compte » → Bill). On
-                        # supprime l'ancienne Purchase pour éviter le doublon.
+                        # recrée le Bill SANS supprimer l'ancienne Purchase
+                        # (suppression en attente de validation comptable).
                         log.warning(
-                            "QBO bill %s introuvable → suppression de "
-                            "l'ancienne Purchase + recréation (achat %s)",
+                            "QBO bill %s introuvable → recréation "
+                            "(ancienne Purchase conservée) (achat %s)",
                             payload.get("Id"),
                             achat.id,
                         )
-                        _old_id = str(payload.get("Id") or "")
-                        if _old_id:
-                            try:
-                                await qbo.delete_purchase(_old_id)
-                            except Exception:  # noqa: BLE001
-                                pass
                         payload.pop("Id", None)
                         payload.pop("SyncToken", None)
                         payload.pop("sparse", None)
