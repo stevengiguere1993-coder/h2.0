@@ -827,6 +827,47 @@ async def trigger_all_hourly(
     await _safe("qbo-invoice-pull", _run_qbo_invoice_pull_hourly, details)
     await _safe("qbo-cost-pull", _run_qbo_cost_pull_hourly, details)
 
+    # Filet : pousse vers QB les achats d'un projet PAS encore synchronisés
+    # (créés/devenus payés sans que l'auto-push immédiat n'aboutisse). Gardé
+    # par l'interrupteur d'auto-sync. Idempotent : sync_achat_to_qbo a sa
+    # propre garde anti-doublon ; on ne prend que les achats sans lien QB.
+    async def _run_qbo_achat_autopush_hourly():
+        from app.services.qbo_auto_sync import is_qbo_auto_sync_enabled
+
+        if not await is_qbo_auto_sync_enabled():
+            return {"skipped": "qbo_auto_sync_off"}
+        from sqlalchemy import select
+        from app.models.achat import Achat
+        from app.services.achat_qbo import sync_achat_to_qbo
+
+        async with AsyncSessionLocal() as db:
+            ids = [
+                int(r[0])
+                for r in (
+                    await db.execute(
+                        select(Achat.id).where(
+                            Achat.project_id.is_not(None),
+                            Achat.status.in_(("received", "paid")),
+                            Achat.qbo_bill_id.is_(None),
+                            Achat.qbo_purchase_id.is_(None),
+                        )
+                    )
+                ).all()
+            ]
+        pushed = 0
+        failed = 0
+        for aid in ids:
+            try:
+                async with AsyncSessionLocal() as s:
+                    await sync_achat_to_qbo(s, aid)
+                    await s.commit()
+                pushed += 1
+            except Exception:  # noqa: BLE001
+                failed += 1
+        return {"candidates": len(ids), "pushed": pushed, "failed": failed}
+
+    await _safe("qbo-achat-autopush", _run_qbo_achat_autopush_hourly, details)
+
     ok_count = sum(1 for v in details.values() if v.get("ok"))
     fail_count = sum(1 for v in details.values() if not v.get("ok"))
     return MegaCronResult(
