@@ -24,6 +24,9 @@ class ProjectStatus(str, Enum):
     READY_TO_START = "ready_to_start"  # « En attente de début »
     IN_PROGRESS = "in_progress"
     SUSPENDED = "suspended"
+    # « Correction / Amélioration » — retour client avant la livraison
+    # finale (Flux A). Les coûts de retour s'accumulent sur le projet.
+    CORRECTION = "correction"
     DELIVERED = "delivered"
 
 

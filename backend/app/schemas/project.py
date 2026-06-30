@@ -79,6 +79,10 @@ class ProjectRead(BaseModel):
     # défaut quand aucune soumission n'est liée.
     billing_kind: str = "forfaitaire"
     estimated_hours_override: Optional[Decimal] = None
+    # Flux A — état de signature des bons liés (corrections) pour le badge
+    # kanban. awaiting = un bon envoyé non signé ; signed = un bon signé.
+    awaiting_signature: bool = False
+    has_signed_bon: bool = False
     created_at: datetime
     updated_at: datetime
 
