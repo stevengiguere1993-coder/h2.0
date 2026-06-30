@@ -338,6 +338,7 @@ export default function BonsPage() {
             {legacy.length > 0 ? (
               <LegacyBons
                 bons={legacy}
+                onMove={moveTo}
                 onOpen={(id) =>
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   router.push(`/app/bons/${id}` as any)
@@ -351,57 +352,128 @@ export default function BonsPage() {
   );
 }
 
-const LEGACY_STATUS: Record<string, { label: string; cls: string }> = {
-  draft: { label: "Brouillon", cls: "bg-white/10 text-white/70" },
-  sent: { label: "Envoyé", cls: "bg-blue-500/20 text-blue-300" },
-  signed: { label: "Signé", cls: "bg-emerald-500/20 text-emerald-300" },
-  cancelled: { label: "Annulé", cls: "bg-white/5 text-white/50" }
-};
+const LEGACY_COLUMNS: Column[] = [
+  { id: "draft", label: "Brouillon", dot: "bg-white/40" },
+  { id: "sent", label: "Envoyé", dot: "bg-blue-400" },
+  { id: "signed", label: "Signé", dot: "bg-emerald-400" },
+  { id: "cancelled", label: "Annulé", dot: "bg-white/20" }
+];
 
 function LegacyBons({
   bons,
-  onOpen
+  onOpen,
+  onMove
 }: {
   bons: Bon[];
   onOpen: (id: number) => void;
+  onMove: (id: number, status: string) => void;
 }) {
+  const dragIdRef = useRef<number | null>(null);
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+
+  const byColumn = useMemo(() => {
+    const map: Record<string, Bon[]> = Object.fromEntries(
+      LEGACY_COLUMNS.map((c) => [c.id, [] as Bon[]])
+    );
+    for (const b of bons) {
+      const target = LEGACY_COLUMNS.find((c) => c.id === b.status)
+        ? b.status
+        : "draft";
+      map[target].push(b);
+    }
+    return map;
+  }, [bons]);
+
   return (
     <section className="mt-8">
       <h2 className="text-lg font-bold text-white">
         Anciens bons de travail (construction)
       </h2>
       <p className="mt-1 text-xs text-white/50">
-        Bons signés / envoyés au client avant la refonte. Toujours
-        accessibles — clique pour ouvrir la fiche.
+        Bons créés avant la refonte. Glisse une carte pour changer son statut,
+        ou clique pour ouvrir la fiche.
       </p>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {bons.map((b) => {
-          const st = LEGACY_STATUS[b.status] || {
-            label: b.status,
-            cls: "bg-white/10 text-white/70"
-          };
+      <div className="mt-4 flex gap-4 overflow-x-auto pb-4">
+        {LEGACY_COLUMNS.map((col) => {
+          const cards = byColumn[col.id] || [];
+          const isOver = dragOverCol === col.id;
           return (
-            <button
-              key={b.id}
-              type="button"
-              onClick={() => onOpen(b.id)}
-              className="block rounded-lg border border-brand-800 bg-brand-950 p-3 text-left transition hover:border-accent-500"
+            <div
+              key={col.id}
+              className={`flex w-72 min-w-[288px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 transition ${
+                isOver
+                  ? "border-accent-500 ring-1 ring-accent-500/40"
+                  : "border-brand-800"
+              }`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (dragOverCol !== col.id) setDragOverCol(col.id);
+              }}
+              onDragLeave={() => {
+                if (dragOverCol === col.id) setDragOverCol(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOverCol(null);
+                const id = dragIdRef.current;
+                dragIdRef.current = null;
+                if (id != null) onMove(id, col.id);
+              }}
             >
-              <div className="flex items-start justify-between gap-2">
-                <h3 className="min-w-0 truncate text-sm font-semibold text-white">
-                  {b.address || b.title}
-                </h3>
-                <span
-                  className={`flex-shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${st.cls}`}
-                >
-                  {st.label}
+              <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className={`h-2 w-2 rounded-full ${col.dot}`} />
+                  <h3 className="text-sm font-semibold text-white">
+                    {col.label}
+                  </h3>
+                </div>
+                <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                  {cards.length}
                 </span>
               </div>
-              <p className="mt-0.5 truncate text-xs text-white/60">{b.title}</p>
-              <p className="mt-0.5 truncate text-[11px] text-white/40">
-                {b.reference} · {money(b.amount)}
-              </p>
-            </button>
+              <div className="flex-1 space-y-3 p-3">
+                {cards.length === 0 ? (
+                  <p className="py-6 text-center text-xs text-white/40">—</p>
+                ) : (
+                  cards.map((b) => (
+                    <div
+                      key={b.id}
+                      role="button"
+                      tabIndex={0}
+                      draggable
+                      onDragStart={(e) => {
+                        dragIdRef.current = b.id;
+                        e.dataTransfer.effectAllowed = "move";
+                      }}
+                      onDragEnd={() => {
+                        dragIdRef.current = null;
+                        setDragOverCol(null);
+                      }}
+                      onClick={() => onOpen(b.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") onOpen(b.id);
+                      }}
+                      className="block cursor-pointer rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-accent-500"
+                    >
+                      <h4 className="truncate text-sm font-semibold text-white">
+                        {b.address || "Adresse non renseignée"}
+                      </h4>
+                      <p className="mt-0.5 truncate text-xs text-white/70">
+                        {b.title}
+                      </p>
+                      <div className="mt-1 flex items-center justify-between">
+                        <p className="truncate text-[11px] text-white/40">
+                          {b.reference}
+                        </p>
+                        <span className="text-xs font-semibold text-white">
+                          {money(b.amount)}
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           );
         })}
       </div>
