@@ -173,6 +173,32 @@ async def list_projects(
                 sm_totals[sid] = total
             sm_billing[sid] = _billing_kind(kind, pricing_kind)
 
+    # Flux A — état de signature des bons liés (corrections) pour le badge
+    # kanban : awaiting = bon envoyé non signé, signed = bon signé.
+    proj_ids = [p.id for p in projects]
+    awaiting_set: set = set()
+    signed_set: set = set()
+    if proj_ids:
+        from sqlalchemy import select as _bsel
+        from app.models.bon_travail import BonTravail
+
+        brows = (
+            await db.execute(
+                _bsel(
+                    BonTravail.project_id,
+                    BonTravail.sent_at,
+                    BonTravail.signed_at,
+                ).where(BonTravail.project_id.in_(set(proj_ids)))
+            )
+        ).all()
+        for pid, sent_at, signed_at in brows:
+            if pid is None:
+                continue
+            if signed_at is not None:
+                signed_set.add(pid)
+            elif sent_at is not None:
+                awaiting_set.add(pid)
+
     out: List[ProjectRead] = []
     for p in projects:
         d = ProjectRead.model_validate(p)
@@ -180,6 +206,8 @@ async def list_projects(
             d.soumission_total = sm_totals[p.soumission_id]
         if p.soumission_id and p.soumission_id in sm_billing:
             d.billing_kind = sm_billing[p.soumission_id]
+        d.awaiting_signature = p.id in awaiting_set
+        d.has_signed_bon = p.id in signed_set
         out.append(d)
     return out
 
@@ -310,3 +338,44 @@ async def delete_project(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found",
         )
+
+
+@router.post("/{project_id}/correction-bon")
+async def create_correction_bon(
+    project_id: int, db: DBSession, current_user: CurrentUser
+) -> dict:
+    """Crée un bon de CORRECTION / amélioration lié au projet (Flux A).
+
+    Bon construction signable par le client : créé en brouillon ici, puis
+    envoyé pour signature depuis sa fiche. Les coûts du retour de chantier
+    s'accumulent sur le projet via project_id (visibilité du déficit)."""
+    from datetime import datetime, timezone
+    from sqlalchemy import select as _bsel
+
+    from app.models.bon_travail import BonTravail
+    from app.models.project import Project as _Proj
+
+    proj = (
+        await db.execute(_bsel(_Proj).where(_Proj.id == project_id))
+    ).scalar_one_or_none()
+    if proj is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
+    bon = BonTravail(
+        reference="BT-" + datetime.now(timezone.utc).strftime("%y%m%d-%H%M%S"),
+        title="Correction / Amélioration",
+        project_id=proj.id,
+        client_id=proj.client_id,
+        address=proj.address,
+        status="draft",
+        origin="correction",
+        kind="construction",
+        bon_type="temps_materiel",
+        requires_signature=True,
+    )
+    db.add(bon)
+    await db.flush()
+    await db.commit()
+    await db.refresh(bon)
+    return {"bon_id": bon.id, "reference": bon.reference}
