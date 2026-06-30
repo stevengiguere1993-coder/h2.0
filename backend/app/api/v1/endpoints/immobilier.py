@@ -983,23 +983,26 @@ class _RollupImmeuble(BaseModel):
 
 @router.get("/maintenance-rollup", response_model=List[_RollupImmeuble])
 async def maintenance_rollup(
-    db: DBSession, user: CurrentUser, year: Optional[int] = None
+    db: DBSession,
+    user: CurrentUser,
+    year: Optional[int] = None,
+    immeuble_id: Optional[int] = None,
 ) -> List[_RollupImmeuble]:
     """Dépenses de maintenance ($/an) par immeuble puis par appartement.
 
     Somme le montant refacturé des bons internes non annulés de l'année.
-    Aucune notion de profit (vue propriétaire/locatif)."""
+    Aucune notion de profit (vue propriétaire/locatif). Filtrable sur un
+    immeuble précis (pour sa fiche)."""
     _require_volet(user)
     target_year = year if year is not None else _now().year
-    bons = (
-        await db.execute(
-            select(BonTravail).where(
-                BonTravail.kind == "interne",
-                BonTravail.status != "cancelled",
-                BonTravail.immeuble_id.isnot(None),
-            )
-        )
-    ).scalars().all()
+    q = select(BonTravail).where(
+        BonTravail.kind == "interne",
+        BonTravail.status != "cancelled",
+        BonTravail.immeuble_id.isnot(None),
+    )
+    if immeuble_id is not None:
+        q = q.where(BonTravail.immeuble_id == int(immeuble_id))
+    bons = (await db.execute(q)).scalars().all()
     bons = [
         b for b in bons if b.created_at and b.created_at.year == target_year
     ]
