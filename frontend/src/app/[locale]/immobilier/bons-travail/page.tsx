@@ -1,16 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import {
-  Building2,
-  ChevronDown,
-  ChevronRight,
-  Hammer,
-  Loader2,
-  Pencil,
-  Plus,
-  X
-} from "lucide-react";
+import { Hammer, Image as ImageIcon, Loader2, Plus, X } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
@@ -57,21 +48,16 @@ type BonListItem = {
   logement_id: number | null;
 };
 
-type RollupLogement = {
-  logement_id: number | null;
-  numero: string | null;
-  total: number;
-  count: number;
-};
-
-type RollupImmeuble = {
-  immeuble_id: number;
-  name: string;
+type PhotoMeta = { id: number; caption: string | null; content_type: string };
+type BonDetail = {
+  id: number;
+  reference: string;
+  title: string;
+  description: string | null;
+  status: string;
   address: string | null;
-  total: number;
-  count: number;
-  communs_total: number;
-  logements: RollupLogement[];
+  work_notes: string | null;
+  photos: PhotoMeta[];
 };
 
 type Column = { id: string; label: string; dot: string };
@@ -90,9 +76,12 @@ const COLUMNS: Column[] = [
 const STATUS_LABEL: Record<string, string> = Object.fromEntries(
   COLUMNS.map((c) => [c.id, c.label])
 );
-// Statuts legacy encore possibles sur d'anciens bons.
 STATUS_LABEL.sent = "Envoyé";
 STATUS_LABEL.signed = "Signé";
+
+// Bouton plein doré — bon contraste (texte foncé sur fond doré).
+const BTN =
+  "inline-flex items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-brand-950 hover:bg-amber-400 disabled:opacity-50";
 
 function money(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -119,11 +108,12 @@ export default function BonsTravailPage() {
   const [formOpen, setFormOpen] = useState(false);
 
   const [bons, setBons] = useState<BonListItem[] | null>(null);
-  const [rollup, setRollup] = useState<RollupImmeuble[]>([]);
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
-  // Édition de la demande (titre / description).
-  const [editBon, setEditBon] = useState<BonListItem | null>(null);
+  // Détail / édition de la demande.
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detail, setDetail] = useState<BonDetail | null>(null);
+  const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({});
   const [editTitre, setEditTitre] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [editBusy, setEditBusy] = useState(false);
@@ -136,18 +126,9 @@ export default function BonsTravailPage() {
       /* ignore */
     }
   }
-  async function loadRollup() {
-    try {
-      const r = await authedFetch("/api/v1/immobilier/maintenance-rollup");
-      if (r.ok) setRollup((await r.json()) as RollupImmeuble[]);
-    } catch {
-      /* ignore */
-    }
-  }
 
   useEffect(() => {
     void loadBons();
-    void loadRollup();
   }, []);
 
   // Immeubles de la compagnie active.
@@ -238,7 +219,6 @@ export default function BonsTravailPage() {
       setPhotoFile(null);
       setFormOpen(false);
       void loadBons();
-      void loadRollup();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -246,18 +226,57 @@ export default function BonsTravailPage() {
     }
   }
 
-  function openEdit(b: BonListItem) {
-    setEditBon(b);
-    setEditTitre(b.title);
-    setEditDesc("");
-    setError(null);
+  async function loadPhoto(bonId: number, photoId: number) {
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/bons-travail/${bonId}/photos/${photoId}`
+      );
+      if (r.ok) {
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        setPhotoUrls((p) => ({ ...p, [photoId]: url }));
+      }
+    } catch {
+      /* ignore */
+    }
   }
+
+  async function openDetail(b: BonListItem) {
+    setDetailOpen(true);
+    setDetailLoading(true);
+    setDetail(null);
+    setPhotoUrls({});
+    setError(null);
+    try {
+      const r = await authedFetch(`/api/v1/immobilier/bons-travail/${b.id}`);
+      if (!r.ok) throw new Error();
+      const d = (await r.json()) as BonDetail;
+      setDetail(d);
+      setEditTitre(d.title);
+      setEditDesc(d.description || "");
+      for (const ph of d.photos) void loadPhoto(b.id, ph.id);
+    } catch {
+      setError("Impossible d'ouvrir ce bon.");
+      setDetailOpen(false);
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  function closeDetail() {
+    setDetailOpen(false);
+    setDetail(null);
+    // Libère les object URLs.
+    Object.values(photoUrls).forEach((u) => URL.revokeObjectURL(u));
+    setPhotoUrls({});
+  }
+
   async function saveEdit() {
-    if (!editBon) return;
+    if (!detail) return;
     setEditBusy(true);
     try {
       const r = await authedFetch(
-        `/api/v1/immobilier/bons-travail/${editBon.id}/demande`,
+        `/api/v1/immobilier/bons-travail/${detail.id}/demande`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -267,8 +286,8 @@ export default function BonsTravailPage() {
           })
         }
       );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setEditBon(null);
+      if (!r.ok) throw new Error();
+      closeDetail();
       void loadBons();
     } catch {
       setError("Modification de la demande échouée.");
@@ -288,15 +307,6 @@ export default function BonsTravailPage() {
     return map;
   }, [bons]);
 
-  function toggleExpand(id: number) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
   return (
     <>
       <ImmobilierTopbar
@@ -305,7 +315,7 @@ export default function BonsTravailPage() {
           { label: "Bons de travail" }
         ]}
       />
-      <div className="p-4 lg:p-6">
+      <div className="p-4 pb-24 lg:p-6">
         <header className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/15 text-amber-300">
@@ -316,14 +326,15 @@ export default function BonsTravailPage() {
               <p className="mt-1 max-w-2xl text-sm text-white/60">
                 Entretien de nos immeubles. Crée une demande de réparation ;
                 Construction la planifie, l&apos;exécute et la refacture. Tu
-                suis l&apos;avancement ici (lecture seule).
+                suis l&apos;avancement ici (lecture seule). Clique un bon pour
+                voir le détail et corriger ta demande.
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={() => setFormOpen((v) => !v)}
-            className="inline-flex flex-shrink-0 items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-500/15 px-3 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-500/25"
+            className={`${BTN} flex-shrink-0`}
           >
             <Plus className="h-4 w-4" /> Nouvelle demande
           </button>
@@ -395,7 +406,7 @@ export default function BonsTravailPage() {
                 type="file"
                 accept="image/*,application/pdf"
                 onChange={(e) => setPhotoFile(e.target.files?.[0] || null)}
-                className="block w-full text-sm text-white/70 file:mr-3 file:rounded-lg file:border-0 file:bg-amber-500/15 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-amber-100 hover:file:bg-amber-500/25"
+                className="block w-full text-sm text-white/70 file:mr-3 file:rounded-lg file:border-0 file:bg-amber-500 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-brand-950 hover:file:bg-amber-400"
               />
             </Field>
 
@@ -409,7 +420,7 @@ export default function BonsTravailPage() {
               type="button"
               onClick={() => void createBon()}
               disabled={busy || immeubleId === "" || !titre.trim()}
-              className="inline-flex items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-500/15 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-500/25 disabled:opacity-50"
+              className={BTN}
             >
               {busy ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -437,86 +448,14 @@ export default function BonsTravailPage() {
           </div>
         ) : null}
 
-        {/* ── Dépenses de maintenance (roll-up) ─────────────────────── */}
-        {rollup.length > 0 ? (
-          <section className="mt-8">
-            <h2 className="text-lg font-bold text-white">
-              Dépenses de maintenance — année en cours
-            </h2>
-            <p className="mt-1 text-xs text-white/50">
-              Montant refacturé par immeuble puis par appartement (sans profit).
-            </p>
-            <div className="mt-4 grid gap-3 lg:grid-cols-2">
-              {rollup.map((r) => {
-                const open = expanded.has(r.immeuble_id);
-                return (
-                  <div
-                    key={r.immeuble_id}
-                    className="rounded-2xl border border-brand-800 bg-brand-900 p-4"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => toggleExpand(r.immeuble_id)}
-                      className="flex w-full items-center justify-between gap-2 text-left"
-                    >
-                      <span className="flex min-w-0 items-center gap-2">
-                        {open ? (
-                          <ChevronDown className="h-4 w-4 flex-shrink-0 text-white/50" />
-                        ) : (
-                          <ChevronRight className="h-4 w-4 flex-shrink-0 text-white/50" />
-                        )}
-                        <Building2 className="h-4 w-4 flex-shrink-0 text-amber-300" />
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-semibold text-white">
-                            {r.name}
-                          </span>
-                          <span className="block truncate text-[11px] text-white/40">
-                            {r.count} bon{r.count > 1 ? "s" : ""}
-                          </span>
-                        </span>
-                      </span>
-                      <span className="flex-shrink-0 text-right">
-                        <span className="block text-base font-bold text-amber-200">
-                          {money(r.total)}
-                        </span>
-                      </span>
-                    </button>
-                    {open ? (
-                      <div className="mt-3 space-y-1 border-t border-brand-800 pt-3 text-sm">
-                        {r.logements.map((l) => (
-                          <div
-                            key={l.logement_id ?? "communs"}
-                            className="flex items-center justify-between text-white/70"
-                          >
-                            <span>App {l.numero || "—"}</span>
-                            <span className="text-white">{money(l.total)}</span>
-                          </div>
-                        ))}
-                        {r.communs_total > 0 ? (
-                          <div className="flex items-center justify-between text-white/70">
-                            <span>Communs / immeuble entier</span>
-                            <span className="text-white">
-                              {money(r.communs_total)}
-                            </span>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        ) : null}
-
         {/* ── Suivi (kanban lecture seule) ──────────────────────────── */}
         <section className="mt-8">
           <h2 className="text-lg font-bold text-white">
             Suivi des bons de travail
           </h2>
           <p className="mt-1 max-w-2xl text-xs text-white/50">
-            Avancement géré par Construction (lecture seule). Tu peux corriger
-            la demande si tu t&apos;es trompé.
+            Avancement géré par Construction (lecture seule). Clique un bon pour
+            le détail et corriger ta demande au besoin.
           </p>
 
           {bons === null ? (
@@ -554,9 +493,11 @@ export default function BonsTravailPage() {
                         </p>
                       ) : (
                         cards.map((b) => (
-                          <div
+                          <button
                             key={b.id}
-                            className="rounded-lg border border-brand-800 bg-brand-950 p-3"
+                            type="button"
+                            onClick={() => openDetail(b)}
+                            className="block w-full rounded-lg border border-brand-800 bg-brand-950 p-3 text-left transition hover:border-accent-500"
                           >
                             <p className="truncate text-sm font-semibold text-white">
                               {b.address || "Adresse non renseignée"}
@@ -575,19 +516,7 @@ export default function BonsTravailPage() {
                                 />
                               </div>
                             ) : null}
-                            <div className="mt-2 flex items-center justify-between">
-                              <button
-                                type="button"
-                                onClick={() => openEdit(b)}
-                                className="inline-flex items-center gap-1 text-[11px] text-white/50 hover:text-amber-200"
-                              >
-                                <Pencil className="h-3 w-3" /> Corriger
-                              </button>
-                              <span className="text-xs font-semibold text-white">
-                                {money(b.amount)}
-                              </span>
-                            </div>
-                          </div>
+                          </button>
                         ))
                       )}
                     </div>
@@ -599,77 +528,135 @@ export default function BonsTravailPage() {
         </section>
       </div>
 
-      {editBon ? (
+      {detailOpen ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={() => (!editBusy ? setEditBon(null) : null)}
+          onClick={() => (!editBusy ? closeDetail() : null)}
         >
           <div
-            className="w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 p-6"
+            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-brand-800 bg-brand-950 p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-white">
-                Corriger la demande
-              </h3>
+              <h3 className="text-lg font-bold text-white">Bon de travail</h3>
               <button
                 type="button"
-                onClick={() => setEditBon(null)}
+                onClick={closeDetail}
                 className="text-white/50 hover:text-white"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <p className="mt-1 text-xs text-white/50">
-              {editBon.reference} — {STATUS_LABEL[editBon.status] || editBon.status}
-            </p>
-            <div className="mt-4 space-y-4">
-              <Field label="Titre">
-                <input
-                  value={editTitre}
-                  onChange={(e) => setEditTitre(e.target.value)}
-                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-amber-300"
-                />
-              </Field>
-              <Field label="Nouvelle description (laisse vide pour ne pas changer)">
-                <textarea
-                  value={editDesc}
-                  onChange={(e) => setEditDesc(e.target.value)}
-                  rows={4}
-                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-amber-300"
-                />
-              </Field>
-            </div>
-            <div className="mt-5 flex items-center justify-between">
-              <Link
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={`/app/bons/${editBon.id}` as any}
-                className="text-xs text-white/50 underline hover:text-white"
-              >
-                Voir dans Construction →
-              </Link>
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setEditBon(null)}
-                  disabled={editBusy}
-                  className="rounded-lg border border-brand-700 px-3 py-2 text-sm text-white/80 hover:bg-brand-900"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void saveEdit()}
-                  disabled={editBusy || !editTitre.trim()}
-                  className="inline-flex items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-500/15 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-500/25 disabled:opacity-50"
-                >
-                  {editBusy ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : null}
-                  Enregistrer
-                </button>
+
+            {detailLoading || !detail ? (
+              <div className="flex min-h-[20vh] items-center justify-center">
+                <Loader2 className="h-6 w-6 animate-spin text-amber-300" />
               </div>
-            </div>
+            ) : (
+              <>
+                <p className="mt-1 text-xs text-white/50">
+                  {detail.reference} —{" "}
+                  {STATUS_LABEL[detail.status] || detail.status}
+                </p>
+
+                <div className="mt-4 space-y-4">
+                  <Field label="Titre">
+                    <input
+                      value={editTitre}
+                      onChange={(e) => setEditTitre(e.target.value)}
+                      className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-amber-300"
+                    />
+                  </Field>
+                  <Field label="Description">
+                    <textarea
+                      value={editDesc}
+                      onChange={(e) => setEditDesc(e.target.value)}
+                      rows={4}
+                      className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-amber-300"
+                    />
+                  </Field>
+
+                  {/* Notes de l'exécutant — lecture seule. */}
+                  {detail.work_notes ? (
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-white/60">
+                        Notes de l&apos;exécutant
+                      </p>
+                      <p className="whitespace-pre-wrap rounded-lg border border-brand-800 bg-brand-900/60 px-3 py-2 text-sm text-white/80">
+                        {detail.work_notes}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {/* Photos — lecture seule. */}
+                  {detail.photos.length > 0 ? (
+                    <div>
+                      <p className="mb-1 flex items-center gap-1 text-xs font-medium text-white/60">
+                        <ImageIcon className="h-3.5 w-3.5" /> Photos
+                      </p>
+                      <div className="grid grid-cols-3 gap-2">
+                        {detail.photos.map((ph) =>
+                          photoUrls[ph.id] ? (
+                            <a
+                              key={ph.id}
+                              href={photoUrls[ph.id]}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="block aspect-square overflow-hidden rounded-lg border border-brand-800"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={photoUrls[ph.id]}
+                                alt={ph.caption || "photo"}
+                                className="h-full w-full object-cover"
+                              />
+                            </a>
+                          ) : (
+                            <div
+                              key={ph.id}
+                              className="flex aspect-square items-center justify-center rounded-lg border border-brand-800 bg-brand-900"
+                            >
+                              <Loader2 className="h-4 w-4 animate-spin text-white/40" />
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="mt-5 flex items-center justify-between">
+                  <Link
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    href={`/app/bons/${detail.id}` as any}
+                    className="text-xs text-white/50 underline hover:text-white"
+                  >
+                    Voir dans Construction →
+                  </Link>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={closeDetail}
+                      disabled={editBusy}
+                      className="rounded-lg border border-brand-700 px-3 py-2 text-sm text-white/80 hover:bg-brand-900"
+                    >
+                      Fermer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void saveEdit()}
+                      disabled={editBusy || !editTitre.trim()}
+                      className={BTN}
+                    >
+                      {editBusy ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : null}
+                      Enregistrer
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       ) : null}
