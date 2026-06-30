@@ -57,6 +57,8 @@ class PunchMe(BaseModel):
 class ClockInRequest(BaseModel):
     project_id: Optional[int] = None
     contact_request_id: Optional[int] = None
+    # Pointer le punch sur un bon de travail interne (entretien d'immeuble).
+    bon_travail_id: Optional[int] = None
     task: Optional[str] = Field(default=None, max_length=255)
     latitude: Optional[float] = None
     longitude: Optional[float] = None
@@ -190,6 +192,7 @@ async def clock_in(
         employe_id=emp.id,
         project_id=data.project_id,
         contact_request_id=data.contact_request_id,
+        bon_travail_id=data.bon_travail_id,
         started_at=datetime.now(timezone.utc),
         task=(data.task.strip() if data.task else None),
         geolocation=_geo_str(data.latitude, data.longitude),
