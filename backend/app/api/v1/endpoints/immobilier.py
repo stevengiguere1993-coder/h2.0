@@ -1127,6 +1127,9 @@ class _BonAvancementDetail(BaseModel):
     project: Optional[_BonAvancementProject]
     phases: List[_BonPhaseRead]
     photos: List[_BonPhotoMeta]
+    # Notes de l'exécutant — lecture seule côté locatif.
+    work_notes: Optional[str] = None
+    address: Optional[str] = None
 
 
 @router.get("/bons-travail/{bon_id}", response_model=_BonAvancementDetail)
@@ -1246,6 +1249,8 @@ async def get_gestion_immo_bon(
         project=proj_summary,
         phases=phases_out,
         photos=photos_out,
+        work_notes=bon.work_notes,
+        address=bon.address,
     )
 
 
