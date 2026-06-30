@@ -77,6 +77,17 @@ type Recap = {
   total: number;
 };
 
+type BonPunch = {
+  id: number;
+  employe_id: number;
+  employe_name: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  hours: number | null;
+  task: string | null;
+  approved: boolean;
+};
+
 type Client = { id: number; name: string; email: string | null };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -140,6 +151,7 @@ export default function BonDetailPage() {
 
   const [b, setB] = useState<Bon | null>(null);
   const [items, setItems] = useState<Item[]>([]);
+  const [punches, setPunches] = useState<BonPunch[]>([]);
   const [client, setClient] = useState<Client | null>(null);
   const [loading, setLoading] = useState(true);
   const [itemBusy, setItemBusy] = useState<number | "new" | null>(null);
@@ -161,17 +173,20 @@ export default function BonDetailPage() {
     async function load() {
       setLoading(true);
       try {
-        const [bRes, iRes, rRes] = await Promise.all([
+        const [bRes, iRes, rRes, pRes] = await Promise.all([
           authedFetch(`/api/v1/bons-travail/${id}`),
           authedFetch(`/api/v1/bons-travail/${id}/items`),
-          authedFetch(`/api/v1/bons-travail/${id}/recap`)
+          authedFetch(`/api/v1/bons-travail/${id}/recap`),
+          authedFetch(`/api/v1/bons-travail/${id}/punches`)
         ]);
         if (!bRes.ok) throw new Error(`http_${bRes.status}`);
         const bd = (await bRes.json()) as Bon;
         const iData = iRes.ok ? ((await iRes.json()) as Item[]) : [];
+        const pData = pRes.ok ? ((await pRes.json()) as BonPunch[]) : [];
         if (cancelled) return;
         setB(bd);
         setItems(iData);
+        setPunches(pData);
         if (rRes.ok) setRecap((await rRes.json()) as Recap);
         setSendSubject(`Bon de travail ${bd.reference} — ${bd.title}`);
         if (bd.client_id) {
@@ -284,6 +299,40 @@ export default function BonDetailPage() {
       setItems((xs) => [...xs, created]);
     } catch {
       setError("Ajout de ligne échoué.");
+    } finally {
+      setItemBusy(null);
+    }
+  }
+
+  // Verse un punch pointé sur ce bon en ligne d'heures refacturable.
+  async function importPunch(p: BonPunch) {
+    const marge = b?.marge_pct != null ? Number(b.marge_pct) : 10;
+    const hours = p.hours ?? 0;
+    const desc =
+      "Main-d'œuvre" +
+      (p.employe_name ? ` — ${p.employe_name}` : "") +
+      (p.task ? ` (${p.task})` : "");
+    setItemBusy("new");
+    try {
+      const res = await authedFetch(`/api/v1/bons-travail/${id}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          position: items.length,
+          item_type: "heure",
+          description: desc,
+          quantity: hours,
+          cost_rate: 35,
+          bill_rate: 55,
+          marge_pct: marge,
+          unit: "h"
+        })
+      });
+      if (!res.ok) throw new Error();
+      const created = (await res.json()) as Item;
+      setItems((xs) => [...xs, created]);
+    } catch {
+      setError("Import du punch échoué.");
     } finally {
       setItemBusy(null);
     }
@@ -741,6 +790,62 @@ export default function BonDetailPage() {
                       </span>
                     </span>
                   </div>
+                </section>
+
+                <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
+                  <div className="border-b border-brand-800 px-5 py-4">
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                      Heures pointées sur ce bon
+                    </h2>
+                    <p className="mt-1 text-xs text-white/50">
+                      Punchs du staff rattachés à ce bon. « Verser » crée une
+                      ligne d&apos;heures refacturable (35 $ / 55 $ + marge),
+                      modifiable ensuite.
+                    </p>
+                  </div>
+                  {punches.length === 0 ? (
+                    <p className="px-5 py-6 text-center text-sm text-white/50">
+                      Aucune heure pointée. Le staff peut choisir ce bon dans
+                      l&apos;écran Punch.
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-brand-800">
+                      {punches.map((p) => (
+                        <div
+                          key={p.id}
+                          className="flex items-center justify-between gap-3 px-5 py-3 text-sm"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate font-medium text-white">
+                              {p.employe_name || `Employé #${p.employe_id}`}
+                            </p>
+                            <p className="truncate text-xs text-white/50">
+                              {p.started_at
+                                ? new Date(p.started_at).toLocaleDateString(
+                                    "fr-CA"
+                                  )
+                                : "—"}
+                              {p.task ? ` · ${p.task}` : ""}
+                              {p.approved ? "" : " · à approuver"}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="font-semibold text-white">
+                              {p.hours != null ? `${p.hours} h` : "en cours"}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => importPunch(p)}
+                              disabled={itemBusy === "new" || p.hours == null}
+                              className="rounded-lg border border-brand-700 bg-brand-950 px-2.5 py-1.5 text-xs font-medium text-white hover:border-accent-500 disabled:opacity-40"
+                            >
+                              Verser →
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </section>
               </>
             ) : (
