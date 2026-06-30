@@ -732,7 +732,8 @@ async def set_immeuble_owner(
 class _BonFromImmeubleRequest(BaseModel):
     titre: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
-    logement: Optional[str] = None  # n° de logement concerné (optionnel)
+    logement: Optional[str] = None  # n° de logement (affichage, legacy)
+    logement_id: Optional[int] = None  # FK logement concerné (optionnel)
 
 
 @router.post("/immeubles/{immeuble_id}/bon-travail")
@@ -780,7 +781,11 @@ async def create_bon_from_immeuble(
             await db.flush()
             client_created = True
 
-    loc = f" — logement {payload.logement}" if payload.logement else ""
+    loc_label = payload.logement
+    if payload.logement_id and not loc_label:
+        lg = await db.get(Logement, payload.logement_id)
+        loc_label = lg.numero if lg else None
+    loc = f" — logement {loc_label}" if loc_label else ""
     where = f"{imm.address}{(', ' + imm.city) if imm.city else ''}"
     scope = (
         f"Immeuble : {imm.name}{loc}\n"
@@ -796,14 +801,31 @@ async def create_bon_from_immeuble(
         address=f"{where}{loc}",
         status="draft",
         origin="gestion_immo",
-        # Signature toujours requise, même pour une demande interne de
-        # gestion immobilière (le bon part chez l'exécutant / la
-        # compagnie pour signature au même titre qu'un client externe).
-        requires_signature=True,
+        # Bon INTERNE (entretien de nos immeubles) : rattachement complet,
+        # aucune signature. Apparaît sur le board Construction ET le miroir
+        # Gestion locative.
+        kind="interne",
+        owner_entreprise_id=own.entreprise_id if own else None,
+        immeuble_id=immeuble_id,
+        logement_id=payload.logement_id,
+        marge_pct=10,
+        requires_signature=False,
     )
     bon.created_at = _now()
     bon.updated_at = _now()
     db.add(bon)
+    await db.flush()
+    # Notifie les gestionnaires (manager+) — comme côté Construction.
+    from app.services.notifications import notify_role
+
+    await notify_role(
+        db,
+        min_role="manager",
+        kind="bon_travail",
+        title="Nouveau bon de travail — " + (bon.address or bon.reference),
+        body=bon.title,
+        href=f"/app/bons/{bon.id}",
+    )
     await db.commit()
     await db.refresh(bon)
     return {
@@ -855,6 +877,10 @@ class _BonAvancementItem(BaseModel):
     signed_at: Optional[datetime]
     client_name: Optional[str]
     project: Optional[_BonAvancementProject]
+    address: Optional[str] = None
+    amount: Optional[float] = None
+    immeuble_id: Optional[int] = None
+    logement_id: Optional[int] = None
 
 
 @router.get("/bons-travail", response_model=List[_BonAvancementItem])
@@ -866,7 +892,8 @@ async def list_gestion_immo_bons(db: DBSession, user: CurrentUser) -> List[_BonA
         await db.execute(
             select(BonTravail)
             .where(
-                (BonTravail.origin == "gestion_immo")
+                (BonTravail.kind == "interne")
+                | (BonTravail.origin == "gestion_immo")
                 | (BonTravail.scope_md.ilike("%Gestion immobilière%"))
             )
             .order_by(BonTravail.created_at.desc())
@@ -927,9 +954,148 @@ async def list_gestion_immo_bons(db: DBSession, user: CurrentUser) -> List[_BonA
                 signed_at=b.signed_at,
                 client_name=clients.get(b.client_id) if b.client_id else None,
                 project=proj_summary,
+                address=b.address,
+                amount=float(b.amount) if b.amount is not None else None,
+                immeuble_id=b.immeuble_id,
+                logement_id=b.logement_id,
             )
         )
     return out
+
+
+# ── Roll-up des dépenses de maintenance (sans profit) ─────────────────────
+class _RollupLogement(BaseModel):
+    logement_id: Optional[int]
+    numero: Optional[str]
+    total: float
+    count: int
+
+
+class _RollupImmeuble(BaseModel):
+    immeuble_id: int
+    name: str
+    address: Optional[str]
+    total: float
+    count: int
+    communs_total: float
+    logements: List[_RollupLogement]
+
+
+@router.get("/maintenance-rollup", response_model=List[_RollupImmeuble])
+async def maintenance_rollup(
+    db: DBSession, user: CurrentUser, year: Optional[int] = None
+) -> List[_RollupImmeuble]:
+    """Dépenses de maintenance ($/an) par immeuble puis par appartement.
+
+    Somme le montant refacturé des bons internes non annulés de l'année.
+    Aucune notion de profit (vue propriétaire/locatif)."""
+    _require_volet(user)
+    target_year = year if year is not None else _now().year
+    bons = (
+        await db.execute(
+            select(BonTravail).where(
+                BonTravail.kind == "interne",
+                BonTravail.status != "cancelled",
+                BonTravail.immeuble_id.isnot(None),
+            )
+        )
+    ).scalars().all()
+    bons = [
+        b for b in bons if b.created_at and b.created_at.year == target_year
+    ]
+    if not bons:
+        return []
+
+    imm_ids = {b.immeuble_id for b in bons}
+    immeubles = {
+        i.id: i
+        for i in (
+            await db.execute(select(Immeuble).where(Immeuble.id.in_(imm_ids)))
+        ).scalars().all()
+    }
+    log_ids = {b.logement_id for b in bons if b.logement_id}
+    logements = (
+        {
+            lg.id: lg
+            for lg in (
+                await db.execute(
+                    select(Logement).where(Logement.id.in_(log_ids))
+                )
+            ).scalars().all()
+        }
+        if log_ids
+        else {}
+    )
+
+    by_imm: dict = {}
+    for b in bons:
+        amt = float(b.amount) if b.amount is not None else 0.0
+        e = by_imm.setdefault(
+            b.immeuble_id,
+            {"total": 0.0, "count": 0, "communs": 0.0, "logs": {}},
+        )
+        e["total"] += amt
+        e["count"] += 1
+        if b.logement_id:
+            le = e["logs"].setdefault(
+                b.logement_id, {"total": 0.0, "count": 0}
+            )
+            le["total"] += amt
+            le["count"] += 1
+        else:
+            e["communs"] += amt
+
+    out: List[_RollupImmeuble] = []
+    for imm_id, e in by_imm.items():
+        imm = immeubles.get(imm_id)
+        out.append(
+            _RollupImmeuble(
+                immeuble_id=imm_id,
+                name=imm.name if imm else f"Immeuble #{imm_id}",
+                address=imm.address if imm else None,
+                total=round(e["total"], 2),
+                count=e["count"],
+                communs_total=round(e["communs"], 2),
+                logements=[
+                    _RollupLogement(
+                        logement_id=lid,
+                        numero=(
+                            logements[lid].numero if lid in logements else None
+                        ),
+                        total=round(lv["total"], 2),
+                        count=lv["count"],
+                    )
+                    for lid, lv in sorted(e["logs"].items())
+                ],
+            )
+        )
+    out.sort(key=lambda x: x.total, reverse=True)
+    return out
+
+
+class _BonDemandeEdit(BaseModel):
+    titre: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = None
+
+
+@router.patch("/bons-travail/{bon_id}/demande")
+async def edit_gestion_immo_bon_demande(
+    bon_id: int, payload: _BonDemandeEdit, db: DBSession, user: CurrentUser
+) -> dict:
+    """Le volet locatif peut corriger la DEMANDE (titre / description) d'un
+    bon interne s'il a fait une erreur — pas la planification ni la
+    refacturation (réservées à Construction)."""
+    _require_volet(user)
+    bon = await db.get(BonTravail, bon_id)
+    if bon is None or (bon.kind or "construction") != "interne":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bon introuvable")
+    if payload.titre is not None:
+        bon.title = payload.titre.strip()
+    if payload.description is not None:
+        bon.description = payload.description or None
+    bon.updated_at = _now()
+    await db.commit()
+    return {"ok": True}
 
 
 class _BonPhaseRead(BaseModel):
