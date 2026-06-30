@@ -50,3 +50,11 @@ class Punch(Base, TimestampUpdateMixin):
         nullable=True,
         index=True,
     )
+
+    # Heures pointées DIRECTEMENT sur un bon de travail interne (entretien
+    # de nos immeubles) plutôt que sur un projet → le coût remonte au bon.
+    bon_travail_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("bons_travail.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )

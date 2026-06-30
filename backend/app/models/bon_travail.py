@@ -19,10 +19,17 @@ from app.db.base import Base, TimestampUpdateMixin
 
 
 class BonTravailStatus(str, Enum):
-    DRAFT = "draft"
+    # Brouillon / Annulé : communs aux deux natures de bon.
+    DRAFT = "draft"  # Brouillon
+    CANCELLED = "cancelled"  # Annulé
+    # Cycle du bon INTERNE (entretien de nos immeubles) :
+    ACCEPTE_A_PLANIFIER = "accepte_a_planifier"
+    PLANIFIE = "planifie"
+    COMPLETE_A_REFACTURER = "complete_a_refacturer"
+    FACTURE = "facture"
+    # Statuts LEGACY (bons construction signés client) — conservés tels quels.
     SENT = "sent"
     SIGNED = "signed"
-    CANCELLED = "cancelled"
 
 
 class BonTravail(Base, TimestampUpdateMixin):
@@ -72,6 +79,30 @@ class BonTravail(Base, TimestampUpdateMixin):
     # zone Gestion immobilière (réparation d'immeuble), sinon NULL/"construction".
     # Sert au miroir lecture seule côté gestion immobilière.
     origin: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+
+    # ── Bon de travail INTERNE (entretien de NOS immeubles) ──────────────
+    # Nature : "construction" (legacy, signé client) ou "interne" (refonte).
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="construction", index=True
+    )
+    # Client interne = une compagnie qu'on détient (propriétaire/payeur) →
+    # un de ses immeubles → un appartement (NULL = communs / immeuble entier).
+    owner_entreprise_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("entreprises.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    immeuble_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_immeubles.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    logement_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_logements.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # Exécutant : nos hommes à tout faire ("nos_hommes") ou un sous-traitant.
+    executant_type: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    sous_traitant_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("sous_traitants.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # Marge par défaut (%) sur la refacturation — modifiable par ligne.
+    marge_pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=0)
 
     sent_to_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
