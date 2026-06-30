@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ClipboardCheck, Loader2, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ClipboardCheck, HardHat, Loader2, Plus, Wrench } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 
 type Bon = {
   id: number;
@@ -19,6 +19,13 @@ type Bon = {
   address: string | null;
   bon_type: string;
   status: string;
+  kind: string | null;
+  owner_entreprise_id: number | null;
+  immeuble_id: number | null;
+  logement_id: number | null;
+  executant_type: string | null;
+  sous_traitant_id: number | null;
+  marge_pct: number | string | null;
   sent_at: string | null;
   signed_at: string | null;
   signed_by_name: string | null;
@@ -26,11 +33,18 @@ type Bon = {
 };
 
 type Column = { id: string; label: string; dot: string };
+// Cycle du bon de travail INTERNE (entretien de nos immeubles).
 const COLUMNS: Column[] = [
-  { id: "draft", label: "Brouillons", dot: "bg-white/40" },
-  { id: "sent", label: "Envoyés", dot: "bg-blue-400" },
-  { id: "signed", label: "Signés", dot: "bg-emerald-400" },
-  { id: "cancelled", label: "Annulés", dot: "bg-white/20" }
+  { id: "draft", label: "Brouillon", dot: "bg-white/40" },
+  { id: "accepte_a_planifier", label: "Accepté à planifier", dot: "bg-amber-400" },
+  { id: "planifie", label: "Planifié", dot: "bg-blue-400" },
+  {
+    id: "complete_a_refacturer",
+    label: "Complété · à refacturer",
+    dot: "bg-violet-400"
+  },
+  { id: "facture", label: "Facturé", dot: "bg-emerald-400" },
+  { id: "cancelled", label: "Annulé", dot: "bg-white/20" }
 ];
 
 function money(n: number | string | null): string {
@@ -46,13 +60,13 @@ function money(n: number | string | null): string {
 
 export default function BonsPage() {
   const { onOpenSidebar } = useAppLayout();
+  const router = useRouter();
   const [items, setItems] = useState<Bon[]>([]);
-  const [clientNames, setClientNames] = useState<Map<number, string>>(
-    new Map()
-  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+  const dragIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,22 +74,10 @@ export default function BonsPage() {
       setLoading(true);
       setError(null);
       try {
-        const [res, cRes] = await Promise.all([
-          authedFetch("/api/v1/bons-travail?limit=500"),
-          authedFetch("/api/v1/clients?limit=500")
-        ]);
+        const res = await authedFetch("/api/v1/bons-travail?limit=500");
         if (!res.ok) throw new Error(`http_${res.status}`);
         const data = (await res.json()) as Bon[];
-        if (!cancelled) {
-          setItems(data);
-          if (cRes.ok) {
-            const cs = (await cRes.json()) as Array<{
-              id: number;
-              name: string;
-            }>;
-            setClientNames(new Map(cs.map((c) => [c.id, c.name])));
-          }
-        }
+        if (!cancelled) setItems(data);
       } catch {
         if (!cancelled) setError("Impossible de charger les bons de travail.");
       } finally {
@@ -88,22 +90,24 @@ export default function BonsPage() {
     };
   }, []);
 
-  const clientNameOf = (b: Bon) =>
-    b.client_id ? clientNames.get(b.client_id) ?? null : null;
+  // Le board ne montre que les bons INTERNES (entretien de nos immeubles).
+  // Les bons « construction » signés client restent en legacy ailleurs.
+  const internal = useMemo(
+    () => items.filter((b) => (b.kind ?? "construction") === "interne"),
+    [items]
+  );
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(
+    if (!q) return internal;
+    return internal.filter(
       (b) =>
         b.reference.toLowerCase().includes(q) ||
         b.title.toLowerCase().includes(q) ||
         (b.address || "").toLowerCase().includes(q) ||
-        (clientNameOf(b) || "").toLowerCase().includes(q) ||
         (b.description || "").toLowerCase().includes(q)
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, search, clientNames]);
+  }, [internal, search]);
 
   const byColumn = useMemo(() => {
     const map: Record<string, Bon[]> = Object.fromEntries(
@@ -113,24 +117,40 @@ export default function BonsPage() {
       const target = COLUMNS.find((c) => c.id === b.status) ? b.status : "draft";
       map[target].push(b);
     }
-    // Classement comme soumissions / projets : adresse → client → numéro.
     const cmp = (a: Bon, b: Bon) => {
       const byAddr = (a.address || "~").localeCompare(b.address || "~", "fr", {
         sensitivity: "base"
       });
       if (byAddr !== 0) return byAddr;
-      const byClient = (clientNameOf(a) || "~").localeCompare(
-        clientNameOf(b) || "~",
-        "fr",
-        { sensitivity: "base" }
-      );
-      if (byClient !== 0) return byClient;
       return a.reference.localeCompare(b.reference, "fr");
     };
     for (const id of Object.keys(map)) map[id].sort(cmp);
     return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered, clientNames]);
+  }, [filtered]);
+
+  async function moveTo(bonId: number, status: string) {
+    const current = items.find((b) => b.id === bonId);
+    if (!current || current.status === status) return;
+    const prevStatus = current.status;
+    // Optimiste.
+    setItems((prev) =>
+      prev.map((b) => (b.id === bonId ? { ...b, status } : b))
+    );
+    try {
+      const res = await authedFetch(`/api/v1/bons-travail/${bonId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+      });
+      if (!res.ok) throw new Error(`http_${res.status}`);
+    } catch {
+      // Annule le déplacement optimiste.
+      setItems((prev) =>
+        prev.map((b) => (b.id === bonId ? { ...b, status: prevStatus } : b))
+      );
+      setError("Échec du déplacement du bon. Réessaie.");
+    }
+  }
 
   return (
     <>
@@ -141,7 +161,7 @@ export default function BonsPage() {
         ]}
         onOpenSidebar={onOpenSidebar}
         onSearch={setSearch}
-        searchPlaceholder="Référence, titre…"
+        searchPlaceholder="Référence, titre, adresse…"
         rightSlot={
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -156,11 +176,13 @@ export default function BonsPage() {
       <div className="p-4 lg:p-6">
         <p className="mb-4 rounded-lg border border-brand-800 bg-brand-900/60 px-4 py-3 text-xs text-white/60">
           <strong className="text-white/80">À quoi ça sert ?</strong>{" "}
-          Un bon de travail documente un travail additionnel sur un
-          projet (extras, modifications hors soumission, appel de service)
-          et peut être signé électroniquement par le client. Le montant
-          est ce que tu <strong className="text-white/80">charges au client</strong>{" "}
-          pour ces extras (avant taxes).
+          Un bon de travail gère un travail d&apos;entretien sur{" "}
+          <strong className="text-white/80">un de nos immeubles</strong>{" "}
+          (compagnie → immeuble → appartement). On assigne nos hommes à
+          tout faire ou un sous-traitant, on suit l&apos;avancement, puis on
+          refacture les heures et le matériel à la compagnie propriétaire.
+          Glisse une carte d&apos;une colonne à l&apos;autre pour changer son
+          statut.
         </p>
 
         {error ? (
@@ -173,16 +195,35 @@ export default function BonsPage() {
           <div className="flex min-h-[40vh] items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
-        ) : items.length === 0 ? (
+        ) : internal.length === 0 ? (
           <Empty />
         ) : (
           <div className="flex gap-4 overflow-x-auto pb-4">
             {COLUMNS.map((col) => {
               const cards = byColumn[col.id] || [];
+              const isOver = dragOverCol === col.id;
               return (
                 <div
                   key={col.id}
-                  className="flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border border-brand-800 bg-brand-900/60"
+                  className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 transition ${
+                    isOver
+                      ? "border-accent-500 ring-1 ring-accent-500/40"
+                      : "border-brand-800"
+                  }`}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    if (dragOverCol !== col.id) setDragOverCol(col.id);
+                  }}
+                  onDragLeave={() => {
+                    if (dragOverCol === col.id) setDragOverCol(null);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOverCol(null);
+                    const id = dragIdRef.current;
+                    dragIdRef.current = null;
+                    if (id != null) moveTo(id, col.id);
+                  }}
                 >
                   <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
                     <div className="flex items-center gap-2">
@@ -201,38 +242,69 @@ export default function BonsPage() {
                         Aucun bon
                       </p>
                     ) : (
-                      cards.map((b) => (
-                        <Link
-                          key={b.id}
-                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          href={`/app/bons/${b.id}` as any}
-                          className="block rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-accent-500"
-                        >
-                          <h3 className="truncate text-sm font-semibold text-white">
-                            {b.address || "Adresse non renseignée"}
-                          </h3>
-                          <p className="mt-0.5 truncate text-xs text-white/70">
-                            {clientNameOf(b) || "Client —"}
-                          </p>
-                          <p className="mt-0.5 truncate text-xs text-white/50">
-                            {b.reference} · {b.title}
-                          </p>
-                          <div className="mt-2 flex items-center justify-between text-xs">
-                            <span className="text-white/50">
-                              {b.bon_type === "garantie"
-                                ? "Garantie"
-                                : "Temps & matériel"}
-                            </span>
-                            <span className="font-semibold text-white">
-                              {b.bon_type === "garantie"
-                                ? "0,00 $"
-                                : b.amount != null && b.amount !== ""
-                                  ? money(b.amount)
-                                  : "T&M"}
-                            </span>
+                      cards.map((b) => {
+                        const sousTraitant =
+                          (b.executant_type ?? "") === "sous_traitant";
+                        return (
+                          <div
+                            key={b.id}
+                            role="button"
+                            tabIndex={0}
+                            draggable
+                            onDragStart={(e) => {
+                              dragIdRef.current = b.id;
+                              e.dataTransfer.effectAllowed = "move";
+                            }}
+                            onDragEnd={() => {
+                              dragIdRef.current = null;
+                              setDragOverCol(null);
+                            }}
+                            onClick={() =>
+                              router.push(
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                `/app/bons/${b.id}` as any
+                              )
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter")
+                                router.push(
+                                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                  `/app/bons/${b.id}` as any
+                                );
+                            }}
+                            className="block cursor-pointer rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-accent-500"
+                          >
+                            <h3 className="truncate text-sm font-semibold text-white">
+                              {b.address || "Adresse non renseignée"}
+                            </h3>
+                            <p className="mt-0.5 truncate text-xs text-white/70">
+                              {b.title}
+                            </p>
+                            <p className="mt-0.5 truncate text-[11px] text-white/40">
+                              {b.reference}
+                            </p>
+                            <div className="mt-2 flex items-center justify-between text-xs">
+                              <span
+                                className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+                                  sousTraitant
+                                    ? "bg-orange-500/15 text-orange-300"
+                                    : "bg-sky-500/15 text-sky-300"
+                                }`}
+                              >
+                                {sousTraitant ? (
+                                  <HardHat className="h-3 w-3" />
+                                ) : (
+                                  <Wrench className="h-3 w-3" />
+                                )}
+                                {sousTraitant ? "Sous-traitant" : "Nos hommes"}
+                              </span>
+                              <span className="font-semibold text-white">
+                                {money(b.amount)}
+                              </span>
+                            </div>
                           </div>
-                        </Link>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 </div>
@@ -249,10 +321,13 @@ function Empty() {
   return (
     <div className="mx-auto mt-16 max-w-md rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center">
       <ClipboardCheck className="mx-auto h-10 w-10 text-accent-500" />
-      <h2 className="mt-4 text-lg font-semibold text-white">Aucun bon de travail</h2>
+      <h2 className="mt-4 text-lg font-semibold text-white">
+        Aucun bon de travail
+      </h2>
       <p className="mt-2 text-sm text-white/60">
-        Les bons de travail servent à faire signer les extras et changements
-        hors soumission initiale.
+        Les bons de travail servent à gérer l&apos;entretien de nos immeubles :
+        on rattache une compagnie, un immeuble et un appartement, on assigne
+        l&apos;exécutant, puis on refacture.
       </p>
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
