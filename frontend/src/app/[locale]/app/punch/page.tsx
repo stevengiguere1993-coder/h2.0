@@ -31,12 +31,19 @@ type Prospect = {
   status: string;
   project_type: string;
 };
+type Bon = {
+  id: number;
+  reference: string;
+  title: string;
+  address: string | null;
+};
 
 type PunchRead = {
   id: number;
   employe_id: number;
   project_id: number | null;
   contact_request_id: number | null;
+  bon_travail_id: number | null;
   started_at: string;
   ended_at: string | null;
   hours: number | null;
@@ -119,6 +126,7 @@ export default function PunchPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [prospects, setProspects] = useState<Prospect[]>([]);
+  const [bons, setBons] = useState<Bon[]>([]);
   const [weekly, setWeekly] = useState<Weekly | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -144,28 +152,41 @@ export default function PunchPage() {
       setLoading(true);
       setError(null);
       try {
-        const [meRes, prRes, csRes] = await Promise.all([
+        const [meRes, prRes, csRes, bRes] = await Promise.all([
           authedFetch("/api/v1/punch/me"),
           authedFetch("/api/v1/projects?limit=200"),
           // Open prospects — anything not yet won/lost/spam, sorted
           // newest-first by the contact endpoint default.
-          authedFetch("/api/v1/contact?limit=200")
+          authedFetch("/api/v1/contact?limit=200"),
+          authedFetch("/api/v1/bons-travail?limit=300")
         ]);
         if (!meRes.ok) throw new Error(`http_${meRes.status}`);
         const meData = (await meRes.json()) as Me;
         const prData = prRes.ok ? ((await prRes.json()) as Project[]) : [];
         const csData = csRes.ok ? ((await csRes.json()) as Prospect[]) : [];
+        const bData = bRes.ok
+          ? ((await bRes.json()) as Array<Bon & { kind?: string | null; status?: string }>)
+          : [];
         const openProspects = csData.filter(
           (c) => !["won", "lost", "spam"].includes(c.status)
+        );
+        // Bons internes encore actifs (pas facturés / annulés).
+        const activeBons = bData.filter(
+          (x) =>
+            (x.kind ?? "construction") === "interne" &&
+            !["facture", "cancelled"].includes(x.status || "")
         );
         if (cancelled) return;
         setMe(meData);
         setProjects(prData);
         setProspects(openProspects);
+        setBons(activeBons);
         if (meData.active?.project_id) {
           setTarget(`p-${meData.active.project_id}`);
         } else if (meData.active?.contact_request_id) {
           setTarget(`c-${meData.active.contact_request_id}`);
+        } else if (meData.active?.bon_travail_id) {
+          setTarget(`b-${meData.active.bon_travail_id}`);
         }
         if (meData.active?.task) setTask(meData.active.task);
         if (meData.employe) await refreshWeekly();
@@ -206,6 +227,8 @@ export default function PunchPage() {
         payload.project_id = Number(target.slice(2));
       } else if (target.startsWith("c-")) {
         payload.contact_request_id = Number(target.slice(2));
+      } else if (target.startsWith("b-")) {
+        payload.bon_travail_id = Number(target.slice(2));
       }
       if (task.trim()) payload.task = task.trim();
       if (pos) {
@@ -273,10 +296,15 @@ export default function PunchPage() {
       me?.active?.contact_request_id &&
       c.id === me.active.contact_request_id
   );
+  const activeBon = bons.find(
+    (x) => me?.active?.bon_travail_id && x.id === me.active.bon_travail_id
+  );
   const activeTargetLabel = activeProject
     ? `Projet — ${activeProject.name}`
     : activeProspect
     ? `Prospect — ${activeProspect.name}`
+    : activeBon
+    ? `Bon — ${activeBon.address || activeBon.reference}`
     : "Aucun";
 
   return (
@@ -335,6 +363,7 @@ export default function PunchPage() {
               <IdleCard
                 projects={projects}
                 prospects={prospects}
+                bons={bons}
                 target={target}
                 onTarget={setTarget}
                 task={task}
@@ -577,6 +606,7 @@ function ActivePunchCard({
 function IdleCard({
   projects,
   prospects,
+  bons,
   target,
   onTarget,
   task,
@@ -586,6 +616,7 @@ function IdleCard({
 }: {
   projects: Project[];
   prospects: Prospect[];
+  bons: Bon[];
   target: string;
   onTarget: (v: string) => void;
   task: string;
@@ -603,7 +634,7 @@ function IdleCard({
       <div className="mt-5 space-y-4">
         <div>
           <label htmlFor="punch_target" className="label">
-            Projet ou prospect
+            Projet, prospect ou bon de travail
           </label>
           <select
             id="punch_target"
@@ -627,6 +658,15 @@ function IdleCard({
                       {p.address ? `${p.address} — ${p.name}` : p.name}
                     </option>
                   ))}
+              </optgroup>
+            ) : null}
+            {bons.length > 0 ? (
+              <optgroup label="Bons de travail (entretien)">
+                {bons.map((x) => (
+                  <option key={`b-${x.id}`} value={`b-${x.id}`}>
+                    {x.address ? `${x.address} — ${x.title}` : x.title}
+                  </option>
+                ))}
               </optgroup>
             ) : null}
             {prospects.length > 0 ? (
