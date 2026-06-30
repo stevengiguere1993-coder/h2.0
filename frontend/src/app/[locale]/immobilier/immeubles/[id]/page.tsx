@@ -119,6 +119,22 @@ type Financials = {
   appreciation_pct?: number | null;
 };
 
+type RollupLogement = {
+  logement_id: number | null;
+  numero: string | null;
+  total: number;
+  count: number;
+};
+type RollupImmeuble = {
+  immeuble_id: number;
+  name: string;
+  address: string | null;
+  total: number;
+  count: number;
+  communs_total: number;
+  logements: RollupLogement[];
+};
+
 const TABS = [
   { id: "overview", label: "Vue d'ensemble", icon: Building2 },
   { id: "logements", label: "Logements", icon: Home },
@@ -190,6 +206,7 @@ export default function ImmeubleDetailPage({
   const [hypotheques, setHypotheques] = useState<Hypotheque[] | null>(null);
   const [evaluations, setEvaluations] = useState<Evaluation[] | null>(null);
   const [maintenance, setMaintenance] = useState<Maintenance[] | null>(null);
+  const [rollup, setRollup] = useState<RollupImmeuble | null>(null);
   const [locataires, setLocataires] = useState<
     { id: number; full_name: string }[]
   >([]);
@@ -246,6 +263,18 @@ export default function ImmeubleDetailPage({
         if (evals.ok) setEvaluations((await evals.json()) as Evaluation[]);
         if (maint.ok) setMaintenance((await maint.json()) as Maintenance[]);
         if (own.ok) setOwnerships((await own.json()) as Ownership[]);
+        // Dépenses de maintenance ($/an) de cet immeuble — bons internes.
+        try {
+          const roll = await authedFetch(
+            `/api/v1/immobilier/maintenance-rollup?immeuble_id=${immeubleId}`
+          );
+          if (roll.ok && !cancelled) {
+            const arr = (await roll.json()) as RollupImmeuble[];
+            setRollup(arr[0] || null);
+          }
+        } catch {
+          /* ignore */
+        }
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
       }
@@ -718,7 +747,9 @@ export default function ImmeubleDetailPage({
           ) : null}
           {tab === "hypotheques" ? <HypothequesTab list={hypotheques} /> : null}
           {tab === "evaluations" ? <EvaluationsTab list={evaluations} /> : null}
-          {tab === "maintenance" ? <MaintenanceTab list={maintenance} /> : null}
+          {tab === "maintenance" ? (
+            <MaintenanceTab list={maintenance} rollup={rollup} />
+          ) : null}
         </div>
       </div>
 
@@ -1553,12 +1584,71 @@ function EvaluationsTab({ list }: { list: Evaluation[] | null }) {
   );
 }
 
-function MaintenanceTab({ list }: { list: Maintenance[] | null }) {
-  if (list === null) return <Loading />;
-  if (list.length === 0) return <Empty msg="Aucun ordre de maintenance." />;
+function MaintenanceTab({
+  list,
+  rollup
+}: {
+  list: Maintenance[] | null;
+  rollup: RollupImmeuble | null;
+}) {
+  const expenses =
+    rollup && (rollup.total > 0 || rollup.count > 0) ? (
+      <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-amber-300">
+            Dépenses de maintenance — année en cours
+          </h3>
+          <span className="text-xl font-bold text-amber-200">
+            {fmtCurrency(rollup.total)}
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-white/50">
+          {rollup.count} bon{rollup.count > 1 ? "s" : ""} de travail (montant
+          refacturé, sans profit).
+        </p>
+        {rollup.logements.length > 0 || rollup.communs_total > 0 ? (
+          <div className="mt-3 space-y-1 border-t border-brand-800 pt-3 text-sm">
+            {rollup.logements.map((l) => (
+              <div
+                key={l.logement_id ?? "communs"}
+                className="flex items-center justify-between text-white/70"
+              >
+                <span>App {l.numero || "—"}</span>
+                <span className="text-white">{fmtCurrency(l.total)}</span>
+              </div>
+            ))}
+            {rollup.communs_total > 0 ? (
+              <div className="flex items-center justify-between text-white/70">
+                <span>Communs / immeuble entier</span>
+                <span className="text-white">
+                  {fmtCurrency(rollup.communs_total)}
+                </span>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    ) : null;
+
+  if (list === null)
+    return (
+      <div className="space-y-6">
+        {expenses}
+        <Loading />
+      </div>
+    );
+  if (list.length === 0)
+    return (
+      <div className="space-y-6">
+        {expenses}
+        <Empty msg="Aucun ordre de maintenance." />
+      </div>
+    );
   return (
-    <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
-      <table className="w-full text-left text-sm">
+    <div className="space-y-6">
+      {expenses}
+      <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
+        <table className="w-full text-left text-sm">
         <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
           <tr>
             <th className="px-4 py-2.5">Titre</th>
@@ -1590,7 +1680,8 @@ function MaintenanceTab({ list }: { list: Maintenance[] | null }) {
             </tr>
           ))}
         </tbody>
-      </table>
+        </table>
+      </div>
     </div>
   );
 }
