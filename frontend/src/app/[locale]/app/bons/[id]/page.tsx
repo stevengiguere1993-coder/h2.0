@@ -12,6 +12,7 @@ import {
   Mail,
   Package,
   Plus,
+  Save,
   Send,
   Trash2
 } from "lucide-react";
@@ -43,6 +44,7 @@ type Bon = {
   executant_type?: string | null;
   sous_traitant_id?: number | null;
   marge_pct?: number | string | null;
+  work_notes?: string | null;
   sent_to_email: string | null;
   sent_at: string | null;
   signed_at: string | null;
@@ -168,6 +170,9 @@ export default function BonDetailPage() {
   const [deleting, setDeleting] = useState(false);
 
   const [recap, setRecap] = useState<Recap | null>(null);
+  const [workNotes, setWorkNotes] = useState("");
+  const [notesSaving, setNotesSaving] = useState(false);
+  const [notesSaved, setNotesSaved] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
   const [sendBusy, setSendBusy] = useState(false);
   const [sendNotice, setSendNotice] = useState<string | null>(null);
@@ -196,6 +201,7 @@ export default function BonDetailPage() {
         setB(bd);
         setItems(iData);
         setPunches(pData);
+        setWorkNotes(bd.work_notes || "");
         if (rRes.ok) setRecap((await rRes.json()) as Recap);
         setSendSubject(`Bon de travail ${bd.reference} — ${bd.title}`);
         if (bd.client_id) {
@@ -247,6 +253,28 @@ export default function BonDetailPage() {
     } catch {
       setB(prev);
       setError("Changement de statut échoué.");
+    }
+  }
+
+  async function saveWorkNotes() {
+    setNotesSaving(true);
+    setNotesSaved(false);
+    try {
+      const res = await authedFetch(
+        `/api/v1/bons-travail/${id}/work-notes`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ work_notes: workNotes.trim() || null })
+        }
+      );
+      if (!res.ok) throw new Error();
+      setNotesSaved(true);
+      setTimeout(() => setNotesSaved(false), 2500);
+    } catch {
+      setError("Enregistrement des notes échoué.");
+    } finally {
+      setNotesSaving(false);
     }
   }
 
@@ -564,6 +592,54 @@ export default function BonDetailPage() {
               label="Bon de travail"
               route="/app/bons/[id]"
             />
+
+            {isInternal ? (
+              <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
+                <div className="border-b border-brand-800 px-5 py-4">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Notes de l&apos;exécutant
+                  </h2>
+                  <p className="mt-1 text-xs text-white/50">
+                    L&apos;homme à tout faire écrit ici ce qu&apos;il observe
+                    pendant le travail. Visible (lecture seule) côté Gestion
+                    locative.
+                  </p>
+                </div>
+                <div className="px-5 py-4">
+                  <textarea
+                    value={workNotes}
+                    onChange={(e) => setWorkNotes(e.target.value)}
+                    rows={4}
+                    placeholder="Ex. Robinet remplacé, joint à surveiller au prochain passage…"
+                    className="input w-full"
+                  />
+                  <div className="mt-3 flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={saveWorkNotes}
+                      disabled={notesSaving}
+                      className="btn-accent text-sm"
+                    >
+                      {notesSaving ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />{" "}
+                          Enregistrement…
+                        </>
+                      ) : (
+                        <>
+                          <Save className="mr-2 h-4 w-4" /> Enregistrer les notes
+                        </>
+                      )}
+                    </button>
+                    {notesSaved ? (
+                      <span className="text-xs text-emerald-300">
+                        Enregistré ✓
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              </section>
+            ) : null}
 
             {b.signed_at && b.signed_by_name ? (
               <div className="mt-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-200">
