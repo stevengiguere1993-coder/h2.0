@@ -190,6 +190,23 @@ async def list_bon_punches(
     return out
 
 
+class BonWorkNotesUpdate(BaseModel):
+    work_notes: Optional[str] = None
+
+
+@router.patch("/{bon_id}/work-notes")
+async def update_work_notes(
+    bon_id: int, data: BonWorkNotesUpdate, db: DBSession, _: CurrentUser
+) -> dict:
+    """Notes de l'exécutant (homme à tout faire) saisies pendant le travail.
+    Accessible à tout utilisateur authentifié — l'employé sur le terrain
+    doit pouvoir écrire ses notes, pas seulement un gestionnaire."""
+    bon = await _ensure_bon(db, bon_id)
+    bon.work_notes = (data.work_notes or None)
+    await db.flush()
+    return {"work_notes": bon.work_notes}
+
+
 @router.post(
     "/{bon_id}/items",
     response_model=BonItemRead,
