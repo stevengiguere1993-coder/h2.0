@@ -5,11 +5,13 @@ import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
   CheckCircle2,
+  Clock,
   FileText,
+  HardHat,
   Loader2,
   Mail,
+  Package,
   Plus,
-  Save,
   Send,
   Trash2
 } from "lucide-react";
@@ -34,6 +36,13 @@ type Bon = {
   bon_type?: string;
   requires_signature?: boolean;
   assignee_user_id?: number | null;
+  kind?: string | null;
+  owner_entreprise_id?: number | null;
+  immeuble_id?: number | null;
+  logement_id?: number | null;
+  executant_type?: string | null;
+  sous_traitant_id?: number | null;
+  marge_pct?: number | string | null;
   sent_to_email: string | null;
   sent_at: string | null;
   signed_at: string | null;
@@ -50,6 +59,13 @@ type Item = {
   quantity: number;
   unit_price: number;
   total: number;
+  item_type?: string;
+  cost_rate?: number | null;
+  bill_rate?: number | null;
+  marge_pct?: number | null;
+  cost_total?: number;
+  employe_id?: number | null;
+  sous_traitant_id?: number | null;
 };
 
 type Recap = {
@@ -67,17 +83,44 @@ const STATUS_LABELS: Record<string, string> = {
   draft: "Brouillon",
   sent: "Envoyé",
   signed: "Signé",
-  cancelled: "Annulé"
+  cancelled: "Annulé",
+  accepte_a_planifier: "Accepté à planifier",
+  planifie: "Planifié",
+  complete_a_refacturer: "Complété · à refacturer",
+  facture: "Facturé"
 };
 
 const STATUS_CLASS: Record<string, string> = {
   draft: "bg-white/10 text-white",
   sent: "bg-blue-500/20 text-blue-300",
   signed: "bg-emerald-500/20 text-emerald-300",
-  cancelled: "bg-white/5 text-white/50"
+  cancelled: "bg-white/5 text-white/50",
+  accepte_a_planifier: "bg-amber-500/20 text-amber-300",
+  planifie: "bg-blue-500/20 text-blue-300",
+  complete_a_refacturer: "bg-violet-500/20 text-violet-300",
+  facture: "bg-emerald-500/20 text-emerald-300"
 };
 
-function money(n: number | string | null): string {
+const LEGACY_STATUSES = ["draft", "sent", "signed", "cancelled"];
+const INTERNAL_STATUSES = [
+  "draft",
+  "accepte_a_planifier",
+  "planifie",
+  "complete_a_refacturer",
+  "facture",
+  "cancelled"
+];
+
+const LINE_TYPE_META: Record<
+  string,
+  { label: string; icon: typeof Clock; tone: string }
+> = {
+  heure: { label: "Heures", icon: Clock, tone: "text-sky-300" },
+  materiel: { label: "Matériel", icon: Package, tone: "text-amber-300" },
+  sous_traitant: { label: "Sous-traitant", icon: HardHat, tone: "text-orange-300" }
+};
+
+function money(n: number | string | null | undefined): string {
   if (n == null || n === "") return "—";
   const num = typeof n === "string" ? Number(n) : n;
   return new Intl.NumberFormat("fr-CA", {
@@ -110,6 +153,8 @@ export default function BonDetailPage() {
   const [sendTo, setSendTo] = useState("");
   const [sendSubject, setSendSubject] = useState("");
   const [sendMessage, setSendMessage] = useState("");
+
+  const isInternal = (b?.kind ?? "construction") === "interne";
 
   useEffect(() => {
     let cancelled = false;
@@ -153,6 +198,15 @@ export default function BonDetailPage() {
     () => +items.reduce((sum, it) => sum + Number(it.total || 0), 0).toFixed(2),
     [items]
   );
+  const costTotal = useMemo(
+    () =>
+      +items.reduce((sum, it) => sum + Number(it.cost_total || 0), 0).toFixed(2),
+    [items]
+  );
+  const profit = useMemo(
+    () => +(itemsTotal - costTotal).toFixed(2),
+    [itemsTotal, costTotal]
+  );
 
   async function updateStatus(newStatus: string) {
     if (!b) return;
@@ -161,6 +215,7 @@ export default function BonDetailPage() {
     try {
       const res = await authedFetch(`/api/v1/bons-travail/${id}`, {
         method: "PATCH",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: newStatus })
       });
       if (!res.ok) throw new Error();
@@ -176,6 +231,7 @@ export default function BonDetailPage() {
     try {
       const res = await authedFetch(`/api/v1/bons-travail/${id}/items`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           position: items.length,
           description: "Nouvel item",
@@ -194,12 +250,55 @@ export default function BonDetailPage() {
     }
   }
 
+  // Ligne de refacturation typée (bon interne).
+  async function addTypedItem(itemType: "heure" | "materiel" | "sous_traitant") {
+    setItemBusy("new");
+    const marge = b?.marge_pct != null ? Number(b.marge_pct) : 10;
+    const base: Record<string, unknown> = {
+      position: items.length,
+      item_type: itemType,
+      marge_pct: marge,
+      quantity: 1
+    };
+    if (itemType === "heure") {
+      base.description = "Main-d'œuvre";
+      base.cost_rate = 35;
+      base.bill_rate = 55;
+      base.unit = "h";
+    } else if (itemType === "materiel") {
+      base.description = "Matériel";
+      base.cost_rate = 0;
+      base.unit = "unité";
+    } else {
+      base.description = "Sous-traitant";
+      base.cost_rate = 0;
+    }
+    try {
+      const res = await authedFetch(`/api/v1/bons-travail/${id}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(base)
+      });
+      if (!res.ok) throw new Error();
+      const created = (await res.json()) as Item;
+      setItems((xs) => [...xs, created]);
+    } catch {
+      setError("Ajout de ligne échoué.");
+    } finally {
+      setItemBusy(null);
+    }
+  }
+
   async function patchItem(item_id: number, patch: Partial<Item>) {
     setItemBusy(item_id);
     try {
       const res = await authedFetch(
         `/api/v1/bons-travail/${id}/items/${item_id}`,
-        { method: "PATCH", body: JSON.stringify(patch) }
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch)
+        }
       );
       if (!res.ok) throw new Error();
       const updated = (await res.json()) as Item;
@@ -212,7 +311,7 @@ export default function BonDetailPage() {
   }
 
   async function deleteItem(item_id: number) {
-    if (!(await confirm("Supprimer cet item ?"))) return;
+    if (!(await confirm("Supprimer cette ligne ?"))) return;
     setItemBusy(item_id);
     try {
       const res = await authedFetch(
@@ -278,6 +377,7 @@ export default function BonDetailPage() {
     try {
       const res = await authedFetch(`/api/v1/bons-travail/${id}/send`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           to,
           subject: sendSubject || null,
@@ -314,6 +414,8 @@ export default function BonDetailPage() {
     }
   }
 
+  const statusKeys = isInternal ? INTERNAL_STATUSES : LEGACY_STATUSES;
+
   return (
     <>
       <AppTopbar
@@ -348,7 +450,15 @@ export default function BonDetailPage() {
               <div>
                 <h1 className="text-2xl font-bold text-white">{b.reference}</h1>
                 <p className="mt-1 text-sm text-white/70">{b.title}</p>
-                {client ? (
+                {isInternal ? (
+                  <p className="mt-1 text-xs text-white/50">
+                    {b.address || "Adresse non renseignée"}
+                    {" · "}
+                    {b.executant_type === "sous_traitant"
+                      ? "Sous-traitant"
+                      : "Nos hommes à tout faire"}
+                  </p>
+                ) : client ? (
                   <p className="mt-1 text-xs text-white/50">
                     Client : {client.name}
                   </p>
@@ -365,11 +475,11 @@ export default function BonDetailPage() {
                 <select
                   value={b.status}
                   onChange={(e) => updateStatus(e.target.value)}
-                  className="input w-40"
+                  className="input w-52"
                 >
-                  {Object.entries(STATUS_LABELS).map(([k, v]) => (
+                  {statusKeys.map((k) => (
                     <option key={k} value={k}>
-                      {v}
+                      {STATUS_LABELS[k]}
                     </option>
                   ))}
                 </select>
@@ -406,15 +516,18 @@ export default function BonDetailPage() {
             ) : null}
 
             {sendNotice ? (
-              <p className={`mt-4 rounded-lg border px-4 py-2 text-sm ${
-                sendNotice.startsWith("Bon envoyé")
-                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-                  : "border-amber-500/40 bg-amber-500/10 text-amber-200"
-              }`}>
+              <p
+                className={`mt-4 rounded-lg border px-4 py-2 text-sm ${
+                  sendNotice.startsWith("Bon envoyé")
+                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                    : "border-amber-500/40 bg-amber-500/10 text-amber-200"
+                }`}
+              >
                 {sendNotice}
               </p>
             ) : null}
 
+            {/* ── Actions ─────────────────────────────────────────── */}
             <div className="mt-6 grid gap-3 sm:grid-cols-2">
               <button
                 type="button"
@@ -431,145 +544,252 @@ export default function BonDetailPage() {
                   </p>
                 </div>
               </button>
-              <button
-                type="button"
-                onClick={() => setSendOpen(true)}
-                className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
-              >
-                <Mail className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
-                <div>
-                  <p className="text-sm font-semibold text-white">
-                    {b.sent_at ? "Renvoyer pour signature" : "Envoyer pour signature"}
-                  </p>
-                  <p className="mt-0.5 text-xs text-white/60">
-                    PDF + lien signature électronique.
-                  </p>
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={manageProject}
-                className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
-              >
-                <FileText className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
-                <div>
-                  <p className="text-sm font-semibold text-white">
-                    Achats, heures &amp; facture
-                  </p>
-                  <p className="mt-0.5 text-xs text-white/60">
-                    Ouvre le projet lié pour suivre les coûts et facturer.
-                  </p>
-                </div>
-              </button>
+              {!isInternal ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setSendOpen(true)}
+                    className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
+                  >
+                    <Mail className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
+                    <div>
+                      <p className="text-sm font-semibold text-white">
+                        {b.sent_at
+                          ? "Renvoyer pour signature"
+                          : "Envoyer pour signature"}
+                      </p>
+                      <p className="mt-0.5 text-xs text-white/60">
+                        PDF + lien signature électronique.
+                      </p>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={manageProject}
+                    className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
+                  >
+                    <FileText className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
+                    <div>
+                      <p className="text-sm font-semibold text-white">
+                        Achats, heures &amp; facture
+                      </p>
+                      <p className="mt-0.5 text-xs text-white/60">
+                        Ouvre le projet lié pour suivre les coûts et facturer.
+                      </p>
+                    </div>
+                  </button>
+                </>
+              ) : null}
             </div>
 
-            <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
-              <div className="flex items-center justify-between border-b border-brand-800 px-5 py-4">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Récap — montant chargé au client
-                </h2>
-                <button
-                  type="button"
-                  onClick={refreshRecap}
-                  className="text-xs text-white/60 underline hover:text-white"
-                >
-                  Rafraîchir
-                </button>
-              </div>
-              <div className="px-5 py-4">
-                {recap?.bon_type === "garantie" ? (
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-white/70">
-                      Travaux sous garantie — rien chargé au client.
-                    </span>
-                    <span className="text-lg font-bold text-emerald-300">
-                      0,00 $
-                    </span>
-                  </div>
-                ) : recap ? (
-                  <div className="space-y-2 text-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="text-white/70">
-                        Main-d&apos;œuvre ({recap.hours} h)
-                      </span>
-                      <span className="text-white">
-                        {money(recap.labor_total)}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-white/70">Achats / matériel</span>
-                      <span className="text-white">
-                        {money(recap.achats_total)}
-                      </span>
-                    </div>
-                    {recap.fixed_amount != null ? (
-                      <div className="flex items-center justify-between text-white/50">
-                        <span>Montant fixe saisi</span>
-                        <span>{money(recap.fixed_amount)}</span>
-                      </div>
-                    ) : null}
-                    <div className="mt-2 flex items-center justify-between border-t border-brand-800 pt-2">
-                      <span className="font-semibold text-white">
-                        Total chargé (avant taxes)
-                      </span>
-                      <span className="text-lg font-bold text-accent-500">
-                        {money(recap.total)}
-                      </span>
-                    </div>
-                    <p className="pt-1 text-xs text-white/50">
-                      Temps &amp; matériel : calculé selon les achats + heures
-                      du projet lié. Ajoute-les via « Achats, heures &amp;
-                      facture », puis rafraîchis.
-                    </p>
-                  </div>
-                ) : (
-                  <p className="text-sm text-white/50">Récap indisponible.</p>
-                )}
-              </div>
-            </section>
-
-            <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
-              <div className="flex items-center justify-between border-b border-brand-800 px-5 py-4">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Items — montant chargé au client
-                </h2>
-                <button
-                  type="button"
-                  onClick={addItem}
-                  disabled={itemBusy === "new"}
-                  className="btn-accent text-xs"
-                >
-                  {itemBusy === "new" ? (
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Plus className="mr-1.5 h-3.5 w-3.5" />
-                  )}
-                  Ajouter un item
-                </button>
-              </div>
-              {items.length === 0 ? (
-                <p className="px-5 py-8 text-center text-sm text-white/50">
-                  Aucun item — sinon laisse simplement le montant global sur
-                  la fiche (c&apos;est ce que le client paiera).
-                </p>
-              ) : (
-                <div className="divide-y divide-brand-800">
-                  {items.map((it) => (
-                    <ItemRow
-                      key={it.id}
-                      item={it}
-                      busy={itemBusy === it.id}
-                      onPatch={(patch) => patchItem(it.id, patch)}
-                      onDelete={() => deleteItem(it.id)}
-                    />
-                  ))}
+            {/* ── Recap legacy (bons construction seulement) ──────── */}
+            {!isInternal ? (
+              <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
+                <div className="flex items-center justify-between border-b border-brand-800 px-5 py-4">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Récap — montant chargé au client
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={refreshRecap}
+                    className="text-xs text-white/60 underline hover:text-white"
+                  >
+                    Rafraîchir
+                  </button>
                 </div>
-              )}
-              <div className="border-t border-brand-800 px-5 py-3 text-right text-sm">
-                <span className="text-white/60">Total items : </span>
-                <span className="font-bold text-white">{money(itemsTotal)}</span>
-              </div>
-            </section>
+                <div className="px-5 py-4">
+                  {recap?.bon_type === "garantie" ? (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-white/70">
+                        Travaux sous garantie — rien chargé au client.
+                      </span>
+                      <span className="text-lg font-bold text-emerald-300">
+                        0,00 $
+                      </span>
+                    </div>
+                  ) : recap ? (
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-white/70">
+                          Main-d&apos;œuvre ({recap.hours} h)
+                        </span>
+                        <span className="text-white">
+                          {money(recap.labor_total)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-white/70">Achats / matériel</span>
+                        <span className="text-white">
+                          {money(recap.achats_total)}
+                        </span>
+                      </div>
+                      {recap.fixed_amount != null ? (
+                        <div className="flex items-center justify-between text-white/50">
+                          <span>Montant fixe saisi</span>
+                          <span>{money(recap.fixed_amount)}</span>
+                        </div>
+                      ) : null}
+                      <div className="mt-2 flex items-center justify-between border-t border-brand-800 pt-2">
+                        <span className="font-semibold text-white">
+                          Total chargé (avant taxes)
+                        </span>
+                        <span className="text-lg font-bold text-accent-500">
+                          {money(recap.total)}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-white/50">Récap indisponible.</p>
+                  )}
+                </div>
+              </section>
+            ) : null}
+
+            {/* ── Refacturation (bon interne) ─────────────────────── */}
+            {isInternal ? (
+              <>
+                <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                  <SummaryTile
+                    label="Refacturé à la compagnie"
+                    value={b.bon_type === "garantie" ? 0 : itemsTotal}
+                    tone="text-accent-500"
+                  />
+                  <SummaryTile label="Coût réel" value={costTotal} tone="text-white" />
+                  <SummaryTile
+                    label="Profit"
+                    value={b.bon_type === "garantie" ? -costTotal : profit}
+                    tone={
+                      (b.bon_type === "garantie" ? -costTotal : profit) >= 0
+                        ? "text-emerald-300"
+                        : "text-rose-300"
+                    }
+                  />
+                </div>
+                {b.bon_type === "garantie" ? (
+                  <p className="mt-2 text-xs text-amber-300">
+                    Bon sous garantie — rien n&apos;est refacturé. Le coût des
+                    lignes représente la perte assumée.
+                  </p>
+                ) : null}
+
+                <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-brand-800 px-5 py-4">
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                      Lignes de refacturation
+                    </h2>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => addTypedItem("heure")}
+                        disabled={itemBusy === "new"}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-950 px-2.5 py-1.5 text-xs font-medium text-white hover:border-accent-500"
+                      >
+                        <Clock className="h-3.5 w-3.5 text-sky-300" /> Heures
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => addTypedItem("materiel")}
+                        disabled={itemBusy === "new"}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-950 px-2.5 py-1.5 text-xs font-medium text-white hover:border-accent-500"
+                      >
+                        <Package className="h-3.5 w-3.5 text-amber-300" /> Matériel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => addTypedItem("sous_traitant")}
+                        disabled={itemBusy === "new"}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-950 px-2.5 py-1.5 text-xs font-medium text-white hover:border-accent-500"
+                      >
+                        <HardHat className="h-3.5 w-3.5 text-orange-300" />{" "}
+                        Sous-traitant
+                      </button>
+                    </div>
+                  </div>
+                  {items.length === 0 ? (
+                    <p className="px-5 py-8 text-center text-sm text-white/50">
+                      Aucune ligne. Ajoute des heures, du matériel ou un
+                      sous-traitant — le total se calcule tout seul (coût + marge).
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-brand-800">
+                      {items.map((it) => (
+                        <InternalLineRow
+                          key={it.id}
+                          item={it}
+                          busy={itemBusy === it.id}
+                          onPatch={(patch) => patchItem(it.id, patch)}
+                          onDelete={() => deleteItem(it.id)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between border-t border-brand-800 px-5 py-3 text-sm">
+                    <span className="text-white/60">
+                      Coût {money(costTotal)} · Profit{" "}
+                      <span
+                        className={
+                          profit >= 0 ? "text-emerald-300" : "text-rose-300"
+                        }
+                      >
+                        {money(profit)}
+                      </span>
+                    </span>
+                    <span>
+                      <span className="text-white/60">Refacturé : </span>
+                      <span className="font-bold text-white">
+                        {money(b.bon_type === "garantie" ? 0 : itemsTotal)}
+                      </span>
+                    </span>
+                  </div>
+                </section>
+              </>
+            ) : (
+              /* ── Items legacy ──────────────────────────────────── */
+              <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
+                <div className="flex items-center justify-between border-b border-brand-800 px-5 py-4">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Items — montant chargé au client
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={addItem}
+                    disabled={itemBusy === "new"}
+                    className="btn-accent text-xs"
+                  >
+                    {itemBusy === "new" ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Plus className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Ajouter un item
+                  </button>
+                </div>
+                {items.length === 0 ? (
+                  <p className="px-5 py-8 text-center text-sm text-white/50">
+                    Aucun item — sinon laisse simplement le montant global sur
+                    la fiche (c&apos;est ce que le client paiera).
+                  </p>
+                ) : (
+                  <div className="divide-y divide-brand-800">
+                    {items.map((it) => (
+                      <ItemRow
+                        key={it.id}
+                        item={it}
+                        busy={itemBusy === it.id}
+                        onPatch={(patch) => patchItem(it.id, patch)}
+                        onDelete={() => deleteItem(it.id)}
+                      />
+                    ))}
+                  </div>
+                )}
+                <div className="border-t border-brand-800 px-5 py-3 text-right text-sm">
+                  <span className="text-white/60">Total items : </span>
+                  <span className="font-bold text-white">
+                    {money(itemsTotal)}
+                  </span>
+                </div>
+              </section>
+            )}
           </>
         ) : null}
       </div>
@@ -601,7 +821,9 @@ export default function BonDetailPage() {
                 />
               </div>
               <div>
-                <label htmlFor="b_subj" className="label">Objet</label>
+                <label htmlFor="b_subj" className="label">
+                  Objet
+                </label>
                 <input
                   id="b_subj"
                   value={sendSubject}
@@ -610,7 +832,9 @@ export default function BonDetailPage() {
                 />
               </div>
               <div>
-                <label htmlFor="b_msg" className="label">Message</label>
+                <label htmlFor="b_msg" className="label">
+                  Message
+                </label>
                 <textarea
                   id="b_msg"
                   rows={4}
@@ -653,6 +877,191 @@ export default function BonDetailPage() {
   );
 }
 
+function SummaryTile({
+  label,
+  value,
+  tone
+}: {
+  label: string;
+  value: number;
+  tone: string;
+}) {
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900 px-4 py-3">
+      <p className="text-xs text-white/55">{label}</p>
+      <p className={`mt-1 text-xl font-bold ${tone}`}>{money(value)}</p>
+    </div>
+  );
+}
+
+function InternalLineRow({
+  item,
+  busy,
+  onPatch,
+  onDelete
+}: {
+  item: Item;
+  busy: boolean;
+  onPatch: (patch: Partial<Item>) => void;
+  onDelete: () => void;
+}) {
+  const type = item.item_type || "materiel";
+  const meta = LINE_TYPE_META[type] || LINE_TYPE_META.materiel;
+  const Icon = meta.icon;
+
+  const [description, setDescription] = useState(item.description);
+  const [quantity, setQuantity] = useState(String(item.quantity));
+  const [costRate, setCostRate] = useState(
+    item.cost_rate != null ? String(item.cost_rate) : ""
+  );
+  const [billRate, setBillRate] = useState(
+    item.bill_rate != null ? String(item.bill_rate) : ""
+  );
+  const [marge, setMarge] = useState(
+    item.marge_pct != null ? String(item.marge_pct) : ""
+  );
+
+  useEffect(() => {
+    setDescription(item.description);
+    setQuantity(String(item.quantity));
+    setCostRate(item.cost_rate != null ? String(item.cost_rate) : "");
+    setBillRate(item.bill_rate != null ? String(item.bill_rate) : "");
+    setMarge(item.marge_pct != null ? String(item.marge_pct) : "");
+  }, [
+    item.id,
+    item.description,
+    item.quantity,
+    item.cost_rate,
+    item.bill_rate,
+    item.marge_pct
+  ]);
+
+  function persist(field: keyof Item, value: unknown) {
+    onPatch({ [field]: value } as Partial<Item>);
+  }
+
+  const isHeure = type === "heure";
+
+  return (
+    <div className="px-5 py-4">
+      <div className="flex items-center gap-2">
+        <Icon className={`h-4 w-4 ${meta.tone}`} />
+        <span className="text-xs font-semibold uppercase tracking-wider text-white/50">
+          {meta.label}
+        </span>
+        <button
+          type="button"
+          onClick={onDelete}
+          disabled={busy}
+          className="ml-auto flex items-center gap-1 text-rose-400 hover:text-rose-300 disabled:opacity-40"
+          aria-label="Supprimer"
+        >
+          {busy ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Trash2 className="h-4 w-4" />
+          )}
+        </button>
+      </div>
+
+      <input
+        type="text"
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        onBlur={() =>
+          description !== item.description && persist("description", description)
+        }
+        disabled={busy}
+        placeholder="Description"
+        className="input mt-2 w-full text-sm"
+      />
+
+      <div className="mt-3 flex flex-wrap items-end gap-3 text-sm">
+        <NumField
+          label={isHeure ? "Heures" : "Quantité"}
+          value={quantity}
+          onChange={setQuantity}
+          onCommit={() =>
+            Number(quantity) !== item.quantity &&
+            persist("quantity", Number(quantity))
+          }
+          disabled={busy}
+        />
+        <NumField
+          label={isHeure ? "Coût / h ($)" : "Coût unitaire ($)"}
+          value={costRate}
+          onChange={setCostRate}
+          onCommit={() =>
+            Number(costRate) !== Number(item.cost_rate ?? 0) &&
+            persist("cost_rate", costRate === "" ? 0 : Number(costRate))
+          }
+          disabled={busy}
+        />
+        {isHeure ? (
+          <NumField
+            label="Facturé / h ($)"
+            value={billRate}
+            onChange={setBillRate}
+            onCommit={() =>
+              Number(billRate) !== Number(item.bill_rate ?? 0) &&
+              persist("bill_rate", billRate === "" ? 0 : Number(billRate))
+            }
+            disabled={busy}
+          />
+        ) : null}
+        <NumField
+          label="Marge (%)"
+          value={marge}
+          onChange={setMarge}
+          onCommit={() =>
+            Number(marge) !== Number(item.marge_pct ?? 0) &&
+            persist("marge_pct", marge === "" ? 0 : Number(marge))
+          }
+          disabled={busy}
+        />
+        <div className="ml-auto text-right">
+          <p className="text-[11px] text-white/50">
+            Coût {money(item.cost_total ?? 0)}
+          </p>
+          <p className="text-base font-bold text-white">{money(item.total)}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NumField({
+  label,
+  value,
+  onChange,
+  onCommit,
+  disabled
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  onCommit: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="w-24">
+      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-white/40">
+        {label}
+      </label>
+      <input
+        type="number"
+        step="0.01"
+        min="0"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onCommit}
+        disabled={disabled}
+        className="input w-full text-sm"
+      />
+    </div>
+  );
+}
+
 function ItemRow({
   item,
   busy,
@@ -685,11 +1094,6 @@ function ItemRow({
     onPatch({ [field]: value } as Partial<Item>);
   }
 
-  // Étiquettes visibles uniquement en mobile (sm:hidden). Sur écran
-  // large, le grid horizontal est assez large pour qu'on devine la
-  // colonne d'après son contenu — mais en stack vertical mobile,
-  // sans label tu vois juste « unité / 1 / 0 / 0,00 $ » sans savoir
-  // ce qui est quoi.
   return (
     <div className="grid gap-2 px-5 py-3 text-sm sm:grid-cols-[1fr_80px_80px_120px_120px_32px] sm:items-center">
       <div>
@@ -700,7 +1104,9 @@ function ItemRow({
           type="text"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          onBlur={() => description !== item.description && persist("description", description)}
+          onBlur={() =>
+            description !== item.description && persist("description", description)
+          }
           disabled={busy}
           className="input text-sm w-full"
         />
@@ -729,7 +1135,9 @@ function ItemRow({
           min="0"
           value={quantity}
           onChange={(e) => setQuantity(e.target.value)}
-          onBlur={() => Number(quantity) !== item.quantity && persist("quantity", Number(quantity))}
+          onBlur={() =>
+            Number(quantity) !== item.quantity && persist("quantity", Number(quantity))
+          }
           disabled={busy}
           className="input text-sm w-full"
         />
@@ -744,7 +1152,10 @@ function ItemRow({
           min="0"
           value={unitPrice}
           onChange={(e) => setUnitPrice(e.target.value)}
-          onBlur={() => Number(unitPrice) !== item.unit_price && persist("unit_price", Number(unitPrice))}
+          onBlur={() =>
+            Number(unitPrice) !== item.unit_price &&
+            persist("unit_price", Number(unitPrice))
+          }
           disabled={busy}
           className="input text-sm w-full"
         />
