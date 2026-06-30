@@ -222,6 +222,13 @@ def make_crud_router(
                 data.reference = await next_facture_number(db)
             elif model is PurchaseOrder:
                 data.reference = await next_po_number(db)
+            elif model is BonTravail:
+                # Bon interne : référence auto BT-AAMMJJ-HHMMSS.
+                from datetime import datetime, timezone
+
+                data.reference = "BT-" + datetime.now(timezone.utc).strftime(
+                    "%y%m%d-%H%M%S"
+                )
         crud = GenericCrud(db, model)
         obj = await crud.create(data)
         # Achat : applique la logique payment_method + due_at apres
