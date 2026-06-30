@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter as useNextRouter } from "next/navigation";
 import {
   Briefcase,
+  CheckCircle2,
+  Clock,
   GripVertical,
+  Hammer,
   Loader2,
   MapPin,
   Plus,
@@ -33,6 +37,9 @@ type Project = {
   // soumission liée (ex. projet créé via auto-acceptation sans budget
   // saisi).
   soumission_total: number | string | null;
+  // Flux A — état de signature des bons liés (corrections).
+  awaiting_signature?: boolean;
+  has_signed_bon?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -44,6 +51,11 @@ const COLUMNS: Column[] = [
   { id: "ready_to_start", label: "En attente de début", dot: "bg-violet-400" },
   { id: "in_progress", label: "En cours", dot: "bg-blue-400" },
   { id: "suspended", label: "Suspendu", dot: "bg-amber-400" },
+  {
+    id: "correction",
+    label: "Correction / Amélioration",
+    dot: "bg-rose-400"
+  },
   { id: "delivered", label: "Livré", dot: "bg-emerald-400" }
 ];
 
@@ -75,6 +87,7 @@ function fmtDate(iso: string | null): string {
 export default function ProjectsPage() {
   const { onOpenSidebar } = useAppLayout();
   const confirm = useConfirm();
+  const router = useNextRouter();
   const [items, setItems] = useState<Project[]>([]);
   const [clientNames, setClientNames] = useState<Map<number, string>>(
     new Map()
@@ -156,6 +169,23 @@ export default function ProjectsPage() {
     } catch (e) {
       setItems(prev);
       setError(`Mise à jour du statut échouée : ${(e as Error).message}`);
+    }
+  }
+
+  // Flux A — crée un bon de correction lié au projet puis ouvre sa fiche
+  // (où on l'envoie au client pour signature).
+  async function createCorrectionBon(id: number) {
+    try {
+      const res = await authedFetch(`/api/v1/projects/${id}/correction-bon`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { bon_id } = (await res.json()) as { bon_id: number };
+      router.push(`/app/bons/${bon_id}`);
+    } catch {
+      setError("Création du bon de correction échouée.");
     }
   }
 
@@ -297,6 +327,7 @@ export default function ProjectsPage() {
                             setHoverCol(null);
                           }}
                           onDelete={() => deleteProject(p.id, p.name)}
+                          onCorrectionBon={() => createCorrectionBon(p.id)}
                           onTouchDragStart={() => setDragging(p.id)}
                           onTouchDragMove={onTouchDragMove}
                           onTouchDragEnd={(x, y) => onTouchDragEnd(p.id, x, y)}
@@ -321,6 +352,7 @@ function ProjectCard({
   onDragStart,
   onDragEnd,
   onDelete,
+  onCorrectionBon,
   onTouchDragStart,
   onTouchDragMove,
   onTouchDragEnd
@@ -331,6 +363,7 @@ function ProjectCard({
   onDragStart: () => void;
   onDragEnd: () => void;
   onDelete: () => void;
+  onCorrectionBon: () => void;
   onTouchDragStart: () => void;
   onTouchDragMove: (x: number, y: number) => void;
   onTouchDragEnd: (x: number, y: number) => void;
@@ -430,6 +463,35 @@ function ProjectCard({
           {fmtMoney(p.budget, p.soumission_total)}
         </span>
       </div>
+
+      {/* Flux A — badge signature du bon de correction. */}
+      {p.has_signed_bon ? (
+        <div className="mt-2">
+          <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-medium text-emerald-300">
+            <CheckCircle2 className="h-3 w-3" /> Signé
+          </span>
+        </div>
+      ) : p.awaiting_signature ? (
+        <div className="mt-2">
+          <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-300">
+            <Clock className="h-3 w-3" /> En attente de signature
+          </span>
+        </div>
+      ) : null}
+
+      {p.status === "correction" ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onCorrectionBon();
+          }}
+          className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-rose-400/30 bg-rose-500/10 px-2.5 py-1.5 text-[11px] font-medium text-rose-200 hover:bg-rose-500/20"
+        >
+          <Hammer className="h-3 w-3" /> Bon de correction (signature)
+        </button>
+      ) : null}
     </Link>
   );
 }
