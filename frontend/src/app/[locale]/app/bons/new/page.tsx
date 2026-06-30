@@ -1,74 +1,63 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter as useNextRouter } from "next/navigation";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, HardHat, Loader2, Wrench } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 
-type Project = {
-  id: number;
-  name: string;
-  client_id: number | null;
-  address?: string | null;
-};
-type Client = { id: number; name: string };
-
-function buildRef(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return (
-    `BON-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
-    `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
-  );
-}
+type Entreprise = { id: number; name: string };
+type Immeuble = { id: number; name: string; address: string };
+type Logement = { id: number; numero: string };
+type SousTraitant = { id: number; full_name: string };
+type User = { id: number; email: string; full_name?: string | null };
 
 export default function NewBonPage() {
   const { onOpenSidebar } = useAppLayout();
   const router = useNextRouter();
 
-  const [reference] = useState(() => buildRef());
+  // Rattachement : compagnie → immeuble → appartement.
+  const [entrepriseId, setEntrepriseId] = useState("");
+  const [immeubleId, setImmeubleId] = useState("");
+  const [logementId, setLogementId] = useState("");
+  // Exécutant.
+  const [executantType, setExecutantType] = useState("nos_hommes");
+  const [sousTraitantId, setSousTraitantId] = useState("");
+  // Méta.
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [projectId, setProjectId] = useState("");
-  const [clientId, setClientId] = useState("");
-  const [amount, setAmount] = useState("");
-  const [address, setAddress] = useState("");
-  const [bonType, setBonType] = useState("temps_materiel");
   const [assigneeId, setAssigneeId] = useState("");
-  const [internal, setInternal] = useState(false);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [users, setUsers] = useState<
-    { id: number; email: string; full_name?: string | null }[]
-  >([]);
+  const [margePct, setMargePct] = useState("10");
+  const [bonType, setBonType] = useState("temps_materiel");
+
+  const [entreprises, setEntreprises] = useState<Entreprise[]>([]);
+  const [immeubles, setImmeubles] = useState<Immeuble[]>([]);
+  const [logements, setLogements] = useState<Logement[]>([]);
+  const [sousTraitants, setSousTraitants] = useState<SousTraitant[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [loadingImm, setLoadingImm] = useState(false);
+  const [loadingLog, setLoadingLog] = useState(false);
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Catalogues fixes au montage.
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const [pRes, cRes, uRes] = await Promise.all([
-          authedFetch("/api/v1/projects?limit=500"),
-          authedFetch("/api/v1/clients?limit=500"),
+        const [eRes, sRes, uRes] = await Promise.all([
+          authedFetch("/api/v1/entreprises?limit=500"),
+          authedFetch("/api/v1/sous-traitants?limit=500"),
           authedFetch("/api/v1/users")
         ]);
-        if (!cancelled) {
-          if (pRes.ok) setProjects((await pRes.json()) as Project[]);
-          if (cRes.ok) setClients((await cRes.json()) as Client[]);
-          if (uRes.ok)
-            setUsers(
-              (await uRes.json()) as {
-                id: number;
-                email: string;
-                full_name?: string | null;
-              }[]
-            );
-        }
+        if (cancelled) return;
+        if (eRes.ok) setEntreprises((await eRes.json()) as Entreprise[]);
+        if (sRes.ok) setSousTraitants((await sRes.json()) as SousTraitant[]);
+        if (uRes.ok) setUsers((await uRes.json()) as User[]);
       } catch {
         /* ignore */
       }
@@ -79,35 +68,119 @@ export default function NewBonPage() {
     };
   }, []);
 
+  // Immeubles de la compagnie sélectionnée.
+  useEffect(() => {
+    setImmeubleId("");
+    setLogementId("");
+    setImmeubles([]);
+    setLogements([]);
+    if (!entrepriseId) return;
+    let cancelled = false;
+    setLoadingImm(true);
+    (async () => {
+      try {
+        const res = await authedFetch(
+          `/api/v1/immobilier/immeubles?entreprise_id=${entrepriseId}`
+        );
+        if (!cancelled && res.ok)
+          setImmeubles((await res.json()) as Immeuble[]);
+      } catch {
+        /* ignore */
+      } finally {
+        if (!cancelled) setLoadingImm(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [entrepriseId]);
+
+  // Appartements de l'immeuble sélectionné.
+  useEffect(() => {
+    setLogementId("");
+    setLogements([]);
+    if (!immeubleId) return;
+    let cancelled = false;
+    setLoadingLog(true);
+    (async () => {
+      try {
+        const res = await authedFetch(
+          `/api/v1/immobilier/immeubles/${immeubleId}/logements`
+        );
+        if (!cancelled && res.ok)
+          setLogements((await res.json()) as Logement[]);
+      } catch {
+        /* ignore */
+      } finally {
+        if (!cancelled) setLoadingLog(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [immeubleId]);
+
+  const selectedImmeuble = useMemo(
+    () => immeubles.find((i) => String(i.id) === immeubleId) || null,
+    [immeubles, immeubleId]
+  );
+
+  function buildAddress(): string | undefined {
+    if (!selectedImmeuble) return undefined;
+    const base = selectedImmeuble.address || selectedImmeuble.name;
+    if (logementId) {
+      const lg = logements.find((l) => String(l.id) === logementId);
+      return lg ? `${base} · App ${lg.numero}` : base;
+    }
+    return `${base} · Communs / immeuble entier`;
+  }
+
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
+    if (!entrepriseId) {
+      setError("Choisis la compagnie propriétaire.");
+      return;
+    }
+    if (!immeubleId) {
+      setError("Choisis l'immeuble concerné.");
+      return;
+    }
     if (!title.trim()) {
-      setError("Le titre est requis.");
+      setError("Le titre du travail est requis.");
+      return;
+    }
+    if (executantType === "sous_traitant" && !sousTraitantId) {
+      setError("Choisis le sous-traitant.");
       return;
     }
     setSubmitting(true);
     try {
       const payload: Record<string, unknown> = {
-        reference,
-        title: title.trim()
+        title: title.trim(),
+        kind: "interne",
+        // Bon interne : aucune signature client.
+        requires_signature: false,
+        origin: "construction",
+        owner_entreprise_id: Number(entrepriseId),
+        immeuble_id: Number(immeubleId),
+        executant_type: executantType,
+        bon_type: bonType,
+        marge_pct: margePct ? Number(margePct) : 0
       };
+      if (logementId) payload.logement_id = Number(logementId);
+      if (executantType === "sous_traitant")
+        payload.sous_traitant_id = Number(sousTraitantId);
       if (description.trim()) payload.description = description.trim();
-      if (projectId) payload.project_id = Number(projectId);
-      if (clientId) payload.client_id = Number(clientId);
-      if (address.trim()) payload.address = address.trim();
-      payload.bon_type = bonType;
-      // Garantie : rien n'est chargé au client.
-      payload.amount = bonType === "garantie" ? 0 : amount ? Number(amount) : null;
       if (assigneeId) payload.assignee_user_id = Number(assigneeId);
-      // Signature toujours requise — qu'il s'agisse d'une demande
-      // interne (gestion immobilière) ou d'un client externe. La case
-      // « interne » ne sert plus qu'au classement (origin).
-      payload.requires_signature = true;
-      if (internal) payload.origin = "gestion_immo";
+      const addr = buildAddress();
+      if (addr) payload.address = addr;
+      // Garantie : rien n'est refacturé à la compagnie.
+      if (bonType === "garantie") payload.amount = 0;
 
       const res = await authedFetch("/api/v1/bons-travail", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
       if (!res.ok) {
@@ -142,15 +215,173 @@ export default function NewBonPage() {
           <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux bons
         </Link>
 
-        <h1 className="mt-6 text-2xl font-bold text-white">Nouveau bon de travail</h1>
+        <h1 className="mt-6 text-2xl font-bold text-white">
+          Nouveau bon de travail
+        </h1>
         <p className="mt-1 text-sm text-white/60">
-          Référence : <span className="text-accent-500">{reference}</span>
+          Entretien d&apos;un de nos immeubles. La référence est générée
+          automatiquement.
         </p>
 
-        <form onSubmit={onSubmit} className="mt-6 max-w-2xl space-y-5">
+        <form onSubmit={onSubmit} className="mt-6 max-w-2xl space-y-6">
+          {/* ── Rattachement ───────────────────────────────────────── */}
+          <fieldset className="rounded-xl border border-brand-800 bg-brand-900/40 p-4">
+            <legend className="px-2 text-sm font-semibold text-white">
+              Rattachement
+            </legend>
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="entreprise" className="label">
+                  Compagnie propriétaire{" "}
+                  <span className="text-rose-400">*</span>
+                </label>
+                <select
+                  id="entreprise"
+                  value={entrepriseId}
+                  onChange={(e) => setEntrepriseId(e.target.value)}
+                  className="input"
+                  required
+                >
+                  <option value="">— Choisir —</option>
+                  {entreprises.map((c) => (
+                    <option key={c.id} value={String(c.id)}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="immeuble" className="label">
+                    Immeuble <span className="text-rose-400">*</span>
+                  </label>
+                  <select
+                    id="immeuble"
+                    value={immeubleId}
+                    onChange={(e) => setImmeubleId(e.target.value)}
+                    className="input"
+                    disabled={!entrepriseId || loadingImm}
+                    required
+                  >
+                    <option value="">
+                      {loadingImm
+                        ? "Chargement…"
+                        : !entrepriseId
+                          ? "Choisis d'abord une compagnie"
+                          : immeubles.length === 0
+                            ? "Aucun immeuble"
+                            : "— Choisir —"}
+                    </option>
+                    {immeubles.map((i) => (
+                      <option key={i.id} value={String(i.id)}>
+                        {i.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="logement" className="label">
+                    Appartement
+                  </label>
+                  <select
+                    id="logement"
+                    value={logementId}
+                    onChange={(e) => setLogementId(e.target.value)}
+                    className="input"
+                    disabled={!immeubleId || loadingLog}
+                  >
+                    <option value="">
+                      {loadingLog
+                        ? "Chargement…"
+                        : "Communs / immeuble entier"}
+                    </option>
+                    {logements.map((l) => (
+                      <option key={l.id} value={String(l.id)}>
+                        App {l.numero}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-white/50">
+                    Laisse vide pour les communs ou l&apos;immeuble entier.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </fieldset>
+
+          {/* ── Exécutant ─────────────────────────────────────────── */}
+          <fieldset className="rounded-xl border border-brand-800 bg-brand-900/40 p-4">
+            <legend className="px-2 text-sm font-semibold text-white">
+              Exécutant
+            </legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setExecutantType("nos_hommes")}
+                className={`flex items-center gap-2 rounded-xl border p-3 text-left transition ${
+                  executantType === "nos_hommes"
+                    ? "border-accent-500 bg-brand-900"
+                    : "border-brand-800 bg-brand-900/60 hover:border-brand-700"
+                }`}
+              >
+                <Wrench className="h-5 w-5 text-sky-300" />
+                <div>
+                  <p className="text-sm font-semibold text-white">
+                    Nos hommes à tout faire
+                  </p>
+                  <p className="text-xs text-white/60">
+                    Refacturé selon les heures pointées.
+                  </p>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setExecutantType("sous_traitant")}
+                className={`flex items-center gap-2 rounded-xl border p-3 text-left transition ${
+                  executantType === "sous_traitant"
+                    ? "border-accent-500 bg-brand-900"
+                    : "border-brand-800 bg-brand-900/60 hover:border-brand-700"
+                }`}
+              >
+                <HardHat className="h-5 w-5 text-orange-300" />
+                <div>
+                  <p className="text-sm font-semibold text-white">
+                    Sous-traitant
+                  </p>
+                  <p className="text-xs text-white/60">
+                    Refacturé selon le coût du sous-traitant + marge.
+                  </p>
+                </div>
+              </button>
+            </div>
+            {executantType === "sous_traitant" ? (
+              <div className="mt-4">
+                <label htmlFor="sous_traitant" className="label">
+                  Quel sous-traitant ?{" "}
+                  <span className="text-rose-400">*</span>
+                </label>
+                <select
+                  id="sous_traitant"
+                  value={sousTraitantId}
+                  onChange={(e) => setSousTraitantId(e.target.value)}
+                  className="input"
+                >
+                  <option value="">— Choisir —</option>
+                  {sousTraitants.map((s) => (
+                    <option key={s.id} value={String(s.id)}>
+                      {s.full_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+          </fieldset>
+
+          {/* ── Travail ───────────────────────────────────────────── */}
           <div>
             <label htmlFor="title" className="label">
-              Titre <span className="text-rose-400">*</span>
+              Titre du travail <span className="text-rose-400">*</span>
             </label>
             <input
               id="title"
@@ -158,85 +389,29 @@ export default function NewBonPage() {
               required
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Ex. Extras — ajout d'une fenêtre cuisine"
+              placeholder="Ex. Réparation de la toiture — fuite côté cour"
               className="input"
             />
-            <p className="mt-1 text-xs text-white/50">
-              Un bon de travail documente un travail additionnel (extras,
-              modifications hors soumission initiale, appels de service…)
-              et peut être signé par le client. Le montant indiqué est ce
-              que vous <span className="font-semibold">chargez au client</span>{" "}
-              pour ces extras.
-            </p>
+          </div>
+
+          <div>
+            <label htmlFor="description" className="label">
+              Description
+            </label>
+            <textarea
+              id="description"
+              rows={4}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Détails du travail à faire…"
+              className="input"
+            />
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label htmlFor="client" className="label">Client</label>
-              <select
-                id="client"
-                value={clientId}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  setClientId(next);
-                  if (next && projectId) {
-                    const p = projects.find(
-                      (x) => String(x.id) === projectId
-                    );
-                    if (
-                      p &&
-                      p.client_id !== null &&
-                      String(p.client_id) !== next
-                    ) {
-                      setProjectId("");
-                    }
-                  }
-                }}
-                className="input"
-              >
-                <option value="">— Aucun —</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={String(c.id)}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label htmlFor="project" className="label">Projet</label>
-              <select
-                id="project"
-                value={projectId}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  setProjectId(next);
-                  const p = projects.find((x) => String(x.id) === next);
-                  if (p?.client_id) setClientId(String(p.client_id));
-                  if (p?.address) setAddress(p.address);
-                }}
-                className="input"
-              >
-                <option value="">— Aucun —</option>
-                {(clientId
-                  ? projects.filter(
-                      (p) => String(p.client_id) === clientId
-                    )
-                  : projects
-                ).map((p) => (
-                  <option key={p.id} value={String(p.id)}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              {clientId ? (
-                <p className="mt-1 text-xs text-white/50">
-                  Filtré sur le client sélectionné.
-                </p>
-              ) : null}
-            </div>
-            <div>
               <label htmlFor="assignee" className="label">
-                Assigné à (employé)
+                Responsable / gestionnaire
               </label>
               <select
                 id="assignee"
@@ -251,58 +426,28 @@ export default function NewBonPage() {
                   </option>
                 ))}
               </select>
+            </div>
+            <div>
+              <label htmlFor="marge" className="label">
+                Marge par défaut (%)
+              </label>
+              <input
+                id="marge"
+                type="number"
+                step="0.5"
+                min="0"
+                value={margePct}
+                onChange={(e) => setMargePct(e.target.value)}
+                className="input"
+              />
               <p className="mt-1 text-xs text-white/50">
-                Apparaît dans son tableau de bord « à faire ».
+                Appliquée sur la refacturation (modifiable par ligne).
               </p>
             </div>
           </div>
 
-          <label className="flex items-start gap-2 rounded-lg border border-brand-800 bg-brand-900 p-3">
-            <input
-              type="checkbox"
-              checked={internal}
-              onChange={(e) => setInternal(e.target.checked)}
-              className="mt-0.5 h-4 w-4"
-            />
-            <span className="text-sm text-white/85">
-              Demande interne (gestion immobilière)
-              <span className="mt-0.5 block text-xs text-white/55">
-                Classement interne. Le bon reste à faire signer, comme pour
-                un client externe.
-              </span>
-            </span>
-          </label>
-
           <div>
-            <label htmlFor="address" className="label">
-              Adresse du chantier
-            </label>
-            <input
-              id="address"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              placeholder="123 rue Principale, Sorel-Tracy"
-              className="input"
-            />
-            <p className="mt-1 text-xs text-white/50">
-              Sert au classement de la liste (adresse → client → numéro).
-            </p>
-          </div>
-
-          <div>
-            <label htmlFor="description" className="label">Description</label>
-            <textarea
-              id="description"
-              rows={4}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Portée des extras, raisons du changement…"
-              className="input"
-            />
-          </div>
-
-          <div>
-            <label className="label">Montant chargé au client</label>
+            <label className="label">Type de bon</label>
             <div className="grid gap-2 sm:grid-cols-2">
               <button
                 type="button"
@@ -317,8 +462,7 @@ export default function NewBonPage() {
                   Temps &amp; matériel
                 </p>
                 <p className="mt-0.5 text-xs text-white/60">
-                  Calculé selon les achats + heures ajoutés (récap sur la
-                  fiche).
+                  Refacturé selon les heures + le matériel ajoutés.
                 </p>
               </button>
               <button
@@ -332,27 +476,10 @@ export default function NewBonPage() {
               >
                 <p className="text-sm font-semibold text-white">Garantie</p>
                 <p className="mt-0.5 text-xs text-white/60">
-                  Travaux sous garantie — 0 $ chargé au client.
+                  Travaux sous garantie — rien n&apos;est refacturé.
                 </p>
               </button>
             </div>
-            {bonType === "temps_materiel" ? (
-              <div className="mt-3">
-                <label htmlFor="amount" className="label">
-                  Montant fixe (optionnel, CAD avant taxes)
-                </label>
-                <input
-                  id="amount"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="Laisse vide pour calculer selon achats + heures"
-                  className="input sm:w-64"
-                />
-              </div>
-            ) : null}
           </div>
 
           {error ? <p className="text-sm text-rose-400">{error}</p> : null}
