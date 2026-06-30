@@ -343,6 +343,8 @@ class BonTravailRead(_Base):
 class PunchCreate(BaseModel):
     employe_id: int
     project_id: Optional[int] = None
+    # Heures pointées sur un bon de travail interne (entretien de nos immeubles).
+    bon_travail_id: Optional[int] = None
     started_at: datetime
     ended_at: Optional[datetime] = None
     hours: Optional[float] = None
@@ -363,6 +365,7 @@ class PunchUpdate(BaseModel):
     notes: Optional[str] = None
     project_id: Optional[int] = None
     contact_request_id: Optional[int] = None
+    bon_travail_id: Optional[int] = None
     employe_id: Optional[int] = None
 
 
@@ -370,6 +373,7 @@ class PunchRead(_Base):
     id: int
     employe_id: int
     project_id: Optional[int]
+    bon_travail_id: Optional[int] = None
     started_at: datetime
     ended_at: Optional[datetime]
     hours: Optional[float]
