@@ -220,6 +220,27 @@ async def ensure_critical_columns() -> None:
         ("bons_travail", "signature_ip", "VARCHAR(64)"),
         ("bons_travail", "signature_image", "BYTEA"),
         ("bons_travail", "signature_image_content_type", "VARCHAR(100)"),
+        # Refonte Bon de travail 2026-06-30 : bon INTERNE (entretien de nos
+        # immeubles) + moteur de refacturation. Ces colonnes n'étaient que
+        # dans `additive_columns` (init_db) → si init_db abort, elles ne sont
+        # jamais créées et le SELECT des bons plante en HTTP 500 (« Impossible
+        # de charger les bons de travail » sur tout /app/bons). On les
+        # garantit ici, comme pour la signature plus haut.
+        ("bons_travail", "kind", "VARCHAR(16) NOT NULL DEFAULT 'construction'"),
+        ("bons_travail", "owner_entreprise_id", "INTEGER"),
+        ("bons_travail", "immeuble_id", "INTEGER"),
+        ("bons_travail", "logement_id", "INTEGER"),
+        ("bons_travail", "executant_type", "VARCHAR(16)"),
+        ("bons_travail", "sous_traitant_id", "INTEGER"),
+        ("bons_travail", "marge_pct", "NUMERIC(5, 2) NOT NULL DEFAULT 0"),
+        ("bon_items", "item_type", "VARCHAR(16) NOT NULL DEFAULT 'materiel'"),
+        ("bon_items", "cost_rate", "NUMERIC(12, 2)"),
+        ("bon_items", "bill_rate", "NUMERIC(12, 2)"),
+        ("bon_items", "marge_pct", "NUMERIC(5, 2)"),
+        ("bon_items", "cost_total", "NUMERIC(12, 2) NOT NULL DEFAULT 0"),
+        ("bon_items", "employe_id", "INTEGER"),
+        ("bon_items", "sous_traitant_id", "INTEGER"),
+        ("punches", "bon_travail_id", "INTEGER"),
         # Mapping comptes QBO (table qbo_account_maps existait avant l'ajout
         # de ces colonnes → create_all ne les pose pas sur une table déjà
         # créée). On les ajoute ici, idempotent.
