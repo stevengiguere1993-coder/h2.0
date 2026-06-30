@@ -173,7 +173,7 @@ export default function PurchaseOrdersListPage() {
         }
       />
 
-      <div className="p-4 lg:p-6">
+      <div className="p-4 pb-24 lg:p-6 lg:pb-24">
         <h1 className="text-2xl font-bold text-white">
           Bons de commande
         </h1>

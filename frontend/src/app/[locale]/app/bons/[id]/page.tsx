@@ -131,6 +131,15 @@ const LINE_TYPE_META: Record<
   sous_traitant: { label: "Sous-traitant", icon: HardHat, tone: "text-orange-300" }
 };
 
+function fmtHours(h: number | null | undefined): string {
+  if (h == null) return "en cours";
+  if (h <= 0) return "0 h";
+  // Sous 1 h, affichage en minutes (un punch court reste valide — pas de
+  // minimum d'1 h).
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))} min`;
+  return `${h} h`;
+}
+
 function money(n: number | string | null | undefined): string {
   if (n == null || n === "") return "—";
   const num = typeof n === "string" ? Number(n) : n;
@@ -831,7 +840,7 @@ export default function BonDetailPage() {
                           </div>
                           <div className="flex items-center gap-3">
                             <span className="font-semibold text-white">
-                              {p.hours != null ? `${p.hours} h` : "en cours"}
+                              {fmtHours(p.hours)}
                             </span>
                             <button
                               type="button"

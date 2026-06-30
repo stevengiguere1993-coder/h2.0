@@ -248,7 +248,12 @@ async def clock_out(
     if started.tzinfo is None:
         started = started.replace(tzinfo=timezone.utc)
     elapsed = (now - started).total_seconds() / 3600.0
-    open_punch.hours = round(max(elapsed, 0), 2)
+    h = round(max(elapsed, 0), 2)
+    # Tout punch réel (même très court) reste valide : on garantit au moins
+    # 0,01 h (~36 s) pour ne JAMAIS enregistrer 0 h. Aucun minimum d'1 h.
+    if elapsed > 0 and h <= 0:
+        h = 0.01
+    open_punch.hours = h
     if data.notes:
         extra = data.notes.strip()
         if extra:
