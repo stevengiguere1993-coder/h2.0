@@ -334,6 +334,7 @@ class BonTravailRead(_Base):
     executant_type: Optional[str] = None
     sous_traitant_id: Optional[int] = None
     marge_pct: Optional[float] = None
+    work_notes: Optional[str] = None
     sent_to_email: Optional[str]
     sent_at: Optional[datetime]
     signed_at: Optional[datetime]
