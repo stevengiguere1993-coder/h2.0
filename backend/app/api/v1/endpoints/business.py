@@ -280,6 +280,23 @@ def make_crud_router(
                 db, getattr(obj, "project_id", None)
             )
             await db.flush()
+        # Bon de travail INTERNE : prévenir les gestionnaires (manager+)
+        # qu'un nouveau bon d'entretien a été créé — qu'il provienne du
+        # pôle Construction ou du miroir Gestion locative.
+        if model is BonTravail and getattr(obj, "kind", None) == "interne":
+            from app.services.notifications import notify_role
+
+            await notify_role(
+                db,
+                min_role="manager",
+                kind="bon_travail",
+                title=(
+                    "Nouveau bon de travail — "
+                    + (getattr(obj, "address", None) or obj.reference)
+                ),
+                body=obj.title,
+                href=f"/app/bons/{obj.id}",
+            )
         # Journal d'audit : on trace la création pour pouvoir
         # retrouver qui a créé quoi (volet construction & Co.).
         from app.services.audit import log_action as _log_action
