@@ -263,7 +263,8 @@ class AgendaEventRead(_Base):
 
 # ---------- BonTravail ----------
 class BonTravailCreate(BaseModel):
-    reference: str = Field(..., max_length=32)
+    # Optionnelle : auto-générée (BT-…) si absente pour un bon interne.
+    reference: Optional[str] = Field(default=None, max_length=32)
     title: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     scope_md: Optional[str] = None
@@ -276,6 +277,14 @@ class BonTravailCreate(BaseModel):
     # False = demande interne (gestion immobilière) → pas de signature.
     requires_signature: Optional[bool] = None
     origin: Optional[str] = Field(default=None, max_length=32)
+    # ── Bon interne (entretien de nos immeubles) ──────────────────────
+    kind: Optional[str] = Field(default=None, max_length=16)
+    owner_entreprise_id: Optional[int] = None
+    immeuble_id: Optional[int] = None
+    logement_id: Optional[int] = None
+    executant_type: Optional[str] = Field(default=None, max_length=16)
+    sous_traitant_id: Optional[int] = None
+    marge_pct: Optional[float] = None
 
 
 class BonTravailUpdate(BaseModel):
@@ -292,6 +301,13 @@ class BonTravailUpdate(BaseModel):
     bon_type: Optional[str] = None
     assignee_user_id: Optional[int] = None
     requires_signature: Optional[bool] = None
+    kind: Optional[str] = None
+    owner_entreprise_id: Optional[int] = None
+    immeuble_id: Optional[int] = None
+    logement_id: Optional[int] = None
+    executant_type: Optional[str] = None
+    sous_traitant_id: Optional[int] = None
+    marge_pct: Optional[float] = None
 
 
 class BonTravailRead(_Base):
@@ -309,6 +325,13 @@ class BonTravailRead(_Base):
     assignee_user_id: Optional[int] = None
     requires_signature: bool = True
     origin: Optional[str] = None
+    kind: str = "construction"
+    owner_entreprise_id: Optional[int] = None
+    immeuble_id: Optional[int] = None
+    logement_id: Optional[int] = None
+    executant_type: Optional[str] = None
+    sous_traitant_id: Optional[int] = None
+    marge_pct: Optional[float] = None
     sent_to_email: Optional[str]
     sent_at: Optional[datetime]
     signed_at: Optional[datetime]
