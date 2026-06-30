@@ -22,6 +22,8 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DBSession
 from app.models.bon_item import BonItem
 from app.models.bon_travail import BonTravail
+from app.models.employe import Employe
+from app.models.punch import Punch
 
 
 router = APIRouter(prefix="/bons-travail", tags=["bon-items"])
@@ -144,6 +146,48 @@ async def list_items(bon_id: int, db: DBSession, _: CurrentUser) -> List[BonItem
         )
     ).scalars().all()
     return [BonItemRead.model_validate(r) for r in rows]
+
+
+class BonPunchRead(BaseModel):
+    id: int
+    employe_id: int
+    employe_name: Optional[str]
+    started_at: Optional[str]
+    ended_at: Optional[str]
+    hours: Optional[float]
+    task: Optional[str]
+    approved: bool
+
+
+@router.get("/{bon_id}/punches", response_model=List[BonPunchRead])
+async def list_bon_punches(
+    bon_id: int, db: DBSession, _: CurrentUser
+) -> List[BonPunchRead]:
+    """Heures pointées directement sur ce bon (entretien interne)."""
+    await _ensure_bon(db, bon_id)
+    rows = (
+        await db.execute(
+            select(Punch, Employe.full_name)
+            .outerjoin(Employe, Employe.id == Punch.employe_id)
+            .where(Punch.bon_travail_id == bon_id)
+            .order_by(Punch.started_at.desc())
+        )
+    ).all()
+    out: List[BonPunchRead] = []
+    for p, emp_name in rows:
+        out.append(
+            BonPunchRead(
+                id=p.id,
+                employe_id=p.employe_id,
+                employe_name=emp_name,
+                started_at=p.started_at.isoformat() if p.started_at else None,
+                ended_at=p.ended_at.isoformat() if p.ended_at else None,
+                hours=float(p.hours) if p.hours is not None else None,
+                task=p.task,
+                approved=bool(p.approved),
+            )
+        )
+    return out
 
 
 @router.post(
