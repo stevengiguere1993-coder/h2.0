@@ -103,6 +103,9 @@ class BonTravail(Base, TimestampUpdateMixin):
     )
     # Marge par défaut (%) sur la refacturation — modifiable par ligne.
     marge_pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=0)
+    # Notes de l'exécutant (homme à tout faire) saisies pendant le travail.
+    # Visibles en lecture seule côté Gestion locative.
+    work_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     sent_to_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
