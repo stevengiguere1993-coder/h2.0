@@ -97,6 +97,22 @@ export default function BonsPage() {
     [items]
   );
 
+  // Anciens bons construction (signature client) — affichés à part pour ne
+  // jamais les perdre de vue. Filtrés par la recherche aussi.
+  const legacy = useMemo(() => {
+    const all = items.filter(
+      (b) => (b.kind ?? "construction") !== "interne"
+    );
+    const q = search.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter(
+      (b) =>
+        b.reference.toLowerCase().includes(q) ||
+        b.title.toLowerCase().includes(q) ||
+        (b.address || "").toLowerCase().includes(q)
+    );
+  }, [items, search]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return internal;
@@ -195,11 +211,18 @@ export default function BonsPage() {
           <div className="flex min-h-[40vh] items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
-        ) : internal.length === 0 ? (
+        ) : items.length === 0 ? (
           <Empty />
         ) : (
-          <div className="flex gap-4 overflow-x-auto pb-4">
-            {COLUMNS.map((col) => {
+          <>
+            {internal.length === 0 ? (
+              <p className="mb-6 rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-sm text-white/50">
+                Aucun bon d&apos;entretien interne pour l&apos;instant. Crée-en
+                un avec « Nouveau bon », ou retrouve tes anciens bons plus bas.
+              </p>
+            ) : (
+              <div className="flex gap-4 overflow-x-auto pb-4">
+                {COLUMNS.map((col) => {
               const cards = byColumn[col.id] || [];
               const isOver = dragOverCol === col.id;
               return (
@@ -309,11 +332,80 @@ export default function BonsPage() {
                   </div>
                 </div>
               );
-            })}
-          </div>
+                })}
+              </div>
+            )}
+            {legacy.length > 0 ? (
+              <LegacyBons
+                bons={legacy}
+                onOpen={(id) =>
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  router.push(`/app/bons/${id}` as any)
+                }
+              />
+            ) : null}
+          </>
         )}
       </div>
     </>
+  );
+}
+
+const LEGACY_STATUS: Record<string, { label: string; cls: string }> = {
+  draft: { label: "Brouillon", cls: "bg-white/10 text-white/70" },
+  sent: { label: "Envoyé", cls: "bg-blue-500/20 text-blue-300" },
+  signed: { label: "Signé", cls: "bg-emerald-500/20 text-emerald-300" },
+  cancelled: { label: "Annulé", cls: "bg-white/5 text-white/50" }
+};
+
+function LegacyBons({
+  bons,
+  onOpen
+}: {
+  bons: Bon[];
+  onOpen: (id: number) => void;
+}) {
+  return (
+    <section className="mt-8">
+      <h2 className="text-lg font-bold text-white">
+        Anciens bons de travail (construction)
+      </h2>
+      <p className="mt-1 text-xs text-white/50">
+        Bons signés / envoyés au client avant la refonte. Toujours
+        accessibles — clique pour ouvrir la fiche.
+      </p>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {bons.map((b) => {
+          const st = LEGACY_STATUS[b.status] || {
+            label: b.status,
+            cls: "bg-white/10 text-white/70"
+          };
+          return (
+            <button
+              key={b.id}
+              type="button"
+              onClick={() => onOpen(b.id)}
+              className="block rounded-lg border border-brand-800 bg-brand-950 p-3 text-left transition hover:border-accent-500"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <h3 className="min-w-0 truncate text-sm font-semibold text-white">
+                  {b.address || b.title}
+                </h3>
+                <span
+                  className={`flex-shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${st.cls}`}
+                >
+                  {st.label}
+                </span>
+              </div>
+              <p className="mt-0.5 truncate text-xs text-white/60">{b.title}</p>
+              <p className="mt-0.5 truncate text-[11px] text-white/40">
+                {b.reference} · {money(b.amount)}
+              </p>
+            </button>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
