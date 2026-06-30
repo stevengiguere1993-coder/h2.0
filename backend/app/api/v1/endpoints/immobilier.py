@@ -1139,7 +1139,8 @@ async def get_gestion_immo_bon(
     _require_volet(user)
     bon = await db.get(BonTravail, bon_id)
     if bon is None or not (
-        bon.origin == "gestion_immo"
+        (bon.kind or "construction") == "interne"
+        or bon.origin == "gestion_immo"
         or (bon.scope_md and "Gestion immobilière" in bon.scope_md)
     ):
         raise HTTPException(
@@ -1261,7 +1262,8 @@ async def get_gestion_immo_bon_photo(
         bon is None
         or bon.project_id is None
         or not (
-            bon.origin == "gestion_immo"
+            (bon.kind or "construction") == "interne"
+            or bon.origin == "gestion_immo"
             or (bon.scope_md and "Gestion immobilière" in bon.scope_md)
         )
     ):
@@ -1299,7 +1301,8 @@ async def upload_gestion_immo_bon_photo(
     _require_volet(user)
     bon = await db.get(BonTravail, bon_id)
     if bon is None or not (
-        bon.origin == "gestion_immo"
+        (bon.kind or "construction") == "interne"
+        or bon.origin == "gestion_immo"
         or (bon.scope_md and "Gestion immobilière" in bon.scope_md)
     ):
         raise HTTPException(

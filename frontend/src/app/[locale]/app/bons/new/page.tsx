@@ -31,7 +31,7 @@ export default function NewBonPage() {
   const [description, setDescription] = useState("");
   const [assigneeId, setAssigneeId] = useState("");
   const [margePct, setMargePct] = useState("10");
-  const [bonType, setBonType] = useState("temps_materiel");
+  const [photos, setPhotos] = useState<File[]>([]);
 
   const [entreprises, setEntreprises] = useState<Entreprise[]>([]);
   const [immeubles, setImmeubles] = useState<Immeuble[]>([]);
@@ -165,7 +165,7 @@ export default function NewBonPage() {
         owner_entreprise_id: Number(entrepriseId),
         immeuble_id: Number(immeubleId),
         executant_type: executantType,
-        bon_type: bonType,
+        bon_type: "temps_materiel",
         marge_pct: margePct ? Number(margePct) : 0
       };
       if (logementId) payload.logement_id = Number(logementId);
@@ -175,8 +175,6 @@ export default function NewBonPage() {
       if (assigneeId) payload.assignee_user_id = Number(assigneeId);
       const addr = buildAddress();
       if (addr) payload.address = addr;
-      // Garantie : rien n'est refacturé à la compagnie.
-      if (bonType === "garantie") payload.amount = 0;
 
       const res = await authedFetch("/api/v1/bons-travail", {
         method: "POST",
@@ -188,6 +186,19 @@ export default function NewBonPage() {
         throw new Error(txt.slice(0, 240) || `http_${res.status}`);
       }
       const created = (await res.json()) as { id: number };
+      // Photos (optionnelles) — attachées au bon après création.
+      for (const f of photos) {
+        try {
+          const fd = new FormData();
+          fd.append("file", f);
+          await authedFetch(
+            `/api/v1/immobilier/bons-travail/${created.id}/photos`,
+            { method: "POST", body: fd }
+          );
+        } catch {
+          /* une photo qui échoue ne bloque pas la création */
+        }
+      }
       router.replace(`/app/bons/${created.id}`);
     } catch (err) {
       setError((err as Error).message);
@@ -326,14 +337,9 @@ export default function NewBonPage() {
                 }`}
               >
                 <Wrench className="h-5 w-5 text-sky-300" />
-                <div>
-                  <p className="text-sm font-semibold text-white">
-                    Nos hommes à tout faire
-                  </p>
-                  <p className="text-xs text-white/60">
-                    Refacturé selon les heures pointées.
-                  </p>
-                </div>
+                <p className="text-sm font-semibold text-white">
+                  Nos hommes à tout faire
+                </p>
               </button>
               <button
                 type="button"
@@ -345,14 +351,9 @@ export default function NewBonPage() {
                 }`}
               >
                 <HardHat className="h-5 w-5 text-orange-300" />
-                <div>
-                  <p className="text-sm font-semibold text-white">
-                    Sous-traitant
-                  </p>
-                  <p className="text-xs text-white/60">
-                    Refacturé selon le coût du sous-traitant + marge.
-                  </p>
-                </div>
+                <p className="text-sm font-semibold text-white">
+                  Sous-traitant
+                </p>
               </button>
             </div>
             {executantType === "sous_traitant" ? (
@@ -447,39 +448,22 @@ export default function NewBonPage() {
           </div>
 
           <div>
-            <label className="label">Type de bon</label>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={() => setBonType("temps_materiel")}
-                className={`rounded-xl border p-3 text-left transition ${
-                  bonType === "temps_materiel"
-                    ? "border-accent-500 bg-brand-900"
-                    : "border-brand-800 bg-brand-900/60 hover:border-brand-700"
-                }`}
-              >
-                <p className="text-sm font-semibold text-white">
-                  Temps &amp; matériel
-                </p>
-                <p className="mt-0.5 text-xs text-white/60">
-                  Refacturé selon les heures + le matériel ajoutés.
-                </p>
-              </button>
-              <button
-                type="button"
-                onClick={() => setBonType("garantie")}
-                className={`rounded-xl border p-3 text-left transition ${
-                  bonType === "garantie"
-                    ? "border-accent-500 bg-brand-900"
-                    : "border-brand-800 bg-brand-900/60 hover:border-brand-700"
-                }`}
-              >
-                <p className="text-sm font-semibold text-white">Garantie</p>
-                <p className="mt-0.5 text-xs text-white/60">
-                  Travaux sous garantie — rien n&apos;est refacturé.
-                </p>
-              </button>
-            </div>
+            <label className="label">Photos (optionnel)</label>
+            <input
+              type="file"
+              accept="image/*,application/pdf"
+              multiple
+              onChange={(e) =>
+                setPhotos(e.target.files ? Array.from(e.target.files) : [])
+              }
+              className="block w-full text-sm text-white/70 file:mr-3 file:rounded-lg file:border-0 file:bg-accent-500 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-brand-950 hover:file:bg-accent-400"
+            />
+            {photos.length > 0 ? (
+              <p className="mt-1 text-xs text-white/50">
+                {photos.length} fichier{photos.length > 1 ? "s" : ""} sélectionné
+                {photos.length > 1 ? "s" : ""}.
+              </p>
+            ) : null}
           </div>
 
           {error ? <p className="text-sm text-rose-400">{error}</p> : null}
