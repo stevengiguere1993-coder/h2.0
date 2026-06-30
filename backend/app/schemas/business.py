@@ -325,7 +325,9 @@ class BonTravailRead(_Base):
     assignee_user_id: Optional[int] = None
     requires_signature: bool = True
     origin: Optional[str] = None
-    kind: str = "construction"
+    # Optionnel : les bons LEGACY ont kind NULL en base (colonne ajoutée
+    # après coup) — None ne doit pas faire planter la lecture de la liste.
+    kind: Optional[str] = "construction"
     owner_entreprise_id: Optional[int] = None
     immeuble_id: Optional[int] = None
     logement_id: Optional[int] = None
