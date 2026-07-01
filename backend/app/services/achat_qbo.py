@@ -51,38 +51,6 @@ class AchatSyncError(Exception):
     pass
 
 
-def _is_stale_ref(exc: Exception) -> bool:
-    """Vrai si l'erreur QBO indique que l'objet référencé (par son Id)
-    a été supprimé/inactivé côté QuickBooks — auquel cas on doit recréer
-    plutôt que mettre à jour. Couvre « Object Not Found » et « made
-    inactive » (errorCode 610 / 3200)."""
-    msg = str(exc).lower()
-    return (
-        "made inactive" in msg
-        or "object not found" in msg
-        or "introuvable" in msg
-        or "inactive" in msg
-        or "errorcode=610" in msg
-        or "code': '610'" in msg
-    )
-
-
-def _is_stale_token(exc: Exception) -> bool:
-    """Vrai si l'erreur QBO indique un SyncToken périmé (« Stale Object »,
-    errorCode 5010) — l'objet a changé côté QBO depuis notre dernier
-    token. Il faut relire le SyncToken courant et réessayer."""
-    msg = str(exc).lower()
-    return (
-        "stale object" in msg
-        or "périmé" in msg
-        or "perime" in msg
-        or "errorcode=5010" in msg
-        or "code': '5010'" in msg
-        or "en même temps" in msg
-        or "en meme temps" in msg
-    )
-
-
 async def _load_achat(db: AsyncSession, achat_id: int) -> Optional[Achat]:
     return (
         await db.execute(select(Achat).where(Achat.id == achat_id))
@@ -96,19 +64,23 @@ def _build_line(
     customer_id: Optional[str] = None,
     class_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    # Montant HT de la ligne. Avec un TaxCodeRef + GlobalTaxCalculation=
-    # TaxExcluded, QBO calcule la TPS/TVQ PAR-DESSUS ce HT, donc on doit
-    # envoyer le HT (pas le TTC — sinon la taxe serait ajoutée sur un TTC,
-    # ce qui gonfle le total, cf. bug « 739,95 au lieu de 643,57 » quand on
-    # envoyait le TTC en pensant que QBO le traiterait comme taxe comprise :
-    # QBO Purchase n'honore PAS TaxInclusive et ajoute la taxe).
-    #   - Achat « normal » : amount = HT déjà (amount_taxes porte la taxe).
-    #   - Achat « legacy » : amount = TTC et amount_taxes = 0/None →
-    #     on décompose le TTC pour retrouver le HT (facteur 1,14975).
+    # Montant TTC de la ligne (mode « taxe comprise », GlobalTaxCalculation=
+    # TaxInclusive au niveau de la transaction) : on envoie le MONTANT TOTAL
+    # réel — celui du relevé — et QBO ventile la TPS/TVQ À L'INTÉRIEUR via le
+    # code de taxe. Le total colle donc exactement (pas d'écart d'arrondi) et
+    # aucun taux n'est référencé (pas d'« Invalid tax rate id »). C'est le
+    # comportement d'une saisie manuelle « taxe comprise » dans QBO.
+    #   - Achat « normal » : amount = HT, amount_taxes = taxe → TTC = somme.
+    #   - Achat « legacy »  : amount = TTC, amount_taxes = 0     → TTC = amount.
+    # `amount + taxes` couvre les deux cas.
+    # NB : ce mode n'est correct QUE si la transaction est bien CRÉÉE en
+    # « taxe comprise ». QBO ne rebascule pas fiablement une dépense existante
+    # via un sparse update (la taxe serait ajoutée sur le TTC → total gonflé,
+    # bug 739,95) : la re-synchro RECRÉE donc la dépense (cf. sync_achat).
     raw_amount = float(achat.amount or 0)
     taxes = float(achat.amount_taxes or 0)
-    if settings.qbo_purchase_tax_code and taxes <= 0 and raw_amount > 0:
-        amount = round(raw_amount / 1.14975, 2)
+    if settings.qbo_purchase_tax_code:
+        amount = round(raw_amount + taxes, 2)
     else:
         amount = raw_amount
     description = (
@@ -197,18 +169,34 @@ def _format_qbo_addr(addr: Optional[Dict[str, Any]]) -> Optional[str]:
 
 
 def _apply_purchase_tax(payload: Dict[str, Any]) -> None:
-    """Applique la taxe d'achat : le montant de ligne est le HT et QBO
-    calcule la TPS/TVQ PAR-DESSUS via le code de taxe de la ligne
-    (TaxCodeRef, posé dans _build_line). GlobalTaxCalculation=TaxExcluded
-    évite que QBO traite le HT comme un TTC (double taxation).
+    """Mode « taxe comprise » : le montant de ligne est le TTC et QBO ventile
+    la TPS/TVQ À L'INTÉRIEUR via le code de taxe de la ligne (TaxCodeRef, posé
+    dans _build_line). GlobalTaxCalculation=TaxInclusive → le total envoyé est
+    le total réel, QBO n'ajoute rien par-dessus.
 
-    NB : on ne pousse ni TaxRateRef (→ « Invalid tax rate id » quand le taux
-    résolu était un taux de vente), ni TaxInclusive avec un TTC (QBO Purchase
-    n'honore pas TaxInclusive : il ajoutait la taxe → total gonflé). Le total
-    QBO peut différer d'1 cent du TTC Kratos (arrondi TVQ de QBO) ; c'est le
-    comportement fiable et non-régressif. Sans code de taxe : rien à poser."""
+    Ne fonctionne QUE sur une transaction CRÉÉE dans ce mode : la re-synchro
+    recrée la dépense plutôt que de la patcher (cf. sync_achat). Sans code de
+    taxe configuré : on ne touche pas au payload."""
     if settings.qbo_purchase_tax_code:
-        payload["GlobalTaxCalculation"] = "TaxExcluded"
+        payload["GlobalTaxCalculation"] = "TaxInclusive"
+
+
+async def _delete_old_qbo_txn(qbo, old_id: Optional[str]) -> None:
+    """Supprime l'ancien objet QB (Purchase OU Bill) avant de recréer, pour ne
+    pas laisser de doublon lors d'une re-synchro. Best-effort et tolérant au
+    type : on tente les deux endpoints car l'achat a pu changer de type
+    (Bill ↔ Purchase). Ne lève jamais (delete_* renvoie False si l'objet
+    n'existe pas / n'est pas du bon type)."""
+    if not old_id:
+        return
+    ok = await qbo.delete_purchase(str(old_id))
+    if not ok:
+        ok = await qbo.delete_bill(str(old_id))
+    if not ok:
+        log.warning(
+            "QBO: suppression de l'ancien objet %s échouée (doublon possible)",
+            old_id,
+        )
 
 
 def _build_bill_payload(
@@ -220,8 +208,6 @@ def _build_bill_payload(
     project_name: Optional[str],
     customer_id: Optional[str] = None,
     class_id: Optional[str] = None,
-    existing_bill_id: Optional[str] = None,
-    existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     lines = [
         _build_line(
@@ -241,10 +227,6 @@ def _build_bill_payload(
     }
     # Taxe comprise : montant de ligne = TTC réel, QB ventile la taxe.
     _apply_purchase_tax(payload)
-    if existing_bill_id and existing_sync_token is not None:
-        payload["Id"] = existing_bill_id
-        payload["SyncToken"] = existing_sync_token
-        payload["sparse"] = True
     return payload
 
 
@@ -260,8 +242,6 @@ def _build_purchase_payload(
     customer_id: Optional[str] = None,
     class_id: Optional[str] = None,
     payment_method_id: Optional[str] = None,
-    existing_purchase_id: Optional[str] = None,
-    existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     lines = [
         _build_line(
@@ -285,10 +265,6 @@ def _build_purchase_payload(
         payload["PaymentMethodRef"] = {"value": str(payment_method_id)}
     # Taxe comprise : montant de ligne = TTC réel, QB ventile la taxe.
     _apply_purchase_tax(payload)
-    if existing_purchase_id and existing_sync_token is not None:
-        payload["Id"] = existing_purchase_id
-        payload["SyncToken"] = existing_sync_token
-        payload["sparse"] = True
     return payload
 
 
@@ -612,8 +588,9 @@ async def sync_achat_to_qbo(
                     "Purchase" if as_purchase else "Bill",
                     achat.qbo_bill_id,
                 )
-                # PAS de return : on continue vers la MAJ (sparse) pour
-                # classer la transaction existante sous le projet.
+                # PAS de return : on continue vers le bloc de push, qui
+                # supprimera cette transaction existante puis la recréera en
+                # « taxe comprise », classée sous le projet.
 
         if as_purchase:
             # Achat déjà payé (carte de crédit, comptant, interac) →
@@ -649,45 +626,16 @@ async def sync_achat_to_qbo(
                 project_name=project.name if project else None,
                 customer_id=customer_id,
                 class_id=class_id,
-                existing_purchase_id=achat.qbo_bill_id,
-                existing_sync_token=achat.qbo_sync_token,
             )
-            if payload.get("Id"):
-                try:
-                    qbo_obj = await qbo.update_purchase(payload)
-                except QuickBooksError as exc:
-                    if _is_stale_token(exc):
-                        # SyncToken périmé : on relit le token courant
-                        # depuis QBO et on réessaie la mise à jour.
-                        fresh = await qbo.get_purchase(str(payload["Id"]))
-                        payload["SyncToken"] = str(
-                            fresh.get("SyncToken") or "0"
-                        )
-                        qbo_obj = await qbo.update_purchase(payload)
-                    elif _is_stale_ref(exc):
-                        # L'objet QBO référencé n'est pas une Purchase
-                        # (souvent : l'achat était un Bill « sur compte »
-                        # puis est passé payé → Purchase). On recrée la
-                        # Purchase. NB : on NE SUPPRIME PAS automatiquement
-                        # l'ancien Bill (+ paiement) — suppression mise en
-                        # attente tant que la comptabilité n'a pas validé
-                        # l'approche (cf. delete_bill/_payment disponibles).
-                        log.warning(
-                            "QBO purchase %s introuvable → recréation "
-                            "(ancien Bill conservé) (achat %s)",
-                            payload.get("Id"),
-                            achat.id,
-                        )
-                        payload.pop("Id", None)
-                        payload.pop("SyncToken", None)
-                        payload.pop("sparse", None)
-                        qbo_obj = await qbo.create_purchase(payload)
-                        did_create = True
-                    else:
-                        raise
-            else:
-                qbo_obj = await qbo.create_purchase(payload)
-                did_create = True
+            # Re-synchro en « taxe comprise » : on SUPPRIME l'ancienne dépense
+            # puis on en CRÉE une neuve, au lieu d'un sparse update. QBO ne
+            # rebascule pas fiablement une dépense existante en « taxe
+            # comprise » (il ajouterait la taxe sur le TTC → total gonflé,
+            # bug 739,95) ; recréer garantit qu'elle naît dans le bon mode,
+            # comme une saisie manuelle. Le nouvel Id remplace l'ancien.
+            await _delete_old_qbo_txn(qbo, achat.qbo_bill_id)
+            qbo_obj = await qbo.create_purchase(payload)
+            did_create = True
         else:
             # Sur compte fournisseur (chèque / net-30) → Bill
             payload = _build_bill_payload(
@@ -698,40 +646,11 @@ async def sync_achat_to_qbo(
                 project_name=project.name if project else None,
                 customer_id=customer_id,
                 class_id=class_id,
-                existing_bill_id=achat.qbo_bill_id,
-                existing_sync_token=achat.qbo_sync_token,
             )
-            if payload.get("Id"):
-                try:
-                    qbo_obj = await qbo.update_bill(payload)
-                except QuickBooksError as exc:
-                    if _is_stale_token(exc):
-                        fresh = await qbo.get_bill(str(payload["Id"]))
-                        payload["SyncToken"] = str(
-                            fresh.get("SyncToken") or "0"
-                        )
-                        qbo_obj = await qbo.update_bill(payload)
-                    elif _is_stale_ref(exc):
-                        # Pas un Bill (souvent : l'achat était payé →
-                        # Purchase, puis repassé « sur compte » → Bill). On
-                        # recrée le Bill SANS supprimer l'ancienne Purchase
-                        # (suppression en attente de validation comptable).
-                        log.warning(
-                            "QBO bill %s introuvable → recréation "
-                            "(ancienne Purchase conservée) (achat %s)",
-                            payload.get("Id"),
-                            achat.id,
-                        )
-                        payload.pop("Id", None)
-                        payload.pop("SyncToken", None)
-                        payload.pop("sparse", None)
-                        qbo_obj = await qbo.create_bill(payload)
-                        did_create = True
-                    else:
-                        raise
-            else:
-                qbo_obj = await qbo.create_bill(payload)
-                did_create = True
+            # Re-synchro : delete + create (idem Purchase ci-dessus).
+            await _delete_old_qbo_txn(qbo, achat.qbo_bill_id)
+            qbo_obj = await qbo.create_bill(payload)
+            did_create = True
     except QuickBooksError as exc:
         raise AchatSyncError(str(exc)) from exc
 
