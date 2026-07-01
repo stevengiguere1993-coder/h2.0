@@ -466,50 +466,50 @@ function ProjectCard({
         </span>
       </div>
 
-      {/* Flux A — badges signature + statut de correction. */}
+      {/* Flux A — badges signature + statut de correction + action, tous
+          au même gabarit (rounded-md, px-2 py-1, text-[11px], icône h-3). */}
       {(p.has_signed_bon ||
         p.awaiting_signature ||
-        (p.status === "correction" && p.correction_status)) && (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        p.status === "correction") && (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {p.has_signed_bon ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-medium text-emerald-300">
+            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-1 text-[11px] font-medium leading-none text-emerald-300">
               <CheckCircle2 className="h-3 w-3" /> Signé
             </span>
           ) : p.awaiting_signature ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-rose-500/20 px-1.5 py-0.5 text-[11px] font-medium text-rose-300">
+            <span className="inline-flex items-center gap-1 rounded-md bg-rose-500/20 px-2 py-1 text-[11px] font-medium leading-none text-rose-300">
               <Clock className="h-3 w-3" /> À signer
             </span>
           ) : null}
           {p.status === "correction" && p.correction_status === "termine" ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-medium text-emerald-300">
-              Correction terminée
+            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-1 text-[11px] font-medium leading-none text-emerald-300">
+              <CheckCircle2 className="h-3 w-3" /> Correction terminée
             </span>
           ) : p.status === "correction" &&
             p.correction_status === "planifie" ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-sky-500/15 px-1.5 py-0.5 text-[11px] font-medium text-sky-300">
-              Correction planifiée
+            <span className="inline-flex items-center gap-1 rounded-md bg-sky-500/15 px-2 py-1 text-[11px] font-medium leading-none text-sky-300">
+              <CheckCircle2 className="h-3 w-3" /> Correction planifiée
             </span>
           ) : p.status === "correction" ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-300">
-              Correction à planifier
+            <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-1 text-[11px] font-medium leading-none text-amber-300">
+              <Clock className="h-3 w-3" /> Correction à planifier
             </span>
+          ) : null}
+          {p.status === "correction" ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onCorrectionBon();
+              }}
+              className="inline-flex items-center gap-1 rounded-md border border-rose-400/40 bg-rose-500/15 px-2 py-1 text-[11px] font-medium leading-none text-rose-200 transition-colors hover:bg-rose-500/25"
+            >
+              <Hammer className="h-3 w-3" /> Bon de correction (signature)
+            </button>
           ) : null}
         </div>
       )}
-
-      {p.status === "correction" ? (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onCorrectionBon();
-          }}
-          className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-rose-400/30 bg-rose-500/10 px-2.5 py-1.5 text-[11px] font-medium text-rose-200 hover:bg-rose-500/20"
-        >
-          <Hammer className="h-3 w-3" /> Bon de correction (signature)
-        </button>
-      ) : null}
     </Link>
   );
 }

@@ -15,7 +15,8 @@ import {
   Plus,
   Save,
   Send,
-  Trash2
+  Trash2,
+  Wrench
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
@@ -53,6 +54,9 @@ type Bon = {
   signed_by_name: string | null;
   created_at: string;
 };
+
+type SousTraitant = { id: number; full_name: string };
+type UserOption = { id: number; email: string; full_name?: string | null };
 
 type Item = {
   id: number;
@@ -164,6 +168,9 @@ export default function BonDetailPage() {
   const [workNotes, setWorkNotes] = useState("");
   const [notesSaving, setNotesSaving] = useState(false);
   const [notesSaved, setNotesSaved] = useState(false);
+  // #1 — édition de l'exécutant/assignation directement sur la fiche.
+  const [sousTraitants, setSousTraitants] = useState<SousTraitant[]>([]);
+  const [users, setUsers] = useState<UserOption[]>([]);
   const [bonPhotos, setBonPhotos] = useState<
     { id: number; caption: string | null }[]
   >([]);
@@ -221,6 +228,28 @@ export default function BonDetailPage() {
     };
   }, [id]);
 
+  // #1 — catalogues pour l'édition de l'exécutant/assignation (bons internes).
+  useEffect(() => {
+    let cancelled = false;
+    async function loadCatalogs() {
+      try {
+        const [sRes, uRes] = await Promise.all([
+          authedFetch("/api/v1/sous-traitants?limit=500"),
+          authedFetch("/api/v1/users")
+        ]);
+        if (cancelled) return;
+        if (sRes.ok) setSousTraitants((await sRes.json()) as SousTraitant[]);
+        if (uRes.ok) setUsers((await uRes.json()) as UserOption[]);
+      } catch {
+        /* ignore — l'édition exécutant restera indisponible */
+      }
+    }
+    void loadCatalogs();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const itemsTotal = useMemo(
     () => +items.reduce((sum, it) => sum + Number(it.total || 0), 0).toFixed(2),
     [items]
@@ -267,6 +296,25 @@ export default function BonDetailPage() {
     } catch {
       setB((prev) => (prev ? { ...prev, is_urgent: !next } : prev));
       setError("Changement d'urgence échoué.");
+    }
+  }
+
+  // #1 — PATCH optimiste générique (exécutant, sous-traitant, responsable).
+  async function patchBon(patch: Partial<Bon>) {
+    if (!b) return;
+    const prev = b;
+    setB({ ...b, ...patch });
+    try {
+      const res = await authedFetch(`/api/v1/bons-travail/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch)
+      });
+      if (!res.ok) throw new Error();
+      setB((await res.json()) as Bon);
+    } catch {
+      setB(prev);
+      setError("Modification échouée.");
     }
   }
 
@@ -668,6 +716,119 @@ export default function BonDetailPage() {
               label="Bon de travail"
               route="/app/bons/[id]"
             />
+
+            {isInternal ? (
+              <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
+                <div className="border-b border-brand-800 px-5 py-4">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Exécutant &amp; assignation
+                  </h2>
+                  <p className="mt-1 text-xs text-white/50">
+                    Modifie qui exécute le bon et le responsable — comme à la
+                    création.
+                  </p>
+                </div>
+                <div className="space-y-4 px-5 py-4">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        patchBon({
+                          executant_type: "nos_hommes",
+                          sous_traitant_id: null
+                        })
+                      }
+                      className={`flex items-center gap-2 rounded-xl border p-3 text-left transition ${
+                        b.executant_type !== "sous_traitant"
+                          ? "border-accent-500 bg-brand-900"
+                          : "border-brand-800 bg-brand-900/60 hover:border-brand-700"
+                      }`}
+                    >
+                      <Wrench className="h-5 w-5 text-sky-300" />
+                      <div>
+                        <p className="text-sm font-semibold text-white">
+                          Nos hommes à tout faire
+                        </p>
+                        <p className="text-xs text-white/60">
+                          Refacturé selon les heures pointées.
+                        </p>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        patchBon({ executant_type: "sous_traitant" })
+                      }
+                      className={`flex items-center gap-2 rounded-xl border p-3 text-left transition ${
+                        b.executant_type === "sous_traitant"
+                          ? "border-accent-500 bg-brand-900"
+                          : "border-brand-800 bg-brand-900/60 hover:border-brand-700"
+                      }`}
+                    >
+                      <HardHat className="h-5 w-5 text-orange-300" />
+                      <div>
+                        <p className="text-sm font-semibold text-white">
+                          Sous-traitant
+                        </p>
+                        <p className="text-xs text-white/60">
+                          Refacturé selon le coût du sous-traitant + marge.
+                        </p>
+                      </div>
+                    </button>
+                  </div>
+                  {b.executant_type === "sous_traitant" ? (
+                    <div>
+                      <label className="label" htmlFor="bon-sous-traitant">
+                        Quel sous-traitant ?
+                      </label>
+                      <select
+                        id="bon-sous-traitant"
+                        value={b.sous_traitant_id ? String(b.sous_traitant_id) : ""}
+                        onChange={(e) =>
+                          patchBon({
+                            sous_traitant_id: e.target.value
+                              ? Number(e.target.value)
+                              : null
+                          })
+                        }
+                        className="input"
+                      >
+                        <option value="">— Choisir —</option>
+                        {sousTraitants.map((s) => (
+                          <option key={s.id} value={String(s.id)}>
+                            {s.full_name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
+                  <div>
+                    <label className="label" htmlFor="bon-assignee">
+                      Responsable / gestionnaire
+                    </label>
+                    <select
+                      id="bon-assignee"
+                      value={b.assignee_user_id ? String(b.assignee_user_id) : ""}
+                      onChange={(e) =>
+                        patchBon({
+                          assignee_user_id: e.target.value
+                            ? Number(e.target.value)
+                            : null
+                        })
+                      }
+                      className="input"
+                    >
+                      <option value="">— Non assigné —</option>
+                      {users.map((u) => (
+                        <option key={u.id} value={String(u.id)}>
+                          {u.full_name || u.email}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </section>
+            ) : null}
 
             {isInternal ? (
               <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
