@@ -196,19 +196,132 @@ def _format_qbo_addr(addr: Optional[Dict[str, Any]]) -> Optional[str]:
     return flat[:500] or None
 
 
-def _apply_purchase_tax(payload: Dict[str, Any]) -> None:
-    """Applique la taxe d'achat : le montant de ligne est le HT et QBO
-    calcule la TPS/TVQ PAR-DESSUS via le code de taxe de la ligne
-    (TaxCodeRef, posé dans _build_line). GlobalTaxCalculation=TaxExcluded
-    évite que QBO traite le HT comme un TTC (double taxation).
+def _is_invalid_tax_rate(exc: Exception) -> bool:
+    """Vrai si QBO rejette un TaxRateRef non valide pour ce type de
+    transaction (« Invalid tax rate id » / « Taux de taxe non valide »).
+    Déclenche le repli : on retire les lignes de taxe explicites et on laisse
+    QBO calculer la taxe."""
+    msg = str(exc).lower()
+    return "invalid tax rate" in msg or "taux de taxe non valide" in msg
 
-    NB : on ne pousse ni TaxRateRef (→ « Invalid tax rate id » quand le taux
-    résolu était un taux de vente), ni TaxInclusive avec un TTC (QBO Purchase
-    n'honore pas TaxInclusive : il ajoutait la taxe → total gonflé). Le total
-    QBO peut différer d'1 cent du TTC Kratos (arrondi TVQ de QBO) ; c'est le
-    comportement fiable et non-régressif. Sans code de taxe : rien à poser."""
-    if settings.qbo_purchase_tax_code:
-        payload["GlobalTaxCalculation"] = "TaxExcluded"
+
+def _strip_txn_tax_detail(payload: Dict[str, Any]) -> bool:
+    """Retire le TxnTaxDetail explicite (lignes de taxe) du payload pour
+    retomber sur le calcul QBO standard (HT + TaxExcluded). Renvoie True si
+    le payload a été modifié → un nouvel essai a du sens."""
+    if "TxnTaxDetail" in payload:
+        payload.pop("TxnTaxDetail", None)
+        return True
+    return False
+
+
+async def _resolve_purchase_tax_rate_ids(
+    qbo,
+) -> tuple[Optional[str], Optional[str]]:
+    """(tps_rate_id, tvq_rate_id) VALIDES POUR LES ACHATS, lus depuis le
+    PurchaseTaxRateList du code de taxe d'achat configuré (TPS/TVQ QC).
+
+    C'est la clé pour imposer des montants de taxe EXACTS sans « Invalid tax
+    rate id » : on prend les taux du VOLET ACHAT du code (pas les taux de
+    vente, cause du 400 précédent). Best-effort : (None, None) si indisponible
+    → l'appelant retombe sur le calcul QBO standard (~1 cent d'écart)."""
+    code_id = settings.qbo_purchase_tax_code
+    if not code_id:
+        return (None, None)
+    code = await qbo.get_tax_code(str(code_id))
+    if not code:
+        return (None, None)
+    details = (
+        (code.get("PurchaseTaxRateList") or {}).get("TaxRateDetail") or []
+    )
+    tps_id: Optional[str] = None
+    tvq_id: Optional[str] = None
+    for d in details:
+        ref = (d.get("TaxRateRef") or {}).get("value")
+        if not ref:
+            continue
+        rate = await qbo.get_tax_rate(str(ref))
+        try:
+            val = float(rate.get("RateValue")) if rate else None
+        except (TypeError, ValueError):
+            val = None
+        if val is None:
+            continue
+        if tps_id is None and abs(val - 5.0) < 0.01:
+            tps_id = str(ref)
+        elif tvq_id is None and abs(val - 9.975) < 0.01:
+            tvq_id = str(ref)
+    return (tps_id, tvq_id)
+
+
+def _apply_purchase_tax(
+    payload: Dict[str, Any],
+    achat: Achat,
+    tps_rate_id: Optional[str] = None,
+    tvq_rate_id: Optional[str] = None,
+) -> None:
+    """Applique la taxe d'achat. Le montant de ligne est le HT (cf.
+    _build_line) ; deux modes selon ce qu'on a pu résoudre :
+
+    1) EXACT (préféré) : si on connaît les taux d'ACHAT QBO (tps/tvq_rate_id)
+       ET la ventilation Kratos (amount_tps/amount_tvq), on pousse des lignes
+       de taxe explicites (TxnTaxDetail) avec les montants EXACTS → total QBO
+       = HT + TPS + TVQ au cent près (colle au relevé, appariement bancaire).
+    2) REPLI : sinon, GlobalTaxCalculation=TaxExcluded et QBO calcule la
+       TPS/TVQ par-dessus le HT via le TaxCodeRef de la ligne (~1 cent d'écart
+       possible dû à l'arrondi TVQ de QBO). Comportement sûr.
+
+    On n'envoie JAMAIS le TTC en ligne (QBO ajouterait la taxe → total gonflé)
+    ni un taux de VENTE (→ « Invalid tax rate id »). Sans code de taxe : rien."""
+    if not settings.qbo_purchase_tax_code:
+        return
+    payload["GlobalTaxCalculation"] = "TaxExcluded"
+
+    def _f(v) -> Optional[float]:
+        try:
+            return round(float(v), 2)
+        except (TypeError, ValueError):
+            return None
+
+    tps = _f(achat.amount_tps)
+    tvq = _f(achat.amount_tvq)
+    if not (
+        tps_rate_id
+        and tvq_rate_id
+        and tps is not None
+        and tvq is not None
+        and (tps > 0 or tvq > 0)
+    ):
+        return  # repli : QBO calcule la taxe sur le HT
+
+    net = round(
+        sum(float(ln.get("Amount") or 0) for ln in payload.get("Line", [])), 2
+    )
+    payload["TxnTaxDetail"] = {
+        "TotalTax": round(tps + tvq, 2),
+        "TaxLine": [
+            {
+                "Amount": tps,
+                "DetailType": "TaxLineDetail",
+                "TaxLineDetail": {
+                    "TaxRateRef": {"value": str(tps_rate_id)},
+                    "PercentBased": True,
+                    "TaxPercent": 5,
+                    "NetAmountTaxable": net,
+                },
+            },
+            {
+                "Amount": tvq,
+                "DetailType": "TaxLineDetail",
+                "TaxLineDetail": {
+                    "TaxRateRef": {"value": str(tvq_rate_id)},
+                    "PercentBased": True,
+                    "TaxPercent": 9.975,
+                    "NetAmountTaxable": net,
+                },
+            },
+        ],
+    }
 
 
 def _build_bill_payload(
@@ -220,6 +333,8 @@ def _build_bill_payload(
     project_name: Optional[str],
     customer_id: Optional[str] = None,
     class_id: Optional[str] = None,
+    tps_rate_id: Optional[str] = None,
+    tvq_rate_id: Optional[str] = None,
     existing_bill_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -239,8 +354,9 @@ def _build_bill_payload(
         "PrivateNote": _private_note(achat, po_reference, project_name),
         "Line": lines,
     }
-    # Taxe comprise : montant de ligne = TTC réel, QB ventile la taxe.
-    _apply_purchase_tax(payload)
+    # HT en ligne ; taxe exacte (TxnTaxDetail) si taux d'achat résolus, sinon
+    # QBO la calcule (repli).
+    _apply_purchase_tax(payload, achat, tps_rate_id, tvq_rate_id)
     if existing_bill_id and existing_sync_token is not None:
         payload["Id"] = existing_bill_id
         payload["SyncToken"] = existing_sync_token
@@ -260,6 +376,8 @@ def _build_purchase_payload(
     customer_id: Optional[str] = None,
     class_id: Optional[str] = None,
     payment_method_id: Optional[str] = None,
+    tps_rate_id: Optional[str] = None,
+    tvq_rate_id: Optional[str] = None,
     existing_purchase_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -283,8 +401,9 @@ def _build_purchase_payload(
     }
     if payment_method_id:
         payload["PaymentMethodRef"] = {"value": str(payment_method_id)}
-    # Taxe comprise : montant de ligne = TTC réel, QB ventile la taxe.
-    _apply_purchase_tax(payload)
+    # HT en ligne ; taxe exacte (TxnTaxDetail) si taux d'achat résolus, sinon
+    # QBO la calcule (repli).
+    _apply_purchase_tax(payload, achat, tps_rate_id, tvq_rate_id)
     if existing_purchase_id and existing_sync_token is not None:
         payload["Id"] = existing_purchase_id
         payload["SyncToken"] = existing_sync_token
@@ -561,6 +680,12 @@ async def sync_achat_to_qbo(
         method = (achat.payment_method or "bill_to_pay").lower()
         as_purchase = method in PAID_METHODS
 
+        # Taux TPS/TVQ d'ACHAT (résolus depuis le code de taxe d'achat) pour
+        # imposer des montants de taxe EXACTS → total au cent près. Best-effort
+        # (résolu une fois) : (None, None) si indisponible → QBO calcule la
+        # taxe (repli, ~1 cent d'écart).
+        tps_rate_id, tvq_rate_id = await _resolve_purchase_tax_rate_ids(qbo)
+
         # Anti-doublon : si cet Achat n'est pas encore lie a un objet QB,
         # on verifie qu'un Bill/Purchase equivalent (meme fournisseur,
         # meme total TTC, ~meme date) existe deja cote QuickBooks. Si oui,
@@ -649,6 +774,8 @@ async def sync_achat_to_qbo(
                 project_name=project.name if project else None,
                 customer_id=customer_id,
                 class_id=class_id,
+                tps_rate_id=tps_rate_id,
+                tvq_rate_id=tvq_rate_id,
                 existing_purchase_id=achat.qbo_bill_id,
                 existing_sync_token=achat.qbo_sync_token,
             )
@@ -683,10 +810,34 @@ async def sync_achat_to_qbo(
                         payload.pop("sparse", None)
                         qbo_obj = await qbo.create_purchase(payload)
                         did_create = True
+                    elif _is_invalid_tax_rate(exc) and _strip_txn_tax_detail(
+                        payload
+                    ):
+                        # Taux d'achat refusé : on retire les lignes de taxe
+                        # exactes et on laisse QBO calculer (repli 643,58).
+                        log.warning(
+                            "QBO taxe exacte refusée → repli calcul QBO "
+                            "(achat %s)",
+                            achat.id,
+                        )
+                        qbo_obj = await qbo.update_purchase(payload)
                     else:
                         raise
             else:
-                qbo_obj = await qbo.create_purchase(payload)
+                try:
+                    qbo_obj = await qbo.create_purchase(payload)
+                except QuickBooksError as exc:
+                    if _is_invalid_tax_rate(exc) and _strip_txn_tax_detail(
+                        payload
+                    ):
+                        log.warning(
+                            "QBO taxe exacte refusée → repli calcul QBO "
+                            "(achat %s)",
+                            achat.id,
+                        )
+                        qbo_obj = await qbo.create_purchase(payload)
+                    else:
+                        raise
                 did_create = True
         else:
             # Sur compte fournisseur (chèque / net-30) → Bill
@@ -698,6 +849,8 @@ async def sync_achat_to_qbo(
                 project_name=project.name if project else None,
                 customer_id=customer_id,
                 class_id=class_id,
+                tps_rate_id=tps_rate_id,
+                tvq_rate_id=tvq_rate_id,
                 existing_bill_id=achat.qbo_bill_id,
                 existing_sync_token=achat.qbo_sync_token,
             )
@@ -727,10 +880,32 @@ async def sync_achat_to_qbo(
                         payload.pop("sparse", None)
                         qbo_obj = await qbo.create_bill(payload)
                         did_create = True
+                    elif _is_invalid_tax_rate(exc) and _strip_txn_tax_detail(
+                        payload
+                    ):
+                        log.warning(
+                            "QBO taxe exacte refusée → repli calcul QBO "
+                            "(achat %s)",
+                            achat.id,
+                        )
+                        qbo_obj = await qbo.update_bill(payload)
                     else:
                         raise
             else:
-                qbo_obj = await qbo.create_bill(payload)
+                try:
+                    qbo_obj = await qbo.create_bill(payload)
+                except QuickBooksError as exc:
+                    if _is_invalid_tax_rate(exc) and _strip_txn_tax_detail(
+                        payload
+                    ):
+                        log.warning(
+                            "QBO taxe exacte refusée → repli calcul QBO "
+                            "(achat %s)",
+                            achat.id,
+                        )
+                        qbo_obj = await qbo.create_bill(payload)
+                    else:
+                        raise
                 did_create = True
     except QuickBooksError as exc:
         raise AchatSyncError(str(exc)) from exc
