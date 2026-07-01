@@ -5,9 +5,12 @@ import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
   Calendar,
+  CheckCircle2,
   ChevronRight,
+  Circle,
   DollarSign,
   FileText,
+  Hammer,
   Loader2,
   Mail,
   MapPin,
@@ -484,6 +487,8 @@ export default function ProjectDetailPage() {
               label="Projet"
               route="/app/projets/[id]"
             />
+
+            <ProjectCorrections projectId={id} />
 
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
@@ -5866,5 +5871,248 @@ function InvoiceRow({ inv }: { inv: InvoiceLine }) {
         </span>
       </Link>
     </li>
+  );
+}
+
+type CorrectionItem = {
+  id: number;
+  title: string;
+  details: string | null;
+  status: string;
+};
+
+function ProjectCorrections({ projectId }: { projectId: number }) {
+  const router = useNextRouter();
+  const [items, setItems] = useState<CorrectionItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newTitle, setNewTitle] = useState("");
+  const [newDetails, setNewDetails] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [bonBusy, setBonBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load() {
+    try {
+      const r = await authedFetch(
+        `/api/v1/projects/${projectId}/corrections`
+      );
+      if (r.ok) setItems((await r.json()) as CorrectionItem[]);
+    } catch {
+      /* ignore */
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  async function add() {
+    if (!newTitle.trim()) return;
+    setAdding(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/projects/${projectId}/corrections`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: newTitle.trim(),
+            details: newDetails.trim() || null
+          })
+        }
+      );
+      if (!r.ok) throw new Error();
+      const c = (await r.json()) as CorrectionItem;
+      setItems((x) => [...x, c]);
+      setNewTitle("");
+      setNewDetails("");
+    } catch {
+      setErr("Ajout de la correction échoué.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function toggle(c: CorrectionItem) {
+    const next = c.status === "complete" ? "a_faire" : "complete";
+    setItems((x) =>
+      x.map((i) => (i.id === c.id ? { ...i, status: next } : i))
+    );
+    try {
+      await authedFetch(
+        `/api/v1/projects/${projectId}/corrections/${c.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: next })
+        }
+      );
+    } catch {
+      void load();
+    }
+  }
+
+  async function remove(itemId: number) {
+    setItems((x) => x.filter((i) => i.id !== itemId));
+    try {
+      await authedFetch(
+        `/api/v1/projects/${projectId}/corrections/${itemId}`,
+        { method: "DELETE" }
+      );
+    } catch {
+      void load();
+    }
+  }
+
+  async function createBon() {
+    setBonBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/projects/${projectId}/correction-bon`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        }
+      );
+      if (!r.ok) throw new Error();
+      const { bon_id } = (await r.json()) as { bon_id: number };
+      router.push(`/app/bons/${bon_id}`);
+    } catch {
+      setErr("Création du bon de correction échouée.");
+      setBonBusy(false);
+    }
+  }
+
+  const todo = items.filter((i) => i.status !== "complete").length;
+
+  return (
+    <section className="mt-6 rounded-2xl border border-rose-500/25 bg-rose-500/[0.04] p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-rose-300">
+            <Hammer className="h-4 w-4" /> Corrections / améliorations
+          </h2>
+          <p className="mt-1 text-xs text-white/50">
+            Points à reprendre sur le projet — {todo} à faire.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void createBon()}
+          disabled={bonBusy}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50"
+        >
+          {bonBusy ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Hammer className="h-4 w-4" />
+          )}
+          Bon de correction à signer
+        </button>
+      </div>
+      <p className="mt-1 text-[11px] text-white/40">
+        « Bon de correction » ouvre un bon signable : ajoute les lignes, puis
+        « Envoyer pour signature » depuis sa fiche. Les coûts du retour
+        s&apos;accumulent sur ce projet.
+      </p>
+
+      <div className="mt-4 space-y-2">
+        {loading ? (
+          <Loader2 className="h-5 w-5 animate-spin text-rose-300" />
+        ) : items.length === 0 ? (
+          <p className="text-sm text-white/40">
+            Aucune correction pour l&apos;instant.
+          </p>
+        ) : (
+          items.map((c) => (
+            <div
+              key={c.id}
+              className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-950 p-3"
+            >
+              <button
+                type="button"
+                onClick={() => void toggle(c)}
+                className="mt-0.5 flex-shrink-0"
+                aria-label="Basculer le statut"
+              >
+                {c.status === "complete" ? (
+                  <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+                ) : (
+                  <Circle className="h-5 w-5 text-white/40" />
+                )}
+              </button>
+              <div className="min-w-0 flex-1">
+                <p
+                  className={`text-sm font-medium ${
+                    c.status === "complete"
+                      ? "text-white/40 line-through"
+                      : "text-white"
+                  }`}
+                >
+                  {c.title}
+                </p>
+                {c.details ? (
+                  <p className="mt-0.5 whitespace-pre-wrap text-xs text-white/50">
+                    {c.details}
+                  </p>
+                ) : null}
+              </div>
+              <span
+                className={`flex-shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
+                  c.status === "complete"
+                    ? "bg-emerald-500/15 text-emerald-300"
+                    : "bg-amber-500/15 text-amber-300"
+                }`}
+              >
+                {c.status === "complete" ? "Complété" : "À faire"}
+              </span>
+              <button
+                type="button"
+                onClick={() => void remove(c.id)}
+                className="flex-shrink-0 text-rose-400 hover:text-rose-300"
+                aria-label="Supprimer"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="mt-3 space-y-2 rounded-lg border border-brand-800 bg-brand-900 p-3">
+        <input
+          value={newTitle}
+          onChange={(e) => setNewTitle(e.target.value)}
+          placeholder="Titre de la correction à faire…"
+          className="input w-full text-sm"
+        />
+        <textarea
+          value={newDetails}
+          onChange={(e) => setNewDetails(e.target.value)}
+          rows={2}
+          placeholder="Détails (optionnel)…"
+          className="input w-full text-sm"
+        />
+        <button
+          type="button"
+          onClick={() => void add()}
+          disabled={adding || !newTitle.trim()}
+          className="btn-accent text-xs"
+        >
+          {adding ? (
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+          )}
+          Ajouter
+        </button>
+      </div>
+      {err ? <p className="mt-2 text-xs text-rose-400">{err}</p> : null}
+    </section>
   );
 }

@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import CurrentUser, DBSession
 from app.core.permissions import visible_project_ids
@@ -379,3 +380,147 @@ async def create_correction_bon(
     await db.commit()
     await db.refresh(bon)
     return {"bon_id": bon.id, "reference": bon.reference}
+
+
+# ── Corrections / améliorations du projet (Flux A) ────────────────────────
+class _CorrectionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    project_id: int
+    title: str
+    details: Optional[str]
+    status: str
+    position: int
+
+
+class _CorrectionCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    details: Optional[str] = None
+
+
+class _CorrectionUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    details: Optional[str] = None
+    status: Optional[str] = None  # "a_faire" | "complete"
+
+
+@router.get(
+    "/{project_id}/corrections", response_model=List[_CorrectionRead]
+)
+async def list_corrections(
+    project_id: int, db: DBSession, _: CurrentUser
+) -> List[_CorrectionRead]:
+    from sqlalchemy import select as _sel
+
+    from app.models.project_correction import ProjectCorrection
+
+    rows = (
+        await db.execute(
+            _sel(ProjectCorrection)
+            .where(ProjectCorrection.project_id == project_id)
+            .order_by(
+                ProjectCorrection.position.asc(), ProjectCorrection.id.asc()
+            )
+        )
+    ).scalars().all()
+    return [_CorrectionRead.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/{project_id}/corrections",
+    response_model=_CorrectionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_correction(
+    project_id: int,
+    data: _CorrectionCreate,
+    db: DBSession,
+    _: CurrentUser,
+) -> _CorrectionRead:
+    from sqlalchemy import func, select as _sel
+
+    from app.models.project_correction import ProjectCorrection
+
+    pos = (
+        await db.execute(
+            _sel(func.count(ProjectCorrection.id)).where(
+                ProjectCorrection.project_id == project_id
+            )
+        )
+    ).scalar_one()
+    obj = ProjectCorrection(
+        project_id=project_id,
+        title=data.title.strip(),
+        details=(data.details or None),
+        status="a_faire",
+        position=int(pos or 0),
+    )
+    db.add(obj)
+    await db.flush()
+    await db.refresh(obj)
+    return _CorrectionRead.model_validate(obj)
+
+
+@router.patch(
+    "/{project_id}/corrections/{correction_id}",
+    response_model=_CorrectionRead,
+)
+async def update_correction(
+    project_id: int,
+    correction_id: int,
+    data: _CorrectionUpdate,
+    db: DBSession,
+    _: CurrentUser,
+) -> _CorrectionRead:
+    from sqlalchemy import select as _sel
+
+    from app.models.project_correction import ProjectCorrection
+
+    obj = (
+        await db.execute(
+            _sel(ProjectCorrection).where(
+                ProjectCorrection.id == correction_id,
+                ProjectCorrection.project_id == project_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if obj is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Correction not found")
+    upd = data.model_dump(exclude_unset=True)
+    if "title" in upd and upd["title"]:
+        obj.title = upd["title"].strip()
+    if "details" in upd:
+        obj.details = upd["details"] or None
+    if "status" in upd and upd["status"] in ("a_faire", "complete"):
+        obj.status = upd["status"]
+    await db.flush()
+    await db.refresh(obj)
+    return _CorrectionRead.model_validate(obj)
+
+
+@router.delete(
+    "/{project_id}/corrections/{correction_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_correction(
+    project_id: int,
+    correction_id: int,
+    db: DBSession,
+    _: CurrentUser,
+) -> None:
+    from sqlalchemy import select as _sel
+
+    from app.models.project_correction import ProjectCorrection
+
+    obj = (
+        await db.execute(
+            _sel(ProjectCorrection).where(
+                ProjectCorrection.id == correction_id,
+                ProjectCorrection.project_id == project_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if obj is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Correction not found")
+    await db.delete(obj)
+    await db.flush()
