@@ -1091,14 +1091,18 @@ class _BonDemandeEdit(BaseModel):
     titre: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
     is_urgent: Optional[bool] = None
+    immeuble_id: Optional[int] = None
+    logement_id: Optional[int] = None
+    # Sentinelle : True = mettre logement_id à NULL (communs / immeuble entier).
+    clear_logement: Optional[bool] = None
 
 
 @router.patch("/bons-travail/{bon_id}/demande")
 async def edit_gestion_immo_bon_demande(
     bon_id: int, payload: _BonDemandeEdit, db: DBSession, user: CurrentUser
 ) -> dict:
-    """Le volet locatif peut corriger la DEMANDE (titre / description) d'un
-    bon interne s'il a fait une erreur, et marquer l'urgence — pas la
+    """Le volet locatif peut corriger la DEMANDE d'un bon interne s'il a fait
+    une erreur : titre, description, immeuble, appartement, urgence — pas la
     planification ni la refacturation (réservées à Construction)."""
     _require_volet(user)
     bon = await db.get(BonTravail, bon_id)
@@ -1110,6 +1114,37 @@ async def edit_gestion_immo_bon_demande(
         bon.description = payload.description or None
     if payload.is_urgent is not None:
         bon.is_urgent = bool(payload.is_urgent)
+    if payload.immeuble_id is not None:
+        bon.immeuble_id = payload.immeuble_id
+        imm = await db.get(Immeuble, payload.immeuble_id)
+        if imm is not None:
+            # Recale le propriétaire depuis l'ownership de l'immeuble.
+            own = (
+                await db.execute(
+                    select(ImmeubleOwnership).where(
+                        ImmeubleOwnership.immeuble_id == payload.immeuble_id
+                    )
+                )
+            ).scalars().first()
+            if own is not None:
+                bon.owner_entreprise_id = own.entreprise_id
+    if payload.clear_logement:
+        bon.logement_id = None
+    elif payload.logement_id is not None:
+        bon.logement_id = payload.logement_id
+    # Recompose l'adresse d'affichage (immeuble · appartement).
+    imm2 = (
+        await db.get(Immeuble, bon.immeuble_id) if bon.immeuble_id else None
+    )
+    if imm2 is not None:
+        base = imm2.address or imm2.name
+        if bon.logement_id:
+            lg = await db.get(Logement, bon.logement_id)
+            bon.address = (
+                f"{base} · App {lg.numero}" if lg else base
+            )
+        else:
+            bon.address = f"{base} · Communs / immeuble entier"
     bon.updated_at = _now()
     await db.commit()
     return {"ok": True}
@@ -1148,6 +1183,8 @@ class _BonAvancementDetail(BaseModel):
     work_notes: Optional[str] = None
     address: Optional[str] = None
     is_urgent: bool = False
+    immeuble_id: Optional[int] = None
+    logement_id: Optional[int] = None
 
 
 @router.get("/bons-travail/{bon_id}", response_model=_BonAvancementDetail)
@@ -1270,6 +1307,8 @@ async def get_gestion_immo_bon(
         work_notes=bon.work_notes,
         address=bon.address,
         is_urgent=bool(getattr(bon, "is_urgent", False)),
+        immeuble_id=bon.immeuble_id,
+        logement_id=bon.logement_id,
     )
 
 
