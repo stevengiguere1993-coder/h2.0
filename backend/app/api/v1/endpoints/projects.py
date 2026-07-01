@@ -341,15 +341,52 @@ async def delete_project(
         )
 
 
+async def _find_correction_bon(db, project_id: int):
+    """Retourne le bon de correction (origin='correction') le plus récent
+    lié à ce projet, ou None. Un projet ne porte qu'UN bon de correction
+    « courant » : on le réutilise au lieu d'en créer des doublons."""
+    from sqlalchemy import select as _bsel
+
+    from app.models.bon_travail import BonTravail
+
+    return (
+        await db.execute(
+            _bsel(BonTravail)
+            .where(
+                BonTravail.project_id == project_id,
+                BonTravail.origin == "correction",
+            )
+            .order_by(BonTravail.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+@router.get("/{project_id}/correction-bon")
+async def get_correction_bon(
+    project_id: int, db: DBSession, current_user: CurrentUser
+) -> dict:
+    """Retrouve le bon de correction courant du projet (ou null). Sert à
+    afficher son détail directement dans l'onglet Corrections sans passer
+    par la fiche générique du bon."""
+    bon = await _find_correction_bon(db, project_id)
+    if bon is None:
+        return {"bon_id": None, "reference": None}
+    return {"bon_id": bon.id, "reference": bon.reference, "status": bon.status}
+
+
 @router.post("/{project_id}/correction-bon")
 async def create_correction_bon(
     project_id: int, db: DBSession, current_user: CurrentUser
 ) -> dict:
-    """Crée un bon de CORRECTION / amélioration lié au projet (Flux A).
+    """Crée (ou réutilise) le bon de CORRECTION / amélioration lié au
+    projet (Flux A).
 
     Bon construction signable par le client : créé en brouillon ici, puis
-    envoyé pour signature depuis sa fiche. Les coûts du retour de chantier
-    s'accumulent sur le projet via project_id (visibilité du déficit)."""
+    envoyé pour signature depuis l'onglet Corrections. Les coûts du retour
+    de chantier s'accumulent sur le projet via project_id. Idempotent : si
+    un bon de correction existe déjà pour ce projet, on le renvoie au lieu
+    d'en créer un doublon."""
     from datetime import datetime, timezone
     from sqlalchemy import select as _bsel
 
@@ -363,6 +400,11 @@ async def create_correction_bon(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
+
+    existing = await _find_correction_bon(db, project_id)
+    if existing is not None:
+        return {"bon_id": existing.id, "reference": existing.reference}
+
     bon = BonTravail(
         reference="BT-" + datetime.now(timezone.utc).strftime("%y%m%d-%H%M%S"),
         title="Correction / Amélioration",
