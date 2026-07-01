@@ -468,7 +468,7 @@ export default function BonsTravailPage() {
               tone="border-rose-500/40 bg-rose-500/10 text-rose-300"
             />
             <StatCard
-              label="Ouverts (brouillon)"
+              label="Ouverts"
               value={bons.filter((b) => b.status === "draft").length}
               tone="border-amber-500/40 bg-amber-500/10 text-amber-300"
             />
