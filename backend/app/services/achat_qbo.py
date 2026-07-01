@@ -96,20 +96,19 @@ def _build_line(
     customer_id: Optional[str] = None,
     class_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    # Montant TTC de la ligne. Mode « taxe comprise »
-    # (GlobalTaxCalculation=TaxInclusive au niveau de la transaction) : on
-    # envoie le montant TOTAL réel — celui qui correspond exactement à la
-    # transaction (carte/relevé bancaire) — et QBO ventile la TPS/TVQ À
-    # L'INTÉRIEUR via le code de taxe. Le total ne dérive donc jamais (pas
-    # de recalcul d'arrondi par-dessus un HT), et on ne référence aucun
-    # taux (TaxRateRef) → plus d'« Invalid tax rate id ».
-    #   - Achat « normal » : amount = HT, amount_taxes = taxe → TTC = somme.
-    #   - Achat « legacy »  : amount = TTC, amount_taxes = 0     → TTC = amount.
-    # `amount + taxes` couvre les deux cas.
+    # Montant HT de la ligne. Avec un TaxCodeRef + GlobalTaxCalculation=
+    # TaxExcluded, QBO calcule la TPS/TVQ PAR-DESSUS ce HT, donc on doit
+    # envoyer le HT (pas le TTC — sinon la taxe serait ajoutée sur un TTC,
+    # ce qui gonfle le total, cf. bug « 739,95 au lieu de 643,57 » quand on
+    # envoyait le TTC en pensant que QBO le traiterait comme taxe comprise :
+    # QBO Purchase n'honore PAS TaxInclusive et ajoute la taxe).
+    #   - Achat « normal » : amount = HT déjà (amount_taxes porte la taxe).
+    #   - Achat « legacy » : amount = TTC et amount_taxes = 0/None →
+    #     on décompose le TTC pour retrouver le HT (facteur 1,14975).
     raw_amount = float(achat.amount or 0)
     taxes = float(achat.amount_taxes or 0)
-    if settings.qbo_purchase_tax_code:
-        amount = round(raw_amount + taxes, 2)
+    if settings.qbo_purchase_tax_code and taxes <= 0 and raw_amount > 0:
+        amount = round(raw_amount / 1.14975, 2)
     else:
         amount = raw_amount
     description = (
@@ -197,18 +196,19 @@ def _format_qbo_addr(addr: Optional[Dict[str, Any]]) -> Optional[str]:
     return flat[:500] or None
 
 
-def _apply_inclusive_tax(payload: Dict[str, Any]) -> None:
-    """Mode « taxe comprise » : le montant de ligne est le TTC réel et QBO
-    ventile la TPS/TVQ À L'INTÉRIEUR via le code de taxe de la ligne
-    (TaxCodeRef, posé dans _build_line).
+def _apply_purchase_tax(payload: Dict[str, Any]) -> None:
+    """Applique la taxe d'achat : le montant de ligne est le HT et QBO
+    calcule la TPS/TVQ PAR-DESSUS via le code de taxe de la ligne
+    (TaxCodeRef, posé dans _build_line). GlobalTaxCalculation=TaxExcluded
+    évite que QBO traite le HT comme un TTC (double taxation).
 
-    On donne à QB le MONTANT TOTAL exact de la transaction (celui du
-    relevé) et QB calcule les taxes ; le total ne dérive donc jamais. Pas
-    de TxnTaxDetail ni de TaxRateRef → plus d'« Invalid tax rate id » et
-    plus d'écart d'arrondi sur le total (qui cassait l'appariement
-    bancaire). Sans code de taxe configuré, on ne touche pas au payload."""
+    NB : on ne pousse ni TaxRateRef (→ « Invalid tax rate id » quand le taux
+    résolu était un taux de vente), ni TaxInclusive avec un TTC (QBO Purchase
+    n'honore pas TaxInclusive : il ajoutait la taxe → total gonflé). Le total
+    QBO peut différer d'1 cent du TTC Kratos (arrondi TVQ de QBO) ; c'est le
+    comportement fiable et non-régressif. Sans code de taxe : rien à poser."""
     if settings.qbo_purchase_tax_code:
-        payload["GlobalTaxCalculation"] = "TaxInclusive"
+        payload["GlobalTaxCalculation"] = "TaxExcluded"
 
 
 def _build_bill_payload(
@@ -240,7 +240,7 @@ def _build_bill_payload(
         "Line": lines,
     }
     # Taxe comprise : montant de ligne = TTC réel, QB ventile la taxe.
-    _apply_inclusive_tax(payload)
+    _apply_purchase_tax(payload)
     if existing_bill_id and existing_sync_token is not None:
         payload["Id"] = existing_bill_id
         payload["SyncToken"] = existing_sync_token
@@ -284,7 +284,7 @@ def _build_purchase_payload(
     if payment_method_id:
         payload["PaymentMethodRef"] = {"value": str(payment_method_id)}
     # Taxe comprise : montant de ligne = TTC réel, QB ventile la taxe.
-    _apply_inclusive_tax(payload)
+    _apply_purchase_tax(payload)
     if existing_purchase_id and existing_sync_token is not None:
         payload["Id"] = existing_purchase_id
         payload["SyncToken"] = existing_sync_token
