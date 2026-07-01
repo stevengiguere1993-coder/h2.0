@@ -265,7 +265,7 @@ export default function PurchaseOrderDetailPage() {
         onOpenSidebar={onOpenSidebar}
       />
 
-      <div className="p-4 lg:p-6">
+      <div className="p-4 pb-24 lg:p-6 lg:pb-24">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={backHref as any}
