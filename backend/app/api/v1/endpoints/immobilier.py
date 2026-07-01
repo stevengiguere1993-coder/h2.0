@@ -881,6 +881,7 @@ class _BonAvancementItem(BaseModel):
     amount: Optional[float] = None
     immeuble_id: Optional[int] = None
     logement_id: Optional[int] = None
+    is_urgent: bool = False
 
 
 @router.get("/bons-travail", response_model=List[_BonAvancementItem])
@@ -958,6 +959,7 @@ async def list_gestion_immo_bons(db: DBSession, user: CurrentUser) -> List[_BonA
                 amount=float(b.amount) if b.amount is not None else None,
                 immeuble_id=b.immeuble_id,
                 logement_id=b.logement_id,
+                is_urgent=bool(getattr(b, "is_urgent", False)),
             )
         )
     return out
@@ -1079,6 +1081,7 @@ async def maintenance_rollup(
 class _BonDemandeEdit(BaseModel):
     titre: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
+    is_urgent: Optional[bool] = None
 
 
 @router.patch("/bons-travail/{bon_id}/demande")
@@ -1086,8 +1089,8 @@ async def edit_gestion_immo_bon_demande(
     bon_id: int, payload: _BonDemandeEdit, db: DBSession, user: CurrentUser
 ) -> dict:
     """Le volet locatif peut corriger la DEMANDE (titre / description) d'un
-    bon interne s'il a fait une erreur — pas la planification ni la
-    refacturation (réservées à Construction)."""
+    bon interne s'il a fait une erreur, et marquer l'urgence — pas la
+    planification ni la refacturation (réservées à Construction)."""
     _require_volet(user)
     bon = await db.get(BonTravail, bon_id)
     if bon is None or (bon.kind or "construction") != "interne":
@@ -1096,6 +1099,8 @@ async def edit_gestion_immo_bon_demande(
         bon.title = payload.titre.strip()
     if payload.description is not None:
         bon.description = payload.description or None
+    if payload.is_urgent is not None:
+        bon.is_urgent = bool(payload.is_urgent)
     bon.updated_at = _now()
     await db.commit()
     return {"ok": True}
@@ -1133,6 +1138,7 @@ class _BonAvancementDetail(BaseModel):
     # Notes de l'exécutant — lecture seule côté locatif.
     work_notes: Optional[str] = None
     address: Optional[str] = None
+    is_urgent: bool = False
 
 
 @router.get("/bons-travail/{bon_id}", response_model=_BonAvancementDetail)
@@ -1254,6 +1260,7 @@ async def get_gestion_immo_bon(
         photos=photos_out,
         work_notes=bon.work_notes,
         address=bon.address,
+        is_urgent=bool(getattr(bon, "is_urgent", False)),
     )
 
 

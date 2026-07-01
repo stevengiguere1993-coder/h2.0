@@ -19,6 +19,7 @@ type Bon = {
   address: string | null;
   bon_type: string;
   status: string;
+  is_urgent?: boolean;
   kind: string | null;
   owner_entreprise_id: number | null;
   immeuble_id: number | null;
@@ -134,6 +135,8 @@ export default function BonsPage() {
       map[target].push(b);
     }
     const cmp = (a: Bon, b: Bon) => {
+      // Les urgences remontent toujours en haut de la colonne.
+      if (!!a.is_urgent !== !!b.is_urgent) return a.is_urgent ? -1 : 1;
       const byAddr = (a.address || "~").localeCompare(b.address || "~", "fr", {
         sensitivity: "base"
       });
@@ -295,8 +298,17 @@ export default function BonsPage() {
                                   `/app/bons/${b.id}` as any
                                 );
                             }}
-                            className="block cursor-pointer rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-accent-500"
+                            className={`block cursor-pointer rounded-lg border p-3 transition ${
+                              b.is_urgent
+                                ? "border-rose-500/70 bg-rose-500/10 hover:border-rose-400"
+                                : "border-brand-800 bg-brand-950 hover:border-accent-500"
+                            }`}
                           >
+                            {b.is_urgent ? (
+                              <span className="mb-1 inline-flex items-center gap-1 rounded-md bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-rose-300">
+                                ⚠ Urgence
+                              </span>
+                            ) : null}
                             <h3 className="truncate text-sm font-semibold text-white">
                               {b.address || "Adresse non renseignée"}
                             </h3>

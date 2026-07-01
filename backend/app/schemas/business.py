@@ -308,6 +308,7 @@ class BonTravailUpdate(BaseModel):
     executant_type: Optional[str] = None
     sous_traitant_id: Optional[int] = None
     marge_pct: Optional[float] = None
+    is_urgent: Optional[bool] = None
 
 
 class BonTravailRead(_Base):
@@ -335,6 +336,7 @@ class BonTravailRead(_Base):
     sous_traitant_id: Optional[int] = None
     marge_pct: Optional[float] = None
     work_notes: Optional[str] = None
+    is_urgent: bool = False
     sent_to_email: Optional[str]
     sent_at: Optional[datetime]
     signed_at: Optional[datetime]

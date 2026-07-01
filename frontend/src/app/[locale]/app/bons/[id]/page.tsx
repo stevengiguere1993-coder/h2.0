@@ -45,6 +45,7 @@ type Bon = {
   sous_traitant_id?: number | null;
   marge_pct?: number | string | null;
   work_notes?: string | null;
+  is_urgent?: boolean;
   sent_to_email: string | null;
   sent_at: string | null;
   signed_at: string | null;
@@ -253,6 +254,23 @@ export default function BonDetailPage() {
     } catch {
       setB(prev);
       setError("Changement de statut échoué.");
+    }
+  }
+
+  async function toggleUrgent() {
+    if (!b) return;
+    const next = !b.is_urgent;
+    setB({ ...b, is_urgent: next });
+    try {
+      const res = await authedFetch(`/api/v1/bons-travail/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_urgent: next })
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setB((prev) => (prev ? { ...prev, is_urgent: !next } : prev));
+      setError("Changement d'urgence échoué.");
     }
   }
 
@@ -571,6 +589,18 @@ export default function BonDetailPage() {
                 </select>
                 <button
                   type="button"
+                  onClick={toggleUrgent}
+                  className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium transition ${
+                    b.is_urgent
+                      ? "border-rose-500 bg-rose-500/20 text-rose-200"
+                      : "border-brand-700 bg-brand-950 text-white/70 hover:border-rose-500/50"
+                  }`}
+                  title="Marquer comme urgence"
+                >
+                  ⚠ {b.is_urgent ? "Urgence activée" : "Urgence"}
+                </button>
+                <button
+                  type="button"
                   onClick={onDelete}
                   disabled={deleting}
                   className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
@@ -584,6 +614,12 @@ export default function BonDetailPage() {
                 </button>
               </div>
             </header>
+
+            {b.is_urgent ? (
+              <div className="mt-4 flex items-center gap-2 rounded-lg border border-rose-500/60 bg-rose-500/10 px-4 py-3 text-sm font-semibold text-rose-200">
+                ⚠ Bon marqué URGENCE — priorisé en haut des tableaux.
+              </div>
+            ) : null}
 
             <EntityDriveSection
               entityType="BonTravail"

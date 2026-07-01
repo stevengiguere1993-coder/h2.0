@@ -106,6 +106,10 @@ class BonTravail(Base, TimestampUpdateMixin):
     # Notes de l'exécutant (homme à tout faire) saisies pendant le travail.
     # Visibles en lecture seule côté Gestion locative.
     work_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Urgence : met la fiche/carte en rouge et la remonte en haut du kanban.
+    is_urgent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, index=True
+    )
 
     sent_to_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
