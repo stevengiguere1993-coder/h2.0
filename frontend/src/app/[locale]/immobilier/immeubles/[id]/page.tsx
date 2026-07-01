@@ -1591,22 +1591,50 @@ function MaintenanceTab({
   list: Maintenance[] | null;
   rollup: RollupImmeuble | null;
 }) {
+  // Filtre : "all" = immeuble entier, "communs", ou l'id d'un logement.
+  const [filter, setFilter] = useState<string>("all");
+
+  const filteredTotal =
+    !rollup || filter === "all"
+      ? rollup?.total ?? 0
+      : filter === "communs"
+        ? rollup.communs_total
+        : rollup.logements.find((l) => String(l.logement_id) === filter)
+            ?.total ?? 0;
+
   const expenses =
     rollup && (rollup.total > 0 || rollup.count > 0) ? (
       <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-sm font-semibold uppercase tracking-wider text-amber-300">
             Dépenses de maintenance — année en cours
           </h3>
           <span className="text-xl font-bold text-amber-200">
-            {fmtCurrency(rollup.total)}
+            {fmtCurrency(filteredTotal)}
           </span>
         </div>
-        <p className="mt-1 text-xs text-white/50">
-          {rollup.count} bon{rollup.count > 1 ? "s" : ""} de travail (montant
-          refacturé, sans profit).
-        </p>
-        {rollup.logements.length > 0 || rollup.communs_total > 0 ? (
+        <div className="mt-2">
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-300 sm:w-64"
+          >
+            <option value="all">Tout l&apos;immeuble</option>
+            {rollup.communs_total > 0 ? (
+              <option value="communs">Communs / immeuble entier</option>
+            ) : null}
+            {rollup.logements.map((l) => (
+              <option
+                key={l.logement_id ?? "x"}
+                value={String(l.logement_id)}
+              >
+                App {l.numero || "—"}
+              </option>
+            ))}
+          </select>
+        </div>
+        {filter === "all" &&
+        (rollup.logements.length > 0 || rollup.communs_total > 0) ? (
           <div className="mt-3 space-y-1 border-t border-brand-800 pt-3 text-sm">
             {rollup.logements.map((l) => (
               <div

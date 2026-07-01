@@ -459,6 +459,31 @@ export default function BonsTravailPage() {
           </div>
         ) : null}
 
+        {/* ── Mini tableau de bord ──────────────────────────────────── */}
+        {bons && bons.length > 0 ? (
+          <div className="mt-6 grid grid-cols-3 gap-3">
+            <StatCard
+              label="Urgences"
+              value={bons.filter((b) => b.is_urgent).length}
+              tone="border-rose-500/40 bg-rose-500/10 text-rose-300"
+            />
+            <StatCard
+              label="Ouverts (brouillon)"
+              value={bons.filter((b) => b.status === "draft").length}
+              tone="border-amber-500/40 bg-amber-500/10 text-amber-300"
+            />
+            <StatCard
+              label="Planifiés"
+              value={
+                bons.filter((b) =>
+                  ["accepte_a_planifier", "planifie"].includes(b.status)
+                ).length
+              }
+              tone="border-sky-500/40 bg-sky-500/10 text-sky-300"
+            />
+          </div>
+        ) : null}
+
         {/* ── Suivi (kanban lecture seule) ──────────────────────────── */}
         <section className="mt-8">
           <h2 className="text-lg font-bold text-white">
@@ -682,6 +707,25 @@ export default function BonsTravailPage() {
         </div>
       ) : null}
     </>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  tone
+}: {
+  label: string;
+  value: number;
+  tone: string;
+}) {
+  return (
+    <div className={`rounded-2xl border px-4 py-3 ${tone}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-wider opacity-80">
+        {label}
+      </p>
+      <p className="mt-1 text-2xl font-bold">{value}</p>
+    </div>
   );
 }
 
