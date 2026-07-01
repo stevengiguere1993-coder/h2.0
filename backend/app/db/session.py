@@ -407,6 +407,32 @@ async def ensure_timesheet_tables() -> None:
         log.warning("ensure_timesheet_tables failed: %s", exc)
 
 
+async def ensure_project_corrections_tables() -> None:
+    """Crée la table `project_corrections` (corrections/améliorations d'un
+    projet, Flux A) dans sa propre transaction, pour survivre à un abort
+    d'``init_db``. Le PR d'origine avait ajouté la colonne
+    ``projects.correction_status`` à ``ensure_critical_columns`` mais avait
+    omis ce filet pour la NOUVELLE table → « relation project_corrections
+    does not exist » en prod (POST /projects/{id}/corrections en 500)."""
+    import logging
+
+    log = logging.getLogger("db.ensure_project_corrections_tables")
+    try:
+        from app.db.base import Base
+        from app.models.project_correction import (  # noqa: F401
+            ProjectCorrection,
+        )
+
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(
+                    c, tables=[ProjectCorrection.__table__]
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_project_corrections_tables failed: %s", exc)
+
+
 async def init_db() -> None:
     """
     Initialize database tables.
