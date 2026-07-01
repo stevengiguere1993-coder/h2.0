@@ -18,6 +18,7 @@ from app.db.session import (
     close_db,
     ensure_critical_columns,
     ensure_immobilier_aux_tables,
+    ensure_project_corrections_tables,
     ensure_raci_tables,
     ensure_timesheet_tables,
     init_db,
@@ -72,6 +73,15 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning(
             "ensure_timesheet_tables failed during startup: %s", exc
+        )
+
+    # Table Corrections/améliorations de projet (Flux A) — transaction
+    # isolée. Sans ce filet la table manque en prod → 500 sur l'ajout.
+    try:
+        await ensure_project_corrections_tables()
+    except Exception as exc:
+        logger.warning(
+            "ensure_project_corrections_tables failed during startup: %s", exc
         )
 
     # Backfill : crée le projet (+ facture d'acompte DRAFT) pour les
