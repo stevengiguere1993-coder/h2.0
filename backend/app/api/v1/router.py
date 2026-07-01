@@ -133,6 +133,7 @@ from app.api.v1.endpoints import (
     qbo_bulk,
     qbo_oauth,
     qbo_token,
+    qbo_webhook,
     search,
     contract_sign,
     soumission_items,
@@ -250,6 +251,9 @@ api_router.include_router(user_roles.router)
 api_router.include_router(lea_web.router)
 api_router.include_router(letmetalk.router)
 api_router.include_router(webhooks_meta.router)
+# Webhook QBO → Kratos (reverse-sync). Public (appelé par Intuit), protégé
+# par la signature intuit-signature vérifiée dans l'endpoint.
+api_router.include_router(qbo_webhook.router)
 api_router.include_router(public_purchase_agreement.router)
 # Offre d'achat minimaliste — flow indépendant du PurchaseAgreement
 # complet (modèle Offer dédié, page publique /sign-offer/{token}).

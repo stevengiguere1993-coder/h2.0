@@ -1066,6 +1066,16 @@ class QuickBooksClient:
         except QuickBooksError:
             return None
 
+    async def get_account(self, account_id: str) -> Optional[Dict[str, Any]]:
+        """Lit un Account QBO par Id (best-effort). Sert au reverse-sync :
+        retrouver le NOM du compte de paiement d'une dépense pour en déduire
+        le mode de paiement Kratos. Renvoie None si absent."""
+        try:
+            data = await self._request("GET", f"/account/{account_id}")
+            return data.get("Account") or data
+        except QuickBooksError:
+            return None
+
     # ------------------------------------------------------------------
     # Account lookup by Name (utilisé pour le mapping mode paiement)
     # ------------------------------------------------------------------
