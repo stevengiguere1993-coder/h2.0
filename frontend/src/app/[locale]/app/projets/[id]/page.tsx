@@ -3417,6 +3417,30 @@ function PlanificationTab({
   );
 }
 
+// Décale une date "YYYY-MM-DD" de `n` jours (calcul en date locale pour
+// éviter les décalages de fuseau) et renvoie une chaîne "YYYY-MM-DD".
+function addDaysYMD(ymd: string, n: number): string {
+  if (!ymd) return "";
+  const [y, m, d] = ymd.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + n);
+  const p = (x: number) => String(x).padStart(2, "0");
+  return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())}`;
+}
+
+// Nombre de jours calendaires INCLUSIFS entre deux dates "YYYY-MM-DD"
+// (même jour = 1). Utilisé pour convertir une plage début→fin en
+// `duration_days` (mode journée complète). Toujours ≥ 1.
+function daysInclusiveYMD(start: string, end: string): number {
+  if (!start || !end) return 1;
+  const [ys, ms, ds] = start.split("-").map(Number);
+  const [ye, me, de] = end.split("-").map(Number);
+  const a = new Date(ys, ms - 1, ds).getTime();
+  const b = new Date(ye, me - 1, de).getTime();
+  const diff = Math.round((b - a) / 86400000) + 1;
+  return diff < 1 ? 1 : diff;
+}
+
 function PhaseCard({
   phase,
   index,
@@ -3474,12 +3498,18 @@ function PhaseCard({
   // on est en mode créneau ; sinon journée complète.
   const initFullDay = phase.start_time == null;
   const [fullDay, setFullDay] = useState(initFullDay);
-  // Mode journée complète : nombre de jours.
-  const [daysPart, setDaysPart] = useState(
-    initFullDay && phase.duration_days != null
-      ? String(Math.max(1, Math.ceil(phase.duration_days)))
-      : "1"
-  );
+  // Mode journée complète : date de FIN, ÉDITABLE. La durée stockée en
+  // base (`duration_days`) est dérivée de la plage début→fin inclusive,
+  // ce qui permet une phase multi-jours sans devoir créer une phase par
+  // jour (le backend supporte déjà duration_days > 1).
+  const initEndDate =
+    initFullDay && phase.start_date && phase.duration_days != null
+      ? addDaysYMD(
+          phase.start_date,
+          Math.max(1, Math.ceil(phase.duration_days)) - 1
+        )
+      : phase.start_date || "";
+  const [endDatePart, setEndDatePart] = useState(initEndDate);
   // Mode créneau : heure début + heure fin (HH:MM).
   const trimSec = (t: string | null) => (t ? t.slice(0, 5) : "");
   const computeEndFromDuration = (
@@ -3507,10 +3537,13 @@ function PhaseCard({
     setStartDate(phase.start_date || "");
     const fd = phase.start_time == null;
     setFullDay(fd);
-    setDaysPart(
-      fd && phase.duration_days != null
-        ? String(Math.max(1, Math.ceil(phase.duration_days)))
-        : "1"
+    setEndDatePart(
+      fd && phase.start_date && phase.duration_days != null
+        ? addDaysYMD(
+            phase.start_date,
+            Math.max(1, Math.ceil(phase.duration_days)) - 1
+          )
+        : phase.start_date || ""
     );
     setStartTime(!fd ? trimSec(phase.start_time) : "08:00");
     setEndTime(
@@ -3530,11 +3563,14 @@ function PhaseCard({
   ]);
 
   // Dérive la durée actuelle (en jours décimaux) selon le mode.
-  // « Journée complète » = 1 jour fixe (pas de N jours configurable).
-  // Pour planifier sur plusieurs jours, l'utilisateur crée plusieurs
-  // phases — chaque phase = une journée (ou un créneau) précis.
+  // « Journée complète » : durée = nombre de jours calendaires inclusifs
+  // entre le début et la fin (fin éditable → phase multi-jours possible).
+  // « Créneau » : durée en heures (fin − début) ramenée en jours (8 h = 1 j).
   const currentDuration: number | null = (() => {
-    if (fullDay) return 1;
+    if (fullDay)
+      return startDate
+        ? daysInclusiveYMD(startDate, endDatePart || startDate)
+        : 1;
     if (!startTime || !endTime) return null;
     const [sh, sm] = startTime.split(":").map(Number);
     const [eh, em] = endTime.split(":").map(Number);
@@ -3545,7 +3581,7 @@ function PhaseCard({
 
   const endDate =
     startDate && fullDay
-      ? startDate // 1 journée = même jour
+      ? endDatePart || startDate
       : startDate && !fullDay
         ? startDate
         : null;
@@ -3576,6 +3612,17 @@ function PhaseCard({
       ) {
         onPatch(patch);
       }
+    }
+  };
+
+  // Mode journée complète : persiste la date de FIN choisie sous forme de
+  // `duration_days` (jours inclusifs début→fin). Une fin < début est
+  // ramenée à 1 jour par daysInclusiveYMD.
+  const persistEndDate = (value: string) => {
+    if (!startDate || !value) return;
+    const dur = daysInclusiveYMD(startDate, value);
+    if (dur !== phase.duration_days) {
+      onPatch({ start_time: null, duration_days: dur });
     }
   };
 
@@ -3629,6 +3676,7 @@ function PhaseCard({
                     // ligne s'aligne sur le serveur. Journée complète
                     // = 1 j sec, créneau = duration calculée.
                     if (next) {
+                      setEndDatePart(startDate);
                       onPatch({ start_time: null, duration_days: 1 });
                     } else {
                       const [sh, sm] = startTime.split(":").map(Number);
@@ -3645,7 +3693,21 @@ function PhaseCard({
                 />
                 Journée complète
               </label>
-              {fullDay ? null : (
+              {fullDay ? (
+                <div className="mt-2">
+                  <label className="text-[11px] uppercase tracking-wider text-white/40">
+                    Fin
+                    <input
+                      type="date"
+                      value={endDatePart}
+                      min={startDate || undefined}
+                      onChange={(e) => setEndDatePart(e.target.value)}
+                      onBlur={() => persistEndDate(endDatePart)}
+                      className="mt-1 w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
+                    />
+                  </label>
+                </div>
+              ) : (
                 <div className="mt-2 grid grid-cols-2 gap-2">
                   <label className="text-[11px] uppercase tracking-wider text-white/40">
                     Heure début
@@ -3674,7 +3736,15 @@ function PhaseCard({
               Fin (calculée)
               <p className="mt-1 rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-sm font-semibold text-accent-500">
                 {fullDay
-                  ? endDate || "—"
+                  ? startDate
+                    ? `${startDate}${
+                        endDate && endDate !== startDate
+                          ? ` → ${endDate}`
+                          : ""
+                      } (${currentDuration ?? 1} jour${
+                        (currentDuration ?? 1) > 1 ? "s" : ""
+                      })`
+                    : "—"
                   : startDate
                     ? `${startDate} · ${startTime} → ${endTime}`
                     : "—"}
