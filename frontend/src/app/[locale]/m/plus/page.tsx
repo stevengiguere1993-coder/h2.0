@@ -5,6 +5,7 @@ import {
   AlarmClock,
   Calendar,
   CheckSquare,
+  ClipboardCheck,
   LogOut,
   Monitor,
   Palmtree,
@@ -141,6 +142,16 @@ export default function MobilePlus() {
           <CheckSquare className="h-5 w-5 text-accent-500" />
           <span className="flex-1 text-left text-sm font-semibold">
             Mes tâches
+          </span>
+        </Link>
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={"/m/po" as any}
+          className="flex w-full items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 px-4 py-3.5 text-white"
+        >
+          <ClipboardCheck className="h-5 w-5 text-accent-500" />
+          <span className="flex-1 text-left text-sm font-semibold">
+            Bons de commande
           </span>
         </Link>
         <Link
