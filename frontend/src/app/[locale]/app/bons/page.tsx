@@ -253,8 +253,10 @@ export default function BonsPage() {
                       </p>
                     ) : (
                       cards.map((b) => {
-                        const sousTraitant =
-                          (b.executant_type ?? "") === "sous_traitant";
+                        const et = b.executant_type ?? "";
+                        const sousTraitant = et === "sous_traitant";
+                        const unclassified =
+                          et === "" || et === "a_classifier";
                         return (
                           <div
                             key={b.id}
@@ -305,9 +307,11 @@ export default function BonsPage() {
                             <div className="mt-2 flex items-center justify-between text-xs">
                               <span
                                 className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
-                                  sousTraitant
-                                    ? "bg-orange-500/15 text-orange-300"
-                                    : "bg-sky-500/15 text-sky-300"
+                                  unclassified
+                                    ? "bg-amber-500/15 text-amber-300"
+                                    : sousTraitant
+                                      ? "bg-orange-500/15 text-orange-300"
+                                      : "bg-sky-500/15 text-sky-300"
                                 }`}
                               >
                                 {sousTraitant ? (
@@ -315,7 +319,11 @@ export default function BonsPage() {
                                 ) : (
                                   <Wrench className="h-3 w-3" />
                                 )}
-                                {sousTraitant ? "Sous-traitant" : "Nos hommes"}
+                                {unclassified
+                                  ? "À classifier"
+                                  : sousTraitant
+                                    ? "Sous-traitant"
+                                    : "Nos hommes"}
                               </span>
                               <span className="font-semibold text-white">
                                 {money(b.amount)}
