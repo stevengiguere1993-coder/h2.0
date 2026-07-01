@@ -969,6 +969,11 @@ function AchatQboPushButton({
         >
           {busy ? "Mise à jour…" : "Re-synchroniser"}
         </button>
+        {justSynced ? (
+          <p className="text-[11px] text-emerald-300">
+            Mis à jour dans QuickBooks ✓
+          </p>
+        ) : null}
         {err ? <p className="text-[11px] text-rose-300">{err}</p> : null}
       </div>
     );
