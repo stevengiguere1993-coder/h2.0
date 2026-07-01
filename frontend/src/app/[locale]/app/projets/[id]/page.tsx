@@ -48,6 +48,9 @@ type Project = {
   end_date: string | null;
   budget: number | string | null;
   estimated_hours_override: number | string | null;
+  correction_status?: string;
+  awaiting_signature?: boolean;
+  has_signed_bon?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -73,6 +76,7 @@ type TabId =
   | "achats"
   | "photos"
   | "tasks"
+  | "corrections"
   | "finances";
 
 const TABS: { id: TabId; label: string }[] = [
@@ -82,7 +86,8 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "achats", label: "Achats / PO" },
   { id: "finances", label: "Récap & finances" },
   { id: "photos", label: "Photos" },
-  { id: "tasks", label: "Tâches" }
+  { id: "tasks", label: "Tâches" },
+  { id: "corrections", label: "Corrections / améliorations" }
 ];
 
 function fmtMoney(n: number | string | null): string {
@@ -160,6 +165,24 @@ export default function ProjectDetailPage() {
   const [estimatedHoursOverride, setEstimatedHoursOverride] = useState("");
   const [description, setDescription] = useState("");
   const [notes, setNotes] = useState("");
+  const [correctionsCount, setCorrectionsCount] = useState(0);
+
+  async function loadCorrectionsCount() {
+    try {
+      const r = await authedFetch(`/api/v1/projects/${id}/corrections`);
+      if (r.ok) {
+        const arr = (await r.json()) as unknown[];
+        setCorrectionsCount(Array.isArray(arr) ? arr.length : 0);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  useEffect(() => {
+    if (id) void loadCorrectionsCount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,6 +230,17 @@ export default function ProjectDetailPage() {
       cancelled = true;
     };
   }, [id]);
+
+  // Rafraîchit le projet (ex. après changement du statut de correction ou
+  // signature d'un bon de correction) sans recharger toute la page.
+  async function reloadProject() {
+    try {
+      const res = await authedFetch(`/api/v1/projects/${id}`);
+      if (res.ok) setP((await res.json()) as Project);
+    } catch {
+      /* ignore */
+    }
+  }
 
   const dirty = useMemo(() => {
     if (!p) return false;
@@ -488,8 +522,6 @@ export default function ProjectDetailPage() {
               route="/app/projets/[id]"
             />
 
-            <ProjectCorrections projectId={id} />
-
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
                 {error}
@@ -547,13 +579,22 @@ export default function ProjectDetailPage() {
                       window.history.replaceState(null, "", `#${t.id}`);
                     }
                   }}
-                  className={`px-4 py-2.5 text-sm font-medium transition ${
+                  className={`whitespace-nowrap px-4 py-2.5 text-sm font-medium transition ${
                     tab === t.id
                       ? "border-b-2 border-accent-500 text-white"
-                      : "text-white/60 hover:text-white"
+                      : t.id === "corrections" &&
+                          correctionsCount > 0 &&
+                          (p?.correction_status || "a_planifier") !== "termine"
+                        ? "text-rose-300 hover:text-rose-200"
+                        : "text-white/60 hover:text-white"
                   }`}
                 >
                   {t.label}
+                  {t.id === "corrections" &&
+                  correctionsCount > 0 &&
+                  (p?.correction_status || "a_planifier") !== "termine" ? (
+                    <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-rose-400 align-middle" />
+                  ) : null}
                 </button>
               ))}
             </nav>
@@ -609,6 +650,17 @@ export default function ProjectDetailPage() {
                 <FinancesTab projectId={id} project={p} />
               ) : tab === "photos" ? (
                 <PhotosTab projectId={id} />
+              ) : tab === "corrections" ? (
+                <ProjectCorrections
+                  projectId={id}
+                  correctionStatus={p?.correction_status || "a_planifier"}
+                  awaitingSignature={!!p?.awaiting_signature}
+                  hasSignedBon={!!p?.has_signed_bon}
+                  onChanged={() => {
+                    void reloadProject();
+                    void loadCorrectionsCount();
+                  }}
+                />
               ) : (
                 <TasksTab projectId={id} />
               )}
@@ -5881,7 +5933,25 @@ type CorrectionItem = {
   status: string;
 };
 
-function ProjectCorrections({ projectId }: { projectId: number }) {
+const CORRECTION_STATUS: { id: string; label: string }[] = [
+  { id: "a_planifier", label: "À planifier" },
+  { id: "planifie", label: "Planifié" },
+  { id: "termine", label: "Terminé" }
+];
+
+function ProjectCorrections({
+  projectId,
+  correctionStatus,
+  awaitingSignature,
+  hasSignedBon,
+  onChanged
+}: {
+  projectId: number;
+  correctionStatus: string;
+  awaitingSignature: boolean;
+  hasSignedBon: boolean;
+  onChanged: () => void;
+}) {
   const router = useNextRouter();
   const [items, setItems] = useState<CorrectionItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -5889,7 +5959,22 @@ function ProjectCorrections({ projectId }: { projectId: number }) {
   const [newDetails, setNewDetails] = useState("");
   const [adding, setAdding] = useState(false);
   const [bonBusy, setBonBusy] = useState(false);
+  const [statusVal, setStatusVal] = useState(correctionStatus);
   const [err, setErr] = useState<string | null>(null);
+
+  async function saveStatus(next: string) {
+    setStatusVal(next);
+    try {
+      await authedFetch(`/api/v1/projects/${projectId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ correction_status: next })
+      });
+      onChanged();
+    } catch {
+      setErr("Changement de statut échoué.");
+    }
+  }
 
   async function load() {
     try {
@@ -5929,6 +6014,7 @@ function ProjectCorrections({ projectId }: { projectId: number }) {
       setItems((x) => [...x, c]);
       setNewTitle("");
       setNewDetails("");
+      onChanged();
     } catch {
       setErr("Ajout de la correction échoué.");
     } finally {
@@ -5950,6 +6036,7 @@ function ProjectCorrections({ projectId }: { projectId: number }) {
           body: JSON.stringify({ status: next })
         }
       );
+      onChanged();
     } catch {
       void load();
     }
@@ -5962,6 +6049,7 @@ function ProjectCorrections({ projectId }: { projectId: number }) {
         `/api/v1/projects/${projectId}/corrections/${itemId}`,
         { method: "DELETE" }
       );
+      onChanged();
     } catch {
       void load();
     }
@@ -5994,8 +6082,17 @@ function ProjectCorrections({ projectId }: { projectId: number }) {
     <section className="mt-6 rounded-2xl border border-rose-500/25 bg-rose-500/[0.04] p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-rose-300">
+          <h2 className="flex flex-wrap items-center gap-2 text-sm font-semibold uppercase tracking-wider text-rose-300">
             <Hammer className="h-4 w-4" /> Corrections / améliorations
+            {hasSignedBon ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                <CheckCircle2 className="h-3 w-3" /> Signé
+              </span>
+            ) : awaitingSignature ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                <Circle className="h-3 w-3" /> À signer
+              </span>
+            ) : null}
           </h2>
           <p className="mt-1 text-xs text-white/50">
             Points à reprendre sur le projet — {todo} à faire.
@@ -6014,6 +6111,33 @@ function ProjectCorrections({ projectId }: { projectId: number }) {
           )}
           Bon de correction à signer
         </button>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
+          Statut de la correction
+        </span>
+        {CORRECTION_STATUS.map((s) => {
+          const active = statusVal === s.id;
+          return (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => void saveStatus(s.id)}
+              className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                active
+                  ? s.id === "termine"
+                    ? "bg-emerald-500 text-white"
+                    : s.id === "planifie"
+                      ? "bg-sky-500 text-white"
+                      : "bg-amber-500 text-brand-950"
+                  : "bg-brand-900 text-white/50 hover:text-white"
+              }`}
+            >
+              {s.label}
+            </button>
+          );
+        })}
       </div>
       <p className="mt-1 text-[11px] text-white/40">
         « Bon de correction » ouvre un bon signable : ajoute les lignes, puis

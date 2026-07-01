@@ -40,6 +40,8 @@ type Project = {
   // Flux A — état de signature des bons liés (corrections).
   awaiting_signature?: boolean;
   has_signed_bon?: boolean;
+  // Statut de la correction : "a_planifier" | "planifie" | "termine".
+  correction_status?: string;
   created_at: string;
   updated_at: string;
 };
@@ -464,20 +466,36 @@ function ProjectCard({
         </span>
       </div>
 
-      {/* Flux A — badge signature du bon de correction. */}
-      {p.has_signed_bon ? (
-        <div className="mt-2">
-          <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-medium text-emerald-300">
-            <CheckCircle2 className="h-3 w-3" /> Signé
-          </span>
+      {/* Flux A — badges signature + statut de correction. */}
+      {(p.has_signed_bon ||
+        p.awaiting_signature ||
+        (p.status === "correction" && p.correction_status)) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {p.has_signed_bon ? (
+            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-medium text-emerald-300">
+              <CheckCircle2 className="h-3 w-3" /> Signé
+            </span>
+          ) : p.awaiting_signature ? (
+            <span className="inline-flex items-center gap-1 rounded-md bg-rose-500/20 px-1.5 py-0.5 text-[11px] font-medium text-rose-300">
+              <Clock className="h-3 w-3" /> À signer
+            </span>
+          ) : null}
+          {p.status === "correction" && p.correction_status === "termine" ? (
+            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-medium text-emerald-300">
+              Correction terminée
+            </span>
+          ) : p.status === "correction" &&
+            p.correction_status === "planifie" ? (
+            <span className="inline-flex items-center gap-1 rounded-md bg-sky-500/15 px-1.5 py-0.5 text-[11px] font-medium text-sky-300">
+              Correction planifiée
+            </span>
+          ) : p.status === "correction" ? (
+            <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-300">
+              Correction à planifier
+            </span>
+          ) : null}
         </div>
-      ) : p.awaiting_signature ? (
-        <div className="mt-2">
-          <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-300">
-            <Clock className="h-3 w-3" /> En attente de signature
-          </span>
-        </div>
-      ) : null}
+      )}
 
       {p.status === "correction" ? (
         <button
