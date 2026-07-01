@@ -293,6 +293,30 @@ async def ensure_critical_columns() -> None:
                 exc,
             )
 
+    # Backfill 2026-07 : les anciens bons de travail (créés avant la refonte,
+    # non liés à une correction de projet) passent en bon INTERNE et leurs
+    # statuts legacy sont mappés vers le nouveau cycle → ils apparaissent
+    # dans le kanban unifié. Idempotent : plus aucun bon « construction » non
+    # correction n'est créé (le formulaire crée des « interne », le bon de
+    # correction porte origin='correction'), donc les runs suivants ne
+    # touchent plus rien.
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE bons_travail SET "
+                    "kind = 'interne', "
+                    "status = CASE "
+                    "WHEN status = 'signed' THEN 'complete_a_refacturer' "
+                    "WHEN status = 'sent' THEN 'accepte_a_planifier' "
+                    "ELSE status END "
+                    "WHERE (kind IS NULL OR kind = 'construction') "
+                    "AND (origin IS NULL OR origin <> 'correction')"
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("backfill bons legacy->interne failed: %s", exc)
+
 
 async def ensure_raci_tables() -> None:
     """Crée les tables RACI dans leur PROPRE transaction.
