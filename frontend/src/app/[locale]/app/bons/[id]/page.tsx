@@ -105,17 +105,6 @@ const STATUS_LABELS: Record<string, string> = {
   facture: "Facturé"
 };
 
-const STATUS_CLASS: Record<string, string> = {
-  draft: "bg-white/10 text-white",
-  sent: "bg-blue-500/20 text-blue-300",
-  signed: "bg-emerald-500/20 text-emerald-300",
-  cancelled: "bg-white/5 text-white/50",
-  accepte_a_planifier: "bg-amber-500/20 text-amber-300",
-  planifie: "bg-blue-500/20 text-blue-300",
-  complete_a_refacturer: "bg-violet-500/20 text-violet-300",
-  facture: "bg-emerald-500/20 text-emerald-300"
-};
-
 const LEGACY_STATUSES = ["draft", "sent", "signed", "cancelled"];
 const INTERNAL_STATUSES = [
   "draft",
@@ -620,26 +609,13 @@ export default function BonDetailPage() {
                     Client : {client.name}
                   </p>
                 ) : null}
+                {b.description ? (
+                  <p className="mt-2 max-w-xl whitespace-pre-wrap text-sm text-white/70">
+                    {b.description}
+                  </p>
+                ) : null}
               </div>
               <div className="flex flex-wrap items-center gap-3">
-                <span
-                  className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
-                    STATUS_CLASS[b.status] || "bg-white/10 text-white"
-                  }`}
-                >
-                  {STATUS_LABELS[b.status] || b.status}
-                </span>
-                <select
-                  value={b.status}
-                  onChange={(e) => updateStatus(e.target.value)}
-                  className="input w-52"
-                >
-                  {statusKeys.map((k) => (
-                    <option key={k} value={k}>
-                      {STATUS_LABELS[k]}
-                    </option>
-                  ))}
-                </select>
                 <button
                   type="button"
                   onClick={toggleUrgent}
@@ -652,6 +628,17 @@ export default function BonDetailPage() {
                 >
                   ⚠ {b.is_urgent ? "Urgence activée" : "Urgence"}
                 </button>
+                <select
+                  value={b.status}
+                  onChange={(e) => updateStatus(e.target.value)}
+                  className="input w-52"
+                >
+                  {statusKeys.map((k) => (
+                    <option key={k} value={k}>
+                      {STATUS_LABELS[k]}
+                    </option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   onClick={onDelete}
