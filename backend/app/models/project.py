@@ -69,6 +69,12 @@ class Project(Base):
         default=ProjectStatus.PLANNED.value,
         index=True,
     )
+    # Statut de la CORRECTION du projet (Flux A) : "a_planifier" (défaut),
+    # "planifie", "termine". Une correction regroupe tous les points à
+    # reprendre, faits d'un coup.
+    correction_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="a_planifier"
+    )
     # Type de projet : "construction" (défaut) ou "bon_travail" (ordre de
     # travail assignable — réutilise la plomberie projet : achats, heures,
     # facture). Permet de séparer les deux vues sans nouvelle table.
