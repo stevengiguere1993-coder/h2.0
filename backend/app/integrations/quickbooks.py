@@ -1049,17 +1049,6 @@ class QuickBooksClient:
     # ------------------------------------------------------------------
     # Account lookup by Name (utilisé pour le mapping mode paiement)
     # ------------------------------------------------------------------
-    async def find_tax_rates(self) -> List[Dict[str, Any]]:
-        """Liste des taux de taxe (TaxRate) configurés dans QBO.
-
-        Sert à retrouver les identifiants des taux TPS (5 %) et TVQ
-        (9,975 %) pour pousser des montants de taxe EXACTS (ligne par
-        ligne) plutôt que de laisser QBO recalculer et arrondir."""
-        try:
-            return await self.query("SELECT * FROM TaxRate MAXRESULTS 200")
-        except QuickBooksError:
-            return []
-
     async def find_account_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         if not name:
             return None
