@@ -203,4 +203,52 @@ async def public_accept(
         )
 
     await db.refresh(bon)
+
+    # Notifie les gestionnaires (manager+) qu'un bon vient d'être signé —
+    # en particulier le bon de correction d'un projet (Flux A). Best-effort :
+    # ne JAMAIS bloquer la signature du client si la notif échoue.
+    try:
+        from app.services.notifications import notify_role
+
+        proj_name: Optional[str] = None
+        if bon.project_id:
+            from app.models.project import Project as _Proj
+
+            proj_name = (
+                await db.execute(
+                    select(_Proj.name).where(_Proj.id == bon.project_id)
+                )
+            ).scalar_one_or_none()
+
+        is_correction = (bon.origin or "") == "correction"
+        label = (
+            "Bon de correction signé"
+            if is_correction
+            else "Bon de travail signé"
+        )
+        where = f" — {proj_name}" if proj_name else ""
+        href = (
+            f"/app/projets/{bon.project_id}"
+            if bon.project_id
+            else f"/app/bons/{bon.id}"
+        )
+        await notify_role(
+            db,
+            min_role="manager",
+            kind="bon_travail",
+            title=f"{label}{where}",
+            body=(
+                f"{bon.reference} signé par "
+                f"{bon.signed_by_name or 'le client'}."
+            ),
+            href=href,
+        )
+        await db.flush()
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "Notification de signature non envoyée pour bon %s",
+            bon.id,
+            exc_info=True,
+        )
+
     return await public_read(token, db)
