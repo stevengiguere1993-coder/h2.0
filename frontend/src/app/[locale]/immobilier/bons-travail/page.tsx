@@ -59,6 +59,8 @@ type BonDetail = {
   address: string | null;
   work_notes: string | null;
   is_urgent: boolean;
+  immeuble_id: number | null;
+  logement_id: number | null;
   photos: PhotoMeta[];
 };
 
@@ -119,6 +121,11 @@ export default function BonsTravailPage() {
   const [editTitre, setEditTitre] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [editUrgent, setEditUrgent] = useState(false);
+  const [editImmeubleId, setEditImmeubleId] = useState("");
+  const [editLogementId, setEditLogementId] = useState("");
+  const [modalImmeubles, setModalImmeubles] = useState<ImmeubleListItem[]>([]);
+  const [modalLogements, setModalLogements] = useState<Logement[]>([]);
+  const [modalPhotoUp, setModalPhotoUp] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
 
   async function loadBons() {
@@ -258,12 +265,74 @@ export default function BonsTravailPage() {
       setEditTitre(d.title);
       setEditDesc(d.description || "");
       setEditUrgent(!!d.is_urgent);
+      setEditImmeubleId(d.immeuble_id ? String(d.immeuble_id) : "");
+      setEditLogementId(d.logement_id ? String(d.logement_id) : "");
       for (const ph of d.photos) void loadPhoto(b.id, ph.id);
+      // Catalogue immeubles (tous) pour le picker de correction.
+      try {
+        const ir = await authedFetch("/api/v1/immobilier/immeubles");
+        if (ir.ok)
+          setModalImmeubles((await ir.json()) as ImmeubleListItem[]);
+      } catch {
+        /* ignore */
+      }
     } catch {
       setError("Impossible d'ouvrir ce bon.");
       setDetailOpen(false);
     } finally {
       setDetailLoading(false);
+    }
+  }
+
+  // Logements de l'immeuble sélectionné dans le modal.
+  useEffect(() => {
+    if (!detailOpen || !editImmeubleId) {
+      setModalLogements([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/immobilier/immeubles/${editImmeubleId}/logements`
+        );
+        if (r.ok && !cancelled)
+          setModalLogements((await r.json()) as Logement[]);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [detailOpen, editImmeubleId]);
+
+  async function uploadModalPhoto(files: FileList | null) {
+    if (!files || !detail || files.length === 0) return;
+    setModalPhotoUp(true);
+    try {
+      for (const f of Array.from(files)) {
+        const fd = new FormData();
+        fd.append("file", f);
+        await authedFetch(
+          `/api/v1/immobilier/bons-travail/${detail.id}/photos`,
+          { method: "POST", body: fd }
+        );
+      }
+      // Recharge les photos.
+      const r = await authedFetch(
+        `/api/v1/immobilier/bons-travail/${detail.id}`
+      );
+      if (r.ok) {
+        const d = (await r.json()) as BonDetail;
+        setDetail(d);
+        for (const ph of d.photos)
+          if (!photoUrls[ph.id]) void loadPhoto(detail.id, ph.id);
+      }
+    } catch {
+      setError("Ajout de photo échoué.");
+    } finally {
+      setModalPhotoUp(false);
     }
   }
 
@@ -287,7 +356,10 @@ export default function BonsTravailPage() {
           body: JSON.stringify({
             titre: editTitre.trim() || null,
             description: editDesc.trim() ? editDesc.trim() : null,
-            is_urgent: editUrgent
+            is_urgent: editUrgent,
+            immeuble_id: editImmeubleId ? Number(editImmeubleId) : null,
+            logement_id: editLogementId ? Number(editLogementId) : null,
+            clear_logement: !editLogementId
           })
         }
       );
@@ -608,6 +680,38 @@ export default function BonsTravailPage() {
                   >
                     ⚠ {editUrgent ? "Urgence activée" : "Marquer urgence"}
                   </button>
+                  <Field label="Immeuble">
+                    <select
+                      value={editImmeubleId}
+                      onChange={(e) => {
+                        setEditImmeubleId(e.target.value);
+                        setEditLogementId("");
+                      }}
+                      className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-amber-300"
+                    >
+                      <option value="">— choisir —</option>
+                      {modalImmeubles.map((i) => (
+                        <option key={i.id} value={String(i.id)}>
+                          {i.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Appartement">
+                    <select
+                      value={editLogementId}
+                      onChange={(e) => setEditLogementId(e.target.value)}
+                      disabled={!editImmeubleId}
+                      className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-amber-300 disabled:opacity-50"
+                    >
+                      <option value="">Communs / immeuble entier</option>
+                      {modalLogements.map((l) => (
+                        <option key={l.id} value={String(l.id)}>
+                          App {l.numero}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
                   <Field label="Titre">
                     <input
                       value={editTitre}
@@ -635,11 +739,28 @@ export default function BonsTravailPage() {
                   </div>
 
                   {/* Photos — lecture seule. */}
-                  {detail.photos.length > 0 ? (
-                    <div>
-                      <p className="mb-1 flex items-center gap-1 text-xs font-medium text-white/60">
+                  <div>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <p className="flex items-center gap-1 text-xs font-medium text-white/60">
                         <ImageIcon className="h-3.5 w-3.5" /> Photos
                       </p>
+                      <label className="cursor-pointer text-xs font-semibold text-amber-300 hover:text-amber-200">
+                        {modalPhotoUp ? "Ajout…" : "+ Ajouter"}
+                        <input
+                          type="file"
+                          accept="image/*,application/pdf"
+                          multiple
+                          className="hidden"
+                          onChange={(e) => {
+                            void uploadModalPhoto(e.target.files);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                    {detail.photos.length === 0 ? (
+                      <p className="text-xs text-white/40">Aucune photo.</p>
+                    ) : (
                       <div className="grid grid-cols-3 gap-2">
                         {detail.photos.map((ph) =>
                           photoUrls[ph.id] ? (
@@ -667,8 +788,8 @@ export default function BonsTravailPage() {
                           )
                         )}
                       </div>
-                    </div>
-                  ) : null}
+                    )}
+                  </div>
                 </div>
 
                 <div className="mt-5 flex items-center justify-between">
