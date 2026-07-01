@@ -121,16 +121,23 @@ async def pull_project_costs_from_qbo(
             )
         ).scalars().all()
     }
-    existing_purchase = {
-        r[0]
-        for r in (
+    existing_purchase: dict[str, Achat] = {
+        str(a.qbo_purchase_id): a
+        for a in (
             await db.execute(
-                select(Achat.qbo_purchase_id).where(
-                    Achat.qbo_purchase_id.is_not(None)
-                )
+                select(Achat).where(Achat.qbo_purchase_id.is_not(None))
             )
-        ).all()
+        ).scalars().all()
     }
+    # Compte de paiement QB (Id) → mode de paiement Horizon exact
+    # (cc_olivier, cheque_horizon…). Sert à refléter le rapprochement : quand
+    # une dépense est rapprochée dans QB, on remonte la carte/compte réel.
+    try:
+        from app.services.qbo_payment_classify import _account_id_to_method
+
+        purchase_acct_methods = await _account_id_to_method(qbo, db)
+    except Exception:  # noqa: BLE001
+        purchase_acct_methods = {}
     pstmt = select(Project).where(Project.qbo_job_id.is_not(None))
     if client_id is not None:
         pstmt = pstmt.where(Project.client_id == client_id)
@@ -203,6 +210,7 @@ async def pull_project_costs_from_qbo(
         "skipped_existing": 0,
         "skipped_no_project": 0,
         "paid_synced": 0,
+        "reconciled_synced": 0,
     }
     preview: list[dict] = []
 
@@ -314,11 +322,43 @@ async def pull_project_costs_from_qbo(
         # l'Id de la Purchase dans `qbo_bill_id` (cf. achat_qbo.py), PAS
         # dans `qbo_purchase_id`. On vérifie donc les DEUX champs, sinon
         # la dépense ré-importée crée un doublon de l'achat d'origine.
-        if pid in existing_purchase or pid in existing_bill:
-            stats["skipped_existing"] += 1
+        # Achat déjà lié (poussé depuis Kratos → qbo_bill_id, ou importé →
+        # qbo_purchase_id). Au lieu de sauter, on REFLÈTE le rapprochement
+        # QB → Kratos : date + mode de paiement réel (compte de la dépense).
+        # Corrige « la dépense a été rapprochée dans QB mais Kratos gardait
+        # l'ancienne date / la mauvaise carte », sans jamais re-pousser.
+        existing = existing_bill.get(pid) or existing_purchase.get(pid)
+        if existing is not None:
+            updated: list[str] = []
+            new_date = _parse_date(p.get("TxnDate"))
+            if new_date and new_date != existing.invoice_date:
+                if not dry_run:
+                    existing.invoice_date = new_date
+                updated.append("date")
+            acc_id = (p.get("AccountRef") or {}).get("value")
+            new_method = (
+                purchase_acct_methods.get(str(acc_id)) if acc_id else None
+            )
+            if new_method and new_method != (existing.payment_method or ""):
+                if not dry_run:
+                    existing.payment_method = new_method
+                updated.append("mode de paiement")
+            if not dry_run:
+                # Rafraîchit le SyncToken pour un achat poussé depuis Kratos
+                # (évite un « stale token » au prochain push).
+                tok = p.get("SyncToken")
+                if tok is not None and pid in existing_bill:
+                    existing.qbo_sync_token = str(tok)
+                if updated:
+                    await db.flush()
+            if updated:
+                stats["reconciled_synced"] += 1
+            else:
+                stats["skipped_existing"] += 1
             preview.append(
                 {"type": "purchase", "qbo_id": pid, "amount": total,
-                 "vendor": vendor, "status": "deja_importe"}
+                 "vendor": vendor,
+                 "status": "rapproche_maj" if updated else "deja_importe"}
             )
             continue
         proj = _project_for_txn(p, proj_by_job)
