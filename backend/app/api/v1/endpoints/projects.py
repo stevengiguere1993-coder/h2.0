@@ -419,6 +419,40 @@ async def create_correction_bon(
     )
     db.add(bon)
     await db.flush()
+
+    # Les points de correction listés deviennent automatiquement les lignes
+    # du bon à signer (le client paie ces reprises). Prix à 0 : le
+    # gestionnaire ajuste le montant chargé ligne par ligne.
+    from app.models.bon_item import BonItem
+    from app.models.project_correction import ProjectCorrection
+
+    corrections = (
+        await db.execute(
+            _bsel(ProjectCorrection)
+            .where(ProjectCorrection.project_id == project_id)
+            .order_by(ProjectCorrection.position.asc(), ProjectCorrection.id.asc())
+        )
+    ).scalars().all()
+    for i, cor in enumerate(corrections):
+        desc = cor.title
+        if cor.details:
+            desc = f"{cor.title} — {cor.details}"
+        db.add(
+            BonItem(
+                bon_id=bon.id,
+                position=i,
+                description=desc[:500],
+                unit="unité",
+                quantity=1,
+                unit_price=0,
+                total=0,
+                item_type="materiel",
+                cost_total=0,
+            )
+        )
+    if corrections:
+        await db.flush()
+
     await db.commit()
     await db.refresh(bon)
     return {"bon_id": bon.id, "reference": bon.reference}

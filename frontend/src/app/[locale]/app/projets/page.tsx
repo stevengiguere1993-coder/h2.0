@@ -1,13 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter as useNextRouter } from "next/navigation";
 import {
   Briefcase,
   CheckCircle2,
   Clock,
   GripVertical,
-  Hammer,
   Loader2,
   MapPin,
   Plus,
@@ -89,7 +87,6 @@ function fmtDate(iso: string | null): string {
 export default function ProjectsPage() {
   const { onOpenSidebar } = useAppLayout();
   const confirm = useConfirm();
-  const router = useNextRouter();
   const [items, setItems] = useState<Project[]>([]);
   const [clientNames, setClientNames] = useState<Map<number, string>>(
     new Map()
@@ -171,23 +168,6 @@ export default function ProjectsPage() {
     } catch (e) {
       setItems(prev);
       setError(`Mise à jour du statut échouée : ${(e as Error).message}`);
-    }
-  }
-
-  // Flux A — crée un bon de correction lié au projet puis ouvre sa fiche
-  // (où on l'envoie au client pour signature).
-  async function createCorrectionBon(id: number) {
-    try {
-      const res = await authedFetch(`/api/v1/projects/${id}/correction-bon`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}"
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const { bon_id } = (await res.json()) as { bon_id: number };
-      router.push(`/app/bons/${bon_id}`);
-    } catch {
-      setError("Création du bon de correction échouée.");
     }
   }
 
@@ -329,7 +309,6 @@ export default function ProjectsPage() {
                             setHoverCol(null);
                           }}
                           onDelete={() => deleteProject(p.id, p.name)}
-                          onCorrectionBon={() => createCorrectionBon(p.id)}
                           onTouchDragStart={() => setDragging(p.id)}
                           onTouchDragMove={onTouchDragMove}
                           onTouchDragEnd={(x, y) => onTouchDragEnd(p.id, x, y)}
@@ -354,7 +333,6 @@ function ProjectCard({
   onDragStart,
   onDragEnd,
   onDelete,
-  onCorrectionBon,
   onTouchDragStart,
   onTouchDragMove,
   onTouchDragEnd
@@ -365,7 +343,6 @@ function ProjectCard({
   onDragStart: () => void;
   onDragEnd: () => void;
   onDelete: () => void;
-  onCorrectionBon: () => void;
   onTouchDragStart: () => void;
   onTouchDragMove: (x: number, y: number) => void;
   onTouchDragEnd: (x: number, y: number) => void;
@@ -494,19 +471,6 @@ function ProjectCard({
             <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-1 text-[11px] font-medium leading-none text-amber-300">
               <Clock className="h-3 w-3" /> Correction à planifier
             </span>
-          ) : null}
-          {p.status === "correction" ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onCorrectionBon();
-              }}
-              className="inline-flex items-center gap-1 rounded-md border border-rose-400/40 bg-rose-500/15 px-2 py-1 text-[11px] font-medium leading-none text-rose-200 transition-colors hover:bg-rose-500/25"
-            >
-              <Hammer className="h-3 w-3" /> Bon de correction (signature)
-            </button>
           ) : null}
         </div>
       )}

@@ -6056,11 +6056,15 @@ function ProjectCorrections({
   const todo = items.filter((i) => i.status !== "complete").length;
 
   return (
-    <section className="mt-6 rounded-2xl border border-rose-500/25 bg-rose-500/[0.04] p-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <section className="mt-6 space-y-4 rounded-2xl border border-rose-500/20 bg-rose-500/[0.03] p-5">
+      {/* En-tête + statut segmenté */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="flex flex-wrap items-center gap-2 text-sm font-semibold uppercase tracking-wider text-rose-300">
-            <Hammer className="h-4 w-4" /> Corrections / améliorations
+          <h2 className="flex flex-wrap items-center gap-2 text-base font-bold text-white">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-500/15 text-rose-300">
+              <Hammer className="h-4 w-4" />
+            </span>
+            Corrections / améliorations
             {hasSignedBon ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
                 <CheckCircle2 className="h-3 w-3" /> Signé
@@ -6071,143 +6075,150 @@ function ProjectCorrections({
               </span>
             ) : null}
           </h2>
-          <p className="mt-1 text-xs text-white/50">
-            Points à reprendre sur le projet — {todo} à faire.
+          <p className="mt-1 max-w-lg text-xs text-white/50">
+            {todo} point{todo > 1 ? "s" : ""} à reprendre. Les coûts du retour
+            s&apos;accumulent sur ce projet.
           </p>
+        </div>
+        <div className="flex flex-col items-start gap-1 sm:items-end">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+            Statut
+          </span>
+          <div className="inline-flex gap-1 rounded-lg bg-brand-950 p-1">
+            {CORRECTION_STATUS.map((s) => {
+              const active = statusVal === s.id;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => void saveStatus(s.id)}
+                  className={`rounded-md px-3 py-1 text-xs font-semibold transition ${
+                    active
+                      ? s.id === "termine"
+                        ? "bg-emerald-500 text-white"
+                        : s.id === "planifie"
+                          ? "bg-sky-500 text-white"
+                          : "bg-amber-500 text-brand-950"
+                      : "text-white/50 hover:text-white"
+                  }`}
+                >
+                  {s.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
-          Statut de la correction
-        </span>
-        {CORRECTION_STATUS.map((s) => {
-          const active = statusVal === s.id;
-          return (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => void saveStatus(s.id)}
-              className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-                active
-                  ? s.id === "termine"
-                    ? "bg-emerald-500 text-white"
-                    : s.id === "planifie"
-                      ? "bg-sky-500 text-white"
-                      : "bg-amber-500 text-brand-950"
-                  : "bg-brand-900 text-white/50 hover:text-white"
-              }`}
-            >
-              {s.label}
-            </button>
-          );
-        })}
-      </div>
-      <p className="mt-1 text-[11px] text-white/40">
-        Liste les points à reprendre ci-dessous, puis prépare le bon de
-        correction signable plus bas (lignes, aperçu PDF, envoi pour
-        signature). Les coûts du retour s&apos;accumulent sur ce projet.
-      </p>
-
-      <div className="mt-4 space-y-2">
-        {loading ? (
-          <Loader2 className="h-5 w-5 animate-spin text-rose-300" />
-        ) : items.length === 0 ? (
-          <p className="text-sm text-white/40">
-            Aucune correction pour l&apos;instant.
-          </p>
-        ) : (
-          items.map((c) => (
-            <div
-              key={c.id}
-              className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-950 p-3"
-            >
-              <button
-                type="button"
-                onClick={() => void toggle(c)}
-                className="mt-0.5 flex-shrink-0"
-                aria-label="Basculer le statut"
+      {/* Carte 1 — points à reprendre (checklist) */}
+      <div className="rounded-xl border border-brand-800 bg-brand-950/60 p-4">
+        <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-white/40">
+          Points à reprendre
+        </h3>
+        <div className="space-y-2">
+          {loading ? (
+            <Loader2 className="h-5 w-5 animate-spin text-rose-300" />
+          ) : items.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-brand-800 py-6 text-center text-sm text-white/40">
+              Aucun point pour l&apos;instant. Ajoute-les ci-dessous.
+            </p>
+          ) : (
+            items.map((c) => (
+              <div
+                key={c.id}
+                className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-900 p-3"
               >
-                {c.status === "complete" ? (
-                  <CheckCircle2 className="h-5 w-5 text-emerald-400" />
-                ) : (
-                  <Circle className="h-5 w-5 text-white/40" />
-                )}
-              </button>
-              <div className="min-w-0 flex-1">
-                <p
-                  className={`text-sm font-medium ${
+                <button
+                  type="button"
+                  onClick={() => void toggle(c)}
+                  className="mt-0.5 flex-shrink-0"
+                  aria-label="Basculer le statut"
+                >
+                  {c.status === "complete" ? (
+                    <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+                  ) : (
+                    <Circle className="h-5 w-5 text-white/40" />
+                  )}
+                </button>
+                <div className="min-w-0 flex-1">
+                  <p
+                    className={`text-sm font-medium ${
+                      c.status === "complete"
+                        ? "text-white/40 line-through"
+                        : "text-white"
+                    }`}
+                  >
+                    {c.title}
+                  </p>
+                  {c.details ? (
+                    <p className="mt-0.5 whitespace-pre-wrap text-xs text-white/50">
+                      {c.details}
+                    </p>
+                  ) : null}
+                </div>
+                <span
+                  className={`flex-shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
                     c.status === "complete"
-                      ? "text-white/40 line-through"
-                      : "text-white"
+                      ? "bg-emerald-500/15 text-emerald-300"
+                      : "bg-amber-500/15 text-amber-300"
                   }`}
                 >
-                  {c.title}
-                </p>
-                {c.details ? (
-                  <p className="mt-0.5 whitespace-pre-wrap text-xs text-white/50">
-                    {c.details}
-                  </p>
-                ) : null}
+                  {c.status === "complete" ? "Complété" : "À faire"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void remove(c.id)}
+                  className="flex-shrink-0 text-rose-400 hover:text-rose-300"
+                  aria-label="Supprimer"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
               </div>
-              <span
-                className={`flex-shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
-                  c.status === "complete"
-                    ? "bg-emerald-500/15 text-emerald-300"
-                    : "bg-amber-500/15 text-amber-300"
-                }`}
-              >
-                {c.status === "complete" ? "Complété" : "À faire"}
-              </span>
-              <button
-                type="button"
-                onClick={() => void remove(c.id)}
-                className="flex-shrink-0 text-rose-400 hover:text-rose-300"
-                aria-label="Supprimer"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
-          ))
-        )}
-      </div>
-
-      <div className="mt-3 space-y-2 rounded-lg border border-brand-800 bg-brand-900 p-3">
-        <input
-          value={newTitle}
-          onChange={(e) => setNewTitle(e.target.value)}
-          placeholder="Titre de la correction à faire…"
-          className="input w-full text-sm"
-        />
-        <textarea
-          value={newDetails}
-          onChange={(e) => setNewDetails(e.target.value)}
-          rows={2}
-          placeholder="Détails (optionnel)…"
-          className="input w-full text-sm"
-        />
-        <button
-          type="button"
-          onClick={() => void add()}
-          disabled={adding || !newTitle.trim()}
-          className="btn-accent text-xs"
-        >
-          {adding ? (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            ))
           )}
-          Ajouter
-        </button>
+        </div>
+
+        <div className="mt-3 space-y-2 rounded-lg border border-brand-800 bg-brand-900/60 p-3">
+          <input
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            placeholder="Titre de la correction à faire…"
+            className="input w-full text-sm"
+          />
+          <textarea
+            value={newDetails}
+            onChange={(e) => setNewDetails(e.target.value)}
+            rows={2}
+            placeholder="Détails (optionnel)…"
+            className="input w-full text-sm"
+          />
+          <button
+            type="button"
+            onClick={() => void add()}
+            disabled={adding || !newTitle.trim()}
+            className="btn-accent text-xs"
+          >
+            {adding ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Ajouter
+          </button>
+        </div>
+        {err ? <p className="mt-2 text-xs text-rose-400">{err}</p> : null}
       </div>
-      {err ? <p className="mt-2 text-xs text-rose-400">{err}</p> : null}
 
-      {/* #4 — bon de correction signable géré ICI (plus de redirection). */}
-      <CorrectionBonPanel projectId={projectId} onChanged={onChanged} />
+      {/* Carte 2 — bon de correction signable (plus de redirection). */}
+      <CorrectionBonPanel
+        projectId={projectId}
+        corrections={items}
+        onChanged={onChanged}
+      />
 
-      {/* #2 — photos du projet (avant/après correction). */}
-      <div className="mt-5 border-t border-rose-500/20 pt-4">
-        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-white/40">
+      {/* Carte 3 — photos du projet (avant/après correction). */}
+      <div className="rounded-xl border border-brand-800 bg-brand-950/60 p-4">
+        <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-white/40">
           Photos
         </h3>
         <PhotosTab projectId={projectId} />
@@ -6257,9 +6268,11 @@ function corMoney(n: number | string | null | undefined): string {
 
 function CorrectionBonPanel({
   projectId,
+  corrections,
   onChanged
 }: {
   projectId: number;
+  corrections: CorrectionItem[];
   onChanged: () => void;
 }) {
   const [bonId, setBonId] = useState<number | null>(null);
@@ -6386,6 +6399,47 @@ function CorrectionBonPanel({
     }
   }
 
+  // Ajoute une ligne par point de correction pas encore présent dans le
+  // bon (comparaison sur le titre). Sert quand des points ont été ajoutés
+  // après la création du bon (à la création, le back-end les sème déjà).
+  async function importCorrections() {
+    if (!bonId) return;
+    const existing = new Set(
+      bonItems.map((it) => it.description.split(" — ")[0].trim())
+    );
+    const missing = corrections.filter((c) => !existing.has(c.title.trim()));
+    if (missing.length === 0) {
+      setErr("Tous les points sont déjà dans le bon.");
+      return;
+    }
+    setItemBusy("new");
+    try {
+      const created: BonItemLite[] = [];
+      let pos = bonItems.length;
+      for (const c of missing) {
+        const desc = c.details ? `${c.title} — ${c.details}` : c.title;
+        const r = await authedFetch(`/api/v1/bons-travail/${bonId}/items`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            position: pos++,
+            description: desc.slice(0, 500),
+            unit: "unité",
+            quantity: 1,
+            unit_price: 0
+          })
+        });
+        if (r.ok) created.push((await r.json()) as BonItemLite);
+      }
+      setBonItems((xs) => [...xs, ...created]);
+      void refreshRecap(bonId);
+    } catch {
+      setErr("Import des points échoué.");
+    } finally {
+      setItemBusy(null);
+    }
+  }
+
   async function patchItem(itemId: number, patch: Partial<BonItemLite>) {
     if (!bonId) return;
     setItemBusy(itemId);
@@ -6482,7 +6536,14 @@ function CorrectionBonPanel({
 
   if (!bonId || !bon) {
     return (
-      <div className="mt-5 border-t border-rose-500/20 pt-4">
+      <div className="rounded-xl border border-brand-800 bg-brand-950/60 p-4">
+        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-white/40">
+          Bon de correction à signer
+        </h3>
+        <p className="mb-3 text-xs text-white/50">
+          Génère le bon signable pour le client. Tes points de correction
+          seront repris automatiquement comme lignes (montants à ajuster).
+        </p>
         <button
           type="button"
           onClick={() => void createBon()}
@@ -6505,11 +6566,14 @@ function CorrectionBonPanel({
   const sent = !signed && !!bon.sent_at;
 
   return (
-    <div className="mt-5 rounded-xl border border-rose-500/25 bg-brand-950/40 p-4">
+    <div className="rounded-xl border border-brand-800 bg-brand-950/60 p-4">
+      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-white/40">
+        Bon de correction à signer
+      </h3>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-white">
-            <Hammer className="h-4 w-4 text-rose-300" /> Bon de correction
+            <Hammer className="h-4 w-4 text-rose-300" /> Bon
             <span className="font-mono text-xs text-white/50">
               {bon.reference}
             </span>
@@ -6655,19 +6719,31 @@ function CorrectionBonPanel({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        <button
-          type="button"
-          onClick={() => void addItem()}
-          disabled={itemBusy === "new"}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white/80 hover:border-accent-500 disabled:opacity-50"
-        >
-          {itemBusy === "new" ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Plus className="h-3.5 w-3.5" />
-          )}
-          Ajouter un item
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void addItem()}
+            disabled={itemBusy === "new"}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white/80 hover:border-accent-500 disabled:opacity-50"
+          >
+            {itemBusy === "new" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
+            Ajouter un item
+          </button>
+          {corrections.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => void importCorrections()}
+              disabled={itemBusy === "new"}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white/80 hover:border-accent-500 disabled:opacity-50"
+            >
+              <Hammer className="h-3.5 w-3.5" /> Reprendre les points
+            </button>
+          ) : null}
+        </div>
         <p className="text-sm">
           <span className="text-white/50">Total chargé au client : </span>
           <span className="font-bold text-emerald-300">
