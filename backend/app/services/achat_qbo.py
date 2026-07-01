@@ -194,34 +194,125 @@ def _format_qbo_addr(addr: Optional[Dict[str, Any]]) -> Optional[str]:
     return flat[:500] or None
 
 
-def _add_quebec_taxes(
-    payload: Dict[str, Any], lines: list, achat: Optional[Achat] = None
-) -> None:
-    """Ajoute le total de taxes à la transaction QB (TxnTaxDetail).
+async def _resolve_qc_tax_rate_ids(qbo) -> tuple[Optional[str], Optional[str]]:
+    """Identifiants QBO des taux TPS (5 %) et TVQ (9,975 %).
 
-    On utilise le montant de taxe RÉEL saisi dans Kratos
-    (``achat.amount_taxes``) plutôt qu'un recalcul TPS+TVQ sur le
-    sous-total. Sinon un écart d'arrondi d'1 cent (ex. Kratos 83,82 $ vs
-    recalcul 83,83 $) fait que le total QB ne correspond plus au montant
-    réel du relevé bancaire — et QuickBooks n'apparie pas la dépense déjà
-    présente. Repli sur le recalcul seulement si le montant réel est
-    absent (achat legacy sans taxes ventilées)."""
-    total_tax: Optional[float] = None
-    if achat is not None and achat.amount_taxes is not None:
+    Permet de pousser des montants de taxe EXACTS (ligne par ligne) pour
+    que QBO n'applique pas son propre arrondi. Best-effort : renvoie
+    (None, None) si la liste des taux est indisponible → repli sur le
+    total global."""
+    tps_id: Optional[str] = None
+    tvq_id: Optional[str] = None
+    try:
+        rates = await qbo.find_tax_rates()
+    except Exception:  # noqa: BLE001
+        return (None, None)
+    for r in rates:
         try:
-            total_tax = round(float(achat.amount_taxes), 2)
+            val = float(r.get("RateValue"))
         except (TypeError, ValueError):
-            total_tax = None
+            val = None
+        name = (r.get("Name") or "").lower()
+        rid = r.get("Id")
+        if not rid:
+            continue
+        # TPS / GST = 5 %
+        if tps_id is None and (
+            (val is not None and abs(val - 5.0) < 0.01)
+            or "tps" in name
+            or "gst" in name
+        ):
+            tps_id = str(rid)
+        # TVQ / QST = 9,975 %
+        if tvq_id is None and (
+            (val is not None and abs(val - 9.975) < 0.01)
+            or "tvq" in name
+            or "qst" in name
+        ):
+            tvq_id = str(rid)
+    return (tps_id, tvq_id)
+
+
+def _add_quebec_taxes(
+    payload: Dict[str, Any],
+    lines: list,
+    achat: Optional[Achat] = None,
+    tps_rate_id: Optional[str] = None,
+    tvq_rate_id: Optional[str] = None,
+) -> None:
+    """Ajoute les taxes à la transaction QB (TxnTaxDetail).
+
+    On veut que le total QB corresponde EXACTEMENT au montant réel de la
+    facture (et donc au relevé bancaire), sinon un écart d'arrondi d'1
+    cent (ex. Kratos 83,82 $ vs recalcul QBO 83,83 $) empêche
+    l'appariement bancaire dans QuickBooks.
+
+    QBO recalcule et arrondit sa propre taxe quand on ne lui fournit
+    qu'un TotalTax. Pour l'en empêcher, on pousse les montants EXACTS de
+    TPS et TVQ ligne par ligne (TaxLine avec TaxRateRef) — QBO utilise
+    alors nos chiffres. Repli sur un TotalTax global (puis sur le recalcul)
+    quand les taxes ventilées ou les taux QBO ne sont pas disponibles."""
+    subtotal = 0.0
+    for line in lines:
+        try:
+            subtotal += float(line.get("Amount") or 0)
+        except (TypeError, ValueError):
+            continue
+
+    def _f(v) -> Optional[float]:
+        try:
+            return round(float(v), 2)
+        except (TypeError, ValueError):
+            return None
+
+    tps = _f(achat.amount_tps) if achat is not None else None
+    tvq = _f(achat.amount_tvq) if achat is not None else None
+    total_tax = _f(achat.amount_taxes) if achat is not None else None
+
+    # Cas idéal : on connaît TPS et TVQ ET les taux QBO → lignes de taxe
+    # explicites, montants exacts, pas de recalcul QBO.
+    if (
+        tps is not None
+        and tvq is not None
+        and tps_rate_id
+        and tvq_rate_id
+        and (tps > 0 or tvq > 0)
+    ):
+        net = round(subtotal, 2)
+        payload["GlobalTaxCalculation"] = "TaxExcluded"
+        payload["TxnTaxDetail"] = {
+            "TotalTax": round(tps + tvq, 2),
+            "TaxLine": [
+                {
+                    "Amount": tps,
+                    "DetailType": "TaxLineDetail",
+                    "TaxLineDetail": {
+                        "TaxRateRef": {"value": str(tps_rate_id)},
+                        "PercentBased": True,
+                        "TaxPercent": 5,
+                        "NetAmountTaxable": net,
+                    },
+                },
+                {
+                    "Amount": tvq,
+                    "DetailType": "TaxLineDetail",
+                    "TaxLineDetail": {
+                        "TaxRateRef": {"value": str(tvq_rate_id)},
+                        "PercentBased": True,
+                        "TaxPercent": 9.975,
+                        "NetAmountTaxable": net,
+                    },
+                },
+            ],
+        }
+        return
+
+    # Repli 1 : total de taxe réel (Kratos) sans ventilation.
     if total_tax is None:
-        subtotal = 0.0
-        for line in lines:
-            try:
-                subtotal += float(line.get("Amount") or 0)
-            except (TypeError, ValueError):
-                continue
-        tps = round(subtotal * 0.05, 2)
-        tvq = round(subtotal * 0.09975, 2)
-        total_tax = round(tps + tvq, 2)
+        # Repli 2 : recalcul TPS+TVQ sur le sous-total (achat legacy).
+        total_tax = round(
+            round(subtotal * 0.05, 2) + round(subtotal * 0.09975, 2), 2
+        )
     if total_tax and total_tax > 0:
         payload["GlobalTaxCalculation"] = "TaxExcluded"
         payload["TxnTaxDetail"] = {"TotalTax": total_tax}
@@ -236,6 +327,8 @@ def _build_bill_payload(
     project_name: Optional[str],
     customer_id: Optional[str] = None,
     class_id: Optional[str] = None,
+    tps_rate_id: Optional[str] = None,
+    tvq_rate_id: Optional[str] = None,
     existing_bill_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -256,7 +349,7 @@ def _build_bill_payload(
         "Line": lines,
     }
     if customer_id:
-        _add_quebec_taxes(payload, lines, achat)
+        _add_quebec_taxes(payload, lines, achat, tps_rate_id, tvq_rate_id)
     elif settings.qbo_purchase_tax_code:
         # Sans client (achat non refacturable) : le montant de ligne est
         # le HT, et QBO calcule la taxe par-dessus via le TaxCodeRef.
@@ -282,6 +375,8 @@ def _build_purchase_payload(
     customer_id: Optional[str] = None,
     class_id: Optional[str] = None,
     payment_method_id: Optional[str] = None,
+    tps_rate_id: Optional[str] = None,
+    tvq_rate_id: Optional[str] = None,
     existing_purchase_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -306,7 +401,7 @@ def _build_purchase_payload(
     if payment_method_id:
         payload["PaymentMethodRef"] = {"value": str(payment_method_id)}
     if customer_id:
-        _add_quebec_taxes(payload, lines, achat)
+        _add_quebec_taxes(payload, lines, achat, tps_rate_id, tvq_rate_id)
     elif settings.qbo_purchase_tax_code:
         # Sans client (achat non refacturable) : montant de ligne = HT,
         # QBO calcule la taxe via le TaxCodeRef. TaxExcluded évite la
@@ -588,6 +683,15 @@ async def sync_achat_to_qbo(
         method = (achat.payment_method or "bill_to_pay").lower()
         as_purchase = method in PAID_METHODS
 
+        # Taux TPS/TVQ QBO — pour pousser des montants de taxe EXACTS
+        # (ligne par ligne) et éviter que QBO recalcule/arrondisse la taxe
+        # (écart d'1 cent qui casse l'appariement bancaire). Résolu une
+        # seule fois ; best-effort (repli sur le total global si absent).
+        tps_rate_id: Optional[str] = None
+        tvq_rate_id: Optional[str] = None
+        if customer_id:
+            tps_rate_id, tvq_rate_id = await _resolve_qc_tax_rate_ids(qbo)
+
         # Anti-doublon : si cet Achat n'est pas encore lie a un objet QB,
         # on verifie qu'un Bill/Purchase equivalent (meme fournisseur,
         # meme total TTC, ~meme date) existe deja cote QuickBooks. Si oui,
@@ -676,6 +780,8 @@ async def sync_achat_to_qbo(
                 project_name=project.name if project else None,
                 customer_id=customer_id,
                 class_id=class_id,
+                tps_rate_id=tps_rate_id,
+                tvq_rate_id=tvq_rate_id,
                 existing_purchase_id=achat.qbo_bill_id,
                 existing_sync_token=achat.qbo_sync_token,
             )
@@ -725,6 +831,8 @@ async def sync_achat_to_qbo(
                 project_name=project.name if project else None,
                 customer_id=customer_id,
                 class_id=class_id,
+                tps_rate_id=tps_rate_id,
+                tvq_rate_id=tvq_rate_id,
                 existing_bill_id=achat.qbo_bill_id,
                 existing_sync_token=achat.qbo_sync_token,
             )
