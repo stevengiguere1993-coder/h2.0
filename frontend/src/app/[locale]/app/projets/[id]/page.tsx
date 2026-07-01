@@ -5952,13 +5952,11 @@ function ProjectCorrections({
   hasSignedBon: boolean;
   onChanged: () => void;
 }) {
-  const router = useNextRouter();
   const [items, setItems] = useState<CorrectionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [newTitle, setNewTitle] = useState("");
   const [newDetails, setNewDetails] = useState("");
   const [adding, setAdding] = useState(false);
-  const [bonBusy, setBonBusy] = useState(false);
   const [statusVal, setStatusVal] = useState(correctionStatus);
   const [err, setErr] = useState<string | null>(null);
 
@@ -6055,27 +6053,6 @@ function ProjectCorrections({
     }
   }
 
-  async function createBon() {
-    setBonBusy(true);
-    setErr(null);
-    try {
-      const r = await authedFetch(
-        `/api/v1/projects/${projectId}/correction-bon`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: "{}"
-        }
-      );
-      if (!r.ok) throw new Error();
-      const { bon_id } = (await r.json()) as { bon_id: number };
-      router.push(`/app/bons/${bon_id}`);
-    } catch {
-      setErr("Création du bon de correction échouée.");
-      setBonBusy(false);
-    }
-  }
-
   const todo = items.filter((i) => i.status !== "complete").length;
 
   return (
@@ -6098,19 +6075,6 @@ function ProjectCorrections({
             Points à reprendre sur le projet — {todo} à faire.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void createBon()}
-          disabled={bonBusy}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50"
-        >
-          {bonBusy ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Hammer className="h-4 w-4" />
-          )}
-          Bon de correction à signer
-        </button>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -6140,9 +6104,9 @@ function ProjectCorrections({
         })}
       </div>
       <p className="mt-1 text-[11px] text-white/40">
-        « Bon de correction » ouvre un bon signable : ajoute les lignes, puis
-        « Envoyer pour signature » depuis sa fiche. Les coûts du retour
-        s&apos;accumulent sur ce projet.
+        Liste les points à reprendre ci-dessous, puis prépare le bon de
+        correction signable plus bas (lignes, aperçu PDF, envoi pour
+        signature). Les coûts du retour s&apos;accumulent sur ce projet.
       </p>
 
       <div className="mt-4 space-y-2">
@@ -6237,6 +6201,482 @@ function ProjectCorrections({
         </button>
       </div>
       {err ? <p className="mt-2 text-xs text-rose-400">{err}</p> : null}
+
+      {/* #4 — bon de correction signable géré ICI (plus de redirection). */}
+      <CorrectionBonPanel projectId={projectId} onChanged={onChanged} />
+
+      {/* #2 — photos du projet (avant/après correction). */}
+      <div className="mt-5 border-t border-rose-500/20 pt-4">
+        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-white/40">
+          Photos
+        </h3>
+        <PhotosTab projectId={projectId} />
+      </div>
     </section>
+  );
+}
+
+// #4 — Panneau du bon de correction embarqué dans l'onglet Corrections :
+// création/reprise du bon, lignes, aperçu PDF, envoi pour signature et
+// récap du montant chargé au client. Remplace la redirection vers la
+// fiche générique /app/bons/[id].
+type BonLite = {
+  id: number;
+  reference: string;
+  status: string;
+  amount: number | string | null;
+  sent_at: string | null;
+  signed_at: string | null;
+  signed_by_name: string | null;
+};
+type BonItemLite = {
+  id: number;
+  position: number;
+  description: string;
+  unit: string | null;
+  quantity: number | string;
+  unit_price: number | string;
+  total: number | string;
+};
+type BonRecapLite = {
+  total: number;
+  labor_total: number;
+  achats_total: number;
+  fixed_amount: number | null;
+};
+
+function corMoney(n: number | string | null | undefined): string {
+  if (n == null || n === "") return "0,00 $";
+  const v = typeof n === "string" ? Number(n) : n;
+  if (!Number.isFinite(v)) return "0,00 $";
+  return `${v.toLocaleString("fr-CA", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })} $`;
+}
+
+function CorrectionBonPanel({
+  projectId,
+  onChanged
+}: {
+  projectId: number;
+  onChanged: () => void;
+}) {
+  const [bonId, setBonId] = useState<number | null>(null);
+  const [bon, setBon] = useState<BonLite | null>(null);
+  const [bonItems, setBonItems] = useState<BonItemLite[]>([]);
+  const [recap, setRecap] = useState<BonRecapLite | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [itemBusy, setItemBusy] = useState<number | "new" | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendTo, setSendTo] = useState("");
+  const [sendBusy, setSendBusy] = useState(false);
+  const [sendNotice, setSendNotice] = useState<string | null>(null);
+
+  async function loadBon(id: number) {
+    try {
+      const [bRes, iRes, rRes] = await Promise.all([
+        authedFetch(`/api/v1/bons-travail/${id}`),
+        authedFetch(`/api/v1/bons-travail/${id}/items`),
+        authedFetch(`/api/v1/bons-travail/${id}/recap`)
+      ]);
+      if (bRes.ok) setBon((await bRes.json()) as BonLite);
+      if (iRes.ok) setBonItems((await iRes.json()) as BonItemLite[]);
+      if (rRes.ok) setRecap((await rRes.json()) as BonRecapLite);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    async function init() {
+      setLoading(true);
+      try {
+        const r = await authedFetch(
+          `/api/v1/projects/${projectId}/correction-bon`
+        );
+        if (r.ok) {
+          const d = (await r.json()) as { bon_id: number | null };
+          if (!cancelled && d.bon_id) {
+            setBonId(d.bon_id);
+            await loadBon(d.bon_id);
+          }
+        }
+        // Pré-remplit le courriel d'envoi depuis le client du projet.
+        const pr = await authedFetch(`/api/v1/projects/${projectId}`);
+        if (pr.ok) {
+          const proj = (await pr.json()) as { client_id?: number | null };
+          if (proj.client_id) {
+            const cr = await authedFetch(`/api/v1/clients/${proj.client_id}`);
+            if (cr.ok) {
+              const c = (await cr.json()) as { email?: string | null };
+              if (c.email && !cancelled) setSendTo(c.email);
+            }
+          }
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void init();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  async function refreshRecap(id: number) {
+    try {
+      const r = await authedFetch(`/api/v1/bons-travail/${id}/recap`);
+      if (r.ok) setRecap((await r.json()) as BonRecapLite);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function createBon() {
+    setCreating(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/projects/${projectId}/correction-bon`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        }
+      );
+      if (!r.ok) throw new Error();
+      const { bon_id } = (await r.json()) as { bon_id: number };
+      setBonId(bon_id);
+      await loadBon(bon_id);
+      onChanged();
+    } catch {
+      setErr("Création du bon de correction échouée.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function addItem() {
+    if (!bonId) return;
+    setItemBusy("new");
+    try {
+      const r = await authedFetch(`/api/v1/bons-travail/${bonId}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          position: bonItems.length,
+          description: "Nouvel item",
+          unit: "unité",
+          quantity: 1,
+          unit_price: 0
+        })
+      });
+      if (!r.ok) throw new Error();
+      const created = (await r.json()) as BonItemLite;
+      setBonItems((xs) => [...xs, created]);
+      void refreshRecap(bonId);
+    } catch {
+      setErr("Ajout d'item échoué.");
+    } finally {
+      setItemBusy(null);
+    }
+  }
+
+  async function patchItem(itemId: number, patch: Partial<BonItemLite>) {
+    if (!bonId) return;
+    setItemBusy(itemId);
+    try {
+      const r = await authedFetch(
+        `/api/v1/bons-travail/${bonId}/items/${itemId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch)
+        }
+      );
+      if (!r.ok) throw new Error();
+      const u = (await r.json()) as BonItemLite;
+      setBonItems((xs) => xs.map((x) => (x.id === itemId ? u : x)));
+      void refreshRecap(bonId);
+    } catch {
+      setErr("Mise à jour échouée.");
+    } finally {
+      setItemBusy(null);
+    }
+  }
+
+  async function deleteItem(itemId: number) {
+    if (!bonId) return;
+    setItemBusy(itemId);
+    try {
+      const r = await authedFetch(
+        `/api/v1/bons-travail/${bonId}/items/${itemId}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok && r.status !== 204) throw new Error();
+      setBonItems((xs) => xs.filter((x) => x.id !== itemId));
+      void refreshRecap(bonId);
+    } catch {
+      setErr("Suppression échouée.");
+    } finally {
+      setItemBusy(null);
+    }
+  }
+
+  async function previewPdf() {
+    if (!bonId) return;
+    try {
+      const r = await authedFetch(`/api/v1/bons-travail/${bonId}/pdf`);
+      if (!r.ok) throw new Error();
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setErr("Aperçu PDF échoué.");
+    }
+  }
+
+  async function send() {
+    if (!bonId) return;
+    const to = sendTo
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    if (to.length === 0) {
+      setSendNotice("Adresse courriel requise.");
+      return;
+    }
+    setSendBusy(true);
+    setSendNotice(null);
+    try {
+      const r = await authedFetch(`/api/v1/bons-travail/${bonId}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to, subject: null, message: null })
+      });
+      if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+      setBon((await r.json()) as BonLite);
+      setSendOpen(false);
+      setSendNotice(`Envoyé à ${to.join(", ")}.`);
+      onChanged();
+    } catch (e) {
+      setSendNotice(`Erreur : ${(e as Error).message}`);
+    } finally {
+      setSendBusy(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="mt-5 flex items-center gap-2 border-t border-rose-500/20 pt-4 text-xs text-white/40">
+        <Loader2 className="h-4 w-4 animate-spin" /> Chargement du bon de
+        correction…
+      </div>
+    );
+  }
+
+  if (!bonId || !bon) {
+    return (
+      <div className="mt-5 border-t border-rose-500/20 pt-4">
+        <button
+          type="button"
+          onClick={() => void createBon()}
+          disabled={creating}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50"
+        >
+          {creating ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Hammer className="h-4 w-4" />
+          )}
+          Préparer le bon de correction
+        </button>
+        {err ? <p className="mt-2 text-xs text-rose-400">{err}</p> : null}
+      </div>
+    );
+  }
+
+  const signed = !!bon.signed_at;
+  const sent = !signed && !!bon.sent_at;
+
+  return (
+    <div className="mt-5 rounded-xl border border-rose-500/25 bg-brand-950/40 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-white">
+            <Hammer className="h-4 w-4 text-rose-300" /> Bon de correction
+            <span className="font-mono text-xs text-white/50">
+              {bon.reference}
+            </span>
+            {signed ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                <CheckCircle2 className="h-3 w-3" /> Signé
+                {bon.signed_by_name ? ` — ${bon.signed_by_name}` : ""}
+              </span>
+            ) : sent ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                <Circle className="h-3 w-3" /> À signer
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/60">
+                Brouillon
+              </span>
+            )}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void previewPdf()}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-2 text-xs font-semibold text-white/80 hover:border-accent-500"
+          >
+            <FileText className="h-4 w-4" /> Prévisualiser le PDF
+          </button>
+          {!signed ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSendNotice(null);
+                setSendOpen(true);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-400"
+            >
+              <Mail className="h-4 w-4" /> Envoyer pour signature
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {sendOpen ? (
+        <div className="mt-3 rounded-lg border border-brand-800 bg-brand-900 p-3">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
+            Courriel du client
+          </label>
+          <input
+            value={sendTo}
+            onChange={(e) => setSendTo(e.target.value)}
+            placeholder="client@exemple.com"
+            className="input mt-1 w-full text-sm"
+          />
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void send()}
+              disabled={sendBusy}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-400 disabled:opacity-50"
+            >
+              {sendBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Mail className="h-3.5 w-3.5" />
+              )}
+              Envoyer (PDF + lien signature)
+            </button>
+            <button
+              type="button"
+              onClick={() => setSendOpen(false)}
+              className="text-xs text-white/50 hover:text-white"
+            >
+              Annuler
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {sendNotice ? (
+        <p className="mt-2 text-xs text-white/60">{sendNotice}</p>
+      ) : null}
+
+      {/* Lignes du bon */}
+      <div className="mt-4 space-y-2">
+        {bonItems.length === 0 ? (
+          <p className="text-xs text-white/40">
+            Aucune ligne — ajoute ce qui est chargé au client pour la
+            correction.
+          </p>
+        ) : (
+          bonItems.map((it) => (
+            <div
+              key={it.id}
+              className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-800 bg-brand-900 p-2"
+            >
+              <input
+                defaultValue={it.description}
+                onBlur={(e) => {
+                  if (e.target.value !== it.description)
+                    void patchItem(it.id, { description: e.target.value });
+                }}
+                className="input min-w-[8rem] flex-1 text-sm"
+              />
+              <input
+                type="number"
+                step="0.01"
+                defaultValue={String(it.quantity)}
+                onBlur={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v) && v !== Number(it.quantity))
+                    void patchItem(it.id, { quantity: v });
+                }}
+                className="input w-16 text-sm"
+                title="Quantité"
+              />
+              <span className="text-white/30">×</span>
+              <input
+                type="number"
+                step="0.01"
+                defaultValue={String(it.unit_price)}
+                onBlur={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v) && v !== Number(it.unit_price))
+                    void patchItem(it.id, { unit_price: v });
+                }}
+                className="input w-24 text-sm"
+                title="Prix unitaire"
+              />
+              <span className="w-24 text-right text-sm font-semibold text-white">
+                {corMoney(it.total)}
+              </span>
+              <button
+                type="button"
+                onClick={() => void deleteItem(it.id)}
+                disabled={itemBusy === it.id}
+                className="text-rose-400 hover:text-rose-300 disabled:opacity-40"
+                aria-label="Supprimer la ligne"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={() => void addItem()}
+          disabled={itemBusy === "new"}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white/80 hover:border-accent-500 disabled:opacity-50"
+        >
+          {itemBusy === "new" ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Plus className="h-3.5 w-3.5" />
+          )}
+          Ajouter un item
+        </button>
+        <p className="text-sm">
+          <span className="text-white/50">Total chargé au client : </span>
+          <span className="font-bold text-emerald-300">
+            {corMoney(recap ? recap.total : bon.amount)}
+          </span>
+        </p>
+      </div>
+
+      {err ? <p className="mt-2 text-xs text-rose-400">{err}</p> : null}
+    </div>
   );
 }
