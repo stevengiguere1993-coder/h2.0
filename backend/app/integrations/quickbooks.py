@@ -1047,6 +1047,26 @@ class QuickBooksClient:
             return False
 
     # ------------------------------------------------------------------
+    # Tax codes / tax rates (pour pousser des montants de taxe EXACTS sur
+    # les achats via les taux d'ACHAT valides — cf. achat_qbo).
+    # ------------------------------------------------------------------
+    async def get_tax_code(self, tax_code_id: str) -> Optional[Dict[str, Any]]:
+        """Lit un TaxCode QBO par Id (best-effort). Renvoie None si absent."""
+        try:
+            data = await self._request("GET", f"/taxcode/{tax_code_id}")
+            return data.get("TaxCode") or data
+        except QuickBooksError:
+            return None
+
+    async def get_tax_rate(self, tax_rate_id: str) -> Optional[Dict[str, Any]]:
+        """Lit un TaxRate QBO par Id (best-effort). Renvoie None si absent."""
+        try:
+            data = await self._request("GET", f"/taxrate/{tax_rate_id}")
+            return data.get("TaxRate") or data
+        except QuickBooksError:
+            return None
+
+    # ------------------------------------------------------------------
     # Account lookup by Name (utilisé pour le mapping mode paiement)
     # ------------------------------------------------------------------
     async def find_account_by_name(self, name: str) -> Optional[Dict[str, Any]]:
