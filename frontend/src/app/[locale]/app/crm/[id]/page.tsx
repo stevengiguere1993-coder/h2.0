@@ -1084,6 +1084,30 @@ function ProspectDocuments({
     (s) => s.status === "sent" && !s.accepted_at
   );
 
+  // Ouvre le PDF de la soumission SIGNÉE (avec la signature tracée du
+  // client rendue dessus par le backend) dans un nouvel onglet — plutôt
+  // que de renvoyer vers l'éditeur de la soumission dans le système. Pour
+  // les documents d'un prospect, on veut voir le PDF signé, pas le
+  // formulaire interne.
+  async function viewSoumissionPdf(soumissionId: number) {
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/soumissions/${soumissionId}/pdf`
+      );
+      if (!res.ok) {
+        setError("Ouverture du PDF échouée.");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setError("Ouverture du PDF échouée.");
+    }
+  }
+
   // Lazy-load blob URLs for both photos (thumbnail preview) and
   // other documents (PDF download link). The endpoint requires a
   // Bearer token, so a plain <a href> would 401 — we fetch via
@@ -1322,10 +1346,11 @@ function ProspectDocuments({
               <ul className="space-y-2">
                 {signedSoumissions.map((s) => (
                   <li key={s.id}>
-                    <Link
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      href={`/app/soumissions/${s.id}` as any}
-                      className="flex items-start justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-sm hover:border-emerald-500/50"
+                    <button
+                      type="button"
+                      onClick={() => void viewSoumissionPdf(s.id)}
+                      title="Ouvrir le PDF signé"
+                      className="flex w-full items-start justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-left text-sm hover:border-emerald-500/50"
                     >
                       <div className="min-w-0">
                         <p className="truncate font-semibold text-white">
@@ -1337,12 +1362,13 @@ function ProspectDocuments({
                           {s.accepted_at
                             ? ` le ${new Date(s.accepted_at).toLocaleDateString("fr-CA")}`
                             : ""}
+                          {" · voir le PDF signé"}
                         </p>
                       </div>
                       <span className="shrink-0 text-sm font-semibold text-emerald-300">
                         {fmtMoney(s.total)}
                       </span>
-                    </Link>
+                    </button>
                   </li>
                 ))}
               </ul>
