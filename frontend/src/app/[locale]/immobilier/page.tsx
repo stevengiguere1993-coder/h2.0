@@ -235,7 +235,7 @@ export default function ImmobilierDashboard() {
                 tone="amber"
               />
               <ATraiterTile
-                href="/immobilier/maintenance"
+                href="/immobilier/bons-travail"
                 icon={<Wrench className="h-4 w-4" />}
                 label="Maintenance urgente"
                 count={aTraiter.maintenance_urgente_nb}
