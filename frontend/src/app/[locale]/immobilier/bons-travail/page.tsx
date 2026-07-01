@@ -316,12 +316,12 @@ export default function BonsTravailPage() {
         ]}
       />
       <div className="p-4 pb-24 lg:p-6">
-        <header className="flex items-start justify-between gap-3">
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex items-start gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/15 text-amber-300">
+            <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-300">
               <Hammer className="h-5 w-5" />
             </span>
-            <div>
+            <div className="min-w-0">
               <h1 className="text-2xl font-bold text-white">Bons de travail</h1>
               <p className="mt-1 max-w-2xl text-sm text-white/60">
                 Entretien de nos immeubles. Crée une demande de réparation ;
@@ -508,14 +508,6 @@ export default function BonsTravailPage() {
                             <p className="mt-0.5 truncate font-mono text-[10px] text-white/40">
                               {b.reference}
                             </p>
-                            {b.project ? (
-                              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-brand-800">
-                                <div
-                                  className="h-full rounded-full bg-gradient-to-r from-amber-400 to-emerald-400"
-                                  style={{ width: `${b.project.progress_pct}%` }}
-                                />
-                              </div>
-                            ) : null}
                           </button>
                         ))
                       )}
@@ -576,17 +568,15 @@ export default function BonsTravailPage() {
                     />
                   </Field>
 
-                  {/* Notes de l'exécutant — lecture seule. */}
-                  {detail.work_notes ? (
-                    <div>
-                      <p className="mb-1 text-xs font-medium text-white/60">
-                        Notes de l&apos;exécutant
-                      </p>
-                      <p className="whitespace-pre-wrap rounded-lg border border-brand-800 bg-brand-900/60 px-3 py-2 text-sm text-white/80">
-                        {detail.work_notes}
-                      </p>
-                    </div>
-                  ) : null}
+                  {/* Notes de l'exécutant — lecture seule, toujours visible. */}
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-white/60">
+                      Notes de l&apos;exécutant
+                    </p>
+                    <p className="whitespace-pre-wrap rounded-lg border border-brand-800 bg-brand-900/60 px-3 py-2 text-sm text-white/80">
+                      {detail.work_notes || "Aucune note pour l'instant."}
+                    </p>
+                  </div>
 
                   {/* Photos — lecture seule. */}
                   {detail.photos.length > 0 ? (
