@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     quickbooks_env: str = "sandbox"
     qbo_refresh_token: Optional[str] = None
     qbo_realm_id: Optional[str] = None
+    # Jeton de vérification du webhook QBO (« Webhooks verifier token » dans
+    # le portail Intuit). Sert à valider la signature intuit-signature des
+    # notifications QBO → Kratos (reverse-sync : maj mode de paiement + date
+    # d'un achat quand la dépense est rapprochée dans QuickBooks).
+    qbo_webhook_verifier_token: Optional[str] = None
     # Id du code de taxe QBO à appliquer sur chaque ligne d'achat
     # (reçu de dépense). Requis si la compagnie utilise la taxe de vente
     # automatisée (« Tous les articles ont besoin d'un taux de taxe »).
