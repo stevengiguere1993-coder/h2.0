@@ -525,13 +525,15 @@ export default function AchatsPage() {
                         )}
                       </td>
                       <td className="px-4 py-3 text-center">
-                        {a.is_billable === false ? (
-                          <span className="text-[10px] uppercase tracking-wider text-white/30">
-                            —
-                          </span>
-                        ) : a.invoiced_at ? (
+                        {a.invoiced_at ? (
+                          // Refacturé au client dans Kratos → vert, prioritaire
+                          // sur tout (même si le drapeau refacturable a changé).
                           <span className="rounded-md bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">
                             ✓ Refacturé
+                          </span>
+                        ) : a.is_billable === false ? (
+                          <span className="text-[10px] uppercase tracking-wider text-white/30">
+                            —
                           </span>
                         ) : (
                           <span className="rounded-md bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-amber-950">
