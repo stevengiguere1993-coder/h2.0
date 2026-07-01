@@ -47,6 +47,7 @@ class OpenPunch(BaseModel):
     started_at: datetime
     project_id: Optional[int]
     contact_request_id: Optional[int]
+    bon_travail_id: Optional[int] = None
     task: Optional[str]
 
 
@@ -64,9 +65,17 @@ class PunchContextProspect(BaseModel):
     project_type: str
 
 
+class PunchContextBon(BaseModel):
+    id: int
+    reference: str
+    title: str
+    address: Optional[str] = None
+
+
 class PunchContextsResponse(BaseModel):
     projects: list[PunchContextProject]
     prospects: list[PunchContextProspect]
+    bons: list[PunchContextBon] = []
 
 
 class AgendaEventMini(BaseModel):
@@ -101,10 +110,13 @@ class MobileMe(BaseModel):
 
 
 class PunchStartBody(BaseModel):
-    # One of the three contexts; at least one must be non-null for the
-    # punch to be useful downstream (finances, reporting).
+    # One of the contexts; at least one must be non-null for the punch to
+    # be useful downstream (finances, reporting).
     project_id: Optional[int] = None
     contact_request_id: Optional[int] = None
+    # Bon de travail interne (entretien de nos immeubles) : les heures
+    # remontent au bon via bon_travail_id (coût temps & matériel).
+    bon_travail_id: Optional[int] = None
     # Free-form task label, e.g. "Admin", "Déplacement", "Formation".
     task: Optional[str] = Field(default=None, max_length=255)
     geolocation: Optional[str] = Field(default=None, max_length=128)
@@ -261,16 +273,24 @@ async def punch_start(
             "Un punch est déjà en cours.",
         )
     # At least one context is required so reporting stays meaningful.
-    if not any([body.project_id, body.contact_request_id, body.task]):
+    if not any(
+        [
+            body.project_id,
+            body.contact_request_id,
+            body.bon_travail_id,
+            body.task,
+        ]
+    ):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "Un contexte est requis (projet, prospect ou tâche admin).",
+            "Un contexte est requis (projet, prospect, bon ou tâche admin).",
         )
     now = datetime.now(timezone.utc)
     p = Punch(
         employe_id=emp.id,
         project_id=body.project_id,
         contact_request_id=body.contact_request_id,
+        bon_travail_id=body.bon_travail_id,
         started_at=now,
         task=body.task,
         geolocation=body.geolocation,
@@ -292,6 +312,7 @@ async def punch_start(
             "employe_id": emp.id,
             "employe": emp.full_name,
             "project_id": p.project_id,
+            "bon_travail_id": p.bon_travail_id,
             "task": p.task,
             "started_at": p.started_at.isoformat(),
             "source": "mobile",
@@ -518,6 +539,22 @@ async def punch_contexts(
     )
     prospects = (await db.execute(prospect_stmt)).scalars().all()
 
+    # Bons de travail internes (entretien de nos immeubles) poinçonnables :
+    # tout bon interne encore ouvert (ni facturé ni annulé). L'employé peut
+    # y pointer ses heures (coût temps & matériel sur le bon).
+    from app.models.bon_travail import BonTravail
+
+    bon_stmt = (
+        select(BonTravail)
+        .where(
+            BonTravail.kind == "interne",
+            BonTravail.status.notin_(["facture", "cancelled"]),
+        )
+        .order_by(BonTravail.is_urgent.desc(), BonTravail.id.desc())
+        .limit(100)
+    )
+    bons = (await db.execute(bon_stmt)).scalars().all()
+
     return PunchContextsResponse(
         projects=[
             PunchContextProject(
@@ -533,6 +570,15 @@ async def punch_contexts(
                 project_type=p.project_type,
             )
             for p in prospects
+        ],
+        bons=[
+            PunchContextBon(
+                id=b.id,
+                reference=b.reference,
+                title=b.title,
+                address=b.address,
+            )
+            for b in bons
         ],
     )
 
