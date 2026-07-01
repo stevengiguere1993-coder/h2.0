@@ -650,7 +650,9 @@ export default function BonDetailPage() {
                     {" · "}
                     {b.executant_type === "sous_traitant"
                       ? "Sous-traitant"
-                      : "Nos hommes à tout faire"}
+                      : b.executant_type === "nos_hommes"
+                        ? "Nos hommes à tout faire"
+                        : "À classifier"}
                   </p>
                 ) : client ? (
                   <p className="mt-1 text-xs text-white/50">
@@ -729,6 +731,13 @@ export default function BonDetailPage() {
                   </p>
                 </div>
                 <div className="space-y-4 px-5 py-4">
+                  {b.executant_type !== "nos_hommes" &&
+                  b.executant_type !== "sous_traitant" ? (
+                    <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-200">
+                      À classifier — ce bon vient de la Gestion locative.
+                      Choisis qui l&apos;exécute.
+                    </p>
+                  ) : null}
                   <div className="grid gap-2 sm:grid-cols-2">
                     <button
                       type="button"
@@ -739,7 +748,7 @@ export default function BonDetailPage() {
                         })
                       }
                       className={`flex items-center gap-2 rounded-xl border p-3 text-left transition ${
-                        b.executant_type !== "sous_traitant"
+                        b.executant_type === "nos_hommes"
                           ? "border-accent-500 bg-brand-900"
                           : "border-brand-800 bg-brand-900/60 hover:border-brand-700"
                       }`}
