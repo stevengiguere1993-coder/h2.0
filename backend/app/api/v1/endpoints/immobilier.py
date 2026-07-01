@@ -805,6 +805,10 @@ async def create_bon_from_immeuble(
         # aucune signature. Apparaît sur le board Construction ET le miroir
         # Gestion locative.
         kind="interne",
+        # Créé côté Gestion locative : l'exécutant (nos hommes vs
+        # sous-traitant) n'est PAS encore décidé → "à classifier". Le
+        # gestionnaire Construction tranchera depuis la fiche du bon.
+        executant_type="a_classifier",
         owner_entreprise_id=own.entreprise_id if own else None,
         immeuble_id=immeuble_id,
         logement_id=payload.logement_id,
