@@ -980,6 +980,7 @@ class _RollupImmeuble(BaseModel):
     total: float
     count: int
     communs_total: float
+    communs_count: int = 0
     logements: List[_RollupLogement]
 
 
@@ -1037,7 +1038,13 @@ async def maintenance_rollup(
         amt = float(b.amount) if b.amount is not None else 0.0
         e = by_imm.setdefault(
             b.immeuble_id,
-            {"total": 0.0, "count": 0, "communs": 0.0, "logs": {}},
+            {
+                "total": 0.0,
+                "count": 0,
+                "communs": 0.0,
+                "communs_count": 0,
+                "logs": {},
+            },
         )
         e["total"] += amt
         e["count"] += 1
@@ -1049,6 +1056,7 @@ async def maintenance_rollup(
             le["count"] += 1
         else:
             e["communs"] += amt
+            e["communs_count"] += 1
 
     out: List[_RollupImmeuble] = []
     for imm_id, e in by_imm.items():
@@ -1061,6 +1069,7 @@ async def maintenance_rollup(
                 total=round(e["total"], 2),
                 count=e["count"],
                 communs_total=round(e["communs"], 2),
+                communs_count=int(e["communs_count"]),
                 logements=[
                     _RollupLogement(
                         logement_id=lid,
