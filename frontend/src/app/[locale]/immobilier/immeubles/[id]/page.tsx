@@ -132,6 +132,7 @@ type RollupImmeuble = {
   total: number;
   count: number;
   communs_total: number;
+  communs_count?: number;
   logements: RollupLogement[];
 };
 
@@ -1620,7 +1621,7 @@ function MaintenanceTab({
             className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-300 sm:w-64"
           >
             <option value="all">Tout l&apos;immeuble</option>
-            {rollup.communs_total > 0 ? (
+            {(rollup.communs_count ?? 0) > 0 ? (
               <option value="communs">Communs / immeuble entier</option>
             ) : null}
             {rollup.logements.map((l) => (
@@ -1634,7 +1635,7 @@ function MaintenanceTab({
           </select>
         </div>
         {filter === "all" &&
-        (rollup.logements.length > 0 || rollup.communs_total > 0) ? (
+        (rollup.logements.length > 0 || (rollup.communs_count ?? 0) > 0) ? (
           <div className="mt-3 space-y-1 border-t border-brand-800 pt-3 text-sm">
             {rollup.logements.map((l) => (
               <div
@@ -1645,7 +1646,7 @@ function MaintenanceTab({
                 <span className="text-white">{fmtCurrency(l.total)}</span>
               </div>
             ))}
-            {rollup.communs_total > 0 ? (
+            {(rollup.communs_count ?? 0) > 0 ? (
               <div className="flex items-center justify-between text-white/70">
                 <span>Communs / immeuble entier</span>
                 <span className="text-white">
