@@ -46,6 +46,7 @@ type BonListItem = {
   amount: number | null;
   immeuble_id: number | null;
   logement_id: number | null;
+  is_urgent?: boolean;
 };
 
 type PhotoMeta = { id: number; caption: string | null; content_type: string };
@@ -57,6 +58,7 @@ type BonDetail = {
   status: string;
   address: string | null;
   work_notes: string | null;
+  is_urgent: boolean;
   photos: PhotoMeta[];
 };
 
@@ -116,6 +118,7 @@ export default function BonsTravailPage() {
   const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({});
   const [editTitre, setEditTitre] = useState("");
   const [editDesc, setEditDesc] = useState("");
+  const [editUrgent, setEditUrgent] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
 
   async function loadBons() {
@@ -254,6 +257,7 @@ export default function BonsTravailPage() {
       setDetail(d);
       setEditTitre(d.title);
       setEditDesc(d.description || "");
+      setEditUrgent(!!d.is_urgent);
       for (const ph of d.photos) void loadPhoto(b.id, ph.id);
     } catch {
       setError("Impossible d'ouvrir ce bon.");
@@ -282,7 +286,8 @@ export default function BonsTravailPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             titre: editTitre.trim() || null,
-            description: editDesc.trim() ? editDesc.trim() : null
+            description: editDesc.trim() ? editDesc.trim() : null,
+            is_urgent: editUrgent
           })
         }
       );
@@ -303,6 +308,12 @@ export default function BonsTravailPage() {
     for (const b of bons || []) {
       const target = COLUMNS.find((c) => c.id === b.status) ? b.status : "draft";
       map[target].push(b);
+    }
+    // Les urgences remontent en haut de chaque colonne.
+    for (const id of Object.keys(map)) {
+      map[id].sort((a, b) =>
+        !!a.is_urgent !== !!b.is_urgent ? (a.is_urgent ? -1 : 1) : 0
+      );
     }
     return map;
   }, [bons]);
@@ -497,8 +508,17 @@ export default function BonsTravailPage() {
                             key={b.id}
                             type="button"
                             onClick={() => openDetail(b)}
-                            className="block w-full rounded-lg border border-brand-800 bg-brand-950 p-3 text-left transition hover:border-accent-500"
+                            className={`block w-full rounded-lg border p-3 text-left transition ${
+                              b.is_urgent
+                                ? "border-rose-500/70 bg-rose-500/10 hover:border-rose-400"
+                                : "border-brand-800 bg-brand-950 hover:border-accent-500"
+                            }`}
                           >
+                            {b.is_urgent ? (
+                              <span className="mb-1 inline-flex items-center gap-1 rounded-md bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-rose-300">
+                                ⚠ Urgence
+                              </span>
+                            ) : null}
                             <p className="truncate text-sm font-semibold text-white">
                               {b.address || "Adresse non renseignée"}
                             </p>
@@ -552,6 +572,17 @@ export default function BonsTravailPage() {
                 </p>
 
                 <div className="mt-4 space-y-4">
+                  <button
+                    type="button"
+                    onClick={() => setEditUrgent((v) => !v)}
+                    className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                      editUrgent
+                        ? "border-rose-500 bg-rose-500/20 text-rose-200"
+                        : "border-brand-700 bg-brand-900 text-white/70 hover:border-rose-500/50"
+                    }`}
+                  >
+                    ⚠ {editUrgent ? "Urgence activée" : "Marquer urgence"}
+                  </button>
                   <Field label="Titre">
                     <input
                       value={editTitre}
