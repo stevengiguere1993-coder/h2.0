@@ -27,7 +27,6 @@ import {
   Sparkles,
   Unlink,
   Users,
-  Wrench,
   X
 } from "lucide-react";
 
@@ -54,7 +53,6 @@ const NAV: NavItem[] = [
   { href: "/immobilier/baux", label: "Baux & paiements", icon: ClipboardList },
   { href: "/immobilier/finances", label: "Finances", icon: CircleDollarSign },
   { href: "/immobilier/renouvellements", label: "Renouvellements", icon: ClipboardList },
-  { href: "/immobilier/maintenance", label: "Maintenance", icon: Wrench },
   { href: "/immobilier/depots", label: "Dépôts de garantie", icon: ShieldCheck },
   { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer },
   // Paramètres = gestion des utilisateurs/employés + volets + immeubles
