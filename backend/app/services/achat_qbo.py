@@ -83,6 +83,39 @@ def _is_stale_token(exc: Exception) -> bool:
     )
 
 
+def _is_invalid_tax_rate(exc: Exception) -> bool:
+    """Vrai si QBO rejette un identifiant de taux de taxe (TaxRateRef) non
+    valide pour ce type de transaction.
+
+    Au Québec, QBO tient des TaxRate DISTINCTS pour les ventes et les
+    achats (ex. TVQ vs TVQ (CTI)). Notre résolution de taux par
+    pourcentage/nom peut tomber sur un taux de VENTE, que QBO refuse dans
+    une Purchase/Bill d'achat (« Invalid tax rate id »). On retombe alors
+    sur un TotalTax global (cf. _strip_explicit_tax_lines)."""
+    msg = str(exc).lower()
+    return (
+        "invalid tax rate" in msg
+        or "taux de taxe non valide" in msg
+    )
+
+
+def _strip_explicit_tax_lines(payload: Dict[str, Any]) -> bool:
+    """Retire les lignes de taxe explicites (TaxLine + TaxRateRef) du
+    payload et retombe sur un TotalTax global — accepté par QBO même quand
+    un TaxRateRef n'est pas valide pour ce type de transaction. Conserve
+    GlobalTaxCalculation=TaxExcluded. Renvoie True si le payload a été
+    modifié (→ un nouvel essai a du sens)."""
+    detail = payload.get("TxnTaxDetail")
+    if not isinstance(detail, dict) or "TaxLine" not in detail:
+        return False
+    total = detail.get("TotalTax")
+    if total is not None:
+        payload["TxnTaxDetail"] = {"TotalTax": total}
+    else:
+        payload.pop("TxnTaxDetail", None)
+    return True
+
+
 async def _load_achat(db: AsyncSession, achat_id: int) -> Optional[Achat]:
     return (
         await db.execute(select(Achat).where(Achat.id == achat_id))
@@ -816,10 +849,32 @@ async def sync_achat_to_qbo(
                         payload.pop("sparse", None)
                         qbo_obj = await qbo.create_purchase(payload)
                         did_create = True
+                    elif _is_invalid_tax_rate(exc) and _strip_explicit_tax_lines(
+                        payload
+                    ):
+                        log.warning(
+                            "QBO taux de taxe invalide → repli TotalTax "
+                            "(achat %s)",
+                            achat.id,
+                        )
+                        qbo_obj = await qbo.update_purchase(payload)
                     else:
                         raise
             else:
-                qbo_obj = await qbo.create_purchase(payload)
+                try:
+                    qbo_obj = await qbo.create_purchase(payload)
+                except QuickBooksError as exc:
+                    if _is_invalid_tax_rate(exc) and _strip_explicit_tax_lines(
+                        payload
+                    ):
+                        log.warning(
+                            "QBO taux de taxe invalide → repli TotalTax "
+                            "(achat %s)",
+                            achat.id,
+                        )
+                        qbo_obj = await qbo.create_purchase(payload)
+                    else:
+                        raise
                 did_create = True
         else:
             # Sur compte fournisseur (chèque / net-30) → Bill
@@ -862,10 +917,32 @@ async def sync_achat_to_qbo(
                         payload.pop("sparse", None)
                         qbo_obj = await qbo.create_bill(payload)
                         did_create = True
+                    elif _is_invalid_tax_rate(exc) and _strip_explicit_tax_lines(
+                        payload
+                    ):
+                        log.warning(
+                            "QBO taux de taxe invalide → repli TotalTax "
+                            "(achat %s)",
+                            achat.id,
+                        )
+                        qbo_obj = await qbo.update_bill(payload)
                     else:
                         raise
             else:
-                qbo_obj = await qbo.create_bill(payload)
+                try:
+                    qbo_obj = await qbo.create_bill(payload)
+                except QuickBooksError as exc:
+                    if _is_invalid_tax_rate(exc) and _strip_explicit_tax_lines(
+                        payload
+                    ):
+                        log.warning(
+                            "QBO taux de taxe invalide → repli TotalTax "
+                            "(achat %s)",
+                            achat.id,
+                        )
+                        qbo_obj = await qbo.create_bill(payload)
+                    else:
+                        raise
                 did_create = True
     except QuickBooksError as exc:
         raise AchatSyncError(str(exc)) from exc
