@@ -38,6 +38,7 @@ class ProjectUpdate(BaseModel):
     # Envoyer null (explicitement) pour retirer le responsable.
     responsible_user_id: Optional[int] = Field(default=None, gt=0)
     status: Optional[str] = Field(default=None, max_length=32)
+    correction_status: Optional[str] = Field(default=None, max_length=16)
     address: Optional[str] = None
     description: Optional[str] = None
     notes: Optional[str] = None
@@ -83,6 +84,7 @@ class ProjectRead(BaseModel):
     # kanban. awaiting = un bon envoyé non signé ; signed = un bon signé.
     awaiting_signature: bool = False
     has_signed_bon: bool = False
+    correction_status: str = "a_planifier"
     created_at: datetime
     updated_at: datetime
 
