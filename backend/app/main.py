@@ -20,6 +20,7 @@ from app.db.session import (
     ensure_immobilier_aux_tables,
     ensure_project_corrections_tables,
     ensure_raci_tables,
+    ensure_relance_tables,
     ensure_timesheet_tables,
     init_db,
 )
@@ -82,6 +83,16 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning(
             "ensure_project_corrections_tables failed during startup: %s", exc
+        )
+
+    # Tables du moteur de relances (cadence + plans + relances par lead) —
+    # transaction isolée. Sans ce filet les tables manquent en prod → 500
+    # sur l'ajout d'une relance (« Ajout échoué (HTTP 500) »).
+    try:
+        await ensure_relance_tables()
+    except Exception as exc:
+        logger.warning(
+            "ensure_relance_tables failed during startup: %s", exc
         )
 
     # Backfill : crée le projet (+ facture d'acompte DRAFT) pour les

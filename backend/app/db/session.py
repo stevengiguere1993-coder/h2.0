@@ -433,6 +433,40 @@ async def ensure_project_corrections_tables() -> None:
         log.warning("ensure_project_corrections_tables failed: %s", exc)
 
 
+async def ensure_relance_tables() -> None:
+    """Crée les tables du moteur de relances (séquence de cadence) dans leur
+    PROPRE transaction, pour survivre à un abort d'``init_db``.
+
+    ``init_db`` lance ``create_all`` dans une seule grosse transaction : si
+    une étape échoue, tout est annulé, y compris la création de ces tables
+    récentes. Sans ce filet isolé, ``cadence_steps`` / ``relance_plans`` /
+    ``relance_items`` manquent en prod → « relation relance_items does not
+    exist » → POST /api/v1/relances/plan/{id} plante en HTTP 500 (« Ajout
+    échoué (HTTP 500) » sur la carte « Relances prévues » d'un prospect).
+    Même classe de bug que ``ensure_project_corrections_tables``.
+    """
+    import logging
+
+    log = logging.getLogger("db.ensure_relance_tables")
+    try:
+        from app.db.base import Base
+        from app.models.cadence_step import CadenceStep  # noqa: F401
+        from app.models.relance_item import RelanceItem  # noqa: F401
+        from app.models.relance_plan import RelancePlan  # noqa: F401
+
+        tables = [
+            CadenceStep.__table__,
+            RelancePlan.__table__,
+            RelanceItem.__table__,
+        ]
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(c, tables=tables)
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_relance_tables failed: %s", exc)
+
+
 async def init_db() -> None:
     """
     Initialize database tables.
