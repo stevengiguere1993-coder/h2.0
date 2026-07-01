@@ -8,6 +8,7 @@ import {
   Clock,
   FileText,
   HardHat,
+  Image as ImageIcon,
   Loader2,
   Mail,
   Package,
@@ -174,6 +175,11 @@ export default function BonDetailPage() {
   const [workNotes, setWorkNotes] = useState("");
   const [notesSaving, setNotesSaving] = useState(false);
   const [notesSaved, setNotesSaved] = useState(false);
+  const [bonPhotos, setBonPhotos] = useState<
+    { id: number; caption: string | null }[]
+  >([]);
+  const [bonPhotoUrls, setBonPhotoUrls] = useState<Record<number, string>>({});
+  const [photoUp, setPhotoUp] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
   const [sendBusy, setSendBusy] = useState(false);
   const [sendNotice, setSendNotice] = useState<string | null>(null);
@@ -203,6 +209,7 @@ export default function BonDetailPage() {
         setItems(iData);
         setPunches(pData);
         setWorkNotes(bd.work_notes || "");
+        if ((bd.kind ?? "construction") === "interne") void loadPhotos();
         if (rRes.ok) setRecap((await rRes.json()) as Recap);
         setSendSubject(`Bon de travail ${bd.reference} — ${bd.title}`);
         if (bd.client_id) {
@@ -271,6 +278,52 @@ export default function BonDetailPage() {
     } catch {
       setB((prev) => (prev ? { ...prev, is_urgent: !next } : prev));
       setError("Changement d'urgence échoué.");
+    }
+  }
+
+  async function loadPhotos() {
+    try {
+      const r = await authedFetch(`/api/v1/immobilier/bons-travail/${id}`);
+      if (!r.ok) return;
+      const d = (await r.json()) as {
+        photos?: { id: number; caption: string | null }[];
+      };
+      const photos = d.photos || [];
+      setBonPhotos(photos);
+      for (const ph of photos) {
+        const pr = await authedFetch(
+          `/api/v1/immobilier/bons-travail/${id}/photos/${ph.id}`
+        );
+        if (pr.ok) {
+          const blob = await pr.blob();
+          setBonPhotoUrls((m) => ({
+            ...m,
+            [ph.id]: URL.createObjectURL(blob)
+          }));
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function uploadPhotos(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setPhotoUp(true);
+    try {
+      for (const f of Array.from(files)) {
+        const fd = new FormData();
+        fd.append("file", f);
+        await authedFetch(`/api/v1/immobilier/bons-travail/${id}/photos`, {
+          method: "POST",
+          body: fd
+        });
+      }
+      await loadPhotos();
+    } catch {
+      setError("Ajout de photo échoué.");
+    } finally {
+      setPhotoUp(false);
     }
   }
 
@@ -673,6 +726,75 @@ export default function BonDetailPage() {
                       </span>
                     ) : null}
                   </div>
+                </div>
+              </section>
+            ) : null}
+
+            {isInternal ? (
+              <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-brand-800 px-5 py-4">
+                  <div>
+                    <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-accent-500">
+                      <ImageIcon className="h-4 w-4" /> Photos
+                    </h2>
+                    <p className="mt-1 text-xs text-white/50">
+                      L&apos;exécutant peut ajouter des photos du travail
+                      (avant / après).
+                    </p>
+                  </div>
+                  <label className="btn-accent cursor-pointer text-xs">
+                    {photoUp ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Plus className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Ajouter des photos
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => {
+                        void uploadPhotos(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                </div>
+                <div className="p-4">
+                  {bonPhotos.length === 0 ? (
+                    <p className="py-4 text-center text-xs text-white/40">
+                      Aucune photo pour l&apos;instant.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                      {bonPhotos.map((ph) =>
+                        bonPhotoUrls[ph.id] ? (
+                          <a
+                            key={ph.id}
+                            href={bonPhotoUrls[ph.id]}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block aspect-square overflow-hidden rounded-lg border border-brand-800"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={bonPhotoUrls[ph.id]}
+                              alt={ph.caption || "photo"}
+                              className="h-full w-full object-cover"
+                            />
+                          </a>
+                        ) : (
+                          <div
+                            key={ph.id}
+                            className="flex aspect-square items-center justify-center rounded-lg border border-brand-800 bg-brand-950"
+                          >
+                            <Loader2 className="h-4 w-4 animate-spin text-white/40" />
+                          </div>
+                        )
+                      )}
+                    </div>
+                  )}
                 </div>
               </section>
             ) : null}
