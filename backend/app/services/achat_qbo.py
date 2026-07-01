@@ -194,22 +194,35 @@ def _format_qbo_addr(addr: Optional[Dict[str, Any]]) -> Optional[str]:
     return flat[:500] or None
 
 
-def _add_quebec_taxes(payload: Dict[str, Any], lines: list) -> None:
-    """Quand l'achat est rattaché à un projet (donc refacturable),
-    on ajoute TPS 5 % + TVQ 9.975 % calculés sur la somme des lignes,
-    avec GlobalTaxCalculation=TaxExcluded (les Amount des lignes ne
-    contiennent pas la taxe). Permet à QB d'avoir le montant total
-    avec taxes pour le rapprochement comptable."""
-    subtotal = 0.0
-    for line in lines:
+def _add_quebec_taxes(
+    payload: Dict[str, Any], lines: list, achat: Optional[Achat] = None
+) -> None:
+    """Ajoute le total de taxes à la transaction QB (TxnTaxDetail).
+
+    On utilise le montant de taxe RÉEL saisi dans Kratos
+    (``achat.amount_taxes``) plutôt qu'un recalcul TPS+TVQ sur le
+    sous-total. Sinon un écart d'arrondi d'1 cent (ex. Kratos 83,82 $ vs
+    recalcul 83,83 $) fait que le total QB ne correspond plus au montant
+    réel du relevé bancaire — et QuickBooks n'apparie pas la dépense déjà
+    présente. Repli sur le recalcul seulement si le montant réel est
+    absent (achat legacy sans taxes ventilées)."""
+    total_tax: Optional[float] = None
+    if achat is not None and achat.amount_taxes is not None:
         try:
-            subtotal += float(line.get("Amount") or 0)
+            total_tax = round(float(achat.amount_taxes), 2)
         except (TypeError, ValueError):
-            continue
-    tps = round(subtotal * 0.05, 2)
-    tvq = round(subtotal * 0.09975, 2)
-    total_tax = round(tps + tvq, 2)
-    if total_tax > 0:
+            total_tax = None
+    if total_tax is None:
+        subtotal = 0.0
+        for line in lines:
+            try:
+                subtotal += float(line.get("Amount") or 0)
+            except (TypeError, ValueError):
+                continue
+        tps = round(subtotal * 0.05, 2)
+        tvq = round(subtotal * 0.09975, 2)
+        total_tax = round(tps + tvq, 2)
+    if total_tax and total_tax > 0:
         payload["GlobalTaxCalculation"] = "TaxExcluded"
         payload["TxnTaxDetail"] = {"TotalTax": total_tax}
 
@@ -243,7 +256,7 @@ def _build_bill_payload(
         "Line": lines,
     }
     if customer_id:
-        _add_quebec_taxes(payload, lines)
+        _add_quebec_taxes(payload, lines, achat)
     elif settings.qbo_purchase_tax_code:
         # Sans client (achat non refacturable) : le montant de ligne est
         # le HT, et QBO calcule la taxe par-dessus via le TaxCodeRef.
@@ -293,7 +306,7 @@ def _build_purchase_payload(
     if payment_method_id:
         payload["PaymentMethodRef"] = {"value": str(payment_method_id)}
     if customer_id:
-        _add_quebec_taxes(payload, lines)
+        _add_quebec_taxes(payload, lines, achat)
     elif settings.qbo_purchase_tax_code:
         # Sans client (achat non refacturable) : montant de ligne = HT,
         # QBO calcule la taxe via le TaxCodeRef. TaxExcluded évite la
