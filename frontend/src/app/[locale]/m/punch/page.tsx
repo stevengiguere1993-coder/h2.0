@@ -11,7 +11,8 @@ import {
   Search,
   Square,
   Timer,
-  UserSearch
+  UserSearch,
+  Wrench
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -21,6 +22,7 @@ type OpenPunch = {
   started_at: string;
   project_id: number | null;
   contact_request_id: number | null;
+  bon_travail_id: number | null;
   task: string | null;
 };
 
@@ -41,12 +43,20 @@ type PunchContextProspect = {
   project_type: string;
 };
 
+type PunchContextBon = {
+  id: number;
+  reference: string;
+  title: string;
+  address: string | null;
+};
+
 type Contexts = {
   projects: PunchContextProject[];
   prospects: PunchContextProspect[];
+  bons: PunchContextBon[];
 };
 
-type PickerMode = "choose" | "project" | "prospect" | "admin";
+type PickerMode = "choose" | "project" | "prospect" | "bon" | "admin";
 
 const ADMIN_TASKS = [
   "Administration",
@@ -190,6 +200,13 @@ export default function MobilePunch() {
           .includes(search.trim().toLowerCase())
       : true
   );
+  const filteredBons = (contexts?.bons || []).filter((b) =>
+    search.trim()
+      ? (b.title + " " + (b.address || "") + " " + b.reference)
+          .toLowerCase()
+          .includes(search.trim().toLowerCase())
+      : true
+  );
 
   return (
     <>
@@ -264,6 +281,13 @@ export default function MobilePunch() {
               sub="Rencontrer un prospect, prendre des mesures, préparer un devis"
               tone="sky"
               onClick={() => setMode("prospect")}
+            />
+            <PickerTile
+              icon={Wrench}
+              label="Un bon de travail"
+              sub="Entretien / réparation sur un de nos immeubles"
+              tone="rose"
+              onClick={() => setMode("bon")}
             />
             <PickerTile
               icon={ClipboardList}
@@ -357,6 +381,44 @@ export default function MobilePunch() {
               </li>
             ))}
           </PickerList>
+        ) : mode === "bon" ? (
+          <PickerList
+            title="Choisir un bon de travail"
+            back={() => {
+              setMode("choose");
+              setSearch("");
+            }}
+            search={search}
+            onSearch={setSearch}
+            emptyLabel="Aucun bon de travail actif."
+          >
+            {filteredBons.map((b) => (
+              <li key={b.id}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    start({ bon_travail_id: b.id, task: null })
+                  }
+                  disabled={busy}
+                  className="flex w-full items-center justify-between gap-3 border-b border-brand-800 px-4 py-3 text-left hover:bg-brand-900 disabled:opacity-60"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-white">
+                      {b.title}
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-white/50">
+                      {b.address || b.reference}
+                    </p>
+                  </div>
+                  {busy ? (
+                    <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-accent-500" />
+                  ) : (
+                    <Play className="h-4 w-4 flex-shrink-0 text-accent-500" />
+                  )}
+                </button>
+              </li>
+            ))}
+          </PickerList>
         ) : (
           // admin
           <PickerList
@@ -400,12 +462,13 @@ function PickerTile({
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   sub: string;
-  tone: "blue" | "sky" | "accent";
+  tone: "blue" | "sky" | "rose" | "accent";
   onClick: () => void;
 }) {
   const toneMap: Record<string, string> = {
     blue: "bg-blue-500 text-white",
     sky: "bg-sky-500 text-white",
+    rose: "bg-rose-500 text-white",
     accent: "bg-accent-500 text-brand-950"
   };
   return (
@@ -500,6 +563,11 @@ function OpenPunchContext({
     label = pr?.name || `Prospect #${p.contact_request_id}`;
     Icon = Eye;
     sub = pr?.address || "Visite / soumission";
+  } else if (p.bon_travail_id && ctx) {
+    const bo = ctx.bons.find((x) => x.id === p.bon_travail_id);
+    label = bo?.title || `Bon #${p.bon_travail_id}`;
+    Icon = Wrench;
+    sub = bo?.address || bo?.reference || "Bon de travail";
   }
   return (
     <div className="mt-4 flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-900 px-3 py-2">
