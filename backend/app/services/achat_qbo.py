@@ -205,6 +205,24 @@ def _is_invalid_tax_rate(exc: Exception) -> bool:
     return "invalid tax rate" in msg or "taux de taxe non valide" in msg
 
 
+def _is_locked_txn(exc: Exception) -> bool:
+    """Vrai si QBO refuse de MODIFIER la transaction parce qu'elle est
+    verrouillée côté comptable : elle a des paiements liés / est rapprochée
+    (bank feed), ou c'est un crédit de carte qu'on ne peut pas retransformer
+    en dépense. Dans ce cas, on ne peut pas re-synchroniser automatiquement —
+    on remonte un message clair à l'utilisateur."""
+    msg = str(exc).lower()
+    return (
+        "a des paiements" in msg
+        or "has payments" in msg
+        or "ne pouvez pas le changer" in msg
+        or "rapprochée" in msg
+        or "rapprochee" in msg
+        or "reconciled" in msg
+        or ("cannot" in msg and "payment" in msg)
+    )
+
+
 def _strip_txn_tax_detail(payload: Dict[str, Any]) -> bool:
     """Retire le TxnTaxDetail explicite (lignes de taxe) du payload pour
     retomber sur le calcul QBO standard (HT + TaxExcluded). Renvoie True si
@@ -908,6 +926,14 @@ async def sync_achat_to_qbo(
                         raise
                 did_create = True
     except QuickBooksError as exc:
+        if _is_locked_txn(exc):
+            raise AchatSyncError(
+                "Cette dépense est verrouillée dans QuickBooks (elle a des "
+                "paiements liés ou est rapprochée), donc la synchro ne peut "
+                "pas la modifier. Ajuste-la directement dans QuickBooks, ou "
+                "annule le paiement / le rapprochement avant de "
+                "re-synchroniser."
+            ) from exc
         raise AchatSyncError(str(exc)) from exc
 
     qbo_id = str(qbo_obj.get("Id") or "")
