@@ -234,6 +234,7 @@ async def ensure_critical_columns() -> None:
         ("bons_travail", "sous_traitant_id", "INTEGER"),
         ("bons_travail", "marge_pct", "NUMERIC(5, 2) NOT NULL DEFAULT 0"),
         ("bons_travail", "work_notes", "TEXT"),
+        ("bons_travail", "is_urgent", "BOOLEAN NOT NULL DEFAULT false"),
         ("bon_items", "item_type", "VARCHAR(16) NOT NULL DEFAULT 'materiel'"),
         ("bon_items", "cost_rate", "NUMERIC(12, 2)"),
         ("bon_items", "bill_rate", "NUMERIC(12, 2)"),
