@@ -597,16 +597,16 @@ export default function BonsTravailPage() {
             />
             <StatCard
               label="Ouverts"
-              value={bons.filter((b) => b.status === "draft").length}
+              value={
+                bons.filter((b) =>
+                  ["draft", "accepte_a_planifier"].includes(b.status)
+                ).length
+              }
               tone="border-amber-500/40 bg-amber-500/10 text-amber-300"
             />
             <StatCard
               label="Planifiés"
-              value={
-                bons.filter((b) =>
-                  ["accepte_a_planifier", "planifie"].includes(b.status)
-                ).length
-              }
+              value={bons.filter((b) => b.status === "planifie").length}
               tone="border-sky-500/40 bg-sky-500/10 text-sky-300"
             />
           </div>
