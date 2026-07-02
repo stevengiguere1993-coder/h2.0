@@ -447,11 +447,17 @@ def _build_purchase_payload(
 
 
 def _payment_type_for(method: Optional[str]) -> str:
-    """QBO Purchase.PaymentType : Cash / Check / CreditCard."""
+    """QBO Purchase.PaymentType : Cash / CreditCard.
+
+    « Compte chèque Horizon » = toujours des VIREMENTS (Interac), jamais de
+    vrais chèques → PaymentType "Cash" pour que QB l'affiche comme une
+    DÉPENSE (sortie de fonds du compte) et non un « Chèque n°… ». Le
+    PaymentMethodRef « Virement » (cf. _payment_method_name_for) précise le
+    mode. NB : les BillPayments depuis un compte bancaire restent PayType
+    "Check" — c'est le seul type que QBO accepte pour un paiement de facture
+    depuis un compte bancaire."""
     if method and method.startswith("cc_"):
         return "CreditCard"
-    if method == "cheque_horizon":
-        return "Check"
     return "Cash"
 
 
