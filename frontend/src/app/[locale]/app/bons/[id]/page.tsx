@@ -168,6 +168,10 @@ export default function BonDetailPage() {
   const [workNotes, setWorkNotes] = useState("");
   const [notesSaving, setNotesSaving] = useState(false);
   const [notesSaved, setNotesSaved] = useState(false);
+  // Description du bon — éditable après création (Construction).
+  const [desc, setDesc] = useState("");
+  const [descSaving, setDescSaving] = useState(false);
+  const [descSaved, setDescSaved] = useState(false);
   // #1 — édition de l'exécutant/assignation directement sur la fiche.
   const [sousTraitants, setSousTraitants] = useState<SousTraitant[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
@@ -205,6 +209,7 @@ export default function BonDetailPage() {
         setItems(iData);
         setPunches(pData);
         setWorkNotes(bd.work_notes || "");
+        setDesc(bd.description || "");
         if ((bd.kind ?? "construction") === "interne") void loadPhotos();
         if (rRes.ok) setRecap((await rRes.json()) as Recap);
         setSendSubject(`Bon de travail ${bd.reference} — ${bd.title}`);
@@ -361,6 +366,26 @@ export default function BonDetailPage() {
       setError("Ajout de photo échoué.");
     } finally {
       setPhotoUp(false);
+    }
+  }
+
+  async function saveDesc() {
+    setDescSaving(true);
+    setDescSaved(false);
+    try {
+      const res = await authedFetch(`/api/v1/bons-travail/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: desc.trim() || null })
+      });
+      if (!res.ok) throw new Error();
+      setB((await res.json()) as Bon);
+      setDescSaved(true);
+      setTimeout(() => setDescSaved(false), 2500);
+    } catch {
+      setError("Enregistrement de la description échoué.");
+    } finally {
+      setDescSaving(false);
     }
   }
 
@@ -720,20 +745,43 @@ export default function BonDetailPage() {
                   Description
                 </h2>
                 <p className="mt-1 text-xs text-white/50">
-                  Le travail demandé, tel que décrit à la création du bon
-                  (Construction ou Gestion locative).
+                  Le travail demandé — rempli à la création (Construction ou
+                  Gestion locative), modifiable ici.
                 </p>
               </div>
               <div className="px-5 py-4">
-                {b.description ? (
-                  <p className="whitespace-pre-wrap text-sm text-white/80">
-                    {b.description}
-                  </p>
-                ) : (
-                  <p className="text-sm text-white/40">
-                    Aucune description fournie.
-                  </p>
-                )}
+                <textarea
+                  value={desc}
+                  onChange={(e) => setDesc(e.target.value)}
+                  rows={4}
+                  placeholder="Décris le travail à faire…"
+                  className="input w-full"
+                />
+                <div className="mt-3 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={saveDesc}
+                    disabled={descSaving}
+                    className="btn-accent text-sm"
+                  >
+                    {descSaving ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />{" "}
+                        Enregistrement…
+                      </>
+                    ) : (
+                      <>
+                        <Save className="mr-2 h-4 w-4" /> Enregistrer la
+                        description
+                      </>
+                    )}
+                  </button>
+                  {descSaved ? (
+                    <span className="text-xs text-emerald-300">
+                      Enregistré ✓
+                    </span>
+                  ) : null}
+                </div>
               </div>
             </section>
 
