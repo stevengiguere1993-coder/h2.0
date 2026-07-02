@@ -255,6 +255,27 @@ async def get_project(
     out.responsible_name = await _responsible_name(
         db, project.responsible_user_id
     )
+
+    # Flux A — état de signature des bons liés (corrections), comme dans
+    # la LISTE. Sans ce calcul, la fiche projet affichait toujours
+    # awaiting_signature/has_signed_bon à faux (défaut du schéma) et le
+    # badge « À signer / Signé » n'apparaissait jamais dans l'onglet
+    # Corrections.
+    from sqlalchemy import select as _bsel
+    from app.models.bon_travail import BonTravail as _BT
+
+    brows = (
+        await db.execute(
+            _bsel(_BT.sent_at, _BT.signed_at).where(
+                _BT.project_id == project_id
+            )
+        )
+    ).all()
+    for sent_at, signed_at in brows:
+        if signed_at is not None:
+            out.has_signed_bon = True
+        elif sent_at is not None:
+            out.awaiting_signature = True
     return out
 
 
