@@ -659,11 +659,6 @@ export default function BonDetailPage() {
                     Client : {client.name}
                   </p>
                 ) : null}
-                {b.description ? (
-                  <p className="mt-2 max-w-xl whitespace-pre-wrap text-sm text-white/70">
-                    {b.description}
-                  </p>
-                ) : null}
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <button
@@ -718,6 +713,29 @@ export default function BonDetailPage() {
               label="Bon de travail"
               route="/app/bons/[id]"
             />
+
+            <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
+              <div className="border-b border-brand-800 px-5 py-4">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  Description
+                </h2>
+                <p className="mt-1 text-xs text-white/50">
+                  Le travail demandé, tel que décrit à la création du bon
+                  (Construction ou Gestion locative).
+                </p>
+              </div>
+              <div className="px-5 py-4">
+                {b.description ? (
+                  <p className="whitespace-pre-wrap text-sm text-white/80">
+                    {b.description}
+                  </p>
+                ) : (
+                  <p className="text-sm text-white/40">
+                    Aucune description fournie.
+                  </p>
+                )}
+              </div>
+            </section>
 
             {isInternal ? (
               <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
