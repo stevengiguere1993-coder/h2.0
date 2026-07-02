@@ -38,6 +38,8 @@ type Project = {
   // Flux A — état de signature des bons liés (corrections).
   awaiting_signature?: boolean;
   has_signed_bon?: boolean;
+  // Bon de correction créé mais pas encore envoyé au client.
+  correction_bon_draft?: boolean;
   // Statut de la correction : "a_planifier" | "planifie" | "termine".
   correction_status?: string;
   created_at: string;
@@ -456,6 +458,10 @@ function ProjectCard({
           ) : p.awaiting_signature ? (
             <span className="inline-flex items-center gap-1 rounded-md bg-rose-500/20 px-2 py-1 text-[11px] font-medium leading-none text-rose-300">
               <Clock className="h-3 w-3" /> À signer
+            </span>
+          ) : p.correction_bon_draft ? (
+            <span className="inline-flex items-center gap-1 rounded-md bg-white/10 px-2 py-1 text-[11px] font-medium leading-none text-white/60">
+              <Clock className="h-3 w-3" /> Bon à envoyer
             </span>
           ) : null}
           {p.status === "correction" && p.correction_status === "termine" ? (
