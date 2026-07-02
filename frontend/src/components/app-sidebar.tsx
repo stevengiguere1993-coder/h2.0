@@ -44,6 +44,7 @@ const CONSTRUCTION_NAV: NavItem[] = [
   { href: "/app/crm", label: "CRM / Prospects", icon: Users, minRole: "manager" },
   { href: "/app/clients", label: "Clients", icon: Contact, minRole: "manager" },
   { href: "/app/soumissions", label: "Soumissions", icon: FileText, minRole: "manager" },
+  { href: "/app/cockpit", label: "Vue d'ensemble", icon: BarChart3, minRole: "manager" },
   { href: "/app/projets", label: "Projets", icon: Briefcase, minRole: "employee" },
   { href: "/app/agenda", label: "Agenda", icon: Calendar, minRole: "employee" },
   { href: "/app/bons", label: "Bons de travail", icon: ClipboardCheck, minRole: "employee" },

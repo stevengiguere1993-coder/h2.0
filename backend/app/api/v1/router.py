@@ -35,6 +35,7 @@ from app.api.v1.endpoints import (
     blog,
     calendar,
     clients,
+    cockpit,
     devlog,
     devlog_soumission_defaults,
     drive_auth,
@@ -339,6 +340,8 @@ api_router.include_router(bons_router)
 # would otherwise try to coerce "me"/"debug"/"weekly" to an int and
 # return 422.
 api_router.include_router(punch_ops.router)
+# Cockpit chargé de projet — vue d'ensemble Construction (manager+).
+api_router.include_router(cockpit.router)
 api_router.include_router(punch_router)
 api_router.include_router(factures_router)
 # Payments sub-routes must come BEFORE facture_items so /factures/{id}/payments
