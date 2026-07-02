@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Hammer, Image as ImageIcon, Loader2, Plus, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Hammer,
+  Image as ImageIcon,
+  Loader2,
+  Plus,
+  X
+} from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
@@ -499,13 +506,47 @@ export default function BonsTravailPage() {
             <button
               type="button"
               onClick={() => setNewUrgent((v) => !v)}
-              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition ${
+              aria-pressed={newUrgent}
+              className={`flex w-full items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition ${
                 newUrgent
-                  ? "border-rose-500 bg-rose-500/20 text-rose-200"
-                  : "border-brand-700 bg-brand-900 text-white/70 hover:border-rose-500/50"
+                  ? "border-rose-500 bg-rose-500/10"
+                  : "border-brand-800 bg-brand-950 hover:border-rose-400/60"
               }`}
             >
-              ⚠ {newUrgent ? "Urgence activée" : "Marquer urgence"}
+              <span className="flex items-center gap-3">
+                <span
+                  className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg transition ${
+                    newUrgent
+                      ? "bg-rose-500 text-white"
+                      : "bg-rose-500/10 text-rose-400"
+                  }`}
+                >
+                  <AlertTriangle className="h-5 w-5" />
+                </span>
+                <span>
+                  <span
+                    className={`block text-sm font-semibold ${
+                      newUrgent ? "text-rose-400" : "text-white"
+                    }`}
+                  >
+                    Urgence
+                  </span>
+                  <span className="block text-xs text-white/50">
+                    Priorisé en haut des tableaux, fiche en rouge.
+                  </span>
+                </span>
+              </span>
+              <span
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition ${
+                  newUrgent ? "bg-rose-500" : "bg-brand-800"
+                }`}
+              >
+                <span
+                  className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${
+                    newUrgent ? "translate-x-5" : "translate-x-1"
+                  }`}
+                />
+              </span>
             </button>
 
             {error ? (
