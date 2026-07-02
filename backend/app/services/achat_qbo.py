@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.integrations.quickbooks import QuickBooksError, get_qbo
 from app.models.achat import Achat
+from app.models.achat_versement import AchatVersement
 from app.models.fournisseur import Fournisseur
 from app.models.project import Project
 from app.models.qbo_account_map import QboAccountMap
@@ -714,6 +715,54 @@ async def sync_achat_to_qbo(
         method = (achat.payment_method or "bill_to_pay").lower()
         as_purchase = method in PAID_METHODS
 
+        # Versements (paiements partiels) : une facture payée en plusieurs
+        # virements DOIT partir en Bill + une BillPayment PAR versement —
+        # jamais en Purchase unique du total, sinon les lignes bancaires
+        # (ex. 2 × 4 000 $) ne peuvent pas s'apparier dans QB.
+        versements = list(
+            (
+                await db.execute(
+                    select(AchatVersement)
+                    .where(AchatVersement.achat_id == achat.id)
+                    .order_by(
+                        AchatVersement.paid_at.asc(), AchatVersement.id.asc()
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if versements:
+            as_purchase = False
+            # Transition : l'achat a pu être poussé AVANT comme Purchase
+            # (dépense unique du total). Ce n'est pas un Bill → on supprime
+            # l'ancien objet QB (non apparié, c'est le problème même) et on
+            # repart proprement en Bill.
+            if achat.qbo_bill_id:
+                is_bill = True
+                try:
+                    await qbo.get_bill(str(achat.qbo_bill_id))
+                except QuickBooksError:
+                    is_bill = False
+                if not is_bill:
+                    if await qbo.delete_purchase(str(achat.qbo_bill_id)):
+                        log.info(
+                            "Achat %s : ancienne Purchase QB %s supprimée "
+                            "→ recréation en Bill (versements)",
+                            achat.id,
+                            achat.qbo_bill_id,
+                        )
+                    else:
+                        log.warning(
+                            "Achat %s : suppression Purchase QB %s échouée "
+                            "(doublon possible)",
+                            achat.id,
+                            achat.qbo_bill_id,
+                        )
+                    achat.qbo_bill_id = None
+                    achat.qbo_sync_token = None
+                    await db.flush()
+
         # Taux TPS/TVQ d'ACHAT (résolus depuis le code de taxe d'achat) pour
         # imposer des montants de taxe EXACTS → total au cent près. Best-effort
         # (résolu une fois) : (None, None) si indisponible → QBO calcule la
@@ -968,6 +1017,29 @@ async def sync_achat_to_qbo(
         achat.id, kind, qbo_id, doc_number,
     )
 
+    # Versements → une BillPayment QB PAR versement (montant + date + compte
+    # réels), chacune appariable à SA ligne du flux bancaire. Idempotent via
+    # qbo_bill_payment_id ; best-effort (un échec n'annule pas le push).
+    if not as_purchase and versements and qbo_id:
+        vendor_ref_id = vendor_id
+        for v in versements:
+            if v.qbo_bill_payment_id or float(v.amount or 0) <= 0:
+                continue
+            try:
+                bp_id = await _create_versement_payment(
+                    db, qbo, achat, v, vendor_ref_id, qbo_id
+                )
+                if bp_id:
+                    v.qbo_bill_payment_id = bp_id
+                    await db.flush()
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "Versement %s (achat %s) : push BillPayment échoué : %s",
+                    v.id,
+                    achat.id,
+                    exc,
+                )
+
     # Joindre la facture fournisseur (image / PDF) si l'employé en a
     # uploadé une. On le fait après création du Bill/Purchase ; en cas
     # d'échec on log mais on ne bloque pas le push principal.
@@ -1023,6 +1095,56 @@ async def sync_achat_to_qbo(
     }
 
 
+async def _create_versement_payment(
+    db: AsyncSession,
+    qbo,
+    achat: Achat,
+    versement: AchatVersement,
+    vendor_id: str,
+    bill_id: str,
+) -> Optional[str]:
+    """Crée la BillPayment QB d'UN versement (montant partiel, date et
+    compte réels du virement) liée au Bill de l'achat. Retourne l'Id QB,
+    ou None si le compte du mode de paiement n'est pas mappé."""
+    method = (versement.payment_method or "").lower()
+    payment_account_id = await _resolve_payment_account(db, qbo, method)
+    if not payment_account_id:
+        log.warning(
+            "Versement %s (achat %s) : pas de compte QBO mappé pour « %s »",
+            versement.id,
+            achat.id,
+            method,
+        )
+        return None
+    amount = round(float(versement.amount or 0), 2)
+    pay_type_check = method == "cheque_horizon"
+    payload: Dict[str, Any] = {
+        "VendorRef": {"value": str(vendor_id)},
+        "TotalAmt": amount,
+        "PayType": "Check" if pay_type_check else "CreditCard",
+        "Line": [
+            {
+                "Amount": amount,
+                "LinkedTxn": [
+                    {"TxnId": str(bill_id), "TxnType": "Bill"}
+                ],
+            }
+        ],
+    }
+    if versement.paid_at:
+        payload["TxnDate"] = versement.paid_at.isoformat()
+    if pay_type_check:
+        payload["CheckPayment"] = {
+            "BankAccountRef": {"value": payment_account_id}
+        }
+    else:
+        payload["CreditCardPayment"] = {
+            "CCAccountRef": {"value": payment_account_id}
+        }
+    created = await qbo.create_bill_payment(payload)
+    return str(created.get("Id") or "") or None
+
+
 async def push_bill_payment_to_qbo(
     db: AsyncSession, achat_id: int
 ) -> Dict[str, Any]:
@@ -1045,6 +1167,18 @@ async def push_bill_payment_to_qbo(
     if achat.qbo_bill_payment_id:
         # Deja sync, on ne re-cree pas.
         return {"ok": True, "qbo_bill_payment_id": achat.qbo_bill_payment_id}
+    has_versements = (
+        await db.execute(
+            select(AchatVersement.id)
+            .where(AchatVersement.achat_id == achat.id)
+            .limit(1)
+        )
+    ).first() is not None
+    if has_versements:
+        # Payé en versements : chaque versement a SA BillPayment (poussée
+        # par sync_achat_to_qbo). Un paiement global du total doublerait
+        # le paiement du Bill.
+        return {"ok": False, "reason": "has_versements"}
     if (achat.payment_method or "") == "bill_to_pay":
         return {"ok": False, "reason": "method_is_bill_to_pay"}
     if achat.status != "paid":

@@ -110,6 +110,7 @@ from app.api.v1.endpoints import (
     punch_ops,
     achat_qbo,
     achat_payment,
+    achat_versements,
     email_templates,
     mtl_properties,
     comparables,
@@ -293,6 +294,7 @@ api_router.include_router(drive_auto_uploads.router)
 api_router.include_router(client_qbo.router)
 api_router.include_router(achat_qbo.router)
 api_router.include_router(achat_payment.router)
+api_router.include_router(achat_versements.router)
 api_router.include_router(purchase_order_actions.router)
 api_router.include_router(cron_runner.router)
 api_router.include_router(automations.router)
