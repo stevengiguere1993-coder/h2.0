@@ -301,8 +301,27 @@ def _apply_purchase_tax(
         except (TypeError, ValueError):
             return None
 
+    net = round(
+        sum(float(ln.get("Amount") or 0) for ln in payload.get("Line", [])), 2
+    )
+    # Total de taxe à IMPOSER = TTC Kratos − HT envoyé en ligne. Couvre
+    # l'achat normal (amount=HT, amount_taxes=taxe → total_tax=amount_taxes)
+    # comme legacy (amount=TTC, amount_taxes=0 → total_tax=TTC−HT). Le total
+    # QBO vaudra donc exactement le TTC Kratos.
+    ttc = round(float(achat.amount or 0) + float(achat.amount_taxes or 0), 2)
+    total_tax = round(ttc - net, 2)
     tps = _f(achat.amount_tps)
     tvq = _f(achat.amount_tvq)
+    # On garde la ventilation Kratos si elle existe ET somme au total attendu ;
+    # sinon on la reconstruit (TPS = 5 % du HT, TVQ = le reste) pour que
+    # TPS + TVQ == total_tax EXACTEMENT — corrige « Kratos 109,13 / QBO 109,14 »
+    # quand le split n'était pas stocké (achat importé ou ancien).
+    if tps is None or tvq is None or round(tps + tvq, 2) != total_tax:
+        if total_tax > 0:
+            tps = round(net * 0.05, 2)
+            tvq = round(total_tax - tps, 2)
+        else:
+            tps = tvq = None
     if not (
         tps_rate_id
         and tvq_rate_id
@@ -312,9 +331,6 @@ def _apply_purchase_tax(
     ):
         return  # repli : QBO calcule la taxe sur le HT
 
-    net = round(
-        sum(float(ln.get("Amount") or 0) for ln in payload.get("Line", [])), 2
-    )
     payload["TxnTaxDetail"] = {
         "TotalTax": round(tps + tvq, 2),
         "TaxLine": [
