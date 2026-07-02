@@ -478,7 +478,7 @@ function ProjectCard({
               <Clock className="h-3 w-3" /> À signer
             </span>
           ) : p.correction_bon_draft ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-white/10 px-2 py-1 text-[11px] font-medium leading-none text-white/60">
+            <span className="inline-flex items-center gap-1 rounded-md bg-rose-500/20 px-2 py-1 text-[11px] font-medium leading-none text-rose-300">
               <Clock className="h-3 w-3" /> Bon à envoyer
             </span>
           ) : null}
