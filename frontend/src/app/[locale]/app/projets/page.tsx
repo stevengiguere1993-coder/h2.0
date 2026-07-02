@@ -157,7 +157,25 @@ export default function ProjectsPage() {
 
   async function moveProject(id: number, newStatus: string) {
     const prev = items;
-    setItems((xs) => xs.map((x) => (x.id === id ? { ...x, status: newStatus } : x)));
+    setItems((xs) =>
+      xs.map((x) =>
+        x.id === id
+          ? {
+              ...x,
+              status: newStatus,
+              // Le backend prépare automatiquement le bon de correction au
+              // passage en colonne Correction : on reflète tout de suite
+              // « Bon à envoyer » sans attendre un rechargement.
+              correction_bon_draft:
+                newStatus === "correction" &&
+                !x.has_signed_bon &&
+                !x.awaiting_signature
+                  ? true
+                  : x.correction_bon_draft
+            }
+          : x
+      )
+    );
     try {
       const res = await authedFetch(`/api/v1/projects/${id}`, {
         method: "PUT",

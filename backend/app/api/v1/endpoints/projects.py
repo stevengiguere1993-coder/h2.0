@@ -343,6 +343,28 @@ async def update_project(
 
         await archive_soumission_on_delivery(db, project.id)
 
+    # Passage en « Correction / Amélioration » → prépare automatiquement
+    # le bon de correction (idempotent, lignes semées depuis les points).
+    # Son état (« Bon à envoyer ») apparaît ainsi immédiatement sur le
+    # kanban et la fiche, sans clic supplémentaire. Effet SECONDAIRE isolé
+    # dans un savepoint : un échec ici n'annule jamais le changement de
+    # statut du projet.
+    if (
+        prev_status != ProjectStatus.CORRECTION.value
+        and project.status == ProjectStatus.CORRECTION.value
+    ):
+        try:
+            async with db.begin_nested():
+                await _ensure_correction_bon(db, project)
+        except Exception as exc:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Auto-création du bon de correction échouée (projet %s): %s",
+                project.id,
+                exc,
+            )
+
     out = ProjectRead.model_validate(project)
     out.responsible_name = await _responsible_name(
         db, project.responsible_user_id
@@ -404,35 +426,19 @@ async def get_correction_bon(
     return {"bon_id": bon.id, "reference": bon.reference, "status": bon.status}
 
 
-@router.post("/{project_id}/correction-bon")
-async def create_correction_bon(
-    project_id: int, db: DBSession, current_user: CurrentUser
-) -> dict:
-    """Crée (ou réutilise) le bon de CORRECTION / amélioration lié au
-    projet (Flux A).
-
-    Bon construction signable par le client : créé en brouillon ici, puis
-    envoyé pour signature depuis l'onglet Corrections. Les coûts du retour
-    de chantier s'accumulent sur le projet via project_id. Idempotent : si
-    un bon de correction existe déjà pour ce projet, on le renvoie au lieu
-    d'en créer un doublon."""
+async def _ensure_correction_bon(db, proj):
+    """Trouve OU crée le bon de correction du projet (idempotent), en
+    semant les lignes depuis les points de correction existants. Utilisé
+    par le POST /correction-bon ET par le passage automatique du projet
+    en colonne « Correction / Amélioration »."""
     from datetime import datetime, timezone
     from sqlalchemy import select as _bsel
 
     from app.models.bon_travail import BonTravail
-    from app.models.project import Project as _Proj
 
-    proj = (
-        await db.execute(_bsel(_Proj).where(_Proj.id == project_id))
-    ).scalar_one_or_none()
-    if proj is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
-        )
-
-    existing = await _find_correction_bon(db, project_id)
+    existing = await _find_correction_bon(db, proj.id)
     if existing is not None:
-        return {"bon_id": existing.id, "reference": existing.reference}
+        return existing
 
     bon = BonTravail(
         reference="BT-" + datetime.now(timezone.utc).strftime("%y%m%d-%H%M%S"),
@@ -458,7 +464,7 @@ async def create_correction_bon(
     corrections = (
         await db.execute(
             _bsel(ProjectCorrection)
-            .where(ProjectCorrection.project_id == project_id)
+            .where(ProjectCorrection.project_id == proj.id)
             .order_by(ProjectCorrection.position.asc(), ProjectCorrection.id.asc())
         )
     ).scalars().all()
@@ -481,7 +487,34 @@ async def create_correction_bon(
         )
     if corrections:
         await db.flush()
+    return bon
 
+
+@router.post("/{project_id}/correction-bon")
+async def create_correction_bon(
+    project_id: int, db: DBSession, current_user: CurrentUser
+) -> dict:
+    """Crée (ou réutilise) le bon de CORRECTION / amélioration lié au
+    projet (Flux A).
+
+    Bon construction signable par le client : créé en brouillon ici, puis
+    envoyé pour signature depuis l'onglet Corrections. Les coûts du retour
+    de chantier s'accumulent sur le projet via project_id. Idempotent : si
+    un bon de correction existe déjà pour ce projet, on le renvoie au lieu
+    d'en créer un doublon."""
+    from sqlalchemy import select as _bsel
+
+    from app.models.project import Project as _Proj
+
+    proj = (
+        await db.execute(_bsel(_Proj).where(_Proj.id == project_id))
+    ).scalar_one_or_none()
+    if proj is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
+
+    bon = await _ensure_correction_bon(db, proj)
     await db.commit()
     await db.refresh(bon)
     return {"bon_id": bon.id, "reference": bon.reference}
