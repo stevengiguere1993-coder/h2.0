@@ -734,6 +734,9 @@ class _BonFromImmeubleRequest(BaseModel):
     description: Optional[str] = None
     logement: Optional[str] = None  # n° de logement (affichage, legacy)
     logement_id: Optional[int] = None  # FK logement concerné (optionnel)
+    # Urgence posée dès la création (comme côté Construction) : le bon
+    # remonte en haut des kanbans des deux pôles.
+    is_urgent: bool = False
 
 
 @router.post("/immeubles/{immeuble_id}/bon-travail")
@@ -814,6 +817,7 @@ async def create_bon_from_immeuble(
         logement_id=payload.logement_id,
         marge_pct=10,
         requires_signature=False,
+        is_urgent=bool(payload.is_urgent),
     )
     bon.created_at = _now()
     bon.updated_at = _now()
