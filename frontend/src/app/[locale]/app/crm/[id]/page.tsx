@@ -113,6 +113,25 @@ const BUDGET_LABEL: Record<string, string> = {
   unsure: "Indéterminé"
 };
 
+// Provenance du lead — les valeurs techniques envoyées par les
+// formulaires du site (contact-page, service-*, landing-*) sont
+// traduites en libellés lisibles.
+function sourceLabel(source: string | null): string {
+  if (!source) return "—";
+  if (source === "contact-page") return "Siteweb (formulaire)";
+  if (source === "service-cuisine")
+    return "Siteweb (formulaire — Cuisine)";
+  if (source === "service-salle-de-bain")
+    return "Siteweb (formulaire — Salle de bain)";
+  if (source === "service-multilogement")
+    return "Siteweb (formulaire — Multilogement)";
+  if (source.startsWith("landing-"))
+    return "Siteweb (formulaire — page locale)";
+  if (source === "manual") return "Ajout manuel";
+  if (source === "facebook") return "Facebook";
+  return source;
+}
+
 const TABS = [
   { id: "apercu", label: "Aperçu", icon: FileText },
   { id: "client", label: "Client", icon: User },
@@ -535,7 +554,7 @@ export default function ProspectDetailPage() {
                     title="Budget approximatif"
                     value={p.budget_range ? BUDGET_LABEL[p.budget_range] || p.budget_range : "—"}
                   />
-                  <InfoCard title="Source" value={p.source || "—"} />
+                  <InfoCard title="Source" value={sourceLabel(p.source)} />
                   {/* Adresse(s) du lieu de soumission — peut différer de
                       l'adresse client si le projet est ailleurs. Une carte
                       par soumission distincte (référence + adresse). */}
