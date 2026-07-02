@@ -105,6 +105,7 @@ export default function BonsTravailPage() {
   const [logementId, setLogementId] = useState<string>("");
   const [titre, setTitre] = useState("");
   const [description, setDescription] = useState("");
+  const [newUrgent, setNewUrgent] = useState(false);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -203,7 +204,8 @@ export default function BonsTravailPage() {
           body: JSON.stringify({
             titre: titre.trim(),
             description: description.trim() || null,
-            logement_id: logementId ? Number(logementId) : null
+            logement_id: logementId ? Number(logementId) : null,
+            is_urgent: newUrgent
           })
         }
       );
@@ -226,6 +228,7 @@ export default function BonsTravailPage() {
       setTitre("");
       setDescription("");
       setLogementId("");
+      setNewUrgent(false);
       setPhotoFile(null);
       setFormOpen(false);
       void loadBons();
@@ -492,6 +495,18 @@ export default function BonsTravailPage() {
                 className="block w-full text-sm text-white/70 file:mr-3 file:rounded-lg file:border-0 file:bg-amber-500 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-brand-950 hover:file:bg-amber-400"
               />
             </Field>
+
+            <button
+              type="button"
+              onClick={() => setNewUrgent((v) => !v)}
+              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                newUrgent
+                  ? "border-rose-500 bg-rose-500/20 text-rose-200"
+                  : "border-brand-700 bg-brand-900 text-white/70 hover:border-rose-500/50"
+              }`}
+            >
+              ⚠ {newUrgent ? "Urgence activée" : "Marquer urgence"}
+            </button>
 
             {error ? (
               <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
