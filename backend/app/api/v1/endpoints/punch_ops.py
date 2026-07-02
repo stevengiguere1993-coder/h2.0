@@ -467,6 +467,151 @@ async def pending_count(db: DBSession, _: RequireManager) -> int:
     return int(n or 0)
 
 
+class LiveWorker(BaseModel):
+    """Une ligne de la vue temps réel « qui est où » (page Assignations).
+
+    La source PRIMAIRE est le punch actif (vérité terrain). La planif des
+    chantiers (phase du jour assignée) complète : gars prévu mais pas
+    pointé, ou écart entre le chantier pointé et le chantier prévu."""
+
+    employe_id: int
+    employe_name: str
+    # Punch actif — null si le gars n'est pas pointé.
+    punch_started_at: Optional[datetime] = None
+    punch_project_id: Optional[int] = None
+    punch_project_name: Optional[str] = None
+    punch_bon_id: Optional[int] = None
+    punch_bon_title: Optional[str] = None
+    punch_task: Optional[str] = None
+    # Planif du jour (phase de chantier assignée couvrant aujourd'hui).
+    planned_project_id: Optional[int] = None
+    planned_project_name: Optional[str] = None
+    planned_phase_name: Optional[str] = None
+
+
+@router.get(
+    "/live",
+    response_model=list[LiveWorker],
+    summary="Vue temps réel : qui est sur quel chantier (manager+)",
+)
+async def punch_live(db: DBSession, _: RequireManager) -> list[LiveWorker]:
+    import math
+
+    from app.models.bon_travail import BonTravail
+    from app.models.project import Project
+    from app.models.project_assignees import ProjectPhaseAssignee
+    from app.models.project_phase import ProjectPhase
+
+    today = date.today()
+
+    emps = (
+        await db.execute(select(Employe).where(Employe.active.is_(True)))
+    ).scalars().all()
+    emp_names = {e.id: e.full_name for e in emps}
+
+    # Punchs ouverts (vérité terrain).
+    open_punches = (
+        await db.execute(select(Punch).where(Punch.ended_at.is_(None)))
+    ).scalars().all()
+    punch_by_emp = {p.employe_id: p for p in open_punches if p.employe_id}
+
+    # Planif du jour : phases dont la fenêtre couvre aujourd'hui.
+    phases = (
+        await db.execute(
+            select(ProjectPhase).where(
+                ProjectPhase.start_date.is_not(None),
+                ProjectPhase.start_date <= today,
+            )
+        )
+    ).scalars().all()
+    active_phases = []
+    for ph in phases:
+        days = max(math.ceil(float(ph.duration_days or 1)), 1)
+        if ph.start_date + timedelta(days=days - 1) >= today:
+            active_phases.append(ph)
+
+    planned_by_emp: dict = {}
+    ph_by_id = {ph.id: ph for ph in active_phases}
+    if active_phases:
+        links = (
+            await db.execute(
+                select(
+                    ProjectPhaseAssignee.phase_id,
+                    ProjectPhaseAssignee.employe_id,
+                ).where(
+                    ProjectPhaseAssignee.phase_id.in_(list(ph_by_id)),
+                    ProjectPhaseAssignee.employe_id.is_not(None),
+                )
+            )
+        ).all()
+        for phid, emp_id in links:
+            planned_by_emp.setdefault(emp_id, ph_by_id[phid])
+    for ph in active_phases:
+        if ph.assignee_employe_id:
+            planned_by_emp.setdefault(ph.assignee_employe_id, ph)
+
+    # Résolution des libellés en une passe.
+    proj_ids = {p.project_id for p in open_punches if p.project_id}
+    proj_ids |= {ph.project_id for ph in planned_by_emp.values()}
+    proj_names: dict = {}
+    if proj_ids:
+        rows = (
+            await db.execute(
+                select(Project.id, Project.name).where(
+                    Project.id.in_(proj_ids)
+                )
+            )
+        ).all()
+        proj_names = {r[0]: r[1] for r in rows}
+    bon_ids = {p.bon_travail_id for p in open_punches if p.bon_travail_id}
+    bon_titles: dict = {}
+    if bon_ids:
+        rows = (
+            await db.execute(
+                select(BonTravail.id, BonTravail.title).where(
+                    BonTravail.id.in_(bon_ids)
+                )
+            )
+        ).all()
+        bon_titles = {r[0]: r[1] for r in rows}
+
+    out: list[LiveWorker] = []
+    for emp_id, name in emp_names.items():
+        p = punch_by_emp.get(emp_id)
+        planned = planned_by_emp.get(emp_id)
+        if p is None and planned is None:
+            continue
+        out.append(
+            LiveWorker(
+                employe_id=emp_id,
+                employe_name=name,
+                punch_started_at=p.started_at if p else None,
+                punch_project_id=p.project_id if p else None,
+                punch_project_name=(
+                    proj_names.get(p.project_id) if p and p.project_id else None
+                ),
+                punch_bon_id=p.bon_travail_id if p else None,
+                punch_bon_title=(
+                    bon_titles.get(p.bon_travail_id)
+                    if p and p.bon_travail_id
+                    else None
+                ),
+                punch_task=p.task if p else None,
+                planned_project_id=planned.project_id if planned else None,
+                planned_project_name=(
+                    proj_names.get(planned.project_id) if planned else None
+                ),
+                planned_phase_name=planned.name if planned else None,
+            )
+        )
+    # Pointés d'abord, puis prévus non pointés, alphabétique dans chaque
+    # groupe.
+    out.sort(
+        key=lambda w: (w.punch_started_at is None, w.employe_name.lower())
+    )
+    return out
+
+
 @router.post(
     "/{punch_id}/approve",
     response_model=PunchPending,
