@@ -5,6 +5,7 @@ import {
   Briefcase,
   Calendar,
   CheckSquare,
+  Clock,
   Loader2,
   Plus,
   Search,
@@ -402,6 +403,10 @@ export default function AssignationsPage() {
           className="mb-4"
         />
 
+        {/* Temps réel : punch actif = vérité terrain, planif = complément
+            (prévu pas pointé + écart chantier pointé vs prévu). */}
+        <LiveBoard onSelect={(id) => setSelectedEmpId(id)} />
+
         {error ? (
           <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
@@ -625,5 +630,178 @@ export default function AssignationsPage() {
         )}
       </div>
     </>
+  );
+}
+
+// ── Temps réel : qui est sur quel chantier ─────────────────────────────
+// Source primaire = punch actif (vérité terrain). La planif des chantiers
+// (phase du jour) complète : gars prévu mais pas pointé, et écart entre le
+// chantier pointé et le chantier prévu. Rafraîchi toutes les 45 s.
+
+type LiveWorker = {
+  employe_id: number;
+  employe_name: string;
+  punch_started_at: string | null;
+  punch_project_id: number | null;
+  punch_project_name: string | null;
+  punch_bon_id: number | null;
+  punch_bon_title: string | null;
+  punch_task: string | null;
+  planned_project_id: number | null;
+  planned_project_name: string | null;
+  planned_phase_name: string | null;
+};
+
+function sinceLabel(iso: string, now: Date): string {
+  const start = new Date(iso);
+  const mins = Math.max(
+    0,
+    Math.floor((now.getTime() - start.getTime()) / 60000)
+  );
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const dur = h > 0 ? `${h} h ${String(m).padStart(2, "0")}` : `${m} min`;
+  const hh = start.toLocaleTimeString("fr-CA", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  return `depuis ${hh} · ${dur}`;
+}
+
+function LiveBoard({ onSelect }: { onSelect: (id: number) => void }) {
+  const [workers, setWorkers] = useState<LiveWorker[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    let cancelled = false;
+    async function tick() {
+      try {
+        const r = await authedFetch("/api/v1/punch/live");
+        if (r.ok && !cancelled) {
+          setWorkers((await r.json()) as LiveWorker[]);
+          setUpdatedAt(new Date());
+          setNow(new Date());
+        }
+      } catch {
+        /* silencieux — le bandeau garde son dernier état */
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    }
+    void tick();
+    const poll = setInterval(tick, 45_000);
+    const clock = setInterval(() => setNow(new Date()), 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(poll);
+      clearInterval(clock);
+    };
+  }, []);
+
+  if (!loaded) return null;
+
+  const punched = workers.filter((w) => w.punch_started_at);
+  const plannedOnly = workers.filter((w) => !w.punch_started_at);
+
+  return (
+    <section className="mb-4 rounded-xl border border-brand-800 bg-brand-900 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="flex flex-wrap items-center gap-2 text-sm font-semibold uppercase tracking-wider text-white/70">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+          </span>
+          En direct sur les chantiers
+          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+            {punched.length} pointé{punched.length > 1 ? "s" : ""}
+          </span>
+          {plannedOnly.length > 0 ? (
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+              {plannedOnly.length} prévu{plannedOnly.length > 1 ? "s" : ""} non
+              pointé{plannedOnly.length > 1 ? "s" : ""}
+            </span>
+          ) : null}
+        </h2>
+        {updatedAt ? (
+          <span className="text-[10px] text-white/40">
+            Mis à jour à{" "}
+            {updatedAt.toLocaleTimeString("fr-CA", {
+              hour: "2-digit",
+              minute: "2-digit"
+            })}
+          </span>
+        ) : null}
+      </div>
+
+      {workers.length === 0 ? (
+        <p className="mt-3 text-sm text-white/40">
+          Personne n&apos;est pointé ni prévu sur un chantier en ce moment.
+        </p>
+      ) : (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {workers.map((w) => {
+            const active = !!w.punch_started_at;
+            const site =
+              w.punch_project_name ||
+              w.punch_bon_title ||
+              w.punch_task ||
+              "Sans contexte";
+            const mismatch =
+              active &&
+              w.planned_project_id != null &&
+              w.punch_project_id !== w.planned_project_id;
+            return (
+              <button
+                key={w.employe_id}
+                type="button"
+                onClick={() => onSelect(w.employe_id)}
+                className={`rounded-lg border p-3 text-left transition ${
+                  active
+                    ? "border-emerald-500/40 bg-emerald-500/[0.06] hover:border-emerald-400"
+                    : "border-brand-800 bg-brand-950 hover:border-brand-700"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`h-2 w-2 flex-shrink-0 rounded-full ${
+                      active ? "bg-emerald-400" : "bg-gray-400/60"
+                    }`}
+                  />
+                  <p className="truncate text-sm font-semibold text-white">
+                    {w.employe_name}
+                  </p>
+                </div>
+                {active ? (
+                  <>
+                    <p className="mt-1 truncate text-sm text-white/80">
+                      {site}
+                    </p>
+                    <p className="mt-0.5 flex items-center gap-1 text-[11px] text-white/50">
+                      <Clock className="h-3 w-3" />
+                      {sinceLabel(w.punch_started_at as string, now)}
+                    </p>
+                    {mismatch ? (
+                      <p className="mt-1 inline-flex rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
+                        Prévu : {w.planned_project_name}
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="mt-1 truncate text-[11px] text-amber-300/90">
+                    Prévu : {w.planned_project_name}
+                    {w.planned_phase_name
+                      ? ` — ${w.planned_phase_name}`
+                      : ""}{" "}
+                    · pas pointé
+                  </p>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
