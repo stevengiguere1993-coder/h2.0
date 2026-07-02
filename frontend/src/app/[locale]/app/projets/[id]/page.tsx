@@ -6078,7 +6078,7 @@ function ProjectCorrections({
                 <Circle className="h-3 w-3" /> À signer
               </span>
             ) : correctionBonDraft ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/60">
+              <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
                 <Circle className="h-3 w-3" /> Bon à envoyer
               </span>
             ) : null}
