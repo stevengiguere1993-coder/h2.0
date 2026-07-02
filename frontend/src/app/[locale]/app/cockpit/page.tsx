@@ -4,10 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Briefcase,
-  Calendar,
   CheckCircle2,
   ClipboardCheck,
-  Clock,
   DollarSign,
   FileText,
   Loader2,
@@ -116,6 +114,61 @@ const BON_STATUS_LABELS: Record<string, string> = {
 // Un chantier « dort » après 5 jours sans punch ni achat.
 const SLEEP_DAYS = 5;
 
+// ── File d'attente d'actions ────────────────────────────────────────────
+
+type ActionItem = {
+  key: string;
+  type: string;
+  verb: string;
+  label: string;
+  sub: string;
+  meta: string;
+  href: string;
+  prio: number;
+};
+
+const ACTION_TYPES: {
+  id: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  pill: string;
+}[] = [
+  {
+    id: "urgence",
+    label: "Urgences",
+    icon: AlertTriangle,
+    pill: "bg-rose-500/15 text-rose-300"
+  },
+  {
+    id: "signature",
+    label: "Signatures",
+    icon: FileText,
+    pill: "bg-rose-500/15 text-rose-300"
+  },
+  {
+    id: "argent",
+    label: "Argent",
+    icon: DollarSign,
+    pill: "bg-amber-500/15 text-amber-300"
+  },
+  {
+    id: "classifier",
+    label: "À classifier",
+    icon: ClipboardCheck,
+    pill: "bg-amber-500/15 text-amber-300"
+  },
+  {
+    id: "suivi",
+    label: "Suivi",
+    icon: Moon,
+    pill: "bg-white/10 text-white/60"
+  }
+];
+
+const ACTION_TYPE_MAP = Object.fromEntries(
+  ACTION_TYPES.map((t) => [t.id, t])
+);
+
 function money(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "—";
   return `${n.toLocaleString("fr-CA", {
@@ -152,6 +205,8 @@ export default function CockpitPage() {
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [now, setNow] = useState(() => new Date());
   const [scope, setScope] = useState<"all" | "mine">("all");
+  const [actionFilter, setActionFilter] = useState<string | null>(null);
+  const [showAllActions, setShowAllActions] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -215,15 +270,112 @@ export default function CockpitPage() {
   const punched = live.filter((w) => w.punch_started_at);
   const plannedOnly = live.filter((w) => !w.punch_started_at);
 
-  const actionCount =
-    urgentBons.length +
-    aClassifier.length +
-    aRefacturer.length +
-    sigToSend.length +
-    sigWaiting.length +
-    poSent.length +
-    sleeping.length +
-    latePhases.length;
+  // File d'attente unique : chaque ligne = UNE action à poser (verbe +
+  // contexte), triée par priorité. Bien plus scannable que des listes
+  // par catégorie.
+  const actions: ActionItem[] = [
+    ...urgentBons.map((b) => ({
+      key: `u${b.id}`,
+      type: "urgence",
+      verb: "Traiter l'urgence",
+      label: b.title,
+      sub: b.address || b.reference,
+      meta: b.age_days > 0 ? `${b.age_days} j` : "aujourd'hui",
+      href: `/app/bons/${b.id}`,
+      prio: 0
+    })),
+    ...sigToSend.map((p) => ({
+      key: `s${p.id}`,
+      type: "signature",
+      verb: "Envoyer pour signature",
+      label: p.name,
+      sub: p.client_name || p.address || "Bon de correction prêt",
+      meta: "",
+      href: `/app/projets/${p.id}`,
+      prio: 1
+    })),
+    ...sigWaiting.map((p) => ({
+      key: `w${p.id}`,
+      type: "signature",
+      verb: "Relancer le client",
+      label: p.name,
+      sub: "Bon envoyé, pas encore signé",
+      meta: "",
+      href: `/app/projets/${p.id}`,
+      prio: 2
+    })),
+    ...aRefacturer.map((b) => ({
+      key: `r${b.id}`,
+      type: "argent",
+      verb: "Refacturer",
+      label: b.title,
+      sub:
+        b.amount != null && b.amount > 0
+          ? `${money(b.amount)} à charger`
+          : "Montant à saisir sur le bon",
+      meta: `complété · ${b.age_days} j`,
+      href: `/app/bons/${b.id}`,
+      prio: 3
+    })),
+    ...poSent.map((po) => ({
+      key: `p${po.id}`,
+      type: "argent",
+      verb: "Récupérer la facture",
+      label: po.reference,
+      sub: `${po.fournisseur_name || "Fournisseur —"} · max ${money(po.amount_max)}`,
+      meta: "",
+      href: `/app/po/${po.id}`,
+      prio: 4
+    })),
+    ...aClassifier.map((b) => ({
+      key: `c${b.id}`,
+      type: "classifier",
+      verb: "Choisir l'exécutant",
+      label: b.title,
+      sub: b.address || b.reference,
+      meta: b.age_days > 0 ? `${b.age_days} j` : "aujourd'hui",
+      href: `/app/bons/${b.id}`,
+      prio: 5
+    })),
+    ...sleeping.map((p) => {
+      const d = daysSince(p.last_activity_at, now);
+      return {
+        key: `z${p.id}`,
+        type: "suivi",
+        verb: "Vérifier le chantier",
+        label: p.name,
+        sub:
+          d === null
+            ? "Aucun punch ni achat enregistré"
+            : `Aucune activité depuis ${d} j`,
+        meta: "",
+        href: `/app/projets/${p.id}`,
+        prio: 6
+      };
+    }),
+    ...latePhases.map((p) => ({
+      key: `l${p.id}`,
+      type: "suivi",
+      verb: "Livrer ou replanifier",
+      label: p.name,
+      sub: `Dernière phase (${p.late_phase_name || "—"}) finie depuis ${p.late_days} j`,
+      meta: "",
+      href: `/app/projets/${p.id}`,
+      prio: 7
+    }))
+  ].sort((a, b) => a.prio - b.prio);
+
+  const actionCount = actions.length;
+  const typeCounts: Record<string, number> = {};
+  for (const a of actions) {
+    typeCounts[a.type] = (typeCounts[a.type] || 0) + 1;
+  }
+  const filteredActions = actionFilter
+    ? actions.filter((a) => a.type === actionFilter)
+    : actions;
+  const shownActions = showAllActions
+    ? filteredActions
+    : filteredActions.slice(0, 10);
 
   return (
     <>
@@ -400,102 +552,99 @@ export default function CockpitPage() {
                   roule.
                 </p>
               ) : (
-                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  <ActionList
-                    title="Urgences"
-                    icon={<AlertTriangle className="h-3.5 w-3.5" />}
-                    tone="rose"
-                    items={urgentBons.map((b) => ({
-                      key: `u${b.id}`,
-                      href: `/app/bons/${b.id}`,
-                      label: b.title,
-                      sub: b.address || b.reference
-                    }))}
-                  />
-                  <ActionList
-                    title="Bons de correction à envoyer"
-                    icon={<FileText className="h-3.5 w-3.5" />}
-                    tone="rose"
-                    items={sigToSend.map((p) => ({
-                      key: `s${p.id}`,
-                      href: `/app/projets/${p.id}`,
-                      label: p.name,
-                      sub: p.client_name || p.address || ""
-                    }))}
-                  />
-                  <ActionList
-                    title="Signatures à relancer"
-                    icon={<Clock className="h-3.5 w-3.5" />}
-                    tone="rose"
-                    items={sigWaiting.map((p) => ({
-                      key: `w${p.id}`,
-                      href: `/app/projets/${p.id}`,
-                      label: p.name,
-                      sub: "Envoyé au client, pas encore signé"
-                    }))}
-                  />
-                  <ActionList
-                    title="Exécutant à classifier"
-                    icon={<ClipboardCheck className="h-3.5 w-3.5" />}
-                    tone="amber"
-                    items={aClassifier.map((b) => ({
-                      key: `c${b.id}`,
-                      href: `/app/bons/${b.id}`,
-                      label: b.title,
-                      sub: b.address || b.reference
-                    }))}
-                  />
-                  <ActionList
-                    title="Complétés — à refacturer"
-                    icon={<DollarSign className="h-3.5 w-3.5" />}
-                    tone="amber"
-                    items={aRefacturer.map((b) => ({
-                      key: `r${b.id}`,
-                      href: `/app/bons/${b.id}`,
-                      label: b.title,
-                      sub: `${money(b.amount)} · ${b.age_days} j`
-                    }))}
-                  />
-                  <ActionList
-                    title="PO envoyés — facture à récupérer"
-                    icon={<ClipboardCheck className="h-3.5 w-3.5" />}
-                    tone="amber"
-                    items={poSent.map((po) => ({
-                      key: `p${po.id}`,
-                      href: `/app/po/${po.id}`,
-                      label: po.reference,
-                      sub: `${po.fournisseur_name || "—"} · max ${money(po.amount_max)}`
-                    }))}
-                  />
-                  <ActionList
-                    title={`Chantiers sans activité (${SLEEP_DAYS} j+)`}
-                    icon={<Moon className="h-3.5 w-3.5" />}
-                    tone="muted"
-                    items={sleeping.map((p) => {
-                      const d = daysSince(p.last_activity_at, now);
-                      return {
-                        key: `z${p.id}`,
-                        href: `/app/projets/${p.id}`,
-                        label: p.name,
-                        sub:
-                          d === null
-                            ? "Aucun punch ni achat enregistré"
-                            : `Dernière activité il y a ${d} j`
-                      };
+                <>
+                  {/* Filtres rapides par type d'action */}
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setActionFilter(null)}
+                      className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
+                        actionFilter === null
+                          ? "bg-accent-500 text-brand-950"
+                          : "bg-brand-950 text-white/60 hover:text-white"
+                      }`}
+                    >
+                      Tout ({actionCount})
+                    </button>
+                    {ACTION_TYPES.filter((t) => typeCounts[t.id]).map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() =>
+                          setActionFilter(
+                            actionFilter === t.id ? null : t.id
+                          )
+                        }
+                        className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
+                          actionFilter === t.id
+                            ? "bg-accent-500 text-brand-950"
+                            : "bg-brand-950 text-white/60 hover:text-white"
+                        }`}
+                      >
+                        {t.label} ({typeCounts[t.id]})
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* File d'attente : une ligne = une action à poser */}
+                  <div className="mt-3 space-y-1.5">
+                    {shownActions.map((a) => {
+                      const t = ACTION_TYPE_MAP[a.type];
+                      const Icon = t.icon;
+                      return (
+                        <Link
+                          key={a.key}
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={a.href as any}
+                          className="flex items-center gap-3 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2.5 transition hover:border-accent-500"
+                        >
+                          <span
+                            className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${t.pill}`}
+                          >
+                            <Icon className="h-4 w-4" />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm">
+                              <span className="font-semibold text-white">
+                                {a.verb}
+                              </span>
+                              <span className="text-white/60">
+                                {" "}
+                                — {a.label}
+                              </span>
+                            </span>
+                            <span className="block truncate text-[11px] text-white/45">
+                              {a.sub}
+                            </span>
+                          </span>
+                          {a.meta ? (
+                            <span className="flex-shrink-0 whitespace-nowrap text-[11px] text-white/40">
+                              {a.meta}
+                            </span>
+                          ) : null}
+                        </Link>
+                      );
                     })}
-                  />
-                  <ActionList
-                    title="Phases planifiées dépassées"
-                    icon={<Calendar className="h-3.5 w-3.5" />}
-                    tone="muted"
-                    items={latePhases.map((p) => ({
-                      key: `l${p.id}`,
-                      href: `/app/projets/${p.id}`,
-                      label: p.name,
-                      sub: `${p.late_phase_name || "Phase"} finie il y a ${p.late_days} j — projet pas livré`
-                    }))}
-                  />
-                </div>
+                  </div>
+                  {filteredActions.length > shownActions.length ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllActions(true)}
+                      className="mt-2 text-xs font-semibold text-accent-400 hover:text-accent-300"
+                    >
+                      Voir les {filteredActions.length - shownActions.length}{" "}
+                      autres →
+                    </button>
+                  ) : showAllActions && filteredActions.length > 10 ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllActions(false)}
+                      className="mt-2 text-xs font-semibold text-white/50 hover:text-white"
+                    >
+                      Réduire
+                    </button>
+                  ) : null}
+                </>
               )}
             </section>
 
@@ -598,61 +747,6 @@ function StatTile({
     <div className={`rounded-lg border p-3 ${tones[tone]}`}>
       <p className="text-2xl font-bold leading-none">{value}</p>
       <p className="mt-1 text-[11px] font-medium opacity-80">{label}</p>
-    </div>
-  );
-}
-
-function ActionList({
-  title,
-  icon,
-  tone,
-  items
-}: {
-  title: string;
-  icon: React.ReactNode;
-  tone: "rose" | "amber" | "muted";
-  items: { key: string; href: string; label: string; sub: string }[];
-}) {
-  if (items.length === 0) return null;
-  const tones: Record<string, string> = {
-    rose: "text-rose-300",
-    amber: "text-amber-300",
-    muted: "text-white/60"
-  };
-  return (
-    <div className="rounded-lg border border-brand-800 bg-brand-950 p-3">
-      <p
-        className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider ${tones[tone]}`}
-      >
-        {icon}
-        {title}
-        <span className="ml-auto rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-white/70">
-          {items.length}
-        </span>
-      </p>
-      <ul className="mt-2 space-y-1">
-        {items.slice(0, 6).map((it) => (
-          <li key={it.key}>
-            <Link
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={it.href as any}
-              className="block rounded-md px-2 py-1.5 transition hover:bg-brand-900"
-            >
-              <p className="truncate text-sm font-medium text-white">
-                {it.label}
-              </p>
-              {it.sub ? (
-                <p className="truncate text-[11px] text-white/50">{it.sub}</p>
-              ) : null}
-            </Link>
-          </li>
-        ))}
-        {items.length > 6 ? (
-          <li className="px-2 pt-1 text-[11px] text-white/40">
-            + {items.length - 6} autre{items.length - 6 > 1 ? "s" : ""}
-          </li>
-        ) : null}
-      </ul>
     </div>
   );
 }
