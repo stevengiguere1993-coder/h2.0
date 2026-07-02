@@ -179,6 +179,7 @@ async def list_projects(
     proj_ids = [p.id for p in projects]
     awaiting_set: set = set()
     signed_set: set = set()
+    draft_set: set = set()
     if proj_ids:
         from sqlalchemy import select as _bsel
         from app.models.bon_travail import BonTravail
@@ -187,18 +188,22 @@ async def list_projects(
             await db.execute(
                 _bsel(
                     BonTravail.project_id,
+                    BonTravail.origin,
                     BonTravail.sent_at,
                     BonTravail.signed_at,
                 ).where(BonTravail.project_id.in_(set(proj_ids)))
             )
         ).all()
-        for pid, sent_at, signed_at in brows:
+        for pid, origin, sent_at, signed_at in brows:
             if pid is None:
                 continue
             if signed_at is not None:
                 signed_set.add(pid)
             elif sent_at is not None:
                 awaiting_set.add(pid)
+            elif (origin or "") == "correction":
+                # Bon de correction créé mais pas encore envoyé au client.
+                draft_set.add(pid)
 
     out: List[ProjectRead] = []
     for p in projects:
@@ -209,6 +214,7 @@ async def list_projects(
             d.billing_kind = sm_billing[p.soumission_id]
         d.awaiting_signature = p.id in awaiting_set
         d.has_signed_bon = p.id in signed_set
+        d.correction_bon_draft = p.id in draft_set
         out.append(d)
     return out
 
@@ -266,16 +272,18 @@ async def get_project(
 
     brows = (
         await db.execute(
-            _bsel(_BT.sent_at, _BT.signed_at).where(
+            _bsel(_BT.origin, _BT.sent_at, _BT.signed_at).where(
                 _BT.project_id == project_id
             )
         )
     ).all()
-    for sent_at, signed_at in brows:
+    for origin, sent_at, signed_at in brows:
         if signed_at is not None:
             out.has_signed_bon = True
         elif sent_at is not None:
             out.awaiting_signature = True
+        elif (origin or "") == "correction":
+            out.correction_bon_draft = True
     return out
 
 
