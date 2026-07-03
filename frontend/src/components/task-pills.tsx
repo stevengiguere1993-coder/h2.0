@@ -77,12 +77,14 @@ export function AutoGrowTextarea({
   value,
   onChange,
   onCommit,
+  onFocus,
   className,
   autoFocus
 }: {
   value: string;
   onChange: (v: string) => void;
   onCommit?: (v: string) => void;
+  onFocus?: () => void;
   className?: string;
   autoFocus?: boolean;
 }) {
@@ -102,6 +104,7 @@ export function AutoGrowTextarea({
       autoFocus={autoFocus}
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      onFocus={onFocus}
       onBlur={(e) => onCommit?.(e.target.value)}
       onKeyDown={(e) => {
         if (e.key === "Enter" && !e.shiftKey) {

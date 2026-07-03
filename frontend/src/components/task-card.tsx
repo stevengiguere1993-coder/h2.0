@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { ArrowRightLeft, Building2, StickyNote, Trash2 } from "lucide-react";
 
 import {
@@ -78,6 +78,18 @@ export function TaskCard({
   onDragEnd?: () => void;
   footer?: React.ReactNode;
 }) {
+  // Le titre est bufferisé localement pendant la frappe : patcher le
+  // parent à chaque touche déclenche un PATCH serveur par caractère,
+  // et la réponse (arrivée en retard / dans le désordre) réécrivait
+  // task.title sous le curseur → le texte « reculait » en tapant. On
+  // n'émet donc onPatch({ title }) qu'au commit (blur / Entrée), et on
+  // ne resynchronise le brouillon depuis les props que hors édition.
+  const [titleDraft, setTitleDraft] = useState(task.title);
+  const [titleEditing, setTitleEditing] = useState(false);
+  useEffect(() => {
+    if (!titleEditing) setTitleDraft(task.title);
+  }, [task.title, titleEditing]);
+
   const tier = scoreToPTier(task.score);
   const hasScore = task.score != null;
   const hasImmeubles =
@@ -126,12 +138,16 @@ export function TaskCard({
         {/* Première ligne : titre + actions inline (compact, hover-révélé) */}
         <div className="flex items-start gap-1.5">
           <AutoGrowTextarea
-            value={task.title}
-            onChange={(v) => onPatch({ title: v })}
+            value={titleDraft}
+            onChange={setTitleDraft}
+            onFocus={() => setTitleEditing(true)}
             onCommit={(v) => {
+              setTitleEditing(false);
               const trimmed = v.trim();
               if (trimmed && trimmed !== task.title) {
                 onPatch({ title: trimmed });
+              } else {
+                setTitleDraft(task.title);
               }
             }}
             className="min-w-0 flex-1 resize-none rounded border border-transparent bg-transparent px-0.5 py-0 text-[13px] font-semibold leading-tight text-white focus:border-accent-500 focus:outline-none"
