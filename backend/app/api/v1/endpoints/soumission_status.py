@@ -151,19 +151,27 @@ async def change_soumission_status(
 
     await db.flush()
 
-    # Auto-création du projet + facture d'acompte DRAFT à
-    # l'acceptation. Idempotent : si déjà créé (ex. via la signature
-    # publique antérieure ou un changement de statut précédent), la
-    # fonction le détecte et ne refait rien. La facture reste en
-    # DRAFT — l'utilisateur clique « Envoyer au client » quand il
-    # est prêt.
+    # Auto-création du projet + facture d'acompte à l'acceptation.
+    # Idempotent : si déjà créé (ex. via la signature publique
+    # antérieure ou un changement de statut précédent), la fonction le
+    # détecte et ne refait rien. La facture d'acompte créée est ensuite
+    # ENVOYÉE AUTOMATIQUEMENT au client (courriel + PDF, status sent) —
+    # même comportement que l'acceptation par signature en ligne.
     if data.status == SoumissionStatus.ACCEPTED.value:
         from app.api.v1.endpoints.soumission_to_project import (
             provision_project_for_soumission,
         )
         try:
-            await provision_project_for_soumission(db, sm, notify_qbo=True)
+            _proj, _dep = await provision_project_for_soumission(
+                db, sm, notify_qbo=True
+            )
             await db.flush()
+            if _dep is not None:
+                from app.api.v1.endpoints.public_soumission import (
+                    _auto_send_deposit_facture,
+                )
+
+                bg.add_task(_auto_send_deposit_facture, int(_dep.id))
         except Exception:  # noqa: BLE001
             # Best-effort : si la provision échoue (DB transient,
             # données partielles…), on ne bloque pas le changement
