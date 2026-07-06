@@ -13,6 +13,7 @@ jamais un corps dont la signature n'est pas vérifiée.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -108,6 +109,7 @@ async def qbo_webhook(request: Request) -> Response:
     # en ignorant les autres compagnies et les suppressions.
     realm = str(settings.qbo_realm_id or "")
     changed: List[Tuple[str, str]] = []
+    pull_needed = False
     for note in payload.get("eventNotifications") or []:
         if realm and str(note.get("realmId") or "") != realm:
             continue
@@ -116,13 +118,24 @@ async def qbo_webhook(request: Request) -> Response:
             name = str(ent.get("name") or "")
             eid = str(ent.get("id") or "")
             op = str(ent.get("operation") or "")
-            if not eid or name not in ("Purchase", "Bill"):
-                continue
             if op in ("Delete", "Merge"):
+                continue
+            # Tout événement « coût » déclenche un import complet LIVE
+            # (nouveaux coûts, fournisseurs, paiements, reçus) — pas
+            # seulement les Purchase/Bill liés.
+            if name in (
+                "Purchase",
+                "Bill",
+                "BillPayment",
+                "Attachable",
+                "Vendor",
+            ):
+                pull_needed = True
+            if not eid or name not in ("Purchase", "Bill"):
                 continue
             changed.append((name, eid))
 
-    if not changed:
+    if not changed and not pull_needed:
         return Response(status_code=status.HTTP_200_OK)
 
     qbo = get_qbo()
@@ -141,9 +154,50 @@ async def qbo_webhook(request: Request) -> Response:
                 )
         await db.commit()
 
+    # Import complet QB → Kratos en ARRIÈRE-PLAN (même logique que le pull
+    # horaire : nouveaux coûts, création des fournisseurs, paiements,
+    # reçus, dédup). Débounce 30 s : une rafale d'événements Intuit ne
+    # lance qu'un seul pull. Le webhook répond 200 tout de suite (Intuit
+    # exige une réponse rapide, sinon il ré-émet).
+    if pull_needed:
+        asyncio.create_task(_run_cost_pull_debounced())
+
     # Toujours 200 : sinon Intuit ré-émet en boucle (le traitement est
     # best-effort, chaque entité est isolée).
     return Response(status_code=status.HTTP_200_OK)
+
+
+# Débounce du pull complet déclenché par webhook : une rafale de
+# notifications Intuit (plusieurs entités modifiées d'un coup) ne doit
+# lancer qu'UN import, et jamais deux en parallèle.
+_pull_lock = asyncio.Lock()
+_last_pull_monotonic: float = 0.0
+_PULL_DEBOUNCE_SECONDS = 30.0
+
+
+async def _run_cost_pull_debounced() -> None:
+    global _last_pull_monotonic
+    import time
+
+    if _pull_lock.locked():
+        return  # un pull est déjà en cours — il couvrira ces événements
+    async with _pull_lock:
+        if time.monotonic() - _last_pull_monotonic < _PULL_DEBOUNCE_SECONDS:
+            return
+        _last_pull_monotonic = time.monotonic()
+        try:
+            from app.services.qbo_cost_pull import (
+                pull_project_costs_from_qbo,
+            )
+
+            async with AsyncSessionLocal() as db:
+                res = await pull_project_costs_from_qbo(db, dry_run=False)
+                await db.commit()
+            log.info("Pull QB→Kratos déclenché par webhook : %s", res)
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "Pull QB→Kratos (webhook) échoué", exc_info=True
+            )
 
 
 async def _apply_reverse_sync(
