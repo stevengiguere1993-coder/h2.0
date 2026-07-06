@@ -49,27 +49,34 @@ def _attachable_ctype(att: dict) -> Optional[str]:
     return None
 
 
-async def _import_qbo_receipts(
-    db: AsyncSession,
-    qbo: Any,
-    existing_bill: dict[str, Achat],
-    existing_purchase: dict[str, Achat],
-) -> int:
+async def _import_qbo_receipts(db: AsyncSession, qbo: Any) -> int:
     """Importe dans Kratos les reçus (pièces jointes image/PDF) déposés sur
     les dépenses / factures fournisseurs QB liées à un achat qui n'a PAS
     encore de reçu. N'écrase jamais un reçu existant. Retourne le nombre de
     reçus importés."""
-    # Candidats indexés par (type d'entité QB, id). `qbo_bill_id` peut
+    # Candidats relus depuis la DB (et non depuis les index construits en
+    # début de run) : couvre AUSSI les achats importés dans CE passage —
+    # sinon leur reçu n'arrivait qu'au passage suivant. `qbo_bill_id` peut
     # pointer un Bill OU une Purchase (achat poussé depuis Kratos) → on
     # l'inscrit sous les deux types.
+    rows = (
+        await db.execute(
+            select(Achat).where(
+                (
+                    Achat.qbo_bill_id.is_not(None)
+                    | Achat.qbo_purchase_id.is_not(None)
+                ),
+                Achat.receipt_image_content_type.is_(None),
+            )
+        )
+    ).scalars().all()
     candidates: dict[tuple[str, str], Achat] = {}
-    for pid, a in existing_bill.items():
-        if a.receipt_image_content_type is None:
-            candidates[("bill", pid)] = a
-            candidates[("purchase", pid)] = a
-    for pid, a in existing_purchase.items():
-        if a.receipt_image_content_type is None:
-            candidates.setdefault(("purchase", pid), a)
+    for a in rows:
+        if a.qbo_bill_id:
+            candidates[("bill", str(a.qbo_bill_id))] = a
+            candidates[("purchase", str(a.qbo_bill_id))] = a
+        if a.qbo_purchase_id:
+            candidates.setdefault(("purchase", str(a.qbo_purchase_id)), a)
     if not candidates:
         return 0
 
@@ -111,6 +118,45 @@ async def _import_qbo_receipts(
     if imported:
         await db.flush()
     return imported
+
+
+async def _fournisseur_id_for(
+    db: AsyncSession,
+    fourn_by_name: dict[str, int],
+    vendor_name: Optional[str],
+    vendor_qbo_id: Optional[str] = None,
+) -> Optional[int]:
+    """Id du Fournisseur Kratos pour un vendor QB — CRÉÉ s'il n'existe pas
+    (le fournisseur travaille sur un projet Kratos, il doit exister dans
+    Kratos ; avant, l'achat importé restait avec « Aucun » fournisseur)."""
+    key = (vendor_name or "").strip().lower()
+    if not key:
+        return None
+    fid = fourn_by_name.get(key)
+    if fid:
+        return fid
+    f = Fournisseur(
+        name=(vendor_name or "").strip()[:255],
+        qbo_vendor_id=str(vendor_qbo_id) if vendor_qbo_id else None,
+        active=True,
+    )
+    db.add(f)
+    await db.flush()
+    fourn_by_name[key] = int(f.id)
+    log.info("Fournisseur créé depuis QB : %s (#%s)", f.name, f.id)
+    return int(f.id)
+
+
+def _txn_description(txn: dict) -> Optional[str]:
+    """Description lisible d'un Bill/Purchase QB : description de la
+    première ligne de dépense, sinon le mémo privé."""
+    for line in txn.get("Line") or []:
+        if line.get("DetailType") == "AccountBasedExpenseLineDetail":
+            d = line.get("Description")
+            if d:
+                return str(d)[:1000]
+    note = txn.get("PrivateNote")
+    return str(note)[:1000] if note else None
 
 
 def _num(v: Any) -> float:
@@ -331,6 +377,16 @@ async def pull_project_costs_from_qbo(
             # Déjà importé → on reflète seulement un PAIEMENT QB
             # (Bill soldé, balance 0) sur un achat pas encore payé.
             ach = existing_bill[bid]
+            # Backfill : fournisseur manquant sur l'achat (importé avant
+            # que la création automatique du fournisseur n'existe).
+            if not dry_run and ach.fournisseur_id is None and vendor:
+                ach.fournisseur_id = await _fournisseur_id_for(
+                    db,
+                    fourn_by_name,
+                    vendor,
+                    (b.get("VendorRef") or {}).get("value"),
+                )
+                await db.flush()
             if paid and ach.status != "paid":
                 if not dry_run:
                     ach.status = "paid"
@@ -370,11 +426,17 @@ async def pull_project_costs_from_qbo(
         if not dry_run:
             db.add(
                 Achat(
-                    fournisseur_id=fourn_by_name.get(
-                        (vendor or "").strip().lower()
+                    # Fournisseur lié — CRÉÉ dans Kratos s'il n'existait
+                    # pas (il travaille sur un projet Kratos).
+                    fournisseur_id=await _fournisseur_id_for(
+                        db,
+                        fourn_by_name,
+                        vendor,
+                        (b.get("VendorRef") or {}).get("value"),
                     ),
                     project_id=proj.id,
                     is_billable=_is_billable(proj),
+                    description=_txn_description(b),
                     amount=total,
                     status="paid" if paid else "received",
                     # Bill payé → mode réel (chèque/carte) déduit de QB ;
@@ -432,6 +494,15 @@ async def pull_project_costs_from_qbo(
                 if not dry_run:
                     existing.payment_method = new_method
                 updated.append("mode de paiement")
+            # Backfill : fournisseur manquant sur l'achat lié.
+            if not dry_run and existing.fournisseur_id is None and vendor:
+                existing.fournisseur_id = await _fournisseur_id_for(
+                    db,
+                    fourn_by_name,
+                    vendor,
+                    (p.get("EntityRef") or {}).get("value"),
+                )
+                updated.append("fournisseur")
             if not dry_run:
                 # Rafraîchit le SyncToken pour un achat poussé depuis Kratos
                 # (évite un « stale token » au prochain push).
@@ -471,11 +542,17 @@ async def pull_project_costs_from_qbo(
         if not dry_run:
             db.add(
                 Achat(
-                    fournisseur_id=fourn_by_name.get(
-                        (vendor or "").strip().lower()
+                    # Fournisseur lié — CRÉÉ dans Kratos s'il n'existait
+                    # pas (il travaille sur un projet Kratos).
+                    fournisseur_id=await _fournisseur_id_for(
+                        db,
+                        fourn_by_name,
+                        vendor,
+                        (p.get("EntityRef") or {}).get("value"),
                     ),
                     project_id=proj.id,
                     is_billable=_is_billable(proj),
+                    description=_txn_description(p),
                     amount=total,
                     status="paid",
                     payment_method=pm,
@@ -527,9 +604,7 @@ async def pull_project_costs_from_qbo(
         # la télécharge et on la stocke sur l'achat. On n'écrase jamais un
         # reçu déjà présent côté Kratos. Une seule query Attachable par
         # run ; sautée s'il n'y a aucun achat candidat.
-        stats["receipts_imported"] = await _import_qbo_receipts(
-            db, qbo, existing_bill, existing_purchase
-        )
+        stats["receipts_imported"] = await _import_qbo_receipts(db, qbo)
 
     if dry_run:
         # Scopé client : on montre TOUT (à importer / déjà importé / sans
