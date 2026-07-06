@@ -80,7 +80,7 @@ async def _recompute_soumission_totals(db, soumission_id: int) -> None:
 
 class SoumissionItemCreate(BaseModel):
     position: int = Field(default=0, ge=0)
-    description: str = Field(..., min_length=1, max_length=500)
+    description: str = Field(..., min_length=1, max_length=4000)
     unit: Optional[str] = Field(default=None, max_length=32)
     quantity: float = Field(default=1)
     unit_price: float = Field(default=0)
@@ -92,7 +92,7 @@ class SoumissionItemCreate(BaseModel):
 
 class SoumissionItemUpdate(BaseModel):
     position: Optional[int] = Field(default=None, ge=0)
-    description: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    description: Optional[str] = Field(default=None, min_length=1, max_length=4000)
     unit: Optional[str] = Field(default=None, max_length=32)
     quantity: Optional[float] = Field(default=None)
     unit_price: Optional[float] = Field(default=None)

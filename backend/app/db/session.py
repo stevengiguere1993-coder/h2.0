@@ -276,8 +276,10 @@ async def ensure_critical_columns() -> None:
     # téléphonique acceptent plusieurs numéros séparés par virgule, donc
     # VARCHAR(20) (un seul numéro) est trop court.
     widen_columns = (
-        # Description d'item de facture : texte long multi-lignes (listes).
+        # Descriptions d'items (facture + soumission) : texte long
+        # multi-lignes (listes).
         ("facture_items", "description", "TEXT"),
+        ("soumission_items", "description", "TEXT"),
         ("voice_phone_numbers", "forward_to_e164", "VARCHAR(255)"),
         ("voice_phone_numbers", "urgency_forward_e164", "VARCHAR(255)"),
         ("voice_phone_numbers", "closer_forward_e164", "VARCHAR(255)"),

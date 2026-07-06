@@ -1865,13 +1865,15 @@ function ItemRow({
     <>
     <tr className="align-top">
       <td className="px-5 py-3">
+        {/* Multi-lignes : Entrée = nouvelle ligne (listes), la hauteur
+            suit le contenu. */}
         <textarea
-          rows={1}
+          rows={Math.min(10, Math.max(1, description.split("\n").length))}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           onFocus={openIfMobile}
           onBlur={() => commit("description")}
-          className="w-full resize-none rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-white focus:border-brand-700 focus:outline-none"
+          className="w-full resize-y rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm leading-snug text-white focus:border-brand-700 focus:outline-none"
         />
       </td>
       <td className="px-3 py-3 w-28">

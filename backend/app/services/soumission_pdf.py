@@ -115,6 +115,15 @@ COMPANY_INSURANCE = "Police d'assurance : SUM-CGL-44100-001"
 COMPANY_SITE = "immohorizon.com"
 COMPANY_EMAIL = "info@immohorizon.com"
 
+
+def _multiline_markup(text_value: str) -> str:
+    """Texte libre → markup Paragraph : échappe le HTML et convertit les
+    sauts de ligne en <br/> (descriptions d'items multi-lignes)."""
+    import html as _html
+
+    return _html.escape(text_value or "").replace("\n", "<br/>")
+
+
 ACCENT_HEX = "#d89b3c"
 DARK_HEX = "#111111"
 MUTED_HEX = "#6b6b6b"
@@ -390,7 +399,7 @@ def _render_bytes(
         )
         data.append(
             [
-                Paragraph(it.description, s["body"]),
+                Paragraph(_multiline_markup(it.description), s["body"]),
                 f"{q:g}",
                 it.unit or "",
                 _money(up),
