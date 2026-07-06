@@ -2017,16 +2017,17 @@ function ItemRow({
         <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-white/40 sm:hidden">
           Description
         </label>
-        <input
-          type="text"
+        {/* Texte long autorisé : Entrée = nouvelle ligne (listes),
+            sauvegarde au blur. La hauteur suit le contenu. */}
+        <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           onBlur={() => {
             if (description !== item.description) persist("description", description);
           }}
           disabled={busy}
-          list={datalistId}
-          className="input text-sm w-full"
+          rows={Math.min(10, Math.max(1, description.split("\n").length))}
+          className="input text-sm w-full resize-y leading-snug"
         />
         {suggestions.length > 0 ? (
           <datalist id={datalistId}>

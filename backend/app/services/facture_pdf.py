@@ -39,6 +39,15 @@ from app.services.soumission_pdf import (
 )
 
 
+def _multiline(text_value: str) -> str:
+    """Texte libre → markup Paragraph : échappe le HTML et convertit les
+    sauts de ligne en <br/> (les descriptions d'items peuvent contenir des
+    listes multi-lignes)."""
+    import html as _html
+
+    return _html.escape(text_value or "").replace("\n", "<br/>")
+
+
 @dataclass
 class ContractSummary:
     """Synthèse contrat affichée sur la facture PDF quand celle-ci est
@@ -572,7 +581,7 @@ def _render_bytes(
         line_total = float(it.total) if it.total is not None else round(q * up, 2)
         subtotal += line_total
         data.append([
-            Paragraph(it.description, s["body"]),
+            Paragraph(_multiline(it.description), s["body"]),
             f"{q:g}", it.unit or "",
             _money(up), _money(line_total),
         ])
