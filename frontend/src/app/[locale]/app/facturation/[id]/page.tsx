@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   FileText,
   Loader2,
   Mail,
@@ -580,6 +582,35 @@ export default function FactureDetailPage() {
       }
     } catch (e) {
       setError(`Mise à jour échouée : ${(e as Error).message}`);
+    } finally {
+      setItemBusy(null);
+    }
+  }
+
+  // Déplace une ligne vers le haut / le bas (échange avec sa voisine du
+  // MÊME type — l'ordre service → extra → frais → rabais est imposé,
+  // mais l'ordre est libre à l'intérieur de chaque groupe).
+  async function moveItem(item_id: number, dir: -1 | 1) {
+    const idx = items.findIndex((x) => x.id === item_id);
+    if (idx < 0) return;
+    const other = idx + dir;
+    if (other < 0 || other >= items.length) return;
+    if (
+      (items[other].kind || "service") !== (items[idx].kind || "service")
+    )
+      return;
+    const orderIds = items.map((x) => x.id);
+    [orderIds[idx], orderIds[other]] = [orderIds[other], orderIds[idx]];
+    setItemBusy(item_id);
+    try {
+      const res = await authedFetch(`/api/v1/factures/${id}/items/reorder`, {
+        method: "POST",
+        body: JSON.stringify({ item_ids: orderIds })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setItems((await res.json()) as Item[]);
+    } catch (e) {
+      setError(`Déplacement échoué : ${(e as Error).message}`);
     } finally {
       setItemBusy(null);
     }
@@ -1425,7 +1456,7 @@ export default function FactureDetailPage() {
                 </p>
               ) : (
                 <div className="divide-y divide-brand-800">
-                  {items.map((it) => (
+                  {items.map((it, idx) => (
                     <ItemRow
                       key={it.id}
                       item={it}
@@ -1433,6 +1464,18 @@ export default function FactureDetailPage() {
                       onPatch={(patch) => patchItem(it.id, patch)}
                       onDelete={() => deleteItem(it.id)}
                       suggestions={suggestions}
+                      canUp={
+                        idx > 0 &&
+                        (items[idx - 1].kind || "service") ===
+                          (it.kind || "service")
+                      }
+                      canDown={
+                        idx < items.length - 1 &&
+                        (items[idx + 1].kind || "service") ===
+                          (it.kind || "service")
+                      }
+                      onMoveUp={() => moveItem(it.id, -1)}
+                      onMoveDown={() => moveItem(it.id, 1)}
                     />
                   ))}
                 </div>
@@ -1864,13 +1907,21 @@ function ItemRow({
   busy,
   onPatch,
   onDelete,
-  suggestions
+  suggestions,
+  canUp,
+  canDown,
+  onMoveUp,
+  onMoveDown
 }: {
   item: Item;
   busy: boolean;
   onPatch: (patch: Partial<Item>) => void;
   onDelete: () => void;
   suggestions: string[];
+  canUp: boolean;
+  canDown: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
 }) {
   const [description, setDescription] = useState(item.description);
   const [unit, setUnit] = useState(item.unit || "");
@@ -1938,6 +1989,28 @@ function ItemRow({
             (hors soumission de base)
           </span>
         ) : null}
+        <span className="ml-auto inline-flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onMoveUp}
+            disabled={busy || !canUp}
+            aria-label="Monter cette ligne"
+            title="Monter"
+            className="rounded-md border border-brand-800 p-1 text-white/50 hover:border-accent-500 hover:text-white disabled:opacity-30"
+          >
+            <ArrowUp className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={onMoveDown}
+            disabled={busy || !canDown}
+            aria-label="Descendre cette ligne"
+            title="Descendre"
+            className="rounded-md border border-brand-800 p-1 text-white/50 hover:border-accent-500 hover:text-white disabled:opacity-30"
+          >
+            <ArrowDown className="h-3.5 w-3.5" />
+          </button>
+        </span>
       </div>
       <div className="grid gap-2 sm:grid-cols-[1fr_80px_80px_120px_120px_32px] sm:items-center">
       <div>
