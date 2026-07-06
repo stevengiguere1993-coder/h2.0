@@ -27,7 +27,7 @@ import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
 
 const PAYMENT_OPTIONS = [
-  { value: "bill_to_pay", label: "Sur compte fournisseur (à payer plus tard)" },
+  { value: "bill_to_pay", label: "Facture à payer (compte fournisseur — un ou plusieurs paiements)" },
   { value: "cheque_horizon", label: "Compte chèque Horizon" },
   { value: "cc_steven", label: "CC Horizon Steven Giguère" },
   { value: "cc_michael", label: "CC Horizon Michael Villiard" },
@@ -577,7 +577,9 @@ export default function AchatDetailPage() {
                       ))}
                     </select>
                     <p className="mt-1 text-[11px] text-white/50">
-                      Détermine le routage QuickBooks (Bill vs Purchase).
+                      « Facture à payer » → facture fournisseur dans QB
+                      (permet d&apos;apparier un ou plusieurs paiements au
+                      flux bancaire). Chèque/CC → dépense payée.
                     </p>
                   </div>
                 </div>

@@ -1077,6 +1077,43 @@ class QuickBooksClient:
             return None
 
     # ------------------------------------------------------------------
+    # Attachables (pièces jointes QB) — import QB → Kratos des reçus
+    # déposés sur une dépense/facture fournisseur dans QuickBooks.
+    # ------------------------------------------------------------------
+    async def list_attachables(self) -> List[Dict[str, Any]]:
+        """Liste des pièces jointes (Attachable) de la compagnie, avec leurs
+        AttachableRef (entités liées). Best-effort : [] si indisponible."""
+        try:
+            return await self.query("SELECT * FROM attachable MAXRESULTS 1000")
+        except QuickBooksError:
+            return []
+
+    async def download_attachable(
+        self, attachable_id: str
+    ) -> Optional[bytes]:
+        """Télécharge le contenu binaire d'un Attachable via son
+        TempDownloadUri (URL pré-signée, valide ~15 min). None si absent
+        ou téléchargement échoué."""
+        try:
+            data = await self._request(
+                "GET", f"/attachable/{attachable_id}"
+            )
+        except QuickBooksError:
+            return None
+        att = data.get("Attachable") or data
+        uri = att.get("TempDownloadUri")
+        if not uri:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as http:
+                r = await http.get(uri)
+                if r.status_code != 200:
+                    return None
+                return r.content
+        except Exception:  # noqa: BLE001
+            return None
+
+    # ------------------------------------------------------------------
     # Account lookup by Name (utilisé pour le mapping mode paiement)
     # ------------------------------------------------------------------
     async def find_account_by_name(self, name: str) -> Optional[Dict[str, Any]]:

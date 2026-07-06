@@ -35,7 +35,7 @@ type POMini = {
 };
 
 const PAYMENT_OPTIONS = [
-  { value: "bill_to_pay", label: "Sur compte fournisseur (à payer plus tard)" },
+  { value: "bill_to_pay", label: "Facture à payer (compte fournisseur — un ou plusieurs paiements)" },
   { value: "cheque_horizon", label: "Compte chèque Horizon" },
   { value: "cc_steven", label: "CC Horizon Steven Giguère" },
   { value: "cc_michael", label: "CC Horizon Michael Villiard" },

@@ -59,7 +59,7 @@ const STATUS_BG: Record<string, string> = {
 };
 
 const PAYMENT_LABELS: Record<string, string> = {
-  bill_to_pay: "Sur compte fournisseur (à payer plus tard)",
+  bill_to_pay: "Facture à payer (compte fournisseur — un ou plusieurs paiements)",
   cheque_horizon: "Compte chèque Horizon",
   cc_steven: "CC Horizon Steven Giguère",
   cc_michael: "CC Horizon Michael Villiard",
