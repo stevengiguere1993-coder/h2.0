@@ -1,10 +1,12 @@
 """Correction automatique du défaut « à refacturer » des achats.
 
-Règle métier (demandée par l'utilisateur) : une dépense rattachée à un
-projet à CONTRAT (kind=contract, prix coûtant majoré) ou à un devis
-ESTIMÉ (pricing_kind != forfaitaire) doit automatiquement apparaître
-« À refacturer » dans la colonne REFACT — et y rester jusqu'à ce qu'elle
-soit effectivement refacturée au client via Kratos (invoiced_at posé).
+Règle métier (demandée par l'utilisateur) : SEULE une dépense rattachée
+à un projet à CONTRAT (kind=contract, prix coûtant majoré) doit
+automatiquement apparaître « À refacturer » dans la colonne REFACT — et y
+rester jusqu'à ce qu'elle soit effectivement refacturée au client via
+Kratos (invoiced_at posé). Un projet ESTIMÉ ou FORFAITAIRE n'est PAS
+refacturable par défaut : le prix donné au client couvre les dépenses
+(cochable à la main au besoin).
 
 Concrètement, dans l'UI :
 - is_billable == False           → « — » (pas de statut)
@@ -25,7 +27,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.achat import Achat
@@ -42,21 +44,12 @@ async def correct_billable_for_contract_projects(db: AsyncSession) -> int:
     sans nouvelle dépense renvoie 0.
     """
     # Projets dont la soumission est refacturable. Aligné sur _is_billable
-    # (qbo_cost_pull) et _billing_kind (endpoints/projects.py) : un CONTRAT
-    # l'emporte, sinon tout pricing_kind != forfaitaire (estimé) est
-    # refacturable.
+    # (qbo_cost_pull) : SEUL un CONTRAT (prix coûtant majoré) est
+    # refacturable par défaut — estimé et forfaitaire ne le sont pas.
     billable_project_ids = (
         select(Project.id)
         .join(Soumission, Soumission.id == Project.soumission_id)
-        .where(
-            or_(
-                Soumission.kind == "contract",
-                and_(
-                    Soumission.pricing_kind.isnot(None),
-                    Soumission.pricing_kind != "forfaitaire",
-                ),
-            )
-        )
+        .where(Soumission.kind == "contract")
     )
 
     result = await db.execute(
