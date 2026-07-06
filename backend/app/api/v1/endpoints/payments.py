@@ -334,7 +334,35 @@ async def delete_payment(
     ).scalar_one_or_none()
     if p is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Payment not found")
+    # Miroir QB : un paiement supprimé dans Kratos doit disparaître de
+    # QuickBooks aussi, sinon la facture QB reste « payée » à tort.
+    # Best-effort : un échec est loggé, la suppression Kratos aboutit.
+    qbo_payment_id = (p.qbo_payment_id or "").strip()
     await db.delete(p)
     await db.flush()
     await _recompute_facture_status(db, fa)
     await db.flush()
+    if qbo_payment_id:
+        try:
+            from app.integrations.quickbooks import get_qbo
+
+            qbo = get_qbo()
+            await qbo._load_refresh_from_db()
+            if qbo.ready:
+                ok = await qbo.delete_payment(qbo_payment_id)
+                if not ok:
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "Paiement QB %s : suppression échouée "
+                        "(déjà supprimé ou verrouillé)",
+                        qbo_payment_id,
+                    )
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Suppression du paiement QB %s échouée",
+                qbo_payment_id,
+                exc_info=True,
+            )

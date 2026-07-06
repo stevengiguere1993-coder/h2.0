@@ -767,6 +767,27 @@ class QuickBooksClient:
             "POST", "/invoice", json_body=payload, params={"minorversion": "70"}
         )
 
+    async def delete_payment(self, payment_id: str) -> bool:
+        """Supprime un Payment CLIENT QB (best-effort) — miroir de la
+        suppression d'un paiement dans Kratos. Renvoie False sans lever si
+        l'objet n'existe pas."""
+        try:
+            data = await self._request("GET", f"/payment/{payment_id}")
+            cur = data.get("Payment") or data
+            tok = str(cur.get("SyncToken") or "0")
+        except Exception:  # noqa: BLE001
+            return False
+        try:
+            await self._request(
+                "POST",
+                "/payment",
+                json_body={"Id": str(payment_id), "SyncToken": tok},
+                params={"operation": "delete", "minorversion": "70"},
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     async def create_payment(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Crée un Payment client (reçu de paiement) appliqué à une ou
         plusieurs factures via Line[].LinkedTxn — solde la facture côté
