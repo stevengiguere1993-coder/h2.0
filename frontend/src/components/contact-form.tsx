@@ -195,7 +195,10 @@ export function ContactForm({ source }: { source?: string }) {
           locale,
           source,
           gdpr_consent: parsed.data.gdpr_consent,
-          marketing_consent: parsed.data.marketing_consent
+          marketing_consent: parsed.data.marketing_consent,
+          // Honeypot : vide pour un humain (champ invisible) ; un bot
+          // qui le remplit est classé spam côté serveur.
+          website: String(fd.get("website") || "") || undefined
         },
         photos
       );
@@ -233,6 +236,29 @@ export function ContactForm({ source }: { source?: string }) {
 
   return (
     <form onSubmit={onSubmit} className="space-y-5" noValidate>
+      {/* Honeypot anti-bot : invisible et non focusable pour un humain
+          (hors écran, pas display:none que certains bots détectent).
+          Un bot qui remplit tous les champs le remplit aussi → la
+          soumission est classée spam côté serveur. */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          left: "-9999px",
+          width: 1,
+          height: 1,
+          overflow: "hidden"
+        }}
+      >
+        <label htmlFor="website">Website</label>
+        <input
+          id="website"
+          name="website"
+          type="text"
+          tabIndex={-1}
+          autoComplete="off"
+        />
+      </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label htmlFor="name" className="label">{t("fields.name")}</label>
