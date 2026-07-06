@@ -445,6 +445,78 @@ def _build_purchase_payload(
     return payload
 
 
+async def _delete_orphan_purchase_duplicates(
+    db: AsyncSession,
+    qbo,
+    achat: Achat,
+    vendor_id: str,
+    po_reference: Optional[str],
+) -> int:
+    """Supprime les dépenses/chèques QB ORPHELINS qui doublonnent cet achat.
+
+    Cas legacy : la même facture fournisseur existe dans QB à la fois comme
+    « Chèque » (ancien push) et comme l'opération actuellement liée — le
+    doublon n'étant lié à AUCUN achat Kratos, la conversion de type ne le
+    voyait pas. Critères STRICTS avant suppression : même DocNumber, même
+    fournisseur, même total (au cent près), et non référencé par un autre
+    achat Kratos. Best-effort ; retourne le nombre supprimé."""
+    docnum = _doc_number(achat, po_reference).strip()
+    if not docnum:
+        return 0
+    ttc = round(float(achat.amount or 0) + float(achat.amount_taxes or 0), 2)
+    safe = docnum.replace("'", "''")
+    try:
+        rows = await qbo.query(
+            f"SELECT * FROM Purchase WHERE DocNumber = '{safe}' MAXRESULTS 10"
+        )
+    except QuickBooksError:
+        return 0
+    deleted = 0
+    for p in rows or []:
+        pid = str(p.get("Id") or "")
+        if not pid or pid == str(achat.qbo_bill_id or ""):
+            continue
+        if str((p.get("EntityRef") or {}).get("value") or "") != str(
+            vendor_id
+        ):
+            continue
+        try:
+            total_amt = float(p.get("TotalAmt") or 0)
+        except (TypeError, ValueError):
+            continue
+        if abs(total_amt - ttc) > 0.02:
+            continue
+        other = (
+            await db.execute(
+                select(Achat.id)
+                .where(
+                    (Achat.qbo_bill_id == pid)
+                    | (Achat.qbo_purchase_id == pid)
+                )
+                .limit(1)
+            )
+        ).first()
+        if other is not None:
+            continue  # lié à un autre achat Kratos — on ne touche pas
+        if await qbo.delete_purchase(pid):
+            deleted += 1
+            log.info(
+                "Doublon QB orphelin supprimé : Purchase %s "
+                "(docnum %s, achat %s)",
+                pid,
+                docnum,
+                achat.id,
+            )
+        else:
+            log.warning(
+                "Doublon QB %s (docnum %s) : suppression échouée "
+                "(verrouillé/rapproché ?)",
+                pid,
+                docnum,
+            )
+    return deleted
+
+
 def _payment_type_for(method: Optional[str]) -> str:
     """QBO Purchase.PaymentType : Cash / CreditCard.
 
@@ -767,6 +839,22 @@ async def sync_achat_to_qbo(
                 achat.qbo_bill_id = None
                 achat.qbo_sync_token = None
                 await db.flush()
+
+        # Route « facture à payer » : nettoie les dépenses/chèques QB
+        # orphelins qui doublonnent cette facture (legacy : ancien
+        # « Chèque » créé avant le reclassement, jamais lié à Kratos —
+        # ex. le Chèque 13395 resté à côté de la Facture à payer 13395).
+        if not as_purchase:
+            try:
+                await _delete_orphan_purchase_duplicates(
+                    db, qbo, achat, vendor_id, po_reference
+                )
+            except Exception:  # noqa: BLE001
+                log.warning(
+                    "Nettoyage des doublons QB échoué (achat %s)",
+                    achat.id,
+                    exc_info=True,
+                )
 
         # Taux TPS/TVQ d'ACHAT (résolus depuis le code de taxe d'achat) pour
         # imposer des montants de taxe EXACTS → total au cent près. Best-effort
