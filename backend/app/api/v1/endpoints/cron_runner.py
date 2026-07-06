@@ -885,6 +885,58 @@ async def trigger_all_hourly(
 
     await _safe("qbo-achat-autopush", _run_qbo_achat_autopush_hourly, details)
 
+    # Filet : pousse vers QB les FACTURES CLIENTS émises (envoyées /
+    # payées / en retard) qui n'ont pas encore de miroir Invoice QB —
+    # l'auto-push à l'envoi est best-effort et SILENCIEUX, donc un échec
+    # ponctuel (réseau, taxe, résolution du projet…) laissait la facture
+    # absente de QB sans que personne ne le voie (ex. facture 117). Gardé
+    # par l'interrupteur d'auto-sync ; idempotent (qbo_invoice_id).
+    async def _run_qbo_facture_autopush_hourly():
+        from app.services.qbo_auto_sync import is_qbo_auto_sync_enabled
+
+        if not await is_qbo_auto_sync_enabled():
+            return {"skipped": "qbo_auto_sync_off"}
+        from sqlalchemy import select
+        from app.models.facture import Facture
+        from app.services.facture_qbo import sync_facture_to_qbo
+
+        async with AsyncSessionLocal() as db:
+            ids = [
+                int(r[0])
+                for r in (
+                    await db.execute(
+                        select(Facture.id).where(
+                            Facture.status.in_(("sent", "paid", "overdue")),
+                            Facture.qbo_invoice_id.is_(None),
+                            Facture.client_id.is_not(None),
+                        )
+                    )
+                ).all()
+            ]
+        pushed = 0
+        failed = 0
+        errors: dict[str, str] = {}
+        for fid in ids:
+            try:
+                async with AsyncSessionLocal() as s:
+                    await sync_facture_to_qbo(s, fid)
+                    await s.commit()
+                pushed += 1
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                # Garde la raison des 5 premiers échecs pour diagnostic
+                # (visible dans le résultat du cron / les logs).
+                if len(errors) < 5:
+                    errors[str(fid)] = str(exc)[:200]
+        out = {"candidates": len(ids), "pushed": pushed, "failed": failed}
+        if errors:
+            out["errors"] = errors
+        return out
+
+    await _safe(
+        "qbo-facture-autopush", _run_qbo_facture_autopush_hourly, details
+    )
+
     ok_count = sum(1 for v in details.values() if v.get("ok"))
     fail_count = sum(1 for v in details.values() if not v.get("ok"))
     return MegaCronResult(
