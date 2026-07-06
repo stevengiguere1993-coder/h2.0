@@ -720,6 +720,54 @@ async def sync_achat_to_qbo(
         method = (achat.payment_method or "bill_to_pay").lower()
         as_purchase = method in PAID_METHODS
 
+        # Cohérence de TYPE avec l'objet QB déjà lié. Deux règles :
+        #
+        # 1) L'achat est lié à un BILL (facture fournisseur) mais son mode
+        #    est « payé » (chèque/CC) → on RESTE en Bill. Un Bill payé porte
+        #    ses BillPayments (appariés au flux bancaire) : le convertir en
+        #    dépense détruirait cette structure. Le paiement se reflète via
+        #    mark-paid / le pull, pas en changeant le type.
+        #
+        # 2) L'achat est lié à une DÉPENSE/CHÈQUE (Purchase) mais son mode
+        #    passe à « Sur compte fournisseur » (bill_to_pay) → on SUPPRIME
+        #    l'ancienne dépense côté QB et on recrée une facture à payer.
+        #    C'est la correction demandée : plus de doublon « Chèque » ou
+        #    « Dépense » orphelin quand on reclasse une opération pour
+        #    pouvoir y apparier plusieurs paiements.
+        if achat.qbo_bill_id:
+            linked_is_bill = True
+            try:
+                await qbo.get_bill(str(achat.qbo_bill_id))
+            except QuickBooksError:
+                linked_is_bill = False
+            if linked_is_bill and as_purchase:
+                as_purchase = False
+                log.info(
+                    "Achat %s : lié à un Bill QB %s → reste en facture "
+                    "fournisseur (paiements rattachés)",
+                    achat.id,
+                    achat.qbo_bill_id,
+                )
+            elif not linked_is_bill and not as_purchase:
+                if await qbo.delete_purchase(str(achat.qbo_bill_id)):
+                    log.info(
+                        "Achat %s : dépense/chèque QB %s supprimé → "
+                        "recréation en facture à payer",
+                        achat.id,
+                        achat.qbo_bill_id,
+                    )
+                else:
+                    log.warning(
+                        "Achat %s : suppression de la dépense QB %s "
+                        "échouée (objet déjà supprimé ou verrouillé) — "
+                        "vérifier les doublons dans QB",
+                        achat.id,
+                        achat.qbo_bill_id,
+                    )
+                achat.qbo_bill_id = None
+                achat.qbo_sync_token = None
+                await db.flush()
+
         # Taux TPS/TVQ d'ACHAT (résolus depuis le code de taxe d'achat) pour
         # imposer des montants de taxe EXACTS → total au cent près. Best-effort
         # (résolu une fois) : (None, None) si indisponible → QBO calcule la

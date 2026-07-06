@@ -23,6 +23,95 @@ from app.models.soumission import Soumission
 
 log = logging.getLogger(__name__)
 
+# Taille maximale d'un reçu importé depuis QB (aligne la limite d'upload
+# Kratos). Extensions acceptées quand QB ne fournit pas de ContentType.
+_MAX_RECEIPT_BYTES = 15 * 1024 * 1024
+_RECEIPT_EXT_CTYPE = {
+    ".pdf": "application/pdf",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".heic": "image/heic",
+}
+
+
+def _attachable_ctype(att: dict) -> Optional[str]:
+    """Content-type d'un Attachable QB : champ ContentType, sinon déduit de
+    l'extension du FileName. None si ce n'est pas un reçu (image/PDF)."""
+    ctype = (att.get("ContentType") or "").lower().strip()
+    if ctype.startswith("image/") or ctype == "application/pdf":
+        return ctype
+    name = (att.get("FileName") or "").lower()
+    for ext, mapped in _RECEIPT_EXT_CTYPE.items():
+        if name.endswith(ext):
+            return mapped
+    return None
+
+
+async def _import_qbo_receipts(
+    db: AsyncSession,
+    qbo: Any,
+    existing_bill: dict[str, Achat],
+    existing_purchase: dict[str, Achat],
+) -> int:
+    """Importe dans Kratos les reçus (pièces jointes image/PDF) déposés sur
+    les dépenses / factures fournisseurs QB liées à un achat qui n'a PAS
+    encore de reçu. N'écrase jamais un reçu existant. Retourne le nombre de
+    reçus importés."""
+    # Candidats indexés par (type d'entité QB, id). `qbo_bill_id` peut
+    # pointer un Bill OU une Purchase (achat poussé depuis Kratos) → on
+    # l'inscrit sous les deux types.
+    candidates: dict[tuple[str, str], Achat] = {}
+    for pid, a in existing_bill.items():
+        if a.receipt_image_content_type is None:
+            candidates[("bill", pid)] = a
+            candidates[("purchase", pid)] = a
+    for pid, a in existing_purchase.items():
+        if a.receipt_image_content_type is None:
+            candidates.setdefault(("purchase", pid), a)
+    if not candidates:
+        return 0
+
+    attachables = await qbo.list_attachables()
+    if not attachables:
+        return 0
+
+    imported = 0
+    done: set[int] = set()
+    for att in attachables:
+        att_id = str(att.get("Id") or "")
+        if not att_id:
+            continue
+        ctype = _attachable_ctype(att)
+        if ctype is None:
+            continue
+        for ref in att.get("AttachableRef") or []:
+            ent = ref.get("EntityRef") or {}
+            key = (
+                str(ent.get("type") or "").lower(),
+                str(ent.get("value") or ""),
+            )
+            achat = candidates.get(key)
+            if achat is None or achat.id in done:
+                continue
+            content = await qbo.download_attachable(att_id)
+            if not content or len(content) > _MAX_RECEIPT_BYTES:
+                continue
+            achat.receipt_image = content
+            achat.receipt_image_content_type = ctype
+            done.add(achat.id)
+            imported += 1
+            log.info(
+                "Reçu QB %s (%s) importé sur achat %s",
+                att_id,
+                att.get("FileName") or ctype,
+                achat.id,
+            )
+    if imported:
+        await db.flush()
+    return imported
+
 
 def _num(v: Any) -> float:
     try:
@@ -431,6 +520,16 @@ async def pull_project_costs_from_qbo(
         from app.services.achat_dedupe import dedupe_achats
 
         stats["deduped"] = await dedupe_achats(db)
+
+        # Import des REÇUS QB → Kratos : si une pièce jointe (image/PDF)
+        # est déposée sur la dépense/facture fournisseur dans QuickBooks
+        # et que l'achat Kratos correspondant n'a PAS encore de reçu, on
+        # la télécharge et on la stocke sur l'achat. On n'écrase jamais un
+        # reçu déjà présent côté Kratos. Une seule query Attachable par
+        # run ; sautée s'il n'y a aucun achat candidat.
+        stats["receipts_imported"] = await _import_qbo_receipts(
+            db, qbo, existing_bill, existing_purchase
+        )
 
     if dry_run:
         # Scopé client : on montre TOUT (à importer / déjà importé / sans
