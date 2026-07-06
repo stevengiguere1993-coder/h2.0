@@ -857,13 +857,23 @@ async def trigger_all_hourly(
         from app.models.achat import Achat
         from app.services.achat_qbo import sync_achat_to_qbo
 
+        from datetime import datetime, timedelta, timezone
+
+        recent_cutoff = datetime.now(timezone.utc) - timedelta(days=14)
         async with AsyncSessionLocal() as db:
             ids = [
                 int(r[0])
                 for r in (
                     await db.execute(
                         select(Achat.id).where(
-                            Achat.project_id.is_not(None),
+                            # Tout achat de PROJET, ou tout achat RÉCENT
+                            # même sans projet (l'auto-push immédiat a pu
+                            # échouer en silence). La fenêtre 14 j évite
+                            # de migrer en masse le legacy sans projet.
+                            (
+                                Achat.project_id.is_not(None)
+                                | (Achat.created_at >= recent_cutoff)
+                            ),
                             Achat.status.in_(("received", "paid")),
                             Achat.qbo_bill_id.is_(None),
                             Achat.qbo_purchase_id.is_(None),

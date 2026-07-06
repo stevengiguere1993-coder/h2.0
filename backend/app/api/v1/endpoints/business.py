@@ -401,6 +401,13 @@ def make_crud_router(
             if model in (Achat, Facture)
             else None
         )
+        # Capture pre-update mode de paiement de l'Achat — s'il change
+        # (ex. reclassé « Facture à payer » pour apparier plusieurs
+        # paiements, ou l'inverse), le type/compte QB doit suivre sans
+        # que l'utilisateur ait à cliquer « Re-synchroniser ».
+        prev_payment_method = (
+            getattr(obj, "payment_method", None) if model is Achat else None
+        )
         # Capture pre-update total Soumission — si le total change,
         # on propage au budget du projet lié pour que la kanban, le
         # header projet (« Budget » pill) et le champ « Budget (CAD) »
@@ -459,6 +466,14 @@ def make_crud_router(
                 new_status in ("received", "paid")
             )
             project_changed = new_proj != prev_doc_project_id
+            # (c) Le MODE DE PAIEMENT change (ex. dépense reclassée
+            # « Facture à payer » pour apparier plusieurs paiements, ou
+            # changement de carte) → le type/compte QB doit suivre
+            # automatiquement, sans clic « Re-synchroniser ».
+            payment_changed = (
+                getattr(obj, "payment_method", None) != prev_payment_method
+                and new_status in ("received", "paid")
+            )
             # Garde anti-doublon : un achat IMPORTÉ de QB comme Purchase ne
             # porte que `qbo_purchase_id` (pas `qbo_bill_id`) et un mode de
             # paiement non mappé → un re-push le recréerait en Bill doublon.
@@ -468,7 +483,9 @@ def make_crud_router(
             safe_for_repush = bool(getattr(obj, "qbo_bill_id", None)) or not (
                 getattr(obj, "qbo_purchase_id", None)
             )
-            if became_active or (project_changed and safe_for_repush):
+            if became_active or (
+                (project_changed or payment_changed) and safe_for_repush
+            ):
                 import asyncio
 
                 from app.api.v1.endpoints.achat_qbo import autopush_achat
