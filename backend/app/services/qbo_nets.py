@@ -88,6 +88,55 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet factures échoué", exc_info=True)
 
+    # ── Paiements de factures non enregistrés dans QB → re-push ──
+    # Un paiement entré dans Kratos doit TOUJOURS finir dans QB : si le
+    # push immédiat (create/update payment) a échoué en silence, on le
+    # rattrape ici. push_facture_payments_only retombe sur la synchro
+    # complète si la facture n'a pas encore de miroir QB.
+    try:
+        from sqlalchemy import select as _select
+
+        from app.models.facture import Facture as _Facture
+        from app.models.payment import Payment
+        from app.services.facture_qbo import push_facture_payments_only
+
+        async with AsyncSessionLocal() as db:
+            fids = [
+                int(r[0])
+                for r in (
+                    await db.execute(
+                        _select(Payment.facture_id)
+                        .join(_Facture, _Facture.id == Payment.facture_id)
+                        .where(
+                            Payment.qbo_payment_id.is_(None),
+                            _Facture.status.notin_(("draft", "void")),
+                        )
+                        .distinct()
+                    )
+                ).all()
+            ]
+        pushed = failed = 0
+        for fid in fids:
+            try:
+                async with AsyncSessionLocal() as s:
+                    await push_facture_payments_only(s, fid)
+                    await s.commit()
+                pushed += 1
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                log.error(
+                    "Facture %s : push des paiements QB échoué : %s",
+                    fid,
+                    exc,
+                )
+        out["paiements"] = {
+            "factures": len(fids),
+            "pushed": pushed,
+            "failed": failed,
+        }
+    except Exception:  # noqa: BLE001
+        log.warning("Filet paiements échoué", exc_info=True)
+
     # ── Dépenses actives sans lien QB → re-push ──
     try:
         from sqlalchemy import select
