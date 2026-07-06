@@ -392,22 +392,6 @@ def make_crud_router(
         prev_project_id = (
             getattr(obj, "project_id", None) if model is Punch else None
         )
-        # Capture pre-update project_id de l'Achat / Facture — si on
-        # (re)classe le document dans un projet, on doit pousser la mise à
-        # jour vers QB (CustomerRef = sous-client du projet, ClassRef =
-        # chantier) pour que le coût / revenu soit attribué au bon projet.
-        prev_doc_project_id = (
-            getattr(obj, "project_id", None)
-            if model in (Achat, Facture)
-            else None
-        )
-        # Capture pre-update mode de paiement de l'Achat — s'il change
-        # (ex. reclassé « Facture à payer » pour apparier plusieurs
-        # paiements, ou l'inverse), le type/compte QB doit suivre sans
-        # que l'utilisateur ait à cliquer « Re-synchroniser ».
-        prev_payment_method = (
-            getattr(obj, "payment_method", None) if model is Achat else None
-        )
         # Capture pre-update total Soumission — si le total change,
         # on propage au budget du projet lié pour que la kanban, le
         # header projet (« Budget » pill) et le champ « Budget (CAD) »
@@ -458,33 +442,23 @@ def make_crud_router(
                 )
         if model is Achat:
             new_status = getattr(obj, "status", None)
-            new_proj = getattr(obj, "project_id", None)
-            # Push QB si : (a) l'achat devient « actif » (received OU paid)
-            # pour la 1ʳᵉ fois, OU (b) on le (re)classe dans un autre projet
-            # (met à jour le CustomerRef/ClassRef du Bill/Purchase QB).
+            # Push LIVE : TOUTE modification enregistrée d'un achat actif
+            # (reçu/payé) est reflétée immédiatement dans QB — montants,
+            # taxes, projet, mode de paiement, description, date… — sans
+            # clic « Re-synchroniser ». Idempotent (mise à jour sparse via
+            # qbo_bill_id ; jamais de doublon). Le cron horaire n'est qu'un
+            # FILET pour les échecs silencieux, pas le mécanisme principal.
             became_active = prev_status not in ("received", "paid") and (
                 new_status in ("received", "paid")
-            )
-            project_changed = new_proj != prev_doc_project_id
-            # (c) Le MODE DE PAIEMENT change (ex. dépense reclassée
-            # « Facture à payer » pour apparier plusieurs paiements, ou
-            # changement de carte) → le type/compte QB doit suivre
-            # automatiquement, sans clic « Re-synchroniser ».
-            payment_changed = (
-                getattr(obj, "payment_method", None) != prev_payment_method
-                and new_status in ("received", "paid")
             )
             # Garde anti-doublon : un achat IMPORTÉ de QB comme Purchase ne
             # porte que `qbo_purchase_id` (pas `qbo_bill_id`) et un mode de
             # paiement non mappé → un re-push le recréerait en Bill doublon.
-            # On ne re-pousse sur changement de projet que les achats sans
-            # lien QB (création propre) ou liés via `qbo_bill_id`
-            # (mise à jour sparse propre).
             safe_for_repush = bool(getattr(obj, "qbo_bill_id", None)) or not (
                 getattr(obj, "qbo_purchase_id", None)
             )
             if became_active or (
-                (project_changed or payment_changed) and safe_for_repush
+                new_status in ("received", "paid") and safe_for_repush
             ):
                 import asyncio
 
@@ -529,19 +503,14 @@ def make_crud_router(
             ):
                 obj.issued_at = datetime.now(timezone.utc)
                 await db.flush()
-            # (Re)classement dans un projet → on pousse vers QB pour
-            # rattacher le REVENU au bon projet (CustomerRef = sous-client,
-            # ClassRef = chantier). Push délibéré (non conditionné à
-            # l'interrupteur de migration). On ne pousse que si la facture
-            # est déjà dans QB (qbo_invoice_id) OU sortie de brouillon, pour
-            # ne pas créer une Invoice à partir d'un brouillon.
-            new_proj = getattr(obj, "project_id", None)
-            already_in_qbo = bool(getattr(obj, "qbo_invoice_id", None))
-            if (
-                new_proj != prev_doc_project_id
-                and (obj.status or "") not in ("draft", "void")
-                and (already_in_qbo or new_proj is not None)
-            ):
+            # Push LIVE : TOUTE modification enregistrée d'une facture
+            # ÉMISE (envoyée/payée/en retard) est reflétée immédiatement
+            # dans QB — montants, projet, échéance… — sans bouton. Les
+            # brouillons ne partent jamais (ils sont poussés à l'envoi au
+            # client). Idempotent (qbo_invoice_id : création la 1ʳᵉ fois,
+            # mise à jour sparse ensuite). Le cron horaire n'est qu'un
+            # filet pour les échecs silencieux.
+            if (obj.status or "") not in ("draft", "void"):
                 await db.flush()
                 import asyncio
 
