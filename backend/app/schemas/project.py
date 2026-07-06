@@ -76,8 +76,8 @@ class ProjectRead(BaseModel):
     soumission_total: Optional[Decimal] = None
     # Type de facturation dérivé de la soumission liée : "forfaitaire",
     # "estime" ou "contrat". Sert de défaut pour la case « refacturable »
-    # des achats (forfaitaire = décoché, sinon coché). "forfaitaire" par
-    # défaut quand aucune soumission n'est liée.
+    # des achats (SEUL "contrat" = coché ; estimé et forfaitaire =
+    # décoché). "forfaitaire" par défaut quand aucune soumission n'est liée.
     billing_kind: str = "forfaitaire"
     estimated_hours_override: Optional[Decimal] = None
     # Flux A — état de signature des bons liés (corrections) pour le badge

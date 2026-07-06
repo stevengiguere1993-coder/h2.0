@@ -137,7 +137,10 @@ export default function NewAchatPage() {
   useEffect(() => {
     if (!projectId) return;
     const p = projects.find((x) => String(x.id) === String(projectId));
-    if (p?.billing_kind) setIsBillable(p.billing_kind !== "forfaitaire");
+    // Refacturable par défaut UNIQUEMENT pour un projet à CONTRAT
+    // (coûtant majoré). Estimé et forfaitaire → décoché (le prix
+    // donné au client couvre les dépenses) ; cochable à la main.
+    if (p?.billing_kind) setIsBillable(p.billing_kind === "contrat");
   }, [projectId, projects]);
 
   // Majoration par défaut : 10 % dès que l'achat est refacturable (si le

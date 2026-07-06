@@ -162,6 +162,35 @@ export default function AchatsPage() {
       if (r.paid_synced > 0)
         parts.push(`${r.paid_synced} basculé(s) en payé via QB`);
       parts.push(`${r.skipped_existing} déjà présent(s)`);
+      // Pull COMPLET en plus (coûts par projet) : crée les fournisseurs
+      // manquants, importe les reçus QB, reflète les rapprochements
+      // (date/mode) sur les achats liés. Best-effort : réservé
+      // admin/owner côté serveur — un 403 est ignoré en silence.
+      try {
+        const cRes = await authedFetch(
+          "/api/v1/qbo/pull-costs?dry_run=false",
+          { method: "POST" }
+        );
+        if (cRes.ok) {
+          const c = (await cRes.json()) as {
+            bills_imported?: number;
+            purchases_imported?: number;
+            reconciled_synced?: number;
+            receipts_imported?: number;
+          };
+          const extra: string[] = [];
+          const nb =
+            (c.bills_imported || 0) + (c.purchases_imported || 0);
+          if (nb > 0) extra.push(`${nb} coût(s) de projet importé(s)`);
+          if ((c.reconciled_synced || 0) > 0)
+            extra.push(`${c.reconciled_synced} rapproché(s) mis à jour`);
+          if ((c.receipts_imported || 0) > 0)
+            extra.push(`${c.receipts_imported} reçu(s) importé(s)`);
+          if (extra.length) parts.push(...extra);
+        }
+      } catch {
+        /* best-effort */
+      }
       setPullResult(parts.join(" · "));
       // Recharge la liste
       const aRes = await authedFetch("/api/v1/achats?limit=500");
