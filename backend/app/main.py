@@ -205,11 +205,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     requête pourrait tomber sur une colonne pas encore créée — négligeable
     sur une BDD déjà à jour (les migrations sont idempotentes / no-op)."""
     startup_task = asyncio.create_task(_run_startup_tasks())
+    # Filets QBO AUTONOMES (aucune dépendance à un cron externe) :
+    # 1ᵉʳ passage ~90 s après le boot (rattrape les factures/dépenses dont
+    # le push à l'envoi a échoué en silence), puis toutes les heures.
+    from app.services.qbo_nets import qbo_nets_loop
+
+    qbo_nets_task = asyncio.create_task(qbo_nets_loop())
     try:
         yield
     finally:
         if not startup_task.done():
             startup_task.cancel()
+        if not qbo_nets_task.done():
+            qbo_nets_task.cancel()
         await close_db()
 
 
