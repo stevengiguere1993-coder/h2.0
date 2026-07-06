@@ -134,6 +134,47 @@ async def _ensure_facture(db, facture_id: int) -> Facture:
     return record
 
 
+class FactureItemsReorder(BaseModel):
+    # Ids des lignes dans l'ordre voulu (liste complète de la facture).
+    item_ids: List[int] = Field(..., min_length=1)
+
+
+@router.post(
+    "/{facture_id}/items/reorder",
+    response_model=List[FactureItemRead],
+    summary="Réordonne les lignes d'une facture (positions = ordre fourni)",
+)
+async def reorder_items(
+    facture_id: int,
+    data: FactureItemsReorder,
+    db: DBSession,
+    _: CurrentUser,
+) -> List[FactureItemRead]:
+    """Assigne position = index de chaque id dans la liste fournie, puis
+    regroupe par type (service → extra → frais → rabais, tri stable) :
+    l'ordre relatif choisi par l'utilisateur est conservé au sein de
+    chaque type. Les ids absents de la liste passent à la fin."""
+    await _ensure_facture(db, facture_id)
+    rows = (
+        await db.execute(
+            select(FactureItem).where(FactureItem.facture_id == facture_id)
+        )
+    ).scalars().all()
+    order = {iid: idx for idx, iid in enumerate(data.item_ids)}
+    for r in rows:
+        r.position = order.get(int(r.id), len(order) + int(r.id))
+    await db.flush()
+    await _reorder_items_by_kind(db, facture_id)
+    fresh = (
+        await db.execute(
+            select(FactureItem)
+            .where(FactureItem.facture_id == facture_id)
+            .order_by(FactureItem.position.asc(), FactureItem.id.asc())
+        )
+    ).scalars().all()
+    return [FactureItemRead.model_validate(r) for r in fresh]
+
+
 @router.get(
     "/{facture_id}/items",
     response_model=List[FactureItemRead],
