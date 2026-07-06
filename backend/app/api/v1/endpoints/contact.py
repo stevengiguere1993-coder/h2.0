@@ -71,6 +71,10 @@ async def submit_contact(
     locale: str = Form("fr"),
     source: Optional[str] = Form(None),
     marketing_consent: bool = Form(False),
+    # Honeypot anti-bot : champ INVISIBLE pour un humain (masqué en CSS
+    # dans le formulaire public). Un bot qui remplit tous les champs le
+    # remplit aussi → classé spam. Nom volontairement appétissant.
+    website: Optional[str] = Form(None),
     photos: List[UploadFile] = File(default=[]),
 ) -> ContactRequestPublicAck:
     if not gdpr_consent:
@@ -127,6 +131,33 @@ async def submit_contact(
         raise
 
     reference = ContactRequestService.build_reference(record)
+
+    # Détection de spam (bots SEO : nom aléatoire, Gmail « à points »,
+    # liens, honeypot rempli). La demande est CONSERVÉE mais classée
+    # « spam » (révisable dans le CRM), et TOUS les effets de bord sont
+    # sautés : pas de notification aux managers, pas de cadence de suivi,
+    # pas d'accusé de réception, et surtout PAS d'appel sortant
+    # automatique de Léa vers un numéro bidon. Le bot reçoit l'accusé
+    # normal — aucun indice qu'il a été détecté.
+    from app.services.contact_spam import looks_like_spam
+
+    spam_reason = looks_like_spam(
+        name=record.name or "",
+        email=record.email or "",
+        message=record.message or "",
+        honeypot=website,
+    )
+    if spam_reason:
+        import logging
+
+        record.status = ContactRequestStatus.SPAM.value
+        await db.flush()
+        logging.getLogger(__name__).info(
+            "Contact %s classé spam (%s) — effets de bord sautés",
+            record.id,
+            spam_reason,
+        )
+        return ContactRequestPublicAck(reference=reference)
 
     photo_payloads: list[tuple[str, bytes, str]] = []
     if photos:

@@ -17,6 +17,8 @@ export type ContactPayload = {
   source?: string;
   gdpr_consent: boolean;
   marketing_consent: boolean;
+  // Honeypot anti-bot : toujours vide pour un humain (champ invisible).
+  website?: string;
 };
 
 export type ContactAck = { ok: boolean; reference: string };
@@ -38,6 +40,7 @@ export async function submitContactRequest(
   if (payload.address) fd.append("address", payload.address);
   if (payload.budget_range) fd.append("budget_range", payload.budget_range);
   if (payload.source) fd.append("source", payload.source);
+  if (payload.website) fd.append("website", payload.website);
   if (photos && photos.length > 0) {
     for (const file of photos) fd.append("photos", file, file.name);
   }
