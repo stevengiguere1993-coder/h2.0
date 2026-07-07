@@ -17,6 +17,7 @@ Flow :
 from __future__ import annotations
 
 import logging
+import os
 import random
 import re
 from typing import List, Optional, Tuple
@@ -141,6 +142,11 @@ async def scrape_owners_via_browser(
     page.on("response", _on_response)
 
     async def _snap(label: str) -> None:
+        # Screenshots de debug opt-in : sans SCRAPE_DEBUG on ne touche
+        # pas au disque (les PNG /tmp s'accumulaient sans nettoyage et
+        # n'ont aucune valeur en prod — le scraping n'en dépend pas).
+        if not os.environ.get("SCRAPE_DEBUG"):
+            return
         try:
             path = f"/tmp/evalweb-step-{matricule}-{label}.png"
             await page.screenshot(path=path, full_page=True)
@@ -252,18 +258,25 @@ async def scrape_owners_via_browser(
                 matricule,
             )
             return owners, None
-        # Si rien extrait, retourne le HTML pour debug + sauve un
-        # screenshot dans /tmp pour inspection ultérieure.
-        try:
-            screenshot_path = f"/tmp/evalweb-fail-{matricule}.png"
-            await page.screenshot(path=screenshot_path, full_page=True)
+        # Si rien extrait, retourne le HTML pour debug. Le screenshot
+        # d'échec dans /tmp est opt-in (SCRAPE_DEBUG) : il s'accumulait
+        # sans nettoyage. On garde toujours le log warning avec l'URL,
+        # qui suffit au diagnostic courant.
+        if os.environ.get("SCRAPE_DEBUG"):
+            try:
+                screenshot_path = f"/tmp/evalweb-fail-{matricule}.png"
+                await page.screenshot(path=screenshot_path, full_page=True)
+                log.warning(
+                    "EvalWeb : 0 owners trouvés. Screenshot : %s. URL: %s",
+                    screenshot_path,
+                    page.url,
+                )
+            except Exception:
+                pass
+        else:
             log.warning(
-                "EvalWeb : 0 owners trouvés. Screenshot : %s. URL: %s",
-                screenshot_path,
-                page.url,
+                "EvalWeb : 0 owners trouvés. URL: %s", page.url
             )
-        except Exception:
-            pass
         return [], html[:8000]
     finally:
         await context.close()
