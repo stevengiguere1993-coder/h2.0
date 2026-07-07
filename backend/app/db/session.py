@@ -251,6 +251,9 @@ async def ensure_critical_columns() -> None:
         # Mapping comptes QBO (table qbo_account_maps existait avant l'ajout
         # de ces colonnes → create_all ne les pose pas sur une table déjà
         # créée). On les ajoute ici, idempotent.
+        # Lien facture_item → soumission_item (facturation progressive
+        # par item). Table préexistante → create_all ne l'ajoute pas.
+        ("facture_items", "soumission_item_id", "INTEGER"),
         ("qbo_account_maps", "labour_expense_account", "VARCHAR(255)"),
         ("qbo_account_maps", "labour_clearing_account", "VARCHAR(255)"),
     )

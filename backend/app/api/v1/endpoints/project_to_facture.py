@@ -178,13 +178,18 @@ async def convert_project_to_facture(
             if sm_base <= 0:
                 sm_base = float(sm.subtotal or 0)
 
-            # Progressive billing : combien a déjà été facturé pour ce
-            # projet AU TITRE DE LA SOUMISSION DE BASE. On exclut
-            # volontairement les lignes « extra » (heures T&M, achats,
-            # ajouts hors-contrat) : elles ne réduisent PAS la cible
-            # cumulative du devis. On somme donc le total des lignes
-            # non-extra des factures existantes (hors la courante).
-            already_billed = 0.0
+            # Progressive billing PAR ITEM : combien a déjà été facturé
+            # pour ce projet au titre de la soumission de base, ITEM PAR
+            # ITEM (lignes liées via soumission_item_id). Un item chargé
+            # AU COMPLET sur une facture précédente ne réapparaît plus ;
+            # un item chargé partiellement n'est facturé que du restant.
+            # Les lignes « extra » (T&M, achats hors-contrat) sont
+            # exclues : elles ne réduisent pas la cible du devis. Le
+            # montant non attribuable à un item (acompte global, factures
+            # antérieures au lien par item) est réparti au prorata du
+            # poids de chaque item — même effet global qu'avant.
+            linked_billed: dict[int, float] = {}
+            unattributed_billed = 0.0
             if data.progressive_billing:
                 from app.models.facture import Facture as _Fac
 
@@ -197,17 +202,31 @@ async def convert_project_to_facture(
                     )
                 ).scalars().all()
                 if prev_ids:
-                    base_sum = (
+                    rows = (
                         await db.execute(
                             select(
-                                func.coalesce(func.sum(FactureItem.total), 0)
-                            ).where(
+                                FactureItem.soumission_item_id,
+                                func.coalesce(
+                                    func.sum(FactureItem.total), 0
+                                ),
+                            )
+                            .where(
                                 FactureItem.facture_id.in_(prev_ids),
                                 FactureItem.kind != "extra",
                             )
+                            .group_by(FactureItem.soumission_item_id)
                         )
-                    ).scalar_one()
-                    already_billed = round(float(base_sum or 0), 2)
+                    ).all()
+                    for sid, amt in rows:
+                        if sid is None:
+                            unattributed_billed = round(float(amt or 0), 2)
+                        else:
+                            linked_billed[int(sid)] = round(
+                                float(amt or 0), 2
+                            )
+            already_billed = round(
+                unattributed_billed + sum(linked_billed.values()), 2
+            )
 
             # Détermine le ratio cible cumulatif.
             if data.soumission_amount is not None and data.soumission_amount > 0:
@@ -220,11 +239,39 @@ async def convert_project_to_facture(
                 prefix_value = float(target_pct)
                 prefix_kind = "pct"
 
-            # Soustrait le déjà-facturé pour obtenir ce qu'on facture
-            # MAINTENANT (delta). En mode non-progressive, delta = target.
-            delta_amount = round(max(0.0, target_amount - already_billed), 2)
+            # Ratio cible cumulatif, borné à 100 % : on ne charge jamais
+            # un item au-delà de son montant de soumission.
+            target_ratio = (
+                min(1.0, target_amount / sm_base) if sm_base > 0 else 1.0
+            )
 
-            if delta_amount <= 0 and sm_base > 0:
+            delta_amount = 0.0
+            planned: list[tuple[SoumissionItem, float]] = []
+            for it in sm_items:
+                item_total = float(it.total or 0)
+                if item_total <= 0:
+                    continue
+                share = (item_total / sm_base) if sm_base > 0 else 0.0
+                billed_i = (
+                    linked_billed.get(int(it.id), 0.0)
+                    + unattributed_billed * share
+                )
+                if not data.progressive_billing:
+                    billed_i = 0.0
+                remaining_i = max(0.0, item_total - billed_i)
+                target_i = item_total * target_ratio
+                delta_i = round(
+                    min(max(0.0, target_i - billed_i), remaining_i), 2
+                )
+                if delta_i <= 0.01:
+                    # Item déjà chargé au complet (ou cible atteinte) →
+                    # il n'apparaît PAS sur cette facture.
+                    continue
+                planned.append((it, delta_i))
+                delta_amount += delta_i
+            delta_amount = round(delta_amount, 2)
+
+            if not planned and sm_base > 0:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=(
@@ -242,19 +289,33 @@ async def convert_project_to_facture(
                 prefix = f"{int(round(prefix_value))} $ — "
             else:
                 prefix = f"{prefix_value:g}% — " if pct != 100 else ""
-            for it in sm_items:
-                qty = float(it.quantity)
-                unit_price = round(float(it.unit_price) * ratio, 2)
-                line_total = round(qty * unit_price, 2)
+            for it, delta_i in planned:
+                item_total = float(it.total or 0)
+                if abs(delta_i - item_total) <= 0.01 and float(it.quantity) > 0:
+                    # Item chargé au complet → quantité/prix/unité d'origine.
+                    qty = float(it.quantity)
+                    unit = it.unit
+                    unit_price = float(it.unit_price)
+                    line_total = round(qty * unit_price, 2)
+                else:
+                    # Partiel → une ligne « lot » au montant exact de la
+                    # tranche (qty 1), pour éviter la dérive d'arrondi
+                    # quantité × prix et ne pas afficher une fausse
+                    # quantité au client.
+                    qty = 1.0
+                    unit = "lot"
+                    unit_price = delta_i
+                    line_total = delta_i
                 db.add(
                     FactureItem(
                         facture_id=facture.id,
                         position=pos,
                         description=f"{prefix}{it.description}",
-                        unit=it.unit,
+                        unit=unit,
                         quantity=qty,
                         unit_price=unit_price,
                         total=line_total,
+                        soumission_item_id=int(it.id),
                     )
                 )
                 pos += 1
