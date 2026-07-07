@@ -175,6 +175,7 @@ from app.models.numbering_counter import NumberingCounter
 from app.models.payment import Payment
 from app.models.project import Project
 from app.models.project_correction import ProjectCorrection
+from app.models.role_permission import RolePermission  # noqa: F401
 from app.models.push_subscription import PushSubscription  # noqa: F401
 from app.models.project_member import ProjectMember
 from app.models.project_phase import ProjectPhase
@@ -351,6 +352,7 @@ __all__ = [
     "Payment",
     "Project",
     "ProjectCorrection",
+    "RolePermission",
     "ProjectMember",
     "ProjectPhase",
     "ProjectSubcontractorContract",

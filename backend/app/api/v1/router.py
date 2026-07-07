@@ -80,6 +80,7 @@ from app.api.v1.endpoints import (
     mobile,
     notifications,
     payments,
+    permissions,
     public_nda,
     public_offer,
     sales_tasks,
@@ -249,6 +250,7 @@ api_router.include_router(push.router)
 api_router.include_router(appointment_types.router)
 api_router.include_router(agenda_availability.router)
 api_router.include_router(user_roles.router)
+api_router.include_router(permissions.router)
 api_router.include_router(lea_web.router)
 api_router.include_router(letmetalk.router)
 api_router.include_router(webhooks_meta.router)
