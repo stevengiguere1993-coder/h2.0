@@ -19,9 +19,28 @@ export type ContactPayload = {
   marketing_consent: boolean;
   // Honeypot anti-bot : toujours vide pour un humain (champ invisible).
   website?: string;
+  // CAPTCHA maison : jeton signé émis par GET /contact/captcha + id de
+  // l'icône cliquée. Sans défi résolu, la demande est classée spam.
+  captcha_token?: string;
+  captcha_answer?: string;
 };
 
 export type ContactAck = { ok: boolean; reference: string };
+
+export type CaptchaChallenge = {
+  token: string;
+  question_fr: string;
+  question_en: string;
+  options: { id: string; icon: string }[];
+};
+
+export async function fetchContactCaptcha(): Promise<CaptchaChallenge> {
+  const res = await fetch(`${DEFAULT_BASE}/api/v1/contact/captcha`, {
+    cache: "no-store"
+  });
+  if (!res.ok) throw new Error(`http_${res.status}`);
+  return (await res.json()) as CaptchaChallenge;
+}
 
 export async function submitContactRequest(
   payload: ContactPayload,
@@ -41,6 +60,10 @@ export async function submitContactRequest(
   if (payload.budget_range) fd.append("budget_range", payload.budget_range);
   if (payload.source) fd.append("source", payload.source);
   if (payload.website) fd.append("website", payload.website);
+  if (payload.captcha_token) fd.append("captcha_token", payload.captcha_token);
+  if (payload.captcha_answer) {
+    fd.append("captcha_answer", payload.captcha_answer);
+  }
   if (photos && photos.length > 0) {
     for (const file of photos) fd.append("photos", file, file.name);
   }
