@@ -386,6 +386,14 @@ async def trigger_calendar_feeds_sync(
     `sync_user_feed` remplace les ExternalBusyBlock existants par lot.
     """
     _check_secret(x_cron_secret, secret)
+    # Respecte le toggle « Synchro calendriers iCal » du hub
+    # d'automatisations. is_automation_enabled est fail-open (True si
+    # la ligne/table est absente) → défaut ON = comportement inchangé.
+    from app.services.automation_state import is_automation_enabled
+
+    if not await is_automation_enabled("ical_sync_all"):
+        return CalendarSyncCronResult(ok=True, job="calendar-feeds-sync")
+
     from app.db.session import AsyncSessionLocal
     from app.models.calendar_sync import UserCalendarFeed
     from app.services.ical_sync import sync_user_feed
@@ -754,6 +762,15 @@ async def trigger_all_hourly(
     details: dict = {}
 
     async def _run_calendar_sync():
+        # Respecte le toggle « Synchro calendriers iCal » du hub
+        # d'automatisations. is_automation_enabled est fail-open (True si
+        # la ligne/table est absente), donc le comportement par défaut
+        # (toggle ON) est strictement identique à avant.
+        from app.services.automation_state import is_automation_enabled
+
+        if not await is_automation_enabled("ical_sync_all"):
+            return {"skipped": True, "feeds_total": 0, "synced": 0, "failed": 0}
+
         from app.models.calendar_sync import UserCalendarFeed
         from app.services.ical_sync import sync_user_feed
         from sqlalchemy import select

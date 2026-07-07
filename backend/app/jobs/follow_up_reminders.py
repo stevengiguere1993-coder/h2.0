@@ -113,6 +113,7 @@ async def _run() -> None:
             if has_real:
                 continue
             # Existe-t-il une notif déjà émise (pour pas spammer) ?
+            # 1er verrou : le follow-up 'auto' marqué overdue_notified.
             already = (
                 await db.execute(
                     select(FollowUp.id).where(
@@ -124,6 +125,24 @@ async def _run() -> None:
                 )
             ).first() is not None
             if already:
+                continue
+            # 2e verrou (anti-spam horaire) : cherche directement une
+            # Notification déjà émise pour ce lead. Les leads Meta/voice/
+            # webhooks n'ont AUCUN follow-up 'auto', donc le marqueur
+            # overdue_notified ci-dessus n'est jamais posé pour eux → sans
+            # ce garde, la cloche re-sonnerait à chaque run horaire. On
+            # calque le pattern de dédup de la Section 4 (rdv.confirm).
+            from app.models.notification import Notification as _Notif
+
+            notif_exists = (
+                await db.execute(
+                    select(_Notif.id).where(
+                        _Notif.kind == "lead.uncalled_24h",
+                        _Notif.href == f"/app/crm/{p.id}",
+                    ).limit(1)
+                )
+            ).first() is not None
+            if notif_exists:
                 continue
             try:
                 await notify_role(
