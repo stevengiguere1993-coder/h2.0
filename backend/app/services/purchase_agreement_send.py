@@ -9,7 +9,6 @@ Pattern calqué sur soumission_send.py :
 from __future__ import annotations
 
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
 from typing import Iterable, Optional
@@ -22,16 +21,11 @@ from app.models.purchase_agreement import (
     PurchaseAgreement,
     PurchaseAgreementStatus,
 )
+from app.services.public_links import public_base
 from app.services.purchase_agreement_pdf import render_purchase_agreement_pdf
 
 
 log = logging.getLogger(__name__)
-
-
-def _public_base() -> str:
-    return (
-        os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com"
-    ).rstrip("/")
 
 
 class PurchaseAgreementSendError(Exception):
@@ -66,7 +60,7 @@ def _signature_block(label: str, url: str) -> str:
 
 def _buyer_body(pa: PurchaseAgreement, intro: Optional[str]) -> str:
     sign_url = (
-        f"{_public_base()}/promesse-achat/acheteur/{pa.buyer_signature_token}"
+        f"{public_base()}/promesse-achat/acheteur/{pa.buyer_signature_token}"
     )
     return f"""\
 <div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:640px">
@@ -90,7 +84,7 @@ def _buyer_body(pa: PurchaseAgreement, intro: Optional[str]) -> str:
 
 def _seller_body(pa: PurchaseAgreement, intro: Optional[str]) -> str:
     sign_url = (
-        f"{_public_base()}/promesse-achat/vendeur/{pa.seller_signature_token}"
+        f"{public_base()}/promesse-achat/vendeur/{pa.seller_signature_token}"
     )
     return f"""\
 <div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:640px">

@@ -10,7 +10,6 @@ Pattern calqué sur purchase_agreement_send.py :
 from __future__ import annotations
 
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
@@ -23,15 +22,10 @@ from app.models.offer import Offer, OfferStatus
 from app.models.prospection_deal import ProspectionDeal
 from app.services.offer_pdf import render_offer_pdf
 from app.services.offer_template import BUYER_ENTITY_NAME, format_money
+from app.services.public_links import public_base
 
 
 log = logging.getLogger(__name__)
-
-
-def _public_base() -> str:
-    return (
-        os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com"
-    ).rstrip("/")
 
 
 class OfferSendError(Exception):
@@ -40,7 +34,7 @@ class OfferSendError(Exception):
 
 def _seller_body(offer: Offer, deal: Optional[ProspectionDeal]) -> str:
     """Email court et direct au vendeur."""
-    sign_url = f"{_public_base()}/sign-offer/{offer.signature_token}"
+    sign_url = f"{public_base()}/sign-offer/{offer.signature_token}"
     salutation = (
         f"Bonjour {offer.vendeur_nom},"
         if offer.vendeur_nom and offer.vendeur_nom.strip()

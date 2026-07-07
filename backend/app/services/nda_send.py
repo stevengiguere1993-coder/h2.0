@@ -10,7 +10,6 @@ Pattern strictement calqué sur `offer_send.py` :
 from __future__ import annotations
 
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
@@ -23,15 +22,10 @@ from app.models.nda import NDA, NDAStatus
 from app.models.prospection_deal import ProspectionDeal
 from app.services.nda_pdf import nda_pdf_filename, render_nda_pdf
 from app.services.nda_template import ISSUER_ENTITY_NAME
+from app.services.public_links import public_base
 
 
 log = logging.getLogger(__name__)
-
-
-def _public_base() -> str:
-    return (
-        os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com"
-    ).rstrip("/")
 
 
 class NDASendError(Exception):
@@ -46,7 +40,7 @@ def _investor_body(nda: NDA, deal: Optional[ProspectionDeal]) -> str:
     l'email révélait déjà l'adresse, le NDA serait inutile.
     """
     del deal  # explicitement ignoré (cf. docstring)
-    sign_url = f"{_public_base()}/sign-nda/{nda.signature_token}"
+    sign_url = f"{public_base()}/sign-nda/{nda.signature_token}"
     salutation = (
         f"Bonjour {nda.investor_name},"
         if nda.investor_name and nda.investor_name.strip()

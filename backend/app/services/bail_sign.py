@@ -8,7 +8,6 @@ pour l'instant (la page publique affiche les conditions essentielles).
 from __future__ import annotations
 
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
 from typing import Iterable, Optional
@@ -18,12 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.email_graph import get_mailer
 from app.models.immobilier import Bail, Locataire
+from app.services.public_links import public_base
 
 log = logging.getLogger(__name__)
-
-
-def _public_base() -> str:
-    return (os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com").rstrip("/")
 
 
 class BailSendError(Exception):
@@ -81,7 +77,7 @@ async def send_bail_for_signature(
     if not bail.signature_token:
         bail.signature_token = secrets.token_urlsafe(32)
         await db.flush()
-    url = f"{_public_base()}/bail/{bail.signature_token}"
+    url = f"{public_base()}/bail/{bail.signature_token}"
 
     try:
         await mailer.send(

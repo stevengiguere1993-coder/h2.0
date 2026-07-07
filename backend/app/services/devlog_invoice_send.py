@@ -19,7 +19,6 @@ Pattern calqué sur ``app.services.devlog_soumission_send`` (PR #473) :
 from __future__ import annotations
 
 import logging
-import os
 import secrets
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
@@ -37,15 +36,10 @@ from app.services.devlog_invoice_pdf import (
     generate_invoice_pdf,
 )
 from app.services.numbering import next_facture_number
+from app.services.public_links import public_base
 
 
 log = logging.getLogger(__name__)
-
-
-def _public_base() -> str:
-    return (
-        os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com"
-    ).rstrip("/")
 
 
 class DevlogInvoiceSendError(Exception):
@@ -228,7 +222,7 @@ async def send_invoice_email(
     )
 
     pay_url = (
-        f"{_public_base()}/devlog/pay-invoice/{invoice.signature_token}"
+        f"{public_base()}/devlog/pay-invoice/{invoice.signature_token}"
     )
     subject = (
         f"Facture {invoice_label} — {BUYER_ENTITY_NAME}"
