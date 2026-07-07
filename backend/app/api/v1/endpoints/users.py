@@ -30,10 +30,12 @@ from app.models.project_member import ProjectMember
 from app.models.user_immeuble import UserImmeuble
 from app.models.user import (
     DEFAULT_VOLETS,
+    ROLE_RANK,
     User,
     UserRole,
     VALID_VOLETS,
 )
+from app.services.audit import log_action
 
 log = logging.getLogger(__name__)
 
@@ -108,6 +110,18 @@ def _user_read(u: User, full_name: Optional[str]) -> UserRead:
         profile_color=u.profile_color,
         has_avatar=u.has_avatar,
     )
+
+
+def _guard_rank(target: User, actor: User) -> None:
+    """Empêche un acteur d'agir sur un compte de rang STRICTEMENT
+    supérieur au sien (ex. un admin qui tenterait de réinitialiser le
+    mot de passe ou de modifier les volets d'un owner). Un acteur peut
+    toujours agir sur un compte de rang égal ou inférieur."""
+    if ROLE_RANK.get(target.role, 0) > ROLE_RANK.get(actor.role, 0):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Impossible d'agir sur un compte de rang supérieur.",
+        )
 
 
 def _validate_volets(volets: List[str]) -> List[str]:
@@ -265,6 +279,15 @@ async def create_user(
         log.exception("welcome email failed: %s", exc)
         welcome_email_error = f"Erreur mailer : {exc}"
 
+    await log_action(
+        db,
+        user=admin,
+        action="user.created",
+        entity_type="user",
+        entity_id=u.id,
+        details={"target_email": u.email, "role": u.role, "volets": volets},
+    )
+
     out = UserCreatedRead(
         id=u.id,
         email=u.email,
@@ -298,11 +321,24 @@ async def update_role(
             status.HTTP_400_BAD_REQUEST,
             "Tu ne peux pas rétrograder ton propre compte.",
         )
+    old_role = u.role
     u.role = data.role
     # Keep the legacy is_admin flag in sync so old code paths still work.
     u.is_admin = data.role in (UserRole.OWNER.value, UserRole.ADMIN.value)
     await db.flush()
     await db.refresh(u)
+    await log_action(
+        db,
+        user=owner,
+        action="user.role_changed",
+        entity_type="user",
+        entity_id=user_id,
+        details={
+            "target_email": u.email,
+            "old_role": old_role,
+            "new_role": u.role,
+        },
+    )
     return _user_read(u, None)
 
 
@@ -311,17 +347,26 @@ async def update_volets(
     user_id: int,
     data: VoletsUpdate,
     db: DBSession,
-    _: RequireAdminRole,
+    admin: RequireAdminRole,
 ) -> UserRead:
     u = (
         await db.execute(select(User).where(User.id == user_id))
     ).scalar_one_or_none()
     if u is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    _guard_rank(u, admin)
     cleaned = _validate_volets(data.volets)
     u.volets_json = json.dumps(cleaned)
     await db.flush()
     await db.refresh(u)
+    await log_action(
+        db,
+        user=admin,
+        action="user.volets_changed",
+        entity_type="user",
+        entity_id=user_id,
+        details={"target_email": u.email, "volets": cleaned},
+    )
     return _user_read(u, None)
 
 
@@ -334,7 +379,7 @@ async def update_can_assign_others(
     user_id: int,
     data: CanAssignUpdate,
     db: DBSession,
-    _: RequireOwner,
+    owner: RequireOwner,
 ) -> UserRead:
     """Toggle la permission spéciale d'assigner des RDV agenda à
     d'autres utilisateurs (cas : un employé prospecteur qui a besoin
@@ -347,6 +392,17 @@ async def update_can_assign_others(
     u.can_assign_others = bool(data.can_assign_others)
     await db.flush()
     await db.refresh(u)
+    await log_action(
+        db,
+        user=owner,
+        action="user.can_assign_changed",
+        entity_type="user",
+        entity_id=user_id,
+        details={
+            "target_email": u.email,
+            "can_assign_others": u.can_assign_others,
+        },
+    )
     return _user_read(u, None)
 
 
@@ -368,6 +424,14 @@ async def deactivate(
     u.is_active = False
     await db.flush()
     await db.refresh(u)
+    await log_action(
+        db,
+        user=owner,
+        action="user.deactivated",
+        entity_type="user",
+        entity_id=user_id,
+        details={"target_email": u.email},
+    )
     return UserRead.model_validate(u)
 
 
@@ -375,7 +439,7 @@ async def deactivate(
 async def activate(
     user_id: int,
     db: DBSession,
-    _: RequireOwner,
+    owner: RequireOwner,
 ) -> UserRead:
     u = (
         await db.execute(select(User).where(User.id == user_id))
@@ -385,6 +449,14 @@ async def activate(
     u.is_active = True
     await db.flush()
     await db.refresh(u)
+    await log_action(
+        db,
+        user=owner,
+        action="user.activated",
+        entity_type="user",
+        entity_id=user_id,
+        details={"target_email": u.email},
+    )
     return UserRead.model_validate(u)
 
 
@@ -421,10 +493,21 @@ async def set_password(
     ).scalar_one_or_none()
     if u is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    _guard_rank(u, admin)
     u.hashed_password = get_password_hash(body.password)
     u.must_change_password = body.must_change
     await db.flush()
     await db.refresh(u)
+    # Audit : on trace QUI a réinitialisé le mot de passe de QUI, jamais
+    # le mot de passe lui-même.
+    await log_action(
+        db,
+        user=admin,
+        action="user.password_set",
+        entity_type="user",
+        entity_id=user_id,
+        details={"target_email": u.email, "must_change": body.must_change},
+    )
 
     welcome_email_sent = False
     welcome_email_error: Optional[str] = None
@@ -508,15 +591,26 @@ async def delete_user(
                 "Crée un autre owner d'abord.",
             )
 
+    # Capture les infos utiles AVANT la suppression de la ligne.
+    target_email = u.email
+    target_role = u.role
     await db.delete(u)
     await db.flush()
+    await log_action(
+        db,
+        user=owner,
+        action="user.deleted",
+        entity_type="user",
+        entity_id=user_id,
+        details={"target_email": target_email, "role": target_role},
+    )
 
 
 @router.post("/{user_id}/force-password-change", response_model=UserRead)
 async def force_password_change(
     user_id: int,
     db: DBSession,
-    _: RequireAdminRole,
+    admin: RequireAdminRole,
 ) -> UserRead:
     """Just flips the must_change_password flag without rotating the
     password. Used when an admin wants to invite a user to update an
@@ -526,9 +620,18 @@ async def force_password_change(
     ).scalar_one_or_none()
     if u is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    _guard_rank(u, admin)
     u.must_change_password = True
     await db.flush()
     await db.refresh(u)
+    await log_action(
+        db,
+        user=admin,
+        action="user.force_password_change",
+        entity_type="user",
+        entity_id=user_id,
+        details={"target_email": u.email},
+    )
     return UserRead.model_validate(u)
 
 
