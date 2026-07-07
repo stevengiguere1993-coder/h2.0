@@ -116,7 +116,7 @@ const PROSPECTION_SECTIONS: NavSection[] = [
     label: "Ressources",
     items: [
       {
-        href: "/prospection/parametres",
+        href: "/parametres",
         label: "Paramètres",
         icon: Settings,
         minRole: "manager"
