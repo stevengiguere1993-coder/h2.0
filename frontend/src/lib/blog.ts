@@ -26,16 +26,28 @@ export async function listArticles(
   const url = `${BASE}/api/v1/blog?locale=${encodeURIComponent(
     locale
   )}&limit=${limit}&skip=${skip}`;
-  const res = await fetch(url, { next: { revalidate: 600 } });
-  if (!res.ok) return [];
-  return (await res.json()) as Article[];
+  // try/catch : un backend down ne doit pas faire planter /blog en 500
+  // (rendu SSR). On retourne une liste vide comme les fonctions sœurs.
+  try {
+    const res = await fetch(url, { next: { revalidate: 600 } });
+    if (!res.ok) return [];
+    return (await res.json()) as Article[];
+  } catch {
+    return [];
+  }
 }
 
 export async function getArticle(slug: string): Promise<ArticleFull | null> {
   const url = `${BASE}/api/v1/blog/${encodeURIComponent(slug)}`;
-  const res = await fetch(url, { next: { revalidate: 3600 } });
-  if (!res.ok) return null;
-  return (await res.json()) as ArticleFull;
+  // try/catch : un backend down route vers notFound() (return null) au
+  // lieu d'un 500 sur /blog/[slug].
+  try {
+    const res = await fetch(url, { next: { revalidate: 3600 } });
+    if (!res.ok) return null;
+    return (await res.json()) as ArticleFull;
+  } catch {
+    return null;
+  }
 }
 
 /**
