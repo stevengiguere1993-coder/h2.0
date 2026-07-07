@@ -311,3 +311,17 @@ L'asymétrie est flagrante : `update_role` (promotion d'un compte existant) exig
 **Plan d'exécution** :
 1. PR dédiée : supprimer les composants d'onglets non câblés + leurs types (grep JSX = 0 pour chacun ; `ProjectTeamSection` mort transitivement).
 2. Ensuite, extraire les gros onglets vivants (`Summary`, `DevlogFinances`, …) en fichiers séparés, un par PR.
+
+---
+
+## P-18 — Helper `public_base()` unique (dédup de `_public_base_url` sur ~10 services d'envoi) (P3)
+
+**Le problème (vérifié)** : la construction de l'URL publique de base (pour les liens dans les courriels) est recopiée à l'identique dans une dizaine de services d'envoi (`bail_sign`, `bon_send`, `devlog`, `devlog_invoice_send`, `devlog_soumission_send`, `facture_send`, `nda_send`, `offer_send`, `purchase_agreement_send`, `soumission_send`). Deux variantes `_public_base_url` divergent légèrement.
+
+**Pourquoi NON fait cette nuit** : c'était sur ma liste « à corriger », mais la factorisation touche ~10 fichiers d'envoi (dont 3 déjà modifiés cette nuit pour les gardes d'état de facturation). Pour respecter la consigne « option la plus sûre et la plus réversible » et garder le diff de la nuit chirurgical, je l'ai **déféré** : un helper partagé bien fait mérite sa propre PR isolée plutôt que d'être noyé dans le lot de correctifs.
+
+**Bénéfice** : source unique pour les liens publics (fin de la dérive entre courriels).
+**Risque** : faible (copies strictement identiques) mais large surface → PR dédiée + vérif d'un courriel de chaque type.
+**Effort** : faible-moyen. **Priorité** : P3.
+
+**Plan** : créer `app/services/public_links.py::public_base()` ; importer dans les copies STRICTEMENT identiques ; laisser les 2 `_public_base_url` divergents pour une revue séparée (comprendre la divergence avant d'unifier).
