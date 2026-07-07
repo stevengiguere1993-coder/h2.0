@@ -15,6 +15,20 @@ import {
 
 const SITE = "https://immohorizon.com";
 
+// Seuls ces services ont une page dédiée /services/{slug}. Les autres slugs
+// SEO (agrandissement, sous-sol, fenêtres, terrasse, rénovation complète)
+// pointaient vers un /services/{slug} inexistant → 404 sur ~275 landing pages
+// (CTA mort + breadcrumb JSON-LD cassé). On les route vers le pilier
+// /services (l'offre de services de construction). Voir P-03.
+const SERVICE_PAGE_SLUGS = new Set([
+  "cuisine",
+  "salle-de-bain",
+  "multilogement",
+]);
+function serviceHref(slug: string): string {
+  return SERVICE_PAGE_SLUGS.has(slug) ? `/services/${slug}` : "/services";
+}
+
 type Props = {
   params: Promise<{ locale: string; service: string; city: string }>;
 };
@@ -93,7 +107,7 @@ export default async function ServiceCityPage({ params }: Props) {
             "@type": "ListItem",
             position: 2,
             name: s.nameCap,
-            item: `${SITE}/services/${s.slug}`
+            item: `${SITE}${serviceHref(s.slug)}`
           },
           {
             "@type": "ListItem",
@@ -145,8 +159,8 @@ export default async function ServiceCityPage({ params }: Props) {
               Obtenir une soumission gratuite
               <ArrowRight className="ml-2 h-4 w-4" />
             </Link>
-            <Link href={`/services/${s.slug}` as "/services"} className="btn-secondary">
-              Voir le service complet
+            <Link href={serviceHref(s.slug) as "/services"} className="btn-secondary">
+              Voir nos services
             </Link>
           </div>
         </div>
