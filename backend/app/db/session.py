@@ -475,6 +475,43 @@ async def ensure_relance_tables() -> None:
         log.warning("ensure_relance_tables failed: %s", exc)
 
 
+async def ensure_role_permissions_tables() -> None:
+    """Crée la table `role_permissions` (permissions configurables) dans sa
+    PROPRE transaction (filet contre un abort d'``init_db``), puis SÈME les
+    défauts = le comportement actuel codé en dur, pour chaque capacité du
+    registre. Le seed est idempotent (ON CONFLICT DO NOTHING) : il ne
+    réécrase jamais un choix de l'owner, et n'insère que les capacités
+    manquantes → aucun changement visible tant que l'owner ne modifie rien.
+    Voir app/core/capabilities.py et app/services/permissions_service.py."""
+    import logging
+
+    from sqlalchemy import text
+
+    log = logging.getLogger("db.ensure_role_permissions_tables")
+    try:
+        from app.core.capabilities import CAPABILITIES
+        from app.db.base import Base
+        from app.models.role_permission import RolePermission  # noqa: F401
+
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(
+                    c, tables=[RolePermission.__table__]
+                )
+            )
+            # Seed des défauts (rôle minimum actuel de chaque capacité).
+            for cap in CAPABILITIES:
+                await conn.execute(
+                    text(
+                        "INSERT INTO role_permissions (capability, min_role) "
+                        "VALUES (:cap, :role) ON CONFLICT (capability) DO NOTHING"
+                    ),
+                    {"cap": cap.id, "role": cap.default_min_role},
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_role_permissions_tables failed: %s", exc)
+
+
 async def init_db() -> None:
     """
     Initialize database tables.

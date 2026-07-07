@@ -21,6 +21,7 @@ from app.db.session import (
     ensure_project_corrections_tables,
     ensure_raci_tables,
     ensure_relance_tables,
+    ensure_role_permissions_tables,
     ensure_timesheet_tables,
     init_db,
 )
@@ -93,6 +94,15 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning(
             "ensure_relance_tables failed during startup: %s", exc
+        )
+
+    # Table des permissions configurables (Paramètres → Permissions) +
+    # seed des défauts (= comportement actuel). Transaction isolée.
+    try:
+        await ensure_role_permissions_tables()
+    except Exception as exc:
+        logger.warning(
+            "ensure_role_permissions_tables failed during startup: %s", exc
         )
 
     # Backfill : crée le projet (+ facture d'acompte DRAFT) pour les

@@ -5,19 +5,21 @@ CRUD operations for projects with role-based access control.
 """
 
 from decimal import Decimal
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import CurrentUser, DBSession, RequireManager
+from app.api.deps import CurrentUser, DBSession
 from app.core.permissions import visible_project_ids
+from app.models.user import User
 from app.schemas.project import (
     ProjectCreate,
     ProjectRead,
     ProjectReadWithClient,
     ProjectUpdate,
 )
+from app.services.permissions_service import require_capability
 from app.services.project import ProjectService
 
 
@@ -380,12 +382,13 @@ async def update_project(
 async def delete_project(
     project_id: int,
     db: DBSession,
-    _: RequireManager,
+    _: Annotated[User, Depends(require_capability("project.delete"))],
 ) -> None:
-    """Supprime un projet. Réservé aux managers+ (action destructive) —
-    auparavant ouverte à tout compte connecté (garde manquante). Voir P-11.
-    Le déplacement de cartes kanban (update_project) reste ouvert aux
-    employés à la demande de Phil."""
+    """Supprime un projet (action destructive). Le rôle minimum requis est
+    CONFIGURABLE depuis Paramètres → Permissions (capacité « project.delete »,
+    défaut = manager). Auparavant ouvert à tout compte connecté (garde
+    manquante, P-11). Le déplacement de cartes kanban (update_project) reste
+    ouvert aux employés à la demande de Phil."""
     service = ProjectService(db)
     deleted = await service.delete(project_id)
     if not deleted:
