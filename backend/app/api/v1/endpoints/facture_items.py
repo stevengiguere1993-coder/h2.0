@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
-from app.models.facture import Facture
+from app.models.facture import Facture, FactureStatus
 from app.models.facture_item import FactureItem
 
 
@@ -135,6 +135,20 @@ async def _ensure_facture(db, facture_id: int) -> Facture:
     return record
 
 
+async def _ensure_facture_editable(db, facture_id: int) -> Facture:
+    """Comme ``_ensure_facture``, mais refuse de modifier les lignes d'une
+    facture déjà PAYÉE ou ANNULÉE (VOID) : on ne retouche pas le détail
+    d'une facture réglée (intégrité comptable). Les états draft / sent /
+    overdue restent modifiables. Voir P-11 (durcissement des écritures)."""
+    record = await _ensure_facture(db, facture_id)
+    if record.status in (FactureStatus.PAID.value, FactureStatus.VOID.value):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Facture payée ou annulée : ses lignes ne sont plus modifiables.",
+        )
+    return record
+
+
 class FactureItemsReorder(BaseModel):
     # Ids des lignes dans l'ordre voulu (liste complète de la facture).
     item_ids: List[int] = Field(..., min_length=1)
@@ -155,7 +169,7 @@ async def reorder_items(
     regroupe par type (service → extra → frais → rabais, tri stable) :
     l'ordre relatif choisi par l'utilisateur est conservé au sein de
     chaque type. Les ids absents de la liste passent à la fin."""
-    await _ensure_facture(db, facture_id)
+    await _ensure_facture_editable(db, facture_id)
     rows = (
         await db.execute(
             select(FactureItem).where(FactureItem.facture_id == facture_id)
@@ -210,7 +224,7 @@ async def create_item(
     db: DBSession,
     _: CurrentUser,
 ) -> FactureItemRead:
-    await _ensure_facture(db, facture_id)
+    await _ensure_facture_editable(db, facture_id)
     # « rabais » = ligne négative obligatoire.
     qty = data.quantity
     unit_price = data.unit_price
@@ -257,6 +271,7 @@ async def update_item(
     db: DBSession,
     _: CurrentUser,
 ) -> FactureItemRead:
+    await _ensure_facture_editable(db, facture_id)
     item = (
         await db.execute(
             select(FactureItem).where(
@@ -299,6 +314,7 @@ async def delete_item(
     db: DBSession,
     _: CurrentUser,
 ) -> None:
+    await _ensure_facture_editable(db, facture_id)
     item = (
         await db.execute(
             select(FactureItem).where(
