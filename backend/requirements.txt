@@ -112,3 +112,10 @@ stripe>=11.0.0,<16.0.0
 # l'heure de Montréal dans les courriels). Garantit America/Toronto même
 # si l'image de base n'embarque pas la tz database système.
 tzdata>=2024.1
+
+# aiosqlite — driver SQLite async utilisé UNIQUEMENT par la suite de
+# tests (backend/tests/smoke : smoke tests d'API sans Postgres). Pure
+# Python, minuscule, sans effet en prod ; placé ici parce que la CI
+# installe requirements.txt (le token CI ne peut pas modifier les
+# workflows GitHub, donc pas de requirements-dev séparé pour l'instant).
+aiosqlite>=0.19.0,<1.0.0

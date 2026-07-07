@@ -237,6 +237,13 @@ export default function ProjectDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     dirty,
+    // `saving` fait partie des deps : sans lui, une modif faite PENDANT un
+    // save en vol (le garde `if (saving) return` court-circuite l'effet)
+    // n'était jamais re-planifiée. Avec `saving`, l'effet se ré-évalue au
+    // passage saving true→false : si `dirty` est encore vrai (l'utilisateur
+    // a retouché un champ), il re-planifie le save ; sinon il s'arrête sur
+    // le garde `if (!dirty) return`. Pas de boucle (save uniquement si dirty).
+    saving,
     name,
     clientId,
     address,

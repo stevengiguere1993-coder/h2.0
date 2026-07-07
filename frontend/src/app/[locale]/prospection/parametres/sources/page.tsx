@@ -325,6 +325,13 @@ export default function ProspectionSourcesPage() {
         clearInterval(reqPollRef.current);
         reqPollRef.current = null;
       }
+      // provPollRef était oublié : démarré par importProvincial (setInterval
+      // 5s) mais jamais nettoyé au démontage -> fuite d'interval + requêtes
+      // fantômes. On le clear comme les 3 autres refs.
+      if (provPollRef.current !== null) {
+        clearInterval(provPollRef.current);
+        provPollRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOwner]);

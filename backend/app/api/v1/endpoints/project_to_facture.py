@@ -105,14 +105,6 @@ class ConvertToFactureRequest(BaseModel):
     )
 
 
-def _build_ref() -> str:
-    d = datetime.now(timezone.utc)
-    return (
-        f"FAC-{d.year}{d.month:02d}{d.day:02d}-"
-        f"{d.hour:02d}{d.minute:02d}{d.second:02d}"
-    )
-
-
 @router.post(
     "/{project_id}/convert-to-facture",
     response_model=FactureRead,
@@ -198,6 +190,12 @@ async def convert_project_to_facture(
                         select(_Fac.id).where(
                             _Fac.project_id == project_id,
                             _Fac.id != facture.id,
+                            # Exclut les factures ANNULÉES du « déjà
+                            # facturé » : une facture VOID ne représente
+                            # plus un montant engagé (sinon sous-facturation
+                            # ou blocage après annulation). On garde les
+                            # brouillons (une étape en brouillon compte).
+                            _Fac.status != FactureStatus.VOID.value,
                         )
                     )
                 ).scalars().all()

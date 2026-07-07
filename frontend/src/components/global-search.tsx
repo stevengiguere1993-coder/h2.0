@@ -66,6 +66,11 @@ export function GlobalSearch() {
       setHits([]);
       return;
     }
+    // Garde anti-race : si `q` change (donc l'effet est re-exécuté) avant
+    // que le fetch en vol ne réponde, on ignore sa réponse. Sans ça, une
+    // requête lente pour un ancien terme pouvait écraser les résultats à
+    // jour d'un terme plus récent (réponses hors-ordre).
+    let ignore = false;
     const t = setTimeout(async () => {
       setLoading(true);
       try {
@@ -73,13 +78,19 @@ export function GlobalSearch() {
           `/api/v1/search?q=${encodeURIComponent(needle)}&limit=5`
         );
         if (!res.ok) return;
-        setHits((await res.json()) as Hit[]);
-        setActive(0);
+        const data = (await res.json()) as Hit[];
+        if (!ignore) {
+          setHits(data);
+          setActive(0);
+        }
       } finally {
-        setLoading(false);
+        if (!ignore) setLoading(false);
       }
     }, 180);
-    return () => clearTimeout(t);
+    return () => {
+      ignore = true;
+      clearTimeout(t);
+    };
   }, [q]);
 
   function onKey(e: React.KeyboardEvent<HTMLInputElement>) {

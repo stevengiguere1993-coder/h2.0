@@ -49,6 +49,10 @@ import {
 
 import { useConfirm } from "@/components/confirm-dialog";
 import { DriveFolderPicker } from "@/components/drive/DriveFolderPicker";
+// Link de next-intl (PAS next/link) : préfixe la locale courante
+// automatiquement. Évite le /fr/ codé en dur qui envoyait un utilisateur
+// « en » sur la mauvaise locale.
+import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 
 // ---------------------------------------------------------------------------
@@ -1694,12 +1698,15 @@ function ErrorState({
         ) : null}
       </div>
       {kind === "auth" ? (
-        <a
-          href="/fr/app/parametres/drive"
+        <Link
+          // Route hors de l'union typée de next-intl (pathnames curés) :
+          // cast `as any` conforme à la convention déjà employée pour ce
+          // lien dans app/parametres/page.tsx et EntityDriveSection.tsx.
+          href={"/app/parametres/drive" as any}
           className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
         >
           Aller à Paramètres → Drive
-        </a>
+        </Link>
       ) : (
         <button
           type="button"

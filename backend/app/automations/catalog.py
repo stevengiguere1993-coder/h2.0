@@ -55,7 +55,7 @@ CATALOG: tuple[Automation, ...] = (
     ),
     Automation(
         "facture_reminders", "Rappels de factures", "relance", "cron",
-        "Tous les jours · 08h30",
+        "Tous les jours · 02:00 UTC (matin)",
         "Courriel de rappel aux clients pour les factures impayées / à échéance.",
         params=(
             Param(
@@ -129,7 +129,7 @@ CATALOG: tuple[Automation, ...] = (
     ),
     Automation(
         "punch_auto_close", "Fermeture auto des punchs", "synchro", "cron",
-        "Tous les jours · 23h00",
+        "Tous les jours · 22h00",
         "Ferme automatiquement les punchs d'employés laissés ouverts.",
     ),
     # ---- Courriels événementiels (informational en v1) ----

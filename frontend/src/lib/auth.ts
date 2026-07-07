@@ -132,10 +132,20 @@ export async function authedFetch(
   // make the first attempt throw a bare network error ("Load failed"
   // on Safari, "Failed to fetch" on Chrome). Retry once after a short
   // pause before surfacing the error to the caller.
+  //
+  // ⚠️ On ne rejoue QUE les méthodes idempotentes (GET/HEAD). Une erreur
+  // réseau après l'envoi d'un POST/PUT/DELETE ne garantit PAS que le
+  // serveur n'a rien traité : rejouer aveuglément créait des doublons
+  // (ex. deux factures pour un seul clic). Pour une mutation, on remonte
+  // l'erreur à l'appelant (qui l'affiche déjà) plutôt que de risquer un
+  // rejeu silencieux.
+  const method = (init.method || "GET").toUpperCase();
+  const retryable = method === "GET" || method === "HEAD";
   let res: Response;
   try {
     res = await doFetch();
   } catch (err) {
+    if (!retryable) throw err;
     await new Promise((r) => setTimeout(r, 1500));
     res = await doFetch();
   }

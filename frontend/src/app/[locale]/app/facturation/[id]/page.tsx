@@ -22,6 +22,7 @@ import { PaymentsPanel } from "@/components/payments-panel";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { TPS_RATE, TVQ_RATE } from "@/lib/tax";
 import { useConfirm } from "@/components/confirm-dialog";
 
 type Facture = {
@@ -115,9 +116,6 @@ const STATUS_CLASS: Record<string, string> = {
   overdue: "bg-rose-500/20 text-rose-300",
   void: "bg-white/5 text-white/50"
 };
-
-const TPS_RATE = 0.05;
-const TVQ_RATE = 0.09975;
 
 function fmtMoney(n: number | string | null): string {
   if (n == null || n === "") return "—";

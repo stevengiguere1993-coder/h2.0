@@ -138,9 +138,13 @@ async def punch_me(db: DBSession, user: CurrentUser) -> PunchMe:
     "/debug",
     summary="Diagnose why /me can't find the employe fiche (admin only)",
 )
-async def punch_debug(db: DBSession, user: CurrentUser):
+async def punch_debug(db: DBSession, admin: RequireAdminRole):
     """Returns the exact values the backend compares so staff can spot
-    the mismatch (e.g. invisible characters, wrong casing, inactive)."""
+    the mismatch (e.g. invisible characters, wrong casing, inactive).
+
+    Réservé aux admins : ce diagnostic expose les courriels (PII) des 50
+    premières fiches employé — ne doit pas être accessible à un employé
+    standard."""
     candidates = (
         await db.execute(select(Employe).limit(50))
     ).scalars().all()
@@ -156,9 +160,9 @@ async def punch_debug(db: DBSession, user: CurrentUser):
         for e in candidates
     ]
     return {
-        "login_email_raw": user.email,
-        "login_email_repr": repr(user.email),
-        "login_email_normalized": (user.email or "").strip().lower(),
+        "login_email_raw": admin.email,
+        "login_email_repr": repr(admin.email),
+        "login_email_normalized": (admin.email or "").strip().lower(),
         "employes": rows,
     }
 

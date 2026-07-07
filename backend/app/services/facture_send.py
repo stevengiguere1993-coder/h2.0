@@ -152,11 +152,21 @@ async def send_facture(
         log.exception("Graph send failed for facture %s", facture_id)
         raise FactureSendError(f"Envoi courriel échoué: {exc}") from exc
 
-    fa.status = FactureStatus.SENT.value
-    # « Émise le » = dernière fois où la facture a été envoyée au
-    # client. On remet à jour à CHAQUE envoi (y compris les renvois)
-    # pour que la date affichée soit la date réelle d'expédition.
-    fa.issued_at = datetime.now(timezone.utc)
-    await db.flush()
+    # Garde d'état : on ne (re)bascule en SENT que depuis un état
+    # « ouvert » (brouillon / déjà envoyée / en retard). Renvoyer une
+    # facture PAYÉE ou ANNULÉE n'écrase PAS son statut — sinon une
+    # facture payée re-rentrerait dans le cron de relances (SENT/OVERDUE)
+    # ou une facture VOID reviendrait active. Le courriel part toujours.
+    if fa.status in (
+        FactureStatus.DRAFT.value,
+        FactureStatus.SENT.value,
+        FactureStatus.OVERDUE.value,
+    ):
+        fa.status = FactureStatus.SENT.value
+        # « Émise le » = dernière fois où la facture a été envoyée au
+        # client. On remet à jour à CHAQUE envoi (y compris les renvois)
+        # pour que la date affichée soit la date réelle d'expédition.
+        fa.issued_at = datetime.now(timezone.utc)
+        await db.flush()
     await db.refresh(fa)
     return fa
