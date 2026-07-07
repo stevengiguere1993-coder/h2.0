@@ -110,3 +110,56 @@ def looks_like_spam(
     if _is_link_spam(message):
         return "liens_seo"
     return None
+
+
+async def sweep_spam_contact_requests(db) -> int:
+    """Reclasse en « spam » les demandes encore NEUVES qui matchent les
+    signaux — rétroactif et filet de course : nettoie les spams entrés
+    AVANT le déploiement du filtre (ou pendant un redémarrage), sans
+    jamais toucher un prospect déjà pris en charge (status != new).
+
+    Signal supplémentaire ici (vision d'ensemble impossible au submit) :
+    un MÊME courriel utilisé par ≥ 3 noms différents = bot (ex.
+    jane.suchy@7oaks.org soumis sous 3 noms aléatoires distincts)."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from app.models.contact_request import (
+        ContactRequest,
+        ContactRequestStatus,
+    )
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=60)
+    rows = (
+        await db.execute(
+            select(ContactRequest).where(
+                ContactRequest.status == ContactRequestStatus.NEW.value,
+                ContactRequest.created_at >= cutoff,
+            )
+        )
+    ).scalars().all()
+
+    by_email: dict[str, set[str]] = {}
+    for r in rows:
+        e = (r.email or "").strip().lower()
+        if e:
+            by_email.setdefault(e, set()).add((r.name or "").strip().lower())
+
+    flagged = 0
+    for r in rows:
+        reason = looks_like_spam(
+            name=r.name or "",
+            email=r.email or "",
+            message=r.message or "",
+        )
+        if not reason:
+            e = (r.email or "").strip().lower()
+            if e and len(by_email.get(e, set())) >= 3:
+                reason = "courriel_multi_noms"
+        if reason:
+            r.status = ContactRequestStatus.SPAM.value
+            flagged += 1
+    if flagged:
+        await db.flush()
+    return flagged

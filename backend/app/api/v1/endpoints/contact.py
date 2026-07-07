@@ -147,6 +147,33 @@ async def submit_contact(
         message=record.message or "",
         honeypot=website,
     )
+    # Signal DB : le même courriel soumis récemment sous ≥ 2 AUTRES noms
+    # = bot qui randomise les noms (les vrais clients gardent leur nom ;
+    # un conjoint qui partage le courriel ne fait qu'UN autre nom).
+    if not spam_reason and (record.email or "").strip():
+        from datetime import timedelta, timezone as _tz
+
+        from sqlalchemy import func as _f
+
+        from app.models.contact_request import ContactRequest as _CR
+
+        _cutoff = datetime.now(_tz.utc) - timedelta(days=7)
+        distinct_names = (
+            await db.execute(
+                select(
+                    _f.count(_f.distinct(_f.lower(_CR.name)))
+                ).where(
+                    _f.lower(_CR.email)
+                    == (record.email or "").strip().lower(),
+                    _CR.created_at >= _cutoff,
+                    _CR.id != record.id,
+                    _f.lower(_CR.name)
+                    != (record.name or "").strip().lower(),
+                )
+            )
+        ).scalar_one()
+        if int(distinct_names or 0) >= 2:
+            spam_reason = "courriel_multi_noms"
     if spam_reason:
         import logging
 

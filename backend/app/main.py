@@ -178,6 +178,23 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning("drive_auto_uploads seed failed: %s", exc)
 
+    # Nettoyage anti-spam rétroactif : reclasse en « spam » les demandes
+    # NEUVES qui matchent les signaux (spams entrés avant le déploiement
+    # du filtre ou pendant un redémarrage). Idempotent, best-effort.
+    try:
+        from app.db.session import AsyncSessionLocal as _SpamSession
+        from app.services.contact_spam import sweep_spam_contact_requests
+
+        async with _SpamSession() as session:
+            n = await sweep_spam_contact_requests(session)
+            await session.commit()
+            if n:
+                logger.info(
+                    "Anti-spam sweep: %d demande(s) reclassée(s) en spam", n
+                )
+    except Exception as exc:
+        logger.warning("anti-spam sweep failed: %s", exc)
+
     # Téléphonie — auto-bootstrap Twilio : si les credentials et le
     # numéro sont configurés en env, on s'assure que la ligne existe en
     # DB et que le webhook URL pointe sur ce backend. Idempotent ;
