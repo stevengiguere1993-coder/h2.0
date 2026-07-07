@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Cloud,
   ExternalLink,
+  FileSignature,
   KeyRound,
   Loader2,
   RefreshCw,
@@ -303,6 +304,32 @@ export default function ParametresPage() {
                 Connecte ton compte Google pour accéder aux documents Drive
                 de l&apos;entreprise directement depuis Kratos (deals,
                 projets, clients, soumissions).
+              </p>
+            </div>
+            <ChevronRight className="h-4 w-4 text-white/40" />
+          </Link>
+        ) : null}
+
+        {/* Modèle par défaut du contrat de gestion immobilière —
+            s'applique à tous les immeubles. La personnalisation par
+            immeuble se fait dans la fiche de l'immeuble. */}
+        {hasMinRole(me, "admin") ? (
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/app/parametres/contrat-gestion" as any}
+            className="mt-3 flex items-center gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:border-accent-500"
+          >
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+              <FileSignature className="h-5 w-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-base font-bold text-white">
+                Contrat de gestion — modèle par défaut
+              </h2>
+              <p className="mt-0.5 text-xs text-white/60">
+                Le texte de la convention de gestion appliqué à tous les
+                immeubles. La personnalisation par immeuble (négociation)
+                se fait dans la fiche de l&apos;immeuble.
               </p>
             </div>
             <ChevronRight className="h-4 w-4 text-white/40" />
