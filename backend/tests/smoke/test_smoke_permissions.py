@@ -26,6 +26,13 @@ def test_get_permissions_grid(client, auth_headers):
     assert "employee" in body["roles"] and "owner" in body["roles"]
     ids = [c["capability"] for c in body["capabilities"]]
     assert "project.delete" in ids
+    # Capacités sensibles branchées en 2C.
+    assert "contrat_gestion.delete" in ids
+    assert "contrat_gestion.template_edit" in ids
+    # Chaque capacité expose un min_role valide + son défaut.
+    for c in body["capabilities"]:
+        assert c["min_role"] in body["roles"]
+        assert c["default_min_role"] in body["roles"]
 
 
 def test_set_min_role_requires_owner(client, auth_headers):

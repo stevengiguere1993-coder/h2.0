@@ -17,18 +17,20 @@ pour ne pas être capturées par le paramètre entier.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 
-from app.api.deps import CurrentUser, DBSession, RequireAdminRole, RequireManager
+from app.api.deps import CurrentUser, DBSession, RequireManager
 from app.models.contrat_gestion import (
     ContratGestion,
     ContratGestionStatus,
     ContratGestionTemplate,
 )
+from app.models.user import User
+from app.services.permissions_service import require_capability
 from app.services.audit import log_action
 from app.services.contrat_gestion_pdf import (
     contrat_pdf_filename,
@@ -273,7 +275,11 @@ async def get_template(db: DBSession, _: CurrentUser) -> TemplateRead:
     "/template", response_model=TemplateRead, summary="Éditer le gabarit (admin+)"
 )
 async def put_template(
-    data: TemplateUpdate, db: DBSession, user: RequireAdminRole
+    data: TemplateUpdate,
+    db: DBSession,
+    user: Annotated[
+        User, Depends(require_capability("contrat_gestion.template_edit"))
+    ],
 ) -> TemplateRead:
     body = (data.corps_markdown or "").strip()
     if len(body) < 50:
@@ -431,7 +437,11 @@ async def contrat_signed_pdf(
     "/{contrat_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Supprimer"
 )
 async def delete_contrat(
-    contrat_id: int, db: DBSession, user: RequireManager
+    contrat_id: int,
+    db: DBSession,
+    user: Annotated[
+        User, Depends(require_capability("contrat_gestion.delete"))
+    ],
 ) -> Response:
     # Suppression autorisée à tout statut (y compris signé) — le
     # frontend demande une confirmation renforcée pour un contrat signé.
