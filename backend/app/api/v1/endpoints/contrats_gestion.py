@@ -36,7 +36,7 @@ from app.services.contrat_gestion_pdf import (
 )
 from app.services.contrat_gestion_send import (
     ContratGestionSendError,
-    send_contrat_gestion,
+    send_to_mandataire,
 )
 from app.services.contrat_gestion_service import (
     autofill_values,
@@ -56,6 +56,7 @@ _EDITABLE_FIELDS = (
     "compagnie", "siege_social", "representant_nom", "representant_titre",
     "immeubles_adresses", "district_judiciaire", "mandant_courriel",
     "lieu_signature", "caution_requise", "caution_nom",
+    "mandataire_nom", "mandataire_courriel",
 )
 
 
@@ -74,6 +75,8 @@ class ContratUpdate(BaseModel):
     lieu_signature: Optional[str] = None
     caution_requise: Optional[bool] = None
     caution_nom: Optional[str] = None
+    mandataire_nom: Optional[str] = None
+    mandataire_courriel: Optional[str] = None
 
 
 class ContratRead(BaseModel):
@@ -92,10 +95,14 @@ class ContratRead(BaseModel):
     lieu_signature: Optional[str]
     caution_requise: bool
     caution_nom: Optional[str]
+    mandataire_nom: Optional[str] = None
+    mandataire_courriel: Optional[str] = None
     status: str
     sent_at: Optional[str] = None
     opened_at: Optional[str] = None
     open_count: int = 0
+    mandataire_signed_at: Optional[str] = None
+    mandataire_signed_name: Optional[str] = None
     signed_at: Optional[str] = None
     signed_name: Optional[str] = None
     has_signed_pdf: bool = False
@@ -135,11 +142,17 @@ async def _load(db, contrat_id: int) -> ContratGestion:
 def _to_read(contrat: ContratGestion) -> ContratRead:
     from app.services.public_links import public_base
 
+    base = public_base()
+    # Le lien copiable reflète l'étape courante : signature MGV en
+    # attente → lien Mandataire ; sinon → lien Mandant (s'il existe).
     sign_url = None
-    if contrat.signature_token:
-        sign_url = (
-            f"{public_base()}/sign-contrat-gestion/{contrat.signature_token}"
-        )
+    if (
+        contrat.status == ContratGestionStatus.ATTENTE_MGV.value
+        and contrat.mandataire_signature_token
+    ):
+        sign_url = f"{base}/sign-contrat-gestion/{contrat.mandataire_signature_token}"
+    elif contrat.signature_token:
+        sign_url = f"{base}/sign-contrat-gestion/{contrat.signature_token}"
     return ContratRead(
         id=contrat.id,
         immeuble_id=contrat.immeuble_id,
@@ -154,10 +167,14 @@ def _to_read(contrat: ContratGestion) -> ContratRead:
         lieu_signature=contrat.lieu_signature,
         caution_requise=contrat.caution_requise,
         caution_nom=contrat.caution_nom,
+        mandataire_nom=contrat.mandataire_nom,
+        mandataire_courriel=contrat.mandataire_courriel,
         status=contrat.status,
         sent_at=_iso(contrat.sent_at),
         opened_at=_iso(contrat.opened_at),
         open_count=contrat.open_count or 0,
+        mandataire_signed_at=_iso(contrat.mandataire_signed_at),
+        mandataire_signed_name=contrat.mandataire_signed_name,
         signed_at=_iso(contrat.signed_at),
         signed_name=contrat.signed_name,
         has_signed_pdf=contrat.signed_pdf_blob is not None,
@@ -210,6 +227,8 @@ async def create_contrat(
         mandant_courriel=values.get("mandant_courriel"),
         lieu_signature=values.get("lieu_signature"),
         caution_nom=values.get("representant_nom"),
+        mandataire_nom=values.get("mandataire_nom"),
+        mandataire_courriel=values.get("mandataire_courriel"),
         status=ContratGestionStatus.BROUILLON.value,
     )
     db.add(contrat)
@@ -306,7 +325,9 @@ async def update_contrat(
 
 
 @router.post(
-    "/{contrat_id}/send", response_model=ContratRead, summary="Envoyer pour signature"
+    "/{contrat_id}/send",
+    response_model=ContratRead,
+    summary="Envoyer pour signature (au Mandataire MGV d'abord)",
 )
 async def send_contrat(
     contrat_id: int, db: DBSession, user: RequireManager
@@ -315,14 +336,14 @@ async def send_contrat(
     if contrat.status == ContratGestionStatus.SIGNE.value:
         raise HTTPException(status.HTTP_409_CONFLICT, "Contrat déjà signé.")
     try:
-        contrat = await send_contrat_gestion(db, contrat_id)
+        contrat = await send_to_mandataire(db, contrat_id)
     except ContratGestionSendError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     try:
         await log_action(
             db, user=user, action="contrat_gestion.sent",
             entity_type="contrat_gestion", entity_id=contrat.id,
-            details={"to": contrat.mandant_courriel},
+            details={"to_mandataire": contrat.mandataire_courriel},
         )
     except Exception:
         pass
@@ -351,7 +372,10 @@ async def contrat_signed_pdf(
         await db.execute(
             select(ContratGestion)
             .where(ContratGestion.id == contrat_id)
-            .options(undefer(ContratGestion.signature_image))
+            .options(
+                undefer(ContratGestion.signature_image),
+                undefer(ContratGestion.mandataire_signature_image),
+            )
         )
     ).scalar_one_or_none()
     if contrat is None:
@@ -387,12 +411,19 @@ async def contrat_signed_pdf(
 async def delete_contrat(
     contrat_id: int, db: DBSession, user: RequireManager
 ) -> Response:
+    # Suppression autorisée à tout statut (y compris signé) — le
+    # frontend demande une confirmation renforcée pour un contrat signé.
+    # Le PDF signé reste, le cas échéant, archivé dans Drive.
     contrat = await _load(db, contrat_id)
-    if contrat.status == ContratGestionStatus.SIGNE.value:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Un contrat signé ne peut être supprimé.",
-        )
+    was_signed = contrat.status == ContratGestionStatus.SIGNE.value
     await db.delete(contrat)
+    try:
+        await log_action(
+            db, user=user, action="contrat_gestion.deleted",
+            entity_type="contrat_gestion", entity_id=contrat_id,
+            details={"was_signed": was_signed},
+        )
+    except Exception:
+        pass
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

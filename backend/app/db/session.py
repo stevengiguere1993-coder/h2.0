@@ -1145,6 +1145,29 @@ async def init_db() -> None:
             # (lien envoyé à cette adresse), reste à collecter le
             # téléphone côté formulaire public.
             ("ndas", "signed_phone", "VARCHAR(32)"),
+            # Contrat de gestion — signature du Mandataire (MGV) qui
+            # signe EN PREMIER, avant relais au Mandant. Colonnes
+            # additives ajoutées après la 1re version (mono-signature).
+            ("contrats_gestion", "mandataire_nom", "VARCHAR(255)"),
+            ("contrats_gestion", "mandataire_courriel", "VARCHAR(320)"),
+            (
+                "contrats_gestion",
+                "mandataire_signature_token",
+                "VARCHAR(64)",
+            ),
+            (
+                "contrats_gestion",
+                "mandataire_signed_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            ("contrats_gestion", "mandataire_signed_name", "VARCHAR(255)"),
+            ("contrats_gestion", "mandataire_signed_ip", "VARCHAR(64)"),
+            ("contrats_gestion", "mandataire_signature_image", "BYTEA"),
+            (
+                "contrats_gestion",
+                "mandataire_signature_image_content_type",
+                "VARCHAR(100)",
+            ),
             # Envoi PDF + consultation publique des factures devlog
             # (pièce #5 vague 1). `due_date` existe déjà dans le modèle,
             # on ajoute le token public, l'horodatage d'envoi et celui
