@@ -1006,17 +1006,25 @@ async def maintenance_rollup(
     immeuble précis (pour sa fiche)."""
     _require_volet(user)
     target_year = year if year is not None else _now().year
+    # Fenêtre de l'année ciblée bornée en SQL plutôt que filtrée en Python
+    # après un fetch complet (évite de charger tous les bons internes de
+    # l'historique). created_at est un TIMESTAMPTZ stocké en UTC : on utilise
+    # des bornes datetime UTC (minuit 1er janvier ← inclus, minuit 1er janvier
+    # suivant → exclu) pour reproduire exactement `created_at.year == year`
+    # quelle que soit la timezone de session Postgres. NULL reste exclu par la
+    # comparaison (created_at est de toute façon NOT NULL).
+    year_start = datetime(target_year, 1, 1, tzinfo=timezone.utc)
+    year_end = datetime(target_year + 1, 1, 1, tzinfo=timezone.utc)
     q = select(BonTravail).where(
         BonTravail.kind == "interne",
         BonTravail.status != "cancelled",
         BonTravail.immeuble_id.isnot(None),
+        BonTravail.created_at >= year_start,
+        BonTravail.created_at < year_end,
     )
     if immeuble_id is not None:
         q = q.where(BonTravail.immeuble_id == int(immeuble_id))
     bons = (await db.execute(q)).scalars().all()
-    bons = [
-        b for b in bons if b.created_at and b.created_at.year == target_year
-    ]
     if not bons:
         return []
 

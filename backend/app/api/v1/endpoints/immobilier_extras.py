@@ -273,21 +273,77 @@ async def renouvellements_overview(
         )
     ).scalars().all()
 
+    # Chargement groupé pour éviter le N+1 (auparavant 3 db.get + 1 select par
+    # bail). On collecte les identifiants puis on résout logements, immeubles,
+    # locataires et le dernier renouvellement par bail via des requêtes in_().
+    # Le contenu et l'ordre de la réponse restent identiques : la boucle ci-
+    # dessous consomme les mêmes objets, résolus depuis des dicts.
+    log_ids = {b.logement_id for b in bails if b.logement_id}
+    log_by_id: dict = {}
+    if log_ids:
+        log_by_id = {
+            lg.id: lg
+            for lg in (
+                await db.execute(
+                    select(Logement).where(Logement.id.in_(list(log_ids)))
+                )
+            ).scalars().all()
+        }
+
+    imm_ids = {lg.immeuble_id for lg in log_by_id.values() if lg.immeuble_id}
+    imm_by_id: dict = {}
+    if imm_ids:
+        imm_by_id = {
+            im.id: im
+            for im in (
+                await db.execute(
+                    select(Immeuble).where(Immeuble.id.in_(list(imm_ids)))
+                )
+            ).scalars().all()
+        }
+
+    loc_ids = {b.locataire_id for b in bails if b.locataire_id}
+    loc_by_id: dict = {}
+    if loc_ids:
+        loc_by_id = {
+            lo.id: lo
+            for lo in (
+                await db.execute(
+                    select(Locataire).where(Locataire.id.in_(list(loc_ids)))
+                )
+            ).scalars().all()
+        }
+
+    # Dernier renouvellement par bail : on charge tous les renouvellements des
+    # baux visés en une requête, puis on retient celui au avis_envoye_le le plus
+    # récent par bail (mêmes semantiques que ORDER BY avis_envoye_le DESC LIMIT
+    # 1 de la version précédente ; avis_envoye_le est NOT NULL, donc pas de cas
+    # NULL ; on départage un ex-æquo par id décroissant, le plus récent créé).
+    last_ren_by_bail: dict = {}
+    bail_ids = [b.id for b in bails]
+    if bail_ids:
+        for r in (
+            await db.execute(
+                select(BailRenouvellement).where(
+                    BailRenouvellement.bail_id.in_(bail_ids)
+                )
+            )
+        ).scalars().all():
+            cur = last_ren_by_bail.get(r.bail_id)
+            if cur is None or (r.avis_envoye_le, r.id) > (
+                cur.avis_envoye_le,
+                cur.id,
+            ):
+                last_ren_by_bail[r.bail_id] = r
+
     out: List[RenouvellementOverview] = []
     for b in bails:
-        logement = await db.get(Logement, b.logement_id)
+        logement = log_by_id.get(b.logement_id)
         immeuble = (
-            await db.get(Immeuble, logement.immeuble_id) if logement else None
+            imm_by_id.get(logement.immeuble_id) if logement else None
         )
-        locataire = await db.get(Locataire, b.locataire_id)
-        last_ren = (
-            await db.execute(
-                select(BailRenouvellement)
-                .where(BailRenouvellement.bail_id == b.id)
-                .order_by(BailRenouvellement.avis_envoye_le.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
+        locataire = loc_by_id.get(b.locataire_id)
+        last_ren = last_ren_by_bail.get(b.id)
 
         delta = (b.date_fin - today).days
         if last_ren is not None:
