@@ -86,6 +86,21 @@ async def register(
     - **password**: Password (min 8 characters)
     - **is_admin**: Whether to grant admin privileges
     """
+    # Garde de rang : reproduit la résolution du rôle effectif du
+    # repository (`role` explicite gagne ; sinon 'admin' si is_admin,
+    # 'employee' sinon) pour empêcher un acteur de créer un compte de
+    # rang STRICTEMENT supérieur au sien (escalade admin → owner).
+    from app.models.user import ROLE_RANK
+
+    requested_role = user_data.role or (
+        "admin" if user_data.is_admin else "employee"
+    )
+    if ROLE_RANK.get(requested_role, 0) > ROLE_RANK.get(current_admin.role, 0):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Impossible de créer un compte de rang supérieur au vôtre.",
+        )
+
     auth_service = AuthService(db)
     user = await auth_service.register(user_data)
 

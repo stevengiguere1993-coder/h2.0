@@ -4,6 +4,8 @@ Vérifie les gardes de rang ajoutées sur les endpoints admin :
 
 - set-password : un admin NE PEUT PAS agir sur un compte de rang
   supérieur (owner) → 403 ; mais peut agir sur un employé → 200.
+- create_user : un admin NE PEUT PAS créer un compte de rang supérieur
+  (owner) → 403 ; mais peut créer un employé / manager → 201.
 - GET /punch/debug (dump PII des fiches employé) est réservé aux admins :
   un employé standard → 403.
 
@@ -77,6 +79,47 @@ def test_admin_can_set_password_on_employee(
         },
     )
     assert resp.status_code == 200, resp.text
+
+
+def test_admin_cannot_create_owner(client, auth_headers):
+    """Escalade interdite : un admin qui tente de CRÉER un compte owner
+    (rang supérieur au sien) → 403. Aucun compte ne doit être créé."""
+    resp = client.post(
+        "/api/v1/users",
+        headers=auth_headers,
+        json={
+            "email": "smoke-newowner@example.com",
+            "role": "owner",
+            "full_name": "Nouvel Owner",
+        },
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_admin_can_create_employee(client, auth_headers):
+    """Flux légitime : un admin crée un employé (rang inférieur) → 201."""
+    resp = client.post(
+        "/api/v1/users",
+        headers=auth_headers,
+        json={
+            "email": "smoke-newemployee@example.com",
+            "role": "employee",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+
+
+def test_admin_can_create_manager(client, auth_headers):
+    """Un admin (rang 3) peut créer un manager (rang 2 < 3) → 201."""
+    resp = client.post(
+        "/api/v1/users",
+        headers=auth_headers,
+        json={
+            "email": "smoke-newmanager@example.com",
+            "role": "manager",
+        },
+    )
+    assert resp.status_code == 201, resp.text
 
 
 def test_punch_debug_forbidden_for_employee(client, employee_headers):

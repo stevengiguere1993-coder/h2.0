@@ -227,6 +227,16 @@ async def list_users(db: DBSession, _: CurrentUser) -> List[UserRead]:
 async def create_user(
     data: UserCreate, db: DBSession, admin: RequireAdminRole
 ) -> UserCreatedRead:
+    # Garde de rang : empêche un acteur de CRÉER un compte de rang
+    # STRICTEMENT supérieur au sien (ex. un admin qui créerait un owner
+    # avec un mot de passe qu'il choisit, puis se connecterait dessus →
+    # escalade de privilège). Rang égal ou inférieur reste permis.
+    if ROLE_RANK.get(data.role, 0) > ROLE_RANK.get(admin.role, 0):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Impossible de créer un compte de rang supérieur au vôtre.",
+        )
+
     email_norm = data.email.lower().strip()
     existing = (
         await db.execute(select(User).where(User.email == email_norm))
