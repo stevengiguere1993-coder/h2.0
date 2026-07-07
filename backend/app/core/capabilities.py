@@ -67,6 +67,66 @@ CAPABILITIES: list[Capability] = [
         category="Contrat de gestion",
         default_min_role="admin",
     ),
+    # ─── Gestion immobilière — suppressions destructives / financières.
+    # Défaut = « employé » car ces actions étaient jusqu'ici ouvertes à
+    # tout utilisateur du volet immobilier (aucun changement au
+    # déploiement). Phil peut les remonter (gestionnaire/admin) ici.
+    Capability(
+        id="immeuble.delete",
+        label="Supprimer un immeuble",
+        description="Effacer définitivement un immeuble et ses données.",
+        category="Gestion immobilière",
+        default_min_role="employee",
+    ),
+    Capability(
+        id="logement.delete",
+        label="Supprimer un logement",
+        description="Effacer une unité locative d'un immeuble.",
+        category="Gestion immobilière",
+        default_min_role="employee",
+    ),
+    Capability(
+        id="bail.delete",
+        label="Supprimer un bail",
+        description="Effacer un bail (document financier/légal).",
+        category="Gestion immobilière",
+        default_min_role="employee",
+    ),
+    Capability(
+        id="locataire.delete",
+        label="Supprimer un locataire",
+        description="Effacer une fiche locataire.",
+        category="Gestion immobilière",
+        default_min_role="employee",
+    ),
+    Capability(
+        id="paiement_loyer.delete",
+        label="Supprimer un paiement de loyer",
+        description="Effacer un paiement de loyer enregistré.",
+        category="Gestion immobilière",
+        default_min_role="employee",
+    ),
+    Capability(
+        id="hypotheque.delete",
+        label="Supprimer une hypothèque",
+        description="Effacer un enregistrement d'hypothèque.",
+        category="Gestion immobilière",
+        default_min_role="employee",
+    ),
+    Capability(
+        id="depense.delete",
+        label="Supprimer une dépense d'immeuble",
+        description="Effacer une dépense (impacte le P&L de l'immeuble).",
+        category="Gestion immobilière",
+        default_min_role="employee",
+    ),
+    Capability(
+        id="evaluation.delete",
+        label="Supprimer une évaluation",
+        description="Effacer une évaluation de valeur d'immeuble.",
+        category="Gestion immobilière",
+        default_min_role="employee",
+    ),
 ]
 
 CAPABILITIES_BY_ID: dict[str, Capability] = {c.id: c for c in CAPABILITIES}

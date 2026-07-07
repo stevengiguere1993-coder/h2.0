@@ -19,9 +19,18 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, select
@@ -31,6 +40,8 @@ from app.core.security import decode_token
 from app.repositories.user import UserRepository
 
 from app.api.deps import CurrentUser, DBSession
+from app.models.user import User
+from app.services.permissions_service import require_capability
 from app.models.entreprise import Entreprise
 from app.models.bon_travail import BonTravail
 from app.models.client import Client
@@ -616,7 +627,9 @@ async def update_immeuble(
     "/immeubles/{immeuble_id}", status_code=status.HTTP_204_NO_CONTENT
 )
 async def delete_immeuble(
-    immeuble_id: int, db: DBSession, user: CurrentUser
+    immeuble_id: int,
+    db: DBSession,
+    user: Annotated[User, Depends(require_capability("immeuble.delete"))],
 ) -> None:
     _require_volet(user)
     obj = await _get_immeuble_or_404(db, immeuble_id)
@@ -1598,7 +1611,9 @@ async def update_logement(
     "/logements/{logement_id}", status_code=status.HTTP_204_NO_CONTENT
 )
 async def delete_logement(
-    logement_id: int, db: DBSession, user: CurrentUser
+    logement_id: int,
+    db: DBSession,
+    user: Annotated[User, Depends(require_capability("logement.delete"))],
 ) -> None:
     _require_volet(user)
     obj = await db.get(Logement, logement_id)
@@ -1675,7 +1690,9 @@ async def update_locataire(
     "/locataires/{locataire_id}", status_code=status.HTTP_204_NO_CONTENT
 )
 async def delete_locataire(
-    locataire_id: int, db: DBSession, user: CurrentUser
+    locataire_id: int,
+    db: DBSession,
+    user: Annotated[User, Depends(require_capability("locataire.delete"))],
 ) -> None:
     _require_volet(user)
     obj = await db.get(Locataire, locataire_id)
@@ -2209,7 +2226,9 @@ async def update_bail(
 
 @router.delete("/baux/{bail_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_bail(
-    bail_id: int, db: DBSession, user: CurrentUser
+    bail_id: int,
+    db: DBSession,
+    user: Annotated[User, Depends(require_capability("bail.delete"))],
 ) -> None:
     _require_volet(user)
     obj = await db.get(Bail, bail_id)
@@ -2284,7 +2303,9 @@ async def create_paiement(
     "/paiements/{paiement_id}", status_code=status.HTTP_204_NO_CONTENT
 )
 async def delete_paiement(
-    paiement_id: int, db: DBSession, user: CurrentUser
+    paiement_id: int,
+    db: DBSession,
+    user: Annotated[User, Depends(require_capability("paiement_loyer.delete"))],
 ) -> None:
     _require_volet(user)
     obj = await db.get(PaiementLoyer, paiement_id)
@@ -2902,7 +2923,9 @@ async def update_depense(
     "/depenses/{depense_id}", status_code=status.HTTP_204_NO_CONTENT
 )
 async def delete_depense(
-    depense_id: int, db: DBSession, user: CurrentUser
+    depense_id: int,
+    db: DBSession,
+    user: Annotated[User, Depends(require_capability("depense.delete"))],
 ) -> None:
     _require_volet(user)
     obj = await db.get(DepenseImmeuble, depense_id)
@@ -3294,7 +3317,9 @@ async def update_hypotheque(
     "/hypotheques/{hyp_id}", status_code=status.HTTP_204_NO_CONTENT
 )
 async def delete_hypotheque(
-    hyp_id: int, db: DBSession, user: CurrentUser
+    hyp_id: int,
+    db: DBSession,
+    user: Annotated[User, Depends(require_capability("hypotheque.delete"))],
 ) -> None:
     _require_volet(user)
     obj = await db.get(Hypotheque, hyp_id)
@@ -3347,7 +3372,9 @@ async def create_evaluation(
     "/evaluations/{eval_id}", status_code=status.HTTP_204_NO_CONTENT
 )
 async def delete_evaluation(
-    eval_id: int, db: DBSession, user: CurrentUser
+    eval_id: int,
+    db: DBSession,
+    user: Annotated[User, Depends(require_capability("evaluation.delete"))],
 ) -> None:
     _require_volet(user)
     obj = await db.get(Evaluation, eval_id)
