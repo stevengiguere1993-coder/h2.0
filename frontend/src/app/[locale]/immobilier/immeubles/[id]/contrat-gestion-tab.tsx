@@ -21,16 +21,17 @@ import {
   Copy,
   Eye,
   FileSignature,
+  ExternalLink,
   Loader2,
   Mail,
   Pencil,
   Plus,
   Send,
-  Settings2,
   Trash2
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { Link } from "@/i18n/navigation";
 
 type Contrat = {
   id: number;
@@ -115,7 +116,6 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [showTemplate, setShowTemplate] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
   const loadList = useCallback(async () => {
@@ -312,7 +312,7 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
   if (selected) {
     const signed = selected.status === "signe";
     return (
-      <div className="space-y-5">
+      <div className="space-y-5 pb-28">
         <div className="flex items-center justify-between">
           <button
             type="button"
@@ -630,7 +630,7 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
 
   // Liste
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-28">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="flex items-center gap-2 text-sm font-bold text-white">
@@ -729,11 +729,15 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
         </div>
       )}
 
-      {/* Gabarit par défaut (avancé) */}
-      <TemplateEditor
-        open={showTemplate}
-        onToggle={() => setShowTemplate((v) => !v)}
-      />
+      {/* Le modèle par défaut (global) se règle dans Paramètres. */}
+      <Link
+        href={"/app/parametres/contrat-gestion" as never}
+        className="flex items-center gap-2 rounded-lg border border-brand-800 px-4 py-3 text-sm text-white/70 hover:text-white"
+      >
+        <ExternalLink className="h-4 w-4" />
+        Modifier le <strong>modèle par défaut</strong> (tous les immeubles) dans
+        Paramètres → Contrat de gestion
+      </Link>
     </div>
   );
 }
@@ -873,103 +877,6 @@ function PerContractTemplate({
               ) : null}
             </div>
           ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-// ─── Éditeur du gabarit par défaut ────────────────────────────────
-
-function TemplateEditor({
-  open,
-  onToggle
-}: {
-  open: boolean;
-  onToggle: () => void;
-}) {
-  const [body, setBody] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open || body !== null) return;
-    void (async () => {
-      try {
-        const res = await authedFetch("/api/v1/contrats-gestion/template");
-        if (!res.ok) throw new Error();
-        setBody(((await res.json()) as { corps_markdown: string }).corps_markdown);
-      } catch {
-        setBody("");
-        setMsg("Chargement du gabarit impossible.");
-      }
-    })();
-  }, [open, body]);
-
-  async function save() {
-    if (body === null) return;
-    setBusy(true);
-    setMsg(null);
-    try {
-      const res = await authedFetch("/api/v1/contrats-gestion/template", {
-        method: "PUT",
-        body: JSON.stringify({ corps_markdown: body })
-      });
-      if (res.status === 403) {
-        setMsg("Réservé aux administrateurs.");
-        return;
-      }
-      if (!res.ok) throw new Error();
-      setMsg("Gabarit enregistré. Les contrats déjà signés gardent leur version.");
-    } catch {
-      setMsg("Enregistrement impossible.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="mt-6 rounded-lg border border-brand-800">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-center justify-between px-4 py-2.5 text-sm font-medium text-white/70"
-      >
-        <span className="inline-flex items-center gap-2">
-          <Settings2 className="h-4 w-4" /> Modèle du contrat par défaut
-        </span>
-        <ChevronDown className={`h-4 w-4 transition ${open ? "rotate-180" : ""}`} />
-      </button>
-      {open ? (
-        <div className="space-y-3 border-t border-brand-800 p-4">
-          <p className="text-xs text-white/50">
-            Modifiable en tout temps. Marqueurs disponibles :{" "}
-            <code className="text-white/70">
-              {"{{COMPAGNIE}} {{SIEGE_SOCIAL}} {{REPRESENTANT}} {{TITRE}} {{IMMEUBLES}} {{DISTRICT}} {{COURRIEL}} {{LIEU}} {{DATE}}"}
-            </code>
-          </p>
-          {body === null ? (
-            <div className="flex items-center justify-center py-6 text-white/40">
-              <Loader2 className="h-5 w-5 animate-spin" />
-            </div>
-          ) : (
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              rows={16}
-              className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 font-mono text-xs leading-relaxed text-white focus:border-sky-500 focus:outline-none"
-            />
-          )}
-          {msg ? <p className="text-xs text-white/70">{msg}</p> : null}
-          <button
-            type="button"
-            onClick={() => void save()}
-            disabled={busy || body === null}
-            className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
-          >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            Enregistrer le modèle
-          </button>
         </div>
       ) : null}
     </div>
