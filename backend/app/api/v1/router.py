@@ -54,6 +54,7 @@ from app.api.v1.endpoints import (
     relances,
     entreprise_extras,
     entreprise_partners_links,
+    contrats_gestion,
     immobilier,
     immobilier_extras,
     investissements,
@@ -97,6 +98,7 @@ from app.api.v1.endpoints import (
     projects,
     public_bail,
     public_bon,
+    public_contrat_gestion,
     public_devlog_contact,
     public_devlog_invoice,
     public_devlog_nps,
@@ -246,6 +248,7 @@ api_router.include_router(contract_sign.router)
 api_router.include_router(contract_sign.docs_router)
 api_router.include_router(public_bon.router)
 api_router.include_router(public_bail.router)
+api_router.include_router(public_contrat_gestion.router)
 api_router.include_router(push.router)
 api_router.include_router(appointment_types.router)
 api_router.include_router(agenda_availability.router)
@@ -421,6 +424,7 @@ api_router.include_router(entreprise_partners_links.router)
 # /immobilier/tal/* et /immobilier/renouvellements/* matchent avant les
 # routes plus génériques de /immobilier.
 api_router.include_router(immobilier_extras.router)
+api_router.include_router(contrats_gestion.router)
 api_router.include_router(immobilier.router)
 api_router.include_router(investissements.router)
 # Formulaire public Dev Logiciel — endpoint POST /public/devlog/contact

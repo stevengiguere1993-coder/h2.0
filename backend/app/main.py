@@ -16,6 +16,7 @@ from app.api.v1 import api_router
 from app.core.config import settings
 from app.db.session import (
     close_db,
+    ensure_contrat_gestion_tables,
     ensure_critical_columns,
     ensure_immobilier_aux_tables,
     ensure_project_corrections_tables,
@@ -103,6 +104,15 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning(
             "ensure_role_permissions_tables failed during startup: %s", exc
+        )
+
+    # Tables du Contrat de gestion (onglet fiche immeuble) + seed du
+    # gabarit par défaut. Transaction isolée.
+    try:
+        await ensure_contrat_gestion_tables()
+    except Exception as exc:
+        logger.warning(
+            "ensure_contrat_gestion_tables failed during startup: %s", exc
         )
 
     # Backfill : crée le projet (+ facture d'acompte DRAFT) pour les
