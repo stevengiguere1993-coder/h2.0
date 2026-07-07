@@ -353,7 +353,7 @@ Récapitulatif des jobs et de leurs déclencheurs connus :
 | Script | Usage |
 |---|---|
 | `app/scripts/create_admin.py`, `scripts/create_admin.py`, `scripts/init_admin.py` | Bootstrap admin (**3 variantes**) |
-| `app/scripts/monday_migrate.py`, `scripts/import_monday.py`, `scripts/import_monday_prospection.py` | Imports Monday one-shot (migration terminée) |
+| `app/scripts/monday_migrate.py` | Import Monday one-shot (migration terminée). NB : `scripts/import_monday*.py` supprimés le 2026-07-07 (morts, cf. P-15). |
 | `scripts/import_montreal_roles.py`, `import_provincial_xml_zip.py`, `import_req_zip.py` | Ingestions lourdes (rôle MTL ~500k, provincial 3-5 Go, REQ ~1M) via Render Shell / VPS |
 | `scripts/rental_scrape_daily.py` | Cible du cron scraping loyers |
 | `app/scripts/twilio_bootstrap.py` | Auto au boot si credentials présents (webhooks numéro) |
@@ -480,9 +480,10 @@ du schéma s'exécute au boot**, dans `backend/app/db/session.py` (3018 lignes) 
   tourne réellement ; `follow-up-reminders` existe dans 3 sources avec 3 horaires différents.
 - `facture_reminders` schedulé **3 fois** ; l'anti-doublon `claim_cron_run` ne couvre pas le chemin
   `python -m` des crons Render.
-- Jobs orphelins/doublons : `monday_bridge.py` (0 importeur), `ical_sync_all.py` réimplémenté
-  inline dans cron_runner **sans** la garde `is_automation_enabled` (le toggle du hub ne coupe pas
-  la vraie synchro), 2 jobs Teams quasi identiques (dont un référence un workflow GH inexistant).
+- Jobs orphelins/doublons : `ical_sync_all.py` réimplémenté
+  inline dans cron_runner (garde `is_automation_enabled` ajoutée le 2026-07-07, P-09/vague 1),
+  2 jobs Teams quasi identiques (dont un référence un workflow GH inexistant).
+  NB : `monday_bridge.py` (0 importeur) supprimé le 2026-07-07 (P-15).
 - `loyer_relances` et `teams_sync_auto` : sans garde et absents du catalogue d'automatisations ;
   horaires du catalogue désynchronisés du scheduling réel ; `devlog_weekly_client_report` et
   `bail-renouvellements` sans déclencheur versionné.
@@ -551,9 +552,10 @@ du schéma s'exécute au boot**, dans `backend/app/db/session.py` (3018 lignes) 
   stub « Section en développement » accessible en nav (entreprises/reglages/equipe).
 - Garde-fous désactivés : `ignoreBuildErrors` + `ignoreDuringBuilds`, eslint no-unused-vars/
   no-explicit-any off, **aucun test frontend** (vitest installé, jamais utilisé).
-- 5 composants orphelins confirmés (analysis-defaults-modal, json-ld, lea-chat-widget — qui prétend
-  être monté, measurement-import-modal, portal-corner) ; JSON-LD LocalBusiness défini 2× (versions
-  divergentes, l'orpheline référence un og-image.jpg inexistant) ; pilier
+- Composants orphelins : 4 supprimés le 2026-07-07 (analysis-defaults-modal, json-ld,
+  measurement-import-modal, portal-corner — P-15). Reste **lea-chat-widget** (prétend être monté,
+  backend câblé → arbitrage Phil : remonter vs supprimer). JSON-LD LocalBusiness n'est plus défini
+  qu'une fois (buildPillarJsonLd de seo-pillar-template) depuis le retrait de l'orpheline ; pilier
   construction-renovation-montreal codé à la main vs template partagé (et son commentaire sur le
   footer est faux).
 - i18n cosmétique : messages fr/en couvrent le site vitrine seulement, portail hardcodé FR ;
