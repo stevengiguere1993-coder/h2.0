@@ -56,7 +56,7 @@ _EDITABLE_FIELDS = (
     "compagnie", "siege_social", "representant_nom", "representant_titre",
     "immeubles_adresses", "district_judiciaire", "mandant_courriel",
     "lieu_signature", "caution_requise", "caution_nom",
-    "mandataire_nom", "mandataire_courriel",
+    "mandataire_nom", "mandataire_courriel", "corps_template_override",
 )
 
 
@@ -77,6 +77,9 @@ class ContratUpdate(BaseModel):
     caution_nom: Optional[str] = None
     mandataire_nom: Optional[str] = None
     mandataire_courriel: Optional[str] = None
+    # Gabarit propre à ce contrat (négociation). `null` = réinitialiser
+    # au gabarit global. Non fourni = inchangé.
+    corps_template_override: Optional[str] = None
 
 
 class ContratRead(BaseModel):
@@ -106,11 +109,15 @@ class ContratRead(BaseModel):
     signed_at: Optional[str] = None
     signed_name: Optional[str] = None
     has_signed_pdf: bool = False
+    has_custom_body: bool = False
     sign_url: Optional[str] = None
 
 
 class ContratDetail(ContratRead):
     body_markdown: str = ""
+    # Gabarit propre au contrat (RAW, avec placeholders), ou null si on
+    # utilise le gabarit global. Pour l'éditeur de personnalisation.
+    custom_template_markdown: Optional[str] = None
 
 
 class TemplateRead(BaseModel):
@@ -178,6 +185,9 @@ def _to_read(contrat: ContratGestion) -> ContratRead:
         signed_at=_iso(contrat.signed_at),
         signed_name=contrat.signed_name,
         has_signed_pdf=contrat.signed_pdf_blob is not None,
+        has_custom_body=bool(
+            (contrat.corps_template_override or "").strip()
+        ),
         sign_url=sign_url,
     )
 
@@ -244,7 +254,11 @@ async def create_contrat(
         pass
     await db.commit()
     body = await resolve_body_markdown(db, contrat)
-    return ContratDetail(**_to_read(contrat).model_dump(), body_markdown=body)
+    return ContratDetail(
+        **_to_read(contrat).model_dump(),
+        body_markdown=body,
+        custom_template_markdown=contrat.corps_template_override,
+    )
 
 
 # --------------------------- Gabarit (avant /{id}) ---------------------------
@@ -300,7 +314,11 @@ async def get_contrat(
 ) -> ContratDetail:
     contrat = await _load(db, contrat_id)
     body = await resolve_body_markdown(db, contrat)
-    return ContratDetail(**_to_read(contrat).model_dump(), body_markdown=body)
+    return ContratDetail(
+        **_to_read(contrat).model_dump(),
+        body_markdown=body,
+        custom_template_markdown=contrat.corps_template_override,
+    )
 
 
 @router.patch("/{contrat_id}", response_model=ContratDetail, summary="Éditer")
@@ -321,7 +339,11 @@ async def update_contrat(
     await db.refresh(contrat)
     await db.commit()
     body = await resolve_body_markdown(db, contrat)
-    return ContratDetail(**_to_read(contrat).model_dump(), body_markdown=body)
+    return ContratDetail(
+        **_to_read(contrat).model_dump(),
+        body_markdown=body,
+        custom_template_markdown=contrat.corps_template_override,
+    )
 
 
 @router.post(

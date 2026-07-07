@@ -36,7 +36,7 @@ from app.services.contrat_gestion_send import (
     send_to_mandant,
 )
 from app.services.contrat_gestion_service import (
-    get_template_markdown,
+    effective_template_markdown,
     render_body,
     resolve_body_markdown,
 )
@@ -270,7 +270,7 @@ async def _sign_mandant(
     if not (contrat.caution_nom or "").strip():
         contrat.caution_nom = signed_name
 
-    template_md = await get_template_markdown(db)
+    template_md = await effective_template_markdown(db, contrat)
     contrat.corps_markdown = render_body(template_md, contrat)
     contrat.status = ContratGestionStatus.SIGNE.value
 
