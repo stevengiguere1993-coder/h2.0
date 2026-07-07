@@ -12,6 +12,7 @@ import {
   DollarSign,
   Home,
   FileDown,
+  FileSignature,
   Loader2,
   Pencil,
   Percent,
@@ -25,6 +26,7 @@ import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../../layout";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
+import { ContratGestionTab } from "./contrat-gestion-tab";
 
 type Ownership = {
   id: number;
@@ -142,7 +144,8 @@ const TABS = [
   { id: "baux", label: "Baux", icon: ClipboardList },
   { id: "hypotheques", label: "Hypothèques", icon: Banknote },
   { id: "evaluations", label: "Évaluations", icon: TrendingUp },
-  { id: "maintenance", label: "Maintenance", icon: Wrench }
+  { id: "maintenance", label: "Maintenance", icon: Wrench },
+  { id: "contrat-gestion", label: "Contrat de gestion", icon: FileSignature }
 ] as const;
 
 function fmtCurrency(n: number | null | undefined): string {
@@ -750,6 +753,9 @@ export default function ImmeubleDetailPage({
           {tab === "evaluations" ? <EvaluationsTab list={evaluations} /> : null}
           {tab === "maintenance" ? (
             <MaintenanceTab list={maintenance} rollup={rollup} />
+          ) : null}
+          {tab === "contrat-gestion" ? (
+            <ContratGestionTab immeubleId={immeubleId} />
           ) : null}
         </div>
       </div>
