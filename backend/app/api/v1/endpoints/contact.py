@@ -75,6 +75,11 @@ async def submit_contact(
     # dans le formulaire public). Un bot qui remplit tous les champs le
     # remplit aussi → classé spam. Nom volontairement appétissant.
     website: Optional[str] = Form(None),
+    # CAPTCHA maison (« cliquez sur la bonne icône ») — cf.
+    # app.services.contact_captcha. Requis pour les soumissions
+    # publiques ; les créations staff (Bearer valide) sont exemptées.
+    captcha_token: Optional[str] = Form(None),
+    captcha_answer: Optional[str] = Form(None),
     photos: List[UploadFile] = File(default=[]),
 ) -> ContactRequestPublicAck:
     if not gdpr_consent:
@@ -147,6 +152,22 @@ async def submit_contact(
         message=record.message or "",
         honeypot=website,
     )
+    # CAPTCHA : le formulaire public doit joindre un défi résolu (jeton
+    # signé + bonne icône). Les créations manuelles du CRM passent par
+    # le même endpoint avec un Bearer valide → exemptées. Un défi
+    # absent / expiré / rejoué / raté = spam silencieux (repêchable).
+    if not spam_reason:
+        _is_staff = False
+        _auth = (request.headers.get("authorization") or "").strip()
+        if _auth.lower().startswith("bearer "):
+            from app.core.security import decode_token
+
+            _is_staff = decode_token(_auth[7:].strip()) is not None
+        if not _is_staff:
+            from app.services.contact_captcha import verify_captcha
+
+            if not verify_captcha(captcha_token, captcha_answer):
+                spam_reason = "captcha"
     # Signal DB : le même courriel soumis récemment sous ≥ 2 AUTRES noms
     # = bot qui randomise les noms (les vrais clients gardent leur nom ;
     # un conjoint qui partage le courriel ne fait qu'UN autre nom).
@@ -272,6 +293,18 @@ async def submit_contact(
         pass
 
     return ContactRequestPublicAck(reference=reference)
+
+
+@router.get(
+    "/captcha",
+    summary="Défi anti-robot pour le formulaire public (icône à cliquer)",
+)
+async def get_contact_captcha() -> dict:
+    # Public et sans état côté client : le jeton signé encode la bonne
+    # réponse (jamais exposée) + une expiration + un nonce anti-rejeu.
+    from app.services.contact_captcha import generate_challenge
+
+    return generate_challenge()
 
 
 @router.get(

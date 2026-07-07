@@ -1,11 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { ImagePlus, Loader2, MapPin, X } from "lucide-react";
+import { ImagePlus, Loader2, MapPin, RefreshCw, X } from "lucide-react";
 import { z } from "zod";
 
-import { submitContactRequest } from "@/lib/api";
+import {
+  fetchContactCaptcha,
+  submitContactRequest,
+  type CaptchaChallenge
+} from "@/lib/api";
 
 const budgetKeys = [
   "unsure",
@@ -90,6 +94,25 @@ export function ContactForm({ source }: { source?: string }) {
   // Photo attachments.
   const [photos, setPhotos] = useState<File[]>([]);
   const fileRef = useRef<HTMLInputElement | null>(null);
+
+  // CAPTCHA maison : défi « cliquez sur la bonne icône » émis par le
+  // backend. Sans défi résolu, la soumission est classée spam côté
+  // serveur — on bloque donc l'envoi tant qu'aucune icône n'est choisie.
+  const [captcha, setCaptcha] = useState<CaptchaChallenge | null>(null);
+  const [captchaAnswer, setCaptchaAnswer] = useState<string | null>(null);
+
+  const loadCaptcha = useCallback(async () => {
+    setCaptchaAnswer(null);
+    try {
+      setCaptcha(await fetchContactCaptcha());
+    } catch {
+      setCaptcha(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCaptcha();
+  }, [loadCaptcha]);
 
   function onAddressChange(e: React.ChangeEvent<HTMLInputElement>) {
     const v = e.target.value;
@@ -181,6 +204,16 @@ export function ContactForm({ source }: { source?: string }) {
       return;
     }
 
+    if (!captcha || !captchaAnswer) {
+      setFormError(
+        locale === "en"
+          ? "Please complete the anti-robot check below."
+          : "Merci de compléter la vérification anti-robot ci-dessous."
+      );
+      if (!captcha) void loadCaptcha();
+      return;
+    }
+
     setState({ status: "submitting" });
     try {
       const ack = await submitContactRequest(
@@ -198,7 +231,9 @@ export function ContactForm({ source }: { source?: string }) {
           marketing_consent: parsed.data.marketing_consent,
           // Honeypot : vide pour un humain (champ invisible) ; un bot
           // qui le remplit est classé spam côté serveur.
-          website: String(fd.get("website") || "") || undefined
+          website: String(fd.get("website") || "") || undefined,
+          captcha_token: captcha.token,
+          captcha_answer: captchaAnswer
         },
         photos
       );
@@ -207,6 +242,9 @@ export function ContactForm({ source }: { source?: string }) {
     } catch (err) {
       const code = (err as Error & { code?: string }).code || "unknown";
       setState({ status: "error", code });
+      // Le jeton est à usage unique côté serveur : on repart sur un
+      // défi frais pour la prochaine tentative.
+      void loadCaptcha();
     }
   }
 
@@ -375,6 +413,58 @@ export function ContactForm({ source }: { source?: string }) {
             ))}
           </ul>
         ) : null}
+      </div>
+
+      {/* CAPTCHA maison : le backend émet la question + les icônes et
+          vérifie la réponse via un jeton signé à usage unique. */}
+      <div>
+        <label className="label">
+          {locale === "en" ? "Anti-robot check" : "Vérification anti-robot"}
+        </label>
+        {captcha ? (
+          <div className="rounded-lg border border-brand-700 bg-brand-900 p-3">
+            <p className="mb-3 text-sm text-white">
+              {locale === "en" ? captcha.question_en : captcha.question_fr}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {captcha.options.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  aria-label={o.id}
+                  aria-pressed={captchaAnswer === o.id}
+                  onClick={() => setCaptchaAnswer(o.id)}
+                  className={`flex h-12 w-12 items-center justify-center rounded-lg border text-2xl transition ${
+                    captchaAnswer === o.id
+                      ? "border-accent-500 bg-brand-800 ring-2 ring-accent-500"
+                      : "border-brand-700 bg-brand-950 hover:border-accent-500"
+                  }`}
+                >
+                  {o.icon}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => void loadCaptcha()}
+                aria-label={locale === "en" ? "New challenge" : "Autre défi"}
+                title={locale === "en" ? "New challenge" : "Autre défi"}
+                className="ml-1 flex h-12 w-12 items-center justify-center rounded-lg border border-brand-700 bg-brand-950 text-white/70 transition hover:border-accent-500 hover:text-white"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void loadCaptcha()}
+            className="text-sm text-white underline underline-offset-2 hover:text-accent-500"
+          >
+            {locale === "en"
+              ? "Load the anti-robot check"
+              : "Charger la vérification anti-robot"}
+          </button>
+        )}
       </div>
 
       <div className="space-y-2">
