@@ -47,6 +47,26 @@ CAPABILITIES: list[Capability] = [
         category="Projets",
         default_min_role="manager",
     ),
+    Capability(
+        id="contrat_gestion.delete",
+        label="Supprimer un contrat de gestion",
+        description=(
+            "Effacer un contrat de gestion immobilière, y compris un "
+            "contrat déjà signé (le PDF signé reste archivé dans Drive)."
+        ),
+        category="Contrat de gestion",
+        default_min_role="manager",
+    ),
+    Capability(
+        id="contrat_gestion.template_edit",
+        label="Modifier le modèle de contrat par défaut",
+        description=(
+            "Éditer le gabarit global de la convention de gestion "
+            "(s'applique à tous les immeubles)."
+        ),
+        category="Contrat de gestion",
+        default_min_role="admin",
+    ),
 ]
 
 CAPABILITIES_BY_ID: dict[str, Capability] = {c.id: c for c in CAPABILITIES}
