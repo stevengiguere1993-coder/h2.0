@@ -121,10 +121,18 @@ class ContratGestion(Base, TimestampUpdateMixin):
         String(255), nullable=True
     )
 
+    # ----- Personnalisation par contrat (négociation) -----
+    # Gabarit propre à CE contrat (avec placeholders {{...}}), quand Phil
+    # négocie des clauses/frais différents pour cet immeuble. NULL = on
+    # utilise le gabarit global par défaut. Éditable tant que brouillon.
+    corps_template_override: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+
     # ----- Corps légal figé à la génération -----
     # Snapshot du gabarit rendu (placeholders substitués) au moment de
-    # l'envoi/signature. NULL tant que jamais envoyé → rendu à la volée
-    # depuis le gabarit courant pour la prévisualisation.
+    # la signature. NULL tant que non signé → rendu à la volée depuis le
+    # gabarit effectif (override du contrat, sinon global).
     corps_markdown: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # ----- Statut & signature (patron NDA/Bail) -----

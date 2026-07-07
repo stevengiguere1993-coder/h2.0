@@ -85,6 +85,43 @@ def test_create_autofill_and_body(client, auth_headers, run):
     assert pdf.content[:4] == b"%PDF"
 
 
+def test_per_contract_override(client, auth_headers, run):
+    immeuble_id = _mk_immeuble(run)
+    contrat_id = client.post(
+        "/api/v1/contrats-gestion",
+        headers=auth_headers,
+        json={"immeuble_id": immeuble_id},
+    ).json()["id"]
+
+    # Personnalisation propre à ce contrat (négociation).
+    custom = (
+        "# CONVENTION DE GESTION (négociée)\n\n"
+        "Frais de gestion : 12 % pour {{COMPAGNIE}} à {{LIEU}}.\n"
+    )
+    patched = client.patch(
+        f"/api/v1/contrats-gestion/{contrat_id}",
+        headers=auth_headers,
+        json={"corps_template_override": custom, "compagnie": "ACME inc."},
+    )
+    assert patched.status_code == 200, patched.text
+    body = patched.json()
+    assert body["has_custom_body"] is True
+    # Le corps rendu reflète l'override (pas le gabarit global).
+    assert "12 %" in body["body_markdown"]
+    assert "ACME inc." in body["body_markdown"]
+    assert body["custom_template_markdown"] == custom
+
+    # Réinitialisation au gabarit global.
+    reset = client.patch(
+        f"/api/v1/contrats-gestion/{contrat_id}",
+        headers=auth_headers,
+        json={"corps_template_override": None},
+    )
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["has_custom_body"] is False
+    assert "CONVENTION DE GESTION IMMOBILIÈRE" in reset.json()["body_markdown"]
+
+
 def test_template_read_and_admin_guard(client, auth_headers, employee_headers):
     got = client.get("/api/v1/contrats-gestion/template", headers=auth_headers)
     assert got.status_code == 200

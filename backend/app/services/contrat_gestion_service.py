@@ -59,11 +59,23 @@ async def get_template_markdown(db: AsyncSession) -> str:
     return DEFAULT_TEMPLATE_MARKDOWN
 
 
+async def effective_template_markdown(
+    db: AsyncSession, contrat: ContratGestion
+) -> str:
+    """Gabarit effectif de CE contrat : override propre au contrat
+    (négociation par immeuble) si présent, sinon le gabarit global."""
+    override = getattr(contrat, "corps_template_override", None)
+    if override and override.strip():
+        return override
+    return await get_template_markdown(db)
+
+
 async def resolve_body_markdown(db: AsyncSession, contrat: ContratGestion) -> str:
-    """Corps rendu du contrat : snapshot figé si présent, sinon à la volée."""
+    """Corps rendu du contrat : snapshot figé si présent, sinon à la volée
+    depuis le gabarit effectif (override du contrat, sinon global)."""
     if contrat.corps_markdown and contrat.corps_markdown.strip():
         return contrat.corps_markdown
-    template_md = await get_template_markdown(db)
+    template_md = await effective_template_markdown(db, contrat)
     return render_body(template_md, contrat)
 
 

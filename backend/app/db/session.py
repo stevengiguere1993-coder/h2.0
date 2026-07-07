@@ -1168,6 +1168,8 @@ async def init_db() -> None:
                 "mandataire_signature_image_content_type",
                 "VARCHAR(100)",
             ),
+            # Gabarit propre à un contrat (négociation par immeuble).
+            ("contrats_gestion", "corps_template_override", "TEXT"),
             # Envoi PDF + consultation publique des factures devlog
             # (pièce #5 vague 1). `due_date` existe déjà dans le modèle,
             # on ajoute le token public, l'horodatage d'envoi et celui

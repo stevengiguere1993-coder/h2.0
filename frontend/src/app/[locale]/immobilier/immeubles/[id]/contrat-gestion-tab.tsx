@@ -23,6 +23,7 @@ import {
   FileSignature,
   Loader2,
   Mail,
+  Pencil,
   Plus,
   Send,
   Settings2,
@@ -56,8 +57,10 @@ type Contrat = {
   signed_at: string | null;
   signed_name: string | null;
   has_signed_pdf: boolean;
+  has_custom_body: boolean;
   sign_url: string | null;
   body_markdown?: string;
+  custom_template_markdown?: string | null;
 };
 
 function fmtDate(iso: string | null): string {
@@ -516,6 +519,15 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
           ) : null}
         </div>
 
+        {/* Personnalisation du texte pour CE contrat (négociation) */}
+        <PerContractTemplate
+          contrat={selected}
+          onSaved={(updated) => {
+            setSelected(updated);
+            void loadList();
+          }}
+        />
+
         {/* Actions */}
         <div className="flex flex-wrap items-center gap-2">
           {selected.status === "brouillon" ? (
@@ -722,6 +734,147 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
         open={showTemplate}
         onToggle={() => setShowTemplate((v) => !v)}
       />
+    </div>
+  );
+}
+
+// ─── Personnalisation du texte pour UN contrat (négociation) ──────
+
+function PerContractTemplate({
+  contrat,
+  onSaved
+}: {
+  contrat: Contrat;
+  onSaved: (c: Contrat) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [body, setBody] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const editable = contrat.status === "brouillon";
+
+  async function ensureLoaded() {
+    if (body !== null) return;
+    if (contrat.custom_template_markdown) {
+      setBody(contrat.custom_template_markdown);
+      return;
+    }
+    try {
+      const res = await authedFetch("/api/v1/contrats-gestion/template");
+      setBody(
+        res.ok
+          ? ((await res.json()) as { corps_markdown: string }).corps_markdown
+          : ""
+      );
+    } catch {
+      setBody("");
+    }
+  }
+
+  async function patch(value: string | null) {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await authedFetch(`/api/v1/contrats-gestion/${contrat.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ corps_template_override: value })
+      });
+      if (!res.ok) throw new Error();
+      onSaved((await res.json()) as Contrat);
+      setMsg(
+        value === null
+          ? "Réinitialisé au modèle par défaut."
+          : "Personnalisation enregistrée pour ce contrat."
+      );
+      if (value === null) setBody(null);
+    } catch {
+      setMsg("Opération impossible.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-brand-800">
+      <button
+        type="button"
+        onClick={() => {
+          const n = !open;
+          setOpen(n);
+          if (n) void ensureLoaded();
+        }}
+        className="flex w-full items-center justify-between px-4 py-2.5 text-sm font-medium text-white/80"
+      >
+        <span className="inline-flex items-center gap-2">
+          <Pencil className="h-4 w-4" /> Personnaliser le texte pour cet immeuble
+          (négociation)
+          {contrat.has_custom_body ? (
+            <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-white">
+              Texte personnalisé
+            </span>
+          ) : null}
+        </span>
+        <ChevronDown
+          className={`h-4 w-4 transition ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open ? (
+        <div className="space-y-3 border-t border-brand-800 p-4">
+          <p className="text-xs text-white/50">
+            Part du modèle par défaut, à modifier uniquement pour CE contrat
+            (ex. frais de gestion négociés). Marqueurs :{" "}
+            <code className="text-white/70">
+              {"{{COMPAGNIE}} {{SIEGE_SOCIAL}} {{REPRESENTANT}} {{TITRE}} {{IMMEUBLES}} {{DISTRICT}} {{COURRIEL}} {{LIEU}} {{DATE}}"}
+            </code>
+          </p>
+          {body === null ? (
+            <div className="flex items-center justify-center py-6 text-white/40">
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </div>
+          ) : (
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={16}
+              disabled={!editable}
+              className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 font-mono text-xs leading-relaxed text-white focus:border-sky-500 focus:outline-none disabled:opacity-60"
+            />
+          )}
+          {!editable ? (
+            <p className="text-xs text-white/50">
+              Modifiable seulement tant que le contrat est en brouillon.
+            </p>
+          ) : null}
+          {msg ? <p className="text-xs text-white/70">{msg}</p> : null}
+          {editable ? (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => body !== null && void patch(body)}
+                disabled={busy || body === null}
+                className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
+              >
+                {busy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Check className="h-4 w-4" />
+                )}
+                Enregistrer pour ce contrat
+              </button>
+              {contrat.has_custom_body ? (
+                <button
+                  type="button"
+                  onClick={() => void patch(null)}
+                  disabled={busy}
+                  className="inline-flex items-center gap-2 rounded-lg border border-brand-800 px-4 py-2 text-sm font-medium text-white/80 hover:text-white disabled:opacity-50"
+                >
+                  Réinitialiser au modèle par défaut
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
