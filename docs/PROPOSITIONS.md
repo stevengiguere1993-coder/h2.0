@@ -31,7 +31,9 @@
 
 ---
 
-## P-02 — 🔴 FK cassée qui casse `init_db` en prod depuis 26 jours (P0 — le plus important de la nuit)
+## P-02 — ✅ FAIT (2026-07-07) — FK cassée qui cassait `init_db` en prod depuis 26 jours (P0)
+
+> **Résolu** : PR #1107 mergée + déployée sous supervision. FK corrigée (`imm_immeubles`), 3 backfills one-shot neutralisés (marqueurs pré-inscrits → aucune rotation de reçus ni réécriture du « refacturable »), garde-fou de schéma ajouté (`test_smoke_schema.py`). Boot prod sain (health 200 en continu), page Finances/P&L locatif rétablie (confirmé par Phil). Détail historique ci-dessous.
 
 **Le bug (prouvé empiriquement)** : `backend/app/models/immobilier.py:609` déclare `ForeignKey("immeubles.id")` alors que la table s'appelle `imm_immeubles` (`immobilier.py:104`). C'est la **seule** FK cassée du schéma (56 tables-cibles vérifiées). Conséquence : `Base.metadata.create_all()` lève `NoReferencedTableError`, donc **`init_db()` plante dès son début** (`session.py:485`) et l'erreur est **avalée silencieusement** au boot (`main.py:43-45`, log `warning`).
 
