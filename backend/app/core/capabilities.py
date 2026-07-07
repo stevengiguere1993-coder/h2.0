@@ -47,6 +47,29 @@ CAPABILITIES: list[Capability] = [
         category="Projets",
         default_min_role="manager",
     ),
+    # Sous-entités de projet. Défauts = comportement actuel (phase/tâche
+    # étaient sans garde de rôle = employé ; membre = gestionnaire).
+    Capability(
+        id="project.phase.delete",
+        label="Supprimer une phase de projet",
+        description="Effacer une phase d'un projet.",
+        category="Projets",
+        default_min_role="employee",
+    ),
+    Capability(
+        id="project.task.delete",
+        label="Supprimer une tâche de projet",
+        description="Effacer une tâche d'un projet.",
+        category="Projets",
+        default_min_role="employee",
+    ),
+    Capability(
+        id="project.member.remove",
+        label="Retirer un membre d'un projet",
+        description="Retirer un membre de l'équipe assignée à un projet.",
+        category="Projets",
+        default_min_role="manager",
+    ),
     Capability(
         id="contrat_gestion.delete",
         label="Supprimer un contrat de gestion",

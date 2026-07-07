@@ -20,13 +20,15 @@ et `assignee_sous_traitant_ids` (listes). Les anciens champs scalaires
 from __future__ import annotations
 
 from datetime import date, datetime, time
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select
 
 from app.api.deps import CurrentUser, DBSession
+from app.models.user import User
+from app.services.permissions_service import require_capability
 from app.core.permissions import visible_project_ids
 from app.models.project import Project
 from app.models.project_assignees import ProjectPhaseAssignee
@@ -519,7 +521,9 @@ async def delete_phase(
     project_id: int,
     phase_id: int,
     db: DBSession,
-    user: CurrentUser,
+    user: Annotated[
+        User, Depends(require_capability("project.phase.delete"))
+    ],
 ) -> None:
     await _ensure_project_visible(db, project_id, user)
     ph = (
