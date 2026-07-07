@@ -6,7 +6,9 @@
 
 ## 1. Résumé exécutif
 
-*(rédigé en fin de nuit — voir dernière section)*
+En une nuit, j'ai cartographié 100 % du dépôt, monté un **filet de 30 smoke tests** sur les parcours critiques (auth, CRUD des pôles, facturation, contrats MCP figés), puis conduit un **audit exhaustif** (9 zones × 6 dimensions) dont chaque constat est passé à une **contre-expertise adversariale** avant d'être retenu. Sur cette base, j'ai appliqué **29 correctifs sûrs et invisibles pour les utilisateurs** — durcissements de sécurité (garde de rang sur les mots de passe, audit log des comptes, endpoint debug fermé), robustesse des machines d'état de facturation (fini les signatures écrasées par un vieux lien, les factures annulées mal comptées, les documents qui rétrogradent de statut), quelques N+1, du code mort et de l'observabilité (fin de la cascade d'erreurs silencieuses au démarrage). **Rien ne change pour l'utilisateur** : ce sont des corrections d'arrière-plan. Tout est sur une **branche isolée**, avec `pytest` (86 verts) et `tsc` (0 erreur) verts, en **15 commits atomiques revertables un par un**. Les changements plus risqués (migrations, réécritures, décisions produit) — dont **une FK cassée qui casse `init_db` en prod depuis 26 jours** — sont **documentés, pas exécutés**, dans `PROPOSITIONS.md` (18 propositions priorisées P0→P3), pour décision de Phil. Un **environnement de staging** est proposé (P-01) pour que tu puisses tester tes branches avant merge, la demande explicite de la mission.
+
+> **À lire en priorité par Phil** : `PROPOSITIONS.md` **P-02** (la FK cassée — le correctif le plus important, à déployer sous supervision) et **P-01** (le staging). Le reste de ce rapport détaille la méthode, les constats et les 29 correctifs livrés.
 
 ## 2. Méthode et garde-fous
 
@@ -179,16 +181,51 @@ Par ailleurs, plusieurs findings ont été **conservés mais rétrogradés** par
 
 ## 5. Actions réalisées (commits)
 
-*(liste finale en fin de nuit)*
+**Métriques** : 15 commits atomiques sur `refactor/nuit-audit-2026-07-06`. Code (hors docs/tests) : **27 fichiers, +484 / −158 lignes**. Avec docs + tests : 44 fichiers. **1 dépendance ajoutée** (`aiosqlite`, dev/tests uniquement), **0 retirée**. **Couverture de tests : 49 → 86 tests** (+37 : filet smoke API + tests des correctifs). **~15 bugs/durcissements corrigés** cette nuit, **~55 items documentés** (18 propositions).
+
+| Commit | Type | Contenu |
+|---|---|---|
+| `[core][test]` | test | Filet de 30 smoke tests API sur SQLite (auth, CRUD pôles, bons, contrats MCP figés) + `aiosqlite` |
+| `[core][docs]` | docs | `ARCHITECTURE.md` (cartographie complète) + squelette du rapport |
+| `[core][docs]` | docs | Audit §4 (findings vérifiés) + `PROPOSITIONS.md` P-01→P-17 |
+| `[core][fix]` | fix | `init_db` : logs au lieu d'exceptions avalées + garde ventilation TPS/TVQ |
+| `[core][securite]` | fix | Comptes : garde de rang sur mutations + audit log + `/punch/debug` en admin |
+| `[construction][fix]` | fix | Machines d'état facturation : gardes anti-régression + factures VOID exclues |
+| `[core][cleanup]` | cleanup | Retrait `config.claude_model` mort + libellés horaires du catalogue |
+| `[construction][fix]` | fix | Autopush QBO via `BackgroundTasks` (task non GC-able) |
+| `[core][fix]` | fix | Respect du toggle « Synchro iCal » + anti-spam relance SLA horaire |
+| `[immobilier][perf]` | perf | Fin du N+1 renouvellements + filtrage SQL du roll-up maintenance |
+| `[prospection][perf]` | perf | EvalWeb : screenshots debug derrière `SCRAPE_DEBUG` |
+| `[core][fix]` | fix | `authedFetch` ne rejoue que GET/HEAD + garde anti-race global-search + blog fallback |
+| `[prospection][fix]` | fix | Page sources : nettoyage de l'interval de polling au démontage |
+| `[core][fix]` | fix | Drive : `Link` next-intl (locale auto, −23 erreurs lint) + LeadAnalysisModal deps étroites |
+| `[devlog][cleanup]` | cleanup | TPS/TVQ depuis `lib/tax` + `DEV_ALLOWED_EMAILS` partagé + auto-save re-planifié |
+| `[core][docs]` | docs | `PROPOSITIONS.md` P-18 (dédup `public_base` déférée) |
 
 ## 6. Bugs corrigés vs bugs documentés
 
-*(liste finale en fin de nuit)*
+**Corrigés cette nuit** (invisibles pour l'utilisateur, chacun testé quand pertinent) :
+- **Sécurité** : escalade de privilège sur set-password (un admin ne peut plus réinitialiser le mot de passe d'un owner) ; `/punch/debug` (dump PII) fermé aux non-admins ; audit log ajouté sur toutes les mutations de comptes.
+- **Intégrité facturation** : soumission acceptée ne peut plus être ré-acceptée/rejetée via un vieux lien (signature préservée) ; un document renvoyé ne rétrograde plus son statut ; les factures annulées (VOID) ne faussent plus la facturation progressive.
+- **Robustesse** : fin de la cascade d'erreurs **silencieuses** au démarrage (`init_db` loggue enfin) ; ventilation TPS/TVQ ne met plus à 0 les achats sans taxes saisies ; `authedFetch` ne duplique plus les mutations sur coupure réseau ; race de recherche corrigée ; `/blog` ne 500 plus si le backend dort ; toggle iCal respecté ; anti-spam de la relance SLA.
+- **Perf/propreté** : 2 N+1 immobiliers, du code mort, des libellés faux, screenshots debug opt-in.
+
+**Documentés (non exécutés)** — voir `PROPOSITIONS.md` :
+- **P-02 (P0)** : FK cassée `immeubles.id` → `init_db` en panne silencieuse depuis 26 jours (déploiement supervisé requis à cause de backfills visibles).
+- **P-04 (P0)** : escalade admin→owner via `/auth/register` et `POST /users` (décision de politique de rôles).
+- **P-05 (sécurité)** : CORS trop ouvert + token QBO en clair + JWT irrévocables + XSS conditionnel NDA.
+- **P-07/P-08/P-09** : 3 guards admin divergents, `session.py` (3018 l.) à découper, auto-commit sur les GET, ordre des routers fragile.
+- **P-03, P-11, P-13, P-14, P-15, P-16, P-17** : liens SEO morts (404), guards d'écriture projets, idempotence des relances loyer, taxes/totaux dupliqués, code mort Monday/Teams, flux signature réimplémenté ~10×, fichiers de 8000 lignes.
 
 ## 7. Propositions non exécutées
 
-Voir `docs/PROPOSITIONS.md` (changements risqués : migrations, réécritures massives, major bumps, contrats MCP).
+Voir `docs/PROPOSITIONS.md` — 18 propositions priorisées (P-01 staging, P-02 FK critique, puis sécurité, refactors, code mort), chacune avec bénéfice / risque / effort / plan d'exécution pas à pas.
 
-## 8. Prochaines étapes recommandées
+## 8. Prochaines étapes recommandées (dans l'ordre)
 
-*(en fin de nuit)*
+1. **Tester cette branche** : ouvrir le staging (P-01) et cliquer dans l'app ; ou, à défaut, relire ce rapport + le diff de la PR. La CI (tsc + lint + 86 tests) est déjà verte sur la PR.
+2. **Merger cette branche** une fois validée (aucun changement visible attendu — c'est le but).
+3. **Déployer P-02 (FK) sous supervision** : c'est le correctif à plus fort impact (répare `init_db`, ressuscite la page P&L locatif) mais il réarme des backfills — suivre le plan P-02 (neutraliser la rotation des reçus).
+4. **Trancher les 2 P0 de sécurité restants** (P-04 escalade de rôle) et le durcissement P-05 (CORS, token QBO).
+5. **Mettre en place le staging permanent** (P-01) pour toutes les grosses tâches futures.
+6. Puis attaquer les refactors de fond au rythme d'une PR par proposition (P-08 `session.py`, P-15 code mort, P-17 fichiers géants…).
