@@ -29,6 +29,9 @@ def test_get_permissions_grid(client, auth_headers):
     # Capacités sensibles branchées en 2C.
     assert "contrat_gestion.delete" in ids
     assert "contrat_gestion.template_edit" in ids
+    # Suppressions immobilières branchées (défaut employé = actuel).
+    assert "immeuble.delete" in ids
+    assert "bail.delete" in ids
     # Chaque capacité expose un min_role valide + son défaut.
     for c in body["capabilities"]:
         assert c["min_role"] in body["roles"]
