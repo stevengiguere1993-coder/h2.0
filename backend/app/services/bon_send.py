@@ -130,9 +130,19 @@ async def send_bon(
         log.exception("Graph send failed for bon %s", bon_id)
         raise BonSendError(f"Envoi courriel échoué: {exc}") from exc
 
-    bon.status = BonTravailStatus.SENT.value
-    bon.sent_at = datetime.now(timezone.utc)
-    bon.sent_to_email = recipients[0]
-    await db.flush()
+    # Garde d'état : on ne (re)bascule en SENT que depuis un état
+    # « ouvert » (brouillon / déjà envoyé). Renvoyer un bon déjà SIGNÉ,
+    # annulé ou avancé dans son cycle interne (planifié, à refacturer,
+    # facturé) n'écrase PAS son statut — sinon on ferait régresser le bon
+    # dans son flux. Le courriel part toujours ; on garde le dernier
+    # destinataire à jour uniquement quand on met aussi à jour le statut.
+    if bon.status in (
+        BonTravailStatus.DRAFT.value,
+        BonTravailStatus.SENT.value,
+    ):
+        bon.status = BonTravailStatus.SENT.value
+        bon.sent_at = datetime.now(timezone.utc)
+        bon.sent_to_email = recipients[0]
+        await db.flush()
     await db.refresh(bon)
     return bon

@@ -271,7 +271,11 @@ async def public_accept(
     bg: BackgroundTasks,
 ) -> PublicSoumission:
     sm = await _load_by_token(db, token)
+    # Garde d'état : une soumission déjà acceptée ne doit PAS pouvoir être
+    # ré-acceptée (sinon écrasement de la signature/preuve légale + double
+    # provision projet/facture via un 2e clic ou une relecture du lien).
     if sm.status in (
+        SoumissionStatus.ACCEPTED.value,
         SoumissionStatus.REJECTED.value,
         SoumissionStatus.EXPIRED.value,
     ):
@@ -532,6 +536,19 @@ async def public_reject(
     db: DBSession,
 ) -> PublicSoumission:
     sm = await _load_by_token(db, token)
+    # Garde d'état : on ne peut refuser qu'une soumission encore active.
+    # Une soumission déjà acceptée/refusée/expirée n'est plus modifiable —
+    # sinon le lien public pourrait basculer en REJECTED une soumission
+    # signée (et repropager le prospect en « perdu »). Calque public_bon.
+    if sm.status in (
+        SoumissionStatus.ACCEPTED.value,
+        SoumissionStatus.REJECTED.value,
+        SoumissionStatus.EXPIRED.value,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cette soumission n'est plus modifiable.",
+        )
     sm.status = SoumissionStatus.REJECTED.value
     # Append the reason to the internal notes for staff visibility.
     if data.reason:

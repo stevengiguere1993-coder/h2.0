@@ -174,24 +174,34 @@ async def send_soumission(
         log.exception("Graph send failed for soumission %s", soumission_id)
         raise SoumissionSendError(f"Envoi courriel échoué: {exc}") from exc
 
-    sm.status = SoumissionStatus.SENT.value
-    sm.sent_at = datetime.now(timezone.utc)
+    # Garde d'état : on ne (re)bascule en SENT — et on ne repropage le
+    # prospect en QUOTED — que depuis un état « ouvert » (brouillon /
+    # déjà envoyée). Renvoyer une soumission ACCEPTÉE/REFUSÉE/EXPIRÉE
+    # (ex. renvoi d'une copie au client) n'écrase PAS son statut ni ne
+    # ramène le prospect en arrière dans le pipeline. Le courriel part
+    # toujours.
+    if sm.status in (
+        SoumissionStatus.DRAFT.value,
+        SoumissionStatus.SENT.value,
+    ):
+        sm.status = SoumissionStatus.SENT.value
+        sm.sent_at = datetime.now(timezone.utc)
 
-    # Propagate to the linked prospect in the CRM: the soumission has
-    # been delivered so the prospect is at "quoted" stage. If the
-    # prospect was in a later stage by mistake, this brings it back
-    # in line with the soumission workflow.
-    if sm.contact_request_id:
-        cr = (
-            await db.execute(
-                select(ContactRequest).where(
-                    ContactRequest.id == sm.contact_request_id
+        # Propagate to the linked prospect in the CRM: the soumission has
+        # been delivered so the prospect is at "quoted" stage. If the
+        # prospect was in a later stage by mistake, this brings it back
+        # in line with the soumission workflow.
+        if sm.contact_request_id:
+            cr = (
+                await db.execute(
+                    select(ContactRequest).where(
+                        ContactRequest.id == sm.contact_request_id
+                    )
                 )
-            )
-        ).scalar_one_or_none()
-        if cr is not None:
-            cr.status = ContactRequestStatus.QUOTED.value
+            ).scalar_one_or_none()
+            if cr is not None:
+                cr.status = ContactRequestStatus.QUOTED.value
 
-    await db.flush()
+        await db.flush()
     await db.refresh(sm)
     return sm
