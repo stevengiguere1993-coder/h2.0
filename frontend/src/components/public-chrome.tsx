@@ -41,7 +41,8 @@ const PORTAL_PREFIXES = [
   "/sign-nda",
   "/sign-bail",
   "/sign-offer",
-  "/sign-devlog"
+  "/sign-devlog",
+  "/sign-contrat-gestion"
 ];
 
 function stripLocale(pathname: string): string {

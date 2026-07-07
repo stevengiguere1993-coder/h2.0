@@ -36,7 +36,8 @@ const DISALLOW_INTERNAL = [
   "/sign-nda",
   "/sign-bail",
   "/sign-offer",
-  "/sign-devlog"
+  "/sign-devlog",
+  "/sign-contrat-gestion"
 ];
 
 export default function robots(): MetadataRoute.Robots {
