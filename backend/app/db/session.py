@@ -8,6 +8,7 @@ Provides:
 """
 
 import json
+import logging
 from collections.abc import AsyncGenerator
 from typing import Optional
 
@@ -476,6 +477,8 @@ async def init_db() -> None:
     """
     from app.db.base import Base
     from sqlalchemy import text
+
+    log = logging.getLogger("app.db.init_db")
 
     # create_all dans sa PROPRE transaction → committé indépendamment des
     # ALTER additifs ci-dessous. Sinon, un ALTER raté annule TOUTE la
@@ -1402,10 +1405,10 @@ async def init_db() -> None:
                     "AND payment_method <> 'bill_to_pay'"
                 )
             )
-        except Exception:
+        except Exception as exc:
             # Table peut ne pas exister au tout premier demarrage,
             # ou colonne pas encore la sur ancien schema.
-            pass
+            log.warning("init_db: backfill achats status=paid échouée: %s", exc)
 
         # Achats : pour les bill_to_pay existants sans due_at, calcule
         # received_at + 30j (defaut) ou + payment_terms_days du
@@ -1423,8 +1426,8 @@ async def init_db() -> None:
                     "AND a.due_at IS NULL"
                 )
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("init_db: backfill achats due_at bill_to_pay échouée: %s", exc)
 
         # DevlogLead : migration des statuts français vers les valeurs
         # ContactRequest (new/contacted/qualified/quoted/won/lost/spam)
@@ -1457,11 +1460,11 @@ async def init_db() -> None:
                     "ALTER COLUMN status TYPE VARCHAR(32)"
                 )
             )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             # Table peut ne pas exister encore au tout premier démarrage
             # ou avoir une autre forme. Migration silencieuse — sera
             # rejouée au prochain redémarrage si nécessaire.
-            pass
+            log.warning("init_db: migration statuts devlog_leads échouée: %s", exc)
 
         # Kratos : passage à entreprise_id NULLABLE (problème global
         # transverse possible). Idempotent : si déjà nullable, no-op.
@@ -1472,8 +1475,8 @@ async def init_db() -> None:
                     "ALTER COLUMN entreprise_id DROP NOT NULL"
                 )
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("init_db: kratos_problems.entreprise_id nullable échouée: %s", exc)
 
         # Backfill: any pre-existing user with is_admin=TRUE becomes
         # an "owner" so current sign-ins keep full access. Only runs
@@ -1485,8 +1488,8 @@ async def init_db() -> None:
                     "WHERE is_admin=TRUE AND role='employee'"
                 )
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("init_db: backfill users role=owner (is_admin) échouée: %s", exc)
 
         # Promote Philippe Meuser au rang owner (mêmes accès que
         # Steven). Idempotent — UPDATE n'a aucun effet quand le rôle
@@ -1501,8 +1504,8 @@ async def init_db() -> None:
                     " 'pmeuser@immohorizon.com')"
                 )
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("init_db: promotion Philippe Meuser owner échouée: %s", exc)
 
         # Élargit la colonne region de mtl_property_units si elle est
         # encore en VARCHAR(8) (legacy). 'mtl-island' fait 10 chars,
@@ -1515,8 +1518,8 @@ async def init_db() -> None:
                     "ALTER COLUMN region TYPE VARCHAR(32)"
                 )
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("init_db: élargit mtl_property_units.region échouée: %s", exc)
 
         # Élargit sous_traitants.region : créée en VARCHAR(32) (une
         # seule région), on accepte désormais une liste séparée par
@@ -1528,8 +1531,8 @@ async def init_db() -> None:
                     "ALTER COLUMN region TYPE VARCHAR(255)"
                 )
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("init_db: élargit sous_traitants.region échouée: %s", exc)
 
         # Élargit municipalite et code_utilisation pour accepter les
         # valeurs du rôle provincial MAMH : nom complet de municipalité
@@ -1547,8 +1550,8 @@ async def init_db() -> None:
                         f"ALTER COLUMN {column} TYPE {new_type}"
                     )
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("init_db: élargit mtl_property_units.%s échouée: %s", column, exc)
 
         # project_phases.duration_days passe de INTEGER → NUMERIC(6,2)
         # pour supporter les phases en heures (ex. 0.5 = ½ journée).
@@ -1561,8 +1564,8 @@ async def init_db() -> None:
                     "ALTER COLUMN duration_days TYPE NUMERIC(6,2)"
                 )
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("init_db: project_phases.duration_days TYPE NUMERIC échouée: %s", exc)
 
         # Relaxations — columns whose nullability changed.
         # ALTER ... DROP NOT NULL is idempotent on PostgreSQL.
@@ -1582,9 +1585,9 @@ async def init_db() -> None:
                 await conn.execute(
                     text(f'ALTER TABLE {table} ALTER COLUMN {column} DROP NOT NULL')
                 )
-            except Exception:
+            except Exception as exc:
                 # Column may not exist yet on a brand-new DB — harmless.
-                pass
+                log.warning("init_db: DROP NOT NULL %s.%s échouée: %s", table, column, exc)
 
         # Drop l'unique constraint sur user_calendar_feeds.user_id pour
         # autoriser plusieurs flux ICS par user (perso + travail + équipe).
@@ -1600,8 +1603,8 @@ async def init_db() -> None:
                         f"DROP CONSTRAINT IF EXISTS {cstr}"
                     )
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("init_db: DROP CONSTRAINT user_calendar_feeds %s échouée: %s", cstr, exc)
 
         # ⚠ DÉSACTIVÉ — était une migration one-shot (Avril 2026) qui
         # déplaçait les anciens « achats » draft/ordered vers la table
@@ -1649,11 +1652,11 @@ async def init_db() -> None:
                     "ON CONFLICT DO NOTHING"
                 )
             )
-        except Exception:
+        except Exception as exc:
             # Tables ou colonnes absentes lors du tout premier boot
             # (avant create_all) — harmless, le backfill retentera au
             # prochain démarrage.
-            pass
+            log.warning("init_db: backfill assignees phases/tasks (N-N) échouée: %s", exc)
 
         # Index additionnels — perf des listes /prospection/mtl-properties
         # avec ~900 K-1 M unités. CREATE INDEX IF NOT EXISTS est idempotent.
@@ -1702,9 +1705,9 @@ async def init_db() -> None:
                         f"ON {table} {expr}"
                     )
                 )
-            except Exception:
+            except Exception as exc:
                 # Table absente au tout premier boot — sera ré-essayé.
-                pass
+                log.warning("init_db: création index %s échouée: %s", idx_name, exc)
 
         # Reclassification one-shot des tâches d'entreprises importées
         # de Monday qui sont restées en « backlog ». L'utilisateur veut
@@ -1876,6 +1879,7 @@ async def init_db() -> None:
                 amount_tvq = COALESCE(amount_taxes, 0)
                              - ROUND(COALESCE(amount_taxes, 0) * 5.0 / 14.975, 2)
             WHERE amount_tps IS NULL
+              AND amount_taxes IS NOT NULL
             """,
             # Rétro-lien projet ↔ soumission : un projet créé manuellement
             # (ou par une ancienne version) peut avoir budget = total de la
@@ -1955,10 +1959,10 @@ async def init_db() -> None:
         ):
             try:
                 await conn.execute(text(sql))
-            except Exception:
+            except Exception as exc:
                 # Table absente / colonne pas encore migrée — on
                 # passe sans bloquer le boot.
-                pass
+                log.warning("init_db: backfill applied_backfills (batch) échouée: %s", exc)
 
         # Rétroactif (one-shot) : faire pivoter de 90° HORAIRE tous les
         # reçus d'achat déjà stockés. Ils ont été numérisés avant la
@@ -1975,8 +1979,9 @@ async def init_db() -> None:
                     {"k": "rotate_existing_receipts_cw90_v1"},
                 )
             ).first()
-        except Exception:
+        except Exception as exc:
             done = True  # table pas prête — on retentera au prochain boot
+            log.warning("init_db: lecture marqueur rotation reçus échouée: %s", exc)
         if not done:
             try:
                 n = await _rotate_existing_receipts_cw90(conn)
@@ -1987,9 +1992,9 @@ async def init_db() -> None:
                     ),
                     {"k": "rotate_existing_receipts_cw90_v1"},
                 )
-                print(f"[init_db] reçus pivotés 90° horaire : {n}")
+                log.info(f"[init_db] reçus pivotés 90° horaire : {n}")
             except Exception as exc:  # noqa: BLE001
-                print(f"[init_db] rotation reçus échouée : {exc}")
+                log.warning(f"[init_db] rotation reçus échouée : {exc}")
 
         # Rétroactif (one-shot) : re-taguer en « extra » les lignes de
         # facture hors-contrat générées automatiquement AVANT que le code
@@ -2006,8 +2011,9 @@ async def init_db() -> None:
                     {"k": "retag_extra_facture_items_v1"},
                 )
             ).first()
-        except Exception:
+        except Exception as exc:
             done = True
+            log.warning("init_db: lecture marqueur retag extra échouée: %s", exc)
         if not done:
             try:
                 res = await conn.execute(
@@ -2026,12 +2032,12 @@ async def init_db() -> None:
                     ),
                     {"k": "retag_extra_facture_items_v1"},
                 )
-                print(
+                log.info(
                     f"[init_db] lignes facture re-taguées extra : "
                     f"{res.rowcount}"
                 )
             except Exception as exc:  # noqa: BLE001
-                print(f"[init_db] retag extra échoué : {exc}")
+                log.warning(f"[init_db] retag extra échoué : {exc}")
 
         # Seed des types de RV par défaut. Idempotent :
         # INSERT ... ON CONFLICT DO NOTHING. L'admin peut modifier
@@ -2106,8 +2112,8 @@ async def init_db() -> None:
                         "travel": travel,
                     },
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("init_db: seed appointment_types échouée: %s", exc)
 
         # Seed des défauts globaux d'analyse financière (mai 2026,
         # étendu mai 2026 pour couvrir TOUS les inputs manuels +
@@ -2156,10 +2162,10 @@ async def init_db() -> None:
                     """
                 )
             )
-        except Exception:
+        except Exception as exc:
             # Table absente — sera créée par create_all + retentée
             # au prochain boot.
-            pass
+            log.warning("init_db: migration groupes prospection_analysis_defaults échouée: %s", exc)
 
         # Liste exhaustive des défauts.
         # Champs des inputs manuels (groupe 'inputs_manuels') :
@@ -2738,10 +2744,10 @@ async def init_db() -> None:
                         "group": group,
                     },
                 )
-            except Exception:
+            except Exception as exc:
                 # Table absente au tout premier boot (create_all n'a
                 # pas encore tourné) — retentera au prochain démarrage.
-                pass
+                log.warning("init_db: upsert prospection_analysis_defaults (%s) échouée: %s", key, exc)
 
         # ── Seed du barème des taxes de bienvenue (juin 2026) ────────
         # Défaut à valeur structurée (``value_json``) : barème progressif
@@ -2794,9 +2800,9 @@ async def init_db() -> None:
                     "group": "baremes_fiscaux",
                 },
             )
-        except Exception:
+        except Exception as exc:
             # Table absente au tout premier boot — retentera plus tard.
-            pass
+            log.warning("init_db: seed taxes_bienvenue_mtl échouée: %s", exc)
 
         # ── Seed des frais de démarrage PERSONNALISÉS (juin 2026) ────
         # Défaut à valeur structurée (``value_json``) : LISTE des postes
@@ -2842,9 +2848,9 @@ async def init_db() -> None:
                     "group": "mdf_frais",
                 },
             )
-        except Exception:
+        except Exception as exc:
             # Table absente au tout premier boot — retentera plus tard.
-            pass
+            log.warning("init_db: seed frais_mdf_custom échouée: %s", exc)
 
         # ── Seed du REGISTRE unifié des frais de démarrage (juin 2026) ──
         # Défaut à valeur structurée (``value_json``) : LISTE ORDONNÉE des
@@ -2933,9 +2939,9 @@ async def init_db() -> None:
                     "group": "mdf_frais",
                 },
             )
-        except Exception:
+        except Exception as exc:
             # Table absente au tout premier boot — retentera plus tard.
-            pass
+            log.warning("init_db: seed mdf_frais_registry échouée: %s", exc)
 
         # ── Backfill `financable_par_defaut` (mai 2026) ──────────────
         # On ne TOUCHE PAS aux items pour lesquels Phil a déjà
@@ -2975,9 +2981,9 @@ async def init_db() -> None:
                     ),
                     {"key": default_key, "val": default_val},
                 )
-            except Exception:
+            except Exception as exc:
                 # Table/colonne absente au premier boot — silencieux.
-                pass
+                log.warning("init_db: backfill financable_par_defaut (%s) échouée: %s", default_key, exc)
 
         # ── Seed des valeurs par défaut des soumissions devis_dev (Phase 6,
         # juin 2026) ─────────────────────────────────────────────────────
@@ -3000,10 +3006,10 @@ async def init_db() -> None:
                     """
                 )
             )
-        except Exception:
+        except Exception as exc:
             # Table absente au tout premier boot (create_all n'a pas encore
             # tourné) — retentera au prochain démarrage.
-            pass
+            log.warning("init_db: seed devlog_soumission_defaults échouée: %s", exc)
 
 
 async def close_db() -> None:
