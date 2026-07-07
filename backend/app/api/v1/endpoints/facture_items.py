@@ -121,6 +121,7 @@ class FactureItemRead(BaseModel):
     unit_price: float
     total: float
     kind: str = "service"
+    soumission_item_id: Optional[int] = None
 
 
 async def _ensure_facture(db, facture_id: int) -> Facture:

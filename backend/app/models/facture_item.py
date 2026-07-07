@@ -37,3 +37,14 @@ class FactureItem(Base, TimestampUpdateMixin):
     kind: Mapped[str] = mapped_column(
         String(16), nullable=False, default="service", index=True
     )
+
+    # Item de la SOUMISSION d'origine (facturation progressive) : permet
+    # de suivre, item par item, combien a déjà été chargé au client — un
+    # item facturé au complet ne réapparaît plus sur les factures à
+    # pourcentage suivantes. NULL pour les lignes manuelles / acomptes /
+    # extras.
+    soumission_item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("soumission_items.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
