@@ -22,6 +22,7 @@ const PORTAL_PREFIXES = [
   "/investisseur",
   "/dev",
   "/dev-logiciel",
+  "/devlog",
   "/telephonie",
   "/mes-taches",
   "/changer-mot-de-passe",
@@ -32,7 +33,15 @@ const PORTAL_PREFIXES = [
   "/valider-demande",
   "/contrat-signature",
   "/promesse-achat",
-  "/facture"
+  "/facture",
+  // Manquaient (P-10) : les pages de signature externes affichaient la nav
+  // marketing enroulée autour du document à signer.
+  "/bon",
+  "/soumission",
+  "/sign-nda",
+  "/sign-bail",
+  "/sign-offer",
+  "/sign-devlog"
 ];
 
 function stripLocale(pathname: string): string {
