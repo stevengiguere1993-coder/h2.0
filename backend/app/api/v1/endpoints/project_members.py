@@ -15,13 +15,15 @@ l'agenda de rouge (personne assigné) à vert (équipe en place).
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import delete, func, insert, select
 
 from app.api.deps import DBSession, RequireManager
+from app.models.user import User
+from app.services.permissions_service import require_capability
 from app.models.employe import Employe
 from app.models.project import Project
 from app.models.project_member import ProjectMember
@@ -153,7 +155,10 @@ async def set_members(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def remove_member(
-    project_id: int, user_id: int, db: DBSession, _: RequireManager
+    project_id: int,
+    user_id: int,
+    db: DBSession,
+    _: Annotated[User, Depends(require_capability("project.member.remove"))],
 ) -> None:
     await _ensure_project(db, project_id)
     await db.execute(

@@ -13,13 +13,15 @@ via la table `project_task_assignees`. Les payloads acceptent
 """
 
 from datetime import date, datetime, timezone
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select
 
 from app.api.deps import CurrentUser, DBSession
+from app.models.user import User
+from app.services.permissions_service import require_capability
 from app.models.project import Project
 from app.models.project_assignees import ProjectTaskAssignee
 from app.models.project_task import ProjectTask
@@ -303,7 +305,10 @@ async def update_task(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_task(
-    project_id: int, task_id: int, db: DBSession, _: CurrentUser
+    project_id: int,
+    task_id: int,
+    db: DBSession,
+    _: Annotated[User, Depends(require_capability("project.task.delete"))],
 ) -> None:
     task = (
         await db.execute(
