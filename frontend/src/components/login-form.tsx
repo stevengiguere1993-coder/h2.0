@@ -18,14 +18,10 @@ import {
 
 import { useRouter } from "@/i18n/navigation";
 import { authedFetch, getMe, getToken, login, setToken } from "@/lib/auth";
-
-// Whitelist email autorisé à voir le bouton « Mode dev » sur le
-// sélecteur de portail. Centralisé pour matcher /dev/page.tsx.
-const DEV_ALLOWED_EMAILS = [
-  "sgiguere@immohorizon.com",
-  "philippe.meuser@immohorizon.com",
-  "pmeuser@immohorizon.com"
-];
+// Source unique de la whitelist « Mode dev » : importée depuis la page
+// /dev pour ne plus dupliquer la liste (elle y est déjà exportée). Seul
+// le const est importé — le composant de page n'est pas rendu.
+import { DEV_ALLOWED_EMAILS } from "@/app/[locale]/dev/page";
 
 // Volet « Téléphonie / Secrétaire d'appels » — en développement,
 // visible pour l'instant uniquement par sgiguere@immohorizon.com.

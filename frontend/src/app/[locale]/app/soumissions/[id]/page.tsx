@@ -37,6 +37,7 @@ import { FollowUpTimeline } from "@/components/follow-up-timeline";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { TPS_RATE, TVQ_RATE } from "@/lib/tax";
 import { useConfirm } from "@/components/confirm-dialog";
 
 type Soumission = {
@@ -109,9 +110,6 @@ const STATUS_CLASS: Record<string, string> = {
   expired: "bg-amber-500/20 text-amber-300",
   spam: "bg-rose-500/20 text-rose-300"
 };
-
-const TPS_RATE = 0.05;
-const TVQ_RATE = 0.09975;
 
 function fmtMoney(n: number | null): string {
   if (n == null) return "—";

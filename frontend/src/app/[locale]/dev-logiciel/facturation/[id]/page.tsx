@@ -20,6 +20,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { useConfirm } from "@/components/confirm-dialog";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { TPS_RATE, TVQ_RATE } from "@/lib/tax";
 import { useDevlogLayout } from "../../layout";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 
@@ -39,9 +40,6 @@ type Invoice = {
   created_at: string;
   updated_at: string;
 };
-
-const TPS_RATE = 0.05;
-const TVQ_RATE = 0.09975;
 
 type Item = {
   id: number;
