@@ -64,7 +64,7 @@ const RESOURCES_NAV: NavItem[] = [
   { href: "/app/sous-traitants", label: "Sous-traitants", icon: HardHat, minRole: "admin" },
   { href: "/app/fournisseurs", label: "Fournisseurs", icon: Truck, minRole: "admin" },
   { href: "/app/services-catalogue", label: "Catalogue services", icon: ClipboardCheck, minRole: "manager" },
-  { href: "/app/parametres", label: "Paramètres", icon: Settings, minRole: "employee" }
+  { href: "/parametres", label: "Paramètres", icon: Settings, minRole: "employee" }
 ];
 
 

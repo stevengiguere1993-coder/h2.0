@@ -25,6 +25,8 @@ const PORTAL_PREFIXES = [
   "/devlog",
   "/telephonie",
   "/mes-taches",
+  // Hub Paramètres unifié (pôle-neutre) — chrome interne, pas marketing.
+  "/parametres",
   "/changer-mot-de-passe",
   "/profil",
   // Pages publiques tokenisées : pas de chrome public (pas de header/

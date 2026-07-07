@@ -295,7 +295,7 @@ export default function EntreprisesLayout({
   ];
 
   const REGLAGES: NavItem[] = [
-    { href: "/entreprises/reglages", label: "Réglages", icon: Settings }
+    { href: "/parametres", label: "Réglages", icon: Settings }
   ];
 
   function isActive(href: string) {

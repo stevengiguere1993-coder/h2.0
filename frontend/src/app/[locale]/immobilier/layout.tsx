@@ -55,9 +55,9 @@ const NAV: NavItem[] = [
   { href: "/immobilier/renouvellements", label: "Renouvellements", icon: ClipboardList },
   { href: "/immobilier/depots", label: "Dépôts de garantie", icon: ShieldCheck },
   { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer },
-  // Paramètres = gestion des utilisateurs/employés + volets + immeubles
-  // accessibles, rendue DANS le volet immobilier (reste dans ce menu).
-  { href: "/immobilier/utilisateurs", label: "Paramètres", icon: Settings }
+  // Paramètres → hub unifié /parametres (point d'entrée unique, identique
+  // depuis tous les pôles). La gestion des utilisateurs y est accessible.
+  { href: "/parametres", label: "Paramètres", icon: Settings }
 ];
 
 // ─── Context : entreprise active dans le volet immobilier ────────────
