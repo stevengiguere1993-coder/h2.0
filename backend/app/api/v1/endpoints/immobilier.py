@@ -795,8 +795,15 @@ async def create_bon_from_immeuble(
         f"Adresse : {where}\n"
         "Source : Gestion immobilière (réparation)."
     )
+    # Référence auto anti-collision : même motif visible BON-AAAAMMJJ-HHMMSS,
+    # mais via le helper partagé (suffixe -N si la seconde est déjà prise) pour
+    # ne plus risquer un 500 sur la contrainte UNIQUE. Cf. business.py.
+    from app.api.v1.endpoints.business import generate_bt_reference
+
     bon = BonTravail(
-        reference=f"BON-{_now():%Y%m%d-%H%M%S}",
+        reference=await generate_bt_reference(
+            db, prefix="BON-", date_format="%Y%m%d-%H%M%S", now=_now()
+        ),
         title=payload.titre,
         description=payload.description,
         scope_md=scope,
