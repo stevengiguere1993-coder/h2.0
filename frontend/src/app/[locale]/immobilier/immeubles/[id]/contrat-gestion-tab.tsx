@@ -545,13 +545,17 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
               Enregistrer
             </button>
           ) : null}
-          <button
-            type="button"
-            onClick={() => void openPdf(`/api/v1/contrats-gestion/${selected.id}/pdf`)}
-            className="inline-flex items-center gap-2 rounded-lg border border-brand-800 px-4 py-2 text-sm font-medium text-white/80 hover:text-white"
-          >
-            <Eye className="h-4 w-4" /> Aperçu PDF
-          </button>
+          {!signed ? (
+            <button
+              type="button"
+              onClick={() =>
+                void openPdf(`/api/v1/contrats-gestion/${selected.id}/pdf`)
+              }
+              className="inline-flex items-center gap-2 rounded-lg border border-brand-800 px-4 py-2 text-sm font-medium text-white/80 hover:text-white"
+            >
+              <Eye className="h-4 w-4" /> Aperçu PDF
+            </button>
+          ) : null}
           {selected.status === "brouillon" ? (
             <button
               type="button"
