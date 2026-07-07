@@ -1,11 +1,12 @@
 """Endpoints publics (no auth) — signature d'un contrat de gestion.
 
-    GET  /api/v1/public/contrats-gestion/{token}        JSON + suivi ouverture
-    GET  /api/v1/public/contrats-gestion/{token}/pdf    PDF inline
-    POST /api/v1/public/contrats-gestion/{token}/sign   body {signed_name, ...}
+Flux à deux signatures :
+1. Le signataire MGV (Mandataire) ouvre son lien et signe.
+2. La convention est relayée automatiquement au Mandant, qui signe.
+3. Le PDF final signé des deux est envoyé par courriel aux deux parties.
 
-Le Mandant signe une seule fois : la même signature remplit le bloc
-Mandant et (si requise) le bloc Caution solidaire — cf. décision Phil.
+Un même endpoint sert les deux signataires : le token identifie la
+partie (`mandataire_signature_token` vs `signature_token`).
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
@@ -29,6 +30,10 @@ from app.services.contrat_gestion_pdf import (
     contrat_pdf_filename,
     generate_signed_contrat_pdf,
     render_contrat_pdf,
+)
+from app.services.contrat_gestion_send import (
+    email_signed_to_both,
+    send_to_mandant,
 )
 from app.services.contrat_gestion_service import (
     get_template_markdown,
@@ -49,21 +54,21 @@ class PublicContrat(BaseModel):
 
     id: int
     status: str
+    party: str  # "mandataire" | "mandant"
     mandataire_name: str
     compagnie: Optional[str]
     representant_nom: Optional[str]
     caution_requise: bool
+    already_signed: bool
     signed_name: Optional[str]
     signed_at: Optional[datetime]
-    sent_at: Optional[datetime]
     body_markdown: str
 
 
 class SignRequest(BaseModel):
     signed_name: str = Field(..., min_length=2, max_length=255)
-    # Signature manuscrite (data-URL PNG). Facultative : la saisie du
-    # nom + l'attestation suffisent à la validité (art. 2827 C.c.Q.).
-    signature_image_data_url: Optional[str] = Field(default=None, max_length=2_000_000)
+    # Signature manuscrite obligatoire (data-URL PNG).
+    signature_image_data_url: str = Field(..., min_length=20, max_length=2_000_000)
     has_scrolled: bool = False
     checkbox_confirmed: bool = False
 
@@ -78,7 +83,7 @@ def _client_ip(request: Request) -> Optional[str]:
     return None
 
 
-def _decode_data_url(data_url: Optional[str]) -> tuple[Optional[bytes], Optional[str]]:
+def _decode_data_url(data_url: str) -> tuple[Optional[bytes], Optional[str]]:
     if not data_url or not data_url.startswith("data:"):
         return None, None
     try:
@@ -95,37 +100,60 @@ def _decode_data_url(data_url: Optional[str]) -> tuple[Optional[bytes], Optional
         return None, None
 
 
-async def _load_by_token(db: AsyncSession, token: str) -> ContratGestion:
+async def _load_by_token(
+    db: AsyncSession, token: str
+) -> tuple[ContratGestion, str]:
+    """Renvoie (contrat, party) — party = 'mandataire' ou 'mandant'."""
     contrat = (
         await db.execute(
-            select(ContratGestion).where(ContratGestion.signature_token == token)
+            select(ContratGestion).where(
+                or_(
+                    ContratGestion.signature_token == token,
+                    ContratGestion.mandataire_signature_token == token,
+                )
+            )
         )
     ).scalar_one_or_none()
     if contrat is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Lien invalide ou expiré.")
-    return contrat
+    party = (
+        "mandataire"
+        if contrat.mandataire_signature_token == token
+        else "mandant"
+    )
+    return contrat, party
 
 
-async def _to_public(db: AsyncSession, contrat: ContratGestion) -> PublicContrat:
+async def _to_public(
+    db: AsyncSession, contrat: ContratGestion, party: str
+) -> PublicContrat:
     body = await resolve_body_markdown(db, contrat)
+    if party == "mandataire":
+        already = contrat.mandataire_signed_at is not None
+        who = contrat.mandataire_signed_name
+        when = contrat.mandataire_signed_at
+    else:
+        already = contrat.signed_at is not None
+        who = contrat.signed_name
+        when = contrat.signed_at
     return PublicContrat(
         id=contrat.id,
         status=contrat.status,
+        party=party,
         mandataire_name=MANDATAIRE_NOM,
         compagnie=contrat.compagnie,
         representant_nom=contrat.representant_nom,
         caution_requise=contrat.caution_requise,
-        signed_name=contrat.signed_name,
-        signed_at=contrat.signed_at,
-        sent_at=contrat.sent_at,
+        already_signed=already,
+        signed_name=who,
+        signed_at=when,
         body_markdown=body,
     )
 
 
 @router.get("/{token}", response_model=PublicContrat, summary="Détail (page publique)")
 async def read_contrat(token: str, db: DBSession) -> PublicContrat:
-    contrat = await _load_by_token(db, token)
-    # Accusé de lecture (best-effort) — ne bloque jamais l'affichage.
+    contrat, party = await _load_by_token(db, token)
     if contrat.status != ContratGestionStatus.SIGNE.value:
         try:
             now = datetime.now(timezone.utc)
@@ -136,12 +164,12 @@ async def read_contrat(token: str, db: DBSession) -> PublicContrat:
             await db.commit()
         except Exception:
             await db.rollback()
-    return await _to_public(db, contrat)
+    return await _to_public(db, contrat, party)
 
 
 @router.get("/{token}/pdf", summary="PDF inline (page publique)")
 async def public_contrat_pdf(token: str, db: DBSession) -> Response:
-    contrat = await _load_by_token(db, token)
+    contrat, _party = await _load_by_token(db, token)
     body = await resolve_body_markdown(db, contrat)
     pdf_bytes = render_contrat_pdf(contrat, body)
     return Response(
@@ -159,41 +187,111 @@ async def public_contrat_pdf(token: str, db: DBSession) -> Response:
 async def sign_contrat(
     token: str, data: SignRequest, request: Request, db: DBSession
 ) -> PublicContrat:
-    contrat = await _load_by_token(db, token)
-    if contrat.status == ContratGestionStatus.SIGNE.value:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Convention déjà signée.")
-
-    signed_name = data.signed_name.strip()[:255]
-    contrat.signed_name = signed_name
-    contrat.signed_at = datetime.now(timezone.utc)
-    contrat.signed_ip = _client_ip(request)
-    if not (contrat.caution_nom or "").strip():
-        contrat.caution_nom = signed_name
+    contrat, party = await _load_by_token(db, token)
 
     sig_bytes, sig_ct = _decode_data_url(data.signature_image_data_url)
-    if sig_bytes:
-        contrat.signature_image = sig_bytes
-        contrat.signature_image_content_type = sig_ct
+    if not sig_bytes:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Signature manuscrite requise.",
+        )
+    signed_name = data.signed_name.strip()[:255]
+    ip = _client_ip(request)
 
-    # Fige le corps avec la date de signature (le contrat garde sa version).
-    template_md = await get_template_markdown(db)
-    contrat.corps_markdown = render_body(template_md, contrat)
-    contrat.status = ContratGestionStatus.SIGNE.value
+    if party == "mandataire":
+        return await _sign_mandataire(db, contrat, signed_name, ip, sig_bytes, sig_ct)
+    return await _sign_mandant(db, contrat, signed_name, ip, sig_bytes, sig_ct)
 
-    # Commit DB de la signature AVANT génération PDF (sécurité timeout).
+
+async def _sign_mandataire(
+    db: AsyncSession,
+    contrat: ContratGestion,
+    signed_name: str,
+    ip: Optional[str],
+    sig_bytes: bytes,
+    sig_ct: Optional[str],
+) -> PublicContrat:
+    if contrat.mandataire_signed_at is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Déjà signé par le Mandataire."
+        )
+    contrat.mandataire_signed_name = signed_name
+    contrat.mandataire_signed_at = datetime.now(timezone.utc)
+    contrat.mandataire_signed_ip = ip
+    contrat.mandataire_signature_image = sig_bytes
+    contrat.mandataire_signature_image_content_type = sig_ct
+    contrat.status = ContratGestionStatus.ATTENTE_CLIENT.value
     await db.flush()
     await db.commit()
 
-    # PDF signé immuable — best-effort.
+    # Relais au Mandant (best-effort — le token Mandant est créé même si
+    # l'envoi échoue, pour permettre de copier le lien depuis l'onglet).
     try:
         reloaded = (
             await db.execute(
                 select(ContratGestion)
                 .where(ContratGestion.id == contrat.id)
-                .options(undefer(ContratGestion.signature_image))
+                .options(undefer(ContratGestion.mandataire_signature_image))
             )
         ).scalar_one()
-        signed_bytes = generate_signed_contrat_pdf(reloaded, reloaded.corps_markdown or "")
+        await send_to_mandant(db, reloaded)
+        await db.commit()
+        contrat = reloaded
+    except Exception:
+        log.exception("Relais au Mandant échoué (contrat %s)", contrat.id)
+    try:
+        await log_action(
+            db, user=None, action="contrat_gestion.mandataire_signed",
+            entity_type="contrat_gestion", entity_id=contrat.id,
+            details={"signed_name": signed_name, "signed_ip": ip},
+        )
+        await db.commit()
+    except Exception:
+        pass
+    return await _to_public(db, contrat, "mandataire")
+
+
+async def _sign_mandant(
+    db: AsyncSession,
+    contrat: ContratGestion,
+    signed_name: str,
+    ip: Optional[str],
+    sig_bytes: bytes,
+    sig_ct: Optional[str],
+) -> PublicContrat:
+    if contrat.signed_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Convention déjà signée.")
+
+    contrat.signed_name = signed_name
+    contrat.signed_at = datetime.now(timezone.utc)
+    contrat.signed_ip = ip
+    contrat.signature_image = sig_bytes
+    contrat.signature_image_content_type = sig_ct
+    if not (contrat.caution_nom or "").strip():
+        contrat.caution_nom = signed_name
+
+    template_md = await get_template_markdown(db)
+    contrat.corps_markdown = render_body(template_md, contrat)
+    contrat.status = ContratGestionStatus.SIGNE.value
+
+    await db.flush()
+    await db.commit()
+
+    # PDF signé final (deux signatures) — best-effort.
+    try:
+        reloaded = (
+            await db.execute(
+                select(ContratGestion)
+                .where(ContratGestion.id == contrat.id)
+                .options(
+                    undefer(ContratGestion.signature_image),
+                    undefer(ContratGestion.mandataire_signature_image),
+                )
+            )
+        ).scalar_one()
+        signed_bytes = generate_signed_contrat_pdf(
+            reloaded, reloaded.corps_markdown or ""
+        )
         reloaded.signed_pdf_blob = signed_bytes
         await db.flush()
         await db.commit()
@@ -202,13 +300,19 @@ async def sign_contrat(
             await log_action(
                 db, user=None, action="contrat_gestion.signed",
                 entity_type="contrat_gestion", entity_id=contrat.id,
-                details={"signed_name": signed_name, "signed_ip": contrat.signed_ip},
+                details={"signed_name": signed_name, "signed_ip": ip},
             )
             await db.commit()
         except Exception:
             pass
 
-        # Archivage Drive (best-effort, non bloquant).
+        # Envoi du PDF signé aux deux parties (best-effort).
+        try:
+            await email_signed_to_both(db, contrat, signed_bytes)
+        except Exception:
+            log.exception("Envoi PDF signé aux deux échoué (contrat %s)", contrat.id)
+
+        # Archivage Drive (best-effort).
         try:
             from app.services.drive_auto_upload_dispatcher import (
                 dispatch_auto_upload,
@@ -229,12 +333,10 @@ async def sign_contrat(
             log.exception("Auto-upload Drive contrat de gestion signé non bloquant")
     except Exception as exc:
         log.warning(
-            "[CG_SIGN] Génération PDF signé échouée (contrat %s) — signature "
-            "conservée, blob NULL (lazy à la consultation). Erreur: %s",
+            "[CG_SIGN] Génération PDF signé échouée (contrat %s): %s",
             contrat.id, exc,
         )
 
-    # Notification interne best-effort.
     try:
         from app.services.notifications import notify_role
 
@@ -249,4 +351,4 @@ async def sign_contrat(
     except Exception:
         pass
 
-    return await _to_public(db, contrat)
+    return await _to_public(db, contrat, "mandant")

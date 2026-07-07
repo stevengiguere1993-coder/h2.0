@@ -28,6 +28,8 @@ from app.models.entreprise import Entreprise, EntreprisePartner
 from app.models.immobilier import Immeuble, ImmeubleOwnership
 from app.services.contrat_gestion_template import (
     DEFAULT_TEMPLATE_MARKDOWN,
+    MANDATAIRE_COURRIEL,
+    MANDATAIRE_REPRESENTANT,
     immeubles_to_markdown,
     render_contrat_markdown,
 )
@@ -112,6 +114,10 @@ async def autofill_values(db: AsyncSession, immeuble_id: int) -> dict:
     values: dict = {
         "immeubles_adresses": _immeuble_address_line(immeuble),
         "lieu_signature": immeuble.city or "",
+        # Signataire MGV (Mandataire) — signe en premier. Pré-rempli,
+        # éditable.
+        "mandataire_nom": MANDATAIRE_REPRESENTANT,
+        "mandataire_courriel": MANDATAIRE_COURRIEL,
     }
 
     entreprise_id = await _owner_entreprise_id(db, immeuble)

@@ -48,13 +48,16 @@ from app.db.base import Base, TimestampUpdateMixin
 class ContratGestionStatus(str, Enum):
     """Cycle de vie d'un contrat de gestion.
 
-    - brouillon : créé, pas encore envoyé (éditable)
-    - envoye    : lien de signature envoyé au Mandant
-    - signe     : Mandant a signé (corps figé, PDF signé stocké)
+    Flux à deux signatures (MGV d'abord, puis le Mandant) :
+    - brouillon      : créé, pas encore envoyé (éditable)
+    - attente_mgv    : envoyé au signataire MGV (Mandataire) pour la 1re signature
+    - attente_client : MGV a signé, envoyé au Mandant pour la 2e signature
+    - signe          : les deux ont signé (corps figé, PDF signé aux deux)
     """
 
     BROUILLON = "brouillon"
-    ENVOYE = "envoye"
+    ATTENTE_MGV = "attente_mgv"
+    ATTENTE_CLIENT = "attente_client"
     SIGNE = "signe"
 
 
@@ -163,6 +166,35 @@ class ContratGestion(Base, TimestampUpdateMixin):
         mapped_column(LargeBinary, nullable=True)
     )
     signature_image_content_type: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )
+
+    # ----- Signature du Mandataire (MGV), qui signe EN PREMIER -----
+    # Le contrat part d'abord au signataire MGV (nom + courriel), qui
+    # signe, puis est relayé automatiquement au Mandant. Colonnes
+    # additives → cf. ensure_critical_columns (session.py).
+    mandataire_nom: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    mandataire_courriel: Mapped[Optional[str]] = mapped_column(
+        String(320), nullable=True
+    )
+    mandataire_signature_token: Mapped[Optional[str]] = mapped_column(
+        String(64), index=True, nullable=True
+    )
+    mandataire_signed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    mandataire_signed_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    mandataire_signed_ip: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    mandataire_signature_image: Mapped[Optional[bytes]] = deferred(
+        mapped_column(LargeBinary, nullable=True)
+    )
+    mandataire_signature_image_content_type: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True
     )
 

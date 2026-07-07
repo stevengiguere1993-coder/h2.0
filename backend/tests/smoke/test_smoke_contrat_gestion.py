@@ -110,7 +110,30 @@ def test_template_read_and_admin_guard(client, auth_headers, employee_headers):
     assert "Ajout test." in ok.json()["corps_markdown"]
 
 
-def test_public_sign_flow(client, auth_headers, run):
+# Petit PNG 1x1 valide (data-URL) pour les signatures des tests.
+_PNG_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "+M8AAAMCAoEB0nkAAAAASUVORK5CYII="
+)
+
+
+def _set_token(run, contrat_id: int, field: str, token: str, status_val: str):
+    async def _do():
+        async with TestSessionLocal() as s:
+            c = (
+                await s.execute(
+                    select(ContratGestion).where(ContratGestion.id == contrat_id)
+                )
+            ).scalar_one()
+            setattr(c, field, token)
+            c.status = status_val
+            await s.commit()
+
+    run(_do())
+
+
+def test_dual_signature_flow(client, auth_headers, run):
     immeuble_id = _mk_immeuble(run)
     created = client.post(
         "/api/v1/contrats-gestion",
@@ -118,47 +141,65 @@ def test_public_sign_flow(client, auth_headers, run):
         json={"immeuble_id": immeuble_id},
     ).json()
     contrat_id = created["id"]
+    # Le signataire MGV est pré-rempli à la création.
+    assert created["mandataire_courriel"]
 
-    # Simule l'envoi : pose un token (sans dépendre de Microsoft Graph).
-    token = secrets.token_urlsafe(24)
+    client.patch(
+        f"/api/v1/contrats-gestion/{contrat_id}",
+        headers=auth_headers,
+        json={"mandant_courriel": "proprio@example.com", "representant_nom": "Marie T."},
+    )
 
-    async def _set_token():
-        async with TestSessionLocal() as s:
-            c = (
-                await s.execute(
-                    select(ContratGestion).where(ContratGestion.id == contrat_id)
-                )
-            ).scalar_one()
-            c.signature_token = token
-            c.status = ContratGestionStatus.ENVOYE.value
-            await s.commit()
-
-    run(_set_token())
-
-    # Page publique : consultable via token.
-    pub = client.get(f"/api/v1/public/contrats-gestion/{token}")
+    # ── Étape 1 : le Mandataire (MGV) signe ──
+    mgv_token = secrets.token_urlsafe(24)
+    _set_token(
+        run, contrat_id, "mandataire_signature_token", mgv_token,
+        ContratGestionStatus.ATTENTE_MGV.value,
+    )
+    pub = client.get(f"/api/v1/public/contrats-gestion/{mgv_token}")
     assert pub.status_code == 200, pub.text
-    assert "CONVENTION DE GESTION" in pub.json()["body_markdown"]
+    assert pub.json()["party"] == "mandataire"
 
-    # Signature.
-    signed = client.post(
-        f"/api/v1/public/contrats-gestion/{token}/sign",
-        json={"signed_name": "Marie Tremblay", "checkbox_confirmed": True},
+    # Signature obligatoire : sans image → 422.
+    no_sig = client.post(
+        f"/api/v1/public/contrats-gestion/{mgv_token}/sign",
+        json={"signed_name": "Philippe Meuser"},
     )
-    assert signed.status_code == 200, signed.text
-    assert signed.json()["status"] == ContratGestionStatus.SIGNE.value
-    assert signed.json()["signed_name"] == "Marie Tremblay"
+    assert no_sig.status_code == 422, no_sig.text
 
-    # Re-signer est refusé.
-    again = client.post(
-        f"/api/v1/public/contrats-gestion/{token}/sign",
-        json={"signed_name": "Autre"},
+    mgv_signed = client.post(
+        f"/api/v1/public/contrats-gestion/{mgv_token}/sign",
+        json={"signed_name": "Philippe Meuser", "signature_image_data_url": _PNG_DATA_URL},
     )
-    assert again.status_code == 409
+    assert mgv_signed.status_code == 200, mgv_signed.text
+    assert mgv_signed.json()["status"] == ContratGestionStatus.ATTENTE_CLIENT.value
 
-    # PDF signé récupérable côté admin.
+    # ── Étape 2 : le Mandant signe (token posé directement — le relais
+    # courriel dépend de Graph, absent en test) ──
+    mandant_token = secrets.token_urlsafe(24)
+    _set_token(
+        run, contrat_id, "signature_token", mandant_token,
+        ContratGestionStatus.ATTENTE_CLIENT.value,
+    )
+    pub2 = client.get(f"/api/v1/public/contrats-gestion/{mandant_token}")
+    assert pub2.json()["party"] == "mandant"
+
+    mandant_signed = client.post(
+        f"/api/v1/public/contrats-gestion/{mandant_token}/sign",
+        json={"signed_name": "Marie T.", "signature_image_data_url": _PNG_DATA_URL},
+    )
+    assert mandant_signed.status_code == 200, mandant_signed.text
+    assert mandant_signed.json()["status"] == ContratGestionStatus.SIGNE.value
+
+    # PDF signé récupérable (contient les deux signatures).
     spdf = client.get(
         f"/api/v1/contrats-gestion/{contrat_id}/signed-pdf", headers=auth_headers
     )
     assert spdf.status_code == 200, spdf.text
     assert spdf.content[:4] == b"%PDF"
+
+    # Un contrat signé peut être supprimé (confirmation côté UI).
+    deleted = client.delete(
+        f"/api/v1/contrats-gestion/{contrat_id}", headers=auth_headers
+    )
+    assert deleted.status_code == 204, deleted.text

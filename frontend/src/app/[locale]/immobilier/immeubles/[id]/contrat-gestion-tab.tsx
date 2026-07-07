@@ -45,10 +45,14 @@ type Contrat = {
   lieu_signature: string | null;
   caution_requise: boolean;
   caution_nom: string | null;
+  mandataire_nom: string | null;
+  mandataire_courriel: string | null;
   status: string;
   sent_at: string | null;
   opened_at: string | null;
   open_count: number;
+  mandataire_signed_at: string | null;
+  mandataire_signed_name: string | null;
   signed_at: string | null;
   signed_name: string | null;
   has_signed_pdf: boolean;
@@ -65,18 +69,33 @@ function fmtDate(iso: string | null): string {
   });
 }
 
+// Contraste : texte en `text-white` (adaptatif au thème clair/sombre du
+// portail) + fond teinté translucide + pastille colorée pour le sens.
 function StatusBadge({ c }: { c: Contrat }) {
-  const map: Record<string, { label: string; cls: string }> = {
-    brouillon: { label: "Brouillon", cls: "bg-white/10 text-white/70" },
-    envoye: { label: "Envoyé", cls: "bg-amber-500/15 text-amber-300" },
-    signe: { label: "Signé", cls: "bg-emerald-500/15 text-emerald-300" }
+  const map: Record<string, { label: string; dot: string; bg: string }> = {
+    brouillon: { label: "Brouillon", dot: "bg-slate-400", bg: "bg-white/10" },
+    attente_mgv: {
+      label: "À signer (MGV)",
+      dot: "bg-sky-400",
+      bg: "bg-sky-500/15"
+    },
+    attente_client: {
+      label: "En attente du client",
+      dot: "bg-amber-400",
+      bg: "bg-amber-500/15"
+    },
+    signe: { label: "Signé", dot: "bg-emerald-400", bg: "bg-emerald-500/15" }
   };
   const s = map[c.status] || map.brouillon;
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${s.cls}`}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold text-white ${s.bg}`}
     >
-      {c.status === "signe" ? <Check className="h-3 w-3" /> : null}
+      {c.status === "signe" ? (
+        <Check className="h-3 w-3 text-emerald-400" />
+      ) : (
+        <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
+      )}
       {s.label}
     </span>
   );
@@ -169,7 +188,9 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
         mandant_courriel: selected.mandant_courriel,
         lieu_signature: selected.lieu_signature,
         caution_requise: selected.caution_requise,
-        caution_nom: selected.caution_nom
+        caution_nom: selected.caution_nom,
+        mandataire_nom: selected.mandataire_nom,
+        mandataire_courriel: selected.mandataire_courriel
       };
       const res = await authedFetch(
         `/api/v1/contrats-gestion/${selected.id}`,
@@ -188,13 +209,18 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
 
   async function sendContract() {
     if (!selected) return;
+    if (!(selected.mandataire_courriel || "").trim()) {
+      setError("Renseignez le courriel du signataire MGV avant l'envoi.");
+      return;
+    }
     if (!(selected.mandant_courriel || "").trim()) {
       setError("Renseignez le courriel du Mandant avant l'envoi.");
       return;
     }
     if (
       !window.confirm(
-        `Envoyer la convention à ${selected.mandant_courriel} pour signature ?`
+        `Envoyer d'abord à ${selected.mandataire_courriel} (MGV) pour signature ? ` +
+          `La convention sera ensuite transmise automatiquement au client.`
       )
     )
       return;
@@ -228,8 +254,12 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
     }
   }
 
-  async function deleteContract(id: number) {
-    if (!window.confirm("Supprimer ce contrat ?")) return;
+  async function deleteContract(id: number, signed = false) {
+    const msg = signed
+      ? "Ce contrat est SIGNÉ. Le supprimer le retire de Kratos (le PDF " +
+        "signé reste archivé dans Drive s'il a été déposé). Continuer ?"
+      : "Supprimer ce contrat ?";
+    if (!window.confirm(msg)) return;
     setBusy(true);
     try {
       const res = await authedFetch(`/api/v1/contrats-gestion/${id}`, {
@@ -292,36 +322,57 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
         </div>
 
         {error ? (
-          <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+          <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-white">
             {error}
           </p>
         ) : null}
         {toast ? (
-          <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+          <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-white">
             {toast}
           </p>
         ) : null}
 
-        {signed ? (
-          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-100">
-            Signé par <strong>{selected.signed_name}</strong> le{" "}
-            {fmtDate(selected.signed_at)}.
-          </div>
-        ) : selected.status === "envoye" ? (
-          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
-            Envoyé le {fmtDate(selected.sent_at)} à{" "}
-            <strong>{selected.mandant_courriel}</strong>.{" "}
-            {selected.open_count > 0
-              ? `Ouvert ${selected.open_count} fois (dernière : ${fmtDate(
-                  selected.opened_at
-                )}).`
-              : "Pas encore ouvert."}
+        {/* Suivi du flux à deux signatures */}
+        {selected.status !== "brouillon" ? (
+          <div className="space-y-2 rounded-lg border border-brand-800 bg-white/5 p-4 text-sm text-white">
+            <div className="flex items-center gap-2">
+              {selected.mandataire_signed_at ? (
+                <Check className="h-4 w-4 text-emerald-400" />
+              ) : (
+                <span className="h-2 w-2 rounded-full bg-sky-400" />
+              )}
+              <span>
+                <strong>Mandataire (MGV)</strong> —{" "}
+                {selected.mandataire_signed_at
+                  ? `signé le ${fmtDate(selected.mandataire_signed_at)}`
+                  : "en attente de signature"}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {selected.signed_at ? (
+                <Check className="h-4 w-4 text-emerald-400" />
+              ) : (
+                <span className="h-2 w-2 rounded-full bg-amber-400" />
+              )}
+              <span>
+                <strong>Mandant (client)</strong> —{" "}
+                {selected.signed_at
+                  ? `signé le ${fmtDate(selected.signed_at)}`
+                  : selected.status === "attente_client"
+                    ? `en attente${
+                        selected.open_count > 0
+                          ? ` · ouvert ${selected.open_count}×`
+                          : ""
+                      }`
+                    : "pas encore transmis"}
+              </span>
+            </div>
           </div>
         ) : null}
 
         {/* Formulaire des champs variables */}
         <fieldset
-          disabled={signed || busy}
+          disabled={selected.status !== "brouillon" || busy}
           className="grid grid-cols-1 gap-4 sm:grid-cols-2"
         >
           <label className="sm:col-span-2">
@@ -413,6 +464,34 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
               </span>
             </label>
           </div>
+
+          {/* Signataire MGV (Mandataire) — signe en premier */}
+          <div className="sm:col-span-2 mt-2 rounded-lg border border-sky-500/30 bg-sky-500/5 p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-white/60">
+              Signataire MGV (Mandataire) — signe en premier
+            </p>
+            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label>
+                <span className={LABEL_CLS}>Nom du signataire MGV</span>
+                <input
+                  className={FIELD_CLS}
+                  value={selected.mandataire_nom || ""}
+                  onChange={(e) => upd("mandataire_nom", e.target.value)}
+                  placeholder="Philippe Meuser"
+                />
+              </label>
+              <label>
+                <span className={LABEL_CLS}>Courriel du signataire MGV</span>
+                <input
+                  type="email"
+                  className={FIELD_CLS}
+                  value={selected.mandataire_courriel || ""}
+                  onChange={(e) => upd("mandataire_courriel", e.target.value)}
+                  placeholder="info@immohorizon.com"
+                />
+              </label>
+            </div>
+          </div>
         </fieldset>
 
         {/* Aperçu du contrat (texte rendu) */}
@@ -439,7 +518,7 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
 
         {/* Actions */}
         <div className="flex flex-wrap items-center gap-2">
-          {!signed ? (
+          {selected.status === "brouillon" ? (
             <button
               type="button"
               onClick={() => void saveContract()}
@@ -461,7 +540,7 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
           >
             <Eye className="h-4 w-4" /> Aperçu PDF
           </button>
-          {!signed ? (
+          {selected.status === "brouillon" ? (
             <button
               type="button"
               onClick={() => void sendContract()}
@@ -469,7 +548,7 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
               className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
             >
               <Send className="h-4 w-4" />
-              {selected.status === "envoye" ? "Renvoyer" : "Envoyer pour signature"}
+              Envoyer pour signature (MGV puis client)
             </button>
           ) : null}
           {selected.sign_url && !signed ? (
@@ -478,7 +557,10 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
               onClick={() => copyLink(selected.sign_url)}
               className="inline-flex items-center gap-2 rounded-lg border border-brand-800 px-4 py-2 text-sm font-medium text-white/80 hover:text-white"
             >
-              <Copy className="h-4 w-4" /> Copier le lien
+              <Copy className="h-4 w-4" />
+              {selected.status === "attente_mgv"
+                ? "Copier le lien (MGV)"
+                : "Copier le lien (client)"}
             </button>
           ) : null}
           {signed ? (
@@ -492,6 +574,14 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
               <FileSignature className="h-4 w-4" /> PDF signé
             </button>
           ) : null}
+          <button
+            type="button"
+            onClick={() => void deleteContract(selected.id, signed)}
+            disabled={busy}
+            className="ml-auto inline-flex items-center gap-2 rounded-lg border border-rose-500/40 px-4 py-2 text-sm font-medium text-white/80 hover:bg-rose-900/30 hover:text-white disabled:opacity-50"
+          >
+            <Trash2 className="h-4 w-4" /> Supprimer
+          </button>
         </div>
 
         <style jsx global>{`
@@ -554,12 +644,12 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
       </div>
 
       {error ? (
-        <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-white">
           {error}
         </p>
       ) : null}
       {toast ? (
-        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+        <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-white">
           {toast}
         </p>
       ) : null}
@@ -592,7 +682,7 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
                 </div>
                 <p className="mt-0.5 truncate text-xs text-white/50">
                   {c.mandant_courriel || "—"}
-                  {c.status === "envoye" && c.open_count > 0
+                  {c.status === "attente_client" && c.open_count > 0
                     ? ` · Ouvert ${c.open_count}×`
                     : ""}
                   {c.status === "signe"
@@ -601,7 +691,7 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
                 </p>
               </button>
               <div className="flex items-center gap-1">
-                {c.status === "envoye" && c.sign_url ? (
+                {c.sign_url && c.status !== "signe" ? (
                   <button
                     type="button"
                     onClick={() => copyLink(c.sign_url)}
@@ -611,16 +701,16 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
                     <Mail className="h-4 w-4" />
                   </button>
                 ) : null}
-                {c.status !== "signe" ? (
-                  <button
-                    type="button"
-                    onClick={() => void deleteContract(c.id)}
-                    title="Supprimer"
-                    className="rounded-md p-2 text-white/50 hover:bg-rose-900/40 hover:text-rose-300"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  onClick={() =>
+                    void deleteContract(c.id, c.status === "signe")
+                  }
+                  title="Supprimer"
+                  className="rounded-md p-2 text-white/50 hover:bg-rose-900/40 hover:text-rose-300"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
               </div>
             </div>
           ))}

@@ -117,9 +117,11 @@ def _body_flowables(rl: dict[str, Any], st: dict[str, Any], body_md: str) -> lis
     return flow
 
 
-def _signature_image_flowable(rl: dict[str, Any], contrat: ContratGestion):
-    """Renvoie une Image reportlab de la signature manuscrite, ou None."""
-    blob = getattr(contrat, "signature_image", None)
+def _signature_image_flowable(
+    rl: dict[str, Any], contrat: ContratGestion, attr: str = "signature_image"
+):
+    """Renvoie une Image reportlab d'une signature manuscrite, ou None."""
+    blob = getattr(contrat, attr, None)
     if not blob:
         return None
     try:
@@ -153,45 +155,60 @@ def _signature_block(
     colors = rl["colors"]
     mm = rl["mm"]
 
-    signed = bool(contrat.signed_at)
-    signed_name = (contrat.signed_name or contrat.representant_nom or "").strip()
-    signed_date = _date_fr_ca_long(contrat.signed_at) if signed else ""
-    sig_img = _signature_image_flowable(rl, contrat) if signed else None
+    # État de chaque signataire (flux à deux signatures).
+    mandant_signed = bool(contrat.signed_at)
+    mandant_name = (contrat.signed_name or contrat.representant_nom or "").strip()
+    mandant_date = _date_fr_ca_long(contrat.signed_at) if mandant_signed else ""
+    mandant_img = (
+        _signature_image_flowable(rl, contrat, "signature_image")
+        if mandant_signed
+        else None
+    )
+
+    mgv_signed = bool(contrat.mandataire_signed_at)
+    mgv_name = (
+        contrat.mandataire_signed_name or contrat.mandataire_nom
+        or MANDATAIRE_REPRESENTANT
+    ).strip()
+    mgv_date = _date_fr_ca_long(contrat.mandataire_signed_at) if mgv_signed else ""
+    mgv_img = (
+        _signature_image_flowable(rl, contrat, "mandataire_signature_image")
+        if mgv_signed
+        else None
+    )
 
     line = "_______________________________"
 
-    def party(role: str, name: str, title: str, is_mandant: bool) -> list:
+    def party(
+        role: str, name: str, title: str, is_signed: bool, date: str, img
+    ) -> list:
         cell: list = [Paragraph(role, st["sig_label"]), Spacer(1, 12)]
-        if is_mandant and signed:
-            if sig_img is not None:
-                cell.append(sig_img)
+        if is_signed:
+            if img is not None:
+                cell.append(img)
             cell.append(Paragraph("<b>Signée électroniquement</b>", st["sig_small"]))
-            cell.append(Paragraph(_html.escape(signed_name), st["sig_label"]))
+            cell.append(Paragraph(_html.escape(name), st["sig_label"]))
             if title:
                 cell.append(Paragraph(_html.escape(title), st["sig_small"]))
-            cell.append(Paragraph(f"Le {signed_date}", st["sig_small"]))
-        elif is_mandant:
+            cell.append(Paragraph(f"Le {date}", st["sig_small"]))
+        else:
             cell.append(Paragraph(line, st["sig_small"]))
             cell.append(Paragraph(_html.escape(name) if name else "&nbsp;", st["sig_label"]))
             if title:
                 cell.append(Paragraph(_html.escape(title), st["sig_small"]))
             cell.append(Paragraph("Date : _______________", st["sig_small"]))
-        else:
-            # Mandataire — toujours pré-rempli.
-            cell.append(Paragraph(line, st["sig_small"]))
-            cell.append(Paragraph(_html.escape(name), st["sig_label"]))
-            cell.append(Paragraph(_html.escape(title), st["sig_small"]))
         return cell
 
     left = party(
-        "LE MANDATAIRE", f"{MANDATAIRE_REPRESENTANT}, {MANDATAIRE_TITRE}",
-        MANDATAIRE_NOM, is_mandant=False,
+        "LE MANDATAIRE", mgv_name, MANDATAIRE_TITRE, mgv_signed, mgv_date, mgv_img
     )
     right = party(
         "LE MANDANT",
         contrat.representant_nom or "",
         contrat.representant_titre or "",
-        is_mandant=True,
+        mandant_signed,
+        mandant_date,
+        mandant_img,
     )
 
     tbl = Table([[left, right]], colWidths=[85 * mm, 85 * mm])
@@ -207,7 +224,7 @@ def _signature_block(
     flow: list = [Spacer(1, 10 * mm), tbl]
 
     if contrat.caution_requise:
-        caution_name = (contrat.caution_nom or signed_name or "").strip()
+        caution_name = (contrat.caution_nom or mandant_name or "").strip()
         flow.append(Spacer(1, 8 * mm))
         flow.append(Paragraph("CAUTIONNEMENT SOLIDAIRE", st["h2"]))
         flow.append(Paragraph(
@@ -222,12 +239,15 @@ def _signature_block(
         caution_cell: list = [
             Paragraph("Caution solidaire", st["sig_label"]), Spacer(1, 10)
         ]
-        if signed:
-            if sig_img is not None:
-                caution_cell.append(_signature_image_flowable(rl, contrat))
+        if mandant_signed:
+            caution_img = _signature_image_flowable(
+                rl, contrat, "signature_image"
+            )
+            if caution_img is not None:
+                caution_cell.append(caution_img)
             caution_cell.append(Paragraph("<b>Signée électroniquement</b>", st["sig_small"]))
             caution_cell.append(Paragraph(_html.escape(caution_name), st["sig_label"]))
-            caution_cell.append(Paragraph(f"Le {signed_date}", st["sig_small"]))
+            caution_cell.append(Paragraph(f"Le {mandant_date}", st["sig_small"]))
         else:
             caution_cell.append(Paragraph(line, st["sig_small"]))
             caution_cell.append(

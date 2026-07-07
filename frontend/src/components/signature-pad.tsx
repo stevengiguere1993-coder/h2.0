@@ -12,10 +12,13 @@ type Point = { x: number; y: number };
  */
 export function SignaturePad({
   onChange,
-  height = 200
+  height = 200,
+  tone = "dark"
 }: {
   onChange: (dataUrl: string | null) => void;
   height?: number;
+  /** "light" = pied de page lisible sur fond clair (pages publiques). */
+  tone?: "dark" | "light";
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawingRef = useRef(false);
@@ -122,12 +125,20 @@ export function SignaturePad({
           </p>
         ) : null}
       </div>
-      <div className="flex items-center justify-between text-[11px] text-white/50">
+      <div
+        className={`flex items-center justify-between text-[11px] ${
+          tone === "light" ? "text-slate-500" : "text-white/50"
+        }`}
+      >
         <span>Votre signature est stockée avec la date, l&apos;heure et l&apos;IP.</span>
         <button
           type="button"
           onClick={clear}
-          className="inline-flex items-center gap-1 rounded-md border border-brand-800 px-2 py-1 text-white/70 hover:text-white"
+          className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 ${
+            tone === "light"
+              ? "border-slate-300 text-slate-700 hover:bg-slate-100"
+              : "border-brand-800 text-white/70 hover:text-white"
+          }`}
         >
           <RotateCcw className="h-3 w-3" /> Effacer
         </button>

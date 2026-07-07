@@ -33,13 +33,14 @@ import { SignaturePad } from "@/components/signature-pad";
 type PublicContrat = {
   id: number;
   status: string;
+  party: "mandataire" | "mandant";
   mandataire_name: string;
   compagnie: string | null;
   representant_nom: string | null;
   caution_requise: boolean;
+  already_signed: boolean;
   signed_name: string | null;
   signed_at: string | null;
-  sent_at: string | null;
   body_markdown: string;
 };
 
@@ -134,6 +135,10 @@ export default function SignContratGestionPage() {
       setError("Veuillez entrer votre nom complet.");
       return;
     }
+    if (!signature) {
+      setError("Veuillez apposer votre signature dans la zone prévue.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -199,11 +204,13 @@ export default function SignContratGestionPage() {
 
   if (!data) return null;
 
-  const alreadyDone = data.status === "signe" || Boolean(doneMessage);
+  const alreadyDone = data.already_signed || Boolean(doneMessage);
+  const isMandataire = data.party === "mandataire";
   const canSubmit =
     hasReadFully &&
     checkboxConfirmed &&
     signedName.trim().length >= 2 &&
+    Boolean(signature) &&
     !submitting;
 
   return (
@@ -305,9 +312,11 @@ export default function SignContratGestionPage() {
               <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-4 text-sm text-emerald-900">
                 <CheckCircle2 className="mb-2 h-5 w-5 text-emerald-600" />
                 {doneMessage ||
-                  `Convention signée le ${fmtDate(data.signed_at)} par ${
-                    data.signed_name
-                  }.`}
+                  (isMandataire
+                    ? "Vous avez signé à titre de Mandataire. Le client (Mandant) va maintenant être invité à signer à son tour."
+                    : `Convention signée le ${fmtDate(data.signed_at)} par ${
+                        data.signed_name
+                      }.`)}
               </div>
             ) : (
               <>
@@ -315,12 +324,22 @@ export default function SignContratGestionPage() {
                   Signature électronique
                 </h3>
                 <p className="mt-1 text-xs text-slate-600">
-                  En signant, vous vous engagez à titre de représentant du
-                  Mandant
-                  {data.caution_requise
-                    ? " et à titre de caution solidaire des obligations de la compagnie"
-                    : ""}
-                  .
+                  {isMandataire ? (
+                    <>
+                      Vous signez à titre de{" "}
+                      <strong>Mandataire ({data.mandataire_name})</strong>. La
+                      convention sera ensuite transmise au Mandant pour sa
+                      signature.
+                    </>
+                  ) : (
+                    <>
+                      Vous signez à titre de <strong>représentant du Mandant</strong>
+                      {data.caution_requise
+                        ? " et de caution solidaire des obligations de la compagnie"
+                        : ""}
+                      .
+                    </>
+                  )}
                 </p>
 
                 <label className="mt-4 block">
@@ -338,10 +357,14 @@ export default function SignContratGestionPage() {
 
                 <div className="mt-4">
                   <span className="text-xs font-semibold uppercase tracking-wider text-slate-700">
-                    Signature (facultatif)
+                    Signature *
                   </span>
                   <div className="mt-1">
-                    <SignaturePad onChange={setSignature} height={160} />
+                    <SignaturePad
+                      onChange={setSignature}
+                      height={160}
+                      tone="light"
+                    />
                   </div>
                 </div>
 
