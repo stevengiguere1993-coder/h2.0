@@ -81,6 +81,11 @@ from app.models.lead_analysis import (  # noqa: F401
     LeadAnalysisAttachment,
     LeadAnalysisStatus,
 )
+from app.models.contrat_gestion import (  # noqa: F401
+    ContratGestion,
+    ContratGestionStatus,
+    ContratGestionTemplate,
+)
 from app.models.nda import NDA, NDAStatus  # noqa: F401
 from app.models.offer import Offer, OfferStatus  # noqa: F401
 from app.models.org_node import OrgNode  # noqa: F401
@@ -345,6 +350,9 @@ __all__ = [
     "SubscriptionVaultAccess",
     "NDA",
     "NDAStatus",
+    "ContratGestion",
+    "ContratGestionStatus",
+    "ContratGestionTemplate",
     "Notification",
     "NumberingCounter",
     "Offer",

@@ -512,6 +512,50 @@ async def ensure_role_permissions_tables() -> None:
         log.warning("ensure_role_permissions_tables failed: %s", exc)
 
 
+async def ensure_contrat_gestion_tables() -> None:
+    """Crée les tables du Contrat de gestion (`contrats_gestion` +
+    `contrat_gestion_template`) dans leur PROPRE transaction, puis sème
+    le gabarit par défaut (singleton id=1) s'il est absent.
+
+    Le seed est idempotent (ON CONFLICT (id) DO NOTHING) : il n'écrase
+    jamais un gabarit édité par Phil. Voir app/models/contrat_gestion.py
+    et app/services/contrat_gestion_template.py."""
+    import logging
+
+    from sqlalchemy import text
+
+    log = logging.getLogger("db.ensure_contrat_gestion_tables")
+    try:
+        from app.db.base import Base
+        from app.models.contrat_gestion import (  # noqa: F401
+            ContratGestion,
+            ContratGestionTemplate,
+        )
+        from app.services.contrat_gestion_template import (
+            DEFAULT_TEMPLATE_MARKDOWN,
+        )
+
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(
+                    c,
+                    tables=[
+                        ContratGestion.__table__,
+                        ContratGestionTemplate.__table__,
+                    ],
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO contrat_gestion_template (id, corps_markdown) "
+                    "VALUES (1, :body) ON CONFLICT (id) DO NOTHING"
+                ),
+                {"body": DEFAULT_TEMPLATE_MARKDOWN},
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_contrat_gestion_tables failed: %s", exc)
+
+
 async def init_db() -> None:
     """
     Initialize database tables.
