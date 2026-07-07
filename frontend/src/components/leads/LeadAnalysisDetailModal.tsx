@@ -733,7 +733,16 @@ export function LeadAnalysisDetailModal({
       equite: winner?.equite_a_la_fin ?? null,
       hasResults: !!results
     };
-  }, [data]);
+    // Deps restreintes aux seuls champs de `data` réellement lus par ce
+    // memo : `setData({...data, [field]:value})` change la référence de
+    // `data` à chaque frappe optimiste, ce qui re-déclenchait le JSON.parse
+    // inutilement. Ces 4 champs suffisent (mêmes valeurs de sortie).
+  }, [
+    data?.analysis_results_json,
+    data?.best_refi_program,
+    data?.mdf_preteur_b,
+    data?.asking_price
+  ]);
 
   if (!open) return null;
 
