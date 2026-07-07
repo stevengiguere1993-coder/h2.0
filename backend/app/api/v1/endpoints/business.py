@@ -70,6 +70,61 @@ from app.schemas.note_template import (
 )
 
 
+# ── Numérotation anti-collision des bons de travail ───────────────────────
+# La colonne `bons_travail.reference` est UNIQUE mais toutes les références
+# auto sont dérivées de `strftime(...-%H%M%S)` : deux bons créés dans la même
+# seconde produisent la même chaîne → IntegrityError → 500. Ce helper garantit
+# une référence libre : il génère la base horodatée (format visible inchangé)
+# puis, en cas de collision déjà présente en base, ajoute un suffixe `-2`,
+# `-3`, … (toujours dans les 32 caractères de la colonne). Combiné à un retry
+# IntegrityError côté insertion, il ferme aussi la course « vraie concurrence ».
+async def generate_bt_reference(
+    db,
+    *,
+    prefix: str = "BT-",
+    date_format: str = "%y%m%d-%H%M%S",
+    now: "datetime | None" = None,
+) -> str:
+    """Renvoie une référence de bon de travail garantie unique en base.
+
+    `prefix`/`date_format` couvrent les deux motifs existants sans changer
+    l'apparence : `BT-AAMMJJ-HHMMSS` (Construction / corrections) et
+    `BON-AAAAMMJJ-HHMMSS` (Gestion locative). Le suffixe `-N` n'est ajouté
+    que sur collision réelle, donc le cas nominal reste rigoureusement le
+    format d'origine.
+    """
+    from sqlalchemy import select
+
+    moment = now or datetime.now(timezone.utc)
+    base = f"{prefix}{moment.strftime(date_format)}"
+
+    # Sonde les références déjà prises qui partagent la même base (base seule
+    # + variantes suffixées), pour choisir le premier index libre.
+    existing = set(
+        (
+            await db.execute(
+                select(BonTravail.reference).where(
+                    BonTravail.reference.like(f"{base}%")
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if base not in existing:
+        return base
+    # Base prise : cherche le premier suffixe libre `-2`, `-3`, … en bornant
+    # sur la longueur de colonne (String(32)) par sécurité. La borne 999 est
+    # un garde-fou terminant : atteindre 1000 bons dans la même seconde est
+    # irréaliste sur cet intranet ; on renvoie alors la dernière variante et on
+    # laisse le retry IntegrityError côté insertion trancher le cas extrême.
+    for suffix in range(2, 1000):
+        candidate = f"{base}-{suffix}"
+        if candidate not in existing and len(candidate) <= 32:
+            return candidate
+    return f"{base}-{1000}"
+
+
 # Anti-doublon opportuniste : on déclenche une déduplication des achats au
 # plus une fois toutes les N secondes quand la liste est consultée, en
 # arrière-plan (session fraîche). Pas de bouton : les doublons disparaissent
@@ -223,12 +278,10 @@ def make_crud_router(
             elif model is PurchaseOrder:
                 data.reference = await next_po_number(db)
             elif model is BonTravail:
-                # Bon interne : référence auto BT-AAMMJJ-HHMMSS.
-                from datetime import datetime, timezone
-
-                data.reference = "BT-" + datetime.now(timezone.utc).strftime(
-                    "%y%m%d-%H%M%S"
-                )
+                # Bon interne : référence auto BT-AAMMJJ-HHMMSS, générée via
+                # le helper anti-collision (suffixe -N si la seconde est déjà
+                # prise) — format visible inchangé.
+                data.reference = await generate_bt_reference(db)
         crud = GenericCrud(db, model)
         obj = await crud.create(data)
         # Achat : applique la logique payment_method + due_at apres

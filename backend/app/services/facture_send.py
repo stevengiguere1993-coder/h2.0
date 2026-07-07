@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
 from typing import Iterable, Optional
@@ -14,18 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.integrations.email_graph import EmailAttachment, get_mailer
 from app.models.facture import Facture, FactureStatus
 from app.services.facture_pdf import render_facture_pdf
+from app.services.public_links import public_base
 
 log = logging.getLogger(__name__)
 
 
 class FactureSendError(Exception):
     pass
-
-
-def _public_base() -> str:
-    return (
-        os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com"
-    ).rstrip("/")
 
 
 def _default_subject(fa: Facture) -> str:
@@ -53,7 +47,7 @@ def _default_body_html(fa: Facture, intro: Optional[str]) -> str:
     # Facture finale : bloc d'invitation à signer en ligne.
     sign_block = ""
     if fa.is_final and fa.signature_token:
-        sign_url = f"{_public_base()}/facture/{fa.signature_token}"
+        sign_url = f"{public_base()}/facture/{fa.signature_token}"
         sign_block = f"""\
   <p style="margin:8px 0 16px 0">
     Cette <strong>facture finale</strong> confirme l'achèvement des

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
 from typing import Iterable, Optional
@@ -15,11 +14,8 @@ from sqlalchemy import select
 from app.integrations.email_graph import EmailAttachment, get_mailer
 from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.soumission import Soumission, SoumissionStatus
+from app.services.public_links import public_base
 from app.services.soumission_pdf import render_soumission_pdf
-
-
-def _public_base() -> str:
-    return (os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com").rstrip("/")
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +49,7 @@ def _default_body_html(sm: Soumission, intro: Optional[str]) -> str:
         )
     sign_block = ""
     if sm.signature_token:
-        sign_url = f"{_public_base()}/soumission/{sm.signature_token}"
+        sign_url = f"{public_base()}/soumission/{sm.signature_token}"
         sign_block = f"""\
   <p style="margin:20px 0 6px 0">
     <a href="{sign_url}"

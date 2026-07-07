@@ -15,7 +15,6 @@ Pattern calqué sur ``app.services.offer_send`` :
 from __future__ import annotations
 
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
@@ -29,15 +28,10 @@ from app.models.devlog_client import DevlogClient
 from app.models.devlog_lead import DevlogLead
 from app.models.devlog_soumission import DevlogSoumission
 from app.services.devlog_soumission_pdf import BUYER_ENTITY_NAME
+from app.services.public_links import public_base
 
 
 log = logging.getLogger(__name__)
-
-
-def _public_base() -> str:
-    return (
-        os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com"
-    ).rstrip("/")
 
 
 class DevlogSoumissionSendError(Exception):
@@ -171,7 +165,7 @@ async def send_devis_email(
     # public pour consulter / télécharger / signer la soumission. Le PDF
     # reste accessible via la page publique (bouton télécharger).
     sign_url = (
-        f"{_public_base()}/devlog/sign-soumission/{soumission.signature_token}"
+        f"{public_base()}/devlog/sign-soumission/{soumission.signature_token}"
     )
     subject = "Soumission de développement — Horizon Services Immobiliers"
     body = _client_body(soumission, recipient, sign_url)

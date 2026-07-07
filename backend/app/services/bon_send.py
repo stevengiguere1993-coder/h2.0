@@ -4,7 +4,6 @@ a public signature link."""
 from __future__ import annotations
 
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
 from typing import Iterable, Optional
@@ -15,12 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.integrations.email_graph import EmailAttachment, get_mailer
 from app.models.bon_travail import BonTravail, BonTravailStatus
 from app.services.bon_pdf import render_bon_pdf
+from app.services.public_links import public_base
 
 log = logging.getLogger(__name__)
-
-
-def _public_base() -> str:
-    return (os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com").rstrip("/")
 
 
 class BonSendError(Exception):
@@ -46,7 +42,7 @@ def _default_body_html(bon: BonTravail, intro: Optional[str]) -> str:
         )
     sign_block = ""
     if bon.signature_token:
-        url = f"{_public_base()}/bon/{bon.signature_token}"
+        url = f"{public_base()}/bon/{bon.signature_token}"
         sign_block = f"""\
   <p style="margin:20px 0 6px 0">
     <a href="{url}"

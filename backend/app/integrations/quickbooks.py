@@ -14,6 +14,7 @@ via the Render API so the next boot picks it up.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -66,6 +67,13 @@ class QuickBooksClient:
         # Guard so we only read the DB-persisted refresh token once per
         # process lifetime. If DB has a newer token than the env, use it.
         self._db_loaded = False
+        # Verrou de rotation du refresh_token (créé paresseusement dans
+        # _access, une fois la boucle d'événements disponible — l'instance
+        # singleton est construite hors boucle via get_qbo). Sérialise les
+        # rafraîchissements concurrents : Intuit rotationne le refresh_token
+        # à chaque appel, donc deux refresh en parallèle persisteraient un
+        # token déjà invalidé par l'autre.
+        self._refresh_lock: Optional[asyncio.Lock] = None
 
     async def _load_refresh_from_db(self) -> None:
         """Pull refresh_token + realm_id + environment from the DB (set
@@ -187,12 +195,27 @@ class QuickBooksClient:
                     log.warning("Could not persist rotated QBO refresh token to Render: %s", exc)
 
     async def _access(self) -> str:
+        # Fast-path hors verrou : token encore valide → on le rend tel quel
+        # (cas le plus fréquent, aucune contention).
         if self.tokens.access_token and time.time() < self.tokens.access_expires_at - 60:
             return self.tokens.access_token
-        await self._load_refresh_from_db()
-        await self._refresh()
-        assert self.tokens.access_token is not None
-        return self.tokens.access_token
+        # Création paresseuse du verrou : on est maintenant sûr d'être dans
+        # une boucle d'événements (contrairement à __init__).
+        if self._refresh_lock is None:
+            self._refresh_lock = asyncio.Lock()
+        # Section critique sérialisée : une seule coroutine rafraîchit à la
+        # fois, pour ne pas rejouer deux rotations concurrentes du
+        # refresh_token (la seconde persisterait un token déjà invalidé).
+        async with self._refresh_lock:
+            # Double-checked : une autre coroutine a pu rafraîchir pendant
+            # qu'on attendait le verrou → le token est de nouveau valide, on
+            # évite un refresh inutile (et une rotation superflue).
+            if self.tokens.access_token and time.time() < self.tokens.access_expires_at - 60:
+                return self.tokens.access_token
+            await self._load_refresh_from_db()
+            await self._refresh()
+            assert self.tokens.access_token is not None
+            return self.tokens.access_token
 
     async def _request(
         self,

@@ -431,17 +431,19 @@ async def _ensure_correction_bon(db, proj):
     semant les lignes depuis les points de correction existants. Utilisé
     par le POST /correction-bon ET par le passage automatique du projet
     en colonne « Correction / Amélioration »."""
-    from datetime import datetime, timezone
     from sqlalchemy import select as _bsel
 
+    from app.api.v1.endpoints.business import generate_bt_reference
     from app.models.bon_travail import BonTravail
 
     existing = await _find_correction_bon(db, proj.id)
     if existing is not None:
         return existing
 
+    # Référence auto anti-collision (même format BT-AAMMJJ-HHMMSS, suffixe -N
+    # si la seconde est déjà prise) — cf. helper business.py.
     bon = BonTravail(
-        reference="BT-" + datetime.now(timezone.utc).strftime("%y%m%d-%H%M%S"),
+        reference=await generate_bt_reference(db),
         title="Correction / Amélioration",
         project_id=proj.id,
         client_id=proj.client_id,
@@ -514,10 +516,37 @@ async def create_correction_bon(
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
 
-    bon = await _ensure_correction_bon(db, proj)
-    await db.commit()
-    await db.refresh(bon)
-    return {"bon_id": bon.id, "reference": bon.reference}
+    from sqlalchemy.exc import IntegrityError
+
+    # Filet anti-collision de référence : si deux bons naissent dans la même
+    # seconde en vraie concurrence, la contrainte UNIQUE peut lever une
+    # IntegrityError malgré la sonde du helper (course TOCTOU). On rejoue alors
+    # la transaction une fois — le helper repioche une référence libre. Retry
+    # borné pour ne jamais boucler.
+    last_err: IntegrityError | None = None
+    for _ in range(3):
+        try:
+            bon = await _ensure_correction_bon(db, proj)
+            await db.commit()
+            await db.refresh(bon)
+            return {"bon_id": bon.id, "reference": bon.reference}
+        except IntegrityError as exc:
+            last_err = exc
+            await db.rollback()
+            # Recharge le projet dans la session repartie à neuf.
+            proj = (
+                await db.execute(_bsel(_Proj).where(_Proj.id == project_id))
+            ).scalar_one_or_none()
+            if proj is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Project not found",
+                )
+    # Épuisement des tentatives : on ne laisse pas fuiter un 500 brut.
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Impossible de générer une référence de bon unique",
+    ) from last_err
 
 
 # ── Corrections / améliorations du projet (Flux A) ────────────────────────

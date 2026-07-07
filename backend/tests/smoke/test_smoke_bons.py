@@ -1,10 +1,11 @@
 """Smoke — Bon de travail INTERNE : création, lignes, récap refacturation.
 
-⚠️ La référence auto-générée (BT-AAMMJJ-HHMMSS) n'a qu'une granularité
-d'UNE SECONDE et la colonne est UNIQUE : deux bons créés dans la même
-seconde → violation de contrainte (HTTP 500) — bug latent en prod. Les
-tests passent donc une référence explicite unique, sauf le premier qui
-valide le format auto.
+La référence auto-générée (BT-AAMMJJ-HHMMSS) n'a qu'une granularité d'UNE
+SECONDE et la colonne est UNIQUE. Ce risque de collision (deux bons dans la
+même seconde → HTTP 500) est désormais couvert par le helper anti-collision
+`generate_bt_reference` (suffixe `-N`) ; `test_two_auto_ref_bons_same_second_no_500`
+en fait la régression. Les autres tests passent une référence explicite unique
+pour rester indépendants, sauf ceux qui valident le format auto.
 """
 
 import uuid
@@ -84,6 +85,26 @@ def test_bon_items_and_rollup(client, auth_headers):
     )
     assert items.status_code == 200
     assert len(items.json()) == 2
+
+
+def test_two_auto_ref_bons_same_second_no_500(client, auth_headers):
+    """Deux bons créés « coup sur coup » (référence auto, même seconde
+    probable) ne doivent PAS lever de 500 et doivent porter deux références
+    distinctes. Régression du bug historique décrit en tête de fichier :
+    la colonne `reference` est UNIQUE et l'horodatage n'a qu'une granularité
+    d'une seconde — le helper anti-collision suffixe la 2e (`…-2`)."""
+    bon1 = _create_bon_interne(client, auth_headers, auto_ref=True)
+    bon2 = _create_bon_interne(client, auth_headers, auto_ref=True)
+
+    # Aucun 500 : les deux POST ont renvoyé 201 (assert dans _create_bon_interne).
+    assert bon1["id"] != bon2["id"]
+    # Références distinctes malgré la même seconde.
+    assert bon1["reference"] != bon2["reference"]
+    assert bon1["reference"].startswith("BT-")
+    assert bon2["reference"].startswith("BT-")
+    # Elles tiennent dans String(32).
+    assert len(bon1["reference"]) <= 32
+    assert len(bon2["reference"]) <= 32
 
 
 def test_bon_recap_does_not_500(client, auth_headers):
