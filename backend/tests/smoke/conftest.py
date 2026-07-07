@@ -130,22 +130,19 @@ def run(loop):
 
 
 def _stub_unresolved_fk_targets() -> list[str]:
-    """Ajoute au metadata des tables STUB pour les cibles de ForeignKey
-    introuvables, afin que ``create_all`` puisse trier les tables.
+    """Filet DÉFENSIF : ajoute au metadata une table STUB pour chaque cible
+    de ForeignKey introuvable, afin que ``create_all`` puisse trier.
 
-    ⚠️ BUG CONNU dans le code de prod (non corrigé ici, on ne touche pas
-    à backend/app) : ``DepenseImmeuble.immeuble_id`` référence
-    ``immeubles.id`` alors que la vraie table s'appelle ``imm_immeubles``.
-    Cette FK cassée fait échouer TOUT ``Base.metadata.create_all()``
-    (NoReferencedTableError) — y compris init_db en prod, où l'erreur est
-    avalée par un try/except. Ici on crée une table factice « immeubles »
-    (id INTEGER PK) pour que le schéma de test se construise ; SQLite
-    n'applique pas les FK par défaut, donc aucune contrainte réelle.
+    En fonctionnement normal, cette fonction ne stubbe RIEN (retourne
+    ``[]``) : le schéma du modèle est cohérent. Elle reste comme garde
+    anti-crash au cas où une FK cassée réapparaîtrait — auquel cas
+    ``test_smoke_schema.py`` échoue et signale la régression (une FK
+    orpheline fait replanter ``init_db`` en prod, cf. P-02, l'incident
+    ``immeubles``→``imm_immeubles`` corrigé le 2026-07-07).
 
     Boucle générique : tant que le tri des tables lève
     NoReferencedTableError, on stubbe la table manquante (max 10).
-    Retourne la liste des tables stubbées (pour trace/debug).
-    """
+    Retourne la liste des tables stubbées (pour trace/debug)."""
     from sqlalchemy import Column, Integer, Table
     from sqlalchemy.exc import NoReferencedTableError
 

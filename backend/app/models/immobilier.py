@@ -606,7 +606,11 @@ class DepenseImmeuble(Base, TimestampUpdateMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     immeuble_id: Mapped[int] = mapped_column(
-        ForeignKey("immeubles.id", ondelete="CASCADE"),
+        # La table des immeubles s'appelle `imm_immeubles` (cf. Immeuble
+        # plus haut). Un `immeubles.id` erroné faisait échouer TOUT
+        # `Base.metadata.create_all()` (NoReferencedTableError) → init_db
+        # plantait en silence à chaque boot. Voir docs/PROPOSITIONS.md P-02.
+        ForeignKey("imm_immeubles.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

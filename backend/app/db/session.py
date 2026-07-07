@@ -1936,6 +1936,27 @@ async def init_db() -> None:
                 applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
             """,
+            # ─── NEUTRALISATION SUPERVISÉE (P-02) ──────────────────────
+            # init_db est resté en panne ~26 j (FK cassée, corrigée dans
+            # ce même déploiement) → `applied_backfills` n'existe pas
+            # encore en prod, donc les 3 backfills one-shot ci-dessous
+            # s'exécuteraient pour la 1re fois AU MÊME BOOT que la remise
+            # en route. Deux d'entre eux ont un effet VISIBLE / destructif
+            # de choix manuels (rotation des reçus déjà droits ; réécriture
+            # du « refacturable » saisi à la main). Pour que ce déploiement
+            # ne fasse QUE réparer le schéma (créer imm_immeubles-dépendant
+            # `immeuble_depenses` + colonnes manquantes) sans rien changer
+            # d'autre, on PRÉ-INSCRIT leurs marqueurs → les 3 one-shots se
+            # court-circuitent. Pour rejouer un backfill plus tard, de façon
+            # DÉLIBÉRÉE : retirer sa ligne ici ET supprimer sa clé de la
+            # table `applied_backfills` en prod. Voir docs/PROPOSITIONS.md P-02.
+            """
+            INSERT INTO applied_backfills (key) VALUES
+                ('achat_is_billable_by_project_type_v1'),
+                ('rotate_existing_receipts_cw90_v1'),
+                ('retag_extra_facture_items_v1')
+            ON CONFLICT (key) DO NOTHING
+            """,
             # Rétroactif (one-shot) : défaut « refacturable » des achats
             # selon le type de la soumission du projet. Forfaitaire =
             # non refacturable (décoché) ; estimé / à contrat =
