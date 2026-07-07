@@ -89,7 +89,7 @@
 | Mécanisme | Où | Jobs |
 |---|---|---|
 | Blueprint `render.yaml` (racine) | déclare h2-0, h2-0-web + **6 crons** `python -m app.jobs.<module>` | seo-daily (11:00 UTC), facture-reminders (12:30), devlog-facture-reminders (13:30), follow-up-reminders (horaire), punch-auto-close (03:00), kratos-problems-daily (10:00) |
-| Crons Render **manuels** (dashboard) | documentés dans `RENDER_CRONS.md` — qui affirme que Render **ne lit pas** render.yaml | rental-scrape-daily (06:00), sales-task-reminders, soumission-reminders, teams-sync-auto (horaire), loyer-relances, unassigned-day-alerts, seo-daily, follow-up-reminders |
+| Crons Render **manuels** (dashboard) | documentés dans `RENDER_CRONS.md` — qui affirme que Render **ne lit pas** render.yaml | rental-scrape-daily (06:00), sales-task-reminders, soumission-reminders, loyer-relances, unassigned-day-alerts, seo-daily, follow-up-reminders. ⚠️ Vérifié le 2026-07-07 : côté Render, SEUL `h2-0-seo-daily` existe réellement ; les autres crons tournent via GitHub Actions (`cron-jobs.yml`), render.yaml n'est pas déployé pour eux. |
 | GitHub Actions `cron-jobs.yml` | 02:00 UTC quotidien + `workflow_dispatch` — `curl POST /api/v1/cron/run/*` avec header **X-Cron-Secret** | unassigned-day-alerts, follow-up-reminders, facture-reminders, appointment-reminders |
 | Mega-crons HTTP `cron_runner.py` | ~16 endpoints `POST /api/v1/cron/run/*` (X-Cron-Secret ou `?secret=`), pensés pour **cron-job.org** | `all-daily` (11 sous-jobs, claim 6h) et `all-hourly` (sync calendriers, dédup achats/factures, pulls + autopush QBO) |
 
@@ -342,7 +342,7 @@ Récapitulatif des jobs et de leurs déclencheurs connus :
 | punch_auto_close | ✓ 03:00 | | | |
 | kratos_problems_daily | ✓ 10:00 | | | |
 | rental_scrape_daily | | ✓ 06:00 | | |
-| sales_task_reminders, soumission_reminders, loyer_relances, teams_sync_auto | | ✓ | | |
+| sales_task_reminders, soumission_reminders, loyer_relances | | ✓ | | |
 | unassigned_day_alerts | | ✓ | ✓ | ✓ |
 | appointment_reminders | | | ✓ | ✓ |
 | qg (pulse/insights/récurrence), bail-renouvellement(s/-tasks), calendar-feeds-sync, devlog_nps_dispatch, dédup/pulls QBO | | | | ✓ |
@@ -482,9 +482,11 @@ du schéma s'exécute au boot**, dans `backend/app/db/session.py` (3018 lignes) 
   `python -m` des crons Render.
 - Jobs orphelins/doublons : `ical_sync_all.py` réimplémenté
   inline dans cron_runner (garde `is_automation_enabled` ajoutée le 2026-07-07, P-09/vague 1),
-  2 jobs Teams quasi identiques (dont un référence un workflow GH inexistant).
-  NB : `monday_bridge.py` (0 importeur) supprimé le 2026-07-07 (P-15).
-- `loyer_relances` et `teams_sync_auto` : sans garde et absents du catalogue d'automatisations ;
+  `teams_meeting_sync` (l'unique job Teams restant). NB : `teams_sync_auto.py`
+  (doublon, 0 déclencheur — vérifié le 2026-07-07 : aucun cron Render ne l'appelle,
+  seul `h2-0-seo-daily` existe côté Render, le reste des crons passe par GitHub
+  Actions) supprimé ; `monday_bridge.py` (0 importeur) supprimé (P-15).
+- `loyer_relances` : sans garde et absent du catalogue d'automatisations ;
   horaires du catalogue désynchronisés du scheduling réel ; `devlog_weekly_client_report` et
   `bail-renouvellements` sans déclencheur versionné.
 - `cron_runner.py` (~900 l.) : logique métier inline dupliquée entre all-daily et all-hourly.
