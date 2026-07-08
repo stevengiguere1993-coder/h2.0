@@ -3,10 +3,12 @@
 /**
  * Hub Paramètres unifié — point d'entrée UNIQUE des réglages, identique
  * depuis tous les pôles. Répertoire de toutes les pages de réglages,
- * groupées par section, filtrées selon le rôle. Chaque carte mène à la
- * page spécialisée existante.
+ * organisées par pôle (+ une section « Général » transverse), avec une
+ * barre de filtre pour aller droit à son pôle. Chaque carte mène à la
+ * page spécialisée existante. Les cartes/sections sont filtrées par rôle.
  */
 
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -18,13 +20,16 @@ import {
   Database,
   FileSignature,
   KeyRound,
+  LayoutGrid,
   Mail,
   Map as MapIcon,
+  Plug,
   RefreshCw,
   Repeat,
   ScrollText,
   Settings,
   ShieldCheck,
+  UserCog,
   Users,
   Wrench,
   type LucideIcon
@@ -42,11 +47,20 @@ type Card = {
   icon: LucideIcon;
   minRole?: Role;
 };
-type Section = { title: string; cards: Card[] };
+type Section = {
+  key: string;
+  label: string; // libellé court pour le filtre
+  title: string; // titre complet de section
+  icon: LucideIcon;
+  cards: Card[];
+};
 
 const SECTIONS: Section[] = [
   {
-    title: "Sécurité & accès",
+    key: "general",
+    label: "Général",
+    title: "Général — sécurité & transverse",
+    icon: ShieldCheck,
     cards: [
       {
         title: "Permissions",
@@ -74,57 +88,13 @@ const SECTIONS: Section[] = [
         href: "/app/parametres/audit",
         icon: ScrollText,
         minRole: "admin"
-      }
-    ]
-  },
-  {
-    title: "Prospection",
-    cards: [
+      },
       {
-        title: "Calculateur d'analyse",
-        desc: "Défauts d'analyse financière : dépenses SCHL, scénarios, fiscalité, MDF, TRI.",
-        href: "/prospection/parametres/analyse",
-        icon: Calculator,
+        title: "Gestion documentaire Drive",
+        desc: "Compte Google, conventions de dossiers, classement automatique.",
+        href: "/app/parametres/drive",
+        icon: Cloud,
         minRole: "admin"
-      },
-      {
-        title: "Sources de données",
-        desc: "Imports de données (provincial, REQ, SCHL, Centris, comparables locatifs).",
-        href: "/prospection/parametres/sources",
-        icon: Database,
-        minRole: "owner"
-      },
-      {
-        title: "Outils admin",
-        desc: "Extension navigateur, recalcul des scores de leads.",
-        href: "/prospection/parametres/outils",
-        icon: Wrench,
-        minRole: "admin"
-      },
-      {
-        title: "Préférences carte",
-        desc: "Centre / zoom par défaut de la carte, défauts des nouveaux leads.",
-        href: "/prospection/parametres",
-        icon: MapIcon
-      }
-    ]
-  },
-  {
-    title: "Immobilier & entreprises",
-    cards: [
-      {
-        title: "Contrat de gestion — modèle",
-        desc: "Gabarit par défaut de la convention de gestion (tous les immeubles).",
-        href: "/app/parametres/contrat-gestion",
-        icon: FileSignature,
-        minRole: "admin"
-      },
-      {
-        title: "Entreprises du portefeuille",
-        desc: "Nom, NEQ, couleur, entreprise mère du groupe.",
-        href: "/entreprises/reglages/entreprises",
-        icon: Building2,
-        minRole: "manager"
       },
       {
         title: "Mes calendriers",
@@ -135,8 +105,96 @@ const SECTIONS: Section[] = [
     ]
   },
   {
-    title: "Construction & comptabilité",
+    key: "prospection",
+    label: "Prospection",
+    title: "Prospection",
+    icon: MapIcon,
     cards: [
+      {
+        title: "Préférences carte",
+        desc: "Centre / zoom par défaut de la carte, défauts des nouveaux leads.",
+        href: "/prospection/parametres",
+        icon: MapIcon
+      },
+      {
+        title: "Connexions",
+        desc: "Intégrations et connexions de données du pôle Prospection.",
+        href: "/prospection/parametres/connexions",
+        icon: Plug,
+        minRole: "manager"
+      },
+      {
+        title: "Utilisateurs (Prospection)",
+        desc: "Accès et attribution des utilisateurs au volet Prospection.",
+        href: "/prospection/parametres/utilisateurs",
+        icon: UserCog,
+        minRole: "owner"
+      },
+      {
+        title: "Sources de données",
+        desc: "Imports de données (provincial, REQ, SCHL, Centris, comparables locatifs).",
+        href: "/prospection/parametres/sources",
+        icon: Database,
+        minRole: "owner"
+      },
+      {
+        title: "Calculateur d'analyse",
+        desc: "Défauts d'analyse financière : dépenses SCHL, scénarios, fiscalité, MDF, TRI.",
+        href: "/prospection/parametres/analyse",
+        icon: Calculator,
+        minRole: "admin"
+      },
+      {
+        title: "Outils admin",
+        desc: "Extension navigateur, recalcul des scores de leads.",
+        href: "/prospection/parametres/outils",
+        icon: Wrench,
+        minRole: "admin"
+      }
+    ]
+  },
+  {
+    key: "immobilier",
+    label: "Immobilier",
+    title: "Immobilier",
+    icon: Building2,
+    cards: [
+      {
+        title: "Contrat de gestion — modèle",
+        desc: "Gabarit par défaut de la convention de gestion (tous les immeubles).",
+        href: "/app/parametres/contrat-gestion",
+        icon: FileSignature,
+        minRole: "admin"
+      }
+    ]
+  },
+  {
+    key: "entreprise",
+    label: "Entreprise & compta",
+    title: "Gestion d'entreprise & comptabilité",
+    icon: Building2,
+    cards: [
+      {
+        title: "Entreprises du portefeuille",
+        desc: "Nom, NEQ, couleur, entreprise mère du groupe.",
+        href: "/entreprises/reglages/entreprises",
+        icon: Building2,
+        minRole: "manager"
+      },
+      {
+        title: "Comptabilité & numérotation",
+        desc: "QuickBooks (connexion, comptes), numérotation factures / devis / PO, calendrier.",
+        href: "/app/parametres",
+        icon: Calculator,
+        minRole: "manager"
+      },
+      {
+        title: "Migration QuickBooks",
+        desc: "Envoyer clients, projets et factures vers QB (aperçu + migration).",
+        href: "/app/parametres/qbo-migration",
+        icon: RefreshCw,
+        minRole: "admin"
+      },
       {
         title: "Agenda — rôles & types de RV",
         desc: "Rôles fonctionnels de l'équipe et types de rendez-vous.",
@@ -157,32 +215,6 @@ const SECTIONS: Section[] = [
         href: "/app/relances",
         icon: Repeat,
         minRole: "manager"
-      },
-      {
-        title: "Comptabilité & numérotation",
-        desc: "QuickBooks (connexion, comptes), numérotation factures / devis / PO, calendrier.",
-        href: "/app/parametres",
-        icon: Calculator,
-        minRole: "manager"
-      },
-      {
-        title: "Migration QuickBooks",
-        desc: "Envoyer clients, projets et factures vers QB (aperçu + migration).",
-        href: "/app/parametres/qbo-migration",
-        icon: RefreshCw,
-        minRole: "admin"
-      }
-    ]
-  },
-  {
-    title: "Documents",
-    cards: [
-      {
-        title: "Gestion documentaire Drive",
-        desc: "Compte Google, conventions de dossiers, classement automatique.",
-        href: "/app/parametres/drive",
-        icon: Cloud,
-        minRole: "admin"
       }
     ]
   }
@@ -191,11 +223,27 @@ const SECTIONS: Section[] = [
 export default function ParametresHubPage() {
   const router = useRouter();
   const { user } = useCurrentUser();
+  const [active, setActive] = useState<string>("all");
 
-  const sections = SECTIONS.map((s) => ({
-    ...s,
-    cards: s.cards.filter((c) => !c.minRole || hasMinRole(user, c.minRole))
-  })).filter((s) => s.cards.length > 0);
+  // Filtre par rôle d'abord : une section sans carte visible disparaît
+  // (et son onglet de filtre aussi).
+  const visibleSections = useMemo(
+    () =>
+      SECTIONS.map((s) => ({
+        ...s,
+        cards: s.cards.filter((c) => !c.minRole || hasMinRole(user, c.minRole))
+      })).filter((s) => s.cards.length > 0),
+    [user]
+  );
+
+  // Si le filtre actif n'existe plus (rôle trop bas), on retombe sur « Tout ».
+  const activeExists = active === "all" || visibleSections.some((s) => s.key === active);
+  const effectiveActive = activeExists ? active : "all";
+
+  const shown =
+    effectiveActive === "all"
+      ? visibleSections
+      : visibleSections.filter((s) => s.key === effectiveActive);
 
   return (
     <div className="mx-auto max-w-5xl p-4 pb-28 lg:p-8 lg:pb-28">
@@ -213,13 +261,32 @@ export default function ParametresHubPage() {
         </h1>
       </div>
       <p className="mt-2 max-w-2xl text-sm text-white/60">
-        Tous les réglages de Kratos au même endroit. Les sections affichées
-        dépendent de ton rôle.
+        Tous les réglages de Kratos au même endroit, organisés par pôle. Choisis
+        un pôle pour filtrer. Les sections affichées dépendent de ton rôle.
       </p>
 
+      {/* Barre de filtre par pôle */}
+      <div className="mt-6 flex flex-wrap gap-2">
+        <FilterPill
+          label="Tout"
+          icon={LayoutGrid}
+          active={effectiveActive === "all"}
+          onClick={() => setActive("all")}
+        />
+        {visibleSections.map((s) => (
+          <FilterPill
+            key={s.key}
+            label={s.label}
+            icon={s.icon}
+            active={effectiveActive === s.key}
+            onClick={() => setActive(s.key)}
+          />
+        ))}
+      </div>
+
       <div className="mt-8 space-y-8">
-        {sections.map((section) => (
-          <section key={section.title}>
+        {shown.map((section) => (
+          <section key={section.key}>
             <h2 className="mb-3 text-xs font-bold uppercase tracking-wider text-accent-400">
               {section.title}
             </h2>
@@ -251,5 +318,32 @@ export default function ParametresHubPage() {
         ))}
       </div>
     </div>
+  );
+}
+
+function FilterPill({
+  label,
+  icon: Icon,
+  active,
+  onClick
+}: {
+  label: string;
+  icon: LucideIcon;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-medium transition ${
+        active
+          ? "border-accent-500 bg-accent-500/15 text-accent-300"
+          : "border-brand-800 bg-brand-900 text-white/60 hover:border-accent-500/50 hover:text-white"
+      }`}
+    >
+      <Icon className="h-4 w-4" />
+      {label}
+    </button>
   );
 }
