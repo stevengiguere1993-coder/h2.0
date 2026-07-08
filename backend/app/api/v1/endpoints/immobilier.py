@@ -34,6 +34,7 @@ from fastapi import (
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.permissions import visible_immeuble_ids
 from app.core.security import decode_token
@@ -2594,6 +2595,26 @@ async def relancer_loyer(
     ).scalars().all()
     niveau = len(existing) + 1
 
+    # P-13 anti double-clic : si une relance a déjà été envoyée pour ce
+    # bail + ce mois il y a moins de 5 min, on refuse (évite le double
+    # courriel au locataire — preuve TAL — et l'escalade de niveau sur un
+    # double-clic ou une relecture du bouton).
+    now_dt = datetime.now(timezone.utc)
+    for r in existing:
+        last = r.sent_at
+        if last is None:
+            continue
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        if now_dt - last < timedelta(minutes=5):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Une relance vient d'être envoyée pour ce loyer (il y a "
+                    "moins de 5 minutes)."
+                ),
+            )
+
     loyer = float(bail.loyer_mensuel or 0)
     adresse = immeuble.name if immeuble else ""
     if logement and logement.numero:
@@ -2617,17 +2638,10 @@ async def relancer_loyer(
 
     from app.integrations.email_graph import get_mailer
 
-    try:
-        await get_mailer().send(
-            to=[dest],
-            subject=f"Rappel de loyer — {mois_fr}",
-            html_body=html,
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=502, detail=f"Envoi du courriel échoué : {exc}"
-        )
-
+    # P-13 : on PERSISTE la relance (commit) AVANT d'envoyer le courriel —
+    # la ligne sert de garde d'idempotence. L'index unique (bail, mois,
+    # niveau) fait échouer un 2e insert simultané (double-clic concurrent)
+    # → 409 au lieu d'un 2e courriel au locataire.
     rl = RelanceLoyer(
         bail_id=bail.id,
         mois_couvert=month_start,
@@ -2638,7 +2652,36 @@ async def relancer_loyer(
         sent_by_email=getattr(user, "email", None),
     )
     db.add(rl)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Une relance pour ce loyer vient d'être enregistrée. "
+                "Réessaie plus tard si nécessaire."
+            ),
+        )
+
+    # Envoi best-effort APRÈS le commit. En cas d'échec, la ligne reste (le
+    # gestionnaire voit l'erreur ; l'anti double-clic + l'index évitent tout
+    # renvoi accidentel) — jamais de double courriel au locataire.
+    try:
+        await get_mailer().send(
+            to=[dest],
+            subject=f"Rappel de loyer — {mois_fr}",
+            html_body=html,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Relance enregistrée, mais l'envoi du courriel a échoué "
+                f"({exc}). Vérifie la config courriel ou réessaie plus tard."
+            ),
+        )
+
     return RelanceLoyerResult(niveau=niveau, destinataire=dest, mois=month_label)
 
 
