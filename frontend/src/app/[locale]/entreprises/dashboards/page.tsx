@@ -152,7 +152,6 @@ export default function DashboardsPage() {
           <>
             Tableau{" "}
             <span
-              className="italic"
               style={{
                 color: "var(--qg-accent)",
                 fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
@@ -322,7 +321,6 @@ function HealthOverview({ buckets }: { buckets: DashHealthBucket[] }) {
                   {meta.label}
                 </span>
                 <span
-                  className="font-mono"
                   style={{ color: "var(--qg-text)" }}
                 >
                   {b.count}
@@ -505,7 +503,7 @@ function HeatmapPanel({
                 {months.map((m) => (
                   <th
                     key={m}
-                    className="px-1 py-2 text-center font-mono text-[10px]"
+                    className="px-1 py-2 text-center text-[10px]"
                     style={{ color: "var(--qg-text-soft)" }}
                   >
                     {fmtMonth(m)}
@@ -538,7 +536,7 @@ function HeatmapPanel({
                   {r.cells.map((c) => (
                     <td key={c.year_month} className="px-1 py-1">
                       <div
-                        className="rounded px-1 py-0.5 text-center text-[10px] font-mono"
+                        className="rounded px-1 py-0.5 text-center text-[10px]"
                         style={{
                           ...cellStyle(c.revenu),
                           color: "var(--qg-text)"
@@ -600,11 +598,11 @@ function VelocityPanel({ points }: { points: DashVelocityPoint[] }) {
               className="mr-1 inline-block h-2 w-2 rounded-full"
               style={{ backgroundColor: "rgb(167 139 250)" }}
             />
-            Créées : <span className="font-mono">{totalCreated}</span>
+            Créées : <span>{totalCreated}</span>
           </span>
           <span>
             <span className="mr-1 inline-block h-2 w-2 rounded-full bg-emerald-400" />
-            Terminées : <span className="font-mono">{totalCompleted}</span>
+            Terminées : <span>{totalCompleted}</span>
           </span>
         </div>
       </div>

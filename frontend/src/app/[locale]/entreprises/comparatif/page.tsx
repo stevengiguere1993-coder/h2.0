@@ -240,11 +240,11 @@ export default function ComparatifPage() {
                           </div>
                         </Link>
                       </td>
-                      <td className="px-4 py-2.5 text-right font-mono text-xs text-emerald-300">
+                      <td className="px-4 py-2.5 text-right text-xs text-emerald-300">
                         {fmtCurrency(s.revenu_ttm)}
                       </td>
                       <td
-                        className={`px-4 py-2.5 text-right font-mono text-xs ${
+                        className={`px-4 py-2.5 text-right text-xs ${
                           (s.ebitda_ttm || 0) >= 0
                             ? "text-violet-300"
                             : "text-rose-300"
@@ -252,10 +252,10 @@ export default function ComparatifPage() {
                       >
                         {fmtCurrency(s.ebitda_ttm)}
                       </td>
-                      <td className="px-4 py-2.5 text-right font-mono text-xs text-sky-300">
+                      <td className="px-4 py-2.5 text-right text-xs text-sky-300">
                         {fmtCurrency(s.tresorerie_courante)}
                       </td>
-                      <td className="px-4 py-2.5 text-right font-mono text-xs text-amber-200">
+                      <td className="px-4 py-2.5 text-right text-xs text-amber-200">
                         {fmtCurrency(s.valorisation_courante)}
                       </td>
                       <td className="px-4 py-2.5 text-right">
@@ -310,7 +310,7 @@ function ProgressBar({ pct }: { pct: number | null | undefined }) {
           style={{ width: `${clamped}%` }}
         />
       </div>
-      <span className="font-mono text-xs text-white/70">
+      <span className="text-xs text-white/70">
         {pct.toFixed(0)}%
       </span>
     </div>

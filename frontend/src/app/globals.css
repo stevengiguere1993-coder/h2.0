@@ -259,32 +259,39 @@ html[data-portal-theme="light"] .placeholder\:text-brand-300::placeholder { colo
  * styles peuvent ainsi pointer sur var(--qg-*) et changer de palette
  * sans modifier le JSX.
  * ===================================================================== */
+/* Les valeurs QG sont désormais CALQUÉES sur les tokens brand-* du
+ * design system (mêmes hex que le thème clair/sombre de Construction) :
+ * page = brand-950, sidebar = brand-950, carte = brand-900,
+ * bordure = brand-800, texte = white + opacités. Résultat : toute
+ * surface QG (inline var() OU className -[var(--qg-*)]) rend à
+ * l'identique du reste du portail. L'accent seul reste spécifique (or).
+ * ------- DARK (défaut) ------- */
 :root {
-  --qg-bg: #0a0a0b;
-  --qg-bg-alt: #18181d;
-  --qg-sidebar-bg: #111114;
-  --qg-card-bg: #15151a;
-  --qg-border: #25252d;
-  --qg-border-soft: #1e1e25;
-  --qg-text: #f5f5f7;
-  --qg-text-muted: #a0a0a8;
-  --qg-text-soft: #66666e;
-  --qg-text-faint: #35353f;
+  --qg-bg: #000000;
+  --qg-bg-alt: #1a1a1a;
+  --qg-sidebar-bg: #000000;
+  --qg-card-bg: #0f0f0f;
+  --qg-border: #1a1a1a;
+  --qg-border-soft: #1a1a1a;
+  --qg-text: #ffffff;
+  --qg-text-muted: rgba(255, 255, 255, 0.7);
+  --qg-text-soft: rgba(255, 255, 255, 0.5);
+  --qg-text-faint: rgba(255, 255, 255, 0.3);
   --qg-accent: #d89b3c;
-  --qg-accent-ink: #0a0a0b;
-  --qg-bg-95: rgba(10, 10, 11, 0.95);
+  --qg-accent-ink: #000000;
+  --qg-bg-95: rgba(0, 0, 0, 0.95);
 }
 html[data-portal-theme="light"] {
   --qg-bg: #ffffff;
-  --qg-bg-alt: #f1f5f9;
-  --qg-sidebar-bg: #f8fafc;
-  --qg-card-bg: #ffffff;
+  --qg-bg-alt: #eef2f6;
+  --qg-sidebar-bg: #ffffff;
+  --qg-card-bg: #f8fafc;
   --qg-border: #e2e8f0;
-  --qg-border-soft: #eef2f6;
+  --qg-border-soft: #e2e8f0;
   --qg-text: #0f172a;
-  --qg-text-muted: #475569;
-  --qg-text-soft: #64748b;
-  --qg-text-faint: #cbd5e1;
+  --qg-text-muted: rgb(15 23 42 / 0.78);
+  --qg-text-soft: rgb(15 23 42 / 0.55);
+  --qg-text-faint: rgb(15 23 42 / 0.35);
   --qg-accent: #d89b3c;
   --qg-accent-ink: #0a0a0b;
   --qg-bg-95: rgba(255, 255, 255, 0.95);

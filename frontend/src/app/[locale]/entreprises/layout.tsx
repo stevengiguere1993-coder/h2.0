@@ -530,7 +530,7 @@ function SidebarSection({
   return (
     <div>
       <div className="mb-2 flex items-center justify-between px-3">
-        <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--qg-accent)]">
+        <p className="text-xs font-semibold uppercase tracking-wider text-[var(--qg-accent)]">
           {title}
         </p>
         {action ? <div className="flex items-center">{action}</div> : null}
@@ -555,8 +555,8 @@ function SidebarLink({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={item.href as any}
         onClick={onClick}
-        className={`flex items-center gap-2.5 rounded-md py-1.5 text-[13px] font-medium transition ${
-          item.indent ? "pl-8 pr-3 text-[12px]" : "px-3"
+        className={`flex items-center gap-3 rounded-lg py-2 text-sm font-medium transition ${
+          item.indent ? "pl-9 pr-3 text-[13px]" : "px-3"
         } ${
           active
             ? "bg-[var(--qg-bg-alt)] text-[var(--qg-text)]"
@@ -571,7 +571,7 @@ function SidebarLink({
         <span className="flex-1">{item.label}</span>
         {item.badge ? (
           <span
-            className="rounded-full px-1.5 py-0.5 text-[9px] font-bold text-[var(--qg-bg)]"
+            className="rounded-full px-1.5 py-0.5 text-[9px] font-bold text-[var(--qg-accent-ink)]"
             style={{ backgroundColor: "var(--qg-accent)" }}
           >
             {item.badge}
@@ -626,17 +626,11 @@ export function QGTopbar({
           <Menu className="h-5 w-5" />
         </button>
         <div className="min-w-0 flex-1">
-          <h1
-            className="text-[22px] font-bold leading-tight text-[var(--qg-text)] sm:text-[26px]"
-            style={{ fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)" }}
-          >
+          <h1 className="text-2xl font-bold leading-tight text-[var(--qg-text)]">
             {greeting}
           </h1>
           {subtitle ? (
-            <p
-              className="mt-1 text-[10px] uppercase tracking-[0.18em] text-[var(--qg-text-soft)]"
-              style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}
-            >
+            <p className="mt-1 text-xs uppercase tracking-wider text-[var(--qg-text-soft)]">
               {subtitle}
             </p>
           ) : null}
@@ -812,9 +806,9 @@ function EntrepriseListWithFolder({
       {active.map((e) => {
         const dot =
           e.health_label === "risk"
-            ? "#ff5566"
+            ? "#fb7185"
             : e.health_label === "warn"
-              ? "#ffaa33"
+              ? "#fbbf24"
               : "#4ade80";
         const dragging = dragId === e.id;
         return (

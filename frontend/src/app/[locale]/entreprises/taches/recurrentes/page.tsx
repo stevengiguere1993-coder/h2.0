@@ -212,7 +212,6 @@ export default function TachesRecurrentesPage() {
           <>
             Tâches{" "}
             <span
-              className="italic"
               style={{
                 color: "var(--qg-accent)",
                 fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
@@ -520,9 +519,9 @@ function TemplateRow({
             {formatFreq(t.every_n, t.unit)}
             {t.departement ? ` · ${t.departement}` : ""}
             {" · prochain "}
-            <span className="font-mono text-white/70">{t.next_due}</span>
+            <span className="text-white/70">{t.next_due}</span>
             {" · lead "}
-            <span className="font-mono">{t.lead_days}j</span>
+            <span>{t.lead_days}j</span>
             {t.impact && t.confidence && t.effort
               ? ` · ICE ${t.impact}/${t.confidence}/${t.effort}`
               : ""}
@@ -958,7 +957,7 @@ function TemplateFormModal({
                   onChange={(e) =>
                     setForm({ ...form, lead_days: e.target.value })
                   }
-                  className="input font-mono"
+                  className="input"
                 />
                 <p className="mt-1 text-[10px] text-white/40">
                   Ex. 7 = la tâche apparaît 7 jours avant l&apos;échéance.
@@ -994,7 +993,7 @@ function TemplateFormModal({
                       onChange={(e) =>
                         setForm({ ...form, every_n: e.target.value })
                       }
-                      className="input font-mono"
+                      className="input"
                     />
                   </div>
                   <div>
@@ -1178,7 +1177,7 @@ function ICEInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="1-10"
-        className="input font-mono"
+        className="input"
       />
     </div>
   );

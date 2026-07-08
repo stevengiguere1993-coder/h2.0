@@ -783,7 +783,7 @@ function ImportModal({
       </div>
 
       <textarea
-        className={INPUT + " min-h-[160px] font-mono text-xs"}
+        className={INPUT + " min-h-[160px] text-xs"}
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder={

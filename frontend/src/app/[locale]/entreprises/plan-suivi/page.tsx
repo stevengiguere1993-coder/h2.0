@@ -475,7 +475,7 @@ export default function PlanSuiviPage() {
             <ul className="space-y-1.5 text-xs text-white/80">
               {VISION_GROUPE.hiringPlan.map((h, i) => (
                 <li key={i} className="flex gap-2">
-                  <span className="inline-flex w-20 flex-shrink-0 font-mono text-[10px] text-indigo-300">
+                  <span className="inline-flex w-20 flex-shrink-0 text-[10px] text-indigo-300">
                     {h.horizon}
                   </span>
                   <span className="flex-1">
