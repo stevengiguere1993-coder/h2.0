@@ -1,15 +1,17 @@
 """Send a bon de travail to a client + PDF preview."""
 
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr, Field
 
 from app.api.deps import CurrentUser, DBSession
+from app.models.user import User
 from app.schemas.business import BonTravailRead
 from app.services.bon_pdf import render_bon_pdf
 from app.services.bon_send import BonSendError, send_bon
+from app.services.permissions_service import require_capability
 
 
 router = APIRouter(prefix="/bons-travail", tags=["bon-send"])
@@ -31,7 +33,7 @@ async def send_bon_endpoint(
     bon_id: int,
     data: BonSendRequest,
     db: DBSession,
-    _: CurrentUser,
+    _: Annotated[User, Depends(require_capability("bon.send"))],
 ) -> BonTravailRead:
     try:
         bon = await send_bon(

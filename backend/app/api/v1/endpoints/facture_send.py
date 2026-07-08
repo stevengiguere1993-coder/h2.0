@@ -2,16 +2,18 @@
 Also exposes GET /pdf for direct preview."""
 
 import logging
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr, Field
 
 from app.api.deps import CurrentUser, DBSession
+from app.models.user import User
 from app.schemas.business import FactureRead
 from app.services.facture_pdf import render_facture_pdf
 from app.services.facture_send import FactureSendError, send_facture
+from app.services.permissions_service import require_capability
 
 
 log = logging.getLogger(__name__)
@@ -64,7 +66,7 @@ async def send_facture_endpoint(
     data: FactureSendRequest,
     db: DBSession,
     background: BackgroundTasks,
-    _: CurrentUser,
+    _: Annotated[User, Depends(require_capability("facture.send"))],
 ) -> FactureRead:
     try:
         fa = await send_facture(
