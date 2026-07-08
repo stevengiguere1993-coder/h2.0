@@ -6,13 +6,13 @@ grouped by employee × hourly_rate.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from app.api.deps import CurrentUser, DBSession
+from app.api.deps import DBSession
 from app.api.v1.endpoints.facture_import import _compute_billed_amount
 from app.models.achat import Achat
 from app.models.employe import Employe
@@ -25,8 +25,10 @@ from app.models.project_subcontractor_contract import (
 from app.models.punch import Punch
 from app.models.soumission import Soumission, SoumissionStatus
 from app.models.soumission_item import SoumissionItem
+from app.models.user import User
 from app.schemas.business import FactureRead
 from app.services.numbering import next_facture_number
+from app.services.permissions_service import require_capability
 
 
 router = APIRouter(prefix="/projects", tags=["project-to-facture"])
@@ -114,7 +116,7 @@ async def convert_project_to_facture(
     project_id: int,
     data: ConvertToFactureRequest,
     db: DBSession,
-    _: CurrentUser,
+    _: Annotated[User, Depends(require_capability("project.to_facture"))],
 ) -> FactureRead:
     project = (
         await db.execute(select(Project).where(Project.id == project_id))

@@ -150,6 +150,37 @@ CAPABILITIES: list[Capability] = [
         category="Gestion immobilière",
         default_min_role="employee",
     ),
+    # ─── Facturation & envois de documents aux clients. Défaut = « employé »
+    # car ces actions étaient jusqu'ici ouvertes à tout utilisateur connecté
+    # (CurrentUser). Aucun changement au déploiement ; Phil peut les remonter
+    # (gestionnaire/admin) depuis Paramètres → Permissions.
+    Capability(
+        id="facture.send",
+        label="Envoyer une facture au client",
+        description="Envoyer une facture par courriel (PDF joint) à un client.",
+        category="Facturation & envois",
+        default_min_role="employee",
+    ),
+    Capability(
+        id="bon.send",
+        label="Envoyer un bon de travail pour signature",
+        description=(
+            "Envoyer un bon de travail au client (PDF + lien de signature "
+            "en ligne)."
+        ),
+        category="Facturation & envois",
+        default_min_role="employee",
+    ),
+    Capability(
+        id="project.to_facture",
+        label="Facturer un projet",
+        description=(
+            "Créer une facture à partir d'un projet (report des heures "
+            "pointées en lignes de facture)."
+        ),
+        category="Facturation & envois",
+        default_min_role="employee",
+    ),
 ]
 
 CAPABILITIES_BY_ID: dict[str, Capability] = {c.id: c for c in CAPABILITIES}

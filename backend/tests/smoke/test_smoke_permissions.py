@@ -32,6 +32,10 @@ def test_get_permissions_grid(client, auth_headers):
     # Suppressions immobilières branchées (défaut employé = actuel).
     assert "immeuble.delete" in ids
     assert "bail.delete" in ids
+    # Facturation & envois branchés en P-11(c) (défaut employé = actuel).
+    assert "facture.send" in ids
+    assert "bon.send" in ids
+    assert "project.to_facture" in ids
     # Chaque capacité expose un min_role valide + son défaut.
     for c in body["capabilities"]:
         assert c["min_role"] in body["roles"]
