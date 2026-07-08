@@ -668,7 +668,7 @@ export default function BonsTravailPage() {
                             }`}
                           >
                             {b.is_urgent ? (
-                              <span className="mb-1 inline-flex items-center gap-1 rounded-md bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-rose-300">
+                              <span className="badge badge-rose mb-1 uppercase tracking-wider">
                                 ⚠ Urgence
                               </span>
                             ) : null}

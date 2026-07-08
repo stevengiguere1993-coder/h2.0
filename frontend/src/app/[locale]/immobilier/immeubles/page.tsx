@@ -977,11 +977,11 @@ function PlexPreview({
               <span className="text-sm font-semibold text-white">{c.name}</span>
               <div className="flex items-center gap-2">
                 {c.matched ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                  <span className="badge badge-emerald">
                     <CheckCircle2 className="h-3 w-3" /> rattachée
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                  <span className="badge badge-rose">
                     <AlertTriangle className="h-3 w-3" /> à rattacher
                   </span>
                 )}

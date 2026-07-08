@@ -39,10 +39,10 @@ const FENETRE_LABELS: Record<RenouvellementOverview["fenetre"], string> = {
 };
 
 const FENETRE_TONE: Record<RenouvellementOverview["fenetre"], string> = {
-  imminente: "bg-rose-500/15 text-rose-300 border-rose-400/30",
-  a_envoyer: "bg-amber-500/15 text-amber-200 border-amber-400/30",
-  envoye: "bg-emerald-500/15 text-emerald-300 border-emerald-400/30",
-  hors_fenetre: "bg-white/5 text-white/40 border-white/10"
+  imminente: "badge-rose",
+  a_envoyer: "badge-amber",
+  envoye: "badge-emerald",
+  hors_fenetre: "bg-white/5 text-white/40"
 };
 
 function fmtCurrency(n: number | null | undefined): string {
@@ -297,7 +297,7 @@ export default function RenouvellementsPage() {
                     </td>
                     <td className="px-4 py-2.5">
                       <span
-                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${FENETRE_TONE[r.fenetre]}`}
+                        className={`badge ${FENETRE_TONE[r.fenetre]}`}
                       >
                         {FENETRE_LABELS[r.fenetre]}
                       </span>
@@ -479,7 +479,7 @@ function PrepareRenouvellementModal({
         </div>
         <div className="grid gap-4 p-5">
           {/* Bandeau résumé loyer */}
-          <div className="grid grid-cols-3 gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4">
+          <div className="panel grid grid-cols-3 gap-3">
             <div>
               <p className="text-[10px] uppercase tracking-wider text-white/50">
                 Loyer actuel

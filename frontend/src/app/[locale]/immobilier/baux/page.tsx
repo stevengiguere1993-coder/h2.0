@@ -367,11 +367,11 @@ export default function BauxPage() {
                     >
                       <td className="px-3 py-2.5">
                         {r.etat === "paye" ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                          <span className="badge badge-emerald">
                             <CheckCircle2 className="h-3 w-3" /> Payé
                           </span>
                         ) : r.etat === "retard" ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-[11px] font-semibold text-rose-300">
+                          <span className="badge badge-rose">
                             <AlertTriangle className="h-3 w-3" /> Retard
                           </span>
                         ) : (
@@ -507,17 +507,17 @@ function EcheancesSection({ data }: { data: EcheanceData }) {
   const TONE: Record<string, { box: string; chip: string; txt: string }> = {
     en_retard: {
       box: "border-rose-500/40 bg-rose-500/5",
-      chip: "bg-rose-500/20 text-rose-300",
+      chip: "badge-rose",
       txt: "En retard"
     },
     a_envoyer: {
       box: "border-amber-500/40 bg-amber-500/5",
-      chip: "bg-amber-500/20 text-amber-300",
+      chip: "badge-amber",
       txt: "À envoyer"
     },
     a_venir: {
       box: "border-sky-500/40 bg-sky-500/5",
-      chip: "bg-sky-500/20 text-sky-300",
+      chip: "badge-sky",
       txt: "À venir"
     }
   };
@@ -554,9 +554,7 @@ function EcheancesSection({ data }: { data: EcheanceData }) {
                   Fenêtre : {fmtDateShort(r.fenetre_debut)} →{" "}
                   {fmtDateShort(r.fenetre_fin)}
                 </span>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${t.chip}`}
-                >
+                <span className={`badge ${t.chip}`}>
                   {t.txt}
                   {r.statut === "a_venir" ? ` dans ${r.jours} j` : ""}
                 </span>

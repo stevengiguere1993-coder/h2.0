@@ -207,7 +207,7 @@ export default function ProspectionListsIndexPage() {
                       {l.member_count}
                     </span>
                     {l.criteria_json ? (
-                      <span className="rounded-full bg-blue-500/15 px-1.5 py-0.5 text-[10px] text-blue-300">
+                      <span className="badge badge-blue">
                         builder
                       </span>
                     ) : null}
