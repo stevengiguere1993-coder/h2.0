@@ -2004,10 +2004,15 @@ async def locataire_etat_de_compte_pdf(
         ).scalars().all()
 
     actifs = [b for b in baux if b.status == BailStatus.ACTIF.value]
-    loyer_actuel = sum(float(b.loyer_mensuel or 0) for b in actifs)
-    depot_total = sum(float(b.depot_garantie or 0) for b in actifs)
-    total_paye = sum(
-        float(p.montant or 0) for p in paiements if p.paye_le is not None
+    # P-14 « PDF = reflet de la fiche » : on calcule les totaux EXACTEMENT
+    # comme la fiche dossier locataire (même filtre baux actifs / paye_le +
+    # round(2)), pour qu'aucun montant ne puisse diverger entre l'écran et
+    # le PDF remis au locataire.
+    loyer_actuel = round(sum(float(b.loyer_mensuel or 0) for b in actifs), 2)
+    depot_total = round(sum(float(b.depot_garantie or 0) for b in actifs), 2)
+    total_paye = round(
+        sum(float(p.montant or 0) for p in paiements if p.paye_le is not None),
+        2,
     )
 
     pdf = _render_etat_de_compte(
