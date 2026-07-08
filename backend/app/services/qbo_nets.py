@@ -101,6 +101,97 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet paiements échoué", exc_info=True)
 
+    # ── DÉCOCHE « à refacturer » dans QB pour les projets NON à contrat ──
+    # Miroir (one-shot) du backfill Kratos `achat_unbill_non_contract_v2` :
+    # les dépenses re-décochées côté Kratos (is_billable=False) doivent
+    # passer BillableStatus=NotBillable dans QuickBooks. On re-synchronise
+    # chaque dépense concernée QUI A un lien QB via sync_achat_to_qbo (qui
+    # pose BillableStatus selon is_billable). NON conditionné à
+    # `qbo_auto_sync` (correction déterministe, pas une création). One-shot
+    # via applied_backfills ; borné (1000) et journalisé. Le marqueur n'est
+    # posé QUE si QBO était disponible → sinon on réessaie au prochain tour.
+    try:
+        from sqlalchemy import select as _sel, text as _text
+
+        from app.integrations.quickbooks import get_qbo
+        from app.models.achat import Achat as _Achat
+        from app.models.project import Project as _Project
+        from app.models.soumission import Soumission as _Soum
+        from app.services.achat_qbo import sync_achat_to_qbo
+
+        _KEY = "decoche_non_contract_qb_v1"
+        async with AsyncSessionLocal() as db:
+            already = (
+                await db.execute(
+                    _text("SELECT 1 FROM applied_backfills WHERE key = :k"),
+                    {"k": _KEY},
+                )
+            ).first()
+        if already is None:
+            _q = get_qbo()
+            await _q._load_refresh_from_db()
+            if _q.ready:
+                async with AsyncSessionLocal() as db:
+                    aids = [
+                        int(r[0])
+                        for r in (
+                            await db.execute(
+                                _sel(_Achat.id)
+                                .join(
+                                    _Project,
+                                    _Project.id == _Achat.project_id,
+                                )
+                                .outerjoin(
+                                    _Soum,
+                                    _Soum.id == _Project.soumission_id,
+                                )
+                                .where(
+                                    _Achat.is_billable.is_(False),
+                                    _Achat.invoiced_at.is_(None),
+                                    (
+                                        _Achat.qbo_bill_id.is_not(None)
+                                        | _Achat.qbo_purchase_id.is_not(None)
+                                    ),
+                                    (
+                                        _Soum.id.is_(None)
+                                        | (_Soum.kind != "contract")
+                                    ),
+                                )
+                                .limit(1000)
+                            )
+                        ).all()
+                    ]
+                ok = ko = 0
+                for aid in aids:
+                    try:
+                        async with AsyncSessionLocal() as s:
+                            await sync_achat_to_qbo(s, aid)
+                            await s.commit()
+                        ok += 1
+                    except Exception as exc:  # noqa: BLE001
+                        ko += 1
+                        log.error(
+                            "Décoche QB achat %s échouée : %s", aid, exc
+                        )
+                async with AsyncSessionLocal() as s:
+                    await s.execute(
+                        _text(
+                            "INSERT INTO applied_backfills (key) "
+                            "VALUES (:k) ON CONFLICT (key) DO NOTHING"
+                        ),
+                        {"k": _KEY},
+                    )
+                    await s.commit()
+                out["decoche_non_contract"] = {
+                    "candidats": len(aids),
+                    "ok": ok,
+                    "ko": ko,
+                }
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "Décoche QB non-contrat (one-shot) échouée", exc_info=True
+        )
+
     # Les filets de CRÉATION en masse (factures/dépenses sans miroir QB) et
     # le pull QB → Kratos restent conditionnés à l'interrupteur de migration :
     # tant qu'il est OFF, on ne (re)crée RIEN automatiquement pour ne pas

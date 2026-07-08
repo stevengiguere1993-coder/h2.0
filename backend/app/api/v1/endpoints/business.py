@@ -293,6 +293,39 @@ def make_crud_router(
             )
 
             await apply_payment_defaults(db, obj)
+            # Défaut « à refacturer » selon le TYPE DE PROJET quand
+            # l'utilisateur ne l'a pas tranché (is_billable non fourni) :
+            # un projet NON à contrat (estimé / forfaitaire / sans
+            # soumission) n'est PAS refacturable par défaut. Cohérent avec
+            # _is_billable et le backfill achat_unbill_non_contract_v2.
+            # L'utilisateur peut toujours cocher à la main (is_billable
+            # explicite respecté).
+            if getattr(data, "is_billable", None) is None and obj.project_id:
+                from sqlalchemy import select as _sel_bill
+
+                from app.models.project import Project as _ProjBill
+                from app.models.soumission import Soumission as _SoumBill
+
+                _soum_id = (
+                    await db.execute(
+                        _sel_bill(_ProjBill.soumission_id).where(
+                            _ProjBill.id == obj.project_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                _kind = (
+                    (
+                        await db.execute(
+                            _sel_bill(_SoumBill.kind).where(
+                                _SoumBill.id == _soum_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if _soum_id
+                    else None
+                )
+                if _kind != "contract" and obj.is_billable:
+                    obj.is_billable = False
             await db.flush()
         # Auto-push QBO pour tout Achat créé « actif » (reçu OU déjà payé) →
         # il part dans QB et se classe dans le bon projet. Avant, seuls les

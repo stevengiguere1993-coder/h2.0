@@ -2134,6 +2134,37 @@ async def init_db() -> None:
             VALUES ('achat_is_billable_by_project_type_v1')
             ON CONFLICT (key) DO NOTHING
             """,
+            # v2 (one-shot) : DÉCOCHE « à refacturer » pour les projets qui
+            # NE SONT PAS à contrat (estimé / forfaitaire / sans soumission).
+            # Le v1 ci-dessus avait coché les ESTIMÉS (s.pricing_kind =
+            # 'estime' → TRUE), à rebours de la règle appliquée partout
+            # ailleurs (_is_billable, correct_billable_for_contract_projects)
+            # : SEUL un CONTRAT (prix coûtant majoré) est refacturable par
+            # défaut. On rétablit ça. Ne touche PAS aux dépenses déjà
+            # refacturées (invoiced_at / facture_item_id posés). One-shot
+            # (NOT EXISTS) : les cases cochées à la main APRÈS ce backfill
+            # ne sont jamais re-décochées → « manuel permis ». Le reflet
+            # dans QB (BillableStatus=NotBillable) est fait par le filet QBO.
+            """
+            UPDATE achats a
+            SET is_billable = FALSE
+            FROM projects p
+            LEFT JOIN soumissions s ON s.id = p.soumission_id
+            WHERE a.project_id = p.id
+              AND a.is_billable = TRUE
+              AND a.invoiced_at IS NULL
+              AND a.facture_item_id IS NULL
+              AND (s.id IS NULL OR s.kind <> 'contract')
+              AND NOT EXISTS (
+                  SELECT 1 FROM applied_backfills
+                  WHERE key = 'achat_unbill_non_contract_v2'
+              )
+            """,
+            """
+            INSERT INTO applied_backfills (key)
+            VALUES ('achat_unbill_non_contract_v2')
+            ON CONFLICT (key) DO NOTHING
+            """,
         ):
             try:
                 await conn.execute(text(sql))
