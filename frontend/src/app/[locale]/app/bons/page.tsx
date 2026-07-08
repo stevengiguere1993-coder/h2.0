@@ -291,7 +291,7 @@ export default function BonsPage() {
                             }`}
                           >
                             {b.is_urgent ? (
-                              <span className="mb-1 inline-flex items-center gap-1 rounded-md bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-rose-300">
+                              <span className="badge badge-rose mb-1 uppercase tracking-wider">
                                 ⚠ Urgence
                               </span>
                             ) : null}
@@ -348,7 +348,7 @@ export default function BonsPage() {
 
 function Empty() {
   return (
-    <div className="mx-auto mt-16 max-w-md rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center">
+    <div className="empty-state mx-auto mt-16 max-w-md">
       <ClipboardCheck className="mx-auto h-10 w-10 text-accent-500" />
       <h2 className="mt-4 text-lg font-semibold text-white">
         Aucun bon de travail
