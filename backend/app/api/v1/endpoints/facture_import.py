@@ -154,8 +154,14 @@ async def import_into_facture(
                 ratio = pct / 100.0
                 prefix = f"{pct:g}% — " if pct != 100 else ""
                 for it in sm_items:
-                    qty = float(it.quantity)
-                    unit_price = round(float(it.unit_price) * ratio, 2)
+                    # Prix unitaire de la SOUMISSION conservé ; l'avancement
+                    # est porté sur la QUANTITÉ (quantité × prix unitaire =
+                    # montant de cette facture). Le client voit le prix de la
+                    # soumission et le % atteint via le préfixe. On lie l'item
+                    # de soumission (soumission_item_id) pour la facturation
+                    # par étapes et l'affichage d'avancement.
+                    unit_price = float(it.unit_price)
+                    qty = round(float(it.quantity) * ratio, 3)
                     line_total = round(qty * unit_price, 2)
                     db.add(
                         FactureItem(
@@ -166,6 +172,7 @@ async def import_into_facture(
                             quantity=qty,
                             unit_price=unit_price,
                             total=line_total,
+                            soumission_item_id=int(it.id),
                         )
                     )
                     pos += 1

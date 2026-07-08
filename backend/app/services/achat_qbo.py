@@ -452,14 +452,22 @@ async def _delete_orphan_purchase_duplicates(
     vendor_id: str,
     po_reference: Optional[str],
 ) -> int:
-    """Supprime les dépenses/chèques QB ORPHELINS qui doublonnent cet achat.
+    """Supprime les dépenses/chèques QB qui doublonnent cet achat.
 
-    Cas legacy : la même facture fournisseur existe dans QB à la fois comme
-    « Chèque » (ancien push) et comme l'opération actuellement liée — le
-    doublon n'étant lié à AUCUN achat Kratos, la conversion de type ne le
-    voyait pas. Critères STRICTS avant suppression : même DocNumber, même
-    fournisseur, même total (au cent près), et non référencé par un autre
-    achat Kratos. Best-effort ; retourne le nombre supprimé."""
+    Cas visé : la même facture fournisseur existe dans QB à la fois comme
+    « Dépense de chèque » (ancien push, Purchase PaymentType=Check) ET comme
+    la « Dépense » actuellement liée (Cash) — même DocNumber, même total.
+
+    Le doublon peut être ORPHELIN (lié à aucun achat) OU rattaché au MÊME
+    achat que celui qu'on synchronise via `qbo_purchase_id` — typiquement
+    parce que le pull des coûts QB → Kratos (qbo_cost_pull) avait relié
+    l'ancien chèque à cet achat. Dans les DEUX cas c'est un doublon à
+    supprimer. On ne protège QUE les Purchase liés à un AUTRE achat Kratos.
+
+    Critères STRICTS avant suppression : même DocNumber, même fournisseur,
+    même total (au cent près), et non référencé par un AUTRE achat. Le lien
+    éventuel de l'achat courant vers le doublon supprimé (`qbo_purchase_id`)
+    est ensuite nettoyé. Best-effort ; retourne le nombre supprimé."""
     docnum = _doc_number(achat, po_reference).strip()
     if not docnum:
         return 0
@@ -486,12 +494,19 @@ async def _delete_orphan_purchase_duplicates(
             continue
         if abs(total_amt - ttc) > 0.02:
             continue
+        # Lié à un AUTRE achat Kratos ? (on EXCLUT l'achat courant : un
+        # doublon rattaché au même achat — ex. l'ancien chèque relié par le
+        # pull des coûts via qbo_purchase_id — EST le doublon à supprimer,
+        # pas une opération d'un tiers à protéger.)
         other = (
             await db.execute(
                 select(Achat.id)
                 .where(
-                    (Achat.qbo_bill_id == pid)
-                    | (Achat.qbo_purchase_id == pid)
+                    (
+                        (Achat.qbo_bill_id == pid)
+                        | (Achat.qbo_purchase_id == pid)
+                    ),
+                    Achat.id != achat.id,
                 )
                 .limit(1)
             )
@@ -500,9 +515,12 @@ async def _delete_orphan_purchase_duplicates(
             continue  # lié à un autre achat Kratos — on ne touche pas
         if await qbo.delete_purchase(pid):
             deleted += 1
+            # Nettoie le lien stale de l'achat courant vers le doublon
+            # supprimé, sinon le pull des coûts pourrait re-pointer dessus.
+            if str(achat.qbo_purchase_id or "") == pid:
+                achat.qbo_purchase_id = None
             log.info(
-                "Doublon QB orphelin supprimé : Purchase %s "
-                "(docnum %s, achat %s)",
+                "Doublon QB supprimé : Purchase %s (docnum %s, achat %s)",
                 pid,
                 docnum,
                 achat.id,
@@ -1109,6 +1127,37 @@ async def sync_achat_to_qbo(
         "Pushed Achat %s to QBO %s %s (DocNumber=%s)",
         achat.id, kind, qbo_id, doc_number,
     )
+
+    # Route « dépense payée » (compte chèque Horizon, carte, comptant) :
+    # après avoir (re)créé la DÉPENSE, on supprime les Purchase QB ORPHELINS
+    # qui doublonnent cet achat — typiquement l'ancienne « Dépense de chèque »
+    # (Purchase PaymentType=Check, « Chèque n°… ») créée par erreur avant que
+    # le compte chèque Horizon soit routé en dépense (PaymentType=Cash). On
+    # nettoie APRÈS le push pour que achat.qbo_bill_id pointe déjà sur la
+    # bonne dépense (exclue de la suppression). Critères STRICTS (même
+    # DocNumber + fournisseur + total, non lié à un autre achat Kratos) via
+    # _delete_orphan_purchase_duplicates → on ne touche jamais la dépense
+    # courante ni une opération rattachée ailleurs. Best-effort : un échec
+    # ne casse pas le push.
+    if as_purchase and qbo_id:
+        try:
+            removed = await _delete_orphan_purchase_duplicates(
+                db, qbo, achat, vendor_id, po_reference
+            )
+            if removed:
+                log.info(
+                    "Achat %s : %d dépense(s) de chèque QB en double "
+                    "supprimée(s) après recréation de la dépense",
+                    achat.id,
+                    removed,
+                )
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "Nettoyage des dépenses de chèque QB en double échoué "
+                "(achat %s)",
+                achat.id,
+                exc_info=True,
+            )
 
     # Joindre la facture fournisseur (image / PDF) si l'employé en a
     # uploadé une. On le fait après création du Bill/Purchase ; en cas

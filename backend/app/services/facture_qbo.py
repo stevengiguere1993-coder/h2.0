@@ -224,6 +224,42 @@ async def _resolve_payment_method_id(qbo, method: Optional[str]) -> Optional[str
         return None
 
 
+async def _create_payment_resilient(
+    qbo, payload: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Crée le Payment QBO en tolérant le rejet d'un champ OPTIONNEL.
+
+    L'application d'un paiement à une facture ne requiert que CustomerRef +
+    TotalAmt + Line[].LinkedTxn. Les décorations — compte de dépôt
+    (DepositToAccountRef), mode de paiement (PaymentMethodRef), n° de
+    référence (PaymentRefNum) — sont des causes FRÉQUENTES de rejet de
+    validation QBO (« Invalid Reference Id », compte de dépôt d'un type non
+    valide, etc.). Quand le payload complet est rejeté, on réessaie avec le
+    payload MINIMAL pour que le paiement solde quand même la facture (elle
+    passe de « En retard » à « Payée » côté QB). C'est le même pattern de
+    repli que côté achats (_strip_txn_tax_detail). On ne lève que si même le
+    payload minimal échoue — l'appelant journalise alors le motif QBO."""
+    try:
+        return await qbo.create_payment(payload)
+    except QuickBooksError as exc:
+        minimal: Dict[str, Any] = {
+            "TotalAmt": payload.get("TotalAmt"),
+            "CustomerRef": payload.get("CustomerRef"),
+            "Line": payload.get("Line"),
+        }
+        if payload.get("TxnDate"):
+            minimal["TxnDate"] = payload["TxnDate"]
+        # Rien à retirer (déjà minimal) → inutile de refaire le même appel.
+        if set(minimal) >= set(payload):
+            raise
+        log.warning(
+            "Payment QBO rejeté avec le payload complet (%s) → nouvel essai "
+            "sans compte de dépôt / mode de paiement / n° de référence",
+            exc,
+        )
+        return await qbo.create_payment(minimal)
+
+
 async def ensure_invoice_payment(
     qbo,
     db: AsyncSession,
@@ -262,14 +298,18 @@ async def ensure_invoice_payment(
     if deposit_account_id:
         payload["DepositToAccountRef"] = {"value": str(deposit_account_id)}
     try:
-        res = await qbo.create_payment(payload)
+        res = await _create_payment_resilient(qbo, payload)
         pay = res.get("Payment") or res
         pid = str(pay.get("Id") or "") or None
         facture.qbo_payment_id = pid
         await db.flush()
         return pid
     except Exception as exc:  # noqa: BLE001
-        log.warning("create payment facture %s: %s", facture.id, exc)
+        # ERROR (pas warning) : un paiement Kratos qui n'atteint pas QB est
+        # exactement l'échec silencieux à rendre visible (motif QBO inclus).
+        log.error(
+            "Paiement QB facture %s NON enregistré : %s", facture.id, exc
+        )
         return None
 
 
@@ -366,7 +406,7 @@ async def sync_facture_payments_to_qbo(
         if deposit_account_id:
             payload["DepositToAccountRef"] = {"value": str(deposit_account_id)}
         try:
-            res = await qbo.create_payment(payload)
+            res = await _create_payment_resilient(qbo, payload)
             pay = res.get("Payment") or res
             qid = str(pay.get("Id") or "") or None
             if qid:
@@ -377,8 +417,11 @@ async def sync_facture_payments_to_qbo(
                 await db.flush()
                 pushed.append(qid)
         except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "create payment (virement) facture %s ligne %s: %s",
+            # ERROR : virement Kratos non répliqué dans QB → à voir dans les
+            # logs (le motif QBO exact est inclus via QuickBooksError).
+            log.error(
+                "Paiement (virement) QB facture %s ligne %s NON "
+                "enregistré : %s",
                 facture.id, p.id, exc,
             )
     return pushed

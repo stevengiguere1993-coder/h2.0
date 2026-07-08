@@ -63,6 +63,10 @@ type Item = {
   unit_price: number;
   total: number;
   kind: string;
+  soumission_item_id: number | null;
+  // Valeur au contrat (total de l'item de soumission lié) — sert à afficher
+  // les colonnes Contrat / Avancement / Facturé. NULL hors soumission.
+  contract_total: number | null;
 };
 
 const KIND_LABELS: Record<string, string> = {
@@ -2113,6 +2117,39 @@ function ItemRow({
         <span className="text-xs sm:hidden">Supprimer</span>
       </button>
       </div>
+      {/* Avancement (AFFICHAGE Kratos) : pour une ligne issue de la
+          soumission, on montre la valeur au contrat, le % facturé sur CETTE
+          facture et le montant facturé — sans toucher au prix unitaire de
+          la soumission ni au PDF client. */}
+      {kind !== "extra" &&
+      typeof item.contract_total === "number" &&
+      item.contract_total > 0 ? (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-white/60">
+          <span>
+            Contrat{" "}
+            <span className="font-semibold text-white">
+              {fmtMoney(item.contract_total)}
+            </span>
+          </span>
+          <span aria-hidden>·</span>
+          <span>
+            Avancement{" "}
+            <span className="font-semibold text-white">
+              {Math.round(
+                (computedTotal / item.contract_total) * 100
+              )}
+              {" %"}
+            </span>
+          </span>
+          <span aria-hidden>·</span>
+          <span>
+            Facturé{" "}
+            <span className="font-semibold text-white">
+              {fmtMoney(computedTotal)}
+            </span>
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }
