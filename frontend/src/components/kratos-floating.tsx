@@ -162,7 +162,7 @@ export function KratosFloating() {
           // pour ne pas le chevaucher / être caché derrière.
           className="fixed bottom-[4.75rem] right-5 z-40 inline-flex h-12 w-12 items-center justify-center rounded-full shadow-lg transition hover:scale-105"
           style={{
-            backgroundColor: "var(--qg-accent, #d4ff3a)",
+            backgroundColor: "var(--qg-accent, #d89b3c)",
             color: "var(--qg-accent-ink, #0a0a0b)"
           }}
         >

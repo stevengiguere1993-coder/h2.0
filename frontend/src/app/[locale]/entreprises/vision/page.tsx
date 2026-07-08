@@ -154,7 +154,7 @@ export default function VisionPage() {
               className="italic"
               style={{
                 color: "var(--qg-accent)",
-                fontFamily: "var(--font-fraunces, Georgia, serif)"
+                fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
               }}
             >
               stratégique
@@ -235,7 +235,7 @@ export default function VisionPage() {
                     <h3
                       className="text-[14px] font-bold text-[var(--qg-text)]"
                       style={{
-                        fontFamily: "var(--font-fraunces, Georgia, serif)"
+                        fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
                       }}
                     >
                       {h.label}
@@ -273,10 +273,10 @@ export default function VisionPage() {
                     style={{
                       backgroundColor: v
                         ? "transparent"
-                        : "rgba(212,255,58,0.12)",
+                        : "rgba(216, 155, 60, 0.12)",
                       border: v
                         ? "1px solid var(--qg-border)"
-                        : "1px solid rgba(212,255,58,0.45)",
+                        : "1px solid rgba(216, 155, 60, 0.45)",
                       color: v ? "var(--qg-text-muted)" : "var(--qg-accent)"
                     }}
                   >
@@ -307,7 +307,7 @@ function VisionCard({ v }: { v: Vision }) {
     <div className="flex flex-1 flex-col gap-3 p-4">
       <h4
         className="text-[14px] font-bold leading-snug text-[var(--qg-text)]"
-        style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
+        style={{ fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)" }}
       >
         {v.title}
       </h4>

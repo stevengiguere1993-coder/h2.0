@@ -300,7 +300,7 @@ export default function EntreprisesDashboard() {
               className="italic"
               style={{
                 color: "var(--qg-accent)",
-                fontFamily: "var(--font-fraunces, Georgia, serif)"
+                fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
               }}
             >
               {greetingName}
@@ -400,7 +400,7 @@ export default function EntreprisesDashboard() {
               <h2
                 className="text-[18px] font-bold text-[var(--qg-text)]"
                 style={{
-                  fontFamily: "var(--font-fraunces, Georgia, serif)"
+                  fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
                 }}
               >
                 Mes{" "}
@@ -537,7 +537,7 @@ function CTAButton({
           ? {
               backgroundColor: "var(--qg-accent)",
               color: "var(--qg-bg)",
-              boxShadow: "0 0 24px -8px rgba(212,255,58,0.5)"
+              boxShadow: "0 0 24px -8px rgba(216, 155, 60, 0.5)"
             }
           : undefined
       }
@@ -593,7 +593,7 @@ function KpiCard({
       <p
         className="mt-2 text-[28px] font-bold leading-tight text-[var(--qg-text)] sm:text-[32px]"
         style={{
-          fontFamily: "var(--font-fraunces, Georgia, serif)"
+          fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
         }}
       >
         {value}
@@ -767,7 +767,7 @@ function BriefingCard({
         <div>
           <h2
             className="text-[18px] font-bold text-[var(--qg-text)]"
-            style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
+            style={{ fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)" }}
           >
             Briefing{" "}
             <span className="italic" style={{ color: "var(--qg-accent)" }}>

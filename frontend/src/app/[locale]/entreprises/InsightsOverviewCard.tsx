@@ -81,7 +81,7 @@ export function InsightsOverviewCard() {
       <div className="flex items-center justify-between px-5 pt-5">
         <h2
           className="text-[18px] font-bold text-[var(--qg-text)]"
-          style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
+          style={{ fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)" }}
         >
           Insights{" "}
           <span className="italic" style={{ color: "var(--qg-accent)" }}>

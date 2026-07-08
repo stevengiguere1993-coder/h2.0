@@ -115,7 +115,7 @@ export default function ComparatifPage() {
           <div>
             <h1
               className="text-2xl font-bold text-white"
-              style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
+              style={{ fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)" }}
             >
               Comparatif portefeuille
             </h1>
