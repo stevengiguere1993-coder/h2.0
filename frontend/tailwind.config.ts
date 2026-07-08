@@ -41,8 +41,13 @@ const config: Config = {
           950: "#000000"
         },
         accent: {
+          // Design system (Phase 4) : nuances ajoutées pour donner de
+          // la portée (survols, bordures, titres). 500/600 inchangés.
+          300: "#e8c382",
+          400: "#e0af5f",
           500: "#d89b3c",
-          600: "#b97e24"
+          600: "#b97e24",
+          700: "#98651c"
         }
       },
       fontFamily: {
@@ -50,7 +55,10 @@ const config: Config = {
         display: ["'Plus Jakarta Sans'", "'Inter'", "sans-serif"]
       },
       boxShadow: {
-        card: "0 1px 2px rgba(0,0,0,0.5), 0 8px 24px -12px rgba(0,0,0,0.7)"
+        // Échelle d'élévation du design system (Phase 4). `card` inchangé.
+        soft: "0 1px 3px rgba(0,0,0,0.4)",
+        card: "0 1px 2px rgba(0,0,0,0.5), 0 8px 24px -12px rgba(0,0,0,0.7)",
+        lift: "0 6px 20px -4px rgba(0,0,0,0.5), 0 14px 40px -12px rgba(0,0,0,0.65)"
       }
     }
   },

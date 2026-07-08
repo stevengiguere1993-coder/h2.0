@@ -96,6 +96,81 @@
   .article-content hr {
     @apply my-10 border-brand-800;
   }
+
+  /* ==================================================================
+   * DESIGN SYSTEM (Phase 4) — primitives partagées.
+   *
+   * Toutes ces classes sont composées des mêmes tokens que le thème
+   * clair remappe déjà plus bas (brand-*, accent-*, white/opacité,
+   * emerald/rose/amber/sky/blue/violet). Elles fonctionnent donc en
+   * mode SOMBRE **et** CLAIR sans override supplémentaire. Additif :
+   * n'altère aucune classe existante.
+   * ================================================================== */
+
+  /* Boutons — modificateurs de TAILLE (se composent avec .btn-primary
+     / .btn-secondary / .btn-accent / .btn-danger). Définis après les
+     bases pour que le padding/rayon l'emporte. */
+  .btn-xs {
+    @apply gap-1 rounded-lg px-2.5 py-1 text-xs;
+  }
+  .btn-sm {
+    @apply rounded-lg px-3 py-1.5 text-sm;
+  }
+  .btn-lg {
+    @apply px-6 py-3.5 text-base;
+  }
+
+  /* Boutons — VARIANTES sémantiques supplémentaires */
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-rose-500 px-5 py-3 font-semibold text-neutral-50 shadow-card transition hover:bg-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 focus:ring-offset-brand-950;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 font-medium text-white/70 transition hover:bg-brand-800 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/20;
+  }
+
+  /* Encadrés — conteneur de section (motif le plus courant du portail) */
+  .panel {
+    @apply rounded-xl border border-brand-800 bg-brand-900 p-4 text-white;
+  }
+  .panel-soft {
+    @apply rounded-xl border border-brand-800 bg-brand-900/60 p-4 text-white;
+  }
+
+  /* Titre de section (eyebrow neutre, majuscules discrètes) */
+  .section-title {
+    @apply text-[11px] font-semibold uppercase tracking-wider text-white/50;
+  }
+
+  /* Badges / pastilles de statut — taille + rayon unifiés (11px, pleine) */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold;
+  }
+  .badge-neutral {
+    @apply bg-brand-800 text-white/70;
+  }
+  .badge-emerald {
+    @apply bg-emerald-500/15 text-emerald-300;
+  }
+  .badge-amber {
+    @apply bg-amber-500/15 text-amber-300;
+  }
+  .badge-rose {
+    @apply bg-rose-500/15 text-rose-300;
+  }
+  .badge-sky {
+    @apply bg-sky-500/15 text-sky-300;
+  }
+  .badge-blue {
+    @apply bg-blue-500/15 text-blue-300;
+  }
+  .badge-violet {
+    @apply bg-violet-500/15 text-violet-300;
+  }
+
+  /* État vide standardisé */
+  .empty-state {
+    @apply rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center text-white/60;
+  }
 }
 
 /* =====================================================================
