@@ -155,7 +155,7 @@ export default function DashboardsPage() {
               className="italic"
               style={{
                 color: "var(--qg-accent)",
-                fontFamily: "var(--font-fraunces, Georgia, serif)"
+                fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
               }}
             >
               de bord
@@ -261,7 +261,7 @@ function KPIStrip({ kpis }: { kpis: DashKPI[] }) {
               className="mt-1 text-2xl font-bold"
               style={{
                 color: "var(--qg-text)",
-                fontFamily: "var(--font-fraunces, Georgia, serif)"
+                fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
               }}
             >
               {fmtKPI(k.value, k.format)}

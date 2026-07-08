@@ -167,13 +167,13 @@ export function QGCommandBar() {
           className="flex items-center gap-2 rounded-full px-4 py-2 text-[12px] font-semibold backdrop-blur transition hover:scale-105"
           style={{
             backgroundColor: "rgba(15,15,18,0.85)",
-            border: "1px solid rgba(212,255,58,0.25)",
+            border: "1px solid rgba(216, 155, 60, 0.25)",
             color: "#a0a0a8",
             boxShadow:
-              "0 8px 32px -8px rgba(0,0,0,0.6), 0 0 24px -8px rgba(212,255,58,0.15)"
+              "0 8px 32px -8px rgba(0,0,0,0.6), 0 0 24px -8px rgba(216, 155, 60, 0.15)"
           }}
         >
-          <Sparkles className="h-3.5 w-3.5" style={{ color: "#d4ff3a" }} />
+          <Sparkles className="h-3.5 w-3.5" style={{ color: "#d89b3c" }} />
           Demander à Kratos
           <kbd
             className="ml-2 rounded border px-1.5 py-0.5 text-[10px] font-mono"
@@ -217,7 +217,7 @@ export function QGCommandBar() {
                 className="flex-1 bg-transparent text-[15px] text-[#f5f5f7] placeholder:text-[#66666e] focus:outline-none"
               />
               {loading ? (
-                <Loader2 className="h-4 w-4 animate-spin text-[#d4ff3a]" />
+                <Loader2 className="h-4 w-4 animate-spin text-[#d89b3c]" />
               ) : null}
               <button
                 type="button"
@@ -240,7 +240,7 @@ export function QGCommandBar() {
                 <p className="px-4 py-12 text-center text-[12px] text-[#66666e]">
                   Aucun résultat. Reindex tes tâches via{" "}
                   <span
-                    className="cursor-pointer underline hover:text-[#d4ff3a]"
+                    className="cursor-pointer underline hover:text-[#d89b3c]"
                     onClick={() => {
                       router.push("/entreprises");
                       setOpen(false);
@@ -273,7 +273,7 @@ export function QGCommandBar() {
                         key={s}
                         type="button"
                         onClick={() => setQ(s)}
-                        className="rounded-md px-2.5 py-1 text-[11px] transition hover:text-[#d4ff3a]"
+                        className="rounded-md px-2.5 py-1 text-[11px] transition hover:text-[#d89b3c]"
                         style={{
                           border: "1px solid #25252d",
                           backgroundColor: "#15151a",
@@ -305,8 +305,8 @@ export function QGCommandBar() {
                       className="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded"
                       style={{
                         backgroundColor:
-                          (h.entreprise_color || "#d4ff3a") + "26",
-                        color: h.entreprise_color || "#d4ff3a"
+                          (h.entreprise_color || "#d89b3c") + "26",
+                        color: h.entreprise_color || "#d89b3c"
                       }}
                     >
                       <Icon className="h-3 w-3" />
@@ -340,7 +340,7 @@ export function QGCommandBar() {
                       style={{
                         color:
                           h.similarity > 0.7
-                            ? "#d4ff3a"
+                            ? "#d89b3c"
                             : h.similarity > 0.5
                             ? "#a0a0a8"
                             : "#66666e",
@@ -351,7 +351,7 @@ export function QGCommandBar() {
                     </span>
                     {active ? (
                       <ArrowRight
-                        className="h-3.5 w-3.5 self-center text-[#d4ff3a]"
+                        className="h-3.5 w-3.5 self-center text-[#d89b3c]"
                       />
                     ) : null}
                   </button>

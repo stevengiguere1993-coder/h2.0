@@ -270,7 +270,7 @@ html[data-portal-theme="light"] .placeholder\:text-brand-300::placeholder { colo
   --qg-text-muted: #a0a0a8;
   --qg-text-soft: #66666e;
   --qg-text-faint: #35353f;
-  --qg-accent: #d4ff3a;
+  --qg-accent: #d89b3c;
   --qg-accent-ink: #0a0a0b;
   --qg-bg-95: rgba(10, 10, 11, 0.95);
 }
@@ -285,8 +285,8 @@ html[data-portal-theme="light"] {
   --qg-text-muted: #475569;
   --qg-text-soft: #64748b;
   --qg-text-faint: #cbd5e1;
-  --qg-accent: #65a30d;
-  --qg-accent-ink: #ffffff;
+  --qg-accent: #d89b3c;
+  --qg-accent-ink: #0a0a0b;
   --qg-bg-95: rgba(255, 255, 255, 0.95);
 }
 

@@ -36,6 +36,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
+import { HorizonLogo } from "@/components/horizon-logo";
 import { KratosLogo } from "@/components/kratos-logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { KratosFloating } from "@/components/kratos-floating";
@@ -341,15 +342,7 @@ export default function EntreprisesLayout({
             style={{ borderBottom: "1px solid var(--qg-border)" }}
           >
             <Link href="/entreprises" className="flex items-center gap-2">
-              <span
-                className="flex h-8 w-8 items-center justify-center rounded-md font-bold text-[var(--qg-bg)]"
-                style={{
-                  backgroundColor: "var(--qg-accent)",
-                  fontFamily: "var(--font-fraunces, Georgia, serif)"
-                }}
-              >
-                Q
-              </span>
+              <HorizonLogo className="h-16 w-auto object-contain" />
             </Link>
             <button
               type="button"
@@ -537,7 +530,7 @@ function SidebarSection({
   return (
     <div>
       <div className="mb-2 flex items-center justify-between px-3">
-        <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--qg-text-soft)]">
+        <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--qg-accent)]">
           {title}
         </p>
         {action ? <div className="flex items-center">{action}</div> : null}
@@ -635,7 +628,7 @@ export function QGTopbar({
         <div className="min-w-0 flex-1">
           <h1
             className="text-[22px] font-bold leading-tight text-[var(--qg-text)] sm:text-[26px]"
-            style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
+            style={{ fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)" }}
           >
             {greeting}
           </h1>

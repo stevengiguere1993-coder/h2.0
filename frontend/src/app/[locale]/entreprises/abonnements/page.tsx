@@ -493,7 +493,7 @@ function Greeting() {
         className="italic"
         style={{
           color: "var(--qg-accent)",
-          fontFamily: "var(--font-fraunces, Georgia, serif)"
+          fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
         }}
       >
         Abonnements

@@ -181,7 +181,7 @@ export default function PilotagePage({
           <div>
             <h1
               className="text-2xl font-bold text-white"
-              style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
+              style={{ fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)" }}
             >
               Pilotage{ent ? ` · ${ent.name}` : ""}
             </h1>
@@ -1267,7 +1267,7 @@ function ValuePlanSection({ entrepriseId }: { entrepriseId: number }) {
                 </p>
                 <p
                   className="mt-1 text-3xl font-bold text-white"
-                  style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
+                  style={{ fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)" }}
                 >
                   {fmtCurrency(plan.target_valuation)}
                 </p>
