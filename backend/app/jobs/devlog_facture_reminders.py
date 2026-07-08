@@ -42,7 +42,7 @@ from app.services.devlog_invoice_pdf import (
     compute_invoice_totals,
     generate_invoice_pdf,
 )
-from app.services.devlog_invoice_send import _public_base
+from app.services.public_links import public_base
 from app.services.notifications import notify_role
 
 
@@ -307,7 +307,7 @@ async def run() -> dict:
 
             invoice_label = inv.number or f"#{inv.id}"
             pay_url = (
-                f"{_public_base()}/devlog/pay-invoice/"
+                f"{public_base()}/devlog/pay-invoice/"
                 f"{inv.signature_token or ''}"
             )
             subject = _SUBJECT_BY_TONE[tier["tone"]].format(

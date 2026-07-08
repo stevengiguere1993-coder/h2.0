@@ -100,6 +100,7 @@ from app.services.devlog_client_provision import (
 )
 from app.services.devlog_contract_signed_hook import on_contract_signed
 from app.services.devlog_devis_calc import compute_devis
+from app.services.public_links import public_base
 from app.services.devlog_project_provision import maybe_start_project
 from app.services.devlog_invoice_pdf import (
     compute_invoice_totals,
@@ -1750,14 +1751,6 @@ invoices_router = _make_crud_router(
 invoice_automations_router = APIRouter(prefix="/devlog/invoices", tags=["devlog"])
 
 
-def _public_base_url() -> str:
-    import os as _os
-
-    return (
-        _os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com"
-    ).rstrip("/")
-
-
 class _InvoiceSendResult(BaseModel):
     success: bool
     sent_at: Optional[str] = None
@@ -1815,7 +1808,7 @@ async def send_invoice(
         ),
         signature_token=invoice.signature_token,
         public_url=(
-            f"{_public_base_url()}/devlog/pay-invoice/{invoice.signature_token}"
+            f"{public_base()}/devlog/pay-invoice/{invoice.signature_token}"
             if invoice.signature_token
             else None
         ),

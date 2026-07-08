@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import secrets
 from datetime import datetime
 from typing import Optional
@@ -35,17 +34,12 @@ from app.models.client_document import ClientDocument
 from app.models.soumission import Soumission
 from app.models.user import User
 from app.schemas.business import SoumissionRead
+from app.services.public_links import public_base
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/soumissions", tags=["soumissions"])
 docs_router = APIRouter(prefix="/clients", tags=["client-documents"])
-
-
-def _public_base() -> str:
-    return (
-        os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com"
-    ).rstrip("/")
 
 
 @router.post(
@@ -105,7 +99,7 @@ async def send_for_contractor_signature(
         await db.flush()
 
     link = (
-        f"{_public_base()}/contrat-signature/"
+        f"{public_base()}/contrat-signature/"
         f"{sm.contractor_signature_token}"
     )
     responsable = (
