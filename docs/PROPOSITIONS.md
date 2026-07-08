@@ -4,6 +4,38 @@
 > effort, priorité (P0 = urgent → P3 = un jour), et plan d'exécution pas à pas.
 > Rien de ce qui est listé ici n'a été modifié dans le code cette nuit.
 
+---
+
+## 📋 État vérifié (2026-07-07, revue exhaustive du code — 16 propositions)
+
+Chaque proposition a été **re-vérifiée dans le code** (pas dans ce doc, qui n'était pas
+à jour). Verdicts :
+
+| Prop | État réel | Note |
+|------|-----------|------|
+| P-01 | ⏳ action Render de Phil | staging = créer les services (je ne peux pas). |
+| P-02 | ✅ FAIT | FK + garde-fou schéma (PR #1107). |
+| P-03 | ✅ FAIT | SEO : whitelist partagée, plus aucun CTA/breadcrumb 404. |
+| P-04 | ✅ FAIT | Escalade admin→owner fermée (création + reset) + tests. |
+| P-05 | 🟡 PARTIEL | (c) QBO lock ✅ ; **(e) NDA DOMPurify ✅ 2026-07-07** ; restent (a) CORS, (b) JWT jti, (d) whitelists emails, (f) extension → **différés** (décision/risque/coordination). |
+| P-06 | 🔶 DIFFÉRÉ | 2 backfills mutants à borner = décision Phil (mutation de données). |
+| P-07 | 🔶 DIFFÉRÉ | guards admin/`require_volet` = changement d'autorisation visible + migration `is_admin`. Phase 2 (require_capability) est orthogonale et livrée. |
+| P-08 | 🔶 DIFFÉRÉ | refactor session.py / contrat get_db = risque élevé, supervisé. |
+| P-09 | ✅ FAIT | filet API/HTTP (`test_smoke_routes.py`) + 14 fichiers smoke. |
+| P-10 | 🟡 PARTIEL | (b) PORTAL_PREFIXES ✅ ; (a) expiration liens + (c) index punch = **différés** (décision + migration). |
+| P-11 | 🟢 QUASI | (a) delete projet ✅, (b) facture PAYÉE verrouillée ✅ ; **(c) facture.send/bon.send/project.to_facture ✅ 2026-07-07** (capacités configurables, défaut employé). |
+| P-12 | ✅ FAIT | `generate_bt_reference` + retry IntegrityError + test. |
+| P-13 | 🔶 DIFFÉRÉ | idempotence relance/import = migration schéma. |
+| P-14 | 🔶 DIFFÉRÉ | PDF=fiche dédup = surfaces visibles, non-régression montant-par-montant requise. |
+| P-15 | ✅ FAIT | **4 fichiers morts supprimés 2026-07-07** (Monday + doublons admin). Léa non tranché (arbitrage Phil). |
+| P-16 | 🔶 DIFFÉRÉ | squelette pages token = refacto ~15 flux client, à faire page par page avec revue. |
+| P-17 | ✅ FAIT | ~5000 lignes mortes retirées (8082→2833). |
+| P-18 | ✅ FAIT | **cron relances factures réparé (ImportError) + dédup public_base 2026-07-07.** |
+
+**Légende** : ✅ fait · 🟢 quasi (reste mineur) · 🟡 partiel · 🔶 différé (risque/migration/décision Phil) · ⏳ action externe.
+Les items 🔶/🟡 restants sont **volontairement gardés** pour une exécution supervisée (ils touchent l'auth, des migrations,
+ou des flux clients visibles). Détail par item ci-dessous.
+
 ## P-01 — Environnement de STAGING : tester une branche avant de merger dans `main` (P0)
 
 **Le besoin (Phil)** : « tester mes branches quelque part avant de les push sur le main ».
