@@ -2840,7 +2840,7 @@ function ModuleCard({
           />
         </div>
         {offert ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+          <span className="badge badge-emerald">
             <Gift className="h-3 w-3" />
             Offert
           </span>

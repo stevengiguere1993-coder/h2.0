@@ -838,7 +838,7 @@ function LeadTable({
                 {fmtMoney(l.best_refi_amount)}
               </td>
               <td className="px-3 py-2 text-center">
-                <span className="rounded-full bg-brand-800 px-2 py-0.5 text-[10px] text-white/70">
+                <span className="badge badge-neutral">
                   {COLUMNS.find((c) => c.key === l.status)?.label || l.status}
                 </span>
               </td>

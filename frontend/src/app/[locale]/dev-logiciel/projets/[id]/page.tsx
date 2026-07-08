@@ -1183,7 +1183,7 @@ function DevlogFinanceKpi({
         ? "text-rose-300"
         : "text-white";
   return (
-    <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+    <div className="panel">
       <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
         {label}
       </p>
@@ -2344,7 +2344,7 @@ function DevlogHeaderKpis({ projectId }: { projectId: number }) {
   return (
     <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {/* KPI 1 : Investissement initial */}
-      <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+      <div className="panel">
         <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
           Budget initial
         </p>
@@ -2363,7 +2363,7 @@ function DevlogHeaderKpis({ projectId }: { projectId: number }) {
       </div>
 
       {/* KPI 2 : MRR */}
-      <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+      <div className="panel">
         <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
           MRR actif
         </p>
@@ -2381,7 +2381,7 @@ function DevlogHeaderKpis({ projectId }: { projectId: number }) {
       </div>
 
       {/* KPI 3 : Heures */}
-      <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+      <div className="panel">
         <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
           Heures saisies
         </p>
@@ -2392,7 +2392,7 @@ function DevlogHeaderKpis({ projectId }: { projectId: number }) {
       </div>
 
       {/* KPI 4 : Marge estimée */}
-      <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+      <div className="panel">
         <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
           Marge estimée
         </p>
@@ -2698,7 +2698,7 @@ function DevlogRecurringServicesTab({
               return (
                 <li
                   key={s.id}
-                  className="rounded-xl border border-brand-800 bg-brand-900 p-4"
+                  className="panel"
                 >
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0 flex-1">

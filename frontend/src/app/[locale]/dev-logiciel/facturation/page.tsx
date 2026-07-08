@@ -31,10 +31,10 @@ const STATUSES: { key: string; label: string }[] = [
 ];
 
 const STATUS_CLS: Record<string, string> = {
-  brouillon: "bg-white/5 text-white/50",
-  envoyee: "bg-blue-500/15 text-blue-300",
-  payee: "bg-emerald-500/15 text-emerald-300",
-  annulee: "bg-rose-500/15 text-rose-300"
+  brouillon: "badge-neutral",
+  envoyee: "badge-blue",
+  payee: "badge-emerald",
+  annulee: "badge-rose"
 };
 
 type Draft = {
@@ -277,8 +277,8 @@ export default function DevlogInvoicesPage() {
                         {fmtAmount(i.amount)}
                       </span>
                       <span
-                        className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
-                          STATUS_CLS[i.status] ?? "bg-white/5 text-white/50"
+                        className={`badge uppercase tracking-wide ${
+                          STATUS_CLS[i.status] ?? "badge-neutral"
                         }`}
                       >
                         {STATUSES.find((x) => x.key === i.status)?.label ??

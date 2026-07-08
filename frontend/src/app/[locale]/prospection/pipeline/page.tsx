@@ -326,7 +326,7 @@ export default function PipelineDealsListPage() {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : deals.length === 0 ? (
-          <div className="mx-auto mt-12 max-w-md rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center">
+          <div className="empty-state mx-auto mt-12 max-w-md">
             <h2 className="text-lg font-semibold text-white">
               Aucun deal pour l&apos;instant
             </h2>

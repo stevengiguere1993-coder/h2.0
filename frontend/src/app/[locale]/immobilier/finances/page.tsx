@@ -581,9 +581,7 @@ function DepensesPanel({
   return (
     <div>
       <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold uppercase tracking-wider text-white/60">
-          Dépenses d&apos;exploitation
-        </p>
+        <p className="section-title">Dépenses d&apos;exploitation</p>
         <button
           type="button"
           onClick={() => setAdding((v) => !v)}
