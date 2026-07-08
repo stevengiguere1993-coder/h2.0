@@ -12,7 +12,7 @@ retombe sur un routeur local si l'IA est indisponible. Léa fournit juste
 un résumé textuel de l'appel.
 
 Ce module est volontairement ISOLÉ : tant qu'il n'est pas appelé depuis
-le dispatcher d'appels (voice.py / lea_web.py), il n'a aucun effet sur
+le dispatcher d'appels (voice.py), il n'a aucun effet sur
 les appels en direct.
 """
 
