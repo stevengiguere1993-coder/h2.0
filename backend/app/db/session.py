@@ -1822,6 +1822,29 @@ async def init_db() -> None:
                 # Table absente au tout premier boot — sera ré-essayé.
                 log.warning("init_db: création index %s échouée: %s", idx_name, exc)
 
+        # P-10c : index UNIQUE PARTIEL — au plus 1 punch OUVERT (ended_at
+        # NULL) par employé. Rend le double-punch structurellement
+        # impossible (la vérif applicative punch_ops/mobile a une fenêtre
+        # de course). SÛR : IF NOT EXISTS (idempotent) + try/except (le boot
+        # ne casse jamais) et AUCUNE mutation de données. Si des doublons
+        # ouverts existent DÉJÀ en prod, le CREATE échoue → on l'attrape et
+        # l'index n'est simplement pas posé (rien n'est touché) ; il se
+        # posera au boot suivant une fois les doublons nettoyés à la main.
+        try:
+            await conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "uq_punches_one_open_per_employe "
+                    "ON punches (employe_id) WHERE ended_at IS NULL"
+                )
+            )
+        except Exception as exc:
+            log.warning(
+                "init_db: index unique 'punch ouvert' non posé "
+                "(doublons ouverts pré-existants ?): %s",
+                exc,
+            )
+
         # Reclassification one-shot des tâches d'entreprises importées
         # de Monday qui sont restées en « backlog ». L'utilisateur veut
         # qu'aucune tâche importée ne reste classée backlog : on la
