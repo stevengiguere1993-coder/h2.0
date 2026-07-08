@@ -181,6 +181,27 @@ CAPABILITIES: list[Capability] = [
         category="Facturation & envois",
         default_min_role="employee",
     ),
+    # ─── Accès à des pôles/pages sensibles (remplace les listes d'emails
+    # codées en dur côté client — P-05d). Défaut « admin » = comportement
+    # actuel (l'accès était owner/admin + quelques emails). Exposé au front
+    # via un flag calculé dans /auth/me (pas de garde d'endpoint ici).
+    Capability(
+        id="telephonie.access",
+        label="Accéder au pôle Téléphonie",
+        description=(
+            "Voir et utiliser la console d'appels (Communications / "
+            "Téléphonie)."
+        ),
+        category="Accès aux pôles",
+        default_min_role="admin",
+    ),
+    Capability(
+        id="devlog.access",
+        label="Accéder à la page Dev / outils",
+        description="Voir la page interne de développement / outils (/dev).",
+        category="Accès aux pôles",
+        default_min_role="admin",
+    ),
 ]
 
 CAPABILITIES_BY_ID: dict[str, Capability] = {c.id: c for c in CAPABILITIES}

@@ -8,28 +8,22 @@ import { Home, ShieldAlert } from "lucide-react";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { HelpRequestsSection } from "@/components/help-requests-section";
 
-/** Page « Mode dev » — accessible UNIQUEMENT à l'utilisateur whitelisté.
+/** Page « Mode dev » — accès restreint : rôle owner/admin, ou capacité
+ *  `devlog.access` accordée dans Paramètres → Permissions (P-05d).
  *
  * Centralise les outils de debugging / développement (demandes d'aide,
  * etc.) pour les retirer de l'UI publique des autres utilisateurs.
  */
-export const DEV_ALLOWED_EMAILS = [
-  "sgiguere@immohorizon.com",
-  "philippe.meuser@immohorizon.com",
-  "pmeuser@immohorizon.com"
-];
-
 export default function DevPage() {
   const { user, loading } = useCurrentUser();
   const router = useRouter();
 
-  // Owner & admin = accès total ; sinon whitelist email héritée.
+  // Accès = rôle owner/admin, ou capacité devlog.access (P-05d).
   const role = (user?.role || "").toLowerCase().trim();
   const allowed =
     role === "owner" ||
     role === "admin" ||
-    (!!user?.email &&
-      DEV_ALLOWED_EMAILS.includes(user.email.toLowerCase().trim()));
+    user?.access?.["devlog.access"] === true;
 
   useEffect(() => {
     if (!loading && user && !allowed) {
