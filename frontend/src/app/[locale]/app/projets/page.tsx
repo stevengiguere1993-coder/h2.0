@@ -470,29 +470,29 @@ function ProjectCard({
         p.status === "correction") && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {p.has_signed_bon ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-1 text-[11px] font-medium leading-none text-emerald-300">
+            <span className="badge badge-emerald">
               <CheckCircle2 className="h-3 w-3" /> Signé
             </span>
           ) : p.awaiting_signature ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-rose-500/20 px-2 py-1 text-[11px] font-medium leading-none text-rose-300">
+            <span className="badge badge-rose">
               <Clock className="h-3 w-3" /> À signer
             </span>
           ) : p.correction_bon_draft ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-gray-400/20 px-2 py-1 text-[11px] font-medium leading-none text-gray-500">
+            <span className="badge badge-neutral">
               <Clock className="h-3 w-3" /> Bon à envoyer
             </span>
           ) : null}
           {p.status === "correction" && p.correction_status === "termine" ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-1 text-[11px] font-medium leading-none text-emerald-300">
+            <span className="badge badge-emerald">
               <CheckCircle2 className="h-3 w-3" /> Correction terminée
             </span>
           ) : p.status === "correction" &&
             p.correction_status === "planifie" ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-sky-500/15 px-2 py-1 text-[11px] font-medium leading-none text-sky-300">
+            <span className="badge badge-sky">
               <CheckCircle2 className="h-3 w-3" /> Correction planifiée
             </span>
           ) : p.status === "correction" ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-1 text-[11px] font-medium leading-none text-amber-300">
+            <span className="badge badge-amber">
               <Clock className="h-3 w-3" /> Correction à planifier
             </span>
           ) : null}
@@ -504,7 +504,7 @@ function ProjectCard({
 
 function EmptyState() {
   return (
-    <div className="mx-auto mt-16 max-w-md rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center">
+    <div className="empty-state mx-auto mt-16 max-w-md">
       <Briefcase className="mx-auto h-10 w-10 text-accent-500" />
       <h2 className="mt-4 text-lg font-semibold text-white">Aucun projet</h2>
       <p className="mt-2 text-sm text-white/60">
