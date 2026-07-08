@@ -122,6 +122,12 @@ class FactureItemRead(BaseModel):
     total: float
     kind: str = "service"
     soumission_item_id: Optional[int] = None
+    # AFFICHAGE Kratos (dérivé, non persisté) : « valeur au contrat » de la
+    # ligne = total de l'item de soumission lié. Permet d'afficher les
+    # colonnes Contrat / % d'avancement / Facturé sans dénaturer la ligne
+    # (le prix unitaire de la soumission reste celui de l'item de
+    # soumission). NULL pour les lignes hors soumission (extras, manuelles).
+    contract_total: Optional[float] = None
 
 
 async def _ensure_facture(db, facture_id: int) -> Facture:
@@ -209,7 +215,33 @@ async def list_items(
             .order_by(FactureItem.position.asc(), FactureItem.id.asc())
         )
     ).scalars().all()
-    return [FactureItemRead.model_validate(r) for r in rows]
+    # Enrichissement AFFICHAGE (Kratos seulement) : « valeur au contrat »
+    # = total de l'item de soumission lié. Aucune persistance, aucun impact
+    # sur le PDF client ni la synchro QBO (qui lisent la ligne telle quelle).
+    from app.models.soumission_item import SoumissionItem
+
+    sids = {
+        int(r.soumission_item_id) for r in rows if r.soumission_item_id
+    }
+    contract_by_sid: dict[int, float] = {}
+    if sids:
+        srows = (
+            await db.execute(
+                select(SoumissionItem.id, SoumissionItem.total).where(
+                    SoumissionItem.id.in_(sids)
+                )
+            )
+        ).all()
+        contract_by_sid = {
+            int(sid): round(float(tot or 0), 2) for sid, tot in srows
+        }
+    out: List[FactureItemRead] = []
+    for r in rows:
+        m = FactureItemRead.model_validate(r)
+        if r.soumission_item_id is not None:
+            m.contract_total = contract_by_sid.get(int(r.soumission_item_id))
+        out.append(m)
+    return out
 
 
 @router.post(
