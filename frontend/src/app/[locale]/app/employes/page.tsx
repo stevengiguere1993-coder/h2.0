@@ -172,7 +172,7 @@ function Card({ emp }: { emp: Employe }) {
 
 function EmptyState() {
   return (
-    <div className="mx-auto mt-16 max-w-md rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center">
+    <div className="empty-state mx-auto mt-16 max-w-md">
       <Users className="mx-auto h-10 w-10 text-accent-500" />
       <h2 className="mt-4 text-lg font-semibold text-white">Aucun employé</h2>
       <p className="mt-2 text-sm text-white/60">

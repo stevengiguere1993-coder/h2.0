@@ -526,7 +526,7 @@ export default function AssignationsPage() {
                   </header>
 
                   <section className="mt-5">
-                    <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/50">
+                    <h3 className="section-title flex items-center gap-2">
                       <Briefcase className="h-3.5 w-3.5 text-accent-500" />
                       Phases de chantier ({activePhases.length})
                     </h3>
@@ -542,7 +542,7 @@ export default function AssignationsPage() {
                   </section>
 
                   <section className="mt-6">
-                    <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/50">
+                    <h3 className="section-title flex items-center gap-2">
                       <CheckSquare className="h-3.5 w-3.5 text-accent-500" />
                       Tâches en cours ({empTasks.length})
                     </h3>
@@ -583,7 +583,7 @@ export default function AssignationsPage() {
                   </section>
 
                   <section className="mt-6">
-                    <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/50">
+                    <h3 className="section-title flex items-center gap-2">
                       <Calendar className="h-3.5 w-3.5 text-accent-500" />
                       Événements agenda ({empEvents.length})
                     </h3>
@@ -706,7 +706,7 @@ function LiveBoard({ onSelect }: { onSelect: (id: number) => void }) {
   const plannedOnly = workers.filter((w) => !w.punch_started_at);
 
   return (
-    <section className="mb-4 rounded-xl border border-brand-800 bg-brand-900 p-4">
+    <section className="panel mb-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex flex-wrap items-center gap-2 text-sm font-semibold uppercase tracking-wider text-white/70">
           <span className="relative flex h-2.5 w-2.5">
