@@ -10,8 +10,13 @@ Ce helper :
 1. garde `qbo_job_id` s'il pointe encore sur un client ACTIF ;
 2. sinon retrouve le sous-client/projet converti sous le parent (par nom /
    adresse) et met `qbo_job_id` à jour ;
-3. à défaut, retombe sur le client PARENT (la classe = chantier assure
-   quand même le suivi par projet).
+3. sinon CRÉE le projet dans QB (API Projets si accordée, à défaut un
+   sous-client convertible) — avant, on retombait silencieusement sur le
+   client parent : la facture atterrissait sur le client, aucun
+   sous-client « 29 Besner » n'existait, et rien n'était convertible en
+   projet côté QB ;
+4. en dernier recours, retombe sur le client PARENT (la classe =
+   chantier assure quand même le suivi par projet).
 """
 
 from __future__ import annotations
@@ -96,5 +101,36 @@ async def resolve_project_customer_id(
     if len(usable) == 1:
         return await _adopt(usable[0])
 
-    # 3) Rien d'identifiable → client parent (suivi assuré par la ClassRef).
+    # 3) Aucun sous-client → on CRÉE le projet QB (même logique que la
+    # synchro en masse : nom = adresse du chantier, sinon nom du projet).
+    project_name = (
+        (getattr(project, "address", None) or "").strip()
+        or (project.name or "").strip()
+    )
+    if project_name:
+        try:
+            start = (
+                project.created_at.date().isoformat()
+                if getattr(project, "created_at", None)
+                else None
+            )
+            job = await qbo.ensure_project(
+                parent_customer_id=str(parent_customer_id),
+                project_name=project_name,
+                start_date=start,
+            )
+            new_id = str(job.get("Id") or "")
+            if new_id:
+                project.qbo_job_id = new_id
+                await db.flush()
+                return new_id
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Création du projet QB « %s » (projet %s) échouée : %s",
+                project_name,
+                project.id,
+                exc,
+            )
+
+    # 4) Rien d'identifiable → client parent (suivi assuré par la ClassRef).
     return str(parent_customer_id)
