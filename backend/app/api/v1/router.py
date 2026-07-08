@@ -23,7 +23,6 @@ from app.api.v1.endpoints import (
     agenda_availability,
     agenda_unified,
     appointment_types,
-    lea_web,
     letmetalk,
     webhooks_meta,
     activity,
@@ -254,7 +253,6 @@ api_router.include_router(appointment_types.router)
 api_router.include_router(agenda_availability.router)
 api_router.include_router(user_roles.router)
 api_router.include_router(permissions.router)
-api_router.include_router(lea_web.router)
 api_router.include_router(letmetalk.router)
 api_router.include_router(webhooks_meta.router)
 # Webhook QBO → Kratos (reverse-sync). Public (appelé par Intuit), protégé
