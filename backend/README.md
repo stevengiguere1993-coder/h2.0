@@ -69,13 +69,11 @@ alembic upgrade head
 ### 7. Créer le premier admin
 
 ```bash
-# Mode interactif (développement)
-python -m scripts.create_admin
-
-# Mode automatique (via variables d'environnement)
+# Idempotent : crée le compte admin, ou upgrade + réinitialise le
+# mot de passe si l'email existe déjà.
 export ADMIN_EMAIL="admin@example.com"
 export ADMIN_PASSWORD="securepassword123"
-python -m scripts.init_admin
+python -m app.scripts.create_admin
 ```
 
 ### 8. Lancer le serveur
