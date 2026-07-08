@@ -285,7 +285,7 @@ export default function EntreprisesDashboard() {
         <>{" · "}{totalEntreprises} ENTREPRISE{totalEntreprises > 1 ? "S" : ""}</>
       ) : null}
       {alertsCount > 0 ? (
-        <>{" · "}<span className="text-[#ff5566]">{alertsCount} ALERTE{alertsCount > 1 ? "S" : ""} ACTIVE{alertsCount > 1 ? "S" : ""}</span></>
+        <>{" · "}<span className="text-rose-400">{alertsCount} ALERTE{alertsCount > 1 ? "S" : ""} ACTIVE{alertsCount > 1 ? "S" : ""}</span></>
       ) : null}
     </>
   );
@@ -297,7 +297,6 @@ export default function EntreprisesDashboard() {
           <>
             Bonjour,{" "}
             <span
-              className="italic"
               style={{
                 color: "var(--qg-accent)",
                 fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
@@ -397,16 +396,8 @@ export default function EntreprisesDashboard() {
             }}
           >
             <div className="flex items-center justify-between px-5 pt-5">
-              <h2
-                className="text-[18px] font-bold text-[var(--qg-text)]"
-                style={{
-                  fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
-                }}
-              >
-                Mes{" "}
-                <span className="italic" style={{ color: "var(--qg-accent)" }}>
-                  entreprises
-                </span>
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                Mes entreprises
               </h2>
               <div className="flex items-center gap-2">
                 <button
@@ -536,7 +527,7 @@ function CTAButton({
         isPrimary
           ? {
               backgroundColor: "var(--qg-accent)",
-              color: "var(--qg-bg)",
+              color: "var(--qg-accent-ink)",
               boxShadow: "0 0 24px -8px rgba(216, 155, 60, 0.5)"
             }
           : undefined
@@ -563,7 +554,7 @@ function KpiCard({
 }) {
   const toneColor =
     tone === "warning"
-      ? "#ffaa33"
+      ? "#fbbf24"
       : tone === "success"
       ? "#4ade80"
       : tone === "lime"
@@ -587,22 +578,17 @@ function KpiCard({
         border: "1px solid var(--qg-border)"
       }}
     >
-      <p className="text-[10px] uppercase tracking-[0.16em] text-[var(--qg-text-soft)]">
+      <p className="text-xs font-medium uppercase tracking-wider text-[var(--qg-text-soft)]">
         {label}
       </p>
-      <p
-        className="mt-2 text-[28px] font-bold leading-tight text-[var(--qg-text)] sm:text-[32px]"
-        style={{
-          fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
-        }}
-      >
+      <p className="mt-3 text-3xl font-bold leading-tight text-[var(--qg-text)]">
         {value}
       </p>
       <p
-        className="mt-1.5 inline-flex items-center gap-1 text-[11px]"
+        className="mt-1 inline-flex items-center gap-1 text-xs"
         style={{ color: toneColor }}
       >
-        ▲ {sub}
+        {sub}
       </p>
     </Wrapper>
   );
@@ -634,9 +620,9 @@ function EntrepriseRow({
     .toUpperCase();
   const barColor =
     e.health_label === "risk"
-      ? "#ff5566"
+      ? "#fb7185"
       : e.health_label === "warn"
-      ? "#ffaa33"
+      ? "#fbbf24"
       : "#4ade80";
   const overdueAlert = e.taches_overdue > 0;
   return (
@@ -700,7 +686,7 @@ function EntrepriseRow({
             className="text-[12px] font-semibold tabular-nums"
             style={{
               color: barColor,
-              fontFamily: "var(--font-mono, ui-monospace), monospace"
+              fontFamily: "var(--font-sans, system-ui, sans-serif)"
             }}
           >
             {e.health_score}
@@ -709,14 +695,14 @@ function EntrepriseRow({
       </td>
       <td className="px-3 py-3 text-right">
         {overdueAlert ? (
-          <span className="inline-flex items-center gap-1 rounded-md border border-[#ff5566]/40 bg-[#ff5566]/10 px-1.5 py-0.5 text-[11px] font-semibold text-[#ff5566]">
+          <span className="inline-flex items-center gap-1 rounded-md border border-rose-400/40 bg-rose-400/10 px-1.5 py-0.5 text-[11px] font-semibold text-rose-400">
             <AlertTriangle className="h-2.5 w-2.5" />
             {e.taches_open} <span className="opacity-50">/ {e.taches_total}</span>
           </span>
         ) : (
           <span
             className="text-[12px] tabular-nums text-[var(--qg-text-muted)]"
-            style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}
+            style={{ fontFamily: "var(--font-sans, system-ui, sans-serif)" }}
           >
             {e.taches_open}
             <span className="text-[var(--qg-text-soft)]"> / {e.taches_total}</span>
@@ -770,7 +756,7 @@ function BriefingCard({
             style={{ fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)" }}
           >
             Briefing{" "}
-            <span className="italic" style={{ color: "var(--qg-accent)" }}>
+            <span style={{ color: "var(--qg-accent)" }}>
               du jour
             </span>
           </h2>
@@ -788,7 +774,7 @@ function BriefingCard({
           {briefing ? (
             <span
               className="text-[10px] uppercase tracking-wider text-[var(--qg-text-soft)]"
-              style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}
+              style={{ fontFamily: "var(--font-sans, system-ui, sans-serif)" }}
             >
               {new Date(briefing.created_at).toLocaleTimeString("fr-CA", {
                 hour: "2-digit",
@@ -878,7 +864,7 @@ function BriefingCard({
 function HighlightBullet({ text, index }: { text: string; index: number }) {
   // Cycle 3 tons : risque (rose), opportunité (lime), synergie (info)
   const tones = [
-    { icon: "⚠", color: "#ff5566", label: "Risque" },
+    { icon: "⚠", color: "#fb7185", label: "Risque" },
     { icon: "⚡", color: "var(--qg-accent)", label: "Opportunité" },
     { icon: "◎", color: "#60a5fa", label: "Synergie" }
   ] as const;

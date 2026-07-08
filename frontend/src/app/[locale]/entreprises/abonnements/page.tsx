@@ -490,7 +490,6 @@ function Greeting() {
     <>
       Coffre{" "}
       <span
-        className="italic"
         style={{
           color: "var(--qg-accent)",
           fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
@@ -638,7 +637,7 @@ function SubCard({
           ) : null}
           {s.has_secret ? (
             <div className="flex items-center justify-between gap-2 text-sm">
-              <span className="truncate font-mono">
+              <span className="truncate">
                 {revealedPwd != null
                   ? revealedPwd || "(vide)"
                   : "•••••••••••"}
@@ -950,7 +949,7 @@ function EditModal({
                       setPwdTouched(true);
                     }}
                     placeholder={initial?.has_secret ? "••••••••" : ""}
-                    className={`${INPUT} flex-1 font-mono`}
+                    className={`${INPUT} flex-1`}
                     autoComplete="new-password"
                   />
                   <button

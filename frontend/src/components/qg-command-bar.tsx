@@ -176,7 +176,7 @@ export function QGCommandBar() {
           <Sparkles className="h-3.5 w-3.5" style={{ color: "#d89b3c" }} />
           Demander à Kratos
           <kbd
-            className="ml-2 rounded border px-1.5 py-0.5 text-[10px] font-mono"
+            className="ml-2 rounded border px-1.5 py-0.5 text-[10px]"
             style={{
               borderColor: "#35353f",
               backgroundColor: "#0a0a0b",
@@ -344,7 +344,7 @@ export function QGCommandBar() {
                             : h.similarity > 0.5
                             ? "#a0a0a8"
                             : "#66666e",
-                        fontFamily: "var(--font-mono, monospace)"
+                        fontFamily: "var(--font-sans, system-ui, sans-serif)"
                       }}
                     >
                       {(h.similarity * 100).toFixed(0)}%
@@ -368,19 +368,19 @@ export function QGCommandBar() {
             >
               <span className="flex items-center gap-3">
                 <span>
-                  <kbd className="rounded border border-[#35353f] px-1 py-0.5 font-mono">
+                  <kbd className="rounded border border-[#35353f] px-1 py-0.5">
                     ↑↓
                   </kbd>{" "}
                   Naviguer
                 </span>
                 <span>
-                  <kbd className="rounded border border-[#35353f] px-1 py-0.5 font-mono">
+                  <kbd className="rounded border border-[#35353f] px-1 py-0.5">
                     ↵
                   </kbd>{" "}
                   Ouvrir
                 </span>
                 <span>
-                  <kbd className="rounded border border-[#35353f] px-1 py-0.5 font-mono">
+                  <kbd className="rounded border border-[#35353f] px-1 py-0.5">
                     Esc
                   </kbd>{" "}
                   Fermer

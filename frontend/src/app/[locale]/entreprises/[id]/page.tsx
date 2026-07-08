@@ -833,7 +833,7 @@ function DailyPulseCard({
               className="rounded-md px-3 py-1 text-[11px] font-bold transition disabled:opacity-60"
               style={{
                 backgroundColor: lime,
-                color: "var(--qg-bg)"
+                color: "var(--qg-accent-ink)"
               }}
             >
               {generating ? (
@@ -1068,7 +1068,7 @@ function EntrepriseImmobilierSection({ entrepriseId }: { entrepriseId: number })
                   {imm.address}
                   {imm.city ? `, ${imm.city}` : ""}
                 </p>
-                <p className="mt-1 font-mono text-[10px] text-white/40">
+                <p className="mt-1 text-[10px] text-white/40">
                   {imm.ownership_pct.toFixed(1)}% détenu ·{" "}
                   {fmtCurrencyImmo(imm.revenu_mensuel_part)}/m
                 </p>
@@ -1226,7 +1226,7 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
                 ) : null}
               </div>
               <div className="flex items-center gap-2">
-                <span className="font-mono text-sm font-bold text-violet-300">
+                <span className="text-sm font-bold text-violet-300">
                   {p.ownership_pct != null
                     ? `${Number(p.ownership_pct).toFixed(2)}%`
                     : "—"}
@@ -1385,7 +1385,7 @@ function PartnerModal({
               max={100}
               value={pct}
               onChange={(e) => setPct(e.target.value)}
-              className="input font-mono"
+              className="input"
               placeholder="ex. 50.00"
             />
           </div>

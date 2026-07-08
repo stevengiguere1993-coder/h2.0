@@ -203,7 +203,7 @@ export default function ReglagesCalendriersPage() {
                   <p className="truncate text-sm font-bold text-white">
                     {f.label || "Calendrier"}
                   </p>
-                  <p className="truncate font-mono text-[11px] text-white/50">
+                  <p className="truncate text-[11px] text-white/50">
                     {f.ics_url}
                   </p>
                   <p className="mt-1 text-[10px] text-white/40">
@@ -329,7 +329,7 @@ function AddFeedModal({
               type="url"
               value={icsUrl}
               onChange={(e) => setIcsUrl(e.target.value)}
-              className="input font-mono text-xs"
+              className="input text-xs"
               placeholder="https://outlook.office.com/owa/calendar/.../calendar.ics"
             />
             <p className="mt-1 text-[10px] text-white/40">

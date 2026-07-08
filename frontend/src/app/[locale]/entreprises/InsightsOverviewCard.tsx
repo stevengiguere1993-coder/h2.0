@@ -84,7 +84,7 @@ export function InsightsOverviewCard() {
           style={{ fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)" }}
         >
           Insights{" "}
-          <span className="italic" style={{ color: "var(--qg-accent)" }}>
+          <span style={{ color: "var(--qg-accent)" }}>
             IA
           </span>
         </h2>

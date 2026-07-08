@@ -405,9 +405,9 @@ function RecurrenceSection({ entrepriseId }: { entrepriseId: number }) {
                     Tous les {t.every_n} {t.unit}
                     {t.departement ? ` · ${t.departement}` : ""}
                     {" · prochain "}
-                    <span className="font-mono text-white/70">{t.next_due}</span>
+                    <span className="text-white/70">{t.next_due}</span>
                     {" · lead "}
-                    <span className="font-mono">{t.lead_days}j</span>
+                    <span>{t.lead_days}j</span>
                   </p>
                   {t.description ? (
                     <p className="mt-1 text-xs text-white/60">{t.description}</p>
@@ -613,7 +613,7 @@ function ComplianceImportModal({
                       <p className="mt-0.5 text-[11px] text-white/60">
                         {c.description}
                       </p>
-                      <p className="mt-1 font-mono text-[10px] text-white/40">
+                      <p className="mt-1 text-[10px] text-white/40">
                         Tous les {c.every_n} {c.unit} · lead {c.lead_days}j
                       </p>
                     </div>
@@ -768,7 +768,7 @@ function CreateTemplateModal({
               min={1}
               value={form.every_n}
               onChange={(e) => setForm({ ...form, every_n: e.target.value })}
-              className="input font-mono"
+              className="input"
             />
           </div>
           <div>
@@ -794,7 +794,7 @@ function CreateTemplateModal({
               onChange={(e) =>
                 setForm({ ...form, lead_days: e.target.value })
               }
-              className="input font-mono"
+              className="input"
             />
           </div>
         </div>
@@ -805,7 +805,7 @@ function CreateTemplateModal({
             required
             value={form.next_due}
             onChange={(e) => setForm({ ...form, next_due: e.target.value })}
-            className="input font-mono"
+            className="input"
           />
         </div>
 
@@ -947,26 +947,26 @@ function FinanceSection({ entrepriseId }: { entrepriseId: number }) {
             <tbody className="divide-y divide-brand-800">
               {[...snapshots].reverse().map((s) => (
                 <tr key={s.id}>
-                  <td className="px-3 py-1.5 font-mono text-xs text-white">
+                  <td className="px-3 py-1.5 text-xs text-white">
                     {s.year_month.slice(0, 7)}
                   </td>
-                  <td className="px-3 py-1.5 text-right font-mono text-xs">
+                  <td className="px-3 py-1.5 text-right text-xs">
                     {fmtCurrency(s.revenu)}
                   </td>
-                  <td className="px-3 py-1.5 text-right font-mono text-xs text-white/60">
+                  <td className="px-3 py-1.5 text-right text-xs text-white/60">
                     {fmtCurrency(s.depenses)}
                   </td>
                   <td
-                    className={`px-3 py-1.5 text-right font-mono text-xs ${
+                    className={`px-3 py-1.5 text-right text-xs ${
                       (s.ebitda || 0) >= 0 ? "text-emerald-300" : "text-rose-300"
                     }`}
                   >
                     {fmtCurrency(s.ebitda)}
                   </td>
-                  <td className="px-3 py-1.5 text-right font-mono text-xs text-sky-300">
+                  <td className="px-3 py-1.5 text-right text-xs text-sky-300">
                     {fmtCurrency(s.tresorerie)}
                   </td>
-                  <td className="px-3 py-1.5 text-right font-mono text-xs text-amber-200">
+                  <td className="px-3 py-1.5 text-right text-xs text-amber-200">
                     {fmtCurrency(s.valorisation_estimee)}
                   </td>
                   <td className="px-3 py-1.5 text-[10px] uppercase text-white/40">
@@ -1107,7 +1107,7 @@ function SnapshotModal({
             onChange={(e) =>
               setForm({ ...form, year_month: e.target.value })
             }
-            className="input font-mono"
+            className="input"
           />
           <p className="mt-1 text-[10px] text-white/40">
             La date sera arrondie au 1er du mois.
@@ -1193,7 +1193,7 @@ function NumField({
         step="0.01"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="input font-mono"
+        className="input"
         placeholder="—"
       />
     </div>
@@ -1310,7 +1310,7 @@ function ValuePlanSection({ entrepriseId }: { entrepriseId: number }) {
                       <p className="text-[11px] font-semibold text-white/70">
                         {d.label}
                       </p>
-                      <p className="mt-1 font-mono text-xs text-white">
+                      <p className="mt-1 text-xs text-white">
                         {d.current ?? "—"} / {d.target ?? "—"}
                         {d.unit ? ` ${d.unit}` : ""}
                       </p>
@@ -1375,7 +1375,7 @@ function ValuePlanSection({ entrepriseId }: { entrepriseId: number }) {
                         {m.metric ? ` · ${m.metric}` : ""}
                       </p>
                     </div>
-                    <span className="rounded-full bg-brand-950 px-2 py-0.5 font-mono text-[10px] uppercase text-white/60">
+                    <span className="rounded-full bg-brand-950 px-2 py-0.5 text-[10px] uppercase text-white/60">
                       {m.status}
                     </span>
                   </li>
@@ -1511,7 +1511,7 @@ function ValuePlanModal({
               onChange={(e) =>
                 setForm({ ...form, target_date: e.target.value })
               }
-              className="input font-mono"
+              className="input"
             />
           </div>
           <NumField
@@ -1574,7 +1574,7 @@ function ValuePlanModal({
                         current: e.target.value ? Number(e.target.value) : null
                       })
                     }
-                    className="input col-span-3 font-mono text-xs"
+                    className="input col-span-3 text-xs"
                   />
                   <input
                     type="number"
@@ -1585,7 +1585,7 @@ function ValuePlanModal({
                         target: e.target.value ? Number(e.target.value) : null
                       })
                     }
-                    className="input col-span-3 font-mono text-xs"
+                    className="input col-span-3 text-xs"
                   />
                   <input
                     placeholder="Unité"
@@ -1704,7 +1704,7 @@ function MilestoneModal({
               onChange={(e) =>
                 setForm({ ...form, target_date: e.target.value })
               }
-              className="input font-mono"
+              className="input"
             />
           </div>
           <NumField

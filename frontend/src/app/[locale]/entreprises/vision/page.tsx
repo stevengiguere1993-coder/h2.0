@@ -151,7 +151,6 @@ export default function VisionPage() {
           <>
             Vision{" "}
             <span
-              className="italic"
               style={{
                 color: "var(--qg-accent)",
                 fontFamily: "var(--font-display, ui-sans-serif, system-ui, sans-serif)"
@@ -243,7 +242,7 @@ export default function VisionPage() {
                   </span>
                   <span
                     className="text-[10px] uppercase tracking-wider text-[var(--qg-text-soft)]"
-                    style={{ fontFamily: "var(--font-mono, monospace)" }}
+                    style={{ fontFamily: "var(--font-sans, system-ui, sans-serif)" }}
                   >
                     +{h.days}j
                   </span>

@@ -303,11 +303,11 @@ export default function ReglagesEntreprisesPage() {
                       ) : null}
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-white/50">
-                      <span className="rounded bg-brand-950 px-1.5 py-0.5 font-mono">
+                      <span className="rounded bg-brand-950 px-1.5 py-0.5">
                         {e.type}
                       </span>
                       {e.neq ? (
-                        <span className="font-mono">NEQ {e.neq}</span>
+                        <span>NEQ {e.neq}</span>
                       ) : null}
                     </div>
                   </div>
@@ -459,7 +459,7 @@ function EntrepriseForm({
           id="neq"
           value={form.neq}
           onChange={(e) => set("neq", e.target.value)}
-          className="input font-mono"
+          className="input"
           placeholder="1234567890"
           maxLength={32}
         />
@@ -498,7 +498,7 @@ function EntrepriseForm({
             value={form.color_accent}
             onChange={(e) => set("color_accent", e.target.value)}
             pattern="^#[0-9a-fA-F]{6}$"
-            className="input flex-1 font-mono text-sm"
+            className="input flex-1 text-sm"
             placeholder="#7c3aed"
           />
         </div>
