@@ -1110,6 +1110,37 @@ async def sync_achat_to_qbo(
         achat.id, kind, qbo_id, doc_number,
     )
 
+    # Route « dépense payée » (compte chèque Horizon, carte, comptant) :
+    # après avoir (re)créé la DÉPENSE, on supprime les Purchase QB ORPHELINS
+    # qui doublonnent cet achat — typiquement l'ancienne « Dépense de chèque »
+    # (Purchase PaymentType=Check, « Chèque n°… ») créée par erreur avant que
+    # le compte chèque Horizon soit routé en dépense (PaymentType=Cash). On
+    # nettoie APRÈS le push pour que achat.qbo_bill_id pointe déjà sur la
+    # bonne dépense (exclue de la suppression). Critères STRICTS (même
+    # DocNumber + fournisseur + total, non lié à un autre achat Kratos) via
+    # _delete_orphan_purchase_duplicates → on ne touche jamais la dépense
+    # courante ni une opération rattachée ailleurs. Best-effort : un échec
+    # ne casse pas le push.
+    if as_purchase and qbo_id:
+        try:
+            removed = await _delete_orphan_purchase_duplicates(
+                db, qbo, achat, vendor_id, po_reference
+            )
+            if removed:
+                log.info(
+                    "Achat %s : %d dépense(s) de chèque QB en double "
+                    "supprimée(s) après recréation de la dépense",
+                    achat.id,
+                    removed,
+                )
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "Nettoyage des dépenses de chèque QB en double échoué "
+                "(achat %s)",
+                achat.id,
+                exc_info=True,
+            )
+
     # Joindre la facture fournisseur (image / PDF) si l'employé en a
     # uploadé une. On le fait après création du Bill/Purchase ; en cas
     # d'échec on log mais on ne bloque pas le push principal.

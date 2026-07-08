@@ -40,59 +40,23 @@ async def run_qbo_nets() -> Dict[str, Any]:
         if not await claim_cron_run(gdb, "qbo-nets", _CLAIM_INTERVAL_SECONDS):
             return {"skipped": "run_recent"}
 
-    if not await is_qbo_auto_sync_enabled():
-        return {"skipped": "qbo_auto_sync_off"}
-
     out: Dict[str, Any] = {}
-
-    # ── Factures clients émises sans miroir QB → re-push ──
-    try:
-        from sqlalchemy import select
-
-        from app.models.facture import Facture
-        from app.services.facture_qbo import sync_facture_to_qbo
-
-        async with AsyncSessionLocal() as db:
-            rows = (
-                await db.execute(
-                    select(Facture.id, Facture.reference).where(
-                        Facture.status.in_(("sent", "paid", "overdue")),
-                        Facture.qbo_invoice_id.is_(None),
-                        Facture.client_id.is_not(None),
-                    )
-                )
-            ).all()
-        pushed = failed = 0
-        errors: Dict[str, str] = {}
-        for fid, ref in rows:
-            try:
-                async with AsyncSessionLocal() as s:
-                    await sync_facture_to_qbo(s, int(fid))
-                    await s.commit()
-                pushed += 1
-            except Exception as exc:  # noqa: BLE001
-                failed += 1
-                if len(errors) < 5:
-                    errors[str(ref or fid)] = str(exc)[:200]
-                # log.ERROR (pas warning) : c'est exactement l'échec
-                # silencieux qu'on veut rendre visible dans les logs.
-                log.error(
-                    "Facture %s : push QB échoué : %s", ref or fid, exc
-                )
-        out["factures"] = {
-            "candidates": len(rows),
-            "pushed": pushed,
-            "failed": failed,
-            **({"errors": errors} if errors else {}),
-        }
-    except Exception:  # noqa: BLE001
-        log.warning("Filet factures échoué", exc_info=True)
 
     # ── Paiements de factures non enregistrés dans QB → re-push ──
     # Un paiement entré dans Kratos doit TOUJOURS finir dans QB : si le
     # push immédiat (create/update payment) a échoué en silence, on le
     # rattrape ici. push_facture_payments_only retombe sur la synchro
     # complète si la facture n'a pas encore de miroir QB.
+    #
+    # IMPORTANT : ce filet n'est PAS conditionné à l'interrupteur de
+    # migration `qbo_auto_sync` — au même titre que le push immédiat
+    # (push_facture_payments_now). Enregistrer un paiement est une action
+    # DÉLIBÉRÉE de l'utilisateur sur UNE facture précise (pas une création
+    # de masse), et c'est idempotent (Payment.qbo_payment_id). Le gater
+    # derrière `qbo_auto_sync` (OFF en régime normal après migration)
+    # laissait les paiements dont le push immédiat avait échoué (ex. la
+    # facture 117 « En retard » avec des virements enregistrés côté Kratos)
+    # bloqués hors de QB pour toujours, faute de rattrapage.
     try:
         from sqlalchemy import select as _select
 
@@ -136,6 +100,58 @@ async def run_qbo_nets() -> Dict[str, Any]:
         }
     except Exception:  # noqa: BLE001
         log.warning("Filet paiements échoué", exc_info=True)
+
+    # Les filets de CRÉATION en masse (factures/dépenses sans miroir QB) et
+    # le pull QB → Kratos restent conditionnés à l'interrupteur de migration :
+    # tant qu'il est OFF, on ne (re)crée RIEN automatiquement pour ne pas
+    # produire de doublons pendant que tous les ID QBO ne sont pas reliés.
+    if not await is_qbo_auto_sync_enabled():
+        out["skipped_migration_nets"] = "qbo_auto_sync_off"
+        log.info("Filets QBO exécutés : %s", out)
+        return out
+
+    # ── Factures clients émises sans miroir QB → re-push ──
+    try:
+        from sqlalchemy import select
+
+        from app.models.facture import Facture
+        from app.services.facture_qbo import sync_facture_to_qbo
+
+        async with AsyncSessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(Facture.id, Facture.reference).where(
+                        Facture.status.in_(("sent", "paid", "overdue")),
+                        Facture.qbo_invoice_id.is_(None),
+                        Facture.client_id.is_not(None),
+                    )
+                )
+            ).all()
+        pushed = failed = 0
+        errors: Dict[str, str] = {}
+        for fid, ref in rows:
+            try:
+                async with AsyncSessionLocal() as s:
+                    await sync_facture_to_qbo(s, int(fid))
+                    await s.commit()
+                pushed += 1
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                if len(errors) < 5:
+                    errors[str(ref or fid)] = str(exc)[:200]
+                # log.ERROR (pas warning) : c'est exactement l'échec
+                # silencieux qu'on veut rendre visible dans les logs.
+                log.error(
+                    "Facture %s : push QB échoué : %s", ref or fid, exc
+                )
+        out["factures"] = {
+            "candidates": len(rows),
+            "pushed": pushed,
+            "failed": failed,
+            **({"errors": errors} if errors else {}),
+        }
+    except Exception:  # noqa: BLE001
+        log.warning("Filet factures échoué", exc_info=True)
 
     # ── Dépenses actives sans lien QB → re-push ──
     try:
