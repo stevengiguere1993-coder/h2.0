@@ -298,14 +298,24 @@ async def convert_project_to_facture(
                     unit_price = float(it.unit_price)
                     line_total = round(qty * unit_price, 2)
                 else:
-                    # Partiel → une ligne « lot » au montant exact de la
-                    # tranche (qty 1), pour éviter la dérive d'arrondi
-                    # quantité × prix et ne pas afficher une fausse
-                    # quantité au client.
-                    qty = 1.0
-                    unit = "lot"
-                    unit_price = delta_i
-                    line_total = delta_i
+                    # Partiel → on CONSERVE le prix unitaire de la SOUMISSION
+                    # (le client le retrouve tel quel sur le PDF) et on porte
+                    # l'avancement sur la QUANTITÉ : quantité × prix unitaire
+                    # = montant facturé sur CETTE facture. Le préfixe de
+                    # description (« 85 % — … ») indique le % cumulatif
+                    # atteint. Repli « lot » si le prix unitaire est nul
+                    # (item de soumission sans prix ⇒ pas de quantité
+                    # dérivable).
+                    unit_price = float(it.unit_price)
+                    if unit_price > 0:
+                        unit = it.unit
+                        qty = round(delta_i / unit_price, 3)
+                        line_total = round(qty * unit_price, 2)
+                    else:
+                        qty = 1.0
+                        unit = "lot"
+                        unit_price = delta_i
+                        line_total = delta_i
                 db.add(
                     FactureItem(
                         facture_id=facture.id,
