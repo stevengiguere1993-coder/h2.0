@@ -283,6 +283,24 @@ async def public_accept(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cette soumission n'est plus active.",
         )
+    # Garde d'EXPIRATION (P-10a) : une soumission dont la date de validité
+    # est dépassée ne peut plus être signée — les prix ne tiennent plus, on
+    # n'engage pas le client sur une offre périmée. Vérifié AVANT toute
+    # mutation. (valid_until est timezone-aware ; on tolère un naïf par
+    # prudence.)
+    if sm.valid_until is not None:
+        valid_until = sm.valid_until
+        if valid_until.tzinfo is None:
+            valid_until = valid_until.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > valid_until:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Cette soumission est expirée (date de validité "
+                    "dépassée). Contactez-nous pour obtenir une version à "
+                    "jour."
+                ),
+            )
     # Signature tracée OBLIGATOIRE : on refuse l'acceptation tant qu'aucun
     # tracé n'est fourni (le nom seul ne suffit pas). Validé avant toute
     # mutation pour ne rien persister en cas de refus.
