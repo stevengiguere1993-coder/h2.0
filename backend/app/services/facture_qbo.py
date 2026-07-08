@@ -313,6 +313,33 @@ async def ensure_invoice_payment(
         return None
 
 
+async def _payment_applied_to_invoice(
+    qbo, payment_id: str, inv_id: str
+) -> bool:
+    """Vrai si le Payment QB `payment_id` EXISTE encore ET est bien imputé
+    à la facture `inv_id` (présent dans un LinkedTxn de type Invoice).
+
+    Sert à détecter un `qbo_payment_id` PÉRIMÉ : quand le sous-client de la
+    facture a été CONVERTI en projet (ou supprimé) dans QB APRÈS
+    l'enregistrement du paiement, l'ancien Payment peut avoir disparu ou ne
+    plus pointer sur cette facture. Dans ce cas l'appelant l'oublie et le
+    recrée, au lieu de le sauter éternellement (idempotence trop stricte)."""
+    try:
+        data = await qbo._request("GET", f"/payment/{payment_id}")
+    except Exception:  # noqa: BLE001
+        return False  # 404 / supprimé → à recréer
+    obj = data.get("Payment") or data
+    if not obj.get("Id"):
+        return False
+    for line in obj.get("Line", []) or []:
+        for lt in line.get("LinkedTxn", []) or []:
+            if str(lt.get("TxnId") or "") == str(inv_id) and (
+                lt.get("TxnType") == "Invoice"
+            ):
+                return True
+    return False
+
+
 async def sync_facture_payments_to_qbo(
     qbo,
     db: AsyncSession,
@@ -378,7 +405,25 @@ async def sync_facture_payments_to_qbo(
     pushed: list[str] = []
     for p in rows:
         if p.qbo_payment_id:
-            continue
+            # Idempotence AVEC garde-fou : on ne saute ce paiement que si son
+            # Payment QB existe ENCORE et est bien imputé à cette facture.
+            # Sinon (sous-client converti/supprimé depuis, Payment orphelin),
+            # on oublie l'ancien id — best-effort delete du Payment orphelin —
+            # et on le recrée sous le bon client. Corrige « le 2e virement ne
+            # s'envoie pas » après conversion du sous-client.
+            if await _payment_applied_to_invoice(qbo, p.qbo_payment_id, inv_id):
+                continue
+            log.warning(
+                "Payment QB %s absent/non imputé à la facture %s → "
+                "recréation (facture %s ligne %s)",
+                p.qbo_payment_id, inv_id, facture.id, p.id,
+            )
+            try:
+                await qbo.delete_payment(str(p.qbo_payment_id))
+            except Exception:  # noqa: BLE001
+                pass
+            p.qbo_payment_id = None
+            await db.flush()
         try:
             amount = float(p.amount or 0)
         except (TypeError, ValueError):
