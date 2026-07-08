@@ -18,18 +18,9 @@ import {
 
 import { useRouter } from "@/i18n/navigation";
 import { authedFetch, getMe, getToken, login, setToken } from "@/lib/auth";
-// Source unique de la whitelist « Mode dev » : importée depuis la page
-// /dev pour ne plus dupliquer la liste (elle y est déjà exportée). Seul
-// le const est importé — le composant de page n'est pas rendu.
-import { DEV_ALLOWED_EMAILS } from "@/app/[locale]/dev/page";
-
-// Volet « Téléphonie / Secrétaire d'appels » — en développement,
-// visible pour l'instant uniquement par sgiguere@immohorizon.com.
-// Étendre cette liste pour donner accès à d'autres comptes au fur
-// et à mesure que le volet mûrit.
-const TELEPHONIE_ALLOWED_EMAILS = [
-  "sgiguere@immohorizon.com"
-];
+// Accès Dev / Téléphonie : plus de listes d'emails en dur (P-05d). On lit
+// les capacités « devlog.access » / « telephonie.access » depuis
+// user.access (calculé par /auth/me), en repli sur le rôle owner/admin.
 
 /**
  * After a successful login, we show a small picker asking the user
@@ -48,6 +39,7 @@ export function LoginForm() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userVolets, setUserVolets] = useState<string[]>([]);
   const [userRole, setUserRole] = useState<string>("");
+  const [userAccess, setUserAccess] = useState<Record<string, boolean>>({});
   const [pendingHelp, setPendingHelp] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -83,6 +75,7 @@ export function LoginForm() {
         setUserEmail(me.email || null);
         setUserVolets(Array.isArray(me.volets) ? me.volets : []);
         setUserRole(me.role || "");
+        setUserAccess(me.access || {});
         setAuthed(true);
       } catch {
         // Token invalide → laisse le user voir le formulaire login
@@ -139,6 +132,7 @@ export function LoginForm() {
         setUserEmail(me.email || null);
         setUserVolets(Array.isArray(me.volets) ? me.volets : []);
         setUserRole(me.role || "");
+        setUserAccess(me.access || {});
       } catch {
         /* fall through to picker */
       }
@@ -159,11 +153,12 @@ export function LoginForm() {
   // uniquement pour les emails whitelistés. Refresh toutes les 60s.
   useEffect(() => {
     if (!authed || !userEmail) return;
-    const norm = userEmail.toLowerCase().trim();
     const role = (userRole || "").toLowerCase().trim();
-    // Owner & admin = accès dev total ; sinon whitelist email héritée.
+    // Accès dev = rôle owner/admin, ou capacité devlog.access (P-05d).
     const devAccess =
-      role === "owner" || role === "admin" || DEV_ALLOWED_EMAILS.includes(norm);
+      role === "owner" ||
+      role === "admin" ||
+      userAccess["devlog.access"] === true;
     if (!devAccess) return;
     let cancelled = false;
     async function fetchCount() {
@@ -184,16 +179,15 @@ export function LoginForm() {
       cancelled = true;
       clearInterval(t);
     };
-  }, [authed, userEmail, userRole]);
+  }, [authed, userEmail, userRole, userAccess]);
 
   if (authed) {
     const role0 = (userRole || "").toLowerCase().trim();
-    // Owner & admin = accès dev total ; sinon whitelist email héritée.
+    // Accès dev = rôle owner/admin, ou capacité devlog.access (P-05d).
     const showDev =
       role0 === "owner" ||
       role0 === "admin" ||
-      (!!userEmail &&
-        DEV_ALLOWED_EMAILS.includes(userEmail.toLowerCase().trim()));
+      userAccess["devlog.access"] === true;
     // Filtre les pastilles de portail selon les volets accessibles.
     // Si la liste est vide (anciens comptes sans volets_json), on
     // affiche tout par sécurité (backward-compat).
@@ -206,15 +200,12 @@ export function LoginForm() {
     const role = (userRole || "").toLowerCase().trim();
     const isOwner = role === "owner";
     const isAdminOrOwner = role === "owner" || role === "admin";
-    // Owner & admin = accès total ; sinon volet « communication »
-    // explicite, ou whitelist email héritée.
+    // Accès Téléphonie = rôle owner/admin, volet « communication », ou
+    // capacité telephonie.access accordée (P-05d).
     const showTelephonie =
       isAdminOrOwner ||
       has("communication") ||
-      (!!userEmail &&
-        TELEPHONIE_ALLOWED_EMAILS.includes(
-          userEmail.toLowerCase().trim()
-        ));
+      userAccess["telephonie.access"] === true;
     return (
       <div className="relative space-y-4">
         {showDev ? (

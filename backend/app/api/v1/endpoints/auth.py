@@ -138,8 +138,18 @@ async def get_me(current_user: CurrentUser) -> UserRead:
     Get current authenticated user's profile.
 
     Returns the user information associated with the provided access token.
+    Inclut ``access`` : les capacités « accès de page » (P-05d) évaluées
+    pour ce compte, que le front utilise pour ganter Téléphonie / Dev.
     """
-    return UserRead.model_validate(current_user)
+    # Import local : évite tout cycle d'import à l'assemblage du routeur.
+    from app.services.permissions_service import get_min_role
+
+    out = UserRead.model_validate(current_user)
+    out.access = {
+        cap: current_user.has_min_role(await get_min_role(cap))
+        for cap in ("telephonie.access", "devlog.access")
+    }
+    return out
 
 
 # ---------- Password change (self-service) ----------

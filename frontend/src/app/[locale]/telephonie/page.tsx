@@ -45,12 +45,14 @@ import { AutomationsPanel } from "@/components/communications/automations-panel"
 //   4. Filtres — blocklist + VIP whitelist
 //   5. Heures — plages d'ouverture hebdomadaires
 //
-// L'accès reste gated par email pour l'instant (sgiguere) — sera
-// remplacé par un rôle dédié quand le volet sortira en GA.
+// Accès géré par capacité (Paramètres → Permissions) : rôle owner/admin
+// ou capacité `telephonie.access` — plus de liste d'emails en dur (P-05d).
 
-const TELEPHONIE_ALLOWED_EMAILS = ["sgiguere@immohorizon.com"];
-
-type Me = { email?: string | null; role?: string | null };
+type Me = {
+  email?: string | null;
+  role?: string | null;
+  access?: Record<string, boolean>;
+};
 
 import type { TelephonieSection as Section } from "./_client-shell";
 
@@ -376,13 +378,12 @@ export default function TelephonieHome() {
       }
       try {
         const me = (await getMe(tok)) as Me;
-        const email = (me?.email || "").toLowerCase().trim();
         const role = (me?.role || "").toLowerCase().trim();
-        // Owner & admin = accès total ; sinon whitelist email héritée.
+        // Accès = rôle owner/admin, ou capacité telephonie.access (P-05d).
         const ok =
           role === "owner" ||
           role === "admin" ||
-          TELEPHONIE_ALLOWED_EMAILS.includes(email);
+          me?.access?.["telephonie.access"] === true;
         if (!cancelled) {
           setAllowed(ok);
           setChecking(false);

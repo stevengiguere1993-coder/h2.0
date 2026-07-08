@@ -72,6 +72,10 @@ class UserRead(UserBase):
     # Préférence visuelle du portail. 'light' (noir sur blanc, défaut)
     # ou 'dark' (blanc sur noir). Persistée par utilisateur en DB.
     theme_preference: str = "light"
+    # Accès configurables (capacités) exposés au front pour le gating de
+    # pages sensibles — P-05d. Ex. {"telephonie.access": true,
+    # "devlog.access": false}. Calculé dans /auth/me.
+    access: dict[str, bool] = Field(default_factory=dict)
     # Volets accessibles à l'utilisateur. Calculé côté ORM par la
     # propriété User.volets : combine volets_json + whitelists des
     # volets en développement (entreprises/immobilier/investisseur).

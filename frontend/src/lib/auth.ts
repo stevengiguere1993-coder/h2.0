@@ -55,6 +55,9 @@ export type CurrentUser = {
   /** Nom calculé côté serveur : « Prénom Nom » sinon partie locale
    *  du courriel. */
   display_name?: string;
+  /** Accès de page configurables (capacités), calculés dans /auth/me —
+   *  P-05d. Ex. { "telephonie.access": true, "devlog.access": false }. */
+  access?: Record<string, boolean>;
 };
 
 const ROLE_RANK: Record<UserRole, number> = {
