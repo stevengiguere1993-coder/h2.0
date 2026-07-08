@@ -86,8 +86,12 @@ function presetRange(preset: PeriodPreset): { start: string; end: string } {
     return { start: yyyyMmDd(s), end };
   }
   if (preset === "quarter") {
-    const qStart = Math.floor(today.getMonth() / 3) * 3;
-    const s = new Date(today.getFullYear(), qStart, 1);
+    // « Trim. » = les 3 DERNIERS mois (fenêtre glissante), et NON le
+    // trimestre civil en cours. Au 8 juillet, le trimestre civil (débuté
+    // le 1er juillet) ne couvrait que 8 jours → une seule vente visible
+    // alors que l'utilisateur attend les ventes des 3 derniers mois.
+    const s = new Date(today);
+    s.setMonth(s.getMonth() - 3);
     return { start: yyyyMmDd(s), end };
   }
   // year

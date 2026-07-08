@@ -664,6 +664,7 @@ export default function FactureDetailPage() {
       const r = (await res.json()) as {
         qbo_invoice_id: string;
         qbo_doc_number: string;
+        sync_warning?: string | null;
       };
       setF((cur) =>
         cur
@@ -674,7 +675,16 @@ export default function FactureDetailPage() {
             }
           : cur
       );
-      setQboNotice(`Synchronisée avec QuickBooks (Invoice ${r.qbo_invoice_id}).`);
+      // Un avertissement (ex. paiement non enregistré dans QB, avec le motif
+      // QBO) s'affiche en ambre. On NE commence PAS par « Synchronisée »
+      // pour déclencher le style d'alerte plutôt que le vert de succès.
+      if (r.sync_warning) {
+        setQboNotice(`⚠️ Facture synchronisée, mais : ${r.sync_warning}`);
+      } else {
+        setQboNotice(
+          `Synchronisée avec QuickBooks (Invoice ${r.qbo_invoice_id}).`
+        );
+      }
     } catch (err) {
       setQboNotice(`Erreur QuickBooks : ${(err as Error).message}`);
     } finally {

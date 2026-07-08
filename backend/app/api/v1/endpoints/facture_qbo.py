@@ -1,5 +1,7 @@
 """Sync a Facture to QuickBooks Online as an Invoice."""
 
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
@@ -13,6 +15,11 @@ router = APIRouter(prefix="/factures", tags=["facture-qbo"])
 class QboSyncResult(BaseModel):
     qbo_invoice_id: str
     qbo_doc_number: str
+    # Avertissement NON bloquant remonté à l'écran : ex. paiement(s) non
+    # enregistré(s) dans QB (avec le motif QBO exact) alors que la facture,
+    # elle, est bien synchronisée. Permet à l'utilisateur de voir POURQUOI
+    # un paiement n'est pas passé, au lieu d'un échec silencieux.
+    sync_warning: Optional[str] = None
 
 
 @router.post(
@@ -29,4 +36,8 @@ async def sync_facture(
         result = await sync_facture_to_qbo(db, facture_id)
     except FactureSyncError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    return QboSyncResult(**result)
+    return QboSyncResult(
+        qbo_invoice_id=str(result.get("qbo_invoice_id") or ""),
+        qbo_doc_number=str(result.get("qbo_doc_number") or ""),
+        sync_warning=result.get("sync_warning"),
+    )

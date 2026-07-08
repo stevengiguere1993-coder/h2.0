@@ -319,6 +319,7 @@ async def sync_facture_payments_to_qbo(
     facture: Facture,
     customer_ref: str,
     inv_id: str,
+    errors_out: Optional[list[str]] = None,
 ) -> list[str]:
     """Pousse CHAQUE virement (ligne de paiement Kratos) de la facture
     comme un Payment QBO DISTINCT — pour qu'il corresponde à une opération
@@ -326,7 +327,11 @@ async def sync_facture_payments_to_qbo(
 
     Repli : si la facture est payée mais sans ligne de paiement détaillée
     (ancien flux « marquée payée »), on solde en un seul Payment.
-    Retourne la liste des IDs de Payment QBO créés."""
+    Retourne la liste des IDs de Payment QBO créés.
+
+    Si `errors_out` (liste) est fourni, chaque échec y ajoute une chaîne
+    lisible (motif QBO) — pour que l'appelant puisse le REMONTER À L'ÉCRAN
+    au lieu de le laisser en silence dans les logs."""
     inv_id = str(inv_id or "")
     if not inv_id:
         return []
@@ -424,6 +429,10 @@ async def sync_facture_payments_to_qbo(
                 "enregistré : %s",
                 facture.id, p.id, exc,
             )
+            if errors_out is not None:
+                errors_out.append(
+                    f"Virement {p.amount} $ ({p.paid_at}): {exc}"
+                )
     return pushed
 
 
@@ -476,6 +485,11 @@ async def sync_facture_to_qbo(
             )
         ).scalar_one_or_none()
 
+    # Pré-initialisés : utilisés dans le chemin de RÉCUPÉRATION ci-dessous
+    # (si la MAJ du corps de facture échoue mais qu'une Invoice QB existe
+    # déjà, on pousse quand même les paiements).
+    customer_id = ""
+    invoice_warning: Optional[str] = None
     try:
         customer = await qbo.ensure_customer(
             display_name=client.name,
@@ -593,24 +607,59 @@ async def sync_facture_to_qbo(
         invoice = await _push_invoice(payload)
 
     except QuickBooksError as exc:
-        raise FactureSyncError(str(exc)) from exc
+        # Le corps de la facture n'a pas pu être poussé/mis à jour. Si une
+        # Invoice QB existe DÉJÀ (facture déjà synchronisée), on NE bloque
+        # PAS les paiements : on garde l'Invoice existante et on tente quand
+        # même de les pousser (le besoin réel de l'utilisateur). Sans
+        # Invoice, impossible d'imputer un paiement → on lève.
+        if not (fa.qbo_invoice_id or "").strip():
+            raise FactureSyncError(str(exc)) from exc
+        log.error(
+            "Facture %s : MAJ du corps QB échouée, on tente quand même les "
+            "paiements sur l'Invoice existante %s : %s",
+            fa.id, fa.qbo_invoice_id, exc,
+        )
+        invoice = {
+            "Id": fa.qbo_invoice_id,
+            "SyncToken": fa.qbo_sync_token,
+            "DocNumber": fa.qbo_doc_number,
+        }
+        invoice_warning = f"Corps de la facture non mis à jour dans QB : {exc}"
 
     inv = invoice.get("Invoice") or invoice
-    fa.qbo_invoice_id = str(inv.get("Id") or "") or None
-    fa.qbo_sync_token = str(inv.get("SyncToken") or "") or None
-    fa.qbo_doc_number = str(inv.get("DocNumber") or "") or None
+    if inv.get("Id"):
+        fa.qbo_invoice_id = str(inv.get("Id"))
+    if inv.get("SyncToken") is not None:
+        fa.qbo_sync_token = str(inv.get("SyncToken") or "") or None
+    if inv.get("DocNumber"):
+        fa.qbo_doc_number = str(inv.get("DocNumber") or "") or None
     await db.flush()
     # Chaque virement Kratos → un Payment QBO distinct (appariable à une
     # opération bancaire). Repli sur 1 paiement global si pas de virement.
+    # On COLLECTE les échecs pour les remonter à l'utilisateur (au lieu de
+    # les laisser en silence dans les logs).
+    payment_errors: list[str] = []
     await sync_facture_payments_to_qbo(
-        qbo, db, fa, customer_id, str(inv.get("Id") or "")
+        qbo, db, fa, customer_id, str(inv.get("Id") or ""),
+        errors_out=payment_errors,
     )
     await db.refresh(fa)
 
-    return {
+    warnings: list[str] = []
+    if invoice_warning:
+        warnings.append(invoice_warning)
+    if payment_errors:
+        warnings.append(
+            "Paiement(s) non enregistré(s) dans QuickBooks : "
+            + " ; ".join(payment_errors)
+        )
+    result: Dict[str, Any] = {
         "qbo_invoice_id": fa.qbo_invoice_id or "",
         "qbo_doc_number": fa.qbo_doc_number or "",
     }
+    if warnings:
+        result["sync_warning"] = " | ".join(warnings)
+    return result
 
 
 async def push_facture_payments_only(

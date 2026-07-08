@@ -45,3 +45,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 _excel_specs_local/
+
+# Réglages Claude Code personnels (non partagés)
+.claude/settings.local.json
