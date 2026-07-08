@@ -585,6 +585,88 @@ async def _send_intake_validation_email(
     await mailer.send(to=[to_email], subject=subject, html_body=html_body)
 
 
+async def _phone_for_user_id(db, user_id: int) -> Optional[str]:
+    """Téléphone d'un utilisateur : `User.phone_e164`, sinon le `phone`
+    de sa fiche Employe (matchée par courriel)."""
+    from app.models.employe import Employe
+    from app.models.user import User
+
+    user = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if user is None:
+        return None
+    if getattr(user, "phone_e164", None):
+        return user.phone_e164
+    if user.email:
+        emp = (
+            await db.execute(
+                select(Employe.phone).where(
+                    Employe.email == user.email,
+                    Employe.phone.is_not(None),
+                )
+            )
+        ).first()
+        if emp and emp[0]:
+            return emp[0]
+    return None
+
+
+async def _find_responsible_for_call(
+    db, call: "Call"
+) -> tuple[Optional[int], Optional[str]]:
+    """Renvoie (user_id, téléphone) du **responsable du dossier** de
+    l'appelant identifié — la personne à qui l'appel doit être référé :
+
+      1. le responsable désigné du projet actif (`responsible_user_id`) ;
+      2. à défaut, l'utilisateur assigné à la demande CRM
+         (`contact_request.assigned_to_user_id`) — directement pour un
+         lead web, via `client.contact_request_id` pour un client.
+
+    (None, None) si l'appelant n'a pas de dossier ou pas de responsable.
+    """
+    uid: Optional[int] = None
+    try:
+        project = await _find_project_for_call(db, call)
+        if project is not None:
+            uid = getattr(project, "responsible_user_id", None)
+        if not uid and call.entity_id:
+            from app.models.contact_request import ContactRequest
+
+            cr_id: Optional[int] = None
+            if call.entity_type == "contact_request":
+                cr_id = int(call.entity_id)
+            elif call.entity_type == "client":
+                from app.models.client import Client
+
+                cli = (
+                    await db.execute(
+                        select(Client.contact_request_id).where(
+                            Client.id == call.entity_id
+                        )
+                    )
+                ).first()
+                if cli and cli[0]:
+                    cr_id = int(cli[0])
+            if cr_id:
+                row = (
+                    await db.execute(
+                        select(ContactRequest.assigned_to_user_id).where(
+                            ContactRequest.id == cr_id
+                        )
+                    )
+                ).first()
+                if row and row[0]:
+                    uid = int(row[0])
+    except Exception:  # noqa: BLE001
+        log.warning("_find_responsible_for_call failed", exc_info=True)
+        return None, None
+    if not uid:
+        return None, None
+    phone = await _phone_for_user_id(db, uid)
+    return uid, phone
+
+
 async def _find_project_lead_phone(
     db, *, call: "Call"
 ) -> Optional[str]:
@@ -605,25 +687,11 @@ async def _find_project_lead_phone(
 
         # 1. Responsable désigné du projet.
         if getattr(project, "responsible_user_id", None):
-            resp = (
-                await db.execute(
-                    select(User).where(User.id == project.responsible_user_id)
-                )
-            ).scalar_one_or_none()
-            if resp is not None:
-                if getattr(resp, "phone_e164", None):
-                    return resp.phone_e164
-                if resp.email:
-                    emp = (
-                        await db.execute(
-                            select(Employe.phone).where(
-                                Employe.email == resp.email,
-                                Employe.phone.is_not(None),
-                            )
-                        )
-                    ).first()
-                    if emp and emp[0]:
-                        return emp[0]
+            resp_phone = await _phone_for_user_id(
+                db, int(project.responsible_user_id)
+            )
+            if resp_phone:
+                return resp_phone
 
         rows = (
             await db.execute(
@@ -668,11 +736,20 @@ async def _find_project_lead_online_user_ids(
 ) -> List[int]:
     """Renvoie les `user_id` des membres du projet ACTUELLEMENT
     « online » dans le portail (Voice SDK heartbeat). On ring d'abord
-    ceux-là via WebRTC (gratuit + reach instantané)."""
+    ceux-là via WebRTC (gratuit + reach instantané).
+
+    Si le **responsable désigné** du projet est online, on ne ring QUE
+    lui : c'est son dossier, l'appel lui revient — pas au premier membre
+    qui décroche."""
     project = await _find_project_for_call(db, call)
     if not project:
         return []
     from app.models.project_member import ProjectMember
+
+    online = await list_online_user_ids(db)
+    resp_uid = getattr(project, "responsible_user_id", None)
+    if resp_uid and int(resp_uid) in set(online):
+        return [int(resp_uid)]
 
     member_ids = (
         await db.execute(
@@ -683,7 +760,6 @@ async def _find_project_lead_online_user_ids(
     ).scalars().all()
     if not member_ids:
         return []
-    online = await list_online_user_ids(db)
     return [uid for uid in online if uid in set(member_ids)]
 
 
@@ -1446,6 +1522,17 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
         )
 
     # ----- FORWARD (Phase 1) : transfert direct -----
+    # Appelant identifié avec un responsable de dossier → on sonne LE
+    # responsable plutôt que le numéro générique (best-effort).
+    try:
+        _resp_uid, _resp_phone = await _find_responsible_for_call(
+            db, existing
+        )
+        if _resp_phone:
+            forward_to = _resp_phone
+            existing.forwarded_to_e164 = _resp_phone
+    except Exception:  # noqa: BLE001
+        pass
     if not forward_to:
         twiml = provider.build_say_and_hangup(
             say="Bonjour, nous vous rappellerons sous peu. Merci.",
@@ -1908,6 +1995,72 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
             or os.getenv("TWILIO_FORWARD_TO")
             or ""
         ).strip()
+
+        # PRIORITÉ RESPONSABLE DE DOSSIER : un appelant identifié
+        # (client / lead) dont le dossier a un responsable est référé à
+        # LUI — pas au premier online ni aux closers. S'il est online
+        # dans le portail on le ring en WebRTC (mobile en fallback),
+        # sinon on sonne directement son mobile.
+        resp_uid, resp_phone = await _find_responsible_for_call(db, call)
+        if resp_uid and voice_sdk_configured():
+            online_uids = await list_online_user_ids(db)
+            if resp_uid in set(online_uids):
+                call.forwarded_to_e164 = resp_phone or forward_to or None
+                clients_xml = build_dial_clients_xml(
+                    [resp_uid], parent_call_sid=call.provider_sid
+                )
+                fallback_url = (
+                    f"{_secretary_base_url()}/api/v1/voice/twilio/"
+                    f"clients-fallback?call_id={call.id}"
+                )
+                twiml = provider.build_say_dial_clients_then_mobile(
+                    say=decision.say,
+                    lang=decision.lang,
+                    clients_xml=clients_xml,
+                    fallback_action_url=fallback_url,
+                    timeout_sec=15,
+                )
+                return Response(content=twiml, media_type="application/xml")
+        if resp_phone:
+            targets = _parse_e164_list(resp_phone)
+            call.forwarded_to_e164 = ",".join(targets)
+            say_with_consent = (
+                decision.say
+                + " Cet appel pourrait être enregistré pour fins de qualité."
+            )
+            try:
+                queue_twiml = await _start_queue_transfer(
+                    db,
+                    provider,
+                    call=call,
+                    targets=targets,
+                    say=say_with_consent,
+                    lang=decision.lang,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception(
+                    "queue transfer (responsable dossier) a échoué, "
+                    "repli <Dial>"
+                )
+                queue_twiml = None
+            if queue_twiml:
+                return Response(
+                    content=queue_twiml, media_type="application/xml"
+                )
+            action_url = (
+                f"{_secretary_base_url()}/api/v1/voice/twilio/"
+                f"dial-followup?call_id={call.id}"
+            )
+            twiml = provider.build_say_and_dial_multi(
+                say=say_with_consent,
+                lang=decision.lang,
+                targets_e164=targets,
+                action_url=action_url,
+                timeout_sec=20,
+                record=True,
+                whisper_url=_transfer_whisper_url(call.id),
+            )
+            return Response(content=twiml, media_type="application/xml")
 
         # Voice SDK hybride : si des users sont online dans le portail,
         # on les ring d'abord via WebRTC (gratuit). Fallback mobile
