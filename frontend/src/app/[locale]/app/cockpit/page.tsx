@@ -85,12 +85,12 @@ const PROJECT_STATUS_LABELS: Record<string, string> = {
   correction: "Correction"
 };
 
-const PROJECT_STATUS_BG: Record<string, string> = {
-  planned: "bg-white/10 text-white/70",
-  ready_to_start: "bg-violet-500/15 text-violet-300",
-  in_progress: "bg-blue-500/15 text-blue-300",
-  suspended: "bg-amber-500/15 text-amber-300",
-  correction: "bg-rose-500/15 text-rose-300"
+const PROJECT_STATUS_BADGE: Record<string, string> = {
+  planned: "badge-neutral",
+  ready_to_start: "badge-violet",
+  in_progress: "badge-blue",
+  suspended: "badge-amber",
+  correction: "badge-rose"
 };
 
 const BON_STATUS_LABELS: Record<string, string> = {
@@ -250,18 +250,18 @@ export default function CockpitPage() {
         ) : (
           <div className="space-y-5">
             {/* ── Le pouls : temps réel + compteurs ── */}
-            <section className="rounded-xl border border-brand-800 bg-brand-900 p-4">
-              <h2 className="flex flex-wrap items-center gap-2 text-sm font-semibold uppercase tracking-wider text-white/70">
+            <section className="panel">
+              <h2 className="section-title flex flex-wrap items-center gap-2">
                 <span className="relative flex h-2.5 w-2.5">
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
                   <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
                 </span>
                 En direct
-                <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+                <span className="badge badge-emerald">
                   {punched.length} pointé{punched.length > 1 ? "s" : ""}
                 </span>
                 {plannedOnly.length > 0 ? (
-                  <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+                  <span className="badge badge-amber">
                     {plannedOnly.length} prévu
                     {plannedOnly.length > 1 ? "s" : ""} non pointé
                     {plannedOnly.length > 1 ? "s" : ""}
@@ -350,7 +350,7 @@ export default function CockpitPage() {
             {/* ── Santé des projets ── */}
             <section className="rounded-xl border border-brand-800 bg-brand-900">
               <div className="border-b border-brand-800 px-4 py-3">
-                <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-white/70">
+                <h2 className="section-title flex items-center gap-2">
                   <Briefcase className="h-4 w-4" /> Projets en cours (
                   {projects.length})
                 </h2>
@@ -386,7 +386,7 @@ export default function CockpitPage() {
             {/* ── Bons de travail actifs ── */}
             <section className="rounded-xl border border-brand-800 bg-brand-900">
               <div className="border-b border-brand-800 px-4 py-3">
-                <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-white/70">
+                <h2 className="section-title flex items-center gap-2">
                   <ClipboardCheck className="h-4 w-4" /> Bons de travail
                   ouverts ({bons.length})
                 </h2>
@@ -482,9 +482,7 @@ function ProjectRow({ p }: { p: CockpitProject }) {
       </td>
       <td className="px-3 py-2">
         <span
-          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-            PROJECT_STATUS_BG[p.status] || "bg-white/10 text-white/70"
-          }`}
+          className={`badge ${PROJECT_STATUS_BADGE[p.status] || "badge-neutral"}`}
         >
           {PROJECT_STATUS_LABELS[p.status] || p.status}
         </span>
@@ -522,17 +520,11 @@ function ProjectRow({ p }: { p: CockpitProject }) {
       </td>
       <td className="px-3 py-2">
         {p.has_signed_bon ? (
-          <span className="rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">
-            Signé
-          </span>
+          <span className="badge badge-emerald">Signé</span>
         ) : p.awaiting_signature ? (
-          <span className="rounded-md bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-rose-300">
-            À signer
-          </span>
+          <span className="badge badge-rose">À signer</span>
         ) : p.correction_bon_draft ? (
-          <span className="rounded-md bg-gray-400/20 px-1.5 py-0.5 text-[10px] font-semibold text-gray-500">
-            Bon à envoyer
-          </span>
+          <span className="badge badge-neutral">Bon à envoyer</span>
         ) : (
           <span className="text-[11px] text-white/30">—</span>
         )}
@@ -570,7 +562,7 @@ function BonRow({ b }: { b: CockpitBon }) {
         </p>
       </td>
       <td className="px-3 py-2">
-        <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/70">
+        <span className="badge badge-neutral">
           {BON_STATUS_LABELS[b.status] || b.status}
         </span>
       </td>
