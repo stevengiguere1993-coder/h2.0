@@ -1845,6 +1845,27 @@ async def init_db() -> None:
                 exc,
             )
 
+        # P-13 : index UNIQUE (bail, mois, niveau) sur les relances de loyer
+        # → un double-clic concurrent sur « relancer » ne peut pas créer 2
+        # lignes au même niveau (donc pas 2 courriels au locataire ; preuve
+        # TAL). Même filet que l'index punch : IF NOT EXISTS + try/except,
+        # aucune mutation ; si des doublons existent déjà, non posé (à
+        # nettoyer à la main) puis posé au boot suivant.
+        try:
+            await conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "uq_relances_loyer_bail_mois_niveau "
+                    "ON imm_relances_loyer (bail_id, mois_couvert, niveau)"
+                )
+            )
+        except Exception as exc:
+            log.warning(
+                "init_db: index unique relance loyer non posé "
+                "(doublons pré-existants ?): %s",
+                exc,
+            )
+
         # Reclassification one-shot des tâches d'entreprises importées
         # de Monday qui sont restées en « backlog ». L'utilisateur veut
         # qu'aucune tâche importée ne reste classée backlog : on la
