@@ -38,6 +38,7 @@ import {
 } from "react";
 import { useParams } from "next/navigation";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
 import {
   CheckCircle2,
   Download,
@@ -121,7 +122,12 @@ export default function SignNDAPage() {
   const ndaHtml = useMemo(() => {
     if (!data?.full_text_markdown) return "";
     marked.setOptions({ gfm: true, breaks: false, async: false });
-    return marked.parse(data.full_text_markdown) as string;
+    const raw = marked.parse(data.full_text_markdown) as string;
+    // Sanitisation défensive avant injection via dangerouslySetInnerHTML
+    // (P-05e). Ce memo ne produit du HTML qu'au navigateur (data arrive
+    // après le fetch), donc DOMPurify côté client suffit ; garde SSR par
+    // prudence.
+    return typeof window === "undefined" ? raw : DOMPurify.sanitize(raw);
   }, [data?.full_text_markdown]);
 
   // Re-vérifie le scroll après que le contenu est rendu : si le
