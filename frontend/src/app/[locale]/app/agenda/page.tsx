@@ -623,7 +623,7 @@ export default function AgendaPage() {
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/app/agenda/parametres" as any}
-              className="inline-flex items-center gap-1 rounded-md border border-brand-800 bg-brand-900 px-3 py-1.5 text-xs text-white/80 hover:text-white"
+              className="btn-secondary btn-sm"
             >
               ⚙️ Rôles & types de RV
             </Link>
@@ -672,7 +672,7 @@ export default function AgendaPage() {
                 }
                 setRef(d);
               }}
-              className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+              className="btn-ghost btn-xs"
               aria-label="Période précédente"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -701,7 +701,7 @@ export default function AgendaPage() {
                 }
                 setRef(d);
               }}
-              className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+              className="btn-ghost btn-xs"
               aria-label="Période suivante"
             >
               <ChevronRight className="h-4 w-4" />
@@ -1166,7 +1166,7 @@ function MonthView({
                           ev.stopPropagation();
                           toggleDayExpanded(dayKey);
                         }}
-                        className="rounded px-1 text-[10px] text-white/60 hover:bg-white/10 hover:text-white"
+                        className="btn-ghost btn-xs"
                         title={
                           isDayExpanded
                             ? "Cliquer pour replier"
@@ -1713,7 +1713,7 @@ function EventModal({
               type="button"
               onClick={remove}
               disabled={busy}
-              className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+              className="btn-outline-rose btn-sm"
             >
               <Trash2 className="h-4 w-4" />
               Supprimer

@@ -188,7 +188,7 @@ export default function EmailTemplatesPage() {
                   <button
                     type="button"
                     onClick={() => deleteTemplate(t)}
-                    className="rounded-md p-1.5 text-white/30 opacity-0 transition hover:bg-rose-500/15 hover:text-rose-300 group-hover:opacity-100"
+                    className="btn-outline-rose btn-xs opacity-0 group-hover:opacity-100"
                     aria-label="Supprimer"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -303,7 +303,7 @@ function TemplateEditorModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-white/40 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>
@@ -380,7 +380,7 @@ function TemplateEditorModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-3 py-1.5 text-xs text-white/60 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-sm"
           >
             Annuler
           </button>

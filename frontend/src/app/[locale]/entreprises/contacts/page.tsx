@@ -250,11 +250,7 @@ export default function ContactsPage() {
             <button
               type="button"
               onClick={() => setImportOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition hover:bg-white/5"
-              style={{
-                borderColor: "var(--qg-border)",
-                color: "var(--qg-text-soft)"
-              }}
+              className="btn-secondary btn-sm"
               title="Importer un CSV (Gmail, Monday, Outlook)"
             >
               <FileUp className="h-3.5 w-3.5" />
@@ -456,7 +452,7 @@ export default function ContactsPage() {
                                 e.stopPropagation();
                                 void removeFromList(c);
                               }}
-                              className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                              className="btn-ghost btn-xs"
                               title={
                                 isPure
                                   ? "Supprimer ce contact"
@@ -583,7 +579,7 @@ function FederatedDetail({
         <button
           type="button"
           onClick={onClose}
-          className="rounded p-1 text-white/40 hover:bg-white/5 hover:text-white"
+          className="btn-ghost btn-xs"
           aria-label="Fermer"
         >
           <X className="h-4 w-4" />
@@ -752,7 +748,7 @@ function PureContactEditor({
         <button
           type="button"
           onClick={onClose}
-          className="rounded p-1 text-white/40 hover:bg-white/5 hover:text-white"
+          className="btn-ghost btn-xs"
           aria-label="Fermer"
         >
           <X className="h-4 w-4" />
@@ -869,7 +865,7 @@ function PureContactEditor({
         <button
           type="button"
           onClick={onDelete}
-          className="inline-flex items-center gap-1 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] font-semibold text-rose-300 hover:bg-rose-500/20"
+          className="btn-outline-rose btn-sm"
         >
           <Trash2 className="h-3 w-3" />
           Supprimer
@@ -960,7 +956,7 @@ function CreateContactModal({
             type="button"
             onClick={onClose}
             disabled={submitting}
-            className="rounded p-1 text-white/40 hover:bg-white/5 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>
@@ -1149,7 +1145,7 @@ function ImportCsvModal({
             type="button"
             onClick={onClose}
             disabled={busy}
-            className="rounded p-1 text-white/40 hover:bg-white/5 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>
@@ -1274,7 +1270,7 @@ function ImportCsvModal({
             type="button"
             onClick={() => void run(true)}
             disabled={!file || busy}
-            className="inline-flex items-center gap-1.5 rounded-md border border-white/15 px-3 py-1.5 text-xs font-semibold text-white/70 hover:bg-white/5 disabled:opacity-50"
+            className="btn-secondary btn-sm disabled:opacity-50"
           >
             {busy && !committing ? (
               <Loader2 className="h-3 w-3 animate-spin" />

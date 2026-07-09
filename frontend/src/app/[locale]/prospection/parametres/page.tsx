@@ -164,7 +164,7 @@ export default function ProspectionPreferencesPage() {
                     key={z.label}
                     type="button"
                     onClick={() => applyZone(z)}
-                    className="rounded-full border border-brand-700 bg-brand-950 px-2.5 py-1 text-[11px] text-white/70 hover:border-accent-500/50 hover:text-accent-500"
+                    className="btn-secondary btn-xs"
                   >
                     {z.label}
                   </button>
@@ -269,7 +269,7 @@ export default function ProspectionPreferencesPage() {
           <button
             type="button"
             onClick={reset}
-            className="inline-flex items-center gap-1.5 rounded-md border border-brand-700 bg-brand-900 px-3 py-2 text-xs text-white/70 hover:bg-brand-800 hover:text-white"
+            className="btn-secondary btn-sm"
           >
             <RotateCcw className="h-3.5 w-3.5" />
             Réinitialiser

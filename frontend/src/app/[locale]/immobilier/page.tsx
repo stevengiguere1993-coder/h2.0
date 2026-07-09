@@ -181,7 +181,7 @@ export default function ImmobilierDashboard() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={"/immobilier/immeubles" as any}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/30 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-500 hover:bg-accent-500/20"
+            className="btn-outline-accent btn-sm"
           >
             <Plus className="h-3.5 w-3.5" />
             Nouvel immeuble
@@ -448,7 +448,7 @@ function EmptyState() {
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={"/immobilier/immeubles" as any}
-        className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-accent-500/30 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-500 hover:bg-accent-500/20"
+        className="btn-outline-accent btn-sm mt-4"
       >
         <Plus className="h-3.5 w-3.5" />
         Ajouter un immeuble

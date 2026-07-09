@@ -181,7 +181,7 @@ export default function OwnerViewPage() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={"/prospection/leads" as any}
-            className="inline-flex items-center gap-1 rounded-md border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs text-white/70 hover:text-white"
+            className="btn-secondary btn-sm"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             Retour aux leads
@@ -237,7 +237,7 @@ export default function OwnerViewPage() {
                   {view.owner_phone ? (
                     <a
                       href={`tel:${view.owner_phone}`}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-sm font-medium text-accent-500 hover:bg-accent-500/20"
+                      className="btn-outline-accent btn-sm"
                     >
                       <Phone className="h-3.5 w-3.5" />
                       {view.owner_phone}
@@ -246,7 +246,7 @@ export default function OwnerViewPage() {
                   {view.owner_email ? (
                     <a
                       href={`mailto:${view.owner_email}`}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-brand-700 bg-brand-900 px-3 py-1.5 text-sm font-medium text-white/70 hover:text-white"
+                      className="btn-secondary btn-sm"
                     >
                       <Mail className="h-3.5 w-3.5" />
                       Courriel

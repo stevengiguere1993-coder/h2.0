@@ -167,7 +167,7 @@ export default function DashboardsPage() {
             type="button"
             onClick={() => void load()}
             disabled={loading}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-bg-alt)] px-3 py-1.5 text-xs text-[var(--qg-text)] hover:bg-[var(--qg-bg)] disabled:opacity-50"
+            className="btn-secondary btn-sm disabled:opacity-50"
           >
             <RefreshCw
               className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`}

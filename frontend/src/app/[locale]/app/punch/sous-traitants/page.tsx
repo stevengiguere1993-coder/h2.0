@@ -479,7 +479,7 @@ export default function SousTraitantTimesheetPage() {
                       <button
                         type="button"
                         onClick={() => removeEntry(r.id)}
-                        className="inline-flex items-center rounded-md border border-brand-800 p-1.5 text-white/60 hover:border-rose-500 hover:text-rose-300"
+                        className="btn-outline-rose btn-xs"
                         aria-label="Supprimer"
                       >
                         <Trash2 className="h-4 w-4" />

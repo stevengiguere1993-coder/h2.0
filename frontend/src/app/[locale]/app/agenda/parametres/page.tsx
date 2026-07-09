@@ -199,7 +199,7 @@ function RolesPanel() {
         <button
           type="button"
           onClick={() => setAdding(!adding)}
-          className="inline-flex items-center gap-1 rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-brand-950"
+          className="btn-accent btn-sm"
         >
           <Plus className="h-3.5 w-3.5" />
           Ajouter
@@ -266,7 +266,7 @@ function RolesPanel() {
                 setAdding(false);
                 setError(null);
               }}
-              className="rounded border border-brand-700 px-3 py-1 text-xs text-white/80"
+              className="btn-secondary btn-sm"
             >
               Annuler
             </button>
@@ -274,7 +274,7 @@ function RolesPanel() {
               type="button"
               onClick={addRole}
               disabled={busy}
-              className="rounded bg-accent-500 px-3 py-1 text-xs font-semibold text-brand-950 disabled:opacity-50"
+              className="btn-accent btn-sm disabled:opacity-50"
             >
               {busy ? "…" : "Assigner"}
             </button>
@@ -331,7 +331,7 @@ function RolesPanel() {
                           <button
                             type="button"
                             onClick={() => deleteRole(ur.id)}
-                            className="ml-1 rounded-full p-0.5 text-rose-400 hover:bg-rose-500/20"
+                            className="btn-ghost btn-xs ml-1"
                             aria-label="Retirer ce rôle"
                           >
                             <X className="h-3 w-3" />
@@ -399,7 +399,7 @@ function TypesPanel() {
         <button
           type="button"
           onClick={() => setEditingId("new")}
-          className="inline-flex items-center gap-1 rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-brand-950"
+          className="btn-accent btn-sm"
         >
           <Plus className="h-3.5 w-3.5" />
           Créer
@@ -482,7 +482,7 @@ function TypesPanel() {
                       <button
                         type="button"
                         onClick={() => setEditingId(t.id)}
-                        className="rounded border border-brand-700 px-2 py-0.5 text-[11px] text-white/80 hover:bg-brand-800"
+                        className="btn-secondary btn-sm"
                       >
                         Éditer
                       </button>
@@ -490,7 +490,7 @@ function TypesPanel() {
                         <button
                           type="button"
                           onClick={() => deactivate(t.id)}
-                          className="rounded border border-rose-500/40 px-2 py-0.5 text-[11px] text-rose-300 hover:bg-rose-500/10"
+                          className="btn-outline-rose btn-xs"
                         >
                           <Trash2 className="h-3 w-3" />
                         </button>
@@ -699,7 +699,7 @@ function TypeEditor({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded border border-brand-700 px-3 py-1 text-xs text-white/80"
+          className="btn-secondary btn-sm"
         >
           Annuler
         </button>
@@ -707,7 +707,7 @@ function TypeEditor({
           type="button"
           onClick={save}
           disabled={busy}
-          className="rounded bg-accent-500 px-3 py-1 text-xs font-semibold text-brand-950 disabled:opacity-50"
+          className="btn-accent btn-sm disabled:opacity-50"
         >
           {busy ? "…" : "Sauvegarder"}
         </button>

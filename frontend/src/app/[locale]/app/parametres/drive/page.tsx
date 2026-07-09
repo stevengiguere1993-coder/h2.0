@@ -421,7 +421,7 @@ function ConnectionSection({
               type="button"
               onClick={onDisconnect}
               disabled={busy}
-              className="inline-flex items-center rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+              className="btn-outline-rose btn-sm disabled:opacity-50"
             >
               <Trash2 className="mr-1.5 h-3.5 w-3.5" />
               Déconnecter
@@ -629,7 +629,7 @@ function ConventionsSection() {
         <button
           type="button"
           onClick={() => setCreating(true)}
-          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
+          className="btn-accent btn-sm shrink-0"
         >
           <Plus className="h-3.5 w-3.5" /> Nouvelle convention
         </button>
@@ -735,7 +735,7 @@ function ConventionsSection() {
                         type="button"
                         title="Tester (apply à une entité)"
                         onClick={() => setTesting(c)}
-                        className="rounded p-1 text-emerald-300 hover:bg-emerald-500/10"
+                        className="btn-ghost btn-xs"
                       >
                         <Play className="h-3.5 w-3.5" />
                       </button>
@@ -743,7 +743,7 @@ function ConventionsSection() {
                         type="button"
                         title="Modifier"
                         onClick={() => setEditing(c)}
-                        className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
+                        className="btn-ghost btn-xs"
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
@@ -751,7 +751,7 @@ function ConventionsSection() {
                         type="button"
                         title={c.active ? "Désactiver" : "Activer"}
                         onClick={() => toggleActive(c)}
-                        className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
+                        className="btn-ghost btn-xs"
                       >
                         <Power className="h-3.5 w-3.5" />
                       </button>
@@ -759,7 +759,7 @@ function ConventionsSection() {
                         type="button"
                         title="Supprimer"
                         onClick={() => remove(c)}
-                        className="rounded p-1 text-rose-300 hover:bg-rose-500/10"
+                        className="btn-outline-rose btn-xs"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -1112,7 +1112,7 @@ function ConventionEditorModal({
               <button
                 type="button"
                 onClick={() => setPickerTarget("parent")}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-2 text-xs font-semibold text-white hover:border-accent-500/50 hover:bg-accent-500/10"
+                className="btn-secondary btn-sm shrink-0"
               >
                 <FolderSearch className="h-3.5 w-3.5" /> Parcourir…
               </button>
@@ -1190,7 +1190,7 @@ function ConventionEditorModal({
               <button
                 type="button"
                 onClick={() => setPickerTarget("template")}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-2 text-xs font-semibold text-white hover:border-accent-500/50 hover:bg-accent-500/10"
+                className="btn-secondary btn-sm shrink-0"
               >
                 <FolderSearch className="h-3.5 w-3.5" /> Parcourir…
               </button>
@@ -1292,7 +1292,7 @@ function ConventionEditorModal({
         <button
           type="button"
           onClick={onClose}
-          className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/70 hover:bg-white/5"
+          className="btn-secondary btn-sm"
         >
           Annuler
         </button>
@@ -1300,7 +1300,7 @@ function ConventionEditorModal({
           type="button"
           onClick={save}
           disabled={busy || !state.name || !state.entity_type}
-          className="inline-flex items-center gap-1 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
+          className="btn-accent btn-sm disabled:opacity-50"
         >
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
           {convention ? "Enregistrer" : "Créer"}
@@ -1468,7 +1468,7 @@ function ConventionTestModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/70 hover:bg-white/5"
+              className="btn-secondary btn-sm"
             >
               Annuler
             </button>
@@ -1476,7 +1476,7 @@ function ConventionTestModal({
               type="button"
               onClick={apply}
               disabled={busy || !entityId}
-              className="inline-flex items-center gap-1 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
+              className="btn-accent btn-sm disabled:opacity-50"
             >
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               Appliquer
@@ -1518,7 +1518,7 @@ function ConventionTestModal({
             <button
               type="button"
               onClick={onApplied}
-              className="rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
+              className="btn-accent btn-sm"
             >
               Fermer
             </button>
@@ -1711,7 +1711,7 @@ function PageModulesSection() {
           type="button"
           onClick={() => void reload()}
           title="Rafraîchir"
-          className="shrink-0 rounded-lg border border-brand-800 p-1.5 text-white/50 hover:bg-white/5 hover:text-white"
+          className="btn-ghost btn-xs shrink-0"
         >
           <RefreshCw className="h-4 w-4" />
         </button>
@@ -1893,7 +1893,7 @@ function ModuleRow({
             type="button"
             onClick={onEdit}
             title="Éditer le titre affiché sur la page"
-            className="rounded p-0.5 text-white/35 hover:bg-white/10 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <Pencil className="h-3 w-3" />
           </button>
@@ -1974,7 +1974,7 @@ function EditModuleTitleModal({
           type="button"
           onClick={onClose}
           disabled={busy}
-          className="rounded-lg border border-brand-700 px-3 py-1.5 text-sm text-white/70 hover:bg-white/5 disabled:opacity-50"
+          className="btn-secondary btn-sm disabled:opacity-50"
         >
           Annuler
         </button>
@@ -1985,7 +1985,7 @@ function EditModuleTitleModal({
             onSave(title.trim());
           }}
           disabled={busy}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-400 disabled:opacity-50"
+          className="btn-accent btn-sm disabled:opacity-50"
         >
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
           Enregistrer
@@ -2143,7 +2143,7 @@ function EntityLinksSection() {
                         target="_blank"
                         rel="noreferrer"
                         title="Ouvrir dans Drive"
-                        className="rounded p-1 text-accent-300 hover:bg-accent-500/10"
+                        className="btn-ghost btn-xs"
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
                       </a>
@@ -2151,7 +2151,7 @@ function EntityLinksSection() {
                         type="button"
                         title="Supprimer le lien"
                         onClick={() => remove(l)}
-                        className="rounded p-1 text-rose-300 hover:bg-rose-500/10"
+                        className="btn-outline-rose btn-xs"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -2315,7 +2315,7 @@ function AutoUploadsSection() {
         <button
           type="button"
           onClick={() => setCreating(true)}
-          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
+          className="btn-accent btn-sm shrink-0"
         >
           <Plus className="h-3.5 w-3.5" /> Nouvelle règle
         </button>
@@ -2396,7 +2396,7 @@ function AutoUploadsSection() {
                         type="button"
                         title="Modifier"
                         onClick={() => setEditing(r)}
-                        className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
+                        className="btn-ghost btn-xs"
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
@@ -2404,7 +2404,7 @@ function AutoUploadsSection() {
                         type="button"
                         title={r.active ? "Désactiver" : "Activer"}
                         onClick={() => toggleActive(r)}
-                        className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
+                        className="btn-ghost btn-xs"
                       >
                         <Power className="h-3.5 w-3.5" />
                       </button>
@@ -2412,7 +2412,7 @@ function AutoUploadsSection() {
                         type="button"
                         title="Supprimer"
                         onClick={() => remove(r)}
-                        className="rounded p-1 text-rose-300 hover:bg-rose-500/10"
+                        className="btn-outline-rose btn-xs"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -2668,7 +2668,7 @@ function AutoUploadEditorModal({
         <button
           type="button"
           onClick={onClose}
-          className="rounded-lg border border-brand-800 px-4 py-2 text-sm text-white/70 hover:bg-white/5"
+          className="btn-secondary btn-sm"
         >
           Annuler
         </button>
@@ -2676,7 +2676,7 @@ function AutoUploadEditorModal({
           type="button"
           onClick={save}
           disabled={saving || !state.name.trim()}
-          className="inline-flex items-center gap-2 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
+          className="btn-accent btn-sm disabled:opacity-50"
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           {isEdit ? "Enregistrer" : "Créer"}
@@ -2855,7 +2855,7 @@ function Modal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>

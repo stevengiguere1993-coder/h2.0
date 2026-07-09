@@ -376,7 +376,7 @@ export default function ContractDetailPage() {
                   type="button"
                   onClick={() => void deleteContract()}
                   disabled={locked}
-                  className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-2 text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+                  className="btn-outline-rose btn-xs disabled:opacity-50"
                   title={
                     locked
                       ? "Contrat signé verrouillé"
@@ -408,7 +408,7 @@ export default function ContractDetailPage() {
                   <button
                     type="button"
                     onClick={() => void copyLink()}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-white/15 bg-white/5 px-3 py-1.5 font-semibold text-white/70 hover:bg-white/10"
+                    className="btn-secondary btn-sm"
                   >
                     {linkCopied ? (
                       <>
@@ -620,7 +620,7 @@ export default function ContractDetailPage() {
               <button
                 type="button"
                 onClick={() => setDepositOpen(false)}
-                className="rounded-md p-1 text-white/50 hover:bg-brand-900 hover:text-white"
+                className="btn-ghost btn-xs"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -648,7 +648,7 @@ export default function ContractDetailPage() {
               <button
                 type="button"
                 onClick={() => setDepositOpen(false)}
-                className="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-sm font-semibold text-white/70 hover:bg-white/10"
+                className="btn-secondary btn-sm"
               >
                 Annuler
               </button>

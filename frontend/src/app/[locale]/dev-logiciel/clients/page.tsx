@@ -308,7 +308,7 @@ export default function ClientsPage() {
               <button
                 type="button"
                 onClick={bulkDelete}
-                className="inline-flex items-center gap-1 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 hover:bg-rose-500/20"
+                className="btn-outline-rose btn-sm"
               >
                 <Trash2 className="h-3.5 w-3.5" /> Supprimer ({selected.size})
               </button>
@@ -316,7 +316,7 @@ export default function ClientsPage() {
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/dev-logiciel/clients/new" as any}
-              className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
+              className="btn-accent"
             >
               <Plus className="mr-1.5 h-4 w-4" /> Nouveau client
             </Link>
@@ -667,7 +667,7 @@ function EmptyState() {
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={"/dev-logiciel/clients/new" as any}
-        className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 mt-6 inline-flex text-sm"
+        className="btn-accent mt-6"
       >
         <Plus className="mr-1.5 h-4 w-4" /> Nouveau client
       </Link>

@@ -595,7 +595,7 @@ export default function CrmKanbanPage() {
                           <button
                             type="button"
                             onClick={() => renameCustomColumn(col.id)}
-                            className="rounded p-1 text-white/40 hover:bg-white/10 hover:text-white"
+                            className="btn-ghost btn-xs"
                             aria-label="Renommer la colonne"
                             title="Renommer la colonne"
                           >
@@ -604,7 +604,7 @@ export default function CrmKanbanPage() {
                           <button
                             type="button"
                             onClick={() => removeCustomColumn(col.id)}
-                            className="rounded p-1 text-white/40 hover:bg-rose-500/10 hover:text-rose-300"
+                            className="btn-ghost btn-xs"
                             aria-label="Supprimer la colonne"
                             title="Supprimer la colonne"
                           >

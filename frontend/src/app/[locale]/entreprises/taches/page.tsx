@@ -875,7 +875,7 @@ function GlobalBriefingCard({
             onClick={() => void load(true)}
             disabled={generating}
             title="Regénérer le briefing global"
-            className="rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1 text-[10px] font-semibold text-white/60 hover:text-white disabled:opacity-50"
+            className="btn-secondary btn-sm disabled:opacity-50"
           >
             {generating ? "…" : "Regénérer"}
           </button>
@@ -884,7 +884,7 @@ function GlobalBriefingCard({
             onClick={() => setExpanded((v) => !v)}
             title={expanded ? "Réduire" : "Étendre"}
             aria-label={expanded ? "Réduire le briefing" : "Étendre le briefing"}
-            className="rounded-md border border-brand-700 bg-brand-900 p-1 text-white/60 transition hover:text-white"
+            className="btn-secondary btn-xs"
           >
             {expanded ? (
               <ChevronUp className="h-3.5 w-3.5" />
@@ -1000,7 +1000,7 @@ function CreateTaskOwnerModal({
             type="button"
             onClick={onCancel}
             aria-label="Fermer"
-            className="rounded-md p-1 text-white/40 hover:bg-white/5 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>
@@ -1065,7 +1065,7 @@ function CreateTaskOwnerModal({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-md border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs text-white/70 hover:text-white"
+            className="btn-secondary btn-sm"
           >
             Annuler
           </button>

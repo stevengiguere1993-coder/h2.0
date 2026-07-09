@@ -271,7 +271,7 @@ export default function BauxPage() {
             <button
               type="button"
               onClick={() => setMois((m) => shiftMonth(m, -1))}
-              className="rounded-md p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+              className="btn-ghost btn-xs"
               aria-label="Mois précédent"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -282,7 +282,7 @@ export default function BauxPage() {
             <button
               type="button"
               onClick={() => setMois((m) => shiftMonth(m, 1))}
-              className="rounded-md p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+              className="btn-ghost btn-xs"
               aria-label="Mois suivant"
             >
               <ChevronRight className="h-4 w-4" />
@@ -458,7 +458,7 @@ export default function BauxPage() {
                                   type="button"
                                   onClick={() => void miseEnDemeure(r)}
                                   title="Générer la mise en demeure (TAL) en PDF"
-                                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
+                                  className="btn-outline-rose btn-sm"
                                 >
                                   <Gavel className="h-3 w-3" />
                                   Mise en demeure

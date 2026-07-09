@@ -179,7 +179,7 @@ export default function PaiePage() {
                   onClick={() =>
                     setPeriodEnd(shiftPeriodEnd(report.period_end, -14))
                   }
-                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  className="btn-ghost btn-xs"
                   title="Période précédente"
                 >
                   <ChevronLeft className="h-4 w-4" />
@@ -206,7 +206,7 @@ export default function PaiePage() {
                   onClick={() =>
                     setPeriodEnd(shiftPeriodEnd(report.period_end, 14))
                   }
-                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  className="btn-ghost btn-xs"
                   title="Période suivante"
                 >
                   <ChevronRight className="h-4 w-4" />
@@ -223,7 +223,7 @@ export default function PaiePage() {
               <button
                 type="button"
                 onClick={() => load(periodEnd)}
-                className="rounded-md p-2 text-white/60 hover:bg-brand-800 hover:text-white"
+                className="btn-ghost btn-xs"
                 title="Rafraîchir"
               >
                 <RefreshCw className="h-4 w-4" />

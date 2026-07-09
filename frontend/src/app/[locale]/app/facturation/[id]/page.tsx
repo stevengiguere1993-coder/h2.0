@@ -820,7 +820,7 @@ export default function FactureDetailPage() {
                       type="button"
                       onClick={() => void saveReference()}
                       disabled={refSaving || !refDraft.trim()}
-                      className="rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-brand-950 disabled:opacity-50"
+                      className="btn-accent btn-sm disabled:opacity-50"
                     >
                       {refSaving ? "…" : "Sauver"}
                     </button>
@@ -828,7 +828,7 @@ export default function FactureDetailPage() {
                       type="button"
                       onClick={() => setEditingRef(false)}
                       disabled={refSaving}
-                      className="rounded-md border border-brand-800 px-3 py-1.5 text-xs font-semibold text-white/60 hover:text-white"
+                      className="btn-secondary btn-sm"
                     >
                       Annuler
                     </button>
@@ -843,7 +843,7 @@ export default function FactureDetailPage() {
                         setEditingRef(true);
                       }}
                       title="Modifier le numéro de facture"
-                      className="rounded p-1 text-white/30 hover:bg-brand-900 hover:text-accent-500"
+                      className="btn-ghost btn-xs"
                     >
                       <span aria-hidden className="text-sm">✏️</span>
                     </button>
@@ -894,7 +894,7 @@ export default function FactureDetailPage() {
                   type="button"
                   onClick={deleteFacture}
                   disabled={deleting}
-                  className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+                  className="btn-outline-rose btn-sm"
                 >
                   {deleting ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -1087,7 +1087,7 @@ export default function FactureDetailPage() {
                         type="button"
                         onClick={saveNextReminder}
                         disabled={saving}
-                        className="rounded-lg border border-brand-700 bg-brand-800 px-3 py-1.5 text-xs font-medium text-white hover:border-accent-500 disabled:opacity-60"
+                        className="btn-secondary btn-sm disabled:opacity-60"
                       >
                         Enregistrer
                       </button>
@@ -2008,7 +2008,7 @@ function ItemRow({
             disabled={busy || !canUp}
             aria-label="Monter cette ligne"
             title="Monter"
-            className="rounded-md border border-brand-800 p-1 text-white/50 hover:border-accent-500 hover:text-white disabled:opacity-30"
+            className="btn-ghost btn-xs disabled:opacity-30"
           >
             <ArrowUp className="h-3.5 w-3.5" />
           </button>
@@ -2018,7 +2018,7 @@ function ItemRow({
             disabled={busy || !canDown}
             aria-label="Descendre cette ligne"
             title="Descendre"
-            className="rounded-md border border-brand-800 p-1 text-white/50 hover:border-accent-500 hover:text-white disabled:opacity-30"
+            className="btn-ghost btn-xs disabled:opacity-30"
           >
             <ArrowDown className="h-3.5 w-3.5" />
           </button>
@@ -2116,7 +2116,7 @@ function ItemRow({
         type="button"
         onClick={onDelete}
         disabled={busy}
-        className="flex items-center gap-1 text-rose-400 hover:text-rose-300 disabled:opacity-40 sm:justify-center"
+        className="btn-outline-rose btn-xs disabled:opacity-40 sm:justify-center"
         aria-label="Supprimer l'item"
       >
         {busy ? (

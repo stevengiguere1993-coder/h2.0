@@ -632,7 +632,7 @@ export default function ClesApiPage() {
                             onClick={() =>
                               setEditingKeyId(editing ? null : k.id)
                             }
-                            className="inline-flex items-center gap-1 rounded-lg border border-brand-700 bg-brand-800/60 px-2.5 py-1 text-xs font-medium text-white/80 hover:bg-brand-800"
+                            className="btn-secondary btn-sm"
                           >
                             {editing ? (
                               <ChevronDown className="h-3.5 w-3.5" />
@@ -646,7 +646,7 @@ export default function ClesApiPage() {
                           <button
                             type="button"
                             onClick={() => void revoke(k)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-xs font-medium text-rose-200 hover:bg-rose-500/20"
+                            className="btn-outline-rose btn-sm"
                           >
                             <Trash2 className="h-3.5 w-3.5" /> Révoquer
                           </button>

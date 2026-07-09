@@ -441,7 +441,7 @@ export default function EntrepriseDetailPage() {
                 onClick={renameEntreprise}
                 title="Renommer l'entreprise"
                 aria-label="Renommer l'entreprise"
-                className="rounded-md p-1.5 text-white/40 transition hover:bg-accent-500/15 hover:text-accent-500"
+                className="btn-ghost btn-xs"
               >
                 <Pencil className="h-4 w-4" />
               </button>
@@ -450,7 +450,7 @@ export default function EntrepriseDetailPage() {
                 onClick={removeEntreprise}
                 title="Supprimer cette entreprise"
                 aria-label="Supprimer l'entreprise"
-                className="rounded-md p-1.5 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-300"
+                className="btn-ghost btn-xs"
               >
                 <Trash2 className="h-4 w-4" />
               </button>
@@ -513,7 +513,7 @@ export default function EntrepriseDetailPage() {
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/entreprises/taches/recurrentes" as any}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-accent-400"
+              className="btn-accent btn-sm"
               title="Gérer les modèles de tâches récurrentes (cross-entreprise)"
             >
               <Repeat className="h-3.5 w-3.5" />
@@ -820,7 +820,7 @@ function DailyPulseCard({
               type="button"
               onClick={() => generate(true)}
               disabled={generating}
-              className="rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1 text-[10px] font-semibold text-white/60 hover:text-white"
+              className="btn-secondary btn-xs"
               title="Regénérer le briefing du jour"
             >
               {generating ? "…" : "Regénérer"}
@@ -851,7 +851,7 @@ function DailyPulseCard({
             onClick={() => setExpanded((v) => !v)}
             title={expanded ? "Réduire" : "Étendre"}
             aria-label={expanded ? "Réduire le briefing" : "Étendre le briefing"}
-            className="rounded-md border border-brand-700 bg-brand-900 p-1 text-white/60 transition hover:text-white"
+            className="btn-secondary btn-xs"
           >
             {expanded ? (
               <ChevronUp className="h-3.5 w-3.5" />
@@ -1176,7 +1176,7 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
             setEditingId(null);
             setShowAdd(true);
           }}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-accent-400"
+          className="btn-accent btn-sm"
         >
           <Plus className="h-3.5 w-3.5" /> Ajouter un partenaire
         </button>
@@ -1237,7 +1237,7 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
                     setEditingId(p.id);
                     setShowAdd(true);
                   }}
-                  className="rounded-lg border border-white/15 bg-brand-900 p-1.5 text-white/60 hover:text-accent-400"
+                  className="btn-secondary btn-xs"
                   title="Modifier"
                 >
                   <Pencil className="h-3.5 w-3.5" />
@@ -1245,7 +1245,7 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
                 <button
                   type="button"
                   onClick={() => remove(p)}
-                  className="rounded-lg border border-white/15 bg-brand-900 p-1.5 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
+                  className="btn-secondary btn-xs"
                   title="Retirer"
                 >
                   <Trash2 className="h-3.5 w-3.5" />

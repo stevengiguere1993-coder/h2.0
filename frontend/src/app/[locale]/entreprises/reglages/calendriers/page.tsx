@@ -138,7 +138,7 @@ export default function ReglagesCalendriersPage() {
             type="button"
             onClick={syncAll}
             disabled={syncingAll || !feeds || feeds.length === 0}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/80 hover:border-accent-500 hover:text-accent-400 disabled:opacity-50"
+            className="btn-secondary btn-sm disabled:opacity-50"
           >
             {syncingAll ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -220,7 +220,7 @@ export default function ReglagesCalendriersPage() {
                 <button
                   type="button"
                   onClick={() => syncOne(f.id)}
-                  className="rounded-lg border border-white/15 bg-brand-950 p-1.5 text-white/60 hover:border-sky-300 hover:text-sky-200"
+                  className="btn-secondary btn-xs"
                   title="Synchroniser maintenant"
                 >
                   <RefreshCw className="h-3.5 w-3.5" />
@@ -228,7 +228,7 @@ export default function ReglagesCalendriersPage() {
                 <button
                   type="button"
                   onClick={() => remove(f)}
-                  className="rounded-lg border border-white/15 bg-brand-950 p-1.5 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
+                  className="btn-secondary btn-xs"
                   title="Supprimer"
                 >
                   <Trash2 className="h-3.5 w-3.5" />

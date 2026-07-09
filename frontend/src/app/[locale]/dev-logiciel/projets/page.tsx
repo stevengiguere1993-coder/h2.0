@@ -183,7 +183,7 @@ export default function ProjectsPage() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={"/dev-logiciel/projets/new" as any}
-            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
+            className="btn-accent"
           >
             <Plus className="mr-1.5 h-4 w-4" />
             Nouveau projet
@@ -317,7 +317,7 @@ function ProjectCard({
         }}
         aria-label="Supprimer"
         title="Supprimer"
-        className="absolute right-2 top-2 rounded-md p-1 text-white/40 opacity-0 transition hover:bg-rose-500/15 hover:text-rose-400 group-hover:opacity-100"
+        className="btn-ghost btn-xs absolute right-2 top-2 opacity-0 group-hover:opacity-100"
       >
         <Trash2 className="h-3.5 w-3.5" />
       </button>
@@ -363,7 +363,7 @@ function EmptyState() {
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={"/dev-logiciel/projets/new" as any}
-        className="inline-flex mt-6 rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
+        className="btn-accent mt-6"
       >
         <Plus className="mr-1.5 h-4 w-4" />
         Nouveau projet

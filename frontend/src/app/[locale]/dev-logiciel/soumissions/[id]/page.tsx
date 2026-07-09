@@ -2019,7 +2019,7 @@ function DevisDevEditor({
                         <button
                           type="button"
                           onClick={() => onDeleteItem(it.id)}
-                          className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                          className="btn-ghost btn-xs"
                         >
                           <Trash2 className="h-3 w-3" />
                         </button>
@@ -2345,7 +2345,7 @@ function DevisDevOwnerInitial({
                     <button
                       type="button"
                       onClick={() => onDeleteItem(it.id)}
-                      className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                      className="btn-ghost btn-xs"
                     >
                       <Trash2 className="h-3 w-3" />
                     </button>
@@ -2546,7 +2546,7 @@ function DevisDevOwnerInitial({
                     <button
                       type="button"
                       onClick={() => onDeleteItem(it.id)}
-                      className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                      className="btn-ghost btn-xs"
                     >
                       <Trash2 className="h-3 w-3" />
                     </button>
@@ -2645,7 +2645,7 @@ function DevisDevOwnerInitial({
                     <button
                       type="button"
                       onClick={() => onDeleteItem(it.id)}
-                      className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                      className="btn-ghost btn-xs"
                     >
                       <Trash2 className="h-3 w-3" />
                     </button>
@@ -2850,7 +2850,7 @@ function ModuleCard({
             type="button"
             disabled={index === 0}
             onClick={() => onMoveModule(md.id, -1)}
-            className="rounded p-1 text-white/30 hover:bg-white/10 hover:text-white disabled:opacity-20"
+            className="btn-ghost btn-xs disabled:opacity-20"
             title="Monter"
           >
             <ChevronUp className="h-3.5 w-3.5" />
@@ -2859,7 +2859,7 @@ function ModuleCard({
             type="button"
             disabled={index === count - 1}
             onClick={() => onMoveModule(md.id, 1)}
-            className="rounded p-1 text-white/30 hover:bg-white/10 hover:text-white disabled:opacity-20"
+            className="btn-ghost btn-xs disabled:opacity-20"
             title="Descendre"
           >
             <ChevronDown className="h-3.5 w-3.5" />
@@ -2867,7 +2867,7 @@ function ModuleCard({
           <button
             type="button"
             onClick={() => onDeleteModule(md.id)}
-            className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+            className="btn-ghost btn-xs"
             title="Supprimer le module"
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -2977,7 +2977,7 @@ function ModuleCard({
                     <button
                       type="button"
                       onClick={() => onDeleteItem(it.id)}
-                      className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                      className="btn-ghost btn-xs"
                     >
                       <Trash2 className="h-3 w-3" />
                     </button>
@@ -3108,7 +3108,7 @@ function LegacyView({
                 <button
                   type="button"
                   onClick={() => void onDeleteItem(it.id)}
-                  className="rounded p-1 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
+                  className="btn-ghost btn-xs"
                 >
                   <Trash2 className="h-3 w-3" />
                 </button>
@@ -3503,7 +3503,7 @@ function SectionCard({
         <button
           type="button"
           onClick={() => onDeleteSection(sec.id)}
-          className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+          className="btn-ghost btn-xs"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
@@ -3587,7 +3587,7 @@ function SectionCard({
                   <button
                     type="button"
                     onClick={() => onDeleteItem(it.id)}
-                    className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                    className="btn-ghost btn-xs"
                   >
                     <Trash2 className="h-3 w-3" />
                   </button>

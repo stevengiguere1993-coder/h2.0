@@ -434,11 +434,9 @@ export default function KratosPage() {
             <button
               type="button"
               onClick={toggleMic}
-              className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold transition ${
-                listening
-                  ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
-                  : "border-accent-500/40 bg-accent-500/10 text-accent-300 hover:bg-accent-500/20"
-              }`}
+              className={
+                listening ? "btn-outline-rose btn-sm" : "btn-outline-accent btn-sm"
+              }
               title="Démarrer / arrêter la dictée vocale"
             >
               <Mic className={`h-3.5 w-3.5 ${listening ? "animate-pulse" : ""}`} />
@@ -455,8 +453,7 @@ export default function KratosPage() {
                 type="button"
                 onClick={() => setText("")}
                 disabled={!text}
-                className="rounded-md px-3 py-1.5 text-xs transition hover:bg-white/5 disabled:opacity-40"
-                style={{ color: "var(--qg-text-muted)" }}
+                className="btn-ghost btn-sm disabled:opacity-40"
               >
                 Effacer
               </button>
@@ -595,7 +592,7 @@ export default function KratosPage() {
                         <button
                           type="button"
                           onClick={() => void discard(m.id)}
-                          className="rounded p-1 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
+                          className="btn-ghost btn-xs"
                           title="Rejeter"
                           aria-label="Rejeter"
                         >
@@ -698,11 +695,9 @@ function UserDrivenProblemsSection({
           <button
             type="button"
             onClick={onToggleMic}
-            className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold transition ${
-              listening
-                ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
-                : "border-accent-500/40 bg-accent-500/10 text-accent-300 hover:bg-accent-500/20"
-            }`}
+            className={
+              listening ? "btn-outline-rose btn-sm" : "btn-outline-accent btn-sm"
+            }
           >
             <Mic
               className={`h-3.5 w-3.5 ${listening ? "animate-pulse" : ""}`}

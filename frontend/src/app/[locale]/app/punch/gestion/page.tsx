@@ -463,7 +463,7 @@ export default function PunchGestionPage() {
                     d.setDate(d.getDate() - 7);
                     setWeekStart(d);
                   }}
-                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  className="btn-ghost btn-xs"
                   aria-label="Semaine précédente"
                 >
                   <ChevronLeft className="h-4 w-4" />
@@ -501,7 +501,7 @@ export default function PunchGestionPage() {
                     d.setDate(d.getDate() + 7);
                     setWeekStart(d);
                   }}
-                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  className="btn-ghost btn-xs"
                   aria-label="Semaine suivante"
                 >
                   <ChevronRight className="h-4 w-4" />
@@ -526,7 +526,7 @@ export default function PunchGestionPage() {
                     setMonthStart(monthStartOf(d));
                     setSelectedDay(null);
                   }}
-                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  className="btn-ghost btn-xs"
                   aria-label="Mois précédent"
                 >
                   <ChevronLeft className="h-4 w-4" />
@@ -543,7 +543,7 @@ export default function PunchGestionPage() {
                     setMonthStart(monthStartOf(d));
                     setSelectedDay(null);
                   }}
-                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  className="btn-ghost btn-xs"
                   aria-label="Mois suivant"
                 >
                   <ChevronRight className="h-4 w-4" />
@@ -563,7 +563,7 @@ export default function PunchGestionPage() {
                 <button
                   type="button"
                   onClick={() => setSelectedDay(null)}
-                  className="rounded-md border border-accent-500/40 bg-accent-500/10 px-2 py-1 text-xs text-accent-300 hover:bg-accent-500/20"
+                  className="btn-outline-accent btn-xs"
                   title="Réinitialiser le jour sélectionné"
                 >
                   ✕ {shortISO(selectedDay)}
@@ -579,7 +579,7 @@ export default function PunchGestionPage() {
                   onClick={() =>
                     setPayPeriodEnd(shiftPayPeriod(payPeriodEnd, -1))
                   }
-                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  className="btn-ghost btn-xs"
                   aria-label="Période précédente"
                 >
                   <ChevronLeft className="h-4 w-4" />
@@ -614,7 +614,7 @@ export default function PunchGestionPage() {
                   onClick={() =>
                     setPayPeriodEnd(shiftPayPeriod(payPeriodEnd, +1))
                   }
-                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  className="btn-ghost btn-xs"
                   aria-label="Période suivante"
                 >
                   <ChevronRight className="h-4 w-4" />
@@ -763,7 +763,7 @@ export default function PunchGestionPage() {
                             e.stopPropagation();
                             remove(p);
                           }}
-                          className="text-rose-400 hover:text-rose-300"
+                          className="btn-outline-rose btn-xs"
                           aria-label="Supprimer"
                         >
                           <Trash2 className="h-4 w-4" />

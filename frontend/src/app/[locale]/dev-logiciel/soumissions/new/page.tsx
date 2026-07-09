@@ -376,7 +376,7 @@ export default function NewSoumissionPage() {
             <button
               type="submit"
               disabled={submitting}
-              className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
+              className="btn-accent justify-center"
             >
               {submitting ? (
                 <>

@@ -90,9 +90,8 @@ const STATUS_LABEL: Record<string, string> = Object.fromEntries(
 STATUS_LABEL.sent = "Envoyé";
 STATUS_LABEL.signed = "Signé";
 
-// Bouton plein doré — bon contraste (texte foncé sur fond doré).
-const BTN =
-  "inline-flex items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-brand-950 hover:bg-amber-400 disabled:opacity-50";
+// Bouton plein doré — design system partagé (texte foncé sur fond doré).
+const BTN = "btn-accent btn-sm justify-center disabled:opacity-50";
 
 function money(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -707,7 +706,7 @@ export default function BonsTravailPage() {
               <button
                 type="button"
                 onClick={closeDetail}
-                className="text-white/50 hover:text-white"
+                className="btn-ghost btn-xs"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -861,7 +860,7 @@ export default function BonsTravailPage() {
                       type="button"
                       onClick={closeDetail}
                       disabled={editBusy}
-                      className="rounded-lg border border-brand-700 px-3 py-2 text-sm text-white/80 hover:bg-brand-900"
+                      className="btn-secondary btn-sm"
                     >
                       Fermer
                     </button>

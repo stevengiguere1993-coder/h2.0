@@ -164,15 +164,8 @@ const STATUS_META: Record<
   }
 };
 
-const BTN_PRIMARY =
-  "inline-flex items-center gap-2 rounded-lg bg-[var(--qg-accent)] px-3.5 py-2 " +
-  "text-sm font-medium text-white shadow-sm transition hover:opacity-90 " +
-  "disabled:cursor-not-allowed disabled:opacity-40";
-const BTN_GHOST =
-  "inline-flex items-center gap-2 rounded-lg border border-[var(--qg-border)] " +
-  "bg-[var(--qg-card-bg)] px-3.5 py-2 text-sm font-medium text-[var(--qg-text)] " +
-  "transition hover:border-[var(--qg-accent)] disabled:cursor-not-allowed " +
-  "disabled:opacity-40";
+const BTN_PRIMARY = "btn-accent btn-sm disabled:cursor-not-allowed disabled:opacity-40";
+const BTN_GHOST = "btn-secondary btn-sm disabled:cursor-not-allowed disabled:opacity-40";
 const CARD =
   "rounded-2xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-5";
 
@@ -1106,11 +1099,11 @@ function CompaniesManager() {
                 <span className="text-sm tabular-nums text-[var(--qg-text-muted)]">
                   {c.taux_refacturation != null ? `${money(c.taux_refacturation)}/h` : "défaut"}
                 </span>
-                <button className="text-[var(--qg-text-faint)] hover:text-[var(--qg-accent)]" onClick={() => setEditing(c)}>
+                <button className="btn-ghost btn-xs" onClick={() => setEditing(c)}>
                   <Pencil className="h-4 w-4" />
                 </button>
                 {c.is_active && (
-                  <button className="text-[var(--qg-text-faint)] hover:text-red-400" onClick={() => removeCompany(c.id)}>
+                  <button className="btn-outline-rose btn-xs" onClick={() => removeCompany(c.id)}>
                     <Trash2 className="h-4 w-4" />
                   </button>
                 )}

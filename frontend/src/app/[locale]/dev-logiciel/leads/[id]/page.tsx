@@ -444,7 +444,7 @@ export default function ProspectDetailPage() {
                   href={
                     `/dev-logiciel/soumissions/new?lead_id=${p.id}` as any
                   }
-                  className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
+                  className="btn-accent"
                 >
                   <FileText className="mr-1.5 h-4 w-4" />
                   Créer soumission
@@ -453,7 +453,7 @@ export default function ProspectDetailPage() {
                   type="button"
                   onClick={deleteProspect}
                   disabled={deleting}
-                  className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 transition hover:bg-rose-500/20 hover:text-rose-200 disabled:opacity-50"
+                  className="btn-outline-rose btn-sm disabled:opacity-50"
                 >
                   {deleting ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -520,7 +520,7 @@ export default function ProspectDetailPage() {
                       type="button"
                       onClick={saveNotes}
                       disabled={savingNotes || notes === (p.internal_notes || "")}
-                      className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 mt-3 text-sm"
+                      className="btn-accent mt-3"
                     >
                       {savingNotes ? (
                         <>
@@ -989,7 +989,7 @@ function AssigneesPanel({
               <button
                 type="button"
                 onClick={onRemove}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-white/60 hover:bg-rose-500/10 hover:text-rose-300"
+                className="btn-ghost btn-xs"
                 title="Retirer"
               >
                 <X className="h-3.5 w-3.5" />
@@ -1030,7 +1030,7 @@ function AssigneesPanel({
               <button
                 type="button"
                 onClick={() => setPicking(false)}
-                className="rounded-md p-2 text-white/40 hover:bg-brand-800"
+                className="btn-ghost btn-xs"
                 title="Annuler"
               >
                 <X className="h-4 w-4" />
@@ -1040,7 +1040,7 @@ function AssigneesPanel({
             <button
               type="button"
               onClick={() => setPicking(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-brand-800 px-3 py-2 text-xs text-white/60 hover:border-accent-500 hover:text-white"
+              className="btn-secondary btn-xs"
             >
               <UserPlus className="h-3.5 w-3.5" />
               {assigned ? "Changer" : "Ajouter une personne"}
@@ -1336,7 +1336,7 @@ function ProspectDocuments({
                       <button
                         type="button"
                         onClick={() => remove(p.id)}
-                        className="rounded p-1 text-white/40 hover:text-rose-300"
+                        className="btn-ghost btn-xs"
                         aria-label="Supprimer"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -1469,7 +1469,7 @@ function ProspectDocuments({
                     <button
                       type="button"
                       onClick={() => remove(d.id)}
-                      className="rounded p-1 text-white/40 hover:text-rose-300"
+                      className="btn-ghost btn-xs"
                       aria-label="Supprimer"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -1742,7 +1742,7 @@ function AppointmentScheduler({
             type="button"
             onClick={submit}
             disabled={submitting}
-            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
+            className="btn-accent disabled:opacity-60"
           >
             {submitting ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />

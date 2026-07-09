@@ -472,7 +472,7 @@ export default function NewBonPage() {
             <button
               type="submit"
               disabled={submitting}
-              className="btn-accent text-sm"
+              className="btn-accent btn-sm"
             >
               {submitting ? (
                 <>
@@ -485,7 +485,7 @@ export default function NewBonPage() {
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/app/bons" as any}
-              className="btn-secondary text-sm"
+              className="btn-secondary btn-sm"
             >
               Annuler
             </Link>

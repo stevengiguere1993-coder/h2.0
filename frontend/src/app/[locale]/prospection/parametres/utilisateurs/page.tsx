@@ -166,7 +166,7 @@ export default function ProspectionUsersPage() {
           <button
             type="button"
             onClick={() => setShowCreate(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-accent-400"
+            className="btn-accent btn-sm"
           >
             <Plus className="h-4 w-4" /> Nouvel utilisateur
           </button>
@@ -547,7 +547,7 @@ function CreateUserModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-white/40 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
             aria-label="Fermer"
           >
             <X className="h-5 w-5" />
@@ -632,7 +632,7 @@ function CreateUserModal({
             <button
               type="submit"
               disabled={submitting}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-brand-950 hover:bg-accent-400 disabled:opacity-50"
+              className="btn-accent btn-sm disabled:opacity-50"
             >
               {submitting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -644,7 +644,7 @@ function CreateUserModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg border border-brand-800 px-3 py-2 text-sm text-white/80 hover:bg-brand-900"
+              className="btn-secondary btn-sm"
             >
               Annuler
             </button>

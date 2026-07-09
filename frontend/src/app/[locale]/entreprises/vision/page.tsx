@@ -268,16 +268,7 @@ export default function VisionPage() {
                     type="button"
                     onClick={() => generate(h.key, !!v)}
                     disabled={generating || !selectedEnt}
-                    className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-bold transition disabled:opacity-50"
-                    style={{
-                      backgroundColor: v
-                        ? "transparent"
-                        : "rgba(216, 155, 60, 0.12)",
-                      border: v
-                        ? "1px solid var(--qg-border)"
-                        : "1px solid rgba(216, 155, 60, 0.45)",
-                      color: v ? "var(--qg-text-muted)" : "var(--qg-accent)"
-                    }}
+                    className={`${v ? "btn-secondary" : "btn-outline-accent"} btn-xs disabled:opacity-50`}
                   >
                     {generating ? (
                       <>

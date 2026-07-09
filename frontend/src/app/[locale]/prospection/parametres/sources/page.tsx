@@ -664,7 +664,7 @@ export default function ProspectionSourcesPage() {
                 provStatus?.status === "running" ||
                 !provFile
               }
-              className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2 text-sm font-medium text-accent-500 transition hover:bg-accent-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+              className="btn-outline-accent btn-sm disabled:cursor-not-allowed disabled:opacity-40"
             >
               {provUploading || provStatus?.status === "running" ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -715,7 +715,7 @@ export default function ProspectionSourcesPage() {
                 }
               }}
               disabled={!isOwner}
-              className="inline-flex items-center gap-2 rounded-lg border border-rose-700 bg-rose-700/10 px-3 py-1.5 text-xs font-bold text-rose-200 transition hover:bg-rose-700/20 disabled:cursor-not-allowed disabled:opacity-40"
+              className="btn-outline-rose btn-sm disabled:cursor-not-allowed disabled:opacity-40"
               title="Vide TOUTE la table mtl_property_units (full reset)"
             >
               ⚠ Reset complet
@@ -812,7 +812,7 @@ export default function ProspectionSourcesPage() {
                     /* silent */
                   }
                 }}
-                className="mt-2 rounded border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[10px] text-rose-200 hover:bg-rose-500/20"
+                className="btn-outline-rose btn-xs mt-2"
               >
                 Forcer le reset (déblocage manuel)
               </button>
@@ -991,7 +991,7 @@ export default function ProspectionSourcesPage() {
                   reqUploading ||
                   reqStatus?.status === "running"
                 }
-                className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2 text-sm font-medium text-accent-500 transition hover:bg-accent-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                className="btn-outline-accent btn-sm disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {reqUploading || reqStatus?.status === "running" ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -1140,7 +1140,7 @@ export default function ProspectionSourcesPage() {
                 type="button"
                 onClick={importCmhc}
                 disabled={!isOwner || !cmhcFile || cmhcBusy}
-                className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2 text-sm font-medium text-accent-500 transition hover:bg-accent-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                className="btn-outline-accent btn-sm disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {cmhcBusy ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -1193,7 +1193,7 @@ export default function ProspectionSourcesPage() {
               type="button"
               onClick={scrapeRental}
               disabled={!isOwner || rentalStatus?.status === "running"}
-              className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2 text-sm font-medium text-accent-500 transition hover:bg-accent-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+              className="btn-outline-accent btn-sm disabled:cursor-not-allowed disabled:opacity-40"
             >
               {rentalStatus?.status === "running" ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

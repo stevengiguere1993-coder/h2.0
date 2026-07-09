@@ -445,7 +445,7 @@ export default function ParametresPage() {
                     <button
                       type="button"
                       onClick={disconnect}
-                      className="inline-flex items-center gap-1 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 hover:bg-rose-500/20"
+                      className="btn-outline-rose btn-sm"
                     >
                       <Trash2 className="h-3.5 w-3.5" /> Déconnecter
                     </button>
@@ -897,7 +897,7 @@ function QuickBooksSection() {
               type="button"
               onClick={disconnect}
               disabled={busy}
-              className="inline-flex items-center rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+              className="btn-outline-rose btn-sm disabled:opacity-50"
             >
               <Trash2 className="mr-1.5 h-3.5 w-3.5" />
               Déconnecter

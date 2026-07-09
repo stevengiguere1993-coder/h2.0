@@ -564,7 +564,7 @@ function SoumissionCard({
           onDelete();
         }}
         aria-label="Supprimer"
-        className="absolute right-2 top-2 rounded-md p-1 text-white/40 opacity-0 transition hover:bg-rose-500/15 hover:text-rose-400 group-hover:opacity-100"
+        className="btn-ghost btn-xs absolute right-2 top-2 opacity-0 group-hover:opacity-100"
       >
         <Trash2 className="h-3.5 w-3.5" />
       </button>

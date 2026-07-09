@@ -466,7 +466,7 @@ export default function AnalysesLeadsPage() {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-brand-700 bg-brand-900 px-3 py-2 text-xs text-white/70 hover:border-accent-500 hover:text-white"
+            className="btn-secondary btn-sm"
           >
             <Upload className="h-3.5 w-3.5" />
             Ajouter des fichiers
@@ -743,7 +743,7 @@ function LeadCard({
             <button
               type="button"
               onClick={onView}
-              className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-brand-950 px-1.5 py-0.5 text-[10px] text-white/70 hover:text-white"
+              className="btn-secondary btn-xs"
               title="Ouvrir la fiche complète"
             >
               <Eye className="h-3 w-3" />
@@ -766,7 +766,7 @@ function LeadCard({
             <button
               type="button"
               onClick={onDelete}
-              className="inline-flex items-center rounded-md border border-white/15 bg-brand-950 p-0.5 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
+              className="btn-secondary btn-xs"
               title="Supprimer"
               aria-label="Supprimer"
             >
@@ -850,7 +850,7 @@ function LeadTable({
                   <button
                     type="button"
                     onClick={() => onView(l.id)}
-                    className="rounded-md border border-white/15 p-1 text-white/60 hover:text-white"
+                    className="btn-secondary btn-xs"
                     title="Fiche"
                   >
                     <Eye className="h-3 w-3" />
@@ -871,7 +871,7 @@ function LeadTable({
                     onClick={() =>
                       onDelete(l.id, l.address || `Lead #${l.id}`)
                     }
-                    className="rounded-md border border-white/15 p-1 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
+                    className="btn-secondary btn-xs"
                     title="Supprimer"
                   >
                     <Trash2 className="h-3 w-3" />

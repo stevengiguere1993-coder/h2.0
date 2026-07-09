@@ -655,7 +655,7 @@ function DealCard({
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={`/prospection/pipeline/${deal.id}` as any}
-              className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-brand-950 px-1.5 py-0.5 text-[10px] text-white/70 hover:text-white"
+              className="btn-secondary btn-sm"
               title="Ouvrir la fiche du deal"
             >
               <Eye className="h-3 w-3" />
@@ -664,7 +664,7 @@ function DealCard({
             <button
               type="button"
               onClick={onDelete}
-              className="inline-flex items-center rounded-md border border-white/15 bg-brand-950 p-0.5 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
+              className="btn-outline-rose btn-xs"
               title="Supprimer le deal"
               aria-label="Supprimer le deal"
             >

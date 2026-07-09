@@ -365,7 +365,7 @@ export default function RencontreDetailPage() {
               type="button"
               onClick={() => void deleteRencontre()}
               disabled={deletingRencontre}
-              className="inline-flex items-center gap-1.5 rounded-md border border-rose-500/40 bg-rose-500/10 px-2.5 py-1.5 text-xs font-semibold text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+              className="btn-outline-rose btn-sm disabled:opacity-50"
               title="Supprimer cette rencontre"
             >
               {deletingRencontre ? (
@@ -521,11 +521,7 @@ export default function RencontreDetailPage() {
                       type="button"
                       onClick={() => importFileRef.current?.click()}
                       disabled={importing}
-                      className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold disabled:opacity-50"
-                      style={{
-                        borderColor: "var(--qg-border)",
-                        color: "var(--qg-text)"
-                      }}
+                      className="btn-secondary btn-sm disabled:opacity-50"
                       title="Importer une transcription (texte) ou un audio — crée la section automatiquement"
                     >
                       {importing ? (
@@ -585,11 +581,7 @@ export default function RencontreDetailPage() {
                       type="button"
                       onClick={() => void quickAddSection()}
                       disabled={creatingSection}
-                      className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-semibold disabled:opacity-50"
-                      style={{
-                        borderColor: "var(--qg-border)",
-                        color: "var(--qg-text)"
-                      }}
+                      className="btn-secondary btn-sm disabled:opacity-50"
                     >
                       {creatingSection ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
@@ -1034,7 +1026,7 @@ ${raw}` : raw;
         <button
           type="button"
           onClick={onDelete}
-          className="rounded p-1.5 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
+          className="btn-ghost btn-xs"
           title="Supprimer cette section"
         >
           <Trash2 className="h-3.5 w-3.5" />
@@ -1112,7 +1104,7 @@ ${raw}` : raw;
             onClick={() => void cleanRawTranscript()}
             disabled={cleaning || !(section.transcript || transcript)}
             title="Réécrit le transcript brut en français québécois propre (homophones, accents, mots mal entendus)"
-            className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-2 py-1 text-[11px] font-semibold text-accent-500 transition hover:bg-accent-500/20 disabled:opacity-50"
+            className="btn-outline-accent btn-sm disabled:opacity-50"
           >
             {cleaning ? (
               <Loader2 className="h-3 w-3 animate-spin" />

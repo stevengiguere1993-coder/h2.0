@@ -359,7 +359,7 @@ export default function PurchaseOrderDetailPage() {
                   type="button"
                   onClick={onDelete}
                   disabled={deleting}
-                  className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+                  className="btn-outline-rose btn-sm"
                 >
                   {deleting ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -702,7 +702,7 @@ function ConvertToAchatModal({
         <button
           type="button"
           onClick={onClose}
-          className="absolute right-3 top-3 rounded-md p-1 text-white/50 hover:bg-brand-800 hover:text-white"
+          className="btn-ghost btn-xs absolute right-3 top-3"
           aria-label="Fermer"
         >
           <X className="h-4 w-4" />
@@ -1028,7 +1028,7 @@ function POItemsSection({
               <button
                 type="button"
                 onClick={() => onSuggestAmountMax(total)}
-                className="rounded-md border border-accent-500/40 bg-accent-500/10 px-2 py-1 text-[11px] font-semibold text-accent-300 hover:bg-accent-500/20"
+                className="btn-outline-accent btn-xs"
               >
                 Utiliser le total
               </button>
@@ -1038,7 +1038,7 @@ function POItemsSection({
           <button
             type="button"
             onClick={() => setPickerOpen(true)}
-            className="rounded-md border border-brand-700 bg-brand-900 px-2 py-1 text-[11px] font-semibold text-white/80 hover:border-accent-500 hover:text-white"
+            className="btn-secondary btn-xs"
           >
             + Catalogue
           </button>
@@ -1274,7 +1274,7 @@ function POCataloguePicker({
                     type="button"
                     onClick={() => apply(t)}
                     disabled={busy === t.id}
-                    className="rounded-lg bg-accent-500 px-3 py-2 text-xs font-bold text-brand-950 disabled:opacity-60"
+                    className="btn-accent btn-sm disabled:opacity-60"
                   >
                     {busy === t.id ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1383,7 +1383,7 @@ function POItemRow({
         type="button"
         onClick={onRemove}
         disabled={busy}
-        className="col-span-12 inline-flex items-center justify-center rounded-md border border-rose-500/30 bg-rose-500/5 py-1.5 text-[11px] text-rose-300 hover:bg-rose-500/15 disabled:opacity-50 sm:col-span-1 sm:py-0"
+        className="btn-outline-rose btn-xs col-span-12 justify-center disabled:opacity-50 sm:col-span-1"
         aria-label="Supprimer"
       >
         <Trash2 className="h-3.5 w-3.5" />

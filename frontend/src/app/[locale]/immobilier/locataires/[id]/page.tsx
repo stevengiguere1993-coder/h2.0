@@ -190,7 +190,7 @@ export default function LocataireDetailPage({
                 type="button"
                 onClick={() => void etatDeCompte()}
                 disabled={pdfLoading}
-                className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2 text-sm font-semibold text-accent-500 transition hover:bg-accent-500/20 disabled:opacity-50"
+                className="btn-outline-accent btn-sm ml-auto shrink-0 disabled:opacity-50"
                 title="Générer l'état de compte (PDF) : loyers, paiements, dépôt"
               >
                 {pdfLoading ? (

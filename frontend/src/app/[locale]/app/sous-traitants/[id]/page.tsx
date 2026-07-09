@@ -347,7 +347,7 @@ export default function SousTraitantDetailPage() {
                   type="button"
                   onClick={onDelete}
                   disabled={deleting}
-                  className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+                  className="btn-outline-rose btn-sm"
                 >
                   {deleting ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -521,7 +521,7 @@ export default function SousTraitantDetailPage() {
                         <button
                           type="button"
                           onClick={addCustomCity}
-                          className="rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1.5 text-xs text-white/80 hover:border-accent-500 hover:text-white"
+                          className="btn-secondary btn-sm"
                         >
                           Ajouter
                         </button>

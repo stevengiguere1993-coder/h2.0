@@ -426,7 +426,7 @@ function RecurrenceSection({ entrepriseId }: { entrepriseId: number }) {
                   <button
                     type="button"
                     onClick={() => toggleActive(t)}
-                    className="rounded-lg border border-white/15 bg-brand-950 px-2 py-1 text-[10px] text-white/70 hover:text-white"
+                    className="btn-secondary btn-xs"
                     title={t.is_active ? "Désactiver" : "Activer"}
                   >
                     {t.is_active ? "Pause" : "Activer"}
@@ -434,7 +434,7 @@ function RecurrenceSection({ entrepriseId }: { entrepriseId: number }) {
                   <button
                     type="button"
                     onClick={() => remove(t)}
-                    className="rounded-lg border border-white/15 bg-brand-950 p-1.5 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
+                    className="btn-ghost btn-xs"
                     title="Supprimer"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -1596,7 +1596,7 @@ function ValuePlanModal({
                   <button
                     type="button"
                     onClick={() => removeDriver(i)}
-                    className="col-span-1 rounded border border-white/10 p-1 text-white/50 hover:border-rose-400/40 hover:text-rose-300"
+                    className="btn-ghost btn-xs col-span-1"
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -1824,7 +1824,7 @@ function ModalShell({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1.5 text-white/60 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>

@@ -483,7 +483,7 @@ export default function ComparablesPage() {
           <button
             type="button"
             onClick={() => setShowAddModal(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2 text-sm font-medium text-accent-500 hover:bg-accent-500/20"
+            className="btn-outline-accent btn-sm"
           >
             <Plus className="h-4 w-4" />
             Ajouter un comparable manuel
@@ -649,7 +649,7 @@ export default function ComparablesPage() {
                   void search();
                 }}
                 disabled={loading}
-                className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-brand-950 hover:bg-accent-400 disabled:opacity-50"
+                className="btn-accent btn-sm w-full justify-center disabled:opacity-50"
               >
                 {loading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -870,7 +870,7 @@ export default function ComparablesPage() {
                             <button
                               type="button"
                               onClick={() => deleteComparable(c)}
-                              className="inline-flex items-center justify-center rounded-md border border-rose-500/40 bg-rose-500/10 p-1.5 text-rose-300 hover:bg-rose-500/20"
+                              className="btn-outline-rose btn-xs"
                               title="Supprimer ce comparable manuel"
                               aria-label="Supprimer"
                             >
@@ -1066,7 +1066,7 @@ function AddComparableModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-white/40 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
             aria-label="Fermer"
           >
             <X className="h-4 w-4" />
@@ -1274,7 +1274,7 @@ function AddComparableModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-sm text-white/70 hover:text-white"
+            className="btn-secondary btn-sm"
           >
             Annuler
           </button>
@@ -1282,7 +1282,7 @@ function AddComparableModal({
             type="button"
             onClick={submit}
             disabled={submitting}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-4 py-1.5 text-sm font-semibold text-brand-950 hover:bg-accent-400 disabled:opacity-50"
+            className="btn-accent btn-sm disabled:opacity-50"
           >
             {submitting ? (
               <Loader2 className="h-4 w-4 animate-spin" />

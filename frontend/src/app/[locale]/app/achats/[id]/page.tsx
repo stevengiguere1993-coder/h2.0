@@ -470,7 +470,7 @@ export default function AchatDetailPage() {
                   type="button"
                   onClick={onDelete}
                   disabled={deleting}
-                  className="inline-flex items-center gap-2 self-start rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+                  className="btn-outline-rose btn-sm self-start"
                 >
                   {deleting ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -802,7 +802,7 @@ export default function AchatDetailPage() {
                       onClick={() => rotateReceipt("left")}
                       disabled={rotating}
                       title="Pivoter de 90° vers la gauche"
-                      className="inline-flex items-center gap-1 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs text-white/80 hover:border-accent-500 hover:text-white disabled:opacity-60"
+                      className="btn-secondary btn-xs disabled:opacity-60"
                     >
                       ↺ Pivoter gauche
                     </button>
@@ -811,7 +811,7 @@ export default function AchatDetailPage() {
                       onClick={() => rotateReceipt("right")}
                       disabled={rotating}
                       title="Pivoter de 90° vers la droite"
-                      className="inline-flex items-center gap-1 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs text-white/80 hover:border-accent-500 hover:text-white disabled:opacity-60"
+                      className="btn-secondary btn-xs disabled:opacity-60"
                     >
                       ↻ Pivoter droite
                     </button>
@@ -819,7 +819,7 @@ export default function AchatDetailPage() {
                       type="button"
                       onClick={deleteReceipt}
                       disabled={uploadBusy}
-                      className="inline-flex items-center gap-1 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/20 disabled:opacity-60"
+                      className="btn-outline-rose btn-sm disabled:opacity-60"
                     >
                       Supprimer
                     </button>
@@ -987,7 +987,7 @@ function AchatQboPushButton({
         type="button"
         onClick={push}
         disabled={busy}
-        className="inline-flex items-center gap-2 self-start rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2.5 text-sm font-medium text-accent-200 hover:bg-accent-500/20 disabled:opacity-50"
+        className="btn-outline-accent btn-sm self-start disabled:opacity-50"
       >
         {busy ? (
           <Loader2 className="h-4 w-4 animate-spin" />

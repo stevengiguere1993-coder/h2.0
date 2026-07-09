@@ -162,7 +162,7 @@ export default function DevlogHoursPage() {
           <button
             type="button"
             onClick={openNew}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-400"
+            className="btn-accent btn-sm"
           >
             <Plus className="h-4 w-4" />
             Saisir des heures
@@ -297,7 +297,7 @@ function TimeEntryDrawer({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-white/50 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-5 w-5" />
           </button>
@@ -353,7 +353,7 @@ function TimeEntryDrawer({
             type="button"
             onClick={onSave}
             disabled={saving || !draft.work_date || !draft.hours.trim()}
-            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent-500 px-3 py-2 text-sm font-semibold text-white hover:bg-accent-400 disabled:opacity-50"
+            className="btn-accent btn-sm flex-1 justify-center disabled:opacity-50"
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Enregistrer
@@ -363,7 +363,7 @@ function TimeEntryDrawer({
               type="button"
               onClick={onDelete}
               title="Supprimer"
-              className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-2 text-rose-300 hover:bg-rose-500/20"
+              className="btn-outline-rose btn-xs"
             >
               <Trash2 className="h-4 w-4" />
             </button>

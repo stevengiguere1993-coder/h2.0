@@ -217,7 +217,7 @@ export default function ProspectionAgendaPage() {
           <button
             type="button"
             onClick={() => setShowCreate(new Date())}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-accent-400"
+            className="btn-accent btn-sm"
           >
             <Plus className="h-4 w-4" /> Nouveau RDV
           </button>
@@ -250,7 +250,7 @@ export default function ProspectionAgendaPage() {
             <button
               type="button"
               onClick={() => setRefDate(navigatePrev(refDate, view))}
-              className="rounded-md border border-brand-800 p-1.5 text-white/70 hover:bg-brand-900"
+              className="btn-secondary btn-sm"
               aria-label="Précédent"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -258,14 +258,14 @@ export default function ProspectionAgendaPage() {
             <button
               type="button"
               onClick={() => setRefDate(new Date())}
-              className="rounded-md border border-brand-800 px-2 py-1 text-xs text-white/70 hover:bg-brand-900"
+              className="btn-secondary btn-sm"
             >
               Aujourd&apos;hui
             </button>
             <button
               type="button"
               onClick={() => setRefDate(navigateNext(refDate, view))}
-              className="rounded-md border border-brand-800 p-1.5 text-white/70 hover:bg-brand-900"
+              className="btn-secondary btn-sm"
               aria-label="Suivant"
             >
               <ChevronRight className="h-4 w-4" />
@@ -1016,7 +1016,7 @@ function EventModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-white/40 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
             aria-label="Fermer"
           >
             <X className="h-5 w-5" />
@@ -1158,7 +1158,7 @@ function EventModal({
             <button
               type="submit"
               disabled={submitting}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-brand-950 hover:bg-accent-400 disabled:opacity-50"
+              className="btn-accent btn-sm disabled:opacity-50"
             >
               {submitting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -1168,7 +1168,7 @@ function EventModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg border border-brand-800 px-3 py-2 text-sm text-white/80 hover:bg-brand-900"
+              className="btn-secondary btn-sm"
             >
               Annuler
             </button>
@@ -1176,7 +1176,7 @@ function EventModal({
               <button
                 type="button"
                 onClick={handleDelete}
-                className="ml-auto rounded-lg border border-rose-500/40 px-3 py-2 text-sm text-rose-300 hover:bg-rose-500/10"
+                className="btn-outline-rose btn-sm ml-auto"
               >
                 Supprimer
               </button>

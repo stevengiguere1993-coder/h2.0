@@ -227,7 +227,7 @@ export default function CrmAujourdhuiPage() {
             <button
               type="button"
               onClick={load}
-              className="rounded-md p-1.5 text-white/40 hover:bg-brand-900 hover:text-white"
+              className="btn-ghost btn-xs"
               title="Rafraîchir"
             >
               <RefreshCw className="h-4 w-4" />
@@ -235,7 +235,7 @@ export default function CrmAujourdhuiPage() {
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/m/crm" as any}
-              className="hidden items-center gap-1 rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1.5 text-xs text-white/70 hover:text-white sm:inline-flex"
+              className="btn-secondary btn-sm hidden sm:inline-flex"
             >
               <Smartphone className="h-3.5 w-3.5" />
               Vue mobile

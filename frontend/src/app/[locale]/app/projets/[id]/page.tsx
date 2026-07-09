@@ -502,7 +502,7 @@ export default function ProjectDetailPage() {
                   type="button"
                   onClick={onDelete}
                   disabled={deleting}
-                  className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+                  className="btn-outline-rose btn-sm"
                 >
                   {deleting ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -533,7 +533,7 @@ export default function ProjectDetailPage() {
               <button
                 type="button"
                 onClick={openFactureModal}
-                className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2.5 text-sm font-medium text-accent-200 hover:bg-accent-500/20"
+                className="btn-outline-accent btn-sm"
               >
                 <DollarSign className="h-4 w-4" />
                 Créer une facture
@@ -2730,7 +2730,7 @@ function FinancesTab({
             <button
               type="button"
               onClick={openStatement}
-              className="inline-flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/40 px-3 py-2 text-xs font-medium text-white/80 transition hover:border-accent-500 hover:text-white"
+              className="btn-secondary btn-sm"
             >
               <FileText className="h-4 w-4 text-accent-500" />
               Consulter l&apos;état de compte (PDF)
@@ -2739,7 +2739,7 @@ function FinancesTab({
               type="button"
               onClick={sendStatement}
               disabled={sendingStatement}
-              className="inline-flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/40 px-3 py-2 text-xs font-medium text-white/80 transition hover:border-accent-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+              className="btn-secondary btn-sm disabled:cursor-not-allowed disabled:opacity-60"
             >
               {sendingStatement ? (
                 <Loader2 className="h-4 w-4 animate-spin text-accent-500" />
@@ -3305,7 +3305,7 @@ function PlanificationTab({
             <button
               type="button"
               onClick={() => sortPhasesByDate()}
-              className="inline-flex items-center rounded-lg border border-brand-700 px-2.5 py-1.5 text-xs text-white/70 hover:border-accent-500 hover:text-accent-500"
+              className="btn-secondary btn-sm"
               title="Réordonner les phases par date de début"
             >
               <ArrowDownUp className="mr-1.5 h-3.5 w-3.5" />
@@ -3856,7 +3856,7 @@ function PhaseCard({
                   phase.name
                 )}` as any
               }
-              className="inline-flex items-center rounded-md border border-brand-800 bg-brand-900 px-2.5 py-1.5 text-xs text-white/80 hover:border-accent-500/40 hover:text-white"
+              className="btn-secondary btn-sm"
               title={`Créer un PO pour la phase « ${phase.name} »`}
             >
               <Plus className="mr-1.5 h-3.5 w-3.5" />
@@ -4750,7 +4750,7 @@ function EventEditModal({
             type="button"
             onClick={remove}
             disabled={busy}
-            className="rounded-md border border-rose-500/40 px-3 py-1.5 text-xs text-rose-300 hover:bg-rose-500/10 disabled:opacity-40"
+            className="btn-outline-rose btn-sm disabled:opacity-40"
           >
             <Trash2 className="mr-1 inline-block h-3.5 w-3.5" />
             Supprimer
@@ -4760,7 +4760,7 @@ function EventEditModal({
               type="button"
               onClick={onClose}
               disabled={busy}
-              className="rounded-md px-3 py-1.5 text-xs text-white/70 hover:bg-white/5"
+              className="btn-ghost btn-sm"
             >
               Annuler
             </button>
@@ -6556,7 +6556,7 @@ function CorrectionBonPanel({
           type="button"
           onClick={() => void createBon()}
           disabled={creating}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50"
+          className="btn-danger btn-sm disabled:opacity-50"
         >
           {creating ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -6605,7 +6605,7 @@ function CorrectionBonPanel({
           <button
             type="button"
             onClick={() => void previewPdf()}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-2 text-xs font-semibold text-white/80 hover:border-accent-500"
+            className="btn-secondary btn-sm"
           >
             <FileText className="h-4 w-4" /> Prévisualiser le PDF
           </button>
@@ -6616,7 +6616,7 @@ function CorrectionBonPanel({
                 setSendNotice(null);
                 setSendOpen(true);
               }}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-400"
+              className="btn-danger btn-sm"
             >
               <Mail className="h-4 w-4" /> Envoyer pour signature
             </button>
@@ -6640,7 +6640,7 @@ function CorrectionBonPanel({
               type="button"
               onClick={() => void send()}
               disabled={sendBusy}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-400 disabled:opacity-50"
+              className="btn-danger btn-sm disabled:opacity-50"
             >
               {sendBusy ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -6732,7 +6732,7 @@ function CorrectionBonPanel({
             type="button"
             onClick={() => void addItem()}
             disabled={itemBusy === "new"}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white/80 hover:border-accent-500 disabled:opacity-50"
+            className="btn-secondary btn-sm disabled:opacity-50"
           >
             {itemBusy === "new" ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -6746,7 +6746,7 @@ function CorrectionBonPanel({
               type="button"
               onClick={() => void importCorrections()}
               disabled={itemBusy === "new"}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white/80 hover:border-accent-500 disabled:opacity-50"
+              className="btn-secondary btn-sm disabled:opacity-50"
             >
               <Hammer className="h-3.5 w-3.5" /> Reprendre les points
             </button>
