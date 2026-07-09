@@ -391,7 +391,7 @@ export default function DevlogContractsPage() {
           <button
             type="button"
             onClick={openNew}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-400"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-400"
           >
             <Plus className="h-4 w-4" />
             Nouveau contrat
@@ -411,7 +411,7 @@ export default function DevlogContractsPage() {
 
         {loading ? (
           <div className="mt-10 flex justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : items.length === 0 ? (
           <p className="mt-10 text-center text-sm text-white/40">
@@ -442,7 +442,7 @@ export default function DevlogContractsPage() {
                   }}
                   className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
                     isHover
-                      ? "border-blue-500 bg-brand-900"
+                      ? "border-accent-500 bg-brand-900"
                       : "border-brand-800"
                   }`}
                 >
@@ -666,7 +666,7 @@ function ContractCard({
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`group relative cursor-grab rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-blue-500 active:cursor-grabbing ${
+      className={`group relative cursor-grab rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-accent-500 active:cursor-grabbing ${
         dragging ? "opacity-40" : ""
       }`}
     >
@@ -680,7 +680,7 @@ function ContractCard({
         className="block w-full text-left"
       >
         <div className="flex items-start gap-2">
-          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-blue-500/15 text-blue-300">
+          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
             <FileSignature className="h-4 w-4" />
           </span>
           <div className="min-w-0 flex-1">
@@ -968,7 +968,7 @@ function Drawer({
             type="button"
             onClick={onSave}
             disabled={saving || !draft.title.trim() || locked}
-            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-500 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
+            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent-500 px-3 py-2 text-sm font-semibold text-white hover:bg-accent-400 disabled:opacity-50"
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Enregistrer

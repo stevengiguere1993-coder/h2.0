@@ -332,7 +332,7 @@ export default function SoumissionsPage() {
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/dev-logiciel/soumissions/new" as any}
-              className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm"
+              className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
             >
               <Plus className="mr-1.5 h-4 w-4" />
               Nouvelle soumission
@@ -354,7 +354,7 @@ export default function SoumissionsPage() {
 
         {loading ? (
           <div className="flex min-h-[50vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : items.length === 0 ? (
           <EmptyState />
@@ -389,7 +389,7 @@ export default function SoumissionsPage() {
                   }}
                   className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
                     isHover
-                      ? "border-blue-500 bg-brand-900"
+                      ? "border-accent-500 bg-brand-900"
                       : "border-brand-800"
                   }`}
                 >
@@ -486,7 +486,7 @@ function SoumissionCard({
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`group relative cursor-grab rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-blue-500 active:cursor-grabbing ${
+      className={`group relative cursor-grab rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-accent-500 active:cursor-grabbing ${
         dragging ? "opacity-40" : ""
       }`}
     >
@@ -545,7 +545,7 @@ function SoumissionCard({
         {/* Numéro de la soumission, en bas — bumpé en text-xs pour
             la lisibilité. */}
         <div className="mt-1.5 flex items-center justify-between">
-          <span className="text-xs font-semibold uppercase tracking-wider text-blue-400">
+          <span className="text-xs font-semibold uppercase tracking-wider text-accent-500">
             {s.reference}
             {s.kind === "contract" ? (
               <span className="ml-1.5 rounded bg-indigo-500/15 px-1 py-0.5 text-[9px] text-indigo-300">
@@ -573,7 +573,7 @@ function SoumissionCard({
 function EmptyState() {
   return (
     <div className="empty-state mx-auto mt-16 max-w-md">
-      <FileText className="mx-auto h-10 w-10 text-blue-400" />
+      <FileText className="mx-auto h-10 w-10 text-accent-500" />
       <h2 className="mt-4 text-lg font-semibold text-white">
         Aucune soumission
       </h2>
@@ -583,7 +583,7 @@ function EmptyState() {
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={"/dev-logiciel/soumissions/new" as any}
-        className="inline-flex mt-6 rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm"
+        className="inline-flex mt-6 rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
       >
         <Plus className="mr-1.5 h-4 w-4" />
         Nouvelle soumission
@@ -636,7 +636,7 @@ function NumberField({
           step="0.01"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-lg border border-white/10 bg-brand-950/60 px-3 py-2 text-sm text-white outline-none focus:border-blue-400"
+          className="w-full rounded-lg border border-white/10 bg-brand-950/60 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
         />
         <span className="text-xs text-white/40">{suffix}</span>
       </div>
@@ -695,7 +695,7 @@ function LineListEditor({
                 placeholder={placeholder}
                 value={line.description}
                 onChange={(e) => onChange(idx, "description", e.target.value)}
-                className="w-full rounded-lg border border-white/10 bg-brand-950/60 px-2.5 py-1.5 text-xs text-white outline-none focus:border-blue-400"
+                className="w-full rounded-lg border border-white/10 bg-brand-950/60 px-2.5 py-1.5 text-xs text-white outline-none focus:border-accent-500"
               />
               <input
                 type="number"
@@ -704,7 +704,7 @@ function LineListEditor({
                 placeholder="h"
                 value={line.heures}
                 onChange={(e) => onChange(idx, "heures", e.target.value)}
-                className="w-20 rounded-lg border border-white/10 bg-brand-950/60 px-2 py-1.5 text-xs text-white outline-none focus:border-blue-400"
+                className="w-20 rounded-lg border border-white/10 bg-brand-950/60 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500"
               />
               <span className="text-[10px] text-white/40">h</span>
               <button
@@ -857,7 +857,7 @@ function SoumissionDefaultsModal({ onClose }: { onClose: () => void }) {
       >
         <div className="flex items-center justify-between border-b border-white/10 px-6 py-4">
           <div className="flex items-center gap-2">
-            <Settings className="h-5 w-5 text-blue-400" />
+            <Settings className="h-5 w-5 text-accent-500" />
             <h2 className="text-base font-semibold text-white">
               Valeurs par défaut des soumissions
             </h2>
@@ -873,7 +873,7 @@ function SoumissionDefaultsModal({ onClose }: { onClose: () => void }) {
 
         {loading ? (
           <div className="flex min-h-[200px] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : (
           <div className="space-y-6 px-6 py-5">
@@ -965,7 +965,7 @@ function SoumissionDefaultsModal({ onClose }: { onClose: () => void }) {
             type="button"
             onClick={onSave}
             disabled={saving || loading}
-            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-400 disabled:opacity-50"
+            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-400 disabled:opacity-50"
           >
             {saving ? (
               <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />

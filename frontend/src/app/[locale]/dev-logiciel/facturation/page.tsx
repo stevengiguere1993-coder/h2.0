@@ -209,7 +209,7 @@ export default function DevlogInvoicesPage() {
           <button
             type="button"
             onClick={openNew}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-400"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-400"
           >
             <Plus className="h-4 w-4" />
             Nouvelle facture
@@ -226,7 +226,7 @@ export default function DevlogInvoicesPage() {
 
         {loading ? (
           <div className="mt-10 flex justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : (
           <>
@@ -260,7 +260,7 @@ export default function DevlogInvoicesPage() {
                     <button
                       type="button"
                       onClick={() => openEdit(i)}
-                      className="flex w-full items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 text-left transition hover:border-blue-500/60"
+                      className="flex w-full items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 text-left transition hover:border-accent-500"
                     >
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold text-white">
@@ -454,7 +454,7 @@ function InvoiceDrawer({
             type="button"
             onClick={onSave}
             disabled={saving}
-            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-500 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
+            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent-500 px-3 py-2 text-sm font-semibold text-white hover:bg-accent-400 disabled:opacity-50"
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Enregistrer

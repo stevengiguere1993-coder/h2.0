@@ -162,7 +162,7 @@ export default function DevlogHoursPage() {
           <button
             type="button"
             onClick={openNew}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-400"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-400"
           >
             <Plus className="h-4 w-4" />
             Saisir des heures
@@ -187,7 +187,7 @@ export default function DevlogHoursPage() {
 
         {loading ? (
           <div className="mt-10 flex justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : (
           <>
@@ -214,9 +214,9 @@ export default function DevlogHoursPage() {
                     <button
                       type="button"
                       onClick={() => openEdit(e)}
-                      className="flex w-full items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 text-left transition hover:border-blue-500/60"
+                      className="flex w-full items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 text-left transition hover:border-accent-500"
                     >
-                      <span className="flex h-11 w-14 flex-shrink-0 flex-col items-center justify-center rounded-lg bg-blue-500/15 text-blue-300">
+                      <span className="flex h-11 w-14 flex-shrink-0 flex-col items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
                         <span className="text-sm font-bold">{e.hours}</span>
                         <span className="text-[9px] uppercase">heures</span>
                       </span>
@@ -353,7 +353,7 @@ function TimeEntryDrawer({
             type="button"
             onClick={onSave}
             disabled={saving || !draft.work_date || !draft.hours.trim()}
-            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-500 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
+            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent-500 px-3 py-2 text-sm font-semibold text-white hover:bg-accent-400 disabled:opacity-50"
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Enregistrer

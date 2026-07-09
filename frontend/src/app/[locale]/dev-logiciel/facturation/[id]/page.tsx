@@ -433,7 +433,7 @@ export default function DevlogInvoiceDetailPage() {
 
         {loading ? (
           <div className="mt-10 flex justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : !inv ? (
           <p className="text-center text-sm text-white/40">Facture introuvable.</p>
@@ -469,7 +469,7 @@ export default function DevlogInvoiceDetailPage() {
                 <button
                   type="button"
                   onClick={() => setImportOpen(true)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-300 hover:bg-blue-500/20"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-500 hover:bg-accent-500/20"
                 >
                   <Download className="h-3.5 w-3.5" />
                   Importer du projet
@@ -488,7 +488,7 @@ export default function DevlogInvoiceDetailPage() {
                     type="button"
                     onClick={() => void sendInvoice()}
                     disabled={sending}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-400 disabled:opacity-50"
                   >
                     {sending ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -636,7 +636,7 @@ export default function DevlogInvoiceDetailPage() {
                     type="button"
                     onClick={() => void saveHeader()}
                     disabled={saving}
-                    className="inline-flex items-center gap-1.5 rounded-md bg-blue-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-400 disabled:opacity-50"
                   >
                     {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
                     Enregistrer
@@ -653,7 +653,7 @@ export default function DevlogInvoiceDetailPage() {
                 <button
                   type="button"
                   onClick={addItem}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-blue-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-400"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-400"
                 >
                   <Plus className="h-3 w-3" />
                   Ajouter une ligne
@@ -924,7 +924,7 @@ export default function DevlogInvoiceDetailPage() {
                   !importProject ||
                   (!importHours && !importSoumission)
                 }
-                className="inline-flex items-center gap-1.5 rounded-md bg-blue-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-400 disabled:opacity-50"
               >
                 {importBusy ? (
                   <Loader2 className="h-3 w-3 animate-spin" />

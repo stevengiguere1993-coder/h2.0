@@ -235,7 +235,7 @@ export default function DevlogHomePage() {
       <div className="mx-auto max-w-6xl px-4 py-6 lg:px-6">
         <header className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
-            <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500/15 text-blue-400">
+            <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
               <Code2 className="h-6 w-6" />
             </span>
             <div>
@@ -254,7 +254,7 @@ export default function DevlogHomePage() {
                 onClick={() => setPeriod(p)}
                 className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
                   period === p
-                    ? "bg-blue-500 text-white"
+                    ? "bg-accent-500 text-brand-950"
                     : "text-white/60 hover:bg-brand-800 hover:text-white"
                 }`}
               >
@@ -274,7 +274,7 @@ export default function DevlogHomePage() {
 
         {loading ? (
           <div className="mt-10 flex justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : (
           <>
@@ -325,7 +325,7 @@ export default function DevlogHomePage() {
             {/* Graphique soumissions vs ventes */}
             <div className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-300">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                   Soumissions vs ventes — {PERIOD_LABELS[period]}
                 </h2>
                 <div className="flex items-center gap-3 text-[11px]">
@@ -472,7 +472,7 @@ function BigTile({
   return (
     <Link
       href={href as any}
-      className="group flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:border-blue-500/60 hover:bg-brand-800"
+      className="group flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:border-accent-500/60 hover:bg-brand-800"
     >
       <span className={`flex h-12 w-12 items-center justify-center rounded-xl ${toneCls}`}>
         <Icon className="h-6 w-6" />
@@ -524,7 +524,7 @@ function KpiCard({
   return (
     <Link
       href={href as any}
-      className="group rounded-xl border border-brand-800 bg-brand-900 p-4 transition hover:border-blue-500/60"
+      className="group rounded-xl border border-brand-800 bg-brand-900 p-4 transition hover:border-accent-500/60"
     >
       <Icon className={`h-5 w-5 ${toneCls}`} />
       <p className="mt-2 text-[11px] uppercase tracking-wide text-white/50">
@@ -550,9 +550,9 @@ function Shortcut({
   return (
     <Link
       href={href as any}
-      className="group flex items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 transition hover:border-blue-500/60 hover:bg-brand-800"
+      className="group flex items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 transition hover:border-accent-500/60 hover:bg-brand-800"
     >
-      <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/15 text-blue-400 group-hover:bg-blue-500 group-hover:text-white">
+      <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500 group-hover:bg-accent-500 group-hover:text-brand-950">
         <Icon className="h-5 w-5" />
       </span>
       <div>

@@ -1299,7 +1299,7 @@ export default function SoumissionDetailPage() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={"/dev-logiciel/soumissions" as any}
-            className="inline-flex items-center text-sm text-white/70 hover:text-blue-400"
+            className="inline-flex items-center text-sm text-white/70 hover:text-accent-500"
           >
             <ArrowLeft className="mr-1 h-4 w-4" /> Retour
           </Link>
@@ -1342,7 +1342,7 @@ export default function SoumissionDetailPage() {
 
         {loading ? (
           <div className="mt-10 flex justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : !s ? (
           <p className="text-center text-sm text-white/40">Soumission introuvable.</p>
@@ -3476,7 +3476,7 @@ function SectionCard({
           onBlur={(e) =>
             onPatchSection(sec.id, { name: e.target.value.trim() })
           }
-          className="flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-base font-bold text-white hover:border-brand-800 focus:border-blue-500/50 focus:outline-none"
+          className="flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-base font-bold text-white hover:border-brand-800 focus:border-accent-500/50 focus:outline-none"
         />
         {adminView ? (
           <label className="inline-flex items-center gap-1.5 text-xs text-white/60">
@@ -3535,7 +3535,7 @@ function SectionCard({
                     onChange={(e) =>
                       onPatchItem(it.id, { description: e.target.value })
                     }
-                    className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-white hover:border-brand-800 focus:border-blue-500/50 focus:outline-none"
+                    className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-white hover:border-brand-800 focus:border-accent-500/50 focus:outline-none"
                   />
                 </td>
                 {adminView ? (

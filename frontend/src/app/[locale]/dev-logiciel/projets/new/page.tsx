@@ -103,7 +103,7 @@ export default function NewProjectPage() {
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/dev-logiciel/projets" as any}
-          className="inline-flex items-center text-sm text-white/70 hover:text-blue-400"
+          className="inline-flex items-center text-sm text-white/70 hover:text-accent-500"
         >
           <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux projets
         </Link>
@@ -216,7 +216,7 @@ export default function NewProjectPage() {
             <button
               type="submit"
               disabled={submitting}
-              className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm"
+              className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
             >
               {submitting ? (
                 <>
