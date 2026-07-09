@@ -841,7 +841,7 @@ export default function SoumissionDetailPage() {
                   type="button"
                   onClick={deleteSoumission}
                   disabled={deleting}
-                  className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+                  className="btn-outline-rose btn-sm"
                 >
                   {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                   Supprimer
@@ -999,7 +999,7 @@ export default function SoumissionDetailPage() {
                 <button
                   type="button"
                   onClick={convertToProject}
-                  className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2.5 text-sm font-medium text-accent-200 hover:bg-accent-500/20"
+                  className="btn-outline-accent btn-sm"
                 >
                   <Briefcase className="h-4 w-4" />
                   Convertir en projet
@@ -1172,7 +1172,7 @@ export default function SoumissionDetailPage() {
                   type="button"
                   onClick={() => addItem("rabais")}
                   disabled={itemBusy === "new"}
-                  className="inline-flex items-center rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/20 disabled:opacity-60"
+                  className="btn-outline-rose btn-sm disabled:opacity-60"
                 >
                   <Plus className="mr-1.5 h-3.5 w-3.5" /> Rabais
                 </button>
@@ -1433,7 +1433,7 @@ export default function SoumissionDetailPage() {
                       <button
                         type="button"
                         onClick={() => setNotePickerOpen(true)}
-                        className="mb-1 rounded-md border border-brand-700 bg-brand-900 px-2 py-1 text-[11px] font-semibold text-white/80 hover:border-accent-500 hover:text-white"
+                        className="btn-secondary btn-xs mb-1"
                       >
                         + Catalogue de notes
                       </button>
@@ -1971,7 +1971,7 @@ function ItemRow({
             onClick={() => setExpanded((v) => !v)}
             aria-label={expanded ? "Replier l'item" : "Éditer l'item en grand"}
             aria-expanded={expanded}
-            className="rounded-md p-1.5 text-white/40 transition hover:bg-white/10 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <ChevronDown
               className={`h-4 w-4 transition-transform ${
@@ -1986,7 +1986,7 @@ function ItemRow({
               type="button"
               onClick={onDelete}
               aria-label="Supprimer l'item"
-              className="rounded-md p-1.5 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-400"
+              className="btn-ghost btn-xs hover:bg-rose-500/15 hover:text-rose-400"
             >
               <Trash2 className="h-4 w-4" />
             </button>
@@ -2231,7 +2231,7 @@ function StreetViewEmbed({ address }: { address: string }) {
           href={gmapsUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-white/70 hover:border-accent-500 hover:text-white"
+          className="btn-secondary btn-xs"
         >
           🗺️ Ouvrir dans Google Maps
         </a>
@@ -2239,7 +2239,7 @@ function StreetViewEmbed({ address }: { address: string }) {
           href={gstreetUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-white/70 hover:border-accent-500 hover:text-white"
+          className="btn-secondary btn-xs"
         >
           👁️ Ouvrir Street View en grand
         </a>
@@ -2335,7 +2335,7 @@ function ClientPhotosModal({
             type="button"
             onClick={onClose}
             aria-label="Fermer"
-            className="rounded-md p-1 text-white/70 hover:bg-white/10 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-5 w-5" />
           </button>
@@ -2522,7 +2522,7 @@ function ServiceTemplatePicker({
                     type="button"
                     onClick={() => apply(t)}
                     disabled={busy === t.id}
-                    className="rounded-lg bg-accent-500 px-3 py-2 text-xs font-bold text-brand-950 disabled:opacity-60"
+                    className="btn-accent btn-sm disabled:opacity-60"
                   >
                     {busy === t.id ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2643,7 +2643,7 @@ function NoteTemplatePicker({
           <button
             type="button"
             onClick={() => setCreating((v) => !v)}
-            className="rounded-md border border-brand-700 bg-brand-900 px-2 py-1 text-[11px] font-semibold text-white/80 hover:border-accent-500 hover:text-white"
+            className="btn-secondary btn-xs"
           >
             <Plus className="mr-1 inline h-3 w-3" />
             Nouvelle note
@@ -2671,7 +2671,7 @@ function NoteTemplatePicker({
               <button
                 type="button"
                 onClick={() => setCreating(false)}
-                className="rounded-md px-3 py-1.5 text-xs text-white/70 hover:bg-white/5"
+                className="btn-ghost btn-sm"
               >
                 Annuler
               </button>
@@ -2714,7 +2714,7 @@ function NoteTemplatePicker({
                       <button
                         type="button"
                         onClick={() => onInsert(t.body)}
-                        className="rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-bold text-brand-950"
+                        className="btn-accent btn-sm"
                       >
                         Insérer
                       </button>
@@ -2722,7 +2722,7 @@ function NoteTemplatePicker({
                         type="button"
                         onClick={() => removeTemplate(t.id)}
                         disabled={busy}
-                        className="rounded-md p-1.5 text-white/40 hover:bg-rose-500/10 hover:text-rose-300"
+                        className="btn-ghost btn-xs hover:bg-rose-500/10 hover:text-rose-300"
                         aria-label="Supprimer"
                       >
                         <Trash2 className="h-3.5 w-3.5" />

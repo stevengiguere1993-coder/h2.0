@@ -226,7 +226,7 @@ export default function TachesRecurrentesPage() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={"/entreprises/taches" as any}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-bg-alt)] px-3 py-1.5 text-xs text-[var(--qg-text)] hover:bg-[var(--qg-bg)]"
+            className="btn-secondary btn-sm"
           >
             ← Toutes les tâches
           </Link>
@@ -545,7 +545,7 @@ function TemplateRow({
           <button
             type="button"
             onClick={onEdit}
-            className="rounded-lg border border-white/15 bg-brand-950 p-1.5 text-white/60 hover:text-white"
+            className="btn-secondary btn-xs"
             title="Modifier"
             aria-label="Modifier"
           >
@@ -554,7 +554,7 @@ function TemplateRow({
           <button
             type="button"
             onClick={onToggle}
-            className="inline-flex items-center gap-1 rounded-lg border border-white/15 bg-brand-950 px-2 py-1 text-[10px] text-white/70 hover:text-white"
+            className="btn-secondary btn-xs"
             title={t.is_active ? "Désactiver" : "Activer"}
           >
             {t.is_active ? (
@@ -572,7 +572,7 @@ function TemplateRow({
           <button
             type="button"
             onClick={onDelete}
-            className="rounded-lg border border-white/15 bg-brand-950 p-1.5 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
+            className="btn-outline-rose btn-xs"
             title="Supprimer"
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -845,7 +845,7 @@ function TemplateFormModal({
             type="button"
             onClick={onClose}
             aria-label="Fermer"
-            className="rounded-md p-1 text-white/60 hover:bg-white/5 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>

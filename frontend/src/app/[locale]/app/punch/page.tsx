@@ -590,7 +590,7 @@ function ActivePunchCard({
         type="button"
         onClick={onStop}
         disabled={busy}
-        className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-rose-500 px-4 py-4 text-base font-bold text-white shadow-lg hover:bg-rose-600 disabled:opacity-60"
+        className="btn-danger mt-6 w-full justify-center disabled:opacity-60"
       >
         {busy ? (
           <Loader2 className="h-5 w-5 animate-spin" />
@@ -699,7 +699,7 @@ function IdleCard({
         type="button"
         onClick={onStart}
         disabled={busy}
-        className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-accent-500 px-4 py-4 text-base font-bold text-brand-950 shadow-lg hover:bg-accent-400 disabled:opacity-60"
+        className="btn-accent mt-6 w-full justify-center disabled:opacity-60"
       >
         {busy ? (
           <Loader2 className="h-5 w-5 animate-spin" />

@@ -114,7 +114,7 @@ export default function ImmeublesListPage() {
             <button
               type="button"
               onClick={() => setShowImport(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white/80 hover:border-accent-500 hover:text-accent-500"
+              className="btn-secondary btn-sm"
             >
               <Download className="h-3.5 w-3.5" />
               Import matricule
@@ -128,7 +128,7 @@ export default function ImmeublesListPage() {
                   ? "Sélectionne une entreprise dans la barre latérale d'abord"
                   : `Créer un immeuble pour ${currentEnt?.name}`
               }
-              className="inline-flex items-center gap-1.5 rounded-lg border border-accent-400/30 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-500 hover:bg-accent-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn-outline-accent btn-sm disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus className="h-3.5 w-3.5" />
               Nouvel immeuble
@@ -312,7 +312,7 @@ function ModalShell({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1.5 text-white/60 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>
@@ -817,7 +817,7 @@ function ImportPlexflowModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1.5 text-white/60 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>
@@ -887,7 +887,7 @@ function ImportPlexflowModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-lg border border-white/15 px-4 py-2 text-xs font-semibold text-white/70 hover:text-white"
+                className="btn-secondary btn-sm"
               >
                 Annuler
               </button>
@@ -895,7 +895,7 @@ function ImportPlexflowModal({
                 type="button"
                 onClick={() => void run(true)}
                 disabled={loading || !raw.trim()}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-900 px-4 py-2 text-xs font-semibold text-white/80 hover:text-white disabled:opacity-50"
+                className="btn-secondary btn-sm disabled:opacity-50"
               >
                 {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
                 Prévisualiser

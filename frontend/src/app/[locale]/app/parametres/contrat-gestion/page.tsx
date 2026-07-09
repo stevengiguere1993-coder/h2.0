@@ -136,7 +136,7 @@ export default function ContratGestionSettingsPage() {
               type="button"
               onClick={() => void save()}
               disabled={busy || body === null}
-              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-black hover:bg-accent-400 disabled:opacity-50"
+              className="btn-accent btn-sm mt-4 disabled:opacity-50"
             >
               {busy ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

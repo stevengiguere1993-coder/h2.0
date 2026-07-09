@@ -332,7 +332,7 @@ export default function DevlogCrmPage() {
           <button
             type="button"
             onClick={() => setCreateOpen(true)}
-            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
+            className="btn-accent"
           >
             <Plus className="mr-1.5 h-4 w-4" /> Créer un prospect
           </button>
@@ -396,7 +396,7 @@ export default function DevlogCrmPage() {
                         <button
                           type="button"
                           onClick={() => removeCustomColumn(col.id)}
-                          className="rounded p-1 text-white/40 hover:bg-rose-500/10 hover:text-rose-300"
+                          className="btn-ghost btn-xs"
                           aria-label="Supprimer la colonne"
                           title="Supprimer la colonne"
                         >
@@ -489,7 +489,7 @@ function LeadCard({
           }}
           aria-label="Créer une soumission"
           title="Créer une soumission"
-          className="rounded-md p-1 text-accent-500 hover:bg-accent-500/10"
+          className="btn-ghost btn-xs"
         >
           <FileText className="h-3.5 w-3.5" />
         </button>
@@ -501,7 +501,7 @@ function LeadCard({
             onDelete();
           }}
           aria-label="Supprimer"
-          className="rounded-md p-1 text-white/40 hover:bg-rose-500/15 hover:text-rose-400"
+          className="btn-ghost btn-xs"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
@@ -725,7 +725,7 @@ function CreateLeadModal({
             type="button"
             onClick={submit}
             disabled={busy}
-            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
+            className="btn-accent disabled:opacity-60"
           >
             {busy ? (
               <>

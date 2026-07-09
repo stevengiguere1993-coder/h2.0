@@ -476,7 +476,7 @@ function ClientAccount({
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={`/dev-logiciel/soumissions/new?client_id=${client.id}` as any}
-            className="inline-flex items-center gap-2 self-start rounded-lg bg-accent-500 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-400"
+            className="btn-accent btn-sm self-start"
           >
             <FilePlus2 className="h-4 w-4" />
             Nouvelle soumission
@@ -484,7 +484,7 @@ function ClientAccount({
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={`/dev-logiciel/projets/new?client_id=${client.id}` as any}
-            className="inline-flex items-center gap-2 self-start rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2.5 text-sm font-medium text-accent-500 hover:bg-accent-500/20"
+            className="btn-outline-accent btn-sm self-start"
           >
             <Briefcase className="h-4 w-4" />
             Nouveau projet
@@ -493,7 +493,7 @@ function ClientAccount({
             type="button"
             onClick={onDelete}
             disabled={deleting}
-            className="inline-flex items-center gap-2 self-start rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+            className="btn-outline-rose btn-sm self-start"
           >
             {deleting ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -1116,7 +1116,7 @@ function NotesContactsEditor({
         type="button"
         onClick={onSave}
         disabled={saving || !dirty}
-        className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-accent-400 disabled:opacity-50"
+        className="btn-accent justify-center disabled:opacity-50"
       >
         {saving ? (
           <>

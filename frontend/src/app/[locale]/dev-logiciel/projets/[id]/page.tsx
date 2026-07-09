@@ -454,7 +454,7 @@ export default function ProjectDetailPage() {
                   type="button"
                   onClick={onDelete}
                   disabled={deleting}
-                  className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+                  className="btn-outline-rose btn-sm"
                 >
                   {deleting ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -487,7 +487,7 @@ export default function ProjectDetailPage() {
               <button
                 type="button"
                 onClick={openFactureModal}
-                className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2.5 text-sm font-medium text-accent-500 hover:bg-accent-500/20"
+                className="btn-outline-accent btn-sm"
               >
                 <DollarSign className="h-4 w-4" />
                 Créer une facture
@@ -767,7 +767,7 @@ export default function ProjectDetailPage() {
                   convertingToFacture ||
                   (!includeSoumission && !includeHours && !includeAchats)
                 }
-                className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
+                className="btn-accent disabled:opacity-60"
               >
                 {convertingToFacture ? (
                   <>
@@ -899,7 +899,7 @@ function SummaryTab(props: {
         type="button"
         onClick={props.onSave}
         disabled={props.saving || !props.dirty}
-        className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
+        className="btn-accent"
       >
         {props.saving ? (
           <>
@@ -1424,7 +1424,7 @@ function DevlogMembersTab({ projectId }: { projectId: number }) {
             type="button"
             onClick={addMember}
             disabled={adding || !pickId}
-            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
+            className="btn-accent disabled:opacity-60"
           >
             {adding ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1748,7 +1748,7 @@ function DevlogPlanificationTab({ projectId }: { projectId: number }) {
             type="button"
             onClick={addPhase}
             disabled={creating || !newName.trim()}
-            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
+            className="btn-accent disabled:opacity-60"
           >
             {creating ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -2078,7 +2078,7 @@ function DevlogAchatsTab({ projectId }: { projectId: number }) {
         <button
           type="button"
           onClick={() => setModalOpen(true)}
-          className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-4 py-2.5 font-semibold text-white transition hover:bg-accent-400 text-sm"
+          className="btn-accent btn-sm"
         >
           <Plus className="mr-2 h-4 w-4" />
           Ajouter une dépense
@@ -2271,7 +2271,7 @@ function DevlogAchatsTab({ projectId }: { projectId: number }) {
                 type="button"
                 onClick={addPurchase}
                 disabled={creating || !fDesc.trim() || !fAmount}
-                className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
+                className="btn-accent disabled:opacity-60"
               >
                 {creating ? (
                   <>
@@ -2665,7 +2665,7 @@ function DevlogRecurringServicesTab({
             type="button"
             onClick={addService}
             disabled={creating || !fName.trim() || !fAmount}
-            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
+            className="btn-accent disabled:opacity-60"
           >
             {creating ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -2795,7 +2795,7 @@ function DevlogRecurringServicesTab({
                         type="button"
                         onClick={() => generateInvoice(s.id, s.name)}
                         disabled={busy || s.status !== "active"}
-                        className="inline-flex items-center gap-1 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-500 hover:bg-accent-500/20 disabled:opacity-50"
+                        className="btn-outline-accent btn-sm disabled:opacity-50"
                         title={
                           s.status === "active"
                             ? "Générer la facture du mois (brouillon)"

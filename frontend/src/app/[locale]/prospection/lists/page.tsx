@@ -101,7 +101,7 @@ export default function ProspectionListsIndexPage() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={"/prospection/leads" as any}
-            className="inline-flex items-center gap-1 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs text-accent-500 hover:bg-accent-500/20"
+            className="btn-outline-accent btn-sm"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             Tous les leads
@@ -127,7 +127,7 @@ export default function ProspectionListsIndexPage() {
           <button
             type="button"
             onClick={load}
-            className="rounded-md p-2 text-white/40 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
             title="Rafraîchir"
           >
             <RefreshCw className="h-4 w-4" />
@@ -221,7 +221,7 @@ export default function ProspectionListsIndexPage() {
                 <button
                   type="button"
                   onClick={() => deleteList(l.id, l.name)}
-                  className="rounded-md p-1.5 text-white/30 opacity-0 transition hover:bg-rose-500/15 hover:text-rose-300 group-hover:opacity-100"
+                  className="btn-outline-rose btn-xs opacity-0 transition group-hover:opacity-100"
                   aria-label="Supprimer"
                 >
                   <Trash2 className="h-3.5 w-3.5" />

@@ -434,7 +434,7 @@ export default function EmployeDetailPage() {
                   type="button"
                   onClick={onDelete}
                   disabled={deleting}
-                  className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+                  className="btn-outline-rose btn-sm"
                 >
                   {deleting ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -643,7 +643,7 @@ export default function EmployeDetailPage() {
                       setRateError(null);
                       setRateFormOpen((v) => !v);
                     }}
-                    className="rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-200 hover:border-accent-500"
+                    className="btn-outline-accent btn-sm"
                   >
                     {rateFormOpen
                       ? "Annuler"
@@ -845,7 +845,7 @@ export default function EmployeDetailPage() {
                                 <button
                                   type="button"
                                   onClick={() => deleteRateChange(r.id)}
-                                  className="text-rose-300/70 hover:text-rose-300"
+                                  className="btn-outline-rose btn-xs"
                                   aria-label="Supprimer ce palier"
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
@@ -921,7 +921,7 @@ export default function EmployeDetailPage() {
                     href={employeurDUrl}
                     target="_blank"
                     rel="noreferrer noopener"
-                    className="mt-4 inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2 text-xs text-accent-200 hover:border-accent-500"
+                    className="btn-outline-accent btn-sm mt-4"
                   >
                     💼 Ouvrir l&apos;espace Employeur D de cet employé →
                   </a>

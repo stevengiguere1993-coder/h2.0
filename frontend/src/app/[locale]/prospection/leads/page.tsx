@@ -518,7 +518,7 @@ export default function ProspectionLeadsPage() {
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/prospection/lists" as any}
-              className="inline-flex items-center gap-1.5 rounded-md border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white"
+              className="btn-secondary btn-sm"
               title="Listes (segments) sauvegardés"
             >
               <Layers className="h-3.5 w-3.5" />
@@ -528,7 +528,7 @@ export default function ProspectionLeadsPage() {
               type="button"
               onClick={() => setSaveOpen(true)}
               disabled={sorted.length === 0}
-              className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-500 hover:bg-accent-500/20 disabled:opacity-40"
+              className="btn-outline-accent btn-sm disabled:opacity-40"
               title="Sauvegarde la vue filtrée actuelle comme liste"
             >
               <Save className="h-3.5 w-3.5" />
@@ -538,7 +538,7 @@ export default function ProspectionLeadsPage() {
               type="button"
               onClick={() => downloadCsv(sorted)}
               disabled={sorted.length === 0}
-              className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-500 hover:bg-accent-500/20 disabled:opacity-40"
+              className="btn-outline-accent btn-sm disabled:opacity-40"
               title="Exporter la liste filtrée en CSV"
             >
               <Download className="h-3.5 w-3.5" />
@@ -1057,7 +1057,7 @@ function SaveAsListModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-white/40 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>
@@ -1132,7 +1132,7 @@ function SaveAsListModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-3 py-1.5 text-xs text-white/60 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-sm"
           >
             Annuler
           </button>
@@ -1447,7 +1447,7 @@ function DeleteLeadButton({
       type="button"
       onClick={handleClick}
       disabled={busy}
-      className="rounded-md p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-30"
+      className="btn-ghost btn-xs disabled:opacity-30"
       aria-label="Supprimer"
       title="Supprimer ce lead"
     >

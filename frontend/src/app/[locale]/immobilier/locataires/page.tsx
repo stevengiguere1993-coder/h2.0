@@ -61,7 +61,7 @@ export default function LocatairesPage() {
           <button
             type="button"
             onClick={() => setShowCreate(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/30 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-500 hover:bg-accent-500/20"
+            className="btn-outline-accent btn-sm"
           >
             <Plus className="h-3.5 w-3.5" />
             Nouveau locataire
@@ -239,7 +239,7 @@ function CreateLocataireModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1.5 text-white/60 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>

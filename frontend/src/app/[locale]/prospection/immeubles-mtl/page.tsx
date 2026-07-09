@@ -528,7 +528,7 @@ export default function ImmeublesMtlPage() {
                 type="button"
                 disabled={offset === 0}
                 onClick={() => setOffset(Math.max(0, offset - limit))}
-                className="rounded border border-brand-700 bg-brand-900 px-2 py-1 text-white/70 disabled:opacity-30"
+                className="btn-secondary btn-xs disabled:opacity-30"
               >
                 ← Précédent
               </button>
@@ -539,7 +539,7 @@ export default function ImmeublesMtlPage() {
                 type="button"
                 disabled={offset + limit >= total}
                 onClick={() => setOffset(offset + limit)}
-                className="rounded border border-brand-700 bg-brand-900 px-2 py-1 text-white/70 disabled:opacity-30"
+                className="btn-secondary btn-xs disabled:opacity-30"
               >
                 Suivant →
               </button>
@@ -788,7 +788,7 @@ function StreetViewModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-white/40 hover:bg-brand-800 hover:text-white"
+            className="btn-ghost btn-xs"
             aria-label="Fermer"
           >
             <X className="h-5 w-5" />
@@ -827,7 +827,7 @@ function StreetViewModal({
             href={gmapsUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 px-3 py-1.5 text-xs text-white/80 hover:bg-brand-800"
+            className="btn-secondary btn-sm"
           >
             <ExternalLink className="h-3 w-3" />
             Ouvrir dans Google Maps
@@ -1111,7 +1111,7 @@ function OwnerCandidatesModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-white/40 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>
@@ -1258,7 +1258,7 @@ function OwnerCandidatesModal({
                     disabled={
                       pasteSubmitting || !pasteText.trim()
                     }
-                    className="inline-flex items-center gap-1 rounded-md bg-accent-500 px-3 py-1.5 text-[11px] font-semibold text-brand-950 hover:bg-accent-400 disabled:opacity-50"
+                    className="btn-accent btn-sm disabled:opacity-50"
                   >
                     {pasteSubmitting ? (
                       <Loader2 className="h-3 w-3 animate-spin" />
@@ -1444,7 +1444,7 @@ function OwnerCandidatesModal({
             type="button"
             onClick={() => convertWithOwner(null)}
             disabled={converting !== null || property.already_lead}
-            className="inline-flex items-center gap-1 rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1.5 text-[11px] text-white/70 hover:text-white disabled:opacity-50"
+            className="btn-secondary btn-sm disabled:opacity-50"
           >
             {converting === "no-neq" ? (
               <Loader2 className="h-3 w-3 animate-spin" />

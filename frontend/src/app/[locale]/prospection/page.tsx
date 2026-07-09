@@ -291,7 +291,7 @@ export default function ProspectionWebPage() {
             <button
               type="button"
               onClick={() => setRouteOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-500 hover:bg-accent-500/20"
+              className="btn-outline-accent btn-sm"
             >
               <Navigation className="h-3.5 w-3.5" />
               Planifier ma route
@@ -362,7 +362,7 @@ export default function ProspectionWebPage() {
               <button
                 type="button"
                 onClick={load}
-                className="rounded-md p-1 hover:bg-brand-900 hover:text-white"
+                className="btn-ghost btn-xs"
                 title="Rafraîchir"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
@@ -476,7 +476,7 @@ export default function ProspectionWebPage() {
                           alert(`Erreur : ${(exc as Error).message}`);
                         }
                       }}
-                      className="absolute right-2 top-2.5 rounded-md p-1.5 text-white/30 opacity-0 transition hover:bg-rose-500/20 hover:text-rose-300 group-hover:opacity-100 focus:opacity-100"
+                      className="btn-outline-rose btn-xs absolute right-2 top-2.5 opacity-0 group-hover:opacity-100 focus:opacity-100"
                       title="Supprimer ce lead"
                       aria-label="Supprimer"
                     >
@@ -509,7 +509,7 @@ export default function ProspectionWebPage() {
                 <button
                   type="button"
                   onClick={() => setSelectedId(null)}
-                  className="rounded-md p-1 text-white/50 hover:bg-brand-800 hover:text-white"
+                  className="btn-ghost btn-xs"
                   aria-label="Fermer"
                 >
                   ✕
@@ -694,7 +694,7 @@ function RouteModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-white/40 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>
@@ -786,7 +786,7 @@ function RouteModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md px-3 py-1.5 text-xs text-white/60 hover:bg-brand-900 hover:text-white"
+              className="btn-ghost btn-sm"
             >
               Annuler
             </button>
@@ -794,7 +794,7 @@ function RouteModal({
               type="button"
               onClick={plan}
               disabled={busy || selected.size < 2}
-              className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-500 hover:bg-accent-500/20 disabled:opacity-40"
+              className="btn-outline-accent btn-sm disabled:opacity-40"
             >
               {busy ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />

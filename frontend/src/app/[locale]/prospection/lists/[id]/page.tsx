@@ -196,7 +196,7 @@ export default function ProspectionListDetailPage() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={"/prospection/lists" as any}
-            className="inline-flex items-center gap-1 rounded-md border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs text-white/70 hover:text-white"
+            className="btn-secondary btn-sm"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             Toutes les listes
@@ -229,7 +229,7 @@ export default function ProspectionListDetailPage() {
                 type="button"
                 onClick={rebuild}
                 disabled={rebuilding}
-                className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-500 hover:bg-accent-500/20 disabled:opacity-50"
+                className="btn-outline-accent btn-sm disabled:opacity-50"
                 title="Recalcule les membres selon les critères enregistrés"
               >
                 {rebuilding ? (
@@ -384,7 +384,7 @@ export default function ProspectionListDetailPage() {
                         <button
                           type="button"
                           onClick={() => removeFromList(l.id)}
-                          className="rounded-md p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                          className="btn-ghost btn-xs"
                           aria-label="Retirer de la liste"
                         >
                           <Trash2 className="h-3.5 w-3.5" />

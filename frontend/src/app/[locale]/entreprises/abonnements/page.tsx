@@ -323,7 +323,7 @@ export default function AbonnementsPage() {
             <button
               type="button"
               onClick={() => setAccessOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm hover:border-[var(--qg-accent)]"
+              className="btn-secondary btn-sm"
             >
               <Users className="h-4 w-4" /> Gérer les accès
             </button>
@@ -693,7 +693,7 @@ function SubCard({
             type="button"
             onClick={onEdit}
             title="Modifier"
-            className="rounded-md p-1.5 text-[var(--qg-text-faint)] hover:bg-[var(--qg-accent)]/10 hover:text-[var(--qg-accent)]"
+            className="btn-ghost btn-xs"
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
@@ -701,7 +701,7 @@ function SubCard({
             type="button"
             onClick={onDelete}
             title="Supprimer"
-            className="rounded-md p-1.5 text-[var(--qg-text-faint)] hover:bg-rose-500/15 hover:text-rose-500"
+            className="btn-ghost btn-xs"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
@@ -812,7 +812,7 @@ function EditModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-1 text-[var(--qg-text-faint)] hover:bg-[var(--qg-card-bg)]"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>
@@ -1017,7 +1017,7 @@ function EditModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-[var(--qg-border)] px-3 py-2 text-sm text-[var(--qg-text-muted)]"
+            className="btn-secondary btn-sm"
           >
             Annuler
           </button>
@@ -1120,7 +1120,7 @@ function AccessModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-1 text-[var(--qg-text-faint)] hover:bg-[var(--qg-card-bg)]"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>
@@ -1176,7 +1176,7 @@ function AccessModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-[var(--qg-border)] px-3 py-2 text-sm text-[var(--qg-text-muted)]"
+            className="btn-secondary btn-sm"
           >
             Annuler
           </button>

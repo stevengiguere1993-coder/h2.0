@@ -364,7 +364,7 @@ export default function DealDetailPage() {
                 onClick={renameDeal}
                 title="Renommer le deal"
                 aria-label="Renommer le deal"
-                className="rounded-md p-1.5 text-white/40 transition hover:bg-violet-500/15 hover:text-violet-300"
+                className="btn-ghost btn-xs"
               >
                 <Pencil className="h-4 w-4" />
               </button>
@@ -373,7 +373,7 @@ export default function DealDetailPage() {
                 onClick={removeDeal}
                 title="Supprimer ce deal"
                 aria-label="Supprimer le deal"
-                className="rounded-md p-1.5 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-300"
+                className="btn-ghost btn-xs"
               >
                 <Trash2 className="h-4 w-4" />
               </button>

@@ -344,8 +344,7 @@ export default function RencontresListPage() {
             <button
               type="button"
               onClick={() => setCreateOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition hover:bg-white/5"
-              style={{ borderColor: "var(--qg-border)", color: "var(--qg-text)" }}
+              className="btn-secondary btn-sm"
             >
               <Plus className="h-4 w-4" />
               Nouvelle rencontre
@@ -424,11 +423,7 @@ export default function RencontresListPage() {
               <button
                 type="button"
                 onClick={() => setCreateOpen(true)}
-                className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition hover:bg-white/5"
-                style={{
-                  borderColor: "var(--qg-border)",
-                  color: "var(--qg-text)"
-                }}
+                className="btn-secondary btn-sm"
               >
                 <Plus className="h-4 w-4" />
                 Nouvelle rencontre
@@ -513,7 +508,7 @@ export default function RencontresListPage() {
                     type="button"
                     onClick={() => void deleteRencontre(r)}
                     disabled={isDeleting}
-                    className="flex shrink-0 items-center justify-center px-3 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-50"
+                    className="btn-ghost btn-xs shrink-0 disabled:opacity-50"
                     title="Supprimer cette rencontre"
                     aria-label={`Supprimer ${r.title}`}
                   >
@@ -658,7 +653,7 @@ export default function RencontresListPage() {
                 type="button"
                 onClick={() => setCreateOpen(false)}
                 disabled={creating}
-                className="rounded-md px-3 py-1.5 text-xs text-white/70 hover:bg-white/5"
+                className="btn-ghost btn-xs"
               >
                 Annuler
               </button>

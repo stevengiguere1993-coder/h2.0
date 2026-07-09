@@ -637,7 +637,7 @@ export default function ImmeubleDetailPage({
               <button
                 type="button"
                 onClick={openEdit}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-accent-500/30 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-500 hover:bg-accent-500/20"
+                className="btn-outline-accent btn-sm"
                 title="Modifier l'immeuble (nom, adresse, etc.)"
               >
                 <Pencil className="h-3.5 w-3.5" /> Modifier
@@ -657,7 +657,7 @@ export default function ImmeubleDetailPage({
               <button
                 type="button"
                 onClick={() => setShowDelete(true)}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/20"
+                className="btn-outline-rose btn-sm"
               >
                 <Trash2 className="h-3.5 w-3.5" /> Supprimer
               </button>
@@ -771,7 +771,7 @@ export default function ImmeubleDetailPage({
                 type="button"
                 onClick={() => setShowDelete(false)}
                 disabled={deleting}
-                className="rounded-md p-1.5 text-white/60 hover:bg-brand-900 hover:text-white"
+                className="btn-ghost btn-xs"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -792,7 +792,7 @@ export default function ImmeubleDetailPage({
                 type="button"
                 onClick={() => setShowDelete(false)}
                 disabled={deleting}
-                className="rounded-lg border border-white/15 px-4 py-2 text-xs font-semibold text-white/70 hover:text-white"
+                className="btn-secondary btn-sm"
               >
                 Annuler
               </button>
@@ -800,7 +800,7 @@ export default function ImmeubleDetailPage({
                 type="button"
                 onClick={() => void onDelete()}
                 disabled={deleting}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500/90 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-50"
+                className="btn-danger btn-sm disabled:opacity-50"
               >
                 {deleting ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -824,7 +824,7 @@ export default function ImmeubleDetailPage({
               <button
                 type="button"
                 onClick={() => setShowBon(false)}
-                className="rounded-md p-1.5 text-white/60 hover:bg-brand-900 hover:text-white"
+                className="btn-ghost btn-xs"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -892,7 +892,7 @@ export default function ImmeubleDetailPage({
                   <button
                     type="button"
                     onClick={() => setShowBon(false)}
-                    className="rounded-lg border border-white/15 px-4 py-2 text-xs font-semibold text-white/70 hover:text-white"
+                    className="btn-secondary btn-sm"
                   >
                     Annuler
                   </button>
@@ -927,7 +927,7 @@ export default function ImmeubleDetailPage({
                 type="button"
                 onClick={() => setShowEdit(false)}
                 disabled={editBusy}
-                className="rounded-md p-1.5 text-white/60 hover:bg-brand-900 hover:text-white"
+                className="btn-ghost btn-xs"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -1060,7 +1060,7 @@ export default function ImmeubleDetailPage({
                 type="button"
                 onClick={() => setShowEdit(false)}
                 disabled={editBusy}
-                className="rounded-lg border border-white/15 px-4 py-2 text-xs font-semibold text-white/70 hover:text-white"
+                className="btn-secondary btn-sm"
               >
                 Annuler
               </button>
@@ -1068,7 +1068,7 @@ export default function ImmeubleDetailPage({
                 type="button"
                 onClick={() => void saveEdit()}
                 disabled={editBusy || !editForm.address.trim()}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500/90 px-4 py-2 text-xs font-semibold text-brand-950 hover:bg-accent-500 disabled:opacity-50"
+                className="btn-accent btn-sm disabled:opacity-50"
               >
                 {editBusy ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1433,7 +1433,7 @@ function BailSignButton({
         type="button"
         onClick={() => void send()}
         disabled={busy}
-        className="inline-flex w-fit items-center gap-1 rounded-md border border-accent-500/40 bg-accent-500/10 px-2 py-1 text-[11px] font-semibold text-accent-500 hover:bg-accent-500/20 disabled:opacity-50"
+        className="btn-outline-accent btn-xs w-fit disabled:opacity-50"
         title="Envoyer le bail au locataire pour signature"
       >
         {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
@@ -1491,7 +1491,7 @@ function TalFormDropdown({ bailId }: { bailId: number }) {
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-1 rounded border border-white/15 bg-brand-950 px-2 py-0.5 text-[11px] text-white/80 hover:border-accent-500 hover:text-accent-500"
+        className="btn-secondary btn-xs"
       >
         Générer ▾
       </button>

@@ -324,7 +324,7 @@ export default function SoumissionsPage() {
               type="button"
               onClick={() => setShowDefaults(true)}
               title="Régler les valeurs par défaut des nouvelles soumissions"
-              className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-3 font-medium text-white/80 transition hover:bg-white/10 hover:text-white text-sm"
+              className="btn-secondary btn-sm"
             >
               <Settings className="mr-1.5 h-4 w-4" />
               Valeurs par défaut
@@ -332,7 +332,7 @@ export default function SoumissionsPage() {
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/dev-logiciel/soumissions/new" as any}
-              className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
+              className="btn-accent"
             >
               <Plus className="mr-1.5 h-4 w-4" />
               Nouvelle soumission
@@ -498,7 +498,7 @@ function SoumissionCard({
           onDelete();
         }}
         aria-label="Supprimer"
-        className="absolute right-2 top-2 rounded-md p-1 text-white/40 opacity-0 transition hover:bg-rose-500/15 hover:text-rose-400 group-hover:opacity-100"
+        className="btn-ghost btn-xs absolute right-2 top-2 opacity-0 group-hover:opacity-100"
       >
         <Trash2 className="h-3.5 w-3.5" />
       </button>
@@ -583,7 +583,7 @@ function EmptyState() {
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={"/dev-logiciel/soumissions/new" as any}
-        className="inline-flex mt-6 rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
+        className="btn-accent mt-6"
       >
         <Plus className="mr-1.5 h-4 w-4" />
         Nouvelle soumission
@@ -675,7 +675,7 @@ function LineListEditor({
         <button
           type="button"
           onClick={onAdd}
-          className="inline-flex items-center rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/10 hover:text-white"
+          className="btn-secondary btn-sm"
         >
           <Plus className="mr-1 h-3.5 w-3.5" />
           {addLabel}
@@ -710,7 +710,7 @@ function LineListEditor({
               <button
                 type="button"
                 onClick={() => onRemove(idx)}
-                className="rounded-lg p-1.5 text-white/50 transition hover:bg-rose-500/10 hover:text-rose-300"
+                className="btn-ghost btn-xs"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -865,7 +865,7 @@ function SoumissionDefaultsModal({ onClose }: { onClose: () => void }) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1.5 text-white/60 transition hover:bg-white/10 hover:text-white"
+            className="btn-ghost btn-xs"
           >
             <X className="h-5 w-5" />
           </button>
@@ -957,7 +957,7 @@ function SoumissionDefaultsModal({ onClose }: { onClose: () => void }) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl px-4 py-2.5 text-sm font-medium text-white/70 transition hover:text-white"
+            className="btn-ghost btn-sm"
           >
             Fermer
           </button>
@@ -965,7 +965,7 @@ function SoumissionDefaultsModal({ onClose }: { onClose: () => void }) {
             type="button"
             onClick={onSave}
             disabled={saving || loading}
-            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-400 disabled:opacity-50"
+            className="btn-accent btn-sm disabled:opacity-50"
           >
             {saving ? (
               <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />

@@ -663,11 +663,7 @@ export default function OrganigrammePage() {
                 type="button"
                 onClick={() => void importEntreprises()}
                 disabled={importing}
-                className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
-                style={{
-                  borderColor: "var(--qg-border)",
-                  color: "var(--qg-text-soft)"
-                }}
+                className="btn-secondary btn-sm disabled:opacity-50"
                 title="Crée un nœud pour chaque entreprise du groupe non encore présente dans l'organigramme. Tu les replaces ensuite par glisser-déposer."
               >
                 {importing ? (
@@ -737,11 +733,7 @@ export default function OrganigrammePage() {
                     type="button"
                     onClick={() => void seedDefault(false)}
                     disabled={seeding}
-                    className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
-                    style={{
-                      borderColor: "var(--qg-border)",
-                      color: "var(--qg-text-soft)"
-                    }}
+                    className="btn-secondary btn-sm disabled:opacity-50"
                     title="Crée la structure de départ basée sur ton carnet (Construction, Dev logiciel, Gestion Immo, Prospection, Dev Immo / Aguci, Comptabilité + rôles et tâches)"
                   >
                     {seeding ? (

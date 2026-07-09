@@ -316,7 +316,7 @@ export default function ReglagesEntreprisesPage() {
                     onClick={() =>
                       editingId === e.id ? cancel() : startEdit(e)
                     }
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-accent-500 hover:text-accent-400"
+                    className="btn-secondary btn-sm"
                   >
                     {editingId === e.id ? (
                       <>
@@ -333,7 +333,7 @@ export default function ReglagesEntreprisesPage() {
                   <button
                     type="button"
                     onClick={() => remove(e)}
-                    className="rounded-lg border border-white/15 bg-brand-950 p-2 text-white/50 transition hover:border-rose-400/50 hover:text-rose-300"
+                    className="btn-secondary btn-xs"
                     title="Mettre à la corbeille (récupérable)"
                   >
                     <Trash2 className="h-3.5 w-3.5" />

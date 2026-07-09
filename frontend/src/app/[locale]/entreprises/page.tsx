@@ -518,20 +518,7 @@ function CTAButton({
     <Link
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       href={href as any}
-      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-bold transition ${
-        isPrimary
-          ? ""
-          : "border border-[var(--qg-border)] bg-[var(--qg-card-bg)] text-[var(--qg-text-muted)] hover:border-[var(--qg-text-faint)] hover:text-[var(--qg-text)]"
-      }`}
-      style={
-        isPrimary
-          ? {
-              backgroundColor: "var(--qg-accent)",
-              color: "var(--qg-accent-ink)",
-              boxShadow: "0 0 24px -8px rgba(216, 155, 60, 0.5)"
-            }
-          : undefined
-      }
+      className={isPrimary ? "btn-accent btn-sm" : "btn-secondary btn-sm"}
     >
       {children}
     </Link>
@@ -787,7 +774,7 @@ function BriefingCard({
               type="button"
               onClick={onRegenerate}
               disabled={!!regenerating}
-              className="inline-flex items-center gap-1 rounded-md border border-accent-500/40 bg-accent-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent-300 hover:bg-accent-500/20 disabled:opacity-50"
+              className="btn-outline-accent btn-sm disabled:opacity-50"
               title="Régénérer le briefing maintenant (utile après avoir changé l'entreprise mère)"
             >
               {regenerating ? (

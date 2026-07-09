@@ -313,7 +313,7 @@ export default function MoyenneLocativePage() {
                       setSuggestions([]);
                       setOpen(false);
                     }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-white/40 hover:text-white"
+                    className="btn-ghost btn-xs absolute right-2 top-1/2 -translate-y-1/2"
                   >
                     <X className="h-4 w-4" />
                   </button>
@@ -324,7 +324,7 @@ export default function MoyenneLocativePage() {
                 onClick={() => {
                   if (query.trim()) void loadByAddress(query);
                 }}
-                className="shrink-0 rounded-xl bg-accent-500 px-4 py-3 text-sm font-semibold text-white hover:bg-accent-400"
+                className="btn-accent btn-sm shrink-0"
               >
                 Rechercher
               </button>
@@ -354,7 +354,7 @@ export default function MoyenneLocativePage() {
                 setQuery("");
                 void loadOverall();
               }}
-              className="rounded-full border border-brand-800 bg-brand-900 px-3 py-1 text-xs text-white/60 hover:border-accent-500/40 hover:text-accent-500"
+              className="btn-secondary btn-sm"
             >
               ↺ Tout le marché récent
             </button>

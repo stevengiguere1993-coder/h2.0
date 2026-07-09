@@ -232,7 +232,7 @@ export default function NewSousTraitantPage() {
                       onClick={() =>
                         setRegions((rs) => rs.filter((x) => x !== r))
                       }
-                      className="text-white/60 hover:text-rose-300"
+                      className="btn-ghost btn-xs"
                       aria-label={`Retirer ${r}`}
                     >
                       ×
@@ -255,7 +255,7 @@ export default function NewSousTraitantPage() {
               <button
                 type="button"
                 onClick={addCustomCity}
-                className="rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1.5 text-xs text-white/80 hover:border-accent-500 hover:text-white"
+                className="btn-secondary btn-xs"
               >
                 Ajouter
               </button>

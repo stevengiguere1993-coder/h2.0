@@ -162,7 +162,7 @@ export default function ContratsSousTraitantsPage() {
             <button
               type="button"
               onClick={() => setAdding(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-accent-600"
+              className="btn-accent btn-sm"
             >
               <Plus className="h-4 w-4" />
               Ajouter un contrat
@@ -349,7 +349,7 @@ export default function ContratsSousTraitantsPage() {
                       type="button"
                       onClick={() => deleteContract(c.id)}
                       title="Supprimer"
-                      className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-2 text-rose-300 hover:bg-rose-500/20"
+                      className="btn-outline-rose btn-xs"
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>

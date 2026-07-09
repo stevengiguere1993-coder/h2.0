@@ -179,7 +179,7 @@ export default function FinancesPage() {
             <button
               type="button"
               onClick={() => setAnnee((a) => a - 1)}
-              className="rounded-md p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+              className="btn-ghost btn-xs"
               aria-label="Année précédente"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -190,7 +190,7 @@ export default function FinancesPage() {
             <button
               type="button"
               onClick={() => setAnnee((a) => a + 1)}
-              className="rounded-md p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+              className="btn-ghost btn-xs"
               aria-label="Année suivante"
             >
               <ChevronRight className="h-4 w-4" />
@@ -702,7 +702,7 @@ function DepensesPanel({
                 <button
                   type="button"
                   onClick={() => void remove(d)}
-                  className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                  className="btn-outline-rose btn-xs"
                   title="Supprimer"
                 >
                   <Trash2 className="h-3 w-3" />

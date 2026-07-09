@@ -613,7 +613,7 @@ export default function ProspectionDetailPage() {
                 href={
                   `/prospection/analyse/nouveau?lead_id=${lead.id}` as any
                 }
-                className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-accent-400"
+                className="btn-accent btn-sm"
               >
                 <Calculator className="h-4 w-4" /> Analyser
               </Link>
@@ -1111,7 +1111,7 @@ export default function ProspectionDetailPage() {
                         href="https://www.registreentreprises.gouv.qc.ca/RQAnonymeGR/GR/GR03/GR03A2_19A_PIU_RechEnt_PC/PageRechSimple.aspx"
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1.5 text-[11px] text-white/70 hover:bg-brand-800 hover:text-white"
+                        className="btn-secondary btn-sm"
                       >
                         🔗 REQ recherche libre
                       </a>
@@ -1128,7 +1128,7 @@ export default function ProspectionDetailPage() {
                           }`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1.5 text-[11px] text-white/70 hover:bg-brand-800 hover:text-white"
+                          className="btn-secondary btn-sm"
                           title="Annuaire public Canada411"
                         >
                           📞 Canada411
@@ -1438,7 +1438,7 @@ export default function ProspectionDetailPage() {
                 <button
                   type="button"
                   onClick={deleteLead}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300 hover:bg-rose-500/20"
+                  className="btn-outline-rose btn-sm"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                   Supprimer
@@ -2042,7 +2042,7 @@ function FinanceSection({
                 <button
                   type="button"
                   onClick={() => deleteTransaction(t.id)}
-                  className="rounded-md p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                  className="btn-ghost btn-xs"
                   aria-label="Supprimer"
                 >
                   <X className="h-3 w-3" />

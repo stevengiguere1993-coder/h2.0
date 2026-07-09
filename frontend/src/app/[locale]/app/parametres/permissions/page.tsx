@@ -213,7 +213,7 @@ export default function PermissionsSettingsPage() {
                                 onClick={() =>
                                   void setMinRole(c, c.default_min_role)
                                 }
-                                className="text-white/40 hover:text-white disabled:cursor-default disabled:hover:text-white/40"
+                                className="btn-ghost btn-xs disabled:cursor-default"
                                 title={`Défaut : ${
                                   ROLE_LABELS[c.default_min_role] ||
                                   c.default_min_role

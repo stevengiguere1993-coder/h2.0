@@ -308,28 +308,28 @@ export default function DistributionTachesPage() {
           <button
             type="button"
             onClick={() => setPoleManagerOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm hover:border-[var(--qg-accent)]"
+            className="btn-secondary btn-sm"
           >
             <Layers className="h-4 w-4" /> Pôles & sous-sections
           </button>
           <button
             type="button"
             onClick={() => setImportOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm hover:border-[var(--qg-accent)]"
+            className="btn-secondary btn-sm"
           >
             <Upload className="h-4 w-4" /> Importer
           </button>
           <button
             type="button"
             onClick={() => setActivityModal("new")}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm hover:border-[var(--qg-accent)]"
+            className="btn-secondary btn-sm"
           >
             <Plus className="h-4 w-4" /> Tâche
           </button>
           <button
             type="button"
             onClick={() => setPersonOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--qg-accent)] px-3 py-2 text-sm font-semibold text-white hover:opacity-90"
+            className="btn-accent btn-sm"
           >
             <Plus className="h-4 w-4" /> Personne
           </button>
@@ -404,7 +404,7 @@ export default function DistributionTachesPage() {
                 setFilterRole("");
                 setFilterPole("");
               }}
-              className="rounded-lg border border-[var(--qg-border)] px-2 py-1.5 text-[var(--qg-text-muted)] hover:border-[var(--qg-accent)]"
+              className="btn-secondary btn-xs"
             >
               Réinitialiser
             </button>
@@ -448,7 +448,7 @@ export default function DistributionTachesPage() {
                       <button
                         type="button"
                         onClick={() => void deletePerson(p)}
-                        className="rounded p-0.5 text-[var(--qg-text-faint)] hover:text-rose-400"
+                        className="btn-ghost btn-xs"
                         title="Retirer"
                       >
                         <Trash2 className="h-3 w-3" />
@@ -549,7 +549,7 @@ export default function DistributionTachesPage() {
                           <button
                             type="button"
                             onClick={() => setActivityModal(a)}
-                            className="rounded p-0.5 text-[var(--qg-text-faint)] hover:text-[var(--qg-accent)]"
+                            className="btn-ghost btn-xs"
                             title="Modifier"
                           >
                             <Pencil className="h-3 w-3" />
@@ -557,7 +557,7 @@ export default function DistributionTachesPage() {
                           <button
                             type="button"
                             onClick={() => void deleteActivity(a)}
-                            className="rounded p-0.5 text-[var(--qg-text-faint)] hover:text-rose-400"
+                            className="btn-ghost btn-xs"
                             title="Supprimer"
                           >
                             <Trash2 className="h-3 w-3" />
@@ -801,7 +801,7 @@ function ImportModal({
         <button
           type="button"
           onClick={onClose}
-          className="rounded-lg border border-[var(--qg-border)] px-3 py-2 text-sm hover:border-[var(--qg-accent)]"
+          className="btn-secondary btn-sm"
         >
           Annuler
         </button>
@@ -809,7 +809,7 @@ function ImportModal({
           type="button"
           onClick={() => void submit()}
           disabled={busy || parsed.length === 0}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--qg-accent)] px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          className="btn-accent btn-sm disabled:opacity-50"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           Importer {parsed.length || ""}
@@ -898,7 +898,7 @@ function PersonPicker({
                   type="button"
                   onClick={() => void remove(per)}
                   disabled={busy !== null}
-                  className="rounded p-1 text-[var(--qg-text-faint)] hover:text-rose-400 disabled:opacity-50"
+                  className="btn-ghost btn-xs disabled:opacity-50"
                   title="Retirer cette colonne"
                 >
                   {busy === -per.id ? (
@@ -932,7 +932,7 @@ function PersonPicker({
               type="button"
               onClick={() => void add(u)}
               disabled={busy !== null}
-              className="flex w-full items-center justify-between rounded-lg border border-[var(--qg-border)] px-3 py-2 text-left text-sm hover:border-[var(--qg-accent)] disabled:opacity-50"
+              className="btn-secondary btn-sm w-full justify-between text-left disabled:opacity-50"
             >
               <span>
                 <span className="font-medium">{u.name}</span>
@@ -1196,7 +1196,7 @@ function PoleManager({
                 <button
                   type="button"
                   onClick={() => void renamePole(p)}
-                  className="rounded p-1 text-[var(--qg-text-faint)] hover:text-[var(--qg-accent)]"
+                  className="btn-ghost btn-xs"
                   title="Renommer le pôle"
                 >
                   <Pencil className="h-3.5 w-3.5" />
@@ -1204,7 +1204,7 @@ function PoleManager({
                 <button
                   type="button"
                   onClick={() => void deletePole(p)}
-                  className="rounded p-1 text-[var(--qg-text-faint)] hover:text-rose-400"
+                  className="btn-ghost btn-xs"
                   title="Supprimer le pôle"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -1246,7 +1246,7 @@ function PoleManager({
                       <button
                         type="button"
                         onClick={() => void renameSub(s)}
-                        className="rounded p-0.5 hover:text-[var(--qg-accent)]"
+                        className="btn-ghost btn-xs"
                         title="Renommer"
                       >
                         <Pencil className="h-3 w-3" />
@@ -1254,7 +1254,7 @@ function PoleManager({
                       <button
                         type="button"
                         onClick={() => void deleteSub(s)}
-                        className="rounded p-0.5 hover:text-rose-400"
+                        className="btn-ghost btn-xs"
                         title="Supprimer"
                       >
                         <Trash2 className="h-3 w-3" />
@@ -1277,7 +1277,7 @@ function PoleManager({
                 <button
                   type="button"
                   onClick={() => void addSub(p.label, p.id)}
-                  className="shrink-0 rounded-lg border border-[var(--qg-border)] px-2 text-xs hover:border-[var(--qg-accent)]"
+                  className="btn-secondary btn-xs shrink-0"
                 >
                   <Plus className="h-3.5 w-3.5" />
                 </button>
@@ -1299,7 +1299,7 @@ function PoleManager({
         <button
           type="button"
           onClick={() => void addPole()}
-          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[var(--qg-accent)] px-3 py-2 text-sm font-semibold text-white hover:opacity-90"
+          className="btn-accent btn-sm shrink-0"
         >
           <Plus className="h-4 w-4" /> Pôle
         </button>
@@ -1325,7 +1325,7 @@ function Modal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-1 text-[var(--qg-text-faint)] hover:bg-[var(--qg-card-bg)]"
+            className="btn-ghost btn-xs"
           >
             <X className="h-4 w-4" />
           </button>
@@ -1350,7 +1350,7 @@ function ModalActions({
       <button
         type="button"
         onClick={onClose}
-        className="rounded-lg border border-[var(--qg-border)] px-3 py-2 text-sm hover:border-[var(--qg-accent)]"
+        className="btn-secondary btn-sm"
       >
         Annuler
       </button>
@@ -1358,7 +1358,7 @@ function ModalActions({
         type="button"
         onClick={onSave}
         disabled={busy}
-        className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--qg-accent)] px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+        className="btn-accent btn-sm disabled:opacity-50"
       >
         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
         Enregistrer

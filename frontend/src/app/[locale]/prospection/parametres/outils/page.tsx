@@ -81,7 +81,7 @@ function BrowserExtensionSection() {
           href="https://github.com/stevengiguere1993-coder/h2.0/archive/refs/heads/main.zip"
           target="_blank"
           rel="noopener"
-          className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2 text-sm font-medium text-accent-500 hover:bg-accent-500/20"
+          className="btn-outline-accent btn-sm"
         >
           <Download className="h-4 w-4" />
           Télécharger l&apos;extension (ZIP)

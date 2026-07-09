@@ -194,7 +194,7 @@ export default function ProspectionAujourdhuiPage() {
           <button
             type="button"
             onClick={load}
-            className="rounded-md p-1.5 text-white/40 hover:bg-brand-900 hover:text-white"
+            className="btn-ghost btn-xs"
             title="Rafraîchir"
           >
             <RefreshCw className="h-4 w-4" />

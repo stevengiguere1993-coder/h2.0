@@ -430,7 +430,7 @@ export default function ServicesCataloguePage() {
                             <button
                               type="button"
                               onClick={() => removeItem(it.id)}
-                              className="text-rose-400 hover:text-rose-300"
+                              className="btn-outline-rose btn-xs"
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>

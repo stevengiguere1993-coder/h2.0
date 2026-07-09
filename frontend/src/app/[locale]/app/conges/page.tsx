@@ -287,7 +287,7 @@ export default function CongesAdminPage() {
                         type="button"
                         disabled={busy === l.id}
                         onClick={() => decide(l.id, "reject")}
-                        className="inline-flex items-center gap-1 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-bold text-rose-200 hover:bg-rose-500/20 disabled:opacity-60"
+                        className="btn-outline-rose btn-sm disabled:opacity-60"
                       >
                         <X className="h-3.5 w-3.5" />
                         Refuser

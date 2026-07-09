@@ -257,7 +257,7 @@ export default function PAEditorPage() {
             href={`${process.env.NEXT_PUBLIC_API_BASE_URL || ""}/api/v1/purchase-agreements/${pa.id}/pdf`}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-brand-800 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white/80 hover:text-white"
+            className="btn-secondary btn-sm"
           >
             <FileText className="h-3.5 w-3.5" /> Aperçu PDF
           </a>
@@ -275,7 +275,7 @@ export default function PAEditorPage() {
             <button
               type="button"
               onClick={() => setSendModal("seller")}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-bold text-brand-950 hover:bg-accent-400"
+              className="btn-accent btn-sm"
             >
               <Mail className="h-3.5 w-3.5" /> Envoyer au vendeur
             </button>
@@ -285,7 +285,7 @@ export default function PAEditorPage() {
               type="button"
               onClick={save}
               disabled={saving}
-              className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-bold text-brand-950 hover:bg-accent-400 disabled:opacity-60"
+              className="btn-accent btn-sm ml-auto disabled:opacity-60"
             >
               {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               Enregistrer
@@ -776,7 +776,7 @@ function SendModal({
             type="button"
             onClick={onClose}
             disabled={busy}
-            className="text-sm text-white/70 hover:text-white"
+            className="btn-ghost btn-sm"
           >
             Annuler
           </button>
@@ -784,7 +784,7 @@ function SendModal({
             type="button"
             onClick={submit}
             disabled={busy || !to.trim()}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-bold text-brand-950 hover:bg-accent-400 disabled:opacity-60"
+            className="btn-accent btn-sm disabled:opacity-60"
           >
             {busy ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />

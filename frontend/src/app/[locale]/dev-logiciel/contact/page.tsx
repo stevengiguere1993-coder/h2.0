@@ -133,7 +133,7 @@ export default function DevlogContactPage() {
             </p>
             <a
               href="https://immohorizon.com"
-              className="mt-6 inline-block rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
+              className="mt-6 btn-accent"
             >
               Retour au site
             </a>
@@ -337,7 +337,7 @@ export default function DevlogContactPage() {
               <button
                 type="submit"
                 disabled={state === "loading"}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                className="btn-accent w-full justify-center disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
               >
                 {state === "loading" ? (
                   <>

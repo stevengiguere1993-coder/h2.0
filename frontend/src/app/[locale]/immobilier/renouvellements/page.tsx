@@ -314,7 +314,7 @@ export default function RenouvellementsPage() {
                       <button
                         type="button"
                         onClick={() => setPrepFor(r)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-2.5 py-1 text-xs text-white/80 transition hover:border-accent-500 hover:text-accent-500"
+                        className="btn-secondary btn-sm"
                       >
                         <Mail className="h-3.5 w-3.5" />
                         Préparer
@@ -619,7 +619,7 @@ function PrepareRenouvellementModal({
               type="button"
               onClick={previewPdf}
               disabled={previewing}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white/80 hover:border-accent-500 hover:text-accent-500 disabled:opacity-60"
+              className="btn-secondary btn-sm disabled:opacity-60"
             >
               {previewing ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />

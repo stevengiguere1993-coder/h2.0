@@ -469,7 +469,7 @@ export default function DevlogInvoiceDetailPage() {
                 <button
                   type="button"
                   onClick={() => setImportOpen(true)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-500 hover:bg-accent-500/20"
+                  className="btn-outline-accent btn-sm"
                 >
                   <Download className="h-3.5 w-3.5" />
                   Importer du projet
@@ -478,7 +478,7 @@ export default function DevlogInvoiceDetailPage() {
                   href={`/api/v1/devlog/invoices/${invoiceId}/pdf`}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/80 hover:bg-white/10"
+                  className="btn-secondary btn-sm"
                 >
                   <FileDown className="h-3.5 w-3.5" />
                   Télécharger PDF
@@ -488,7 +488,7 @@ export default function DevlogInvoiceDetailPage() {
                     type="button"
                     onClick={() => void sendInvoice()}
                     disabled={sending}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-400 disabled:opacity-50"
+                    className="btn-accent btn-sm disabled:opacity-50"
                   >
                     {sending ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -502,7 +502,7 @@ export default function DevlogInvoiceDetailPage() {
                   <button
                     type="button"
                     onClick={() => void copyPublicLink()}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/80 hover:bg-white/10"
+                    className="btn-secondary btn-sm"
                   >
                     {copyOk ? (
                       <CheckCircle2 className="h-3.5 w-3.5 text-emerald-300" />
@@ -525,7 +525,7 @@ export default function DevlogInvoiceDetailPage() {
                 <button
                   type="button"
                   onClick={deleteInvoice}
-                  className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-1.5 text-rose-300 hover:bg-rose-500/20"
+                  className="btn-outline-rose btn-xs"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
@@ -628,7 +628,7 @@ export default function DevlogInvoiceDetailPage() {
                   <button
                     type="button"
                     onClick={() => void loadAll()}
-                    className="rounded-md border border-white/15 px-3 py-1.5 text-xs text-white/60 hover:bg-brand-800"
+                    className="btn-secondary btn-sm"
                   >
                     Annuler
                   </button>
@@ -636,7 +636,7 @@ export default function DevlogInvoiceDetailPage() {
                     type="button"
                     onClick={() => void saveHeader()}
                     disabled={saving}
-                    className="inline-flex items-center gap-1.5 rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-400 disabled:opacity-50"
+                    className="btn-accent btn-sm disabled:opacity-50"
                   >
                     {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
                     Enregistrer
@@ -653,7 +653,7 @@ export default function DevlogInvoiceDetailPage() {
                 <button
                   type="button"
                   onClick={addItem}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-400"
+                  className="btn-accent btn-sm"
                 >
                   <Plus className="h-3 w-3" />
                   Ajouter une ligne
@@ -778,7 +778,7 @@ export default function DevlogInvoiceDetailPage() {
                             <button
                               type="button"
                               onClick={() => void deleteItem(it.id)}
-                              className="rounded p-1 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
+                              className="btn-ghost btn-xs"
                             >
                               <Trash2 className="h-3 w-3" />
                             </button>
@@ -912,7 +912,7 @@ export default function DevlogInvoiceDetailPage() {
                 type="button"
                 onClick={() => setImportOpen(false)}
                 disabled={importBusy}
-                className="rounded-md border border-white/15 px-3 py-1.5 text-xs text-white/60 hover:bg-brand-800"
+                className="btn-secondary btn-sm"
               >
                 Annuler
               </button>
@@ -924,7 +924,7 @@ export default function DevlogInvoiceDetailPage() {
                   !importProject ||
                   (!importHours && !importSoumission)
                 }
-                className="inline-flex items-center gap-1.5 rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-400 disabled:opacity-50"
+                className="btn-accent btn-sm disabled:opacity-50"
               >
                 {importBusy ? (
                   <Loader2 className="h-3 w-3 animate-spin" />

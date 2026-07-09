@@ -713,7 +713,7 @@ export default function BonDetailPage() {
                   type="button"
                   onClick={onDelete}
                   disabled={deleting}
-                  className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+                  className="btn-outline-rose btn-sm"
                 >
                   {deleting ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -1197,7 +1197,7 @@ export default function BonDetailPage() {
                         type="button"
                         onClick={() => addTypedItem("heure")}
                         disabled={itemBusy === "new"}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-950 px-2.5 py-1.5 text-xs font-medium text-white hover:border-accent-500"
+                        className="btn-secondary btn-xs"
                       >
                         <Clock className="h-3.5 w-3.5 text-sky-300" /> Heures
                       </button>
@@ -1205,7 +1205,7 @@ export default function BonDetailPage() {
                         type="button"
                         onClick={() => addTypedItem("materiel")}
                         disabled={itemBusy === "new"}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-950 px-2.5 py-1.5 text-xs font-medium text-white hover:border-accent-500"
+                        className="btn-secondary btn-xs"
                       >
                         <Package className="h-3.5 w-3.5 text-amber-300" /> Matériel
                       </button>
@@ -1213,7 +1213,7 @@ export default function BonDetailPage() {
                         type="button"
                         onClick={() => addTypedItem("sous_traitant")}
                         disabled={itemBusy === "new"}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-950 px-2.5 py-1.5 text-xs font-medium text-white hover:border-accent-500"
+                        className="btn-secondary btn-xs"
                       >
                         <HardHat className="h-3.5 w-3.5 text-orange-300" />{" "}
                         Sous-traitant
@@ -1303,7 +1303,7 @@ export default function BonDetailPage() {
                               type="button"
                               onClick={() => importPunch(p)}
                               disabled={itemBusy === "new" || p.hours == null}
-                              className="rounded-lg border border-brand-700 bg-brand-950 px-2.5 py-1.5 text-xs font-medium text-white hover:border-accent-500 disabled:opacity-40"
+                              className="btn-secondary btn-xs disabled:opacity-40"
                             >
                               Verser →
                             </button>

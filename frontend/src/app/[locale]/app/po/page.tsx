@@ -343,7 +343,7 @@ export default function PurchaseOrdersListPage() {
                           }}
                           disabled={deleting === po.id}
                           title="Supprimer ce PO"
-                          className="rounded p-1.5 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-40"
+                          className="btn-outline-rose btn-xs disabled:opacity-40"
                         >
                           {deleting === po.id ? (
                             <Loader2 className="h-4 w-4 animate-spin" />

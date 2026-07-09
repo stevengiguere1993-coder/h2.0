@@ -503,7 +503,7 @@ export default function ProspectDetailPage() {
                   type="button"
                   onClick={deleteProspect}
                   disabled={deleting}
-                  className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 transition hover:bg-rose-500/20 hover:text-rose-200 disabled:opacity-50"
+                  className="btn-outline-rose btn-sm disabled:opacity-50"
                 >
                   {deleting ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -1300,7 +1300,7 @@ function ProspectDocuments({
                       <button
                         type="button"
                         onClick={() => remove(p.id)}
-                        className="rounded p-1 text-white/40 hover:text-rose-300"
+                        className="btn-ghost btn-xs"
                         aria-label="Supprimer"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -1435,7 +1435,7 @@ function ProspectDocuments({
                     <button
                       type="button"
                       onClick={() => remove(d.id)}
-                      className="rounded p-1 text-white/40 hover:text-rose-300"
+                      className="btn-ghost btn-xs"
                       aria-label="Supprimer"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -1888,7 +1888,7 @@ function AppointmentScheduler({
                         type="button"
                         onClick={() => resendConfirmation(a.id)}
                         disabled={busyId !== null}
-                        className="rounded p-1 text-white/50 hover:bg-accent-500/20 hover:text-accent-300 disabled:opacity-40"
+                        className="btn-ghost btn-xs disabled:opacity-40"
                         aria-label="Renvoyer la confirmation au prospect"
                         title="Renvoyer la confirmation (avec invitation calendrier .ics)"
                       >
@@ -1898,7 +1898,7 @@ function AppointmentScheduler({
                         type="button"
                         onClick={() => startEdit(a)}
                         disabled={busyId !== null}
-                        className="rounded p-1 text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-40"
+                        className="btn-ghost btn-xs disabled:opacity-40"
                         aria-label="Modifier la date"
                       >
                         <Pencil className="h-3.5 w-3.5" />
@@ -1907,7 +1907,7 @@ function AppointmentScheduler({
                         type="button"
                         onClick={() => deleteAppt(a.id)}
                         disabled={busyId !== null}
-                        className="rounded p-1 text-white/50 hover:bg-rose-500/20 hover:text-rose-300 disabled:opacity-40"
+                        className="btn-ghost btn-xs disabled:opacity-40"
                         aria-label="Supprimer le rendez-vous"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -1993,7 +1993,7 @@ function AppointmentScheduler({
                         type="button"
                         onClick={cancelEdit}
                         disabled={busyId === a.id}
-                        className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:bg-white/5"
+                        className="btn-secondary btn-xs"
                       >
                         Annuler
                       </button>

@@ -333,7 +333,7 @@ export default function AchatsPage() {
               type="button"
               onClick={pullFromQbo}
               disabled={pulling}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm font-medium text-sky-300 hover:bg-sky-500/20 disabled:opacity-50"
+              className="btn-secondary btn-sm disabled:opacity-50"
               title="Importer dans Kratos les factures fournisseur saisies directement dans QuickBooks"
             >
               {pulling ? (
@@ -745,7 +745,7 @@ function MarkPaidModal({
             type="button"
             onClick={onClose}
             disabled={busy}
-            className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/70 hover:bg-white/5"
+            className="btn-secondary btn-sm"
           >
             Annuler
           </button>

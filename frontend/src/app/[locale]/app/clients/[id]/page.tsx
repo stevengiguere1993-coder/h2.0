@@ -218,7 +218,7 @@ export default function ClientDetailPage() {
                   type="button"
                   onClick={onDelete}
                   disabled={deleting}
-                  className="inline-flex items-center gap-2 self-start rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+                  className="btn-outline-rose btn-sm self-start"
                 >
                   {deleting ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -673,7 +673,7 @@ function QboPushButton({
         type="button"
         onClick={push}
         disabled={busy}
-        className="inline-flex items-center gap-2 self-start rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2.5 text-sm font-medium text-accent-200 hover:bg-accent-500/20 disabled:opacity-50"
+        className="btn-outline-accent btn-sm self-start disabled:opacity-50"
       >
         {busy ? (
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -965,7 +965,7 @@ function ClientDocuments({
             {contactRequestId ? " · documents du formulaire prospect" : ""}.
           </p>
         </div>
-        <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2 text-xs font-semibold text-accent-300 hover:bg-accent-500/20">
+        <label className="btn-outline-accent btn-sm cursor-pointer">
           {uploadingDoc ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (

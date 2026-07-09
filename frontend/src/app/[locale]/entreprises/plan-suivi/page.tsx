@@ -577,7 +577,7 @@ export default function PlanSuiviPage() {
               type="button"
               onClick={runSeed}
               disabled={seeding}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-amber-400 disabled:opacity-60"
+              className="btn-accent btn-sm disabled:opacity-60"
             >
               {seeding ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

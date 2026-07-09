@@ -339,7 +339,7 @@ export default function RelancesPage() {
                         type="button"
                         onClick={() => removeStep(s.id)}
                         aria-label="Supprimer l'étape"
-                        className="self-center rounded-md border border-brand-800 p-2 text-white/50 hover:border-rose-500 hover:text-rose-300"
+                        className="btn-outline-rose btn-xs self-center"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
