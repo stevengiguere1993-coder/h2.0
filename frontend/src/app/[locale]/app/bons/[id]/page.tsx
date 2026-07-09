@@ -1458,7 +1458,7 @@ function SummaryTile({
   tone: string;
 }) {
   return (
-    <div className="rounded-xl border border-brand-800 bg-brand-900 px-4 py-3">
+    <div className="kpi-card">
       <p className="text-xs text-white/55">{label}</p>
       <p className={`mt-1 text-xl font-bold ${tone}`}>{money(value)}</p>
     </div>

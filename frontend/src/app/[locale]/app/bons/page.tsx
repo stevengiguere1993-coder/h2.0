@@ -203,7 +203,7 @@ export default function BonsPage() {
         ) : (
           <>
             {internal.length === 0 ? (
-              <p className="mb-6 rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-sm text-white/50">
+              <p className="empty-state mb-6 text-sm">
                 Aucun bon d&apos;entretien interne pour l&apos;instant. Crée-en
                 un avec « Nouveau bon », ou retrouve tes anciens bons plus bas.
               </p>
@@ -242,7 +242,7 @@ export default function BonsPage() {
                         {col.label}
                       </h2>
                     </div>
-                    <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                    <span className="badge badge-neutral">
                       {cards.length}
                     </span>
                   </div>
@@ -306,12 +306,12 @@ export default function BonsPage() {
                             </p>
                             <div className="mt-2 flex items-center justify-between text-xs">
                               <span
-                                className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+                                className={`badge ${
                                   unclassified
-                                    ? "bg-amber-500/15 text-amber-300"
+                                    ? "badge-amber"
                                     : sousTraitant
                                       ? "bg-orange-500/15 text-orange-300"
-                                      : "bg-sky-500/15 text-sky-300"
+                                      : "badge-sky"
                                 }`}
                               >
                                 {sousTraitant ? (

@@ -36,9 +36,9 @@ const KIND_LABEL: Record<string, string> = {
   personal: "📋 Personnel"
 };
 const KIND_COLOR: Record<string, string> = {
-  vacation: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
-  sick: "bg-rose-500/15 text-rose-300 border-rose-500/40",
-  personal: "bg-sky-500/15 text-sky-300 border-sky-500/40"
+  vacation: "badge-emerald",
+  sick: "badge-rose",
+  personal: "badge-sky"
 };
 
 type Tab = "pending" | "approved" | "rejected" | "all";
@@ -77,10 +77,10 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_CLASS: Record<string, string> = {
-  pending: "bg-amber-500/15 text-amber-300",
-  approved: "bg-emerald-500/15 text-emerald-300",
-  rejected: "bg-rose-500/15 text-rose-300",
-  cancelled: "bg-white/10 text-white/60"
+  pending: "badge-amber",
+  approved: "badge-emerald",
+  rejected: "badge-rose",
+  cancelled: "badge-neutral"
 };
 
 export default function CongesAdminPage() {
@@ -206,7 +206,7 @@ export default function CongesAdminPage() {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : items.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center">
+          <div className="empty-state">
             <Palmtree className="mx-auto h-8 w-8 text-white/30" />
             <p className="mt-3 text-sm text-white/60">
               Aucune demande{" "}
@@ -227,16 +227,12 @@ export default function CongesAdminPage() {
                         {l.employe_name || `Employé #${l.employe_id}`}
                       </p>
                       <span
-                        className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${
-                          KIND_COLOR[l.kind || "vacation"]
-                        }`}
+                        className={`badge ${KIND_COLOR[l.kind || "vacation"]}`}
                       >
                         {KIND_LABEL[l.kind || "vacation"]}
                       </span>
                       <span
-                        className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
-                          STATUS_CLASS[l.status]
-                        }`}
+                        className={`badge uppercase ${STATUS_CLASS[l.status]}`}
                       >
                         {STATUS_LABELS[l.status]}
                       </span>

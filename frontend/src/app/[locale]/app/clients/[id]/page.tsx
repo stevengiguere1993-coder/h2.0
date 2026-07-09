@@ -762,7 +762,7 @@ function DocSection({
         )}
         <span className="text-accent-500">{icon}</span>
         <span className="text-white">{title}</span>
-        <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70">
+        <span className="badge badge-neutral ml-auto">
           {count}
         </span>
       </button>
@@ -1114,7 +1114,7 @@ function ClientDocuments({
                             : ""}
                         </p>
                       </div>
-                      <span className="shrink-0 rounded bg-sky-500/15 px-2 py-0.5 text-[10px] uppercase text-sky-300">
+                      <span className="badge badge-sky shrink-0 uppercase">
                         {b.status}
                       </span>
                     </Link>

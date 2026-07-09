@@ -533,7 +533,7 @@ export default function AchatsPage() {
                             const due = new Date(a.due_at);
                             const overdue = daysBetween(new Date(), due);
                             return overdue > 0 ? (
-                              <span className="rounded-md bg-rose-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                              <span className="badge badge-rose">
                                 En retard {overdue} j
                               </span>
                             ) : (
@@ -557,7 +557,7 @@ export default function AchatsPage() {
                         {a.invoiced_at ? (
                           // Refacturé au client dans Kratos → vert, prioritaire
                           // sur tout (même si le drapeau refacturable a changé).
-                          <span className="rounded-md bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                          <span className="badge badge-emerald">
                             ✓ Refacturé
                           </span>
                         ) : a.is_billable === false ? (
@@ -565,7 +565,7 @@ export default function AchatsPage() {
                             —
                           </span>
                         ) : (
-                          <span className="rounded-md bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-amber-950">
+                          <span className="badge badge-amber">
                             À refacturer
                           </span>
                         )}

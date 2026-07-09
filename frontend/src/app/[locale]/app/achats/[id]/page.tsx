@@ -694,16 +694,16 @@ export default function AchatDetailPage() {
                         Refacturation au client
                       </p>
                       {a?.invoiced_at ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
+                        <span className="badge badge-emerald uppercase tracking-wider">
                           ✓ Refacturé
                           {a.facture_item_id ? ` · ligne #${a.facture_item_id}` : ""}
                         </span>
                       ) : isBillable ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+                        <span className="badge badge-amber uppercase tracking-wider">
                           À refacturer
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                        <span className="badge badge-neutral uppercase tracking-wider">
                           Non refacturable
                         </span>
                       )}
@@ -785,7 +785,7 @@ export default function AchatDetailPage() {
 
                 {a.has_receipt_image ? (
                   <div className="mt-4 flex flex-wrap items-center gap-3">
-                    <span className="rounded-md bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-300">
+                    <span className="badge badge-emerald">
                       {a.receipt_image_content_type === "application/pdf"
                         ? "PDF attaché"
                         : "Photo attachée"}

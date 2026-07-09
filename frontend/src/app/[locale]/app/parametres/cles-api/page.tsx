@@ -203,12 +203,12 @@ function PolePermissions({
                         <p className="flex items-center gap-2 text-sm text-white/85">
                           {cap.label_fr}
                           {cap.category === "ecriture" ? (
-                            <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-300/90">
+                            <span className="badge badge-amber uppercase tracking-wide">
                               écriture
                             </span>
                           ) : null}
                           {cap.coming_soon ? (
-                            <span className="rounded border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white/40">
+                            <span className="badge badge-neutral uppercase tracking-wide">
                               à venir
                             </span>
                           ) : null}
@@ -577,7 +577,7 @@ export default function ClesApiPage() {
               <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
             </div>
           ) : keys.length === 0 ? (
-            <div className="mt-4 rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-12 text-center">
+            <div className="empty-state mt-4">
               <KeyRound className="mx-auto h-8 w-8 text-white/30" />
               <p className="mt-3 text-sm text-white/60">
                 Aucune clé pour l&apos;instant. Génère ta première clé pour
@@ -606,11 +606,11 @@ export default function ClesApiPage() {
                             </span>
                           )}
                           {k.is_active ? (
-                            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                            <span className="badge badge-emerald">
                               Active
                             </span>
                           ) : (
-                            <span className="rounded-full border border-white/20 bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/50">
+                            <span className="badge badge-neutral">
                               Révoquée
                             </span>
                           )}

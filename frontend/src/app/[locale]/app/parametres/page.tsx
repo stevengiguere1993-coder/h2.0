@@ -818,9 +818,7 @@ function QuickBooksSection() {
   const env = status?.environment || "sandbox";
   const envLabel = env === "production" ? "Production" : "Sandbox (test)";
   const envClass =
-    env === "production"
-      ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
-      : "bg-amber-500/15 text-amber-300 border-amber-500/30";
+    env === "production" ? "badge-emerald" : "badge-amber";
 
   return (
     <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
@@ -838,7 +836,7 @@ function QuickBooksSection() {
           </p>
         </div>
         <span
-          className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${envClass}`}
+          className={`badge ${envClass} shrink-0 uppercase`}
           title="Environnement QBO actif"
         >
           {envLabel}

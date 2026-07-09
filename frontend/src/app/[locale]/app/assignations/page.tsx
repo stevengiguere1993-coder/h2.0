@@ -714,11 +714,11 @@ function LiveBoard({ onSelect }: { onSelect: (id: number) => void }) {
             <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
           </span>
           En direct sur les chantiers
-          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+          <span className="badge badge-emerald">
             {punched.length} pointé{punched.length > 1 ? "s" : ""}
           </span>
           {plannedOnly.length > 0 ? (
-            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+            <span className="badge badge-amber">
               {plannedOnly.length} prévu{plannedOnly.length > 1 ? "s" : ""} non
               pointé{plannedOnly.length > 1 ? "s" : ""}
             </span>
@@ -783,7 +783,7 @@ function LiveBoard({ onSelect }: { onSelect: (id: number) => void }) {
                       {sinceLabel(w.punch_started_at as string, now)}
                     </p>
                     {mismatch ? (
-                      <p className="mt-1 inline-flex rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
+                      <p className="badge badge-amber mt-1">
                         Prévu : {w.planned_project_name}
                       </p>
                     ) : null}

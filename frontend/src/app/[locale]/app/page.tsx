@@ -451,7 +451,7 @@ function BigTile({
     <Link
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       href={href as any}
-      className="group rounded-xl border border-brand-800 bg-brand-900 p-5 transition hover:border-accent-500"
+      className="group kpi-card transition hover:border-accent-500"
     >
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium uppercase tracking-wider text-white/50">
@@ -483,7 +483,7 @@ function MiniStat({
   hint: string;
 }) {
   return (
-    <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+    <div className="kpi-card">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium uppercase tracking-wider text-white/50">
           {label}
@@ -595,7 +595,7 @@ function KpiCard({
     <Link
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       href={href as any}
-      className="group rounded-xl border border-brand-800 bg-brand-900 p-5 transition hover:border-accent-500"
+      className="group kpi-card transition hover:border-accent-500"
     >
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium uppercase tracking-wider text-white/50">
@@ -612,7 +612,7 @@ function KpiCard({
       </p>
       <p className="mt-1 text-xs text-white/50">{hint}</p>
       {alert ? (
-        <p className="mt-2 rounded-md bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+        <p className="mt-2 badge badge-rose">
           {alert}
         </p>
       ) : null}

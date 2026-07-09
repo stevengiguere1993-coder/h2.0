@@ -124,7 +124,7 @@ function Card({ f }: { f: Fournisseur }) {
           ) : null}
         </div>
         {!f.active ? (
-          <span className="rounded-md bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold text-white/50">
+          <span className="badge badge-neutral">
             Inactif
           </span>
         ) : null}
