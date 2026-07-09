@@ -4,7 +4,6 @@ import { usePathname } from "next/navigation";
 import {
   Calendar,
   Clock,
-  Code2,
   FileSignature,
   FileText,
   FolderKanban,
@@ -19,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { HorizonLogo } from "@/components/horizon-logo";
 import { AccountBadge } from "@/components/account-badge";
 
 type NavItem = {
@@ -124,23 +124,13 @@ export function DevlogSidebar({
       ) : null}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 flex-col border-r border-blue-900/40 bg-brand-950 transition-transform lg:static lg:flex lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 w-64 flex-col border-r border-brand-800 bg-brand-950 transition-transform lg:static lg:flex lg:translate-x-0 ${
           open ? "flex translate-x-0" : "hidden -translate-x-full"
         }`}
       >
-        <div className="flex items-center justify-between border-b border-blue-900/40 px-4 py-4">
+        <div className="flex items-center justify-between border-b border-brand-800 px-4 py-4">
           <Link href={"/dev-logiciel" as any} className="flex items-center gap-2">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-500/15 text-blue-400">
-              <Code2 className="h-5 w-5" />
-            </span>
-            <span className="flex flex-col leading-tight">
-              <span className="text-sm font-bold text-white">
-                Dév. logiciel
-              </span>
-              <span className="text-[10px] uppercase tracking-wider text-blue-400/80">
-                Horizon
-              </span>
-            </span>
+            <HorizonLogo className="h-16 w-auto object-contain" />
           </Link>
           <button
             type="button"
@@ -155,7 +145,7 @@ export function DevlogSidebar({
         <nav className="flex-1 overflow-y-auto px-2 py-3">
           {DEVLOG_SECTIONS.map((section, idx) => (
             <div key={section.label} className={idx === 0 ? "" : "mt-4"}>
-              <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-blue-500/80">
+              <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-accent-500">
                 {section.label}
               </p>
               <ul className="space-y-0.5">
@@ -169,11 +159,15 @@ export function DevlogSidebar({
                         onClick={onClose}
                         className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition ${
                           active
-                            ? "bg-blue-500/15 text-blue-300"
+                            ? "bg-brand-900 text-white"
                             : "text-white/70 hover:bg-brand-900 hover:text-white"
                         }`}
                       >
-                        <Icon className="h-4 w-4" />
+                        <Icon
+                          className={`h-4 w-4 flex-shrink-0 ${
+                            active ? "text-accent-500" : ""
+                          }`}
+                        />
                         {it.label}
                       </Link>
                     </li>
