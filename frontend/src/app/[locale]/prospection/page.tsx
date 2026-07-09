@@ -291,7 +291,7 @@ export default function ProspectionWebPage() {
             <button
               type="button"
               onClick={() => setRouteOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20"
+              className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-500 hover:bg-accent-500/20"
             >
               <Navigation className="h-3.5 w-3.5" />
               Planifier ma route
@@ -686,7 +686,7 @@ function RouteModal({
       <div className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
         <header className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
           <div className="flex items-center gap-2">
-            <Navigation className="h-4 w-4 text-emerald-400" />
+            <Navigation className="h-4 w-4 text-accent-500" />
             <h2 className="text-sm font-semibold text-white">
               Planifier ma route drive-by
             </h2>
@@ -794,7 +794,7 @@ function RouteModal({
               type="button"
               onClick={plan}
               disabled={busy || selected.size < 2}
-              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-500 hover:bg-accent-500/20 disabled:opacity-40"
             >
               {busy ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />

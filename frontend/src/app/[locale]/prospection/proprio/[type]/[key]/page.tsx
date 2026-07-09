@@ -192,7 +192,7 @@ export default function OwnerViewPage() {
       <div className="p-4 lg:p-6">
         {loading ? (
           <div className="flex min-h-[40vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-emerald-500" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : error ? (
           <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
@@ -211,7 +211,7 @@ export default function OwnerViewPage() {
             <header className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="text-[11px] uppercase tracking-wider text-emerald-400">
+                  <p className="text-[11px] uppercase tracking-wider text-accent-500">
                     {view.owner_kind === "corporation"
                       ? "Corporation"
                       : view.owner_kind === "particulier"
@@ -237,7 +237,7 @@ export default function OwnerViewPage() {
                   {view.owner_phone ? (
                     <a
                       href={`tel:${view.owner_phone}`}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-sm font-medium text-emerald-300 hover:bg-emerald-500/20"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-sm font-medium text-accent-500 hover:bg-accent-500/20"
                     >
                       <Phone className="h-3.5 w-3.5" />
                       {view.owner_phone}
@@ -299,7 +299,7 @@ export default function OwnerViewPage() {
                     <Link
                       // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       href={`/prospection/${l.id}` as any}
-                      className="flex items-center gap-3 rounded-lg border border-brand-800 bg-brand-950/40 p-3 transition hover:border-emerald-500/40"
+                      className="flex items-center gap-3 rounded-lg border border-brand-800 bg-brand-950/40 p-3 transition hover:border-accent-500/40"
                     >
                       <span
                         className={`inline-flex h-8 w-10 shrink-0 items-center justify-center rounded-md text-xs font-bold tabular-nums ${
@@ -380,7 +380,7 @@ export default function OwnerViewPage() {
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           href={`/prospection/${f.lead_id}` as any}
-                          className="text-[11px] text-emerald-400 hover:text-emerald-300"
+                          className="text-[11px] text-accent-500 hover:text-accent-400"
                         >
                           → {f.lead_name}
                         </Link>

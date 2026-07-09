@@ -53,7 +53,7 @@ export default function ProspectionAnalysePage() {
 
       <div className="mx-auto max-w-3xl p-4 lg:p-6">
         <h1 className="flex items-center gap-2 text-2xl font-bold text-white">
-          <SlidersHorizontal className="h-6 w-6 text-emerald-400" />
+          <SlidersHorizontal className="h-6 w-6 text-accent-500" />
           Calculateur d&apos;analyse financière
         </h1>
         <p className="mt-1 text-sm text-white/60">

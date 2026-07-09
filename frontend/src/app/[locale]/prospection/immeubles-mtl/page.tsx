@@ -243,7 +243,7 @@ export default function ImmeublesMtlPage() {
 
       <div className="p-4 lg:p-6">
         <header className="flex flex-wrap items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
             <Building2 className="h-5 w-5" />
           </span>
           <div className="flex-1 min-w-0">
@@ -316,7 +316,7 @@ export default function ImmeublesMtlPage() {
                 onClick={() => applyPreset(i)}
                 className={`rounded-full px-3 py-1 text-xs ${
                   presetIdx === i
-                    ? "bg-emerald-500/20 text-emerald-300"
+                    ? "bg-brand-900 text-white"
                     : "bg-brand-800 text-white/60 hover:text-white"
                 }`}
               >
@@ -425,12 +425,12 @@ export default function ImmeublesMtlPage() {
             <button
               type="button"
               onClick={() => setShowUtilFilter((v) => !v)}
-              className="flex w-full items-center justify-between text-sm text-white/80 hover:text-emerald-300"
+              className="flex w-full items-center justify-between text-sm text-white/80 hover:text-accent-500"
             >
               <span className="font-medium">
                 Type d&apos;utilisation
                 {selectedCodes.size > 0 ? (
-                  <span className="ml-2 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-300">
+                  <span className="ml-2 rounded-full bg-brand-900 px-2 py-0.5 text-[10px] text-white">
                     {selectedCodes.size} cochés
                   </span>
                 ) : (
@@ -472,7 +472,7 @@ export default function ImmeublesMtlPage() {
                           key={t.code}
                           className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-[11px] transition ${
                             checked
-                              ? "bg-emerald-500/15 text-emerald-200"
+                              ? "bg-brand-900 text-white"
                               : "text-white/70 hover:bg-brand-900"
                           }`}
                         >
@@ -486,7 +486,7 @@ export default function ImmeublesMtlPage() {
                               setSelectedCodes(next);
                               setOffset(0);
                             }}
-                            className="h-3.5 w-3.5 rounded border-brand-700 bg-brand-900 text-emerald-500 focus:ring-emerald-500"
+                            className="h-3.5 w-3.5 rounded border-brand-700 bg-brand-900 text-accent-500 focus:ring-accent-500"
                           />
                           <span className="flex-1 truncate">
                             <span className="font-mono text-[10px] text-white/40">
@@ -567,7 +567,7 @@ export default function ImmeublesMtlPage() {
         <div className="mt-4 overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
           {loading && properties.length === 0 ? (
             <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-emerald-500" />
+              <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
             </div>
           ) : properties.length === 0 ? (
             <div className="p-12 text-center">
@@ -608,7 +608,7 @@ export default function ImmeublesMtlPage() {
                         <button
                           type="button"
                           onClick={() => setStreetViewFor(p)}
-                          className="text-left hover:text-emerald-300 hover:underline"
+                          className="text-left hover:text-accent-500 hover:underline"
                           title="Ouvrir Street View"
                         >
                           {p.full_address || "—"}
@@ -624,7 +624,7 @@ export default function ImmeublesMtlPage() {
                           <button
                             type="button"
                             onClick={() => setOwnerModalFor(p)}
-                            className="text-left text-[11px] text-emerald-300 hover:text-emerald-200 hover:underline"
+                            className="text-left text-[11px] text-accent-500 hover:text-accent-400 hover:underline"
                             title="Voir les détails du propriétaire"
                           >
                             {p.owner_names.length === 1 ? (
@@ -809,7 +809,7 @@ function StreetViewModal({
             />
           </div>
           <div className="overflow-hidden rounded-lg border border-brand-800 bg-black">
-            <p className="border-b border-brand-800 bg-brand-900/40 px-3 py-1.5 text-[11px] uppercase tracking-wider text-emerald-300">
+            <p className="border-b border-brand-800 bg-brand-900/40 px-3 py-1.5 text-[11px] uppercase tracking-wider text-accent-500">
               Vue satellite
             </p>
             <iframe
@@ -1096,7 +1096,7 @@ function OwnerCandidatesModal({
         <header className="flex items-start justify-between gap-3 border-b border-brand-800 p-4">
           <div className="min-w-0">
             <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
-              <Users className="h-4 w-4 text-emerald-400" />
+              <Users className="h-4 w-4 text-accent-500" />
               Propriétaires candidats
             </h2>
             <p className="mt-1 text-xs text-white/60">
@@ -1121,7 +1121,7 @@ function OwnerCandidatesModal({
           {/* EvalWeb (rôle d'évaluation MTL) — source primaire. */}
           <section className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-accent-500">
                 Propriétaires au rôle (EvalWeb)
               </h3>
               <div className="flex items-center gap-1.5">
@@ -1226,7 +1226,7 @@ function OwnerCandidatesModal({
                       href="https://montreal.ca/role-evaluation-fonciere"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-emerald-300 underline hover:text-emerald-200"
+                      className="text-accent-500 underline hover:text-accent-400"
                     >
                       ouvrir le site
                     </a>{" "}
@@ -1258,7 +1258,7 @@ function OwnerCandidatesModal({
                     disabled={
                       pasteSubmitting || !pasteText.trim()
                     }
-                    className="inline-flex items-center gap-1 rounded-md bg-emerald-500 px-3 py-1.5 text-[11px] font-semibold text-brand-950 hover:bg-emerald-400 disabled:opacity-50"
+                    className="inline-flex items-center gap-1 rounded-md bg-accent-500 px-3 py-1.5 text-[11px] font-semibold text-brand-950 hover:bg-accent-400 disabled:opacity-50"
                   >
                     {pasteSubmitting ? (
                       <Loader2 className="h-3 w-3 animate-spin" />
@@ -1371,7 +1371,7 @@ function OwnerCandidatesModal({
 
           {loading ? (
             <div className="flex justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-emerald-500" />
+              <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
             </div>
           ) : candidates.length === 0 ? (
             <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-200">

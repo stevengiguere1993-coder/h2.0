@@ -217,7 +217,7 @@ export default function ProspectionAgendaPage() {
           <button
             type="button"
             onClick={() => setShowCreate(new Date())}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-emerald-400"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-accent-400"
           >
             <Plus className="h-4 w-4" /> Nouveau RDV
           </button>
@@ -227,7 +227,7 @@ export default function ProspectionAgendaPage() {
       <div className="px-4 py-6 lg:px-6">
         <header className="mb-4 flex flex-wrap items-center gap-3">
           <h1 className="flex items-center gap-2 text-xl font-bold text-white">
-            <Calendar className="h-5 w-5 text-emerald-400" />
+            <Calendar className="h-5 w-5 text-accent-500" />
             Agenda Prospection
           </h1>
 
@@ -239,7 +239,7 @@ export default function ProspectionAgendaPage() {
                 onClick={() => setView(v)}
                 className={`rounded-md border px-2 py-1 text-xs ${
                   view === v
-                    ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-200"
+                    ? "border-accent-500 bg-accent-500 text-brand-950"
                     : "border-brand-800 text-white/70 hover:bg-brand-900"
                 }`}
               >
@@ -657,7 +657,7 @@ function MiniMonth({
     <button
       type="button"
       onClick={onClick}
-      className="rounded-xl border border-brand-800 bg-brand-900/40 p-3 text-left transition hover:border-emerald-500/50"
+      className="rounded-xl border border-brand-800 bg-brand-900/40 p-3 text-left transition hover:border-accent-500/50"
     >
       <h3 className="mb-2 text-sm font-semibold text-white">
         {MONTHS_FR[monthDate.getMonth()]}
@@ -1114,7 +1114,7 @@ function EventModal({
                 onChange={(e) =>
                   setSendEmailInvite(e.target.checked)
                 }
-                className="h-4 w-4 rounded border-brand-700 bg-brand-900 text-emerald-500 focus:ring-emerald-500"
+                className="h-4 w-4 rounded border-brand-700 bg-brand-900 text-accent-500 focus:ring-accent-500"
               />
               Envoyer un courriel d&apos;invitation avec lien de
               confirmation
@@ -1158,7 +1158,7 @@ function EventModal({
             <button
               type="submit"
               disabled={submitting}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-brand-950 hover:bg-emerald-400 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-brand-950 hover:bg-accent-400 disabled:opacity-50"
             >
               {submitting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

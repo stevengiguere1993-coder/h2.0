@@ -271,7 +271,7 @@ export default function MoyenneLocativePage() {
 
       <div className="p-4 lg:p-6">
         <header className="flex flex-wrap items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
             <Building2 className="h-5 w-5" />
           </span>
           <div className="min-w-0 flex-1">
@@ -303,7 +303,7 @@ export default function MoyenneLocativePage() {
                     }
                   }}
                   placeholder="Tape une adresse (ex. 1660 rue Saint-Clément…)"
-                  className="w-full rounded-xl border border-brand-800 bg-brand-900 py-3 pl-9 pr-3 text-sm text-white outline-none focus:border-emerald-500/60"
+                  className="w-full rounded-xl border border-brand-800 bg-brand-900 py-3 pl-9 pr-3 text-sm text-white outline-none focus:border-accent-500/60"
                 />
                 {query ? (
                   <button
@@ -324,7 +324,7 @@ export default function MoyenneLocativePage() {
                 onClick={() => {
                   if (query.trim()) void loadByAddress(query);
                 }}
-                className="shrink-0 rounded-xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
+                className="shrink-0 rounded-xl bg-accent-500 px-4 py-3 text-sm font-semibold text-white hover:bg-accent-400"
               >
                 Rechercher
               </button>
@@ -339,7 +339,7 @@ export default function MoyenneLocativePage() {
                     onClick={() => pickSuggestion(s)}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-white/80 hover:bg-brand-800/60"
                   >
-                    <MapPin className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                    <MapPin className="h-3.5 w-3.5 shrink-0 text-accent-500" />
                     <span className="flex-1 truncate">{s.label}</span>
                   </button>
                 ))}
@@ -354,7 +354,7 @@ export default function MoyenneLocativePage() {
                 setQuery("");
                 void loadOverall();
               }}
-              className="rounded-full border border-brand-800 bg-brand-900 px-3 py-1 text-xs text-white/60 hover:border-emerald-500/40 hover:text-emerald-300"
+              className="rounded-full border border-brand-800 bg-brand-900 px-3 py-1 text-xs text-white/60 hover:border-accent-500/40 hover:text-accent-500"
             >
               ↺ Tout le marché récent
             </button>
@@ -376,7 +376,7 @@ export default function MoyenneLocativePage() {
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <MapPin className="h-4 w-4 text-emerald-400" />
+                    <MapPin className="h-4 w-4 text-accent-500" />
                     <h2 className="text-lg font-bold text-white">{label}</h2>
                   </div>
                   {hasMarket ? (
@@ -496,7 +496,7 @@ export default function MoyenneLocativePage() {
               {hasMarket ? (
                 <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
                   <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
-                    <TrendingUp className="h-4 w-4 text-emerald-400" />
+                    <TrendingUp className="h-4 w-4 text-accent-500" />
                     Compare un loyer au marché
                   </h3>
                   <div className="mt-3 flex flex-wrap items-end gap-3">
@@ -509,7 +509,7 @@ export default function MoyenneLocativePage() {
                         onChange={(e) => setMonLoyer(e.target.value)}
                         inputMode="numeric"
                         placeholder="1 250"
-                        className="w-32 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/60"
+                        className="w-32 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-accent-500/60"
                       />
                     </div>
                     <div>
@@ -519,7 +519,7 @@ export default function MoyenneLocativePage() {
                       <select
                         value={monBed}
                         onChange={(e) => setMonBed(parseInt(e.target.value, 10))}
-                        className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/60"
+                        className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-accent-500/60"
                       >
                         {rows.map((b) => (
                           <option key={b.bedrooms} value={b.bedrooms}>
@@ -553,7 +553,7 @@ export default function MoyenneLocativePage() {
               {hasMarket ? (
                 <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
                   <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
-                    <Calculator className="h-4 w-4 text-emerald-400" />
+                    <Calculator className="h-4 w-4 text-accent-500" />
                     Revenu potentiel d&apos;un immeuble
                   </h3>
                   <p className="mt-1 text-[11px] text-white/45">
@@ -586,7 +586,7 @@ export default function MoyenneLocativePage() {
                             }
                             inputMode="numeric"
                             placeholder="0"
-                            className="w-16 rounded-lg border border-brand-800 bg-brand-950 px-2 py-1.5 text-right text-sm text-white outline-none focus:border-emerald-500/60"
+                            className="w-16 rounded-lg border border-brand-800 bg-brand-950 px-2 py-1.5 text-right text-sm text-white outline-none focus:border-accent-500/60"
                           />
                         </div>
                       ))}
@@ -620,7 +620,7 @@ export default function MoyenneLocativePage() {
                       onChange={(e) => setPrix(e.target.value)}
                       inputMode="numeric"
                       placeholder="1 200 000"
-                      className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/60"
+                      className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-accent-500/60"
                     />
                     {grm ? (
                       <div className="mt-2 flex items-center justify-between rounded-lg bg-brand-950 px-3 py-2 text-sm">

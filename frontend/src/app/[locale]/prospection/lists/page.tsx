@@ -101,7 +101,7 @@ export default function ProspectionListsIndexPage() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={"/prospection/leads" as any}
-            className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/20"
+            className="inline-flex items-center gap-1 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs text-accent-500 hover:bg-accent-500/20"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             Tous les leads
@@ -111,7 +111,7 @@ export default function ProspectionListsIndexPage() {
 
       <div className="mx-auto max-w-4xl p-4 lg:p-6">
         <header className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
             <Layers className="h-5 w-5" />
           </span>
           <div className="flex-1">
@@ -174,7 +174,7 @@ export default function ProspectionListsIndexPage() {
 
         {loading ? (
           <div className="flex min-h-[20vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-emerald-500" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : lists.length === 0 ? (
           <div className="mt-6 rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-8 text-center">
@@ -192,7 +192,7 @@ export default function ProspectionListsIndexPage() {
             {lists.map((l) => (
               <li
                 key={l.id}
-                className="group flex items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 transition hover:border-emerald-500/40"
+                className="group flex items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 transition hover:border-accent-500/40"
               >
                 <Link
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -203,7 +203,7 @@ export default function ProspectionListsIndexPage() {
                     <h3 className="truncate font-medium text-white">
                       {l.name}
                     </h3>
-                    <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] tabular-nums text-emerald-300">
+                    <span className="rounded-full border border-accent-500/30 bg-accent-500/10 px-2 py-0.5 text-[11px] tabular-nums text-accent-500">
                       {l.member_count}
                     </span>
                     {l.criteria_json ? (

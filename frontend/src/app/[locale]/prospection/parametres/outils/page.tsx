@@ -61,7 +61,7 @@ function BrowserExtensionSection() {
   return (
     <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
       <header className="flex items-center gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
           <Puzzle className="h-5 w-5" />
         </span>
         <div>
@@ -81,7 +81,7 @@ function BrowserExtensionSection() {
           href="https://github.com/stevengiguere1993-coder/h2.0/archive/refs/heads/main.zip"
           target="_blank"
           rel="noopener"
-          className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-500/20"
+          className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2 text-sm font-medium text-accent-500 hover:bg-accent-500/20"
         >
           <Download className="h-4 w-4" />
           Télécharger l&apos;extension (ZIP)
@@ -150,7 +150,7 @@ function BrowserExtensionSection() {
                 href="https://montreal.ca/role-evaluation-fonciere"
                 target="_blank"
                 rel="noopener"
-                className="text-emerald-300 underline"
+                className="text-accent-500 underline"
               >
                 montreal.ca
               </a>{" "}
@@ -159,7 +159,7 @@ function BrowserExtensionSection() {
                 href="https://www.centris.ca"
                 target="_blank"
                 rel="noopener"
-                className="text-emerald-300 underline"
+                className="text-accent-500 underline"
               >
                 centris.ca
               </a>{" "}

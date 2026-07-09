@@ -566,7 +566,7 @@ export default function ProspectionSourcesPage() {
 
       <div className="mx-auto max-w-3xl p-4 lg:p-6">
         <header className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
             <Database className="h-5 w-5" />
           </span>
           <div>
@@ -592,7 +592,7 @@ export default function ProspectionSourcesPage() {
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
           <header className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-3">
-              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
                 <MapPin className="h-5 w-5" />
               </span>
               <div>
@@ -613,7 +613,7 @@ export default function ProspectionSourcesPage() {
               href="https://www.donneesquebec.ca/recherche/dataset/roles-d-evaluation-fonciere-du-quebec/resource/32ac5079-ae14-460a-9a2d-b811b0fc56f3"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex flex-shrink-0 items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300"
+              className="inline-flex flex-shrink-0 items-center gap-1 text-[11px] text-accent-500 hover:text-accent-400"
             >
               <ExternalLink className="h-3 w-3" />
               source
@@ -627,7 +627,7 @@ export default function ProspectionSourcesPage() {
                 href="https://www.donneesquebec.ca/recherche/dataset/roles-d-evaluation-fonciere-du-quebec/resource/32ac5079-ae14-460a-9a2d-b811b0fc56f3"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-emerald-400 hover:text-emerald-300"
+                className="text-accent-500 hover:text-accent-400"
               >
                 donneesquebec.ca
               </a>{" "}
@@ -653,7 +653,7 @@ export default function ProspectionSourcesPage() {
               accept=".csv,.zip,text/csv,application/zip,application/x-zip-compressed"
               onChange={(e) => setProvFile(e.target.files?.[0] || null)}
               disabled={provUploading || provStatus?.status === "running"}
-              className="rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm text-white file:mr-3 file:rounded file:border-0 file:bg-emerald-500/20 file:px-3 file:py-1 file:text-xs file:text-emerald-300"
+              className="rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm text-white file:mr-3 file:rounded file:border-0 file:bg-accent-500/20 file:px-3 file:py-1 file:text-xs file:text-accent-500"
             />
             <button
               type="button"
@@ -664,7 +664,7 @@ export default function ProspectionSourcesPage() {
                 provStatus?.status === "running" ||
                 !provFile
               }
-              className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2 text-sm font-medium text-accent-500 transition hover:bg-accent-500/20 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {provUploading || provStatus?.status === "running" ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -900,7 +900,7 @@ export default function ProspectionSourcesPage() {
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
           <header className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-3">
-              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
                 <Building2 className="h-5 w-5" />
               </span>
               <div>
@@ -918,7 +918,7 @@ export default function ProspectionSourcesPage() {
               href="https://www.donneesquebec.ca/recherche/dataset/registre-des-entreprises"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex flex-shrink-0 items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300"
+              className="inline-flex flex-shrink-0 items-center gap-1 text-[11px] text-accent-500 hover:text-accent-400"
             >
               <ExternalLink className="h-3 w-3" />
               source
@@ -932,7 +932,7 @@ export default function ProspectionSourcesPage() {
                 href="https://www.donneesquebec.ca/recherche/dataset/registre-des-entreprises"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-emerald-400 hover:text-emerald-300"
+                className="text-accent-500 hover:text-accent-400"
               >
                 donneesquebec.ca
               </a>{" "}
@@ -977,7 +977,7 @@ export default function ProspectionSourcesPage() {
                 onChange={(e) =>
                   setReqFile(e.target.files?.[0] || null)
                 }
-                className="mt-1 block w-full cursor-pointer rounded-md border border-brand-700 bg-brand-950 px-3 py-2 text-xs text-white/80 file:mr-3 file:rounded file:border-0 file:bg-emerald-500/15 file:px-3 file:py-1.5 file:text-emerald-300 hover:file:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+                className="mt-1 block w-full cursor-pointer rounded-md border border-brand-700 bg-brand-950 px-3 py-2 text-xs text-white/80 file:mr-3 file:rounded file:border-0 file:bg-accent-500/15 file:px-3 file:py-1.5 file:text-accent-500 hover:file:bg-accent-500/25 disabled:cursor-not-allowed disabled:opacity-40"
               />
             </label>
 
@@ -991,7 +991,7 @@ export default function ProspectionSourcesPage() {
                   reqUploading ||
                   reqStatus?.status === "running"
                 }
-                className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2 text-sm font-medium text-accent-500 transition hover:bg-accent-500/20 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {reqUploading || reqStatus?.status === "running" ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -1067,7 +1067,7 @@ export default function ProspectionSourcesPage() {
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
           <header className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-3">
-              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
                 <DollarSign className="h-5 w-5" />
               </span>
               <div>
@@ -1086,7 +1086,7 @@ export default function ProspectionSourcesPage() {
               href="https://www03.cmhc-schl.gc.ca/hmip-pimh/fr"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex flex-shrink-0 items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300"
+              className="inline-flex flex-shrink-0 items-center gap-1 text-[11px] text-accent-500 hover:text-accent-400"
             >
               <ExternalLink className="h-3 w-3" />
               source
@@ -1100,7 +1100,7 @@ export default function ProspectionSourcesPage() {
                 href="https://www03.cmhc-schl.gc.ca/hmip-pimh/fr/TableMapChart/RentalMarket"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-emerald-400 hover:text-emerald-300"
+                className="text-accent-500 hover:text-accent-400"
               >
                 portail SCHL
               </a>
@@ -1131,7 +1131,7 @@ export default function ProspectionSourcesPage() {
                 onChange={(e) =>
                   setCmhcFile(e.target.files?.[0] || null)
                 }
-                className="mt-1 block w-full cursor-pointer rounded-md border border-brand-700 bg-brand-950 px-3 py-2 text-xs text-white/80 file:mr-3 file:rounded file:border-0 file:bg-emerald-500/15 file:px-3 file:py-1.5 file:text-emerald-300 hover:file:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+                className="mt-1 block w-full cursor-pointer rounded-md border border-brand-700 bg-brand-950 px-3 py-2 text-xs text-white/80 file:mr-3 file:rounded file:border-0 file:bg-accent-500/15 file:px-3 file:py-1.5 file:text-accent-500 hover:file:bg-accent-500/25 disabled:cursor-not-allowed disabled:opacity-40"
               />
             </label>
 
@@ -1140,7 +1140,7 @@ export default function ProspectionSourcesPage() {
                 type="button"
                 onClick={importCmhc}
                 disabled={!isOwner || !cmhcFile || cmhcBusy}
-                className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2 text-sm font-medium text-accent-500 transition hover:bg-accent-500/20 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {cmhcBusy ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -1172,7 +1172,7 @@ export default function ProspectionSourcesPage() {
         {/* === Comparables loyers (Kijiji + LesPAC) === */}
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
           <header className="flex items-start gap-3">
-            <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+            <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
               <RefreshCw className="h-5 w-5" />
             </span>
             <div>
@@ -1193,7 +1193,7 @@ export default function ProspectionSourcesPage() {
               type="button"
               onClick={scrapeRental}
               disabled={!isOwner || rentalStatus?.status === "running"}
-              className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2 text-sm font-medium text-accent-500 transition hover:bg-accent-500/20 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {rentalStatus?.status === "running" ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

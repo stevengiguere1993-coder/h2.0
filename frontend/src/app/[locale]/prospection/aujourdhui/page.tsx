@@ -228,7 +228,7 @@ export default function ProspectionAujourdhuiPage() {
 
         {loading ? (
           <div className="flex min-h-[40vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-emerald-500" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : buckets.total === 0 ? (
           <div className="mt-8 rounded-2xl border border-dashed border-brand-800 bg-brand-900/50 p-12 text-center">
@@ -348,7 +348,7 @@ function Bucket({
                 <Link
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   href={`/prospection/${l.id}` as any}
-                  className="block truncate font-bold text-white hover:text-emerald-300"
+                  className="block truncate font-bold text-white hover:text-accent-500"
                 >
                   {l.name}
                 </Link>
@@ -363,7 +363,7 @@ function Bucket({
                   {l.owner_phone ? (
                     <a
                       href={`tel:${l.owner_phone}`}
-                      className="inline-flex items-center gap-1 hover:text-emerald-300"
+                      className="inline-flex items-center gap-1 hover:text-accent-500"
                     >
                       <Phone className="h-3 w-3" />
                       {l.owner_phone}
@@ -372,7 +372,7 @@ function Bucket({
                   {l.owner_email ? (
                     <a
                       href={`mailto:${l.owner_email}`}
-                      className="inline-flex items-center gap-1 hover:text-emerald-300"
+                      className="inline-flex items-center gap-1 hover:text-accent-500"
                     >
                       <Mail className="h-3 w-3" />
                       {l.owner_email}

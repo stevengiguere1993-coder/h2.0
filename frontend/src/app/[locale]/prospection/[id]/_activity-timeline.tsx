@@ -135,7 +135,7 @@ export function ActivityTimeline({ leadId }: { leadId: number }) {
       <header className="mb-4 flex items-center justify-between">
         <div>
           <h2 className="flex items-center gap-2 text-base font-bold text-white">
-            <Activity className="h-4 w-4 text-emerald-400" />
+            <Activity className="h-4 w-4 text-accent-500" />
             Historique d&apos;actions
           </h2>
           <p className="mt-0.5 text-xs text-white/50">
@@ -145,7 +145,7 @@ export function ActivityTimeline({ leadId }: { leadId: number }) {
         <button
           type="button"
           onClick={() => setShowForm((v) => !v)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-sm font-medium text-emerald-300 hover:bg-emerald-500/20"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-sm font-medium text-accent-500 hover:bg-accent-500/20"
         >
           {showForm ? (
             <>
@@ -219,7 +219,7 @@ export function ActivityTimeline({ leadId }: { leadId: number }) {
                     <>
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-center gap-2">
-                          <Icon className="h-3.5 w-3.5 text-emerald-400" />
+                          <Icon className="h-3.5 w-3.5 text-accent-500" />
                           <span className="text-sm font-semibold text-white">
                             {KIND_LABEL[it.kind] || it.kind}
                           </span>
@@ -354,7 +354,7 @@ function LogActionForm({
   return (
     <form
       onSubmit={submit}
-      className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3"
+      className="mb-4 rounded-lg border border-accent-500/30 bg-accent-500/5 p-3"
     >
       <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
         <label className="text-xs">
@@ -446,7 +446,7 @@ function LogActionForm({
         <button
           type="submit"
           disabled={saving}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-emerald-950 hover:bg-emerald-400 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-accent-400 disabled:opacity-50"
         >
           {saving ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -527,7 +527,7 @@ function EditActionForm({
 
   return (
     <form onSubmit={submit} className="space-y-2">
-      <span className="block text-xs font-semibold text-emerald-300">
+      <span className="block text-xs font-semibold text-accent-500">
         Modifier — {KIND_LABEL[item.kind] || item.kind}
       </span>
       <label className="block text-xs">
@@ -598,7 +598,7 @@ function EditActionForm({
         <button
           type="submit"
           disabled={saving}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-emerald-950 hover:bg-emerald-400 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-brand-950 hover:bg-accent-400 disabled:opacity-50"
         >
           {saving ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />

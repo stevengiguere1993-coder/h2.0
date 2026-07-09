@@ -141,7 +141,7 @@ export default function ProspectionPreferencesPage() {
         {/* === Préférences carte === */}
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
           <header className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
               <Map className="h-5 w-5" />
             </span>
             <div>
@@ -164,7 +164,7 @@ export default function ProspectionPreferencesPage() {
                     key={z.label}
                     type="button"
                     onClick={() => applyZone(z)}
-                    className="rounded-full border border-brand-700 bg-brand-950 px-2.5 py-1 text-[11px] text-white/70 hover:border-emerald-500/50 hover:text-emerald-300"
+                    className="rounded-full border border-brand-700 bg-brand-950 px-2.5 py-1 text-[11px] text-white/70 hover:border-accent-500/50 hover:text-accent-500"
                   >
                     {z.label}
                   </button>
@@ -217,7 +217,7 @@ export default function ProspectionPreferencesPage() {
         {/* === Défauts nouveaux leads === */}
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
           <header className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
               <Sparkles className="h-5 w-5" />
             </span>
             <div>
@@ -287,7 +287,7 @@ export default function ProspectionPreferencesPage() {
         {/* === Méthodologie scoring === */}
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
           <header className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
               <Info className="h-5 w-5" />
             </span>
             <div>

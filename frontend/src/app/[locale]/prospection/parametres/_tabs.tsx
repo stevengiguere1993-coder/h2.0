@@ -94,7 +94,7 @@ export function ParametresTabs() {
             href={t.href as any}
             className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition ${
               active
-                ? "bg-emerald-500/15 text-emerald-300"
+                ? "bg-brand-900 text-white"
                 : "text-white/60 hover:bg-brand-900 hover:text-white"
             }`}
           >

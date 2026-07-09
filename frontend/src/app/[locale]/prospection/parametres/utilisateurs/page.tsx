@@ -166,7 +166,7 @@ export default function ProspectionUsersPage() {
           <button
             type="button"
             onClick={() => setShowCreate(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-emerald-400"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-accent-400"
           >
             <Plus className="h-4 w-4" /> Nouvel utilisateur
           </button>
@@ -176,7 +176,7 @@ export default function ProspectionUsersPage() {
 
       <div className="px-4 py-6 lg:px-6">
         <h1 className="flex items-center gap-2 text-xl font-bold text-white">
-          <Users className="h-5 w-5 text-emerald-400" />
+          <Users className="h-5 w-5 text-accent-500" />
           Utilisateurs &amp; volets
         </h1>
         <p className="mt-1 max-w-2xl text-sm text-white/60">
@@ -321,7 +321,7 @@ function UsersTable({
   return (
     <section className="mt-6 rounded-xl border border-brand-800">
       <div className="flex items-center gap-2 border-b border-brand-800 bg-brand-900/60 px-4 py-3">
-        <ShieldCheck className="h-4 w-4 text-emerald-400" />
+        <ShieldCheck className="h-4 w-4 text-accent-500" />
         <h2 className="text-sm font-semibold text-white">{title}</h2>
         <span className="ml-auto text-xs text-white/40">
           {users.length} {users.length > 1 ? "comptes" : "compte"}
@@ -541,7 +541,7 @@ function CreateUserModal({
       <div className="w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 p-6">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-base font-bold text-white">
-            <UserPlus className="h-5 w-5 text-emerald-400" />
+            <UserPlus className="h-5 w-5 text-accent-500" />
             Nouvel utilisateur
           </h2>
           <button
@@ -632,7 +632,7 @@ function CreateUserModal({
             <button
               type="submit"
               disabled={submitting}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-brand-950 hover:bg-emerald-400 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-brand-950 hover:bg-accent-400 disabled:opacity-50"
             >
               {submitting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

@@ -229,7 +229,7 @@ export default function ProspectionListDetailPage() {
                 type="button"
                 onClick={rebuild}
                 disabled={rebuilding}
-                className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-500 hover:bg-accent-500/20 disabled:opacity-50"
                 title="Recalcule les membres selon les critères enregistrés"
               >
                 {rebuilding ? (
@@ -251,7 +251,7 @@ export default function ProspectionListDetailPage() {
 
         {loading ? (
           <div className="flex min-h-[40vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-emerald-500" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : sorted.length === 0 ? (
           <div className="mt-8 rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-12 text-center">
@@ -262,7 +262,7 @@ export default function ProspectionListDetailPage() {
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/prospection/leads" as any}
-              className="mt-3 inline-flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300"
+              className="mt-3 inline-flex items-center gap-1 text-xs text-accent-500 hover:text-accent-400"
             >
               Aller chercher des leads à ajouter →
             </Link>
@@ -309,7 +309,7 @@ export default function ProspectionListDetailPage() {
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           href={`/prospection/${l.id}` as any}
-                          className="font-medium text-white hover:text-emerald-300"
+                          className="font-medium text-white hover:text-accent-500"
                         >
                           {l.name}
                         </Link>
@@ -361,7 +361,7 @@ export default function ProspectionListDetailPage() {
                         {l.owner_phone ? (
                           <a
                             href={`tel:${l.owner_phone}`}
-                            className="inline-flex items-center gap-1 text-xs text-emerald-300 hover:text-emerald-200"
+                            className="inline-flex items-center gap-1 text-xs text-accent-500 hover:text-accent-400"
                           >
                             <Phone className="h-3 w-3" />
                             {l.owner_phone}
