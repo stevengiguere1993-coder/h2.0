@@ -252,7 +252,7 @@ export default function BauxPage() {
       <div className="p-4 lg:p-6">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-start gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/15 text-sky-300">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
               <ClipboardList className="h-5 w-5" />
             </span>
             <div>
@@ -336,7 +336,7 @@ export default function BauxPage() {
         <div className="mt-5 overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
           {loading ? (
             <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-sky-400" />
+              <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
             </div>
           ) : !data || data.rows.length === 0 ? (
             <div className="p-10 text-center text-sm text-white/50">
@@ -387,7 +387,7 @@ export default function BauxPage() {
                         {r.locataire_phone ? (
                           <a
                             href={`tel:${r.locataire_phone}`}
-                            className="ml-2 inline-flex items-center gap-1 text-[11px] text-sky-300 hover:underline"
+                            className="ml-2 inline-flex items-center gap-1 text-[11px] text-accent-500 hover:underline"
                           >
                             <Phone className="h-3 w-3" />
                             {r.locataire_phone}
@@ -398,7 +398,7 @@ export default function BauxPage() {
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           href={`/immobilier/immeubles/${r.immeuble_id}` as any}
-                          className="hover:text-sky-300 hover:underline"
+                          className="hover:text-accent-500 hover:underline"
                         >
                           {r.immeuble_name}
                         </Link>

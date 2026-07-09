@@ -114,7 +114,7 @@ export default function ImmeublesListPage() {
             <button
               type="button"
               onClick={() => setShowImport(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white/80 hover:border-sky-300 hover:text-sky-200"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white/80 hover:border-accent-500 hover:text-accent-500"
             >
               <Download className="h-3.5 w-3.5" />
               Import matricule
@@ -128,7 +128,7 @@ export default function ImmeublesListPage() {
                   ? "Sélectionne une entreprise dans la barre latérale d'abord"
                   : `Créer un immeuble pour ${currentEnt?.name}`
               }
-              className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-accent-400/30 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-500 hover:bg-accent-500/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus className="h-3.5 w-3.5" />
               Nouvel immeuble
@@ -306,7 +306,7 @@ function ModalShell({
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
       <div className="my-8 w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
         <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-sky-300">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
             {title}
           </h2>
           <button
@@ -531,7 +531,7 @@ function CreateImmeubleModal({
                 type="file"
                 accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
                 onChange={onPhotoChange}
-                className="block w-full text-xs text-white/70 file:mr-3 file:rounded-lg file:border-0 file:bg-sky-500/15 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-sky-200 hover:file:bg-sky-500/25"
+                className="block w-full text-xs text-white/70 file:mr-3 file:rounded-lg file:border-0 file:bg-accent-500/15 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-accent-500 hover:file:bg-accent-500/25"
               />
               <p className="mt-1 text-[10px] text-white/40">
                 JPG, PNG, WEBP ou HEIC, max 8 Mo.
@@ -655,7 +655,7 @@ function ImportMatriculeModal({
             type="checkbox"
             checked={createLogements}
             onChange={(e) => setCreateLogements(e.target.checked)}
-            className="h-4 w-4 accent-sky-500"
+            className="h-4 w-4 accent-accent-500"
           />
           <span>
             Créer automatiquement les logements (Apt 1 à N selon nb_logements)

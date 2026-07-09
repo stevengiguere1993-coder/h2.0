@@ -61,7 +61,7 @@ export default function LocatairesPage() {
           <button
             type="button"
             onClick={() => setShowCreate(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/20"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/30 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-500 hover:bg-accent-500/20"
           >
             <Plus className="h-3.5 w-3.5" />
             Nouveau locataire
@@ -114,10 +114,10 @@ export default function LocatairesPage() {
                         href={`/immobilier/locataires/${l.id}` as any}
                         className="flex items-center gap-3"
                       >
-                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-sky-500/15 text-sky-300">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-500/15 text-accent-500">
                           <User className="h-4 w-4" />
                         </div>
-                        <span className="font-bold text-white group-hover:text-sky-300">
+                        <span className="font-bold text-white group-hover:text-accent-500">
                           {l.full_name}
                         </span>
                       </Link>
@@ -233,7 +233,7 @@ function CreateLocataireModal({
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
       <div className="my-8 w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
         <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-sky-300">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
             Nouveau locataire
           </h2>
           <button

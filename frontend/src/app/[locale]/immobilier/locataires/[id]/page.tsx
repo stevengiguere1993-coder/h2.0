@@ -147,7 +147,7 @@ export default function LocataireDetailPage({
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/immobilier/locataires" as any}
-          className="inline-flex items-center text-xs text-white/50 hover:text-sky-300"
+          className="inline-flex items-center text-xs text-white/50 hover:text-accent-500"
         >
           <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Locataires
         </Link>
@@ -163,7 +163,7 @@ export default function LocataireDetailPage({
         ) : (
           <div className="mt-4 space-y-6">
             <header className="flex items-start gap-4">
-              <span className="flex h-14 w-14 items-center justify-center rounded-xl bg-sky-500/15 text-sky-300">
+              <span className="flex h-14 w-14 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
                 <User className="h-6 w-6" />
               </span>
               <div className="min-w-0">
@@ -174,7 +174,7 @@ export default function LocataireDetailPage({
                   {loc.email ? (
                     <a
                       href={`mailto:${loc.email}`}
-                      className="inline-flex items-center gap-1 hover:text-sky-300"
+                      className="inline-flex items-center gap-1 hover:text-accent-500"
                     >
                       <Mail className="h-3.5 w-3.5" /> {loc.email}
                     </a>
@@ -190,7 +190,7 @@ export default function LocataireDetailPage({
                 type="button"
                 onClick={() => void etatDeCompte()}
                 disabled={pdfLoading}
-                className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+                className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2 text-sm font-semibold text-accent-500 transition hover:bg-accent-500/20 disabled:opacity-50"
                 title="Générer l'état de compte (PDF) : loyers, paiements, dépôt"
               >
                 {pdfLoading ? (
@@ -204,7 +204,7 @@ export default function LocataireDetailPage({
 
             <section className="grid gap-4 sm:grid-cols-2">
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-sky-300">
+                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
                   Informations
                 </h2>
                 <dl className="space-y-1.5 text-sm">
@@ -278,7 +278,7 @@ export default function LocataireDetailPage({
 
             {/* Baux */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-sky-300">
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
                 Baux
               </h2>
               {!dossier || dossier.baux.length === 0 ? (
@@ -306,7 +306,7 @@ export default function LocataireDetailPage({
                               href={
                                 `/immobilier/immeubles/${b.immeuble_id}` as any
                               }
-                              className="font-medium text-white hover:text-sky-300"
+                              className="font-medium text-white hover:text-accent-500"
                             >
                               {b.immeuble_name}
                             </Link>
@@ -350,7 +350,7 @@ export default function LocataireDetailPage({
             {/* Historique de paiements */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-sky-300">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                   Historique de paiements
                 </h2>
                 {dossier && dossier.nb_paiements > 0 ? (

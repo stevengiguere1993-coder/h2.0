@@ -517,7 +517,7 @@ export default function ImmeubleDetailPage({
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/immobilier/immeubles" as any}
-          className="inline-flex items-center text-xs text-white/50 hover:text-sky-300"
+          className="inline-flex items-center text-xs text-white/50 hover:text-accent-500"
         >
           <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Liste des immeubles
         </Link>
@@ -529,7 +529,7 @@ export default function ImmeubleDetailPage({
               onClick={() => fileRef.current?.click()}
               disabled={photoBusy}
               title="Changer la photo de l'immeuble"
-              className="group relative h-16 w-16 flex-shrink-0 overflow-hidden rounded-xl bg-sky-500/15 text-sky-300"
+              className="group relative h-16 w-16 flex-shrink-0 overflow-hidden rounded-xl bg-accent-500/15 text-accent-500"
             >
               {immeuble.has_cover_photo || immeuble.cover_photo_url ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -614,7 +614,7 @@ export default function ImmeubleDetailPage({
                 value={ownerId ?? ""}
                 onChange={(e) => void onChangeOwner(Number(e.target.value))}
                 disabled={savingOwner || entreprises.length === 0}
-                className="rounded-lg border border-brand-800 bg-brand-900 px-2 py-1 text-xs font-semibold text-white outline-none focus:border-sky-300 disabled:opacity-50"
+                className="rounded-lg border border-brand-800 bg-brand-900 px-2 py-1 text-xs font-semibold text-white outline-none focus:border-accent-500 disabled:opacity-50"
               >
                 <option value="" disabled className="bg-brand-950 text-white">
                   — choisir —
@@ -630,14 +630,14 @@ export default function ImmeubleDetailPage({
                 ))}
               </select>
               {savingOwner ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-300" />
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-accent-500" />
               ) : null}
             </label>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={openEdit}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/20"
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-accent-500/30 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-500 hover:bg-accent-500/20"
                 title="Modifier l'immeuble (nom, adresse, etc.)"
               >
                 <Pencil className="h-3.5 w-3.5" /> Modifier
@@ -722,7 +722,7 @@ export default function ImmeubleDetailPage({
                 onClick={() => setTab(t.id)}
                 className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-4 py-2 text-sm font-medium transition ${
                   active
-                    ? "border-sky-400 text-sky-500"
+                    ? "border-accent-500 text-accent-500"
                     : "border-transparent text-white/60 hover:text-white"
                 }`}
               >
@@ -920,7 +920,7 @@ export default function ImmeubleDetailPage({
         <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
           <div className="my-8 w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
             <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
-              <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-sky-300">
+              <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-accent-500">
                 <Pencil className="h-4 w-4" /> Modifier l&apos;immeuble
               </h2>
               <button
@@ -939,7 +939,7 @@ export default function ImmeubleDetailPage({
                   onChange={(e) =>
                     setEditForm((f) => ({ ...f, name: e.target.value }))
                   }
-                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
                   placeholder="Laisser vide = adresse"
                 />
               </EditField>
@@ -949,7 +949,7 @@ export default function ImmeubleDetailPage({
                   onChange={(e) =>
                     setEditForm((f) => ({ ...f, address: e.target.value }))
                   }
-                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
                 />
               </EditField>
               <div className="grid grid-cols-2 gap-3">
@@ -959,7 +959,7 @@ export default function ImmeubleDetailPage({
                     onChange={(e) =>
                       setEditForm((f) => ({ ...f, city: e.target.value }))
                     }
-                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
                   />
                 </EditField>
                 <EditField label="Code postal">
@@ -971,7 +971,7 @@ export default function ImmeubleDetailPage({
                         postal_code: e.target.value
                       }))
                     }
-                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
                   />
                 </EditField>
               </div>
@@ -986,7 +986,7 @@ export default function ImmeubleDetailPage({
                     }))
                   }
                   placeholder="ex. 514 555-0123"
-                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
                 />
                 <p className="mt-1 text-[11px] text-white/50">
                   Appelé en priorité par Léa lors d'une urgence locataire
@@ -1001,7 +1001,7 @@ export default function ImmeubleDetailPage({
                     onChange={(e) =>
                       setEditForm((f) => ({ ...f, type: e.target.value }))
                     }
-                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
                   >
                     {["residentiel", "commercial", "mixte", "unifamilial", "autre"].map(
                       (t) => (
@@ -1022,7 +1022,7 @@ export default function ImmeubleDetailPage({
                         annee_construction: e.target.value
                       }))
                     }
-                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
                   />
                 </EditField>
               </div>
@@ -1037,7 +1037,7 @@ export default function ImmeubleDetailPage({
                         nb_logements: e.target.value
                       }))
                     }
-                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
                   />
                 </EditField>
                 <EditField label="Prix d'achat">
@@ -1050,7 +1050,7 @@ export default function ImmeubleDetailPage({
                         purchase_price: e.target.value
                       }))
                     }
-                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
                   />
                 </EditField>
               </div>
@@ -1068,7 +1068,7 @@ export default function ImmeubleDetailPage({
                 type="button"
                 onClick={() => void saveEdit()}
                 disabled={editBusy || !editForm.address.trim()}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500/90 px-4 py-2 text-xs font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500/90 px-4 py-2 text-xs font-semibold text-brand-950 hover:bg-accent-500 disabled:opacity-50"
               >
                 {editBusy ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1149,7 +1149,7 @@ function Section({
   void empty;
   return (
     <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-sky-300">
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
         {title}
       </h2>
       {children}
@@ -1326,7 +1326,7 @@ function BauxTab({
                 <Link
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   href={`/immobilier/locataires/${b.locataire_id}` as any}
-                  className="font-medium text-sky-300 hover:underline"
+                  className="font-medium text-accent-500 hover:underline"
                 >
                   {locMap.get(b.locataire_id) || `Locataire #${b.locataire_id}`}
                 </Link>
@@ -1491,7 +1491,7 @@ function TalFormDropdown({ bailId }: { bailId: number }) {
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-1 rounded border border-white/15 bg-brand-950 px-2 py-0.5 text-[11px] text-white/80 hover:border-sky-300 hover:text-sky-200"
+        className="inline-flex items-center gap-1 rounded border border-white/15 bg-brand-950 px-2 py-0.5 text-[11px] text-white/80 hover:border-accent-500 hover:text-accent-500"
       >
         Générer ▾
       </button>
