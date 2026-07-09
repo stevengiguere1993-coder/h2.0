@@ -109,7 +109,7 @@ export default function ComparatifPage() {
           route="/entreprises/comparatif"
         />
         <header className="flex items-start gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/15 text-violet-300">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
             <BarChart3 className="h-5 w-5" />
           </span>
           <div>
@@ -289,7 +289,7 @@ function ThSort({
       <button
         type="button"
         onClick={onClick}
-        className={`hover:text-white ${active ? "text-violet-300" : "text-white/50"}`}
+        className={`hover:text-white ${active ? "text-accent-500" : "text-white/50"}`}
       >
         {label} {active ? "↓" : ""}
       </button>

@@ -1112,7 +1112,7 @@ ${raw}` : raw;
             onClick={() => void cleanRawTranscript()}
             disabled={cleaning || !(section.transcript || transcript)}
             title="Réécrit le transcript brut en français québécois propre (homophones, accents, mots mal entendus)"
-            className="inline-flex items-center gap-1.5 rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1 text-[11px] font-semibold text-violet-300 transition hover:bg-violet-500/20 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-2 py-1 text-[11px] font-semibold text-accent-500 transition hover:bg-accent-500/20 disabled:opacity-50"
           >
             {cleaning ? (
               <Loader2 className="h-3 w-3 animate-spin" />

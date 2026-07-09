@@ -326,7 +326,7 @@ export function TaskBoard({
             <button
               type="button"
               onClick={() => void handleNewTask()}
-              className="btn-accent inline-flex items-center text-xs"
+              className="btn-accent btn-sm inline-flex items-center"
             >
               <Plus className="mr-1 h-3.5 w-3.5" />
               {newTaskLabel}
@@ -341,7 +341,7 @@ export function TaskBoard({
               onClick={() => setView("cartes")}
               className={`mr-0.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
                 view === "cartes"
-                  ? "bg-violet-400 text-brand-950 shadow"
+                  ? "bg-accent-500 text-brand-950 shadow"
                   : "border border-brand-700 bg-brand-950/40 text-white hover:bg-brand-950/70"
               }`}
             >
@@ -353,7 +353,7 @@ export function TaskBoard({
             onClick={() => setView("list")}
             className={`ml-0.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
               view === "list"
-                ? "bg-violet-400 text-brand-950 shadow"
+                ? "bg-accent-500 text-brand-950 shadow"
                 : "border border-brand-700 bg-brand-950/40 text-white hover:bg-brand-950/70"
             }`}
           >
@@ -364,7 +364,7 @@ export function TaskBoard({
             onClick={() => setView("kanban")}
             className={`ml-0.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
               view === "kanban"
-                ? "bg-violet-400 text-brand-950 shadow"
+                ? "bg-accent-500 text-brand-950 shadow"
                 : "border border-brand-700 bg-brand-950/40 text-white hover:bg-brand-950/70"
             }`}
           >
@@ -1215,7 +1215,7 @@ function TaskListView({
                   dragging
                     ? "opacity-50"
                     : hover
-                      ? "bg-violet-500/10"
+                      ? "bg-accent-500/10"
                       : "hover:bg-white/[0.03]"
                 }`}
                 style={{

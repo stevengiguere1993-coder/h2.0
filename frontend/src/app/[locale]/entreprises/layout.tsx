@@ -502,7 +502,7 @@ export default function EntreprisesLayout({
                         type="button"
                         onClick={() => void createEntreprise()}
                         disabled={newEntBusy || newEntName.trim().length < 1}
-                        className="rounded-md bg-violet-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-400 disabled:opacity-50"
+                        className="rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-brand-950 hover:bg-accent-600 disabled:opacity-50"
                       >
                         {newEntBusy ? "Création…" : "Créer"}
                       </button>

@@ -6,7 +6,7 @@ export default function ReglagesEquipePage() {
   return (
     <div className="p-4 lg:p-6">
       <header className="flex items-start gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/15 text-violet-300">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
           <Users className="h-5 w-5" />
         </span>
         <div>

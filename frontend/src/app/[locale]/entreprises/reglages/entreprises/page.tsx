@@ -209,7 +209,7 @@ export default function ReglagesEntreprisesPage() {
     <div className="p-4 lg:p-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/15 text-violet-300">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
             <Building2 className="h-5 w-5" />
           </span>
           <div>
@@ -249,7 +249,7 @@ export default function ReglagesEntreprisesPage() {
       {/* Création nouvelle entreprise */}
       {editingId === "new" && form ? (
         <section className="mt-6 rounded-2xl border border-violet-500/40 bg-violet-500/5 p-5">
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-violet-200">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-accent-500">
             Nouvelle entreprise
           </h2>
           <EntrepriseForm
@@ -292,7 +292,7 @@ export default function ReglagesEntreprisesPage() {
                       <Link
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         href={`/entreprises/${e.id}` as any}
-                        className="truncate text-sm font-bold text-white hover:text-violet-300"
+                        className="truncate text-sm font-bold text-white hover:text-accent-500"
                       >
                         {e.name}
                       </Link>
@@ -316,7 +316,7 @@ export default function ReglagesEntreprisesPage() {
                     onClick={() =>
                       editingId === e.id ? cancel() : startEdit(e)
                     }
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-violet-300 hover:text-violet-200"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-accent-500 hover:text-accent-400"
                   >
                     {editingId === e.id ? (
                       <>
@@ -510,7 +510,7 @@ function EntrepriseForm({
             type="checkbox"
             checked={form.is_active}
             onChange={(e) => set("is_active", e.target.checked)}
-            className="h-4 w-4 accent-violet-500"
+            className="h-4 w-4 accent-[#d89b3c]"
           />
           <span>{form.is_active ? "Actif" : "Inactif"}</span>
         </label>
@@ -524,7 +524,7 @@ function EntrepriseForm({
             onChange={(e) =>
               set("is_parent_company", e.target.checked)
             }
-            className="h-4 w-4 accent-violet-500"
+            className="h-4 w-4 accent-[#d89b3c]"
           />
           <span>
             {form.is_parent_company
