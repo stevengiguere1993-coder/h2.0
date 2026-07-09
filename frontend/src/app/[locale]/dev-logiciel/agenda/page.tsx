@@ -289,7 +289,7 @@ export default function DevlogAgendaPage() {
 
       <div className="mx-auto max-w-4xl px-4 py-5 lg:px-6">
         <header className="mb-4 flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/15 text-blue-300">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
             <CalendarClock className="h-5 w-5" />
           </span>
           <div>
@@ -342,7 +342,7 @@ export default function DevlogAgendaPage() {
 
         {loading ? (
           <div className="mt-10 flex justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : groupedByDate.length === 0 ? (
           <p className="rounded-xl border border-brand-800 bg-brand-900 p-6 text-center text-sm text-white/40">
@@ -355,7 +355,7 @@ export default function DevlogAgendaPage() {
                 key={date}
                 className={`rounded-2xl border bg-brand-900 ${
                   date === today
-                    ? "border-blue-500/60 ring-1 ring-blue-500/30"
+                    ? "border-accent-500/60 ring-1 ring-accent-500/30"
                     : "border-brand-800"
                 }`}
               >
@@ -364,7 +364,7 @@ export default function DevlogAgendaPage() {
                     {fmtDateLong(date)}
                   </span>
                   {date === today ? (
-                    <span className="rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-300">
+                    <span className="rounded-full bg-accent-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-500">
                       Aujourd'hui
                     </span>
                   ) : (

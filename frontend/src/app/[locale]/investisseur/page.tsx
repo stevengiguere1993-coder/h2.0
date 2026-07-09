@@ -96,7 +96,7 @@ export default function InvestisseurPortefeuille() {
       />
       <div className="p-4 lg:p-6">
         <header className="flex items-start gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-300">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
             <Wallet className="h-5 w-5" />
           </span>
           <div>
@@ -171,7 +171,7 @@ export default function InvestisseurPortefeuille() {
             </section>
 
             <section className="mt-8">
-              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-emerald-300">
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
                 Investissements
               </h2>
               {data.investissements.length === 0 ? (

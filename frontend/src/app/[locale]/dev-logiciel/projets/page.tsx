@@ -183,7 +183,7 @@ export default function ProjectsPage() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={"/dev-logiciel/projets/new" as any}
-            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm"
+            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
           >
             <Plus className="mr-1.5 h-4 w-4" />
             Nouveau projet
@@ -200,7 +200,7 @@ export default function ProjectsPage() {
 
         {loading ? (
           <div className="flex min-h-[50vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : items.length === 0 ? (
           <EmptyState />
@@ -228,7 +228,7 @@ export default function ProjectsPage() {
                   }}
                   className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
                     isHover
-                      ? "border-blue-500 bg-brand-900"
+                      ? "border-accent-500 bg-brand-900"
                       : "border-brand-800"
                   }`}
                 >
@@ -304,8 +304,8 @@ function ProjectCard({
       onDragEnd={onDragEnd}
       className={`group relative block rounded-lg border bg-brand-950 p-3 transition ${
         dragging
-          ? "border-blue-500 opacity-60"
-          : "border-brand-800 hover:border-blue-500"
+          ? "border-accent-500 opacity-60"
+          : "border-brand-800 hover:border-accent-500"
       }`}
     >
       <button
@@ -354,7 +354,7 @@ function ProjectCard({
 function EmptyState() {
   return (
     <div className="empty-state mx-auto mt-16 max-w-md">
-      <Briefcase className="mx-auto h-10 w-10 text-blue-400" />
+      <Briefcase className="mx-auto h-10 w-10 text-accent-500" />
       <h2 className="mt-4 text-lg font-semibold text-white">Aucun projet</h2>
       <p className="mt-2 text-sm text-white/60">
         Crée un projet à partir d&apos;une soumission acceptée ou directement
@@ -363,7 +363,7 @@ function EmptyState() {
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={"/dev-logiciel/projets/new" as any}
-        className="inline-flex mt-6 rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm"
+        className="inline-flex mt-6 rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
       >
         <Plus className="mr-1.5 h-4 w-4" />
         Nouveau projet

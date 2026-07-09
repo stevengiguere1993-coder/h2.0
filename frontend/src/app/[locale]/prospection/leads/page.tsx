@@ -474,9 +474,9 @@ export default function ProspectionLeadsPage() {
     if (sortKey !== k)
       return <ArrowUpDown className="ml-1 inline h-3 w-3 opacity-40" />;
     return sortAsc ? (
-      <ArrowUp className="ml-1 inline h-3 w-3 text-emerald-400" />
+      <ArrowUp className="ml-1 inline h-3 w-3 text-accent-500" />
     ) : (
-      <ArrowDown className="ml-1 inline h-3 w-3 text-emerald-400" />
+      <ArrowDown className="ml-1 inline h-3 w-3 text-accent-500" />
     );
   }
 
@@ -497,7 +497,7 @@ export default function ProspectionLeadsPage() {
                 onClick={() => setView("table")}
                 className={`px-2.5 py-1.5 ${
                   view === "table"
-                    ? "bg-emerald-500/15 text-emerald-300"
+                    ? "bg-brand-900 text-white"
                     : "bg-brand-900 text-white/60 hover:text-white"
                 }`}
               >
@@ -508,7 +508,7 @@ export default function ProspectionLeadsPage() {
                 onClick={() => setView("kanban")}
                 className={`px-2.5 py-1.5 ${
                   view === "kanban"
-                    ? "bg-emerald-500/15 text-emerald-300"
+                    ? "bg-brand-900 text-white"
                     : "bg-brand-900 text-white/60 hover:text-white"
                 }`}
               >
@@ -528,7 +528,7 @@ export default function ProspectionLeadsPage() {
               type="button"
               onClick={() => setSaveOpen(true)}
               disabled={sorted.length === 0}
-              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-500 hover:bg-accent-500/20 disabled:opacity-40"
               title="Sauvegarde la vue filtrée actuelle comme liste"
             >
               <Save className="h-3.5 w-3.5" />
@@ -538,7 +538,7 @@ export default function ProspectionLeadsPage() {
               type="button"
               onClick={() => downloadCsv(sorted)}
               disabled={sorted.length === 0}
-              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-500 hover:bg-accent-500/20 disabled:opacity-40"
               title="Exporter la liste filtrée en CSV"
             >
               <Download className="h-3.5 w-3.5" />
@@ -652,7 +652,7 @@ export default function ProspectionLeadsPage() {
                 onClick={() => setCityFilter("")}
                 className={`rounded-full px-2 py-0.5 text-[11px] transition ${
                   cityFilter === ""
-                    ? "bg-emerald-500/20 text-emerald-300"
+                    ? "bg-brand-900 text-white"
                     : "bg-brand-800 text-white/60 hover:text-white"
                 }`}
               >
@@ -665,7 +665,7 @@ export default function ProspectionLeadsPage() {
                   onClick={() => setCityFilter(c)}
                   className={`rounded-full px-2 py-0.5 text-[11px] transition ${
                     cityFilter === c
-                      ? "bg-emerald-500/20 text-emerald-300"
+                      ? "bg-brand-900 text-white"
                       : "bg-brand-800 text-white/60 hover:text-white"
                   }`}
                 >
@@ -688,7 +688,7 @@ export default function ProspectionLeadsPage() {
         <div className="mt-4 overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
           {loading ? (
             <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-emerald-500" />
+              <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
             </div>
           ) : error ? (
             <p className="p-6 text-sm text-rose-300">{error}</p>
@@ -816,7 +816,7 @@ export default function ProspectionLeadsPage() {
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           href={`/prospection/${l.id}` as any}
-                          className="font-medium text-white hover:text-emerald-300"
+                          className="font-medium text-white hover:text-accent-500"
                         >
                           {l.address || (
                             <span className="text-white/30">—</span>
@@ -896,7 +896,7 @@ export default function ProspectionLeadsPage() {
                         {l.owner_phone ? (
                           <a
                             href={`tel:${l.owner_phone}`}
-                            className="inline-flex items-center gap-1 text-xs text-emerald-300 hover:text-emerald-200"
+                            className="inline-flex items-center gap-1 text-xs text-accent-500 hover:text-accent-400"
                           >
                             <Phone className="h-3 w-3" />
                             {l.owner_phone}
@@ -1049,7 +1049,7 @@ function SaveAsListModal({
       <div className="w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 p-5 shadow-2xl">
         <header className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Save className="h-4 w-4 text-emerald-400" />
+            <Save className="h-4 w-4 text-accent-500" />
             <h2 className="text-sm font-semibold text-white">
               Sauvegarder la vue comme liste
             </h2>
@@ -1275,7 +1275,7 @@ function KanbanBoard({
               }}
               className={`flex w-72 shrink-0 flex-col rounded-xl border bg-brand-900 transition ${
                 isHover
-                  ? "border-emerald-500/60 bg-emerald-500/5"
+                  ? "border-accent-500/60 bg-accent-500/5"
                   : col.key === "hot_lead"
                     ? "hot-lead-column border-orange-400/60"
                     : col.key === "cold_lead"
@@ -1333,7 +1333,7 @@ function KanbanBoard({
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           href={`/prospection/${l.id}` as any}
-                          className="min-w-0 flex-1 truncate font-medium text-white hover:text-emerald-300"
+                          className="min-w-0 flex-1 truncate font-medium text-white hover:text-accent-500"
                         >
                           {l.address || l.name}
                           {l.city ? (
@@ -1389,7 +1389,7 @@ function KanbanBoard({
                         <a
                           href={`tel:${l.owner_phone}`}
                           onClick={(e) => e.stopPropagation()}
-                          className="mt-1 block truncate text-[10px] text-emerald-400 hover:text-emerald-300"
+                          className="mt-1 block truncate text-[10px] text-accent-500 hover:text-accent-400"
                         >
                           📞 {l.owner_phone}
                         </a>

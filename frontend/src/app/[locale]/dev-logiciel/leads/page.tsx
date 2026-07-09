@@ -332,7 +332,7 @@ export default function DevlogCrmPage() {
           <button
             type="button"
             onClick={() => setCreateOpen(true)}
-            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm"
+            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
           >
             <Plus className="mr-1.5 h-4 w-4" /> Créer un prospect
           </button>
@@ -348,7 +348,7 @@ export default function DevlogCrmPage() {
 
         {loading ? (
           <div className="flex min-h-[50vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : (
           <div className="flex gap-4 overflow-x-auto pb-4">
@@ -368,7 +368,7 @@ export default function DevlogCrmPage() {
                   onDrop={() => onDropToColumn(col)}
                   className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
                     isHover
-                      ? "border-blue-500 bg-brand-900"
+                      ? "border-accent-500 bg-brand-900"
                       : "border-brand-800"
                   }`}
                 >
@@ -431,7 +431,7 @@ export default function DevlogCrmPage() {
             <button
               type="button"
               onClick={addCustomColumn}
-              className="flex h-12 w-80 min-w-[320px] flex-shrink-0 items-center justify-center gap-2 rounded-xl border border-dashed border-brand-800 text-sm text-white/40 hover:border-blue-500 hover:text-white"
+              className="flex h-12 w-80 min-w-[320px] flex-shrink-0 items-center justify-center gap-2 rounded-xl border border-dashed border-brand-800 text-sm text-white/40 hover:border-accent-500 hover:text-white"
             >
               <Plus className="h-4 w-4" />
               Ajouter une colonne
@@ -473,7 +473,7 @@ function LeadCard({
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`group relative cursor-grab rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-blue-500 active:cursor-grabbing ${
+      className={`group relative cursor-grab rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-accent-500 active:cursor-grabbing ${
         dragging ? "opacity-40" : ""
       }`}
     >
@@ -489,7 +489,7 @@ function LeadCard({
           }}
           aria-label="Créer une soumission"
           title="Créer une soumission"
-          className="rounded-md p-1 text-blue-300 hover:bg-blue-500/15"
+          className="rounded-md p-1 text-accent-500 hover:bg-accent-500/10"
         >
           <FileText className="h-3.5 w-3.5" />
         </button>
@@ -725,7 +725,7 @@ function CreateLeadModal({
             type="button"
             onClick={submit}
             disabled={busy}
-            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm disabled:opacity-60"
+            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
           >
             {busy ? (
               <>

@@ -230,7 +230,7 @@ function ScalarDefaultRow({
           type="button"
           onClick={() => void save()}
           disabled={!dirty || saving}
-          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex items-center gap-1 rounded-md border border-accent-500/40 bg-accent-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-accent-500 transition hover:bg-accent-500/25 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {saving ? (
             <Loader2 className="h-3 w-3 animate-spin" />
@@ -293,7 +293,7 @@ function SectionShell({
     <section
       className={`rounded-2xl border p-5 ${
         highlight
-          ? "border-emerald-500/40 bg-emerald-500/[0.04]"
+          ? "border-accent-500/40 bg-accent-500/[0.04]"
           : "border-brand-800 bg-brand-900"
       }`}
     >
@@ -337,14 +337,14 @@ export function DepensesNormaliseesSection() {
   return (
     <SectionShell
       icon={Calculator}
-      iconClass="bg-emerald-500/15 text-emerald-400"
+      iconClass="bg-accent-500/15 text-accent-500"
       title="Dépenses normalisées (SCHL)"
       subtitle="Barème SCHL : conciergerie, entretien, gestion, wifi/internet, thermopompe, seuil 12 log, taux d'inoccupation."
       loading={loading}
       error={error}
       highlight
     >
-      <p className="mb-3 rounded-md border border-emerald-500/30 bg-emerald-500/[0.06] px-3 py-2 text-[11px] text-emerald-200/90">
+      <p className="mb-3 rounded-md border border-accent-500/30 bg-accent-500/[0.06] px-3 py-2 text-[11px] text-accent-200/90">
         Ajuste ces valeurs quand la SCHL met à jour ses normes de dépenses
         normalisées — elles alimentent directement le calcul de la valeur
         économique des refinancements.
@@ -530,7 +530,7 @@ function TaxesBienvenueEditor({
           type="button"
           onClick={() => void save()}
           disabled={saving}
-          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-500/25 disabled:opacity-40"
+          className="inline-flex items-center gap-1 rounded-md border border-accent-500/40 bg-accent-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-accent-500 transition hover:bg-accent-500/25 disabled:opacity-40"
         >
           {saving ? (
             <Loader2 className="h-3 w-3 animate-spin" />
@@ -1066,7 +1066,7 @@ function RegistryRow({
                   type="button"
                   onClick={() => void saveLabel()}
                   disabled={savingLabel}
-                  className="rounded-md border border-emerald-500/40 bg-emerald-500/15 p-1 text-emerald-300 transition hover:bg-emerald-500/25 disabled:opacity-40"
+                  className="rounded-md border border-accent-500/40 bg-accent-500/15 p-1 text-accent-500 transition hover:bg-accent-500/25 disabled:opacity-40"
                   title="Enregistrer le nom"
                 >
                   {savingLabel ? (
@@ -1139,7 +1139,7 @@ function RegistryRow({
                   type="button"
                   onClick={() => void saveValue()}
                   disabled={!valueDirty || savingValue || dimmed}
-                  className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 text-[10px] font-semibold text-emerald-300 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="inline-flex items-center gap-1 rounded-md border border-accent-500/40 bg-accent-500/15 px-2 py-1 text-[10px] font-semibold text-accent-500 transition hover:bg-accent-500/25 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {savingValue ? (
                     <Loader2 className="h-3 w-3 animate-spin" />
@@ -1195,7 +1195,7 @@ function RegistryRow({
                   type="button"
                   onClick={() => void setVisible(true)}
                   disabled={busy}
-                  className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 text-[10px] font-semibold text-emerald-300 transition hover:bg-emerald-500/25 disabled:opacity-40"
+                  className="inline-flex items-center gap-1 rounded-md border border-accent-500/40 bg-accent-500/15 px-2 py-1 text-[10px] font-semibold text-accent-500 transition hover:bg-accent-500/25 disabled:opacity-40"
                   title="Réafficher ce poste"
                 >
                   {busy ? (
@@ -1500,7 +1500,7 @@ export function TriDefautsSection() {
   return (
     <SectionShell
       icon={Percent}
-      iconClass="bg-emerald-500/15 text-emerald-400"
+      iconClass="bg-accent-500/15 text-accent-500"
       title="Défauts TRI (taux de rendement interne)"
       subtitle="Valeurs pré-remplies de l'onglet TRI : % des parts de l'investisseur, croissance des loyers et des dépenses."
       loading={loading}

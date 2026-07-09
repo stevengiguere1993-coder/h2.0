@@ -181,7 +181,7 @@ export default function ImmobilierDashboard() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={"/immobilier/immeubles" as any}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/20"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/30 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-500 hover:bg-accent-500/20"
           >
             <Plus className="h-3.5 w-3.5" />
             Nouvel immeuble
@@ -190,7 +190,7 @@ export default function ImmobilierDashboard() {
       />
       <div className="p-4 lg:p-6">
         <header className="flex items-start gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/15 text-sky-300">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
             <Building2 className="h-5 w-5" />
           </span>
           <div>
@@ -309,13 +309,13 @@ export default function ImmobilierDashboard() {
         {/* Liste immeubles */}
         <section className="mt-8">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-sky-300">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
               Portefeuille
             </h2>
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/immobilier/immeubles" as any}
-              className="text-xs text-white/60 hover:text-sky-300"
+              className="text-xs text-white/60 hover:text-accent-500"
             >
               Voir tout →
             </Link>
@@ -385,7 +385,7 @@ function ImmeubleRow({ imm }: { imm: ImmeubleListItem }) {
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={`/immobilier/immeubles/${imm.id}` as any}
-        className="flex items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 transition hover:border-sky-400/40"
+        className="flex items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 transition hover:border-accent-500"
       >
         <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg bg-brand-950">
           {imm.has_cover_photo || imm.cover_photo_url ? (
@@ -448,7 +448,7 @@ function EmptyState() {
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={"/immobilier/immeubles" as any}
-        className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/20"
+        className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-accent-500/30 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-500 hover:bg-accent-500/20"
       >
         <Plus className="h-3.5 w-3.5" />
         Ajouter un immeuble

@@ -613,7 +613,7 @@ export default function ProspectionDetailPage() {
                 href={
                   `/prospection/analyse/nouveau?lead_id=${lead.id}` as any
                 }
-                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-emerald-400"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-accent-400"
               >
                 <Calculator className="h-4 w-4" /> Analyser
               </Link>
@@ -1060,7 +1060,7 @@ export default function ProspectionDetailPage() {
 
                   {/* Recherche dans le Registraire des entreprises QC */}
                   <div className="mt-2 rounded-lg border border-brand-700 bg-brand-950/40 p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-400">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-accent-500">
                       Rechercher dans le REQ
                     </p>
                     <p className="mt-0.5 text-[11px] text-white/50">

@@ -106,7 +106,7 @@ function StatusBadge({ c }: { c: Contrat }) {
 }
 
 const FIELD_CLS =
-  "mt-1 w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500/40";
+  "mt-1 w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500/40";
 const LABEL_CLS =
   "text-[11px] font-semibold uppercase tracking-wider text-white/50";
 
@@ -460,7 +460,7 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
                 type="checkbox"
                 checked={selected.caution_requise}
                 onChange={(e) => upd("caution_requise", e.target.checked)}
-                className="h-4 w-4 rounded border-brand-700 text-sky-500"
+                className="h-4 w-4 rounded border-brand-700 text-accent-500"
               />
               <span className="text-sm text-white/80">
                 Exiger une caution solidaire
@@ -469,7 +469,7 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
           </div>
 
           {/* Signataire MGV (Mandataire) — signe en premier */}
-          <div className="sm:col-span-2 mt-2 rounded-lg border border-sky-500/30 bg-sky-500/5 p-3">
+          <div className="sm:col-span-2 mt-2 rounded-lg border border-accent-500/30 bg-accent-500/5 p-3">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-white/60">
               Signataire MGV (Mandataire) — signe en premier
             </p>
@@ -535,7 +535,7 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
               type="button"
               onClick={() => void saveContract()}
               disabled={busy}
-              className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
             >
               {busy ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -638,7 +638,7 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
       <div className="flex items-center justify-between">
         <div>
           <h3 className="flex items-center gap-2 text-sm font-bold text-white">
-            <FileSignature className="h-4 w-4 text-sky-400" /> Contrats de gestion
+            <FileSignature className="h-4 w-4 text-accent-500" /> Contrats de gestion
           </h3>
           <p className="mt-0.5 text-xs text-white/50">
             Envoi pour signature en ligne au propriétaire (Mandant) + suivi.
@@ -648,7 +648,7 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
           type="button"
           onClick={() => void createDraft()}
           disabled={busy}
-          className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-lg bg-accent-500 px-3 py-2 text-sm font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
         >
           {busy ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -845,7 +845,7 @@ function PerContractTemplate({
               onChange={(e) => setBody(e.target.value)}
               rows={16}
               disabled={!editable}
-              className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 font-mono text-xs leading-relaxed text-white focus:border-sky-500 focus:outline-none disabled:opacity-60"
+              className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 font-mono text-xs leading-relaxed text-white focus:border-accent-500 focus:outline-none disabled:opacity-60"
             />
           )}
           {!editable ? (
@@ -860,7 +860,7 @@ function PerContractTemplate({
                 type="button"
                 onClick={() => body !== null && void patch(body)}
                 disabled={busy || body === null}
-                className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
               >
                 {busy ? (
                   <Loader2 className="h-4 w-4 animate-spin" />

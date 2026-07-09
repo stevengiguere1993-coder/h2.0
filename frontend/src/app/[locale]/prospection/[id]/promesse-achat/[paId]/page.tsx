@@ -275,7 +275,7 @@ export default function PAEditorPage() {
             <button
               type="button"
               onClick={() => setSendModal("seller")}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-brand-950 hover:bg-emerald-400"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-bold text-brand-950 hover:bg-accent-400"
             >
               <Mail className="h-3.5 w-3.5" /> Envoyer au vendeur
             </button>
@@ -784,7 +784,7 @@ function SendModal({
             type="button"
             onClick={submit}
             disabled={busy || !to.trim()}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-bold text-brand-950 hover:bg-emerald-400 disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-bold text-brand-950 hover:bg-accent-400 disabled:opacity-60"
           >
             {busy ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />

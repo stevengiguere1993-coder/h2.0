@@ -360,14 +360,14 @@ export default function ProspectDetailPage() {
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/dev-logiciel/leads" as any}
-          className="inline-flex items-center text-sm text-white/70 hover:text-blue-400"
+          className="inline-flex items-center text-sm text-white/70 hover:text-accent-500"
         >
           <ArrowLeft className="mr-1 h-4 w-4" /> Retour au pipeline
         </Link>
 
         {loading ? (
           <div className="flex min-h-[40vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : error ? (
           <p className="mt-6 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
@@ -444,7 +444,7 @@ export default function ProspectDetailPage() {
                   href={
                     `/dev-logiciel/soumissions/new?lead_id=${p.id}` as any
                   }
-                  className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm"
+                  className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
                 >
                   <FileText className="mr-1.5 h-4 w-4" />
                   Créer soumission
@@ -474,7 +474,7 @@ export default function ProspectDetailPage() {
                   onClick={() => setTab(t.id)}
                   className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
                     tab === t.id
-                      ? "border-blue-500 text-white"
+                      ? "border-accent-500 text-white"
                       : "border-transparent text-white/60 hover:text-white"
                   }`}
                 >
@@ -498,7 +498,7 @@ export default function ProspectDetailPage() {
                   />
                   <InfoCard title="Source" value={p.source || "—"} />
                   <div className="lg:col-span-3 rounded-xl border border-brand-800 bg-brand-900 p-5">
-                    <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                       Message du client
                     </h3>
                     <p className="mt-3 whitespace-pre-wrap text-sm text-white/90">
@@ -506,7 +506,7 @@ export default function ProspectDetailPage() {
                     </p>
                   </div>
                   <div className="lg:col-span-3 rounded-xl border border-brand-800 bg-brand-900 p-5">
-                    <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                       Notes internes
                     </h3>
                     <textarea
@@ -520,7 +520,7 @@ export default function ProspectDetailPage() {
                       type="button"
                       onClick={saveNotes}
                       disabled={savingNotes || notes === (p.internal_notes || "")}
-                      className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 mt-3 text-sm"
+                      className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 mt-3 text-sm"
                     >
                       {savingNotes ? (
                         <>
@@ -539,7 +539,7 @@ export default function ProspectDetailPage() {
                 <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                         Notes de rencontre
                       </h3>
                       <p className="mt-1 text-xs text-white/50">
@@ -717,7 +717,7 @@ export default function ProspectDetailPage() {
 function InfoCard({ title, value }: { title: string; value: string }) {
   return (
     <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-      <p className="text-xs font-semibold uppercase tracking-wider text-blue-400">
+      <p className="text-xs font-semibold uppercase tracking-wider text-accent-500">
         {title}
       </p>
       <p className="mt-2 text-lg font-semibold text-white">{value}</p>
@@ -737,7 +737,7 @@ function InfoRow({
   return (
     <div className="rounded-lg border border-brand-800 bg-brand-900 p-4">
       <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-white/50">
-        <Icon className="h-3.5 w-3.5 text-blue-400" /> {label}
+        <Icon className="h-3.5 w-3.5 text-accent-500" /> {label}
       </p>
       <p className="mt-1.5 break-words text-sm text-white">{value}</p>
     </div>
@@ -778,7 +778,7 @@ function EditableField({
     <div className="group rounded-lg border border-brand-800 bg-brand-900 p-4">
       <p className="flex items-center justify-between gap-2 text-xs font-medium uppercase tracking-wider text-white/50">
         <span className="inline-flex items-center gap-2">
-          <Icon className="h-3.5 w-3.5 text-blue-400" /> {label}
+          <Icon className="h-3.5 w-3.5 text-accent-500" /> {label}
         </span>
         {!editing ? (
           <button
@@ -805,7 +805,7 @@ function EditableField({
               setEditing(false);
             }
           }}
-          className="mt-1.5 w-full rounded border border-blue-500 bg-brand-950 px-2 py-1 text-sm text-white focus:outline-none"
+          className="mt-1.5 w-full rounded border border-accent-500 bg-brand-950 px-2 py-1 text-sm text-white focus:outline-none"
         />
       ) : (
         <button
@@ -843,7 +843,7 @@ function EditableAddress({
     <div className="group rounded-lg border border-brand-800 bg-brand-900 p-4">
       <p className="flex items-center justify-between gap-2 text-xs font-medium uppercase tracking-wider text-white/50">
         <span className="inline-flex items-center gap-2">
-          <Icon className="h-3.5 w-3.5 text-blue-400" /> {label}
+          <Icon className="h-3.5 w-3.5 text-accent-500" /> {label}
         </span>
         {!editing ? (
           <button
@@ -861,7 +861,7 @@ function EditableAddress({
               setEditing(false);
               if (draft.trim() !== value) onSave(draft.trim());
             }}
-            className="text-[10px] text-blue-400 hover:text-blue-300"
+            className="text-[10px] text-accent-500 hover:text-accent-500"
           >
             Sauvegarder
           </button>
@@ -903,12 +903,12 @@ function EditableSelect({
   return (
     <div className="rounded-lg border border-brand-800 bg-brand-900 p-4">
       <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-white/50">
-        <Icon className="h-3.5 w-3.5 text-blue-400" /> {label}
+        <Icon className="h-3.5 w-3.5 text-accent-500" /> {label}
       </p>
       <select
         value={value}
         onChange={(e) => onSave(e.target.value)}
-        className="mt-1.5 w-full cursor-pointer rounded border border-transparent bg-transparent text-sm text-white hover:border-brand-700 focus:border-blue-500 focus:outline-none"
+        className="mt-1.5 w-full cursor-pointer rounded border border-transparent bg-transparent text-sm text-white hover:border-brand-700 focus:border-accent-500 focus:outline-none"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -970,7 +970,7 @@ function AssigneesPanel({
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
           Personnes assignées
         </h3>
         <p className="mt-1 text-xs text-white/50">
@@ -981,7 +981,7 @@ function AssigneesPanel({
           {assigned ? (
             <div className="flex items-center justify-between rounded-lg border border-brand-800 bg-brand-950 px-3 py-2">
               <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-blue-400" />
+                <Users className="h-4 w-4 text-accent-500" />
                 <span className="text-sm text-white">
                   {displayName(assigned)}
                 </span>
@@ -1040,7 +1040,7 @@ function AssigneesPanel({
             <button
               type="button"
               onClick={() => setPicking(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-brand-800 px-3 py-2 text-xs text-white/60 hover:border-blue-500 hover:text-white"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-brand-800 px-3 py-2 text-xs text-white/60 hover:border-accent-500 hover:text-white"
             >
               <UserPlus className="h-3.5 w-3.5" />
               {assigned ? "Changer" : "Ajouter une personne"}
@@ -1095,11 +1095,11 @@ function DocSection({
         className="flex w-full items-center gap-2 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/70 transition hover:bg-brand-950/40"
       >
         {open ? (
-          <ChevronDown className="h-3.5 w-3.5 text-blue-400" />
+          <ChevronDown className="h-3.5 w-3.5 text-accent-500" />
         ) : (
           <ChevronRight className="h-3.5 w-3.5 text-white/40" />
         )}
-        <span className="text-blue-400">{icon}</span>
+        <span className="text-accent-500">{icon}</span>
         <span className="text-white">{title}</span>
         <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70">
           {count}
@@ -1249,7 +1249,7 @@ function ProspectDocuments({
     <section className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
             Documents du prospect
           </h3>
           <p className="mt-1 text-xs text-white/60">
@@ -1257,7 +1257,7 @@ function ProspectDocuments({
             par type.
           </p>
         </div>
-        <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-brand-800 bg-brand-900 px-3 py-1.5 text-xs text-white hover:border-blue-500">
+        <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-brand-800 bg-brand-900 px-3 py-1.5 text-xs text-white hover:border-accent-500">
           {uploading ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
@@ -1453,9 +1453,9 @@ function ProspectDocuments({
                       target="_blank"
                       rel="noreferrer"
                       download={d.filename || `document-${d.id}`}
-                      className="flex min-w-0 items-center gap-2 text-white hover:text-blue-400"
+                      className="flex min-w-0 items-center gap-2 text-white hover:text-accent-500"
                     >
-                      <FileText className="h-4 w-4 shrink-0 text-blue-400" />
+                      <FileText className="h-4 w-4 shrink-0 text-accent-500" />
                       <div className="min-w-0">
                         <p className="truncate">
                           {d.filename || `document-${d.id}`}
@@ -1629,8 +1629,8 @@ function AppointmentScheduler({
 
   return (
     <div className="space-y-4">
-      <section className="rounded-2xl border border-blue-500/30 bg-blue-500/5 p-5">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+      <section className="rounded-2xl border border-accent-500/30 bg-accent-500/5 p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
           Planifier un rendez-vous
         </h3>
         <p className="mt-1 text-xs text-white/60">
@@ -1742,7 +1742,7 @@ function AppointmentScheduler({
             type="button"
             onClick={submit}
             disabled={submitting}
-            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm disabled:opacity-60"
+            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
           >
             {submitting ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1753,7 +1753,7 @@ function AppointmentScheduler({
       </section>
 
       <section>
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-blue-400">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-accent-500">
           Historique
         </h3>
         {loading ? (

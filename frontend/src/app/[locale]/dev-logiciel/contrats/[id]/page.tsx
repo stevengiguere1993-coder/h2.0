@@ -310,7 +310,7 @@ export default function ContractDetailPage() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={"/dev-logiciel/contrats" as any}
-            className="inline-flex items-center text-sm text-white/70 hover:text-blue-400"
+            className="inline-flex items-center text-sm text-white/70 hover:text-accent-500"
           >
             <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux contrats
           </Link>
@@ -327,7 +327,7 @@ export default function ContractDetailPage() {
 
         {loading ? (
           <div className="mt-10 flex justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : !contract ? (
           <p className="text-center text-sm text-white/40">

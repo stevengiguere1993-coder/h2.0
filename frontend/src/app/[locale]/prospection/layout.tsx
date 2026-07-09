@@ -21,7 +21,7 @@ export default function ProspectionLayout({
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-brand-950">
-        <Loader2 className="h-6 w-6 animate-spin text-emerald-500" />
+        <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
       </div>
     );
   }

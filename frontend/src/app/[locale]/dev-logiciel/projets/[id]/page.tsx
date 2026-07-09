@@ -398,14 +398,14 @@ export default function ProjectDetailPage() {
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/dev-logiciel/projets" as any}
-          className="inline-flex items-center text-sm text-white/70 hover:text-blue-400"
+          className="inline-flex items-center text-sm text-white/70 hover:text-accent-500"
         >
           <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux projets
         </Link>
 
         {loading ? (
           <div className="flex min-h-[40vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : error && !p ? (
           <p className="mt-6 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
@@ -487,7 +487,7 @@ export default function ProjectDetailPage() {
               <button
                 type="button"
                 onClick={openFactureModal}
-                className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-4 py-2.5 text-sm font-medium text-blue-200 hover:bg-blue-500/20"
+                className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2.5 text-sm font-medium text-accent-500 hover:bg-accent-500/20"
               >
                 <DollarSign className="h-4 w-4" />
                 Créer une facture
@@ -524,7 +524,7 @@ export default function ProjectDetailPage() {
                 const isActive = tab === t.id;
                 const baseCls = "px-4 py-2.5 text-sm font-medium transition whitespace-nowrap";
                 const activeCls = isActive
-                  ? "border-b-2 border-blue-500 text-white"
+                  ? "border-b-2 border-accent-500 text-white"
                   : "text-white/60 hover:text-white";
                 // Style atténué pour les onglets indisponibles : opacity
                 // + italique + curseur not-allowed au hover. On laisse
@@ -665,7 +665,7 @@ export default function ProjectDetailPage() {
                             onClick={() => setSoumissionPct(String(v))}
                             className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${
                               String(v) === soumissionPct
-                                ? "bg-blue-500 text-brand-950"
+                                ? "bg-accent-500 text-brand-950"
                                 : "bg-white/5 text-white/70 hover:bg-white/10"
                             }`}
                           >
@@ -767,7 +767,7 @@ export default function ProjectDetailPage() {
                   convertingToFacture ||
                   (!includeSoumission && !includeHours && !includeAchats)
                 }
-                className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm disabled:opacity-60"
+                className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
               >
                 {convertingToFacture ? (
                   <>
@@ -812,7 +812,7 @@ function SummaryTab(props: {
   return (
     <div className="max-w-3xl space-y-6">
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
           Identification
         </h2>
         <div className="mt-4 space-y-4">
@@ -850,7 +850,7 @@ function SummaryTab(props: {
       </section>
 
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
           Calendrier
         </h2>
         <p className="mt-1 text-[11px] text-white/40">
@@ -883,7 +883,7 @@ function SummaryTab(props: {
       </section>
 
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
           Notes internes
         </h2>
         <textarea
@@ -899,7 +899,7 @@ function SummaryTab(props: {
         type="button"
         onClick={props.onSave}
         disabled={props.saving || !props.dirty}
-        className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm"
+        className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
       >
         {props.saving ? (
           <>
@@ -993,7 +993,7 @@ function DevlogFinancesTab({ projectId }: { projectId: number }) {
   if (loading) {
     return (
       <div className="flex min-h-[30vh] items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+        <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
       </div>
     );
   }
@@ -1012,7 +1012,7 @@ function DevlogFinancesTab({ projectId }: { projectId: number }) {
       {/* Bloc 1 : INVESTISSEMENT INITIAL */}
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
             Investissement initial
           </h3>
           <span className="text-[11px] text-white/50">
@@ -1054,7 +1054,7 @@ function DevlogFinancesTab({ projectId }: { projectId: number }) {
       {/* Bloc 2 : SERVICES RÉCURRENTS */}
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
             Services récurrents
           </h3>
           <span className="text-[11px] text-white/50">
@@ -1092,7 +1092,7 @@ function DevlogFinancesTab({ projectId }: { projectId: number }) {
       {/* Bloc 3 : Marge */}
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
             Marge & efficacité
           </h3>
         </div>
@@ -1113,7 +1113,7 @@ function DevlogFinancesTab({ projectId }: { projectId: number }) {
       </section>
 
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
           Soumission liée
         </h3>
         {data.soumission_id ? (
@@ -1141,7 +1141,7 @@ function DevlogFinancesTab({ projectId }: { projectId: number }) {
               <Link
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 href={`/dev-logiciel/soumissions/${data.soumission_id}` as any}
-                className="mt-1 inline-block font-semibold text-blue-300 underline decoration-dotted hover:text-blue-200"
+                className="mt-1 inline-block font-semibold text-accent-500 underline decoration-dotted hover:text-accent-400"
               >
                 #{data.soumission_id} →
               </Link>
@@ -1364,7 +1364,7 @@ function DevlogMembersTab({ projectId }: { projectId: number }) {
   return (
     <div className="space-y-5">
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
           Équipe du projet
         </h2>
         <p className="mt-1 text-xs text-white/60">
@@ -1424,7 +1424,7 @@ function DevlogMembersTab({ projectId }: { projectId: number }) {
             type="button"
             onClick={addMember}
             disabled={adding || !pickId}
-            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm disabled:opacity-60"
+            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
           >
             {adding ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1440,7 +1440,7 @@ function DevlogMembersTab({ projectId }: { projectId: number }) {
       <section className="rounded-xl border border-brand-800 bg-brand-900">
         {loading ? (
           <div className="flex min-h-[30vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : members.length === 0 ? (
           <p className="px-5 py-8 text-center text-sm text-white/60">
@@ -1714,7 +1714,7 @@ function DevlogPlanificationTab({ projectId }: { projectId: number }) {
   return (
     <div className="space-y-5">
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
           Phases du projet
         </h2>
         <p className="mt-1 text-xs text-white/60">
@@ -1748,7 +1748,7 @@ function DevlogPlanificationTab({ projectId }: { projectId: number }) {
             type="button"
             onClick={addPhase}
             disabled={creating || !newName.trim()}
-            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm disabled:opacity-60"
+            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
           >
             {creating ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1764,7 +1764,7 @@ function DevlogPlanificationTab({ projectId }: { projectId: number }) {
       <section>
         {loading ? (
           <div className="flex min-h-[30vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : sorted.length === 0 ? (
           <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
@@ -1783,7 +1783,7 @@ function DevlogPlanificationTab({ projectId }: { projectId: number }) {
                   onDrop={() => onDrop(ph.id)}
                   className={`flex flex-col gap-3 rounded-xl border bg-brand-900 p-4 transition sm:flex-row sm:items-center ${
                     dragId === ph.id
-                      ? "border-blue-500/60 bg-brand-900/60"
+                      ? "border-accent-500/60 bg-brand-900/60"
                       : "border-brand-800 hover:border-brand-700"
                   }`}
                 >
@@ -2066,7 +2066,7 @@ function DevlogAchatsTab({ projectId }: { projectId: number }) {
     <div className="space-y-5">
       <section className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
             Outils & licences
           </h2>
           <p className="mt-1 text-xs text-white/60">
@@ -2078,7 +2078,7 @@ function DevlogAchatsTab({ projectId }: { projectId: number }) {
         <button
           type="button"
           onClick={() => setModalOpen(true)}
-          className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-4 py-2.5 font-semibold text-white transition hover:bg-blue-400 text-sm"
+          className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-4 py-2.5 font-semibold text-white transition hover:bg-accent-400 text-sm"
         >
           <Plus className="mr-2 h-4 w-4" />
           Ajouter une dépense
@@ -2088,7 +2088,7 @@ function DevlogAchatsTab({ projectId }: { projectId: number }) {
       <section className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
         {loading ? (
           <div className="flex min-h-[30vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : items.length === 0 ? (
           <p className="px-5 py-10 text-center text-sm text-white/60">
@@ -2131,7 +2131,7 @@ function DevlogAchatsTab({ projectId }: { projectId: number }) {
                       <button
                         type="button"
                         onClick={() => viewReceipt(it.id)}
-                        className="text-xs text-blue-300 underline decoration-dotted hover:text-blue-200"
+                        className="text-xs text-accent-500 underline decoration-dotted hover:text-accent-400"
                       >
                         Voir
                       </button>
@@ -2271,7 +2271,7 @@ function DevlogAchatsTab({ projectId }: { projectId: number }) {
                 type="button"
                 onClick={addPurchase}
                 disabled={creating || !fDesc.trim() || !fAmount}
-                className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm disabled:opacity-60"
+                className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
               >
                 {creating ? (
                   <>
@@ -2611,7 +2611,7 @@ function DevlogRecurringServicesTab({
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
               Services récurrents
             </h2>
             <p className="mt-1 text-xs text-white/60">
@@ -2634,7 +2634,7 @@ function DevlogRecurringServicesTab({
       </section>
 
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
           Ajouter un service récurrent
         </h2>
         <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_180px_180px_auto]">
@@ -2665,7 +2665,7 @@ function DevlogRecurringServicesTab({
             type="button"
             onClick={addService}
             disabled={creating || !fName.trim() || !fAmount}
-            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm disabled:opacity-60"
+            className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm disabled:opacity-60"
           >
             {creating ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -2681,7 +2681,7 @@ function DevlogRecurringServicesTab({
       <section>
         {loading ? (
           <div className="flex min-h-[30vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : services.length === 0 ? (
           <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
@@ -2795,7 +2795,7 @@ function DevlogRecurringServicesTab({
                         type="button"
                         onClick={() => generateInvoice(s.id, s.name)}
                         disabled={busy || s.status !== "active"}
-                        className="inline-flex items-center gap-1 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-1.5 text-xs font-medium text-blue-200 hover:bg-blue-500/20 disabled:opacity-50"
+                        className="inline-flex items-center gap-1 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-500 hover:bg-accent-500/20 disabled:opacity-50"
                         title={
                           s.status === "active"
                             ? "Générer la facture du mois (brouillon)"

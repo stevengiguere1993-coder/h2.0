@@ -310,14 +310,14 @@ export default function DealDetailPage() {
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/prospection/pipeline" as any}
-          className="inline-flex items-center text-xs text-white/60 hover:text-emerald-300"
+          className="inline-flex items-center text-xs text-white/60 hover:text-accent-500"
         >
           <ArrowLeft className="mr-1 h-3.5 w-3.5" />
           Retour au pipeline
         </Link>
 
         <header className="mt-4 flex items-start gap-3">
-          <span className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+          <span className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
             <MapPin className="h-5 w-5" />
           </span>
           <div className="flex-1">
@@ -332,7 +332,7 @@ export default function DealDetailPage() {
                   if (v && v !== deal.address) patchDeal({ address: v });
                   else setDraftName(deal.address);
                 }}
-                className="w-full resize-none rounded border border-emerald-500 bg-brand-950 px-2 py-1.5 text-2xl font-bold text-white focus:outline-none"
+                className="w-full resize-none rounded border border-accent-500 bg-brand-950 px-2 py-1.5 text-2xl font-bold text-white focus:outline-none"
               />
             ) : (
               <button
@@ -581,9 +581,9 @@ function MoveTaskToDealDialog({
                   type="button"
                   onClick={() => move(d.id)}
                   disabled={busy}
-                  className="flex w-full items-center gap-2 rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-left text-sm text-white hover:border-emerald-500/50 hover:bg-emerald-500/10 disabled:opacity-50"
+                  className="flex w-full items-center gap-2 rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-left text-sm text-white hover:border-accent-500/50 hover:bg-accent-500/10 disabled:opacity-50"
                 >
-                  <MapPin className="h-3.5 w-3.5 flex-shrink-0 text-emerald-400" />
+                  <MapPin className="h-3.5 w-3.5 flex-shrink-0 text-accent-500" />
                   <span className="truncate">{d.address}</span>
                 </button>
               </li>

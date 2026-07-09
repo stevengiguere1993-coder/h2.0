@@ -316,7 +316,7 @@ export default function ClientsPage() {
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/dev-logiciel/clients/new" as any}
-              className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm"
+              className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 text-sm"
             >
               <Plus className="mr-1.5 h-4 w-4" /> Nouveau client
             </Link>
@@ -371,7 +371,7 @@ export default function ClientsPage() {
                 }}
                 className={`flex-1 rounded-md px-3 py-1.5 font-semibold transition ${
                   tab === t.id
-                    ? "bg-blue-500 text-white"
+                    ? "bg-accent-500 text-brand-950"
                     : "text-white/70 hover:text-white"
                 }`}
               >
@@ -394,7 +394,7 @@ export default function ClientsPage() {
               title="Vue liste"
               className={`rounded-md p-1.5 transition ${
                 view === "list"
-                  ? "bg-blue-500 text-white"
+                  ? "bg-accent-500 text-brand-950"
                   : "text-white/70 hover:text-white"
               }`}
             >
@@ -407,7 +407,7 @@ export default function ClientsPage() {
               title="Vue kanban"
               className={`rounded-md p-1.5 transition ${
                 view === "kanban"
-                  ? "bg-blue-500 text-white"
+                  ? "bg-accent-500 text-brand-950"
                   : "text-white/70 hover:text-white"
               }`}
             >
@@ -418,7 +418,7 @@ export default function ClientsPage() {
 
         {loading ? (
           <div className="flex min-h-[40vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : filtered.length === 0 ? (
           <EmptyState />
@@ -493,7 +493,7 @@ export default function ClientsPage() {
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           href={href as any}
-                          className="font-semibold text-white hover:text-blue-400"
+                          className="font-semibold text-white hover:text-accent-500"
                         >
                           {r.name}
                         </Link>
@@ -618,7 +618,7 @@ function KanbanCard({ row: r }: { row: Row }) {
     <Link
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       href={href as any}
-      className="block rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-blue-500"
+      className="block rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-accent-500"
     >
       <div className="flex items-start justify-between gap-2">
         <h3 className="truncate text-sm font-semibold text-white">
@@ -656,7 +656,7 @@ function KanbanCard({ row: r }: { row: Row }) {
 function EmptyState() {
   return (
     <div className="empty-state mx-auto mt-16 max-w-md">
-      <Briefcase className="mx-auto h-10 w-10 text-blue-400" />
+      <Briefcase className="mx-auto h-10 w-10 text-accent-500" />
       <h2 className="mt-4 text-lg font-semibold text-white">
         Aucune fiche
       </h2>
@@ -667,7 +667,7 @@ function EmptyState() {
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={"/dev-logiciel/clients/new" as any}
-        className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 mt-6 inline-flex text-sm"
+        className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 font-semibold text-white transition hover:bg-accent-400 mt-6 inline-flex text-sm"
       >
         <Plus className="mr-1.5 h-4 w-4" /> Nouveau client
       </Link>

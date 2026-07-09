@@ -351,14 +351,14 @@ export default function ClientDetailPage() {
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/dev-logiciel/clients" as any}
-          className="inline-flex items-center text-sm text-white/70 hover:text-blue-400"
+          className="inline-flex items-center text-sm text-white/70 hover:text-accent-500"
         >
           <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux clients
         </Link>
 
         {loading ? (
           <div className="flex min-h-[40vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : error && !data ? (
           <p className="mt-6 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
@@ -418,7 +418,7 @@ function ClientAccount({
       <header className="mt-6 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-500/15 text-lg font-semibold text-blue-300">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-accent-500/15 text-lg font-semibold text-accent-500">
               {(client.name || "?").slice(0, 2).toUpperCase()}
             </div>
             <div className="min-w-0">
@@ -443,7 +443,7 @@ function ClientAccount({
             {client.email ? (
               <a
                 href={`mailto:${client.email}`}
-                className="text-white/70 hover:text-blue-400"
+                className="text-white/70 hover:text-accent-500"
               >
                 {client.email}
               </a>
@@ -451,7 +451,7 @@ function ClientAccount({
             {client.phone ? (
               <a
                 href={`tel:${client.phone}`}
-                className="text-white/70 hover:text-blue-400"
+                className="text-white/70 hover:text-accent-500"
               >
                 {client.phone}
               </a>
@@ -464,7 +464,7 @@ function ClientAccount({
                 href={client.website}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 text-white/70 hover:text-blue-400"
+                className="inline-flex items-center gap-1 text-white/70 hover:text-accent-500"
               >
                 {client.website} <ExternalLink className="h-3 w-3" />
               </a>
@@ -476,7 +476,7 @@ function ClientAccount({
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={`/dev-logiciel/soumissions/new?client_id=${client.id}` as any}
-            className="inline-flex items-center gap-2 self-start rounded-lg bg-blue-500 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-400"
+            className="inline-flex items-center gap-2 self-start rounded-lg bg-accent-500 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-400"
           >
             <FilePlus2 className="h-4 w-4" />
             Nouvelle soumission
@@ -484,7 +484,7 @@ function ClientAccount({
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={`/dev-logiciel/projets/new?client_id=${client.id}` as any}
-            className="inline-flex items-center gap-2 self-start rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2.5 text-sm font-medium text-blue-200 hover:bg-blue-500/20"
+            className="inline-flex items-center gap-2 self-start rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2.5 text-sm font-medium text-accent-500 hover:bg-accent-500/20"
           >
             <Briefcase className="h-4 w-4" />
             Nouveau projet
@@ -597,7 +597,7 @@ function ClientAccount({
               href={
                 `/dev-logiciel/facturation?client_id=${client.id}` as any
               }
-              className="text-xs text-blue-300 underline decoration-dotted hover:text-blue-200"
+              className="text-xs text-accent-500 underline decoration-dotted hover:text-accent-400"
             >
               Voir toutes les factures
             </Link>
@@ -690,7 +690,7 @@ function KpiCard({
       ? "text-emerald-300"
       : tone === "amber"
       ? "text-amber-300"
-      : "text-blue-300";
+      : "text-accent-500";
   return (
     <div className={`rounded-xl border ${toneClasses} p-4`}>
       <div className={`flex items-center gap-2 text-xs uppercase tracking-wider ${iconTone}`}>
@@ -714,7 +714,7 @@ function SectionHeader({
 }) {
   return (
     <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
         {title}
         {typeof count === "number" ? (
           <span className="ml-2 rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70">
@@ -742,10 +742,10 @@ function ProjectCard({ project }: { project: Project }) {
     <Link
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       href={`/dev-logiciel/projets/${project.id}` as any}
-      className="group block rounded-xl border border-brand-800 bg-brand-900 p-4 transition hover:border-blue-500/50 hover:bg-brand-800/60"
+      className="group block rounded-xl border border-brand-800 bg-brand-900 p-4 transition hover:border-accent-500 hover:bg-brand-800/60"
     >
       <div className="flex items-start justify-between gap-2">
-        <p className="line-clamp-2 text-sm font-semibold text-white group-hover:text-blue-300">
+        <p className="line-clamp-2 text-sm font-semibold text-white group-hover:text-accent-500">
           {project.name}
         </p>
         <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] uppercase ${tone}`}>
@@ -812,7 +812,7 @@ function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                   <Link
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     href={`/dev-logiciel/facturation/${inv.id}` as any}
-                    className="text-xs text-blue-300 hover:text-blue-200"
+                    className="text-xs text-accent-500 hover:text-accent-400"
                   >
                     Voir
                   </Link>
@@ -849,7 +849,7 @@ function ContractsTable({ contracts }: { contracts: Contract[] }) {
                   <Link
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     href={`/dev-logiciel/contrats/${c.id}` as any}
-                    className="font-medium text-white hover:text-blue-300"
+                    className="font-medium text-white hover:text-accent-500"
                   >
                     {c.title}
                   </Link>
@@ -876,7 +876,7 @@ function ContractsTable({ contracts }: { contracts: Contract[] }) {
                     <Link
                       // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       href={`/dev-logiciel/projets/${c.project_id}` as any}
-                      className="text-blue-300 hover:text-blue-200"
+                      className="text-accent-500 hover:text-accent-400"
                     >
                       Projet #{c.project_id}
                     </Link>
@@ -929,7 +929,7 @@ function SoumissionsTable({ soumissions }: { soumissions: Soumission[] }) {
                   <Link
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     href={`/dev-logiciel/soumissions/${s.id}` as any}
-                    className="text-xs text-blue-300 hover:text-blue-200"
+                    className="text-xs text-accent-500 hover:text-accent-400"
                   >
                     Voir
                   </Link>
@@ -965,11 +965,11 @@ function CollapsibleSection({
         className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-brand-950/40"
       >
         {open ? (
-          <ChevronDown className="h-4 w-4 text-blue-400" />
+          <ChevronDown className="h-4 w-4 text-accent-500" />
         ) : (
           <ChevronRight className="h-4 w-4 text-white/40" />
         )}
-        <span className="uppercase tracking-wider text-blue-400">{title}</span>
+        <span className="uppercase tracking-wider text-accent-500">{title}</span>
         {typeof count === "number" ? (
           <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70">
             {count}
@@ -1116,7 +1116,7 @@ function NotesContactsEditor({
         type="button"
         onClick={onSave}
         disabled={saving || !dirty}
-        className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-400 disabled:opacity-50"
+        className="inline-flex items-center justify-center rounded-xl bg-accent-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-accent-400 disabled:opacity-50"
       >
         {saving ? (
           <>
@@ -1191,7 +1191,7 @@ function SourceLeadPanel({
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={`/dev-logiciel/leads/${clientLeadId}` as any}
-            className="text-blue-300 underline decoration-dotted hover:text-blue-200"
+            className="text-accent-500 underline decoration-dotted hover:text-accent-400"
           >
             ici
           </Link>

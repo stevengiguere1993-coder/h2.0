@@ -157,7 +157,7 @@ export default function DepotsPage() {
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           href={`/immobilier/locataires/${r.locataire_id}` as any}
-                          className="font-medium text-white hover:text-sky-300"
+                          className="font-medium text-white hover:text-accent-500"
                         >
                           {r.locataire_name || "—"}
                         </Link>
@@ -171,7 +171,7 @@ export default function DepotsPage() {
                       <Link
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         href={`/immobilier/immeubles/${r.immeuble_id}` as any}
-                        className="hover:text-sky-300"
+                        className="hover:text-accent-500"
                       >
                         {r.immeuble_name}
                       </Link>
