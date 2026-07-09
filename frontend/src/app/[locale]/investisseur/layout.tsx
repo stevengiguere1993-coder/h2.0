@@ -50,7 +50,7 @@ export default function InvestisseurLayout({
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-brand-950">
-        <Loader2 className="h-6 w-6 animate-spin text-emerald-300" />
+        <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
       </div>
     );
   }
@@ -99,7 +99,7 @@ export default function InvestisseurLayout({
 
           <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
             <div>
-              <p className="mb-2 flex items-center gap-1.5 px-3 text-xs font-semibold uppercase tracking-wider text-emerald-300">
+              <p className="mb-2 flex items-center gap-1.5 px-3 text-xs font-semibold uppercase tracking-wider text-accent-500">
                 <Sparkles className="h-3 w-3" />
                 Investisseurs
               </p>
@@ -114,13 +114,13 @@ export default function InvestisseurLayout({
                         onClick={() => setSidebarOpen(false)}
                         className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
                           active
-                            ? "bg-emerald-500/15 text-emerald-200"
+                            ? "bg-brand-900 text-white"
                             : "text-white/70 hover:bg-brand-900 hover:text-white"
                         }`}
                       >
                         <item.icon
                           className={`h-4 w-4 flex-shrink-0 ${
-                            active ? "text-emerald-300" : ""
+                            active ? "text-accent-500" : ""
                           }`}
                         />
                         <span>{item.label}</span>
@@ -209,7 +209,7 @@ export function InvestisseurTopbar({
         {breadcrumbs.map((c, i) => {
           const isLast = i === breadcrumbs.length - 1;
           const cls = `truncate text-sm font-medium ${
-            isLast ? "text-white" : c.href ? "text-white/60 hover:text-emerald-300" : "text-white/50"
+            isLast ? "text-white" : c.href ? "text-white/60 hover:text-accent-500" : "text-white/50"
           }`;
           return (
             <span key={i} className="flex items-center gap-2">

@@ -156,7 +156,7 @@ export default function ImmobilierLayout({
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-brand-950">
-        <Loader2 className="h-6 w-6 animate-spin text-sky-300" />
+        <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
       </div>
     );
   }
@@ -213,7 +213,7 @@ export default function ImmobilierLayout({
 
           <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
             <div>
-              <p className="mb-2 flex items-center gap-1.5 px-3 text-xs font-semibold uppercase tracking-wider text-sky-300">
+              <p className="mb-2 flex items-center gap-1.5 px-3 text-xs font-semibold uppercase tracking-wider text-accent-500">
                 <Sparkles className="h-3 w-3" />
                 Gestion immobilière
               </p>
@@ -228,13 +228,13 @@ export default function ImmobilierLayout({
                         onClick={() => setSidebarOpen(false)}
                         className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
                           active
-                            ? "bg-sky-500/15 text-sky-200"
+                            ? "bg-brand-900 text-white"
                             : "text-white/70 hover:bg-brand-900 hover:text-white"
                         }`}
                       >
                         <item.icon
                           className={`h-4 w-4 flex-shrink-0 ${
-                            active ? "text-sky-300" : ""
+                            active ? "text-accent-500" : ""
                           }`}
                         />
                         <span>{item.label}</span>
@@ -331,7 +331,7 @@ export function ImmobilierTopbar({
         {breadcrumbs.map((c, i) => {
           const isLast = i === breadcrumbs.length - 1;
           const cls = `truncate text-sm font-medium ${
-            isLast ? "text-white" : c.href ? "text-white/60 hover:text-sky-300" : "text-white/50"
+            isLast ? "text-white" : c.href ? "text-white/60 hover:text-accent-500" : "text-white/50"
           }`;
           return (
             <span key={i} className="flex items-center gap-2">
@@ -477,7 +477,7 @@ function EntrepriseSelector({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-2 rounded-lg border border-brand-700 bg-brand-900 px-3 py-2 text-left text-sm transition hover:border-sky-400/50"
+        className="flex w-full items-center justify-between gap-2 rounded-lg border border-brand-700 bg-brand-900 px-3 py-2 text-left text-sm transition hover:border-accent-500/50"
       >
         {current ? (
           <span className="flex min-w-0 items-center gap-2">
@@ -507,7 +507,7 @@ function EntrepriseSelector({
               setOpen(false);
             }}
             className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition hover:bg-brand-900 ${
-              currentId == null ? "bg-sky-500/10 text-sky-200" : "text-white/80"
+              currentId == null ? "bg-accent-500/10 text-accent-500" : "text-white/80"
             }`}
           >
             <span>Toutes les entreprises</span>
@@ -523,7 +523,7 @@ function EntrepriseSelector({
               <div
                 key={e.id}
                 className={`group flex items-center gap-1 px-1.5 py-0.5 transition hover:bg-brand-900 ${
-                  isCurrent ? "bg-sky-500/10" : ""
+                  isCurrent ? "bg-accent-500/10" : ""
                 }`}
               >
                 <button
@@ -533,7 +533,7 @@ function EntrepriseSelector({
                     setOpen(false);
                   }}
                   className={`flex min-w-0 flex-1 items-center justify-between gap-2 rounded px-1.5 py-1.5 text-left text-sm ${
-                    isCurrent ? "text-sky-200" : "text-white/80"
+                    isCurrent ? "text-accent-500" : "text-white/80"
                   }`}
                 >
                   <span className="flex min-w-0 items-center gap-2">
@@ -548,7 +548,7 @@ function EntrepriseSelector({
                       className={`rounded-full px-1.5 py-0.5 font-mono text-[10px] ${
                         nb === 0
                           ? "bg-white/5 text-white/40"
-                          : "bg-sky-500/20 text-sky-200"
+                          : "bg-accent-500/20 text-accent-500"
                       }`}
                       title={
                         nb === 0
@@ -569,7 +569,7 @@ function EntrepriseSelector({
                     ev.stopPropagation();
                     void renameEntreprise(e);
                   }}
-                  className="flex-shrink-0 rounded p-1.5 text-white/30 opacity-0 transition hover:text-sky-300 group-hover:opacity-100"
+                  className="flex-shrink-0 rounded p-1.5 text-white/30 opacity-0 transition hover:text-accent-500 group-hover:opacity-100"
                   title="Renommer cette entreprise"
                 >
                   <Pencil className="h-3.5 w-3.5" />
@@ -599,7 +599,7 @@ function EntrepriseSelector({
               <button
                 type="button"
                 onClick={() => setShowAddExisting((v) => !v)}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-sky-300 transition hover:bg-sky-500/10"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-accent-500 transition hover:bg-accent-500/10"
                 title="Sélectionner une entreprise existante pour lui créer un immeuble"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -703,7 +703,7 @@ function CreateEntrepriseModal({
     <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
       <div className="my-8 w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
         <div className="border-b border-brand-800 px-5 py-3">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-sky-300">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
             Nouvelle entreprise propriétaire
           </h2>
         </div>

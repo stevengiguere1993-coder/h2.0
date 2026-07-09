@@ -11,7 +11,6 @@ import {
   Layers,
   LogOut,
   Map as MapIcon,
-  MapPin,
   Settings,
   Smartphone,
   Sparkles,
@@ -24,6 +23,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { type UserRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { HorizonLogo } from "@/components/horizon-logo";
 import { AccountBadge } from "@/components/account-badge";
 
 type NavItem = {
@@ -180,23 +180,13 @@ export function ProspectionSidebar({
       ) : null}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 flex-col border-r border-emerald-900/40 bg-brand-950 transition-transform lg:static lg:flex lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 w-64 flex-col border-r border-brand-800 bg-brand-950 transition-transform lg:static lg:flex lg:translate-x-0 ${
           open ? "flex translate-x-0" : "hidden -translate-x-full"
         }`}
       >
-        <div className="flex items-center justify-between border-b border-emerald-900/40 px-4 py-4">
+        <div className="flex items-center justify-between border-b border-brand-800 px-4 py-4">
           <Link href="/prospection" className="flex items-center gap-2">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-400">
-              <MapPin className="h-5 w-5" />
-            </span>
-            <span className="flex flex-col leading-tight">
-              <span className="text-sm font-bold text-white">
-                Prospection
-              </span>
-              <span className="text-[10px] uppercase tracking-wider text-emerald-400/80">
-                Horizon
-              </span>
-            </span>
+            <HorizonLogo className="h-16 w-auto object-contain" />
           </Link>
           <button
             type="button"
@@ -212,7 +202,7 @@ export function ProspectionSidebar({
           {visibleSections.map((section, idx) => (
             <div key={section.label} className={idx === 0 ? "" : "mt-4"}>
               <div className="flex items-center justify-between px-2 py-1">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/80">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
                   {section.label}
                 </p>
               </div>
@@ -228,11 +218,13 @@ export function ProspectionSidebar({
                         onClick={onClose}
                         className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition ${
                           active
-                            ? "bg-emerald-500/15 text-emerald-300"
+                            ? "bg-brand-900 text-white"
                             : "text-white/70 hover:bg-brand-900 hover:text-white"
                         }`}
                       >
-                        <Icon className="h-4 w-4" />
+                        <Icon
+                          className={`h-4 w-4 ${active ? "text-accent-500" : ""}`}
+                        />
                         {it.label}
                       </Link>
                     </li>
