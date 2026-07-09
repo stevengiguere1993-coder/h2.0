@@ -318,7 +318,7 @@ export function ImmobilierTopbar({
 }) {
   const { onOpenSidebar } = useImmobilierLayout();
   return (
-    <header className="sticky top-0 z-30 flex min-h-[152px] items-center gap-3 border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:px-6">
+    <header className="sticky top-0 z-30 flex min-h-[64px] items-center gap-3 border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:min-h-[152px] lg:px-6">
       <button
         type="button"
         onClick={onOpenSidebar}

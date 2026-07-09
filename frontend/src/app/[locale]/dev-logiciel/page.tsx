@@ -239,7 +239,7 @@ export default function DevlogHomePage() {
               <Code2 className="h-6 w-6" />
             </span>
             <div>
-              <h1 className="text-xl font-bold text-white">Accueil — Dév. logiciel</h1>
+              <h1 className="text-2xl font-bold text-white">Accueil — Dév. logiciel</h1>
               <p className="text-sm text-white/60">
                 Vue d&apos;ensemble du pôle pour la période sélectionnée.
               </p>

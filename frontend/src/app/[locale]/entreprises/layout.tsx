@@ -14,7 +14,6 @@ import {
   Briefcase,
   Calendar,
   ChevronDown,
-  ChevronRight,
   Clock,
   Compass,
   Contact as ContactIcon,
@@ -701,7 +700,7 @@ export function EntreprisesTopbar({
             return (
               <span key={i} className="flex items-center gap-2 min-w-0">
                 {i > 0 ? (
-                  <ChevronRight className="h-3.5 w-3.5 text-[var(--qg-text-faint)]" />
+                  <span className="text-[var(--qg-text-faint)]">/</span>
                 ) : null}
                 {!isLast && c.href ? (
                   <Link
