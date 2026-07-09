@@ -168,7 +168,7 @@ export default function PilotagePage({
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={`/entreprises/${entrepriseId}` as any}
-          className="inline-flex items-center text-xs text-white/50 hover:text-violet-300"
+          className="inline-flex items-center text-xs text-white/50 hover:text-accent-500"
         >
           <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Retour à la fiche
         </Link>
@@ -387,7 +387,7 @@ function RecurrenceSection({ entrepriseId }: { entrepriseId: number }) {
               className="rounded-xl border border-brand-800 bg-brand-900 p-4"
             >
               <div className="flex items-start gap-3">
-                <span className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-violet-500/15 text-violet-300">
+                <span className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
                   <Repeat className="h-4 w-4" />
                 </span>
                 <div className="min-w-0 flex-1">
@@ -1329,7 +1329,7 @@ function ValuePlanSection({ entrepriseId }: { entrepriseId: number }) {
 
           <section className="mt-5">
             <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-semibold uppercase tracking-wider text-violet-300">
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                 Jalons
               </h3>
               <button
@@ -1543,7 +1543,7 @@ function ValuePlanModal({
             <button
               type="button"
               onClick={addDriver}
-              className="text-xs text-violet-300 hover:text-violet-200"
+              className="text-xs text-accent-500 hover:text-accent-400"
             >
               + Ajouter
             </button>
@@ -1818,7 +1818,7 @@ function ModalShell({
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
       <div className="my-8 w-full max-w-2xl rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
         <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-violet-300">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
             {title}
           </h2>
           <button

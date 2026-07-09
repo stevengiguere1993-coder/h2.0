@@ -651,7 +651,7 @@ export default function MesTachesPage() {
               <Link
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 href={"/entreprises/taches/recurrentes" as any}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-violet-400 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-violet-300"
+                className="btn-secondary btn-sm inline-flex items-center gap-1.5"
                 title="Gérer les modèles de tâches récurrentes"
               >
                 <Repeat className="h-3.5 w-3.5" />

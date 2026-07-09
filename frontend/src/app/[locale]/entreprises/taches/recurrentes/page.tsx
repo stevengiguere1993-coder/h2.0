@@ -491,7 +491,7 @@ function TemplateRow({
   return (
     <li className="rounded-xl border border-brand-800 bg-brand-900 p-4">
       <div className="flex items-start gap-3">
-        <span className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-violet-500/15 text-violet-300">
+        <span className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
           <Repeat className="h-4 w-4" />
         </span>
         <div className="min-w-0 flex-1">

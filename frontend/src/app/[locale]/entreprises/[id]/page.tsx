@@ -384,7 +384,7 @@ export default function EntrepriseDetailPage() {
               {error}
             </p>
           ) : (
-            <Loader2 className="h-6 w-6 animate-spin text-violet-300" />
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           )}
         </div>
       </>
@@ -404,7 +404,7 @@ export default function EntrepriseDetailPage() {
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/entreprises" as any}
-          className="inline-flex items-center text-xs text-white/60 hover:text-violet-300"
+          className="inline-flex items-center text-xs text-white/60 hover:text-accent-500"
         >
           <ArrowLeft className="mr-1 h-3.5 w-3.5" />
           Retour aux entreprises
@@ -441,7 +441,7 @@ export default function EntrepriseDetailPage() {
                 onClick={renameEntreprise}
                 title="Renommer l'entreprise"
                 aria-label="Renommer l'entreprise"
-                className="rounded-md p-1.5 text-white/40 transition hover:bg-violet-500/15 hover:text-violet-300"
+                className="rounded-md p-1.5 text-white/40 transition hover:bg-accent-500/15 hover:text-accent-500"
               >
                 <Pencil className="h-4 w-4" />
               </button>
@@ -513,7 +513,7 @@ export default function EntrepriseDetailPage() {
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/entreprises/taches/recurrentes" as any}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-violet-400 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-violet-300"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-accent-400"
               title="Gérer les modèles de tâches récurrentes (cross-entreprise)"
             >
               <Repeat className="h-3.5 w-3.5" />
@@ -657,7 +657,7 @@ function MoveTacheDialog({
                   type="button"
                   onClick={() => move(e.id)}
                   disabled={busy}
-                  className="flex w-full items-center gap-2 rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-left text-sm text-white hover:border-violet-500/50 hover:bg-violet-500/10 disabled:opacity-50"
+                  className="flex w-full items-center gap-2 rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-left text-sm text-white hover:border-accent-500/50 hover:bg-accent-500/10 disabled:opacity-50"
                 >
                   <span
                     className="h-2 w-2 flex-shrink-0 rounded-full"
@@ -1156,7 +1156,7 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
     <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-violet-300">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
             Partenaires & parts
           </h2>
           {list && list.length > 0 ? (
@@ -1176,7 +1176,7 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
             setEditingId(null);
             setShowAdd(true);
           }}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-violet-400 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-violet-300"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-accent-400"
         >
           <Plus className="h-3.5 w-3.5" /> Ajouter un partenaire
         </button>
@@ -1237,7 +1237,7 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
                     setEditingId(p.id);
                     setShowAdd(true);
                   }}
-                  className="rounded-lg border border-white/15 bg-brand-900 p-1.5 text-white/60 hover:text-violet-200"
+                  className="rounded-lg border border-white/15 bg-brand-900 p-1.5 text-white/60 hover:text-accent-400"
                   title="Modifier"
                 >
                   <Pencil className="h-3.5 w-3.5" />
@@ -1336,7 +1336,7 @@ function PartnerModal({
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
       <div className="my-8 w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
         <div className="border-b border-brand-800 px-5 py-3">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-violet-300">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
             {existing ? "Modifier le partenaire" : "Nouveau partenaire"}
           </h2>
         </div>

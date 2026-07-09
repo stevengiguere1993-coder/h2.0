@@ -637,7 +637,7 @@ export default function RencontresListPage() {
                                   );
                                 }
                               }}
-                              className="h-3.5 w-3.5 accent-violet-500"
+                              className="h-3.5 w-3.5 accent-[#d89b3c]"
                             />
                             <span className="flex-1 truncate">{e.name}</span>
                           </label>
