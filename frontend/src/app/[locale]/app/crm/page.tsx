@@ -587,7 +587,7 @@ export default function CrmKanbanPage() {
                       </h2>
                     </button>
                     <div className="flex items-center gap-2">
-                      <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                      <span className="badge badge-neutral">
                         {cards.length}
                       </span>
                       {col.custom ? (

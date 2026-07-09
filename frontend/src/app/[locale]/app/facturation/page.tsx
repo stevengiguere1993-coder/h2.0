@@ -309,7 +309,7 @@ export default function FacturationPage() {
                         {col.label}
                       </h2>
                     </div>
-                    <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                    <span className="badge badge-neutral">
                       {cards.length}
                     </span>
                   </button>

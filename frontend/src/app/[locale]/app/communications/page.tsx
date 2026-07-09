@@ -205,7 +205,7 @@ export default function CommunicationsPage() {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : items.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-8 text-center text-sm text-white/50">
+          <p className="empty-state text-sm">
             Aucune communication pour ce filtre.
           </p>
         ) : (
@@ -292,10 +292,8 @@ function FeedRow({ it }: { it: FeedItem }) {
               · {fmtDateTime(it.at)}
             </span>
             <span
-              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                isInbound
-                  ? "bg-teal-500/20 text-teal-200"
-                  : "bg-white/10 text-white/60"
+              className={`badge ${
+                isInbound ? "badge-emerald" : "badge-neutral"
               }`}
             >
               {isInbound ? "Reçu" : "Envoyé"}

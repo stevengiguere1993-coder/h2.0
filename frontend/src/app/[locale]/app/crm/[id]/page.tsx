@@ -777,7 +777,7 @@ export default function ProspectDetailPage() {
 
 function InfoCard({ title, value }: { title: string; value: string }) {
   return (
-    <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+    <div className="kpi-card">
       <p className="text-xs font-semibold uppercase tracking-wider text-accent-500">
         {title}
       </p>
@@ -986,7 +986,7 @@ function EditableSelect({
 
 function Placeholder({ label }: { label: string }) {
   return (
-    <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center">
+    <div className="empty-state">
       <p className="text-sm text-white/50">{label}</p>
     </div>
   );
@@ -1041,7 +1041,7 @@ function DocSection({
         )}
         <span className="text-accent-500">{icon}</span>
         <span className="text-white">{title}</span>
-        <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70">
+        <span className="badge badge-neutral ml-auto">
           {count}
         </span>
       </button>
@@ -1259,7 +1259,7 @@ function ProspectDocuments({
             defaultOpen={false}
           >
             {photos.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
+              <p className="empty-state text-xs">
                 Aucune photo jointe.
               </p>
             ) : (
@@ -1358,7 +1358,7 @@ function ProspectDocuments({
             defaultOpen={false}
           >
             {signedSoumissions.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
+              <p className="empty-state text-xs">
                 Aucune soumission signée par ce prospect.
               </p>
             ) : (
@@ -1402,7 +1402,7 @@ function ProspectDocuments({
             defaultOpen={false}
           >
             {otherDocs.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
+              <p className="empty-state text-xs">
                 Aucun PDF ou autre document. Utilise « Ajouter un
                 fichier » plus haut pour déposer un plan, un devis
                 concurrent, un rapport d&apos;inspection, etc.
@@ -2017,18 +2017,18 @@ function AppointmentScheduler({
                       : ""}
                   </p>
                 )}
-                <span className="mt-1 inline-flex rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase text-white/50">
+                <span className="badge badge-neutral mt-1 uppercase">
                   {a.event_type}
                 </span>
                 {a.assignee_id ? (
-                  <span className="ml-1 inline-flex rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-200">
+                  <span className="badge badge-sky ml-1">
                     👤{" "}
                     {employes.find((e) => e.id === a.assignee_id)
                       ?.full_name || `#${a.assignee_id}`}
                   </span>
                 ) : null}
                 {a.confirmation_sent_at ? (
-                  <span className="ml-1 inline-flex rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] uppercase text-emerald-300">
+                  <span className="badge badge-emerald ml-1 uppercase">
                     courriel envoyé
                   </span>
                 ) : null}

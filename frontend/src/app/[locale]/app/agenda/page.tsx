@@ -2007,7 +2007,7 @@ function WeeklyTeamGridView({
 
   if (employes.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+      <div className="empty-state text-sm">
         Aucun employé — ajoute des membres d&apos;équipe pour voir leur
         planning ici.
       </div>
@@ -2485,7 +2485,7 @@ function TimelineView({
 
   if (rows.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-14 text-center">
+      <div className="empty-state">
         <CalendarIcon className="mx-auto h-8 w-8 text-white/30" />
         <p className="mt-3 text-sm text-white/60">
           Aucun événement ni phase sur cette période.

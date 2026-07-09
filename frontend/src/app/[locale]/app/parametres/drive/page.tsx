@@ -480,21 +480,18 @@ function triggerBadge(t: string): { label: string; className: string } {
   if (t === "created") {
     return {
       label: "Auto (création)",
-      className:
-        "bg-sky-500/15 text-sky-300 border border-sky-500/30"
+      className: "badge-sky"
     };
   }
   if (t === "status_changed") {
     return {
       label: "Auto (statut)",
-      className:
-        "bg-violet-500/15 text-violet-300 border border-violet-500/30"
+      className: "badge-violet"
     };
   }
   return {
     label: "Manuel",
-    className:
-      "bg-white/5 text-white/60 border border-white/10"
+    className: "badge-neutral"
   };
 }
 
@@ -589,7 +586,7 @@ function ConventionsSection() {
       icon={FolderCog}
       title="Création automatique de dossiers"
       badge={
-        <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+        <span className="badge badge-emerald shrink-0 uppercase">
           Actif
         </span>
       }
@@ -704,7 +701,7 @@ function ConventionsSection() {
                         {TRIGGER_LABELS[c.trigger_event] || c.trigger_event}
                       </span>
                       <span
-                        className={`inline-flex w-fit items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${triggerBadge(c.trigger_event).className}`}
+                        className={`badge w-fit uppercase tracking-wide ${triggerBadge(c.trigger_event).className}`}
                       >
                         {triggerBadge(c.trigger_event).label}
                       </span>

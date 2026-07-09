@@ -63,21 +63,21 @@ function fmtDateTime(iso: string): string {
 
 function actionPillCls(action: string): string {
   if (action.endsWith(".deleted") || action.endsWith(".rejected")) {
-    return "bg-rose-500/15 text-rose-300 border-rose-500/30";
+    return "badge-rose";
   }
   if (action.endsWith(".created") || action.endsWith(".clock_in")) {
-    return "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
+    return "badge-emerald";
   }
   if (action.endsWith(".approved") || action.endsWith(".clock_out")) {
-    return "bg-sky-500/15 text-sky-300 border-sky-500/30";
+    return "badge-sky";
   }
   if (action.endsWith(".auto_closed")) {
-    return "bg-amber-500/15 text-amber-300 border-amber-500/30";
+    return "badge-amber";
   }
   if (action.endsWith(".modifie") || action.endsWith(".updated")) {
-    return "bg-violet-500/15 text-violet-300 border-violet-500/30";
+    return "badge-violet";
   }
-  return "bg-white/10 text-white/70 border-white/20";
+  return "badge-neutral";
 }
 
 export default function AuditPage() {
@@ -245,7 +245,7 @@ export default function AuditPage() {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : filtered.length === 0 ? (
-          <div className="mt-8 rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-14 text-center">
+          <div className="empty-state mt-8">
             <ScrollText className="mx-auto h-8 w-8 text-white/30" />
             <p className="mt-3 text-sm text-white/60">
               Aucune entrée d&apos;audit. Si tu viens d&apos;activer le
@@ -292,9 +292,7 @@ export default function AuditPage() {
                       </td>
                       <td className="px-3 py-2">
                         <span
-                          className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${actionPillCls(
-                            r.action
-                          )}`}
+                          className={`badge ${actionPillCls(r.action)}`}
                         >
                           {r.action}
                         </span>

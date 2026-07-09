@@ -462,7 +462,7 @@ function Kpi({
     bad: "text-rose-300"
   };
   return (
-    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+    <div className="kpi-card">
       <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-white/50">
         {icon}
         {label}

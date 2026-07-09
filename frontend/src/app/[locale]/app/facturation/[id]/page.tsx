@@ -114,11 +114,11 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_CLASS: Record<string, string> = {
-  draft: "bg-white/10 text-white",
-  sent: "bg-blue-500/20 text-blue-300",
-  paid: "bg-emerald-500/20 text-emerald-300",
-  overdue: "bg-rose-500/20 text-rose-300",
-  void: "bg-white/5 text-white/50"
+  draft: "badge-neutral",
+  sent: "badge-blue",
+  paid: "badge-emerald",
+  overdue: "badge-rose",
+  void: "badge-neutral"
 };
 
 function fmtMoney(n: number | string | null): string {
@@ -873,8 +873,8 @@ export default function FactureDetailPage() {
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <span
-                  className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
-                    STATUS_CLASS[f.status] || "bg-white/10 text-white"
+                  className={`badge ${
+                    STATUS_CLASS[f.status] || "badge-neutral"
                   }`}
                 >
                   {STATUS_LABELS[f.status] || f.status}
