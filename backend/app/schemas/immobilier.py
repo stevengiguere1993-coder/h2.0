@@ -31,6 +31,15 @@ class ImmeubleBase(BaseModel):
     # lors d'une urgence locataire, avant le repli sur le numéro de garde.
     urgence_phone: Optional[str] = Field(default=None, max_length=32)
     is_active: bool = True
+    # Gestion externe : immeuble géré par une compagnie tierce → exclu
+    # des flux opérationnels (loyers, renouvellements, dépôts, relances).
+    gestion_externe: bool = False
+    gestionnaire_externe_nom: Optional[str] = Field(
+        default=None, max_length=255
+    )
+    gestionnaire_externe_contact: Optional[str] = Field(
+        default=None, max_length=255
+    )
 
 
 class ImmeubleCreate(ImmeubleBase):
@@ -56,6 +65,13 @@ class ImmeubleUpdate(BaseModel):
     description: Optional[str] = None
     urgence_phone: Optional[str] = Field(default=None, max_length=32)
     is_active: Optional[bool] = None
+    gestion_externe: Optional[bool] = None
+    gestionnaire_externe_nom: Optional[str] = Field(
+        default=None, max_length=255
+    )
+    gestionnaire_externe_contact: Optional[str] = Field(
+        default=None, max_length=255
+    )
 
 
 class ImmeubleRead(ImmeubleBase):

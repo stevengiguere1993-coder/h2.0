@@ -261,13 +261,19 @@ async def renouvellements_overview(
     today = date.today()
     horizon = today + timedelta(days=365)
 
+    # Gestion externe : les renouvellements relèvent du gestionnaire
+    # tiers → exclu (isnot(True) couvre les NULL legacy).
     bails = (
         await db.execute(
-            select(Bail).where(
+            select(Bail)
+            .join(Logement, Logement.id == Bail.logement_id)
+            .join(Immeuble, Immeuble.id == Logement.immeuble_id)
+            .where(
                 and_(
                     Bail.status == BailStatus.ACTIF.value,
                     Bail.date_fin >= today,
                     Bail.date_fin <= horizon,
+                    Immeuble.gestion_externe.isnot(True),
                 )
             ).order_by(Bail.date_fin.asc())
         )

@@ -244,13 +244,20 @@ async def scan_and_send_due_renouvellements(
     cutoff_min = today + timedelta(days=fenetre_min_jours)
     cutoff_max = today + timedelta(days=fenetre_max_jours)
 
+    # Immeubles en GESTION EXTERNE : ne JAMAIS envoyer d'avis automatique
+    # à leurs locataires — le gestionnaire tiers s'en charge. isnot(True)
+    # couvre aussi les NULL (lignes d'avant le backfill du default).
     bails = (
         await db.execute(
-            select(Bail).where(
+            select(Bail)
+            .join(Logement, Logement.id == Bail.logement_id)
+            .join(Immeuble, Immeuble.id == Logement.immeuble_id)
+            .where(
                 and_(
                     Bail.status == BailStatus.ACTIF.value,
                     Bail.date_fin >= cutoff_min,
                     Bail.date_fin <= cutoff_max,
+                    Immeuble.gestion_externe.isnot(True),
                 )
             )
         )

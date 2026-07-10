@@ -70,15 +70,22 @@ async def scan_and_create_renew_tasks(
     today = today or date.today()
     now_utc = datetime.now(timezone.utc)
 
-    # Charge tous les baux actifs avec date_fin dans les 7 prochains mois
+    # Charge tous les baux actifs avec date_fin dans les 7 prochains mois.
+    # Immeubles en GESTION EXTERNE exclus : les renouvellements relèvent
+    # du gestionnaire tiers → pas de tâche QG auto. isnot(True) couvre
+    # aussi les NULL (lignes d'avant le backfill du default).
     horizon = today + timedelta(days=210)
     bails = (
         await db.execute(
-            select(Bail).where(
+            select(Bail)
+            .join(Logement, Logement.id == Bail.logement_id)
+            .join(Immeuble, Immeuble.id == Logement.immeuble_id)
+            .where(
                 and_(
                     Bail.status == BailStatus.ACTIF.value,
                     Bail.date_fin >= today,
                     Bail.date_fin <= horizon,
+                    Immeuble.gestion_externe.isnot(True),
                 )
             )
         )

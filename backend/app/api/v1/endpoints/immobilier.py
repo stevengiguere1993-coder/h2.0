@@ -2062,7 +2062,9 @@ async def depots_overview(
     (baux terminés/résiliés). Sert à ne pas oublier de rembourser."""
     _require_volet(user)
 
-    imm_q = select(Immeuble)
+    # Gestion externe : dépôts suivis par le gestionnaire tiers → exclu
+    # (isnot(True) couvre les NULL legacy).
+    imm_q = select(Immeuble).where(Immeuble.gestion_externe.isnot(True))
     if entreprise_id is not None:
         imm_q = imm_q.where(Immeuble.owner_entreprise_id == int(entreprise_id))
     immeubles = (await db.execute(imm_q)).scalars().all()
@@ -2383,7 +2385,13 @@ async def loyers_overview(
     month_label = month_start.strftime("%Y-%m")
 
     # Périmètre immeubles : filtre entreprise + visibilité employé.
-    imm_q = select(Immeuble).where(Immeuble.is_active.is_(True))
+    # Gestion externe : les loyers sont perçus par le gestionnaire tiers →
+    # hors du suivi opérationnel. isnot(True) couvre aussi les NULL
+    # (lignes créées avant le backfill du default).
+    imm_q = select(Immeuble).where(
+        Immeuble.is_active.is_(True),
+        Immeuble.gestion_externe.isnot(True),
+    )
     if entreprise_id is not None:
         imm_q = imm_q.where(
             Immeuble.owner_entreprise_id == int(entreprise_id)
@@ -2732,7 +2740,12 @@ async def baux_echeances(
     _require_volet(user)
     today = datetime.now(timezone.utc).date()
 
-    imm_q = select(Immeuble).where(Immeuble.is_active.is_(True))
+    # Gestion externe : les avis de renouvellement relèvent du
+    # gestionnaire tiers → exclu (isnot(True) couvre les NULL legacy).
+    imm_q = select(Immeuble).where(
+        Immeuble.is_active.is_(True),
+        Immeuble.gestion_externe.isnot(True),
+    )
     if entreprise_id is not None:
         imm_q = imm_q.where(
             Immeuble.owner_entreprise_id == int(entreprise_id)
@@ -3654,7 +3667,10 @@ class ATraiterOut(BaseModel):
 async def a_traiter(db: DBSession, user: CurrentUser) -> ATraiterOut:
     """Cockpit « À traiter » : agrège tout ce qui demande une action —
     loyers en retard, baux à renouveler, maintenance urgente, dépôts à
-    rendre. Un coup d'œil pour ne rien échapper."""
+    rendre. Un coup d'œil pour ne rien échapper.
+
+    Les immeubles en gestion externe sont exclus des compteurs loyers /
+    renouvellements / dépôts via les overviews délégués ci-dessous."""
     _require_volet(user)
     # Appels internes : on passe TOUS les paramètres optionnels
     # explicitement (en appel direct, les défauts Query() ne valent pas None).
