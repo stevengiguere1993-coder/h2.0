@@ -357,6 +357,28 @@ async def delete_item(
     ).scalar_one_or_none()
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    # « Dé-refacturer » : supprimer une LIGNE qui portait des achats
+    # refacturés (y compris la ligne FUSIONNÉE qui en regroupe plusieurs)
+    # ou des heures doit les remettre « À refacturer » / disponibles. Sans
+    # ça, le FK facture_item_id passe à NULL (SET NULL) mais invoiced_at
+    # reste posé → l'achat reste faussement « ✓ Refacturé » et ne peut
+    # plus jamais être réimporté. Même logique que la suppression de la
+    # facture entière (business.delete_item / Facture).
+    from sqlalchemy import update as _update
+
+    from app.models.achat import Achat as _Achat
+    from app.models.punch import Punch as _Punch
+
+    await db.execute(
+        _update(_Achat)
+        .where(_Achat.facture_item_id == item_id)
+        .values(invoiced_at=None, facture_item_id=None)
+    )
+    await db.execute(
+        _update(_Punch)
+        .where(_Punch.facture_item_id == item_id)
+        .values(invoiced_at=None, facture_item_id=None)
+    )
     await db.delete(item)
     await db.flush()
     await _recompute_facture_totals(db, facture_id)
