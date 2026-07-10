@@ -8,9 +8,11 @@ import {
   FileText,
   Loader2,
   Mail,
+  Pencil,
   Phone,
   User,
-  Wallet
+  Wallet,
+  X
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
@@ -96,6 +98,7 @@ export default function LocataireDetailPage({
   const [dossier, setDossier] = useState<Dossier | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
   const loc = dossier?.locataire ?? null;
 
   async function etatDeCompte() {
@@ -186,20 +189,31 @@ export default function LocataireDetailPage({
                   ) : null}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => void etatDeCompte()}
-                disabled={pdfLoading}
-                className="btn-outline-accent btn-sm ml-auto shrink-0 disabled:opacity-50"
-                title="Générer l'état de compte (PDF) : loyers, paiements, dépôt"
-              >
-                {pdfLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Download className="h-4 w-4" />
-                )}
-                État de compte
-              </button>
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEdit(true)}
+                  className="btn-secondary btn-sm"
+                  title="Modifier les informations du locataire"
+                >
+                  <Pencil className="h-4 w-4" />
+                  Modifier
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void etatDeCompte()}
+                  disabled={pdfLoading}
+                  className="btn-outline-accent btn-sm disabled:opacity-50"
+                  title="Générer l'état de compte (PDF) : loyers, paiements, dépôt"
+                >
+                  {pdfLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  État de compte
+                </button>
+              </div>
             </header>
 
             <section className="grid gap-4 sm:grid-cols-2">
@@ -422,7 +436,180 @@ export default function LocataireDetailPage({
           </div>
         )}
       </div>
+
+      {showEdit && loc ? (
+        <EditLocataireModal
+          locataire={loc}
+          onClose={() => setShowEdit(false)}
+          onSaved={(updated) => {
+            setDossier((d) =>
+              d ? { ...d, locataire: { ...d.locataire, ...updated } } : d
+            );
+            setShowEdit(false);
+          }}
+        />
+      ) : null}
     </>
+  );
+}
+
+function EditLocataireModal({
+  locataire,
+  onClose,
+  onSaved
+}: {
+  locataire: Locataire;
+  onClose: () => void;
+  onSaved: (l: Locataire) => void;
+}) {
+  const [form, setForm] = useState({
+    full_name: locataire.full_name,
+    email: locataire.email ?? "",
+    phone: locataire.phone ?? "",
+    employeur: locataire.employeur ?? "",
+    revenu_annuel:
+      locataire.revenu_annuel != null ? String(locataire.revenu_annuel) : "",
+    notes: locataire.notes ?? ""
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function set<K extends keyof typeof form>(k: K, v: string) {
+    setForm((f) => ({ ...f, [k]: v }));
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!form.full_name.trim()) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      const body: Record<string, unknown> = {
+        full_name: form.full_name.trim(),
+        email: form.email.trim() || null,
+        phone: form.phone.trim() || null,
+        employeur: form.employeur.trim() || null,
+        revenu_annuel: form.revenu_annuel.trim()
+          ? Number(form.revenu_annuel)
+          : null,
+        notes: form.notes.trim() ? form.notes : null
+      };
+      const res = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataire.id}`,
+        { method: "PATCH", body: JSON.stringify(body) }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      onSaved((await res.json()) as Locataire);
+    } catch (e2) {
+      setErr((e2 as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+      <div className="my-8 w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-accent-500">
+            <Pencil className="h-4 w-4" /> Modifier le locataire
+          </h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <form onSubmit={submit} className="grid gap-4 p-5">
+          <div>
+            <label className="label">Nom complet *</label>
+            <input
+              required
+              value={form.full_name}
+              onChange={(e) => set("full_name", e.target.value)}
+              className="input"
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Email</label>
+              <input
+                type="email"
+                value={form.email}
+                onChange={(e) => set("email", e.target.value)}
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="label">Téléphone</label>
+              <input
+                value={form.phone}
+                onChange={(e) => set("phone", e.target.value)}
+                className="input font-mono"
+              />
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Employeur</label>
+              <input
+                value={form.employeur}
+                onChange={(e) => set("employeur", e.target.value)}
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="label">Revenu annuel (CAD)</label>
+              <input
+                type="number"
+                min={0}
+                step={1000}
+                value={form.revenu_annuel}
+                onChange={(e) => set("revenu_annuel", e.target.value)}
+                className="input font-mono"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="label">Notes</label>
+            <textarea
+              rows={3}
+              value={form.notes}
+              onChange={(e) => set("notes", e.target.value)}
+              className="input"
+            />
+          </div>
+
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+              {err}
+            </p>
+          ) : null}
+
+          <div className="flex items-center justify-end gap-2 border-t border-brand-800 pt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="btn-secondary btn-sm"
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={saving || !form.full_name.trim()}
+              className="btn-accent btn-sm inline-flex items-center disabled:opacity-60"
+            >
+              {saving ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Enregistrer
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 

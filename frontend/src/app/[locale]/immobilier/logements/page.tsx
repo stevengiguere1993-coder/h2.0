@@ -12,12 +12,19 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
+import {
+  fmtPieces,
+  LogementFiche,
+  type LogementFicheBail,
+  type LogementFicheData
+} from "@/components/immobilier/logement-fiche";
 
 /**
  * Logements — vue agrégée de TOUS les logements du portefeuille
  * (entreprise active via le contexte du layout). Filtres client-side :
- * recherche texte, immeuble, statut. Clic → fiche immeuble (la fiche
- * logement partagée viendra d'un autre lot).
+ * recherche texte, immeuble, statut. Clic sur une ligne → fiche
+ * logement partagée (modale) ; la colonne immeuble reste un lien vers
+ * la fiche immeuble.
  */
 
 type ImmeubleLite = {
@@ -27,17 +34,7 @@ type ImmeubleLite = {
   city?: string | null;
 };
 
-type Logement = {
-  id: number;
-  immeuble_id: number;
-  numero: string;
-  nb_pieces_decimal?: number | null;
-  nb_chambres?: number | null;
-  superficie_pi2?: number | null;
-  type: string;
-  status: string;
-  loyer_demande?: number | null;
-};
+type Logement = LogementFicheData;
 
 type Row = Logement & {
   immeuble_name: string;
@@ -50,12 +47,6 @@ const STATUTS = [
   { value: "reserve", label: "Réservés" },
   { value: "hors_location", label: "Hors loc." }
 ];
-
-function fmtPieces(n: number | null | undefined): string {
-  if (n == null) return "—";
-  // 3.5 → « 3½ », 4 → « 4 » (convention QC).
-  return `${n}`.replace(".5", "½");
-}
 
 function fmtMoney(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -85,6 +76,28 @@ export default function LogementsPage() {
   const [search, setSearch] = useState("");
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
   const [statutFilter, setStatutFilter] = useState<string>("all");
+  const [fiche, setFiche] = useState<Row | null>(null);
+  const [ficheBails, setFicheBails] = useState<
+    LogementFicheBail[] | undefined
+  >(undefined);
+
+  // Ouvre la fiche partagée + charge les baux de l'immeuble du logement
+  // (pour la section Occupation).
+  function openFiche(row: Row) {
+    setFiche(row);
+    setFicheBails(undefined);
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/immobilier/immeubles/${row.immeuble_id}/baux`
+        );
+        if (r.ok) setFicheBails((await r.json()) as LogementFicheBail[]);
+        else setFicheBails([]);
+      } catch {
+        setFicheBails([]);
+      }
+    })();
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -240,25 +253,26 @@ export default function LogementsPage() {
                 </thead>
                 <tbody className="divide-y divide-brand-800">
                   {filtered.map((l) => (
-                    <tr key={l.id} className="group hover:bg-brand-950/50">
+                    <tr
+                      key={l.id}
+                      onClick={() => openFiche(l)}
+                      className="group cursor-pointer hover:bg-brand-950/50"
+                    >
                       <td className="px-4 py-3">
-                        <Link
-                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          href={`/immobilier/immeubles/${l.immeuble_id}` as any}
-                          className="flex items-center gap-3"
-                        >
-                          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
+                        <span className="flex items-center gap-3">
+                          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
                             <DoorOpen className="h-4 w-4" />
-                          </div>
+                          </span>
                           <span className="font-bold text-white group-hover:text-accent-500">
                             {l.numero}
                           </span>
-                        </Link>
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-xs text-white/70">
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           href={`/immobilier/immeubles/${l.immeuble_id}` as any}
+                          onClick={(e) => e.stopPropagation()}
                           className="inline-flex items-center gap-1.5 hover:text-accent-500"
                         >
                           <Building2 className="h-3.5 w-3.5 text-white/40" />
@@ -285,6 +299,29 @@ export default function LogementsPage() {
           </div>
         )}
       </div>
+
+      {fiche ? (
+        <LogementFiche
+          logement={fiche}
+          bails={ficheBails}
+          onClose={() => setFiche(null)}
+          onSaved={(updated) => {
+            setRows(
+              (prev) =>
+                prev?.map((r) =>
+                  r.id === updated.id
+                    ? { ...r, ...updated, immeuble_name: r.immeuble_name }
+                    : r
+                ) ?? prev
+            );
+            setFiche(null);
+          }}
+          onDeleted={(id) => {
+            setRows((prev) => prev?.filter((r) => r.id !== id) ?? prev);
+            setFiche(null);
+          }}
+        />
+      ) : null}
     </>
   );
 }
