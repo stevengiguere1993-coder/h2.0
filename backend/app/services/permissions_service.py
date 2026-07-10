@@ -20,6 +20,7 @@ from fastapi import Depends, HTTPException, status
 from sqlalchemy import select
 
 from app.api.deps import get_current_user
+from app.core.access_registry import PAGE_KEY_PREFIX, PAGES_BY_KEY
 from app.core.capabilities import CAPABILITIES_BY_ID
 from app.db.session import AsyncSessionLocal
 from app.models.role_permission import RolePermission
@@ -45,15 +46,25 @@ def invalidate_permissions_cache() -> None:
 
 
 async def get_min_role(capability: str) -> str:
-    """Rôle minimum requis pour ``capability`` (DB si dispo, sinon défaut)."""
+    """Rôle minimum requis pour ``capability`` (DB si dispo, sinon défaut).
+
+    Accepte aussi les clés de PAGE du registre central (``page:<page_key>``,
+    refonte permissions 2026-07) : même table, même cache, fallback sur le
+    défaut déclaré dans ``access_registry``."""
     if time.monotonic() - _cache_loaded_at > _CACHE_TTL_SECONDS:
         await _load_cache()
     stored = _cache.get(capability)
     if stored:
         return stored
     cap = CAPABILITIES_BY_ID.get(capability)
-    # Sécurité par défaut : si la capacité est inconnue, on exige owner.
-    return cap.default_min_role if cap else "owner"
+    if cap:
+        return cap.default_min_role
+    if capability.startswith(PAGE_KEY_PREFIX):
+        page = PAGES_BY_KEY.get(capability[len(PAGE_KEY_PREFIX):])
+        if page:
+            return page.default_min_role
+    # Sécurité par défaut : clé inconnue → on exige owner.
+    return "owner"
 
 
 def require_capability(capability: str):
