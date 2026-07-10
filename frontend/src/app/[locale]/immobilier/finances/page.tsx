@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Check,
   CheckCircle2,
@@ -106,6 +106,7 @@ export default function FinancesPage() {
   const [openId, setOpenId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [prev, setPrev] = useState<Previsionnel | null>(null);
+  const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
 
   useEffect(() => {
     let cancelled = false;
@@ -153,6 +154,51 @@ export default function FinancesPage() {
     window.setTimeout(() => setToast(null), 2500);
   }
 
+  // Immeubles distincts du P&L (pour le select de filtre).
+  const immeubles = useMemo(
+    () =>
+      (data?.rows || [])
+        .map((r) => ({ id: r.immeuble_id, name: r.immeuble_name }))
+        .sort((a, b) => a.name.localeCompare(b.name, "fr")),
+    [data]
+  );
+
+  // Lignes visibles selon l'immeuble choisi (le Prévisionnel reste global).
+  const visibleRows = useMemo(
+    () =>
+      (data?.rows || []).filter(
+        (r) => immeubleFilter === "all" || r.immeuble_id === immeubleFilter
+      ),
+    [data, immeubleFilter]
+  );
+
+  // Totaux affichés dans les tuiles KPI — recalculés sur la sélection.
+  const totaux = useMemo<PnlRow | null>(() => {
+    if (!data) return null;
+    if (immeubleFilter === "all") return data.totaux;
+    const base: PnlRow = {
+      immeuble_id: 0,
+      immeuble_name: "Sélection",
+      loyers_annualises: 0,
+      revenus_recus: 0,
+      depenses: 0,
+      dette_annuelle: 0,
+      cashflow_potentiel: 0,
+      cashflow_reel: 0,
+      nb_baux_actifs: 0
+    };
+    for (const r of visibleRows) {
+      base.loyers_annualises += r.loyers_annualises;
+      base.revenus_recus += r.revenus_recus;
+      base.depenses += r.depenses;
+      base.dette_annuelle += r.dette_annuelle;
+      base.cashflow_potentiel += r.cashflow_potentiel;
+      base.cashflow_reel += r.cashflow_reel;
+      base.nb_baux_actifs += r.nb_baux_actifs;
+    }
+    return base;
+  }, [data, immeubleFilter, visibleRows]);
+
   return (
     <>
       <ImmobilierTopbar
@@ -175,26 +221,44 @@ export default function FinancesPage() {
               </p>
             </div>
           </div>
-          <div className="inline-flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-900 px-1 py-1">
-            <button
-              type="button"
-              onClick={() => setAnnee((a) => a - 1)}
-              className="btn-ghost btn-xs"
-              aria-label="Année précédente"
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={immeubleFilter === "all" ? "all" : String(immeubleFilter)}
+              onChange={(e) =>
+                setImmeubleFilter(
+                  e.target.value === "all" ? "all" : Number(e.target.value)
+                )
+              }
+              className="input w-auto max-w-[220px] text-sm"
             >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <span className="min-w-[70px] text-center text-sm font-semibold text-white">
-              {annee}
-            </span>
-            <button
-              type="button"
-              onClick={() => setAnnee((a) => a + 1)}
-              className="btn-ghost btn-xs"
-              aria-label="Année suivante"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
+              <option value="all">Tous les immeubles</option>
+              {immeubles.map((imm) => (
+                <option key={imm.id} value={imm.id}>
+                  {imm.name}
+                </option>
+              ))}
+            </select>
+            <div className="inline-flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-900 px-1 py-1">
+              <button
+                type="button"
+                onClick={() => setAnnee((a) => a - 1)}
+                className="btn-ghost btn-xs"
+                aria-label="Année précédente"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <span className="min-w-[70px] text-center text-sm font-semibold text-white">
+                {annee}
+              </span>
+              <button
+                type="button"
+                onClick={() => setAnnee((a) => a + 1)}
+                className="btn-ghost btn-xs"
+                aria-label="Année suivante"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </header>
 
@@ -204,27 +268,27 @@ export default function FinancesPage() {
           </p>
         ) : null}
 
-        {data ? (
+        {totaux ? (
           <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Tile
               label="Loyers annualisés"
-              value={fmtMoney(data.totaux.loyers_annualises)}
-              sub={`${data.totaux.nb_baux_actifs} baux actifs`}
+              value={fmtMoney(totaux.loyers_annualises)}
+              sub={`${totaux.nb_baux_actifs} ba${
+                totaux.nb_baux_actifs > 1 ? "ux" : "il"
+              } actif${totaux.nb_baux_actifs > 1 ? "s" : ""}`}
             />
             <Tile
               label="Dépenses / an"
-              value={fmtMoney(data.totaux.depenses)}
+              value={fmtMoney(totaux.depenses)}
             />
             <Tile
               label="Dette / an"
-              value={fmtMoney(data.totaux.dette_annuelle)}
+              value={fmtMoney(totaux.dette_annuelle)}
             />
             <Tile
               label="Cashflow potentiel"
-              value={fmtMoney(data.totaux.cashflow_potentiel)}
-              tone={
-                data.totaux.cashflow_potentiel >= 0 ? "emerald" : "rose"
-              }
+              value={fmtMoney(totaux.cashflow_potentiel)}
+              tone={totaux.cashflow_potentiel >= 0 ? "emerald" : "rose"}
             />
           </div>
         ) : null}
@@ -335,10 +399,13 @@ export default function FinancesPage() {
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-emerald-400" />
             </div>
-          ) : !data || data.rows.length === 0 ? (
+          ) : !data || visibleRows.length === 0 ? (
             <div className="p-10 text-center text-sm text-white/50">
-              Aucun immeuble actif
-              {currentEntrepriseId != null ? " pour cette entreprise" : ""}.
+              {data && data.rows.length > 0
+                ? "Aucun immeuble ne correspond au filtre."
+                : `Aucun immeuble actif${
+                    currentEntrepriseId != null ? " pour cette entreprise" : ""
+                  }.`}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -357,7 +424,7 @@ export default function FinancesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-brand-800">
-                  {data.rows.map((r) => (
+                  {visibleRows.map((r) => (
                     <ImmeubleRow
                       key={r.immeuble_id}
                       row={r}

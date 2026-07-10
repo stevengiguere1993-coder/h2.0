@@ -119,6 +119,10 @@ export default function BonsTravailPage() {
   const [formOpen, setFormOpen] = useState(false);
 
   const [bons, setBons] = useState<BonListItem[] | null>(null);
+  // Filtre immeuble du suivi (kanban + mini dashboard).
+  const [filterImmeubleId, setFilterImmeubleId] = useState<number | "all">(
+    "all"
+  );
 
   // Détail / édition de la demande.
   const [detailOpen, setDetailOpen] = useState(false);
@@ -153,6 +157,7 @@ export default function BonsTravailPage() {
     let cancelled = false;
     setImmeubles(null);
     setImmeubleId("");
+    setFilterImmeubleId("all");
     (async () => {
       const url =
         currentEntrepriseId != null
@@ -382,11 +387,20 @@ export default function BonsTravailPage() {
     }
   }
 
+  // Bons visibles selon le filtre immeuble (kanban + mini dashboard).
+  const visibleBons = useMemo(
+    () =>
+      (bons || []).filter(
+        (b) => filterImmeubleId === "all" || b.immeuble_id === filterImmeubleId
+      ),
+    [bons, filterImmeubleId]
+  );
+
   const byColumn = useMemo(() => {
     const map: Record<string, BonListItem[]> = Object.fromEntries(
       COLUMNS.map((c) => [c.id, [] as BonListItem[]])
     );
-    for (const b of bons || []) {
+    for (const b of visibleBons) {
       const target = COLUMNS.find((c) => c.id === b.status) ? b.status : "draft";
       map[target].push(b);
     }
@@ -397,7 +411,7 @@ export default function BonsTravailPage() {
       );
     }
     return map;
-  }, [bons]);
+  }, [visibleBons]);
 
   return (
     <>
@@ -586,15 +600,43 @@ export default function BonsTravailPage() {
           </div>
         ) : null}
 
+        {/* ── Filtre immeuble (dashboard + kanban) ──────────────────── */}
+        {bons && bons.length > 0 ? (
+          <div className="mt-6 flex flex-wrap items-center gap-2">
+            <select
+              value={
+                filterImmeubleId === "all" ? "all" : String(filterImmeubleId)
+              }
+              onChange={(e) =>
+                setFilterImmeubleId(
+                  e.target.value === "all" ? "all" : Number(e.target.value)
+                )
+              }
+              className="input w-auto max-w-[240px] text-sm"
+            >
+              <option value="all">Tous les immeubles</option>
+              {(immeubles || []).map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.name}
+                  {i.city ? ` — ${i.city}` : ""}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-white/50">
+              {visibleBons.length} / {bons.length}
+            </span>
+          </div>
+        ) : null}
+
         {/* ── Mini tableau de bord ──────────────────────────────────── */}
         {bons && bons.length > 0 ? (
-          <div className="mt-6 grid grid-cols-3 gap-3">
+          <div className="mt-3 grid grid-cols-3 gap-3">
             <StatCard
               label="Urgences"
               // Seuls les bons encore ACTIFS comptent comme urgences — un
               // bon urgent complété/facturé/annulé n'est plus une urgence.
               value={
-                bons.filter(
+                visibleBons.filter(
                   (b) =>
                     b.is_urgent &&
                     ["draft", "accepte_a_planifier", "planifie"].includes(
@@ -607,7 +649,7 @@ export default function BonsTravailPage() {
             <StatCard
               label="Ouverts"
               value={
-                bons.filter((b) =>
+                visibleBons.filter((b) =>
                   ["draft", "accepte_a_planifier"].includes(b.status)
                 ).length
               }
@@ -615,7 +657,7 @@ export default function BonsTravailPage() {
             />
             <StatCard
               label="Planifiés"
-              value={bons.filter((b) => b.status === "planifie").length}
+              value={visibleBons.filter((b) => b.status === "planifie").length}
               tone="border-sky-500/40 bg-sky-500/10 text-sky-300"
             />
           </div>

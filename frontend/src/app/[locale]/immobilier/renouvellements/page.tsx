@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -59,6 +59,7 @@ export default function RenouvellementsPage() {
   const [list, setList] = useState<RenouvellementOverview[] | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "todo" | "envoye">("todo");
+  const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
   const [scanRunning, setScanRunning] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -142,7 +143,18 @@ export default function RenouvellementsPage() {
     }
   }
 
+  // Immeubles distincts présents dans les rows chargées (pour le select).
+  const immeubles = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const r of list || []) m.set(r.immeuble_id, r.immeuble_name);
+    return [...m.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+  }, [list]);
+
   const filtered = (list || []).filter((r) => {
+    if (immeubleFilter !== "all" && r.immeuble_id !== immeubleFilter)
+      return false;
     if (filter === "todo" && r.fenetre === "envoye") return false;
     if (filter === "envoye" && r.fenetre !== "envoye") return false;
     if (search.trim()) {
@@ -210,6 +222,22 @@ export default function RenouvellementsPage() {
               className="input w-full pl-9"
             />
           </div>
+          <select
+            value={immeubleFilter === "all" ? "all" : String(immeubleFilter)}
+            onChange={(e) =>
+              setImmeubleFilter(
+                e.target.value === "all" ? "all" : Number(e.target.value)
+              )
+            }
+            className="input w-auto max-w-[220px] text-sm"
+          >
+            <option value="all">Tous les immeubles</option>
+            {immeubles.map((imm) => (
+              <option key={imm.id} value={imm.id}>
+                {imm.name}
+              </option>
+            ))}
+          </select>
           <FilterPill
             label="À envoyer"
             active={filter === "todo"}
