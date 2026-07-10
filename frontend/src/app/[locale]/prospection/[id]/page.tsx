@@ -691,7 +691,7 @@ export default function ProspectionDetailPage() {
                       {lead.tags.map((t) => (
                         <span
                           key={t}
-                          className="rounded-full bg-brand-800 px-2 py-0.5 text-[11px] text-white/70"
+                          className="badge badge-neutral"
                         >
                           {TAG_LABEL[t] || t}
                         </span>
@@ -925,7 +925,7 @@ export default function ProspectionDetailPage() {
                               · NEQ {c.neq}
                             </span>
                             {c.statut ? (
-                              <span className="ml-2 rounded-full bg-brand-800 px-1.5 py-0.5 text-[10px] text-white/60">
+                              <span className="badge badge-neutral ml-2">
                                 {c.statut}
                               </span>
                             ) : null}
@@ -1185,7 +1185,7 @@ export default function ProspectionDetailPage() {
                           >
                             {p.phone}
                           </a>
-                          <span className="rounded-full bg-brand-800 px-2 py-0.5 text-[10px] uppercase text-white/60">
+                          <span className="badge badge-neutral uppercase">
                             {p.source}
                           </span>
                         </div>
@@ -1298,7 +1298,7 @@ export default function ProspectionDetailPage() {
                                 </td>
                                 <td className="px-2 py-1.5">
                                   {b.is_estimate ? (
-                                    <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] text-amber-300">
+                                    <span className="badge badge-amber">
                                       estimé sur 3+ BR
                                     </span>
                                   ) : null}
@@ -2032,7 +2032,7 @@ function FinanceSection({
                 <span className="w-24 shrink-0 text-right tabular-nums font-bold text-emerald-300">
                   {fmtMoney(t.amount)}
                 </span>
-                <span className="rounded bg-brand-800 px-1.5 py-0.5 text-[10px] uppercase text-white/60">
+                <span className="badge badge-neutral uppercase">
                   {t.kind}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-white/50">

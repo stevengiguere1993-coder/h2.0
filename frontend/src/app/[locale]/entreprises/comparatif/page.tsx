@@ -338,7 +338,7 @@ function KpiTotal({
   };
   void TrendingDown;
   return (
-    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+    <div className="kpi-card">
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
           {label}

@@ -646,7 +646,7 @@ function MoveTacheDialog({
             <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
           </div>
         ) : list.length === 0 ? (
-          <p className="mt-4 rounded-md border border-dashed border-brand-800 bg-brand-900/40 px-3 py-3 text-center text-xs text-white/50">
+          <p className="empty-state mt-4 text-xs">
             Aucune autre entreprise — créez-en une dans Mes entreprises.
           </p>
         ) : (
@@ -1187,7 +1187,7 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
           <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Chargement…
         </p>
       ) : list.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-brand-800 bg-brand-950 p-3 text-xs text-white/50">
+        <p className="empty-state text-xs">
           Aucun partenaire enregistré.
         </p>
       ) : (
@@ -1210,7 +1210,7 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
                   <span className="text-sm font-bold text-white">
                     {p.display_name}
                   </span>
-                  <span className="rounded-full border border-white/15 bg-brand-900 px-2 py-0.5 text-[10px] font-semibold text-white/70">
+                  <span className="badge badge-neutral">
                     {PARTNER_ROLES.find((r) => r.value === p.role)?.label ||
                       p.role}
                   </span>

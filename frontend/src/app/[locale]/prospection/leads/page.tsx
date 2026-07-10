@@ -574,10 +574,7 @@ export default function ProspectionLeadsPage() {
         {/* Stats */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {stats.map((s) => (
-            <div
-              key={s.key}
-              className="rounded-xl border border-brand-800 bg-brand-900 p-3"
-            >
+            <div key={s.key} className="kpi-card">
               <p className="text-[11px] uppercase tracking-wider text-white/50">
                 {s.label}
               </p>
@@ -830,10 +827,7 @@ export default function ProspectionLeadsPage() {
                         {l.tags.length > 0 ? (
                           <div className="mt-1 flex flex-wrap gap-1">
                             {l.tags.slice(0, 3).map((t) => (
-                              <span
-                                key={t}
-                                className="rounded bg-brand-800 px-1.5 py-0.5 text-[10px] text-white/60"
-                              >
+                              <span key={t} className="badge badge-neutral">
                                 {TAG_LABEL[t] || t}
                               </span>
                             ))}
@@ -854,24 +848,20 @@ export default function ProspectionLeadsPage() {
                         )}
                         <div className="mt-0.5 flex flex-wrap gap-1">
                           {l.owner_kind === "corporation" ? (
-                            <span className="rounded bg-violet-500/15 px-1 py-0.5 text-[10px] text-violet-300">
-                              Corp
-                            </span>
+                            <span className="badge badge-violet">Corp</span>
                           ) : l.owner_kind === "particulier" ? (
-                            <span className="rounded bg-blue-500/15 px-1 py-0.5 text-[10px] text-blue-300">
+                            <span className="badge badge-blue">
                               Particulier
                             </span>
                           ) : (
-                            <span className="rounded bg-brand-800 px-1 py-0.5 text-[10px] text-white/40">
-                              ?
-                            </span>
+                            <span className="badge badge-neutral">?</span>
                           )}
                           {(l.multi_properties_count ?? 0) > 0 ? (
                             (() => {
                               const href = ownerViewHref(l);
                               const inner = (
                                 <span
-                                  className="rounded bg-amber-500/15 px-1 py-0.5 text-[10px] text-amber-300 hover:bg-amber-500/25"
+                                  className="badge badge-amber hover:bg-amber-500/25"
                                   title="Voir la fiche propriétaire (tous ses immeubles)"
                                 >
                                   +{l.multi_properties_count} autres
@@ -907,7 +897,7 @@ export default function ProspectionLeadsPage() {
                       </td>
                       <td className="px-3 py-2.5">
                         <span
-                          className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                          className={`badge ${
                             STATUS_COLOR[l.status] ||
                             "bg-brand-800 text-white/60"
                           }`}
@@ -1306,7 +1296,7 @@ function KanbanBoard({
                     col.label
                   )}
                 </span>
-                <span className="rounded-full bg-brand-800 px-1.5 py-0.5 text-[10px] tabular-nums text-white/60">
+                <span className="badge badge-neutral tabular-nums">
                   {items.length}
                 </span>
               </header>

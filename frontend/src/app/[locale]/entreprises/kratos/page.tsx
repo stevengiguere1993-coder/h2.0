@@ -74,23 +74,23 @@ type EntrepriseMini = { id: number; name: string };
 const KIND_LABELS: Record<string, { label: string; cls: string }> = {
   entreprise_task: {
     label: "Tâche d'entreprise",
-    cls: "bg-violet-500/15 text-violet-300 border-violet-500/30"
+    cls: "badge-violet"
   },
   lead_note: {
     label: "Note sur lead",
-    cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+    cls: "badge-emerald"
   },
   prospection_lead_note: {
     label: "Note pipeline",
-    cls: "bg-sky-500/15 text-sky-300 border-sky-500/30"
+    cls: "badge-sky"
   },
   note: {
     label: "Note libre",
-    cls: "bg-white/10 text-white/70 border-white/20"
+    cls: "badge-neutral"
   },
   unknown: {
     label: "Non classé",
-    cls: "bg-amber-500/15 text-amber-300 border-amber-500/30"
+    cls: "badge-amber"
   }
 };
 
@@ -541,18 +541,16 @@ export default function KratosPage() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${k.cls}`}
-                          >
+                          <span className={`badge ${k.cls}`}>
                             {k.label}
                           </span>
                           {needsReview ? (
-                            <span className="rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
+                            <span className="badge badge-amber">
                               à confirmer
                             </span>
                           ) : null}
                           {isDiscarded ? (
-                            <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                            <span className="badge badge-rose">
                               rejeté
                             </span>
                           ) : null}
@@ -615,9 +613,9 @@ export default function KratosPage() {
 // ─── Section problèmes user-driven (Phase 4 réorientée) ────────
 
 const SEVERITY_CLS: Record<string, string> = {
-  high: "bg-rose-500/15 text-rose-300 border-rose-500/40",
-  medium: "bg-amber-500/15 text-amber-300 border-amber-500/40",
-  low: "bg-sky-500/15 text-sky-300 border-sky-500/30"
+  high: "badge-rose",
+  medium: "badge-amber",
+  low: "badge-sky"
 };
 
 function UserDrivenProblemsSection({
@@ -788,7 +786,7 @@ function ProblemSolutionCard({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span
-              className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${
+              className={`badge uppercase ${
                 SEVERITY_CLS[problem.severity] || SEVERITY_CLS.medium
               }`}
             >
@@ -804,12 +802,12 @@ function ProblemSolutionCard({
               {entById(problem.entreprise_id)}
             </span>
             {isApplied ? (
-              <span className="rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+              <span className="badge badge-emerald">
                 appliqué
               </span>
             ) : null}
             {isDismissed ? (
-              <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+              <span className="badge badge-rose">
                 rejeté
               </span>
             ) : null}

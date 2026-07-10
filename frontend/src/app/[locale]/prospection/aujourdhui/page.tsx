@@ -231,7 +231,7 @@ export default function ProspectionAujourdhuiPage() {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : buckets.total === 0 ? (
-          <div className="mt-8 rounded-2xl border border-dashed border-brand-800 bg-brand-900/50 p-12 text-center">
+          <div className="empty-state mt-8">
             <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-400" />
             <p className="mt-3 text-base font-bold text-white">
               Aucune action immédiate

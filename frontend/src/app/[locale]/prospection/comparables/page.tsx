@@ -193,7 +193,7 @@ function StatTile({
   accent?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-brand-800 bg-brand-900 px-4 py-3">
+    <div className="kpi-card">
       <p className="text-[11px] uppercase tracking-wider text-white/50">
         {label}
       </p>
@@ -854,12 +854,12 @@ export default function ComparablesPage() {
                         </td>
                         <td className="px-3 py-2.5">
                           {isManual ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-200">
+                            <span className="badge badge-amber">
                               <Plus className="h-2.5 w-2.5" />
                               Manuel
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-300">
+                            <span className="badge badge-emerald">
                               <Newspaper className="h-2.5 w-2.5" />
                               Journal
                             </span>

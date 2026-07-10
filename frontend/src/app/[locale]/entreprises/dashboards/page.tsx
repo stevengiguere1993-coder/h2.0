@@ -247,8 +247,7 @@ function KPIStrip({ kpis }: { kpis: DashKPI[] }) {
         return (
           <div
             key={i}
-            className="rounded-2xl border p-4 shadow-card"
-            style={CARD_STYLE}
+            className="kpi-card shadow-card"
           >
             <p
               className="text-[10px] uppercase tracking-wider"

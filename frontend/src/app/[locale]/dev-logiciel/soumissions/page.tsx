@@ -399,7 +399,7 @@ export default function SoumissionsPage() {
                       <h2 className="text-sm font-semibold text-white">
                         {col.label}
                       </h2>
-                      <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                      <span className="badge badge-neutral">
                         {cards.length}
                       </span>
                     </div>
@@ -548,12 +548,12 @@ function SoumissionCard({
           <span className="text-xs font-semibold uppercase tracking-wider text-accent-500">
             {s.reference}
             {s.kind === "contract" ? (
-              <span className="ml-1.5 rounded bg-indigo-500/15 px-1 py-0.5 text-[9px] text-indigo-300">
+              <span className="badge badge-violet ml-1.5">
                 Contrat
               </span>
             ) : null}
             {s.kind !== "contract" && s.is_devis_dev === false ? (
-              <span className="ml-1.5 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] text-amber-300">
+              <span className="badge badge-amber ml-1.5">
                 Ancien format
               </span>
             ) : null}

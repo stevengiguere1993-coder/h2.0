@@ -191,7 +191,7 @@ export default function DevlogHoursPage() {
           </div>
         ) : (
           <>
-            <div className="mb-4 rounded-2xl border border-brand-800 bg-brand-900 p-4">
+            <div className="kpi-card mb-4">
               <p className="text-xs uppercase tracking-wide text-white/50">
                 Total des heures saisies
               </p>

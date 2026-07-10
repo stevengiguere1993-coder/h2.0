@@ -73,13 +73,13 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const STATUS_COLOR: Record<string, string> = {
-  a_visiter: "bg-emerald-500/20 text-emerald-300",
-  visite: "bg-blue-500/20 text-blue-300",
-  a_contacter: "bg-amber-500/20 text-amber-300",
-  contacte: "bg-violet-500/20 text-violet-300",
+  a_visiter: "badge-emerald",
+  visite: "badge-blue",
+  a_contacter: "badge-amber",
+  contacte: "badge-violet",
   soumissionne: "bg-pink-500/20 text-pink-300",
   converti: "bg-green-500/30 text-green-200",
-  perdu: "bg-rose-500/20 text-rose-300"
+  perdu: "badge-rose"
 };
 
 const KIND_EMOJI: Record<string, string> = {
@@ -199,7 +199,7 @@ export default function OwnerViewPage() {
             {error}
           </p>
         ) : !view || view.leads_count === 0 ? (
-          <div className="mt-8 rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-12 text-center">
+          <div className="empty-state mt-8">
             <Building2 className="mx-auto h-8 w-8 text-white/20" />
             <p className="mt-3 text-sm text-white/50">
               Aucun lead trouvé pour ce propriétaire.
@@ -332,9 +332,8 @@ export default function OwnerViewPage() {
                         </p>
                       </div>
                       <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                          STATUS_COLOR[l.status] ||
-                          "bg-brand-800 text-white/60"
+                        className={`badge shrink-0 ${
+                          STATUS_COLOR[l.status] || "badge-neutral"
                         }`}
                       >
                         {STATUS_LABEL[l.status] || l.status}
@@ -419,7 +418,7 @@ function Kpi({
   value: string;
 }) {
   return (
-    <div className="rounded-xl border border-brand-800 bg-brand-950/40 p-3">
+    <div className="kpi-card">
       <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-white/50">
         {icon}
         {label}

@@ -178,7 +178,7 @@ export default function ReglagesCalendriersPage() {
             <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Chargement…
           </p>
         ) : feeds.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-6 text-center">
+          <div className="empty-state">
             <Calendar className="mx-auto h-8 w-8 text-white/30" />
             <p className="mt-2 text-sm font-bold text-white">
               Aucun calendrier connecté

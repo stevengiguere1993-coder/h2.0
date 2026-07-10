@@ -380,7 +380,7 @@ export default function MoyenneLocativePage() {
                     <h2 className="text-lg font-bold text-white">{label}</h2>
                   </div>
                   {hasMarket ? (
-                    <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300">
+                    <span className="badge badge-emerald">
                       {market!.sample_size} annonce
                       {market!.sample_size > 1 ? "s" : ""} ·{" "}
                       {market!.fresh_count} récente
@@ -651,7 +651,7 @@ export default function MoyenneLocativePage() {
             </div>
           </div>
         ) : (
-          <div className="mt-10 max-w-2xl rounded-2xl border border-dashed border-brand-800 p-8 text-center text-white/50">
+          <div className="empty-state mt-10 max-w-2xl">
             <Building2 className="mx-auto h-8 w-8 opacity-40" />
             <p className="mt-3 text-sm">
               Tape une adresse pour voir les loyers du marché.

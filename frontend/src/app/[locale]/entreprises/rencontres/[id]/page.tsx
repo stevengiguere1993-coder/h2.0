@@ -548,13 +548,7 @@ export default function RencontreDetailPage() {
               </div>
 
               {data.sections.length === 0 ? (
-                <div
-                  className="mt-3 rounded-2xl border border-dashed p-6 text-center"
-                  style={{
-                    borderColor: "var(--qg-border)",
-                    color: "var(--qg-text-muted)"
-                  }}
-                >
+                <div className="empty-state mt-3">
                   <p className="text-sm font-medium">
                     Aucun sujet pour l&apos;instant.
                   </p>

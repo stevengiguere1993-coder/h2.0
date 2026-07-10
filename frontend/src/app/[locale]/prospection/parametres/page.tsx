@@ -304,7 +304,7 @@ export default function ProspectionPreferencesPage() {
           <ul className="mt-4 divide-y divide-brand-800 text-sm">
             {SCORE_RULES.map((r) => (
               <li key={r.label} className="flex items-start gap-3 py-2.5">
-                <span className="w-20 shrink-0 rounded-md bg-emerald-500/15 px-2 py-1 text-center text-xs font-bold text-emerald-300">
+                <span className="badge badge-emerald w-20 shrink-0 justify-center">
                   {r.pts}
                 </span>
                 <div className="min-w-0">

@@ -177,7 +177,7 @@ export default function ProspectionListsIndexPage() {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : lists.length === 0 ? (
-          <div className="mt-6 rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-8 text-center">
+          <div className="empty-state mt-6">
             <Layers className="mx-auto h-8 w-8 text-white/20" />
             <p className="mt-3 text-sm text-white/60">
               Aucune liste pour l&apos;instant.

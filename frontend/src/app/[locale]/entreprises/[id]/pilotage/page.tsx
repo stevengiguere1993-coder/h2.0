@@ -396,7 +396,7 @@ function RecurrenceSection({ entrepriseId }: { entrepriseId: number }) {
                       {t.title}
                     </h3>
                     {!t.is_active ? (
-                      <span className="rounded-full border border-white/15 px-1.5 py-0.5 text-[10px] uppercase text-white/50">
+                      <span className="badge badge-neutral uppercase">
                         Désactivé
                       </span>
                     ) : null}
@@ -1241,7 +1241,7 @@ function ValuePlanSection({ entrepriseId }: { entrepriseId: number }) {
   return (
     <div>
       {!plan ? (
-        <div className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-8 text-center">
+        <div className="empty-state">
           <Target className="mx-auto h-10 w-10 text-white/30" />
           <h3 className="mt-3 text-sm font-bold text-white">
             Aucun plan de valeur défini
@@ -1375,7 +1375,7 @@ function ValuePlanSection({ entrepriseId }: { entrepriseId: number }) {
                         {m.metric ? ` · ${m.metric}` : ""}
                       </p>
                     </div>
-                    <span className="rounded-full bg-brand-950 px-2 py-0.5 text-[10px] uppercase text-white/60">
+                    <span className="badge badge-neutral uppercase">
                       {m.status}
                     </span>
                   </li>
@@ -1788,7 +1788,7 @@ function Kpi({
     amber: "bg-amber-500/15 text-amber-300"
   };
   return (
-    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+    <div className="kpi-card">
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
           {label}

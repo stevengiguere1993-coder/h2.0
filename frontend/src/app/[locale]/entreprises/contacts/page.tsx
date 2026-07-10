@@ -97,15 +97,15 @@ const KIND_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
 };
 
 const KIND_CLS: Record<string, string> = {
-  professional: "bg-blue-500/15 text-blue-300",
-  partner: "bg-amber-500/15 text-amber-300",
-  investor_prospect: "bg-emerald-500/15 text-emerald-300",
-  service: "bg-violet-500/15 text-violet-300",
-  other: "bg-white/10 text-white/60",
+  professional: "badge-blue",
+  partner: "badge-amber",
+  investor_prospect: "badge-emerald",
+  service: "badge-violet",
+  other: "badge-neutral",
   subcontractor: "bg-orange-500/15 text-orange-300",
-  devlog_subcontractor: "bg-sky-500/15 text-sky-300",
+  devlog_subcontractor: "badge-sky",
   supplier: "bg-slate-500/20 text-slate-200",
-  partner_employee: "bg-amber-500/15 text-amber-300"
+  partner_employee: "badge-amber"
 };
 
 const KINDS_FOR_NEW = [
@@ -410,8 +410,8 @@ export default function ContactsPage() {
                         </td>
                         <td className="px-3 py-2">
                           <span
-                            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                              KIND_CLS[c.kind] || "bg-white/10 text-white/60"
+                            className={`badge ${
+                              KIND_CLS[c.kind] || "badge-neutral"
                             }`}
                           >
                             <Icon className="h-3 w-3" />
@@ -557,8 +557,8 @@ function FederatedDetail({
       >
         <div className="min-w-0 flex-1">
           <span
-            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-              KIND_CLS[contact.kind] || "bg-white/10 text-white/60"
+            className={`badge ${
+              KIND_CLS[contact.kind] || "badge-neutral"
             }`}
           >
             <Icon className="h-3 w-3" />
@@ -732,8 +732,8 @@ function PureContactEditor({
       >
         <div className="min-w-0 flex-1">
           <span
-            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-              KIND_CLS[c.kind] || "bg-white/10 text-white/60"
+            className={`badge ${
+              KIND_CLS[c.kind] || "badge-neutral"
             }`}
           >
             {KIND_LABEL[c.kind] || c.kind}

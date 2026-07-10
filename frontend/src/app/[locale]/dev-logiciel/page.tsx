@@ -472,7 +472,7 @@ function BigTile({
   return (
     <Link
       href={href as any}
-      className="group flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:border-accent-500/60 hover:bg-brand-800"
+      className="kpi-card group flex items-center gap-4 transition hover:border-accent-500/60 hover:bg-brand-800"
     >
       <span className={`flex h-12 w-12 items-center justify-center rounded-xl ${toneCls}`}>
         <Icon className="h-6 w-6" />
@@ -490,7 +490,7 @@ function BigTile({
 
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+    <div className="kpi-card">
       <p className="text-xs uppercase tracking-wide text-white/50">
         {label}
       </p>
@@ -524,7 +524,7 @@ function KpiCard({
   return (
     <Link
       href={href as any}
-      className="group rounded-xl border border-brand-800 bg-brand-900 p-4 transition hover:border-accent-500/60"
+      className="kpi-card group transition hover:border-accent-500/60"
     >
       <Icon className={`h-5 w-5 ${toneCls}`} />
       <p className="mt-2 text-[11px] uppercase tracking-wide text-white/50">

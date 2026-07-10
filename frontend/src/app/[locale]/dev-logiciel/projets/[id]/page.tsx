@@ -50,15 +50,15 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_CLASS: Record<string, string> = {
-  planifie: "bg-white/10 text-white",
-  en_attente: "bg-white/10 text-white",
-  en_cours: "bg-blue-500/20 text-blue-300",
-  suspendu: "bg-amber-500/20 text-amber-300",
-  livre: "bg-emerald-500/20 text-emerald-300",
-  planned: "bg-white/10 text-white",
-  in_progress: "bg-blue-500/20 text-blue-300",
-  suspended: "bg-amber-500/20 text-amber-300",
-  delivered: "bg-emerald-500/20 text-emerald-300"
+  planifie: "badge-neutral",
+  en_attente: "badge-neutral",
+  en_cours: "badge-blue",
+  suspendu: "badge-amber",
+  livre: "badge-emerald",
+  planned: "badge-neutral",
+  in_progress: "badge-blue",
+  suspended: "badge-amber",
+  delivered: "badge-emerald"
 };
 
 type TabId =
@@ -427,8 +427,8 @@ export default function ProjectDetailPage() {
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <span
-                  className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
-                    STATUS_CLASS[p.status] || "bg-white/10 text-white"
+                  className={`badge ${
+                    STATUS_CLASS[p.status] || "badge-neutral"
                   }`}
                 >
                   {STATUS_LABELS[p.status] || p.status}
@@ -1466,10 +1466,8 @@ function DevlogMembersTab({ projectId }: { projectId: number }) {
                     ) : null}
                   </div>
                   <span
-                    className={`rounded-full border px-2 py-0.5 text-center text-[11px] font-semibold ${
-                      meta.kind === "Interne"
-                        ? "border-blue-500/30 bg-blue-500/15 text-blue-300"
-                        : "border-amber-500/30 bg-amber-500/15 text-amber-300"
+                    className={`badge justify-center ${
+                      meta.kind === "Interne" ? "badge-blue" : "badge-amber"
                     }`}
                   >
                     {meta.kind}
@@ -1767,7 +1765,7 @@ function DevlogPlanificationTab({ projectId }: { projectId: number }) {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : sorted.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+          <p className="empty-state">
             Aucune phase. Décompose ton projet en étapes pour suivre l&apos;avancement.
           </p>
         ) : (
@@ -1819,12 +1817,12 @@ function DevlogPlanificationTab({ projectId }: { projectId: number }) {
                     />
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-white/50">
                       {ph.budget_cents > 0 ? (
-                        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-semibold text-emerald-300">
+                        <span className="badge badge-emerald">
                           {fmtMoney(ph.budget_cents / 100)}
                         </span>
                       ) : null}
                       {ph.heures_dev_prevues > 0 ? (
-                        <span className="rounded bg-blue-500/15 px-1.5 py-0.5 font-semibold text-blue-300">
+                        <span className="badge badge-blue">
                           {ph.heures_dev_prevues} h prévues
                         </span>
                       ) : null}
@@ -2684,7 +2682,7 @@ function DevlogRecurringServicesTab({
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : services.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+          <p className="empty-state">
             Aucun service récurrent. Les services issus de la soumission
             seront ajoutés automatiquement au démarrage du projet ; tu peux
             aussi en ajouter manuellement ci-dessus.

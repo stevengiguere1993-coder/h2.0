@@ -231,7 +231,7 @@ export default function DevlogInvoicesPage() {
         ) : (
           <>
             <div className="mb-4 grid gap-3 sm:grid-cols-2">
-              <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+              <div className="kpi-card">
                 <p className="text-xs uppercase tracking-wide text-white/50">
                   Encaissé (payées)
                 </p>
@@ -239,7 +239,7 @@ export default function DevlogInvoicesPage() {
                   {fmtAmount(totalPaid)}
                 </p>
               </div>
-              <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+              <div className="kpi-card">
                 <p className="text-xs uppercase tracking-wide text-white/50">
                   En attente (envoyées)
                 </p>

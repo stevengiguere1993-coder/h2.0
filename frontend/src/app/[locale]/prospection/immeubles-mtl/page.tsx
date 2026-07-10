@@ -430,7 +430,7 @@ export default function ImmeublesMtlPage() {
               <span className="font-medium">
                 Type d&apos;utilisation
                 {selectedCodes.size > 0 ? (
-                  <span className="ml-2 rounded-full bg-brand-900 px-2 py-0.5 text-[10px] text-white">
+                  <span className="badge badge-neutral ml-2">
                     {selectedCodes.size} cochés
                   </span>
                 ) : (
@@ -1297,12 +1297,12 @@ function OwnerCandidatesModal({
                       <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-white/50">
                         {o.statut ? <span>{o.statut}</span> : null}
                         {o.req_neq ? (
-                          <span className="rounded-full bg-blue-500/15 px-1.5 py-0.5 text-blue-300">
+                          <span className="badge badge-blue">
                             REQ : {o.req_neq}
                           </span>
                         ) : null}
                         {o.conditions ? (
-                          <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-amber-300">
+                          <span className="badge badge-amber">
                             {o.conditions}
                           </span>
                         ) : null}
@@ -1410,7 +1410,7 @@ function OwnerCandidatesModal({
                         </p>
                       ) : null}
                       {c.statut ? (
-                        <span className="mt-1 inline-block rounded-full bg-brand-800 px-1.5 py-0.5 text-[10px] text-white/60">
+                        <span className="badge badge-neutral mt-1">
                           {c.statut}
                         </span>
                       ) : null}

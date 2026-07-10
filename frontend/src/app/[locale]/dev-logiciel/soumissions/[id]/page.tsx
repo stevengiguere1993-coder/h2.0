@@ -238,11 +238,11 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const STATUS_CLS: Record<string, string> = {
-  brouillon: "bg-white/5 text-white/60",
-  envoyee: "bg-blue-500/15 text-blue-300",
-  acceptee: "bg-emerald-500/15 text-emerald-300",
-  refusee: "bg-rose-500/15 text-rose-300",
-  expiree: "bg-amber-500/15 text-amber-300"
+  brouillon: "badge-neutral",
+  envoyee: "badge-blue",
+  acceptee: "badge-emerald",
+  refusee: "badge-rose",
+  expiree: "badge-amber"
 };
 
 function fmtAmount(n: number | null): string {
@@ -1353,14 +1353,14 @@ export default function SoumissionDetailPage() {
               <h1 className="text-2xl font-bold text-white">{s.title}</h1>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                 <span
-                  className={`rounded px-2 py-0.5 font-semibold uppercase tracking-wide ${
-                    STATUS_CLS[s.status] ?? "bg-white/5 text-white/50"
+                  className={`badge ${
+                    STATUS_CLS[s.status] ?? "badge-neutral"
                   }`}
                 >
                   {STATUS_LABEL[s.status] ?? s.status}
                 </span>
                 {!isDevisDev ? (
-                  <span className="rounded bg-amber-500/15 px-2 py-0.5 font-semibold uppercase tracking-wide text-amber-300">
+                  <span className="badge badge-amber">
                     Ancien format
                   </span>
                 ) : null}
@@ -1369,14 +1369,14 @@ export default function SoumissionDetailPage() {
                   {new Date(s.created_at).toLocaleDateString("fr-CA")}
                 </span>
                 {s.sent_at ? (
-                  <span className="rounded bg-blue-500/15 px-2 py-0.5 font-semibold text-blue-300">
+                  <span className="badge badge-blue">
                     Envoyée le{" "}
                     {new Date(s.sent_at).toLocaleDateString("fr-CA")}
                   </span>
                 ) : null}
                 {s.opened_at ? (
                   <span
-                    className="inline-flex items-center gap-1 rounded bg-violet-500/15 px-2 py-0.5 font-semibold text-violet-300"
+                    className="badge badge-violet"
                     title={`Dernière ouverture : ${new Date(
                       s.last_opened_at ?? s.opened_at
                     ).toLocaleString("fr-CA")} · ${
@@ -1388,13 +1388,13 @@ export default function SoumissionDetailPage() {
                     {new Date(s.opened_at).toLocaleDateString("fr-CA")}
                   </span>
                 ) : s.sent_at ? (
-                  <span className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-0.5 font-semibold text-white/40">
+                  <span className="badge badge-neutral">
                     <EyeOff className="h-3 w-3" />
                     Pas encore ouverte
                   </span>
                 ) : null}
                 {s.signed_at && s.status === "acceptee" ? (
-                  <span className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-2 py-0.5 font-semibold text-emerald-300">
+                  <span className="badge badge-emerald">
                     <CheckCircle2 className="h-3 w-3" />
                     Signée le{" "}
                     {new Date(s.signed_at).toLocaleDateString("fr-CA")}
@@ -1402,7 +1402,7 @@ export default function SoumissionDetailPage() {
                   </span>
                 ) : null}
                 {s.signed_at && s.status === "refusee" ? (
-                  <span className="inline-flex items-center gap-1 rounded bg-rose-500/15 px-2 py-0.5 font-semibold text-rose-300">
+                  <span className="badge badge-rose">
                     <XCircle className="h-3 w-3" />
                     Refusée le{" "}
                     {new Date(s.signed_at).toLocaleDateString("fr-CA")}
@@ -3417,7 +3417,7 @@ function SectionGroup({
         </button>
       </header>
       {sections.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-brand-800 px-4 py-6 text-center text-xs text-white/40">
+        <p className="empty-state">
           Aucune section. Clique sur « {addLabel} » pour démarrer.
         </p>
       ) : (
@@ -3497,7 +3497,7 @@ function SectionCard({
             %
           </label>
         ) : null}
-        <span className="rounded bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/60">
+        <span className="badge badge-neutral">
           {sec.billing_kind === "recurring" ? "mensuel" : "initial"}
         </span>
         <button

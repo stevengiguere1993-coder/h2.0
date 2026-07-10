@@ -452,7 +452,7 @@ export default function DevlogContractsPage() {
                       <h2 className="text-sm font-semibold text-white">
                         {col.label}
                       </h2>
-                      <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                      <span className="badge badge-neutral">
                         {cards.length}
                       </span>
                     </div>
@@ -744,7 +744,7 @@ function ContractCard({
 
         {/* Bandeau projet démarré */}
         {projectStarted && project?.started_at ? (
-          <p className="mt-1 rounded-md bg-emerald-500/15 px-2 py-1 text-[11px] font-semibold text-emerald-300">
+          <p className="badge badge-emerald mt-1">
             Projet démarré le{" "}
             {new Date(project.started_at).toLocaleDateString("fr-CA")}
           </p>

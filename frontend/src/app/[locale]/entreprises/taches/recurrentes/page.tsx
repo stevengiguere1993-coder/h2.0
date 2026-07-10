@@ -300,7 +300,7 @@ export default function TachesRecurrentesPage() {
         {filtered === null ? (
           <p className="py-12 text-center text-sm text-white/40">Chargement…</p>
         ) : filtered.length === 0 ? (
-          <div className="rounded-xl border border-brand-800 bg-brand-900/40 px-6 py-12 text-center">
+          <div className="empty-state">
             <Repeat className="mx-auto mb-3 h-8 w-8 text-white/30" />
             <p className="text-sm text-white/60">
               Aucun modèle pour ces filtres.
@@ -499,18 +499,16 @@ function TemplateRow({
             <h3 className="truncate text-sm font-bold text-white">
               {t.title}
             </h3>
-            <span className="rounded-full border border-white/10 bg-brand-950 px-1.5 py-0.5 text-[10px] text-white/70">
+            <span className="badge badge-neutral">
               {t.entreprise_name}
             </span>
             {statusOpt ? (
-              <span
-                className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${statusOpt.pill}`}
-              >
+              <span className={`badge ${statusOpt.pill}`}>
                 {statusOpt.label}
               </span>
             ) : null}
             {!t.is_active ? (
-              <span className="rounded-full border border-white/15 px-1.5 py-0.5 text-[10px] uppercase text-white/50">
+              <span className="badge badge-neutral uppercase">
                 Désactivé
               </span>
             ) : null}
