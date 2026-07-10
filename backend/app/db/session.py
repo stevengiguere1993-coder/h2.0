@@ -393,12 +393,19 @@ async def ensure_immobilier_aux_tables() -> None:
     log = logging.getLogger("db.ensure_immobilier_aux_tables")
     try:
         from app.db.base import Base
-        from app.models.immobilier import RelanceLoyer  # noqa: F401
+        from app.models.immobilier import (  # noqa: F401
+            LocataireCommunication,
+            RelanceLoyer,
+        )
 
         async with engine.begin() as conn:
             await conn.run_sync(
                 lambda c: Base.metadata.create_all(
-                    c, tables=[RelanceLoyer.__table__]
+                    c,
+                    tables=[
+                        RelanceLoyer.__table__,
+                        LocataireCommunication.__table__,
+                    ],
                 )
             )
     except Exception as exc:  # noqa: BLE001

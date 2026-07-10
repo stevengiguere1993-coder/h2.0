@@ -71,14 +71,6 @@ class EnvoyerRenouvellementResult(BaseModel):
     nouvelle_date_fin: Optional[date] = None
 
 
-class RenouvellementScanResult(BaseModel):
-    bails_scanned: int = 0
-    avis_crees: int = 0
-    courriels_envoyes: int = 0
-    skipped: int = 0
-    errors: List[str] = Field(default_factory=list)
-
-
 class RenouvellementOverview(BaseModel):
     """Item d'aperçu pour la page Renouvellements (liste).
 

@@ -448,12 +448,50 @@ class DossierPaiement(BaseModel):
     en_retard: bool = False
 
 
+class LocataireCommunicationCreate(BaseModel):
+    """Entrée manuelle du journal de communications (fiche locataire)."""
+
+    kind: str = "note"  # note | appel | courriel | sms | visite | autre
+    contenu: str
+
+
+class LocataireCommunicationRead(BaseModel):
+    id: int
+    locataire_id: int
+    kind: str
+    contenu: str
+    auteur: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DossierRenouvellement(BaseModel):
+    """Avis/renouvellement de bail tel qu'affiché dans la fiche locataire."""
+
+    id: int
+    bail_id: int
+    immeuble_name: str
+    logement_numero: Optional[str] = None
+    avis_envoye_le: date
+    nouveau_loyer: Optional[float] = None
+    nouvelle_date_debut: Optional[date] = None
+    nouvelle_date_fin: Optional[date] = None
+    status: str
+    locataire_repondu_le: Optional[date] = None
+    notes: Optional[str] = None
+
+
 class LocataireDossier(BaseModel):
     """Vue 360 d'un locataire : baux, historique de paiements, agrégats."""
 
     locataire: LocataireRead
     baux: List[DossierBail] = Field(default_factory=list)
     paiements: List[DossierPaiement] = Field(default_factory=list)
+    renouvellements: List[DossierRenouvellement] = Field(default_factory=list)
+    communications: List[LocataireCommunicationRead] = Field(
+        default_factory=list
+    )
     nb_baux_actifs: int = 0
     loyer_actuel: float = 0.0
     depot_total: float = 0.0

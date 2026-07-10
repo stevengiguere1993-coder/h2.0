@@ -7,7 +7,6 @@ import {
   ClipboardList,
   Loader2,
   Mail,
-  Play,
   Search
 } from "lucide-react";
 
@@ -60,7 +59,6 @@ export default function RenouvellementsPage() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "todo" | "envoye">("todo");
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
-  const [scanRunning, setScanRunning] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sendingFor, setSendingFor] = useState<number | null>(null);
@@ -82,35 +80,8 @@ export default function RenouvellementsPage() {
     void reload();
   }, []);
 
-  async function runScan() {
-    setScanRunning(true);
-    setMsg(null);
-    try {
-      const res = await authedFetch(
-        "/api/v1/immobilier/renouvellements/scan-batch",
-        { method: "POST" }
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const d = (await res.json()) as {
-        bails_scanned: number;
-        avis_crees: number;
-        courriels_envoyes: number;
-        skipped: number;
-      };
-      setMsg(
-        `${d.bails_scanned} baux scannés · ${d.avis_crees} avis créé${
-          d.avis_crees > 1 ? "s" : ""
-        } · ${d.courriels_envoyes} courriel${d.courriels_envoyes > 1 ? "s" : ""} envoyé${
-          d.courriels_envoyes > 1 ? "s" : ""
-        } · ${d.skipped} déjà traité${d.skipped > 1 ? "s" : ""}.`
-      );
-      void reload();
-    } catch (e) {
-      setMsg((e as Error).message);
-    } finally {
-      setScanRunning(false);
-    }
-  }
+  // « Scanner & envoyer » (batch) retiré — demande Phil 2026-07-10 :
+  // aucun envoi de masse, chaque avis part via son bouton, vérifié.
 
   async function sendNow(bailId: number) {
     setSendingFor(bailId);
@@ -175,26 +146,6 @@ export default function RenouvellementsPage() {
           { label: "Gestion immobilière", href: "/immobilier" },
           { label: "Renouvellements" }
         ]}
-        rightSlot={
-          <button
-            type="button"
-            onClick={runScan}
-            disabled={scanRunning}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-60"
-          >
-            {scanRunning ? (
-              <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Scan…
-              </>
-            ) : (
-              <>
-                <Play className="h-3.5 w-3.5" />
-                Scanner & envoyer
-              </>
-            )}
-          </button>
-        }
       />
 
       <div className="p-4 pb-28 lg:p-6 lg:pb-28">
@@ -205,9 +156,9 @@ export default function RenouvellementsPage() {
           <div>
             <h1 className="text-2xl font-bold text-white">Renouvellements de bail</h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
-              Baux qui se terminent dans les 12 prochains mois. Envoie les avis
-              de modification (PDF + courriel via Microsoft Graph) en lot ou
-              au cas par cas.
+              Baux qui se terminent dans les 12 prochains mois. Rien ne part
+              tout seul : chaque avis de modification (PDF + courriel)
+              s&apos;envoie à la main, bail par bail, après vérification.
             </p>
           </div>
         </header>

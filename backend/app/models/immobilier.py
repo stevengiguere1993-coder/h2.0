@@ -296,6 +296,31 @@ class Locataire(Base, TimestampUpdateMixin):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
+class LocataireCommunication(Base, TimestampUpdateMixin):
+    """Entrée MANUELLE d'historique de communication avec un locataire.
+
+    Demande de Phil (2026-07-10) : pas de lien avec le système de
+    téléphonie — l'employé consigne lui-même ses appels/courriels/notes
+    depuis la fiche du locataire. Simple journal horodaté.
+    """
+
+    __tablename__ = "imm_locataire_communications"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    locataire_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_locataires.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    # 'note' | 'appel' | 'courriel' | 'sms' | 'visite' | 'autre'
+    kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="note", server_default="note"
+    )
+    contenu: Mapped[str] = mapped_column(Text, nullable=False)
+    # Nom de l'employé qui consigne (snapshot, pas de FK — l'historique
+    # survit à la suppression d'un compte).
+    auteur: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+
 # ─── BAIL ───────────────────────────────────────────────────────────────
 
 

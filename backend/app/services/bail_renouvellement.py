@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
-from sqlalchemy import and_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.email_graph import EmailAttachment, GraphMailer
@@ -35,7 +35,6 @@ from app.models.immobilier import (
     Bail,
     BailRenouvellement,
     BailRenouvellementStatus,
-    BailStatus,
     ImmeubleOwnership,
     Immeuble,
     Locataire,
@@ -232,55 +231,8 @@ def _render_email_body(ctx: TalContext) -> str:
     """.strip()
 
 
-async def scan_and_send_due_renouvellements(
-    db: AsyncSession,
-    today: date | None = None,
-    fenetre_min_jours: int = 120,  # ~4 mois
-    fenetre_max_jours: int = 180,  # ~6 mois
-) -> RenouvellementResult:
-    """Scan quotidien : envoie les avis pour les baux dont la fin tombe
-    dans la fenêtre cible (4-6 mois par défaut)."""
-    today = today or date.today()
-    cutoff_min = today + timedelta(days=fenetre_min_jours)
-    cutoff_max = today + timedelta(days=fenetre_max_jours)
-
-    # Immeubles en GESTION EXTERNE : ne JAMAIS envoyer d'avis automatique
-    # à leurs locataires — le gestionnaire tiers s'en charge. isnot(True)
-    # couvre aussi les NULL (lignes d'avant le backfill du default).
-    bails = (
-        await db.execute(
-            select(Bail)
-            .join(Logement, Logement.id == Bail.logement_id)
-            .join(Immeuble, Immeuble.id == Logement.immeuble_id)
-            .where(
-                and_(
-                    Bail.status == BailStatus.ACTIF.value,
-                    Bail.date_fin >= cutoff_min,
-                    Bail.date_fin <= cutoff_max,
-                    Immeuble.gestion_externe.isnot(True),
-                )
-            )
-        )
-    ).scalars().all()
-
-    res = RenouvellementResult(bails_scanned=len(bails))
-
-    for bail in bails:
-        try:
-            existing = await _existing_renouvellement_active(db, bail)
-            if existing is not None:
-                res.skipped += 1
-                continue
-            obj, sent = await send_renouvellement_for_bail(db, bail)
-            res.avis_crees += 1
-            if sent:
-                res.courriels_envoyes += 1
-        except Exception as exc:  # noqa: BLE001
-            log.exception("Renouvellement bail %s failed", bail.id)
-            assert res.errors is not None
-            res.errors.append(f"bail {bail.id}: {exc!s}"[:240])
-
-    if res.avis_crees:
-        await db.commit()
-
-    return res
+# « scan_and_send_due_renouvellements » (envoi AUTOMATIQUE des avis par
+# cron/batch) supprimé — demande Phil 2026-07-10 : plus rien ne part vers
+# un locataire sans un clic explicite. Seul chemin d'envoi restant :
+# send_renouvellement_for_bail(), déclenché par le bouton de
+# /immobilier/renouvellements (POST /baux/{id}/envoyer-renouvellement).
