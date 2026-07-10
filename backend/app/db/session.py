@@ -2271,6 +2271,38 @@ async def init_db() -> None:
             VALUES ('achat_unrefacture_orphans_v1')
             ON CONFLICT (key) DO NOTHING
             """,
+            # One-shot : resynchronise les TOTAUX STOCKÉS des factures avec
+            # la somme réelle de leurs items. L'import « Importer du
+            # projet » sur une facture existante ne recalculait pas
+            # Facture.total → le kanban (total en base) divergeait de
+            # l'éditeur (calcul depuis les lignes), ex. 2 618,85 $ vs
+            # 6 730,43 $. Même arithmétique que _recompute_facture_totals
+            # (TPS 5 % et TVQ 9,975 % arrondies séparément).
+            """
+            UPDATE factures f
+            SET subtotal = s.sub,
+                tps = ROUND(s.sub * 0.05, 2),
+                tvq = ROUND(s.sub * 0.09975, 2),
+                total = s.sub + ROUND(s.sub * 0.05, 2)
+                        + ROUND(s.sub * 0.09975, 2)
+            FROM (
+                SELECT facture_id,
+                       ROUND(SUM(COALESCE(total, 0))::numeric, 2) AS sub
+                FROM facture_items
+                GROUP BY facture_id
+            ) s
+            WHERE s.facture_id = f.id
+              AND COALESCE(f.subtotal, -1) <> s.sub
+              AND NOT EXISTS (
+                  SELECT 1 FROM applied_backfills
+                  WHERE key = 'facture_totals_resync_v1'
+              )
+            """,
+            """
+            INSERT INTO applied_backfills (key)
+            VALUES ('facture_totals_resync_v1')
+            ON CONFLICT (key) DO NOTHING
+            """,
         ):
             try:
                 await conn.execute(text(sql))

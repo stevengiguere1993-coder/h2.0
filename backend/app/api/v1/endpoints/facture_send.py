@@ -30,12 +30,23 @@ async def _autopush_to_qbo(facture_id: int) -> None:
 
     try:
         async with AsyncSessionLocal() as db:
-            await sync_facture_to_qbo(db, facture_id)
+            res = await sync_facture_to_qbo(db, facture_id)
             await db.commit()
-        log.info("Auto-push QBO facture %s ok", facture_id)
+        if isinstance(res, dict) and res.get("sync_warning"):
+            log.error(
+                "Auto-push QBO facture %s : avertissement : %s",
+                facture_id,
+                res["sync_warning"],
+            )
+        else:
+            log.info("Auto-push QBO facture %s ok", facture_id)
     except Exception as exc:
-        log.warning(
-            "Auto-push QBO facture %s a échoué (silencieux): %s",
+        # ERROR (pas warning) : une facture ENVOYÉE AU CLIENT qui n'atteint
+        # pas QuickBooks est exactement l'échec silencieux à rendre visible
+        # (motif QBO inclus). Le filet horaire (qbo_nets, non gated) la
+        # re-poussera ; le bouton « Relancer QuickBooks » affiche le motif.
+        log.error(
+            "Auto-push QBO facture %s ÉCHOUÉ : %s",
             facture_id,
             exc,
         )

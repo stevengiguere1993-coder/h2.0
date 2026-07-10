@@ -2292,8 +2292,10 @@ function FinancesTab({
         </dl>
         <p className="mt-2 text-[10px] text-white/40">
           Calcul 100 % hors taxes. Les taxes payées sur les matériaux sont
-          récupérées (CTI/RTI) → exclues du coût. Indépendant du montant
-          facturé.
+          récupérées (CTI/RTI) → exclues du coût.{" "}
+          {data.billing_kind === "forfaitaire"
+            ? "Indépendant du montant facturé (prix fixe garanti)."
+            : "Revenu = montant réellement facturé (contrat / sans soumission : facturation au réel)."}
         </p>
       </div>
 

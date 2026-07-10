@@ -225,16 +225,12 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet feuilles de temps échoué", exc_info=True)
 
-    # Les filets de CRÉATION en masse (factures/dépenses sans miroir QB)
-    # restent conditionnés à l'interrupteur de migration : tant qu'il est
-    # OFF, on ne (re)crée RIEN automatiquement pour ne pas produire de
-    # doublons pendant que tous les ID QBO ne sont pas reliés.
-    if not await is_qbo_auto_sync_enabled():
-        out["skipped_migration_nets"] = "qbo_auto_sync_off"
-        log.info("Filets QBO exécutés : %s", out)
-        return out
-
     # ── Factures clients émises sans miroir QB → re-push ──
+    # NON gated : envoyer une facture au client est une action DÉLIBÉRÉE —
+    # elle DOIT finir dans QuickBooks. Si l'auto-push à l'envoi a échoué
+    # (fond, silencieux), c'est ce filet qui rattrape dans l'heure.
+    # Idempotent : qbo_invoice_id + rattachement par DocNumber (jamais de
+    # doublon : une facture au même numéro est reliée, pas recréée).
     try:
         from sqlalchemy import select
 
@@ -276,6 +272,15 @@ async def run_qbo_nets() -> Dict[str, Any]:
         }
     except Exception:  # noqa: BLE001
         log.warning("Filet factures échoué", exc_info=True)
+
+    # Les filets de CRÉATION en masse restants (dépenses sans miroir QB)
+    # restent conditionnés à l'interrupteur de migration : tant qu'il est
+    # OFF, on ne (re)crée RIEN automatiquement pour ne pas produire de
+    # doublons pendant que tous les ID QBO ne sont pas reliés.
+    if not await is_qbo_auto_sync_enabled():
+        out["skipped_migration_nets"] = "qbo_auto_sync_off"
+        log.info("Filets QBO exécutés : %s", out)
+        return out
 
     # ── Dépenses actives sans lien QB → re-push ──
     try:
