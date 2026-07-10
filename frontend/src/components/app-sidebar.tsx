@@ -13,11 +13,8 @@ import {
   HardHat,
   Home,
   Contact,
-  LogOut,
   Palmtree,
-  Settings,
   ShoppingCart,
-  Sun,
   Truck,
   UserCircle,
   Users,
@@ -29,8 +26,7 @@ import { authedFetch, type UserRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useNavAccess } from "@/hooks/use-nav-access";
 import { HorizonLogo } from "@/components/horizon-logo";
-import { InstallAppButton } from "@/components/install-app-button";
-import { AccountBadge } from "@/components/account-badge";
+import { SidebarFooter } from "@/components/sidebar-footer";
 
 type NavItem = {
   href: string;
@@ -64,8 +60,7 @@ const RESOURCES_NAV: NavItem[] = [
   { href: "/app/employes", label: "Employés", icon: UserCircle, minRole: "admin" },
   { href: "/app/sous-traitants", label: "Sous-traitants", icon: HardHat, minRole: "admin" },
   { href: "/app/fournisseurs", label: "Fournisseurs", icon: Truck, minRole: "admin" },
-  { href: "/app/services-catalogue", label: "Catalogue services", icon: ClipboardCheck, minRole: "manager" },
-  { href: "/parametres", label: "Paramètres", icon: Settings, minRole: "employee" }
+  { href: "/app/services-catalogue", label: "Catalogue services", icon: ClipboardCheck, minRole: "manager" }
 ];
 
 
@@ -83,14 +78,14 @@ function canSee(role: UserRole | undefined, min: UserRole = "manager") {
 
 export function AppSidebar({
   open,
-  onClose,
-  userEmail,
-  onSignOut
+  onClose
 }: {
   open: boolean;
   onClose: () => void;
+  // Conservés dans la signature pour ne pas casser les appels existants —
+  // le footer unifié (SidebarFooter) gère user + signOut lui-même.
   userEmail?: string;
-  onSignOut: () => void;
+  onSignOut?: () => void;
 }) {
   const pathname = usePathname();
   const [pendingLeaves, setPendingLeaves] = useState(0);
@@ -283,40 +278,9 @@ export function AppSidebar({
             </ul>
           </div>
 
-          <div className="mt-6 border-t border-brand-800 pt-3">
-            <Link
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={"/connexion" as any}
-              onClick={onClose}
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-white/70 hover:bg-brand-900 hover:text-white"
-            >
-              <Home className="h-4 w-4" />
-              Accueil du portail
-            </Link>
-          </div>
         </nav>
 
-        <div className="border-t border-brand-800 px-3 py-4">
-          <AccountBadge />
-          <InstallAppButton variant="sidebar" />
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/profil" as any}
-            onClick={onClose}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/70 transition hover:bg-brand-900 hover:text-white"
-          >
-            <UserCircle className="h-4 w-4" />
-            <span>Mon profil</span>
-          </Link>
-          <button
-            type="button"
-            onClick={onSignOut}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/70 transition hover:bg-brand-900 hover:text-white"
-          >
-            <LogOut className="h-4 w-4" />
-            <span>Se déconnecter</span>
-          </button>
-        </div>
+        <SidebarFooter onNavigate={onClose} />
       </aside>
     </>
   );
