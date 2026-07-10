@@ -144,7 +144,7 @@ export default function EmailTemplatesPage() {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : templates.length === 0 ? (
-          <div className="mt-6 rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-8 text-center">
+          <div className="mt-6 empty-state">
             <FileText className="mx-auto h-8 w-8 text-white/20" />
             <p className="mt-3 text-sm text-white/60">
               Aucun template pour l&apos;instant.
@@ -176,7 +176,7 @@ export default function EmailTemplatesPage() {
                     <h3 className="truncate font-medium text-white">
                       {t.name}
                     </h3>
-                    <span className="rounded-full bg-brand-800 px-2 py-0.5 text-[10px] uppercase text-white/60">
+                    <span className="badge badge-neutral uppercase">
                       {t.category}
                     </span>
                   </div>

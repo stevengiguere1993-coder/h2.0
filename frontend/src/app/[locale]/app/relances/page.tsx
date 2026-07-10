@@ -243,7 +243,7 @@ export default function RelancesPage() {
                         <span className="text-xs font-semibold text-white">
                           {meta.label}
                         </span>
-                        <span className="rounded bg-brand-900 px-1.5 py-0.5 text-[10px] font-semibold text-white/70">
+                        <span className="badge badge-neutral">
                           J+{cumulativeDays[i]}
                         </span>
                       </div>

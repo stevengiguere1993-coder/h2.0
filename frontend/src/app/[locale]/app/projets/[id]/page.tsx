@@ -64,10 +64,10 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_CLASS: Record<string, string> = {
-  planned: "bg-white/10 text-white",
-  in_progress: "bg-blue-500/20 text-blue-300",
-  suspended: "bg-amber-500/20 text-amber-300",
-  delivered: "bg-emerald-500/20 text-emerald-300"
+  planned: "badge-neutral",
+  in_progress: "badge-blue",
+  suspended: "badge-amber",
+  delivered: "badge-emerald"
 };
 
 type TabId =
@@ -481,8 +481,8 @@ export default function ProjectDetailPage() {
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <span
-                  className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
-                    STATUS_CLASS[p.status] || "bg-white/10 text-white"
+                  className={`badge ${
+                    STATUS_CLASS[p.status] || "badge-neutral"
                   }`}
                 >
                   {STATUS_LABELS[p.status] || p.status}
@@ -930,7 +930,7 @@ function Kpi({
   value: string;
 }) {
   return (
-    <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+    <div className="kpi-card">
       <div className="flex items-center gap-2">
         <Icon className="h-4 w-4 text-accent-500" />
         <p className="text-xs font-medium uppercase tracking-wider text-white/50">
@@ -1403,7 +1403,7 @@ function PhotosTab({ projectId }: { projectId: number }) {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : photos.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+          <p className="empty-state">
             Aucune photo pour ce projet.
           </p>
         ) : (
@@ -1749,12 +1749,12 @@ function RecapDelayCard({
   endDate: Date | null;
   isDelivered: boolean;
 }) {
-  let pillCls = "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
+  let pillCls = "badge-emerald";
   let label = "Dans les temps";
   let detail = "";
   if (overrunDays != null) {
     if (overrunDays > 0) {
-      pillCls = "bg-rose-500/15 text-rose-300 border-rose-500/30";
+      pillCls = "badge-rose";
       label = `${overrunDays} jour${overrunDays > 1 ? "s" : ""} de retard`;
       detail = isDelivered
         ? "Livré au-delà de la date prévue."
@@ -1776,9 +1776,7 @@ function RecapDelayCard({
       <h3 className="text-[10px] uppercase tracking-wider text-white/50">
         Délai
       </h3>
-      <span
-        className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${pillCls}`}
-      >
+      <span className={`mt-2 badge ${pillCls}`}>
         {label}
       </span>
       <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
@@ -1859,12 +1857,12 @@ function RecapContractProgressCard({
           Montant utilisé sur la soumission
         </h3>
         <span
-          className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+          className={`badge ${
             overRun
-              ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
+              ? "badge-rose"
               : pctSpent > 80
-                ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
-                : "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                ? "badge-amber"
+                : "badge-emerald"
           }`}
         >
           {pctSpent.toFixed(0)} % consommé
@@ -2778,7 +2776,7 @@ function FinanceKpi({
     white: "text-white"
   };
   return (
-    <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+    <div className="kpi-card">
       <p className="text-xs font-medium uppercase tracking-wider text-white/50">
         {label}
       </p>
@@ -3329,7 +3327,7 @@ function PlanificationTab({
       </div>
 
       {phases.length === 0 ? (
-        <p className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+        <p className="empty-state">
           Aucune phase. Clique « Nouvelle phase » pour en créer une.
           (Démolition, Plomberie et Électricité sont créées
           automatiquement à la première ouverture du projet.)
@@ -4843,7 +4841,7 @@ function EventRow({
         <p className="mt-0.5 text-xs text-white/60">
           {dayFmt} · {timeFmt}
           {outOfRange ? (
-            <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200">
+            <span className="badge badge-amber ml-2">
               Hors délai
             </span>
           ) : null}
@@ -4851,7 +4849,7 @@ function EventRow({
         {event.location ? (
           <p className="mt-0.5 text-xs text-white/50">📍 {event.location}</p>
         ) : null}
-        <span className="mt-1 inline-flex rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase text-white/50">
+        <span className="badge badge-neutral mt-1 uppercase">
           {event.event_type} · {projectName}
         </span>
       </div>
@@ -4907,7 +4905,7 @@ function ChantierGantt({
 
   if (sorted.length === 0) {
     return (
-      <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-4 py-8 text-center text-xs text-white/50">
+      <p className="empty-state">
         Aucun événement pour ce projet — passe en vue Liste pour en ajouter
         un.
       </p>
@@ -5360,7 +5358,7 @@ function ProjectTeamSection({
                 title={m.full_name ? m.email : undefined}
               >
                 <span className="font-semibold">{displayName}</span>
-                <span className="rounded bg-white/10 px-1.5 py-0.5 text-[9px] uppercase text-white/60">
+                <span className="badge badge-neutral uppercase">
                   {m.role}
                 </span>
                 <button
@@ -5400,7 +5398,7 @@ function ProjectTeamSection({
                       <span className="ml-2 text-white/40">{u.email}</span>
                     ) : null}
                   </span>
-                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] uppercase text-white/50">
+                  <span className="badge badge-neutral uppercase">
                     {u.role}
                   </span>
                 </button>
@@ -5458,10 +5456,10 @@ const PO_STATUS_LABEL: Record<string, string> = {
 };
 
 const PO_STATUS_BG: Record<string, string> = {
-  draft: "bg-white/10 text-white/70 border-white/20",
-  sent: "bg-blue-500/15 text-blue-300 border-blue-500/30",
-  fulfilled: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  cancelled: "bg-rose-500/15 text-rose-300 border-rose-500/30"
+  draft: "badge-neutral",
+  sent: "badge-blue",
+  fulfilled: "badge-emerald",
+  cancelled: "badge-rose"
 };
 
 const ACHAT_STATUS_LABEL: Record<string, string> = {
@@ -5471,9 +5469,9 @@ const ACHAT_STATUS_LABEL: Record<string, string> = {
 };
 
 const ACHAT_STATUS_BG: Record<string, string> = {
-  received: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-  paid: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  cancelled: "bg-rose-500/15 text-rose-300 border-rose-500/30"
+  received: "badge-amber",
+  paid: "badge-emerald",
+  cancelled: "badge-rose"
 };
 
 const ACHAT_PAYMENT_LABEL: Record<string, string> = {
@@ -5619,7 +5617,7 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
               </Link>
             </header>
             {pos.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/50">
+              <div className="empty-state">
                 Aucun PO pour ce projet.
               </div>
             ) : (
@@ -5674,9 +5672,8 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                           </td>
                           <td className="px-3 py-2 text-center">
                             <span
-                              className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                                PO_STATUS_BG[p.status] ||
-                                "border-white/20 bg-white/10 text-white/70"
+                              className={`badge ${
+                                PO_STATUS_BG[p.status] || "badge-neutral"
                               }`}
                             >
                               {PO_STATUS_LABEL[p.status] || p.status}
@@ -5707,7 +5704,7 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
               </Link>
             </header>
             {achats.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/50">
+              <div className="empty-state">
                 Aucun achat enregistré pour ce projet.
               </div>
             ) : (
@@ -5793,18 +5790,16 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                                   })
                                 }
                                 title="Cliquer pour marquer payé"
-                                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold transition hover:ring-2 hover:ring-emerald-400/60 ${
-                                  ACHAT_STATUS_BG[a.status] ||
-                                  "border-white/20 bg-white/10 text-white/70"
+                                className={`badge transition hover:ring-2 hover:ring-emerald-400/60 ${
+                                  ACHAT_STATUS_BG[a.status] || "badge-neutral"
                                 }`}
                               >
                                 {ACHAT_STATUS_LABEL[a.status] || a.status}
                               </button>
                             ) : (
                               <span
-                                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                                  ACHAT_STATUS_BG[a.status] ||
-                                  "border-white/20 bg-white/10 text-white/70"
+                                className={`badge ${
+                                  ACHAT_STATUS_BG[a.status] || "badge-neutral"
                                 }`}
                               >
                                 {ACHAT_STATUS_LABEL[a.status] || a.status}
@@ -5867,11 +5862,11 @@ const INVOICE_STATUS_LABEL: Record<string, string> = {
 };
 
 const INVOICE_STATUS_TONE: Record<string, string> = {
-  draft: "bg-white/10 text-white/70 border-white/20",
-  sent: "bg-blue-500/15 text-blue-300 border-blue-500/30",
-  paid: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  overdue: "bg-rose-500/15 text-rose-300 border-rose-500/30",
-  void: "bg-white/5 text-white/40 border-white/10"
+  draft: "badge-neutral",
+  sent: "badge-blue",
+  paid: "badge-emerald",
+  overdue: "badge-rose",
+  void: "badge-neutral"
 };
 
 function InvoiceRow({ inv }: { inv: InvoiceLine }) {
@@ -5894,7 +5889,7 @@ function InvoiceRow({ inv }: { inv: InvoiceLine }) {
       >
         <span className="flex min-w-0 items-center gap-2">
           <span
-            className={`inline-flex flex-shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${tone}`}
+            className={`badge ${tone} flex-shrink-0 uppercase tracking-wider`}
           >
             {label}
           </span>
@@ -6070,15 +6065,15 @@ function ProjectCorrections({
             </span>
             Corrections / améliorations
             {hasSignedBon ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+              <span className="badge badge-emerald">
                 <CheckCircle2 className="h-3 w-3" /> Signé
               </span>
             ) : awaitingSignature ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+              <span className="badge badge-rose">
                 <Circle className="h-3 w-3" /> À signer
               </span>
             ) : correctionBonDraft ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-gray-400/20 px-2 py-0.5 text-[10px] font-semibold text-gray-500">
+              <span className="badge badge-neutral">
                 <Circle className="h-3 w-3" /> Bon à envoyer
               </span>
             ) : null}
@@ -6165,10 +6160,8 @@ function ProjectCorrections({
                   ) : null}
                 </div>
                 <span
-                  className={`flex-shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
-                    c.status === "complete"
-                      ? "bg-emerald-500/15 text-emerald-300"
-                      : "bg-amber-500/15 text-amber-300"
+                  className={`badge flex-shrink-0 ${
+                    c.status === "complete" ? "badge-emerald" : "badge-amber"
                   }`}
                 >
                   {c.status === "complete" ? "Complété" : "À faire"}
@@ -6586,16 +6579,16 @@ function CorrectionBonPanel({
               {bon.reference}
             </span>
             {signed ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+              <span className="badge badge-emerald">
                 <CheckCircle2 className="h-3 w-3" /> Signé
                 {bon.signed_by_name ? ` — ${bon.signed_by_name}` : ""}
               </span>
             ) : sent ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+              <span className="badge badge-rose">
                 <Circle className="h-3 w-3" /> À signer
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/60">
+              <span className="badge badge-neutral">
                 Brouillon
               </span>
             )}

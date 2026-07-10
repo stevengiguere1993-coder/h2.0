@@ -330,10 +330,10 @@ export default function LocataireDetailPage({
                           </td>
                           <td className="py-2.5 text-right">
                             <span
-                              className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                              className={`badge ${
                                 b.status === "actif"
-                                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-                                  : "border-white/15 bg-white/5 text-white/50"
+                                  ? "badge-emerald"
+                                  : "badge-neutral"
                               }`}
                             >
                               {BAIL_STATUS_LABEL[b.status] ?? b.status}
@@ -398,16 +398,16 @@ export default function LocataireDetailPage({
                           <td className="py-2.5 text-right">
                             {p.paye_le ? (
                               <span
-                                className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                                className={`badge ${
                                   p.en_retard
-                                    ? "border-amber-500/40 bg-amber-500/10 text-amber-200"
-                                    : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                                    ? "badge-amber"
+                                    : "badge-emerald"
                                 }`}
                               >
                                 {p.en_retard ? "Payé en retard" : "Payé"}
                               </span>
                             ) : (
-                              <span className="inline-block rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[11px] font-semibold text-rose-200">
+                              <span className="badge badge-rose">
                                 Impayé
                               </span>
                             )}

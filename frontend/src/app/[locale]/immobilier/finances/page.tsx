@@ -411,7 +411,7 @@ function Tile({
   tone?: "emerald" | "rose";
 }) {
   return (
-    <div className="rounded-xl border border-brand-800 bg-brand-900 px-4 py-3">
+    <div className="kpi-card">
       <p className="text-[11px] uppercase tracking-wider text-white/50">
         {label}
       </p>
@@ -684,7 +684,7 @@ function DepensesPanel({
             >
               <span className="min-w-0">
                 <span className="text-white/80">{d.libelle}</span>
-                <span className="ml-2 rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-white/50">
+                <span className="badge badge-neutral ml-2">
                   {CAT_LABEL[d.categorie] || d.categorie}
                 </span>
                 <span className="ml-1 text-[10px] text-white/40">

@@ -250,7 +250,7 @@ export default function PurchaseOrdersListPage() {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : filtered.length === 0 ? (
-          <div className="mt-8 rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-14 text-center">
+          <div className="empty-state mt-8">
             <ClipboardCheck className="mx-auto h-8 w-8 text-white/30" />
             <p className="mt-3 text-sm text-white/60">
               Aucun bon de commande.

@@ -626,7 +626,7 @@ export default function BonsTravailPage() {
               <Loader2 className="h-4 w-4 animate-spin" /> Chargement…
             </div>
           ) : bons.length === 0 ? (
-            <p className="mt-4 rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-4 py-8 text-center text-sm text-white/50">
+            <p className="empty-state mt-4">
               Aucun bon de travail pour l&apos;instant.
             </p>
           ) : (
@@ -645,7 +645,7 @@ export default function BonsTravailPage() {
                           {col.label}
                         </h3>
                       </div>
-                      <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                      <span className="badge badge-neutral">
                         {cards.length}
                       </span>
                     </div>

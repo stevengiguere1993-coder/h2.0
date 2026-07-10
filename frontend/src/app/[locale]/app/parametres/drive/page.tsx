@@ -717,11 +717,11 @@ function ConventionsSection() {
                   </td>
                   <td className="px-2 py-2">
                     {c.active ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-300">
+                      <span className="badge badge-emerald">
                         <CheckCircle2 className="h-3 w-3" /> Actif
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-white/40">
+                      <span className="badge badge-neutral">
                         Inactif
                       </span>
                     )}
@@ -768,7 +768,7 @@ function ConventionsSection() {
           </table>
         </div>
       ) : (
-        <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
+        <p className="empty-state mt-4">
           Aucune convention. Crée-en une avec le bouton ci-dessus.
         </p>
       )}
@@ -1678,7 +1678,7 @@ function PageModulesSection() {
       icon={LayoutGrid}
       title="Afficher Drive sur les pages"
       badge={
-        <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+        <span className="badge badge-emerald shrink-0 uppercase">
           Actif
         </span>
       }
@@ -1795,7 +1795,7 @@ function PageModulesSection() {
               ) : null}
             </div>
           ) : (
-            <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/60">
+            <p className="empty-state mt-4">
               Aucune page de fiche dans ce pôle pour l'instant. Les pages
               apparaissent ici automatiquement quand elles sont créées dans
               Kratos.
@@ -1803,7 +1803,7 @@ function PageModulesSection() {
           )}
         </>
       ) : (
-        <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
+        <p className="empty-state mt-4">
           Aucune page configurée. Les modules sont créés au démarrage du
           serveur.
         </p>
@@ -1882,7 +1882,7 @@ function ModuleRow({
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium text-white">{moduleLabel(m)}</span>
           {m.display_title ? (
-            <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/50">
+            <span className="badge badge-neutral">
               Titre : {m.display_title}
             </span>
           ) : null}
@@ -1914,10 +1914,8 @@ function ModuleRow({
           <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" />
         ) : null}
         <span
-          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
-            m.active
-              ? "border border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-              : "border border-white/15 bg-white/5 text-white/40"
+          className={`badge uppercase ${
+            m.active ? "badge-emerald" : "badge-neutral"
           }`}
         >
           {m.active ? "Activé" : "Inactif"}
@@ -2057,7 +2055,7 @@ function EntityLinksSection() {
       icon={Link2}
       title="Dossiers Drive liés"
       badge={
-        <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+        <span className="badge badge-emerald shrink-0 uppercase">
           Actif
         </span>
       }
@@ -2160,7 +2158,7 @@ function EntityLinksSection() {
           </table>
         </div>
       ) : (
-        <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
+        <p className="empty-state mt-4">
           Aucun lien encore. Crée-en un en appliquant une convention sur une
           entité (bouton « Tester »).
         </p>
@@ -2185,17 +2183,17 @@ function strategyBadge(strategy: string): {
     case "overwrite":
       return {
         label: "Remplacer",
-        className: "bg-amber-500/15 text-amber-300"
+        className: "badge-amber"
       };
     case "keep_both":
       return {
         label: "Garder",
-        className: "bg-sky-500/15 text-sky-300"
+        className: "badge-sky"
       };
     default:
       return {
         label: "Versionner",
-        className: "bg-violet-500/15 text-violet-300"
+        className: "badge-violet"
       };
   }
 }
@@ -2279,7 +2277,7 @@ function AutoUploadsSection() {
       icon={UploadCloud}
       title="Classement automatique des documents"
       badge={
-        <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+        <span className="badge badge-emerald shrink-0 uppercase">
           Actif
         </span>
       }
@@ -2371,18 +2369,18 @@ function AutoUploadsSection() {
                   </td>
                   <td className="px-2 py-2">
                     <span
-                      className={`inline-flex w-fit items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${strategyBadge(r.overwrite_strategy).className}`}
+                      className={`badge w-fit uppercase tracking-wide ${strategyBadge(r.overwrite_strategy).className}`}
                     >
                       {strategyBadge(r.overwrite_strategy).label}
                     </span>
                   </td>
                   <td className="px-2 py-2">
                     {r.active ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-300">
+                      <span className="badge badge-emerald">
                         <CheckCircle2 className="h-3 w-3" /> Actif
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-white/40">
+                      <span className="badge badge-neutral">
                         Inactif
                       </span>
                     )}
@@ -2430,7 +2428,7 @@ function AutoUploadsSection() {
           </p>
         </div>
       ) : (
-        <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
+        <p className="empty-state mt-4">
           Aucune règle. Crée-en une avec le bouton ci-dessus.
         </p>
       )}
@@ -2703,7 +2701,7 @@ function PlaceholderSection({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h2 className="text-base font-bold text-white/70">{title}</h2>
-            <span className="shrink-0 rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase text-white/50">
+            <span className="badge badge-neutral shrink-0 uppercase">
               Bientôt disponible · {phase}
             </span>
           </div>
@@ -2788,7 +2786,7 @@ function CollapsibleSection({
           <span className="text-base font-bold text-white">{title}</span>
           {badge}
           {count ? (
-            <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] font-medium text-white/60">
+            <span className="badge badge-neutral">
               {count}
             </span>
           ) : null}
@@ -2828,7 +2826,7 @@ function SeedExampleBadge({
   return (
     <span
       title="Règle pré-installée par Kratos (exemple). Tu peux la modifier, l'activer ou la supprimer."
-      className="inline-flex items-center rounded-full border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white/50"
+      className="badge badge-neutral uppercase tracking-wide"
     >
       Exemple
     </span>

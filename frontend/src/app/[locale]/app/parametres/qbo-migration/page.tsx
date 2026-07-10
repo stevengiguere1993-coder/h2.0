@@ -24,16 +24,16 @@ type PullItem = {
 
 // Libellé + couleur (lisibles en clair ET en sombre) par état d'import.
 const PULL_STATUS: Record<string, { label: string; cls: string }> = {
-  a_importer: { label: "À importer", cls: "bg-emerald-500/20 text-emerald-300" },
-  deja_importe: { label: "Déjà importé", cls: "bg-slate-500/25 text-slate-200" },
-  sans_projet: { label: "Sans projet", cls: "bg-amber-500/20 text-amber-300" },
+  a_importer: { label: "À importer", cls: "badge-emerald" },
+  deja_importe: { label: "Déjà importé", cls: "badge-neutral" },
+  sans_projet: { label: "Sans projet", cls: "badge-amber" },
   paiement_synchro: {
     label: "Paiement synchronisé",
-    cls: "bg-blue-500/20 text-blue-300"
+    cls: "badge-blue"
   },
   reliee_par_numero: {
     label: "Reliée (même n°)",
-    cls: "bg-blue-500/20 text-blue-300"
+    cls: "badge-blue"
   }
 };
 
@@ -614,9 +614,8 @@ export default function QboMigrationPage() {
                             : ""}
                         </span>
                         <span
-                          className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${
-                            PULL_STATUS[it.status]?.cls ||
-                            "bg-white/10 text-white/70"
+                          className={`badge shrink-0 ${
+                            PULL_STATUS[it.status]?.cls || "badge-neutral"
                           }`}
                         >
                           {PULL_STATUS[it.status]?.label || it.status}
@@ -732,11 +731,11 @@ export default function QboMigrationPage() {
                               {p.address || p.name || `Projet #${p.id}`}
                             </span>
                             {p.qbo_job_id ? (
-                              <span className="shrink-0 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[11px] text-emerald-300">
+                              <span className="badge badge-emerald shrink-0">
                                 Relié ✓
                               </span>
                             ) : (
-                              <span className="shrink-0 rounded-full bg-amber-500/20 px-2 py-0.5 text-[11px] text-amber-300">
+                              <span className="badge badge-amber shrink-0">
                                 Non relié ⚠
                               </span>
                             )}

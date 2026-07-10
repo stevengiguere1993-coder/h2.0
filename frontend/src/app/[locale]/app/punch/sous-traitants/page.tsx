@@ -380,17 +380,17 @@ export default function SousTraitantTimesheetPage() {
         </div>
 
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
-          <div className="rounded-xl border border-brand-800 bg-brand-900/60 p-4">
+          <div className="kpi-card">
             <p className="text-xs text-white/60">Total des heures</p>
             <p className="mt-1 text-2xl font-bold text-accent-500">
               {fmtHm(recap.totalHrs)}
             </p>
           </div>
-          <div className="rounded-xl border border-brand-800 bg-brand-900/60 p-4">
+          <div className="kpi-card">
             <p className="text-xs text-white/60">Saisies</p>
             <p className="mt-1 text-2xl font-bold text-white">{recap.entries}</p>
           </div>
-          <div className="rounded-xl border border-brand-800 bg-brand-900/60 p-4">
+          <div className="kpi-card">
             <p className="text-xs text-white/60">Sous-traitants actifs</p>
             <p className="mt-1 text-2xl font-bold text-white">
               {recap.perSt.length}
@@ -436,7 +436,7 @@ export default function SousTraitantTimesheetPage() {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : filteredRows.length === 0 ? (
-          <p className="mt-3 rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-6 text-center text-sm text-white/60">
+          <p className="empty-state mt-3">
             Aucune saisie pour l&apos;instant.
           </p>
         ) : (

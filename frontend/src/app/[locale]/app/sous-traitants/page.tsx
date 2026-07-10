@@ -282,12 +282,12 @@ function Card({ st }: { st: SousTraitant }) {
       <div className="flex flex-wrap gap-2 text-[10px]">
         {st.rbq_license ? (
           <span
-            className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-semibold ${
+            className={`badge ${
               rbqExpired
-                ? "bg-rose-500/15 text-rose-300"
+                ? "badge-rose"
                 : rbqExpiringSoon
-                ? "bg-amber-500/15 text-amber-300"
-                : "bg-emerald-500/10 text-emerald-300"
+                ? "badge-amber"
+                : "badge-emerald"
             }`}
           >
             {rbqExpired || rbqExpiringSoon ? (
@@ -296,18 +296,18 @@ function Card({ st }: { st: SousTraitant }) {
             RBQ {st.rbq_license}
           </span>
         ) : (
-          <span className="rounded-md bg-rose-500/10 px-1.5 py-0.5 font-semibold text-rose-300">
+          <span className="badge badge-rose">
             Pas de licence RBQ
           </span>
         )}
         {st.insurance_provider ? (
           <span
-            className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-semibold ${
+            className={`badge ${
               insExpired
-                ? "bg-rose-500/15 text-rose-300"
+                ? "badge-rose"
                 : insExpiringSoon
-                ? "bg-amber-500/15 text-amber-300"
-                : "bg-emerald-500/10 text-emerald-300"
+                ? "badge-amber"
+                : "badge-emerald"
             }`}
           >
             {insExpired || insExpiringSoon ? (
@@ -316,12 +316,12 @@ function Card({ st }: { st: SousTraitant }) {
             Assurance OK
           </span>
         ) : (
-          <span className="rounded-md bg-rose-500/10 px-1.5 py-0.5 font-semibold text-rose-300">
+          <span className="badge badge-rose">
             Assurance manquante
           </span>
         )}
         {!st.active ? (
-          <span className="rounded-md bg-white/5 px-1.5 py-0.5 font-semibold text-white/50">
+          <span className="badge badge-neutral">
             Inactif
           </span>
         ) : null}
@@ -337,7 +337,7 @@ function Card({ st }: { st: SousTraitant }) {
       {st.charges_travel_fee ? (
         <div className="flex items-center justify-between text-xs">
           <span className="text-white/50">Déplacement</span>
-          <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 font-medium text-amber-300">
+          <span className="badge badge-amber">
             Facturé
             {st.travel_fee_amount != null
               ? ` · ${new Intl.NumberFormat("fr-CA", {

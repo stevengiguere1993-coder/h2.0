@@ -240,7 +240,7 @@ export default function ServicesCataloguePage() {
                         ) : null}
                       </div>
                       {!t.is_active ? (
-                        <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/50">
+                        <span className="badge badge-neutral">
                           inactif
                         </span>
                       ) : null}

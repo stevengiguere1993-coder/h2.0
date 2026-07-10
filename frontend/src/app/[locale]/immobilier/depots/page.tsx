@@ -187,11 +187,11 @@ export default function DepotsPage() {
                     </td>
                     <td className="px-3 py-2.5 text-right">
                       {r.statut === "a_rendre" ? (
-                        <span className="inline-block rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[11px] font-semibold text-rose-200">
+                        <span className="badge badge-rose">
                           À rendre
                         </span>
                       ) : (
-                        <span className="inline-block rounded-full border border-violet-500/40 bg-violet-500/10 px-2 py-0.5 text-[11px] font-semibold text-violet-200">
+                        <span className="badge badge-violet">
                           Détenu
                         </span>
                       )}

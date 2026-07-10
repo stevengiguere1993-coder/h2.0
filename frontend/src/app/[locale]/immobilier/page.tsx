@@ -360,7 +360,7 @@ function KpiCard({
     amber: "bg-amber-500/15 text-amber-300"
   };
   return (
-    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+    <div className="kpi-card">
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
           {label}
@@ -418,8 +418,8 @@ function ImmeubleRow({ imm }: { imm: ImmeubleListItem }) {
               {imm.nb_logements_occupes}/{imm.nb_logements_actifs} occ.
             </span>
             <span
-              className={`rounded px-1.5 py-0.5 font-mono ${
-                tauxOk ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"
+              className={`badge font-mono ${
+                tauxOk ? "badge-emerald" : "badge-amber"
               }`}
             >
               {taux}
@@ -436,7 +436,7 @@ function ImmeubleRow({ imm }: { imm: ImmeubleListItem }) {
 
 function EmptyState() {
   return (
-    <div className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-8 text-center">
+    <div className="empty-state">
       <Building2 className="mx-auto h-10 w-10 text-white/30" />
       <h3 className="mt-3 text-sm font-bold text-white">
         Aucun immeuble dans le portefeuille

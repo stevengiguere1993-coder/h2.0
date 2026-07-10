@@ -794,15 +794,15 @@ function ExpiryChip({
 }) {
   const cls =
     status.tone === "ok"
-      ? "bg-emerald-500/10 text-emerald-300"
+      ? "badge-emerald"
       : status.tone === "warn"
-      ? "bg-amber-500/15 text-amber-300"
+      ? "badge-amber"
       : status.tone === "danger"
-      ? "bg-rose-500/15 text-rose-300"
-      : "bg-white/5 text-white/50";
+      ? "badge-rose"
+      : "badge-neutral";
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${cls}`}
+      className={`badge ${cls}`}
     >
       {status.tone === "warn" || status.tone === "danger" ? (
         <AlertTriangle className="h-3 w-3" />
