@@ -3,6 +3,7 @@
 import { createContext, useContext, useState } from "react";
 import { Loader2 } from "lucide-react";
 
+import { AccessGuard } from "@/components/access-guard";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
 import { KratosFloating } from "@/components/kratos-floating";
@@ -47,7 +48,9 @@ export default function ProspectionLayout({
               {/* Pas de topbar layout-level : chaque page Prospection
                   rend son propre <AppTopbar> qui contient déjà
                   ThemeToggle + Kratos + recherche globale. */}
-              <main className="flex-1 overflow-x-hidden">{children}</main>
+              <main className="flex-1 overflow-x-hidden">
+                <AccessGuard>{children}</AccessGuard>
+              </main>
               <KratosFloating />
               <HelpButton />
             </ConfirmProvider>

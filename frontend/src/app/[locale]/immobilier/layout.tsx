@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { AccessGuard } from "@/components/access-guard";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { HelpButton } from "@/components/help-button";
@@ -38,6 +39,7 @@ import { KratosLogo } from "@/components/kratos-logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { useNavAccess } from "@/hooks/use-nav-access";
 import { authedFetch } from "@/lib/auth";
 
 type NavItem = {
@@ -96,6 +98,9 @@ export default function ImmobilierLayout({
   const { user, loading, signOut } = useCurrentUser();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const pathname = usePathname() || "";
+  // Filtre d'accès par page (refonte permissions) — appliqué à côté
+  // du gating par volet existant, sans le remplacer.
+  const canSeeHref = useNavAccess(user);
 
   // Contexte « entreprise active » (persistant dans localStorage).
   const [currentEntrepriseId, _setEntrepriseId] = useState<number | null>(null);
@@ -218,7 +223,7 @@ export default function ImmobilierLayout({
                 Gestion immobilière
               </p>
               <ul className="space-y-0.5">
-                {NAV.map((item) => {
+                {NAV.filter((item) => canSeeHref(item.href)).map((item) => {
                   const active = isActive(item.href);
                   return (
                     <li key={item.href}>
@@ -286,7 +291,7 @@ export default function ImmobilierLayout({
           >
             <ConfirmProvider>
               <main className="flex-1 overflow-x-hidden">
-                {allowed ? children : <NoAccess />}
+                {allowed ? <AccessGuard>{children}</AccessGuard> : <NoAccess />}
               </main>
               {/* Kratos + ThemeToggle intégrés dans ImmobilierTopbar */}
               <HelpButton />

@@ -23,6 +23,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { type UserRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { useNavAccess } from "@/hooks/use-nav-access";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { AccountBadge } from "@/components/account-badge";
 
@@ -150,9 +151,14 @@ export function ProspectionSidebar({
   const pathname = usePathname();
   const { user } = useCurrentUser();
   const role = (user?.role as UserRole | undefined) || "employee";
+  // Filtre d'accès par page (refonte permissions) — à côté du filtre de
+  // rôle historique, fail-open si l'accès n'est pas chargé.
+  const canSeeHref = useNavAccess(user);
   const visibleSections = PROSPECTION_SECTIONS.map((s) => ({
     ...s,
-    items: s.items.filter((i) => canSee(role, i.minRole))
+    items: s.items.filter(
+      (i) => canSee(role, i.minRole) && canSeeHref(i.href)
+    )
   })).filter((s) => s.items.length > 0);
 
   function isActive(href: string) {

@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { AccessGuard } from "@/components/access-guard";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
 import { HorizonLogo } from "@/components/horizon-logo";
@@ -42,6 +43,7 @@ import { KratosFloating } from "@/components/kratos-floating";
 import { QGCommandBar } from "@/components/qg-command-bar";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { useNavAccess } from "@/hooks/use-nav-access";
 import { authedFetch } from "@/lib/auth";
 
 type NavItem = {
@@ -83,6 +85,9 @@ export default function EntreprisesLayout({
   children: React.ReactNode;
 }) {
   const { user, loading, signOut } = useCurrentUser();
+  // Filtre d'accès par page (refonte permissions) — appliqué à côté
+  // du gating par volet/rôle existant, sans le remplacer.
+  const canSeeHref = useNavAccess(user);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [entreprises, setEntreprises] = useState<EntrepriseLite[]>([]);
   const [openTasksCount, setOpenTasksCount] = useState<number>(0);
@@ -355,7 +360,7 @@ export default function EntreprisesLayout({
 
           <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
             <SidebarSection title="Navigation">
-              {NAVIGATION.map((item) => (
+              {NAVIGATION.filter((item) => canSeeHref(item.href)).map((item) => (
                 <SidebarLink
                   key={item.href}
                   item={item}
@@ -371,7 +376,7 @@ export default function EntreprisesLayout({
                 /entreprises (lien « Entreprises » ci-dessus). */}
 
             <SidebarSection title="Réglages">
-              {REGLAGES.map((item) => (
+              {REGLAGES.filter((item) => canSeeHref(item.href)).map((item) => (
                 <SidebarLink
                   key={item.href}
                   item={item}
@@ -423,7 +428,7 @@ export default function EntreprisesLayout({
           >
             <ConfirmProvider>
               <main className="flex-1 overflow-x-hidden">
-                {allowed ? children : <NoAccess />}
+                {allowed ? <AccessGuard>{children}</AccessGuard> : <NoAccess />}
               </main>
               {/* Kratos + ThemeToggle intégrés dans QGTopbar/EntreprisesTopbar */}
               {allowed ? <QGCommandBar /> : null}

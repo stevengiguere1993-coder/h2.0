@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
+import { AccessGuard } from "@/components/access-guard";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
 import { KratosFloating } from "@/components/kratos-floating";
@@ -124,7 +125,9 @@ export function TelephonieClientShell({
               {/* #20 — overflow-x-auto : le contenu trop large (ex. fil de
                   messages) reste accessible en défilant horizontalement
                   sur cellulaire, au lieu d'être coupé hors écran. */}
-              <main className="flex-1 overflow-x-auto">{children}</main>
+              <main className="flex-1 overflow-x-auto">
+                <AccessGuard>{children}</AccessGuard>
+              </main>
               <KratosFloating />
               <HelpButton />
               <VoiceConsole />

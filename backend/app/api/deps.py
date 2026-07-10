@@ -130,20 +130,22 @@ async def get_current_admin_or_owner(
     return current_user
 
 
-def require_volet(volet: str):
+def require_volet(*volets: str):
     """Garde d'accès PAR PÔLE (volet) — refonte permissions 2026-07.
 
     Fabrique une dépendance FastAPI qui exige que l'utilisateur courant ait
-    accès au volet (``User.has_volet`` : owner/admin = tous les volets,
-    sinon ``volets_json`` + whitelists de dev). À appliquer à l'inclusion
-    des routeurs métier d'un pôle (``dependencies=[Depends(require_volet(
-    "prospection"))]``) — les routeurs transverses/publics n'en ont pas.
+    accès à AU MOINS UN des volets donnés (``User.has_volet`` : owner/admin
+    = tous les volets, sinon ``volets_json`` + whitelists de dev). Plusieurs
+    volets = ressource partagée entre pôles (ex. bons de travail :
+    construction OU immobilier). À appliquer à l'inclusion des routeurs
+    métier (``dependencies=[Depends(require_volet("prospection"))]``) —
+    les routeurs transverses/publics n'en ont pas.
     """
 
     async def check(
         current_user: Annotated[User, Depends(get_current_user)],
     ) -> User:
-        if not current_user.has_volet(volet):
+        if not any(current_user.has_volet(v) for v in volets):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Accès au pôle non autorisé.",
