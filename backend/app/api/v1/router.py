@@ -93,6 +93,7 @@ from app.api.v1.endpoints import (
     project_members,
     project_phases,
     project_photos,
+    project_punches,
     project_tasks,
     project_to_facture,
     projects,
@@ -247,6 +248,7 @@ api_router.include_router(project_phases.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_phases.phases_router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_members.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_finances.router, dependencies=DEP_CONSTRUCTION)
+api_router.include_router(project_punches.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(project_billables.router, dependencies=DEP_CONSTRUCTION)
 api_router.include_router(subcontractor_contracts.router)
 api_router.include_router(projects.router, dependencies=DEP_CONSTRUCTION)
