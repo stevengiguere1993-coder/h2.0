@@ -2234,6 +2234,43 @@ async def init_db() -> None:
             VALUES ('achat_unbill_non_contract_v2')
             ON CONFLICT (key) DO NOTHING
             """,
+            # One-shot : « dé-refacture » les achats/punches ORPHELINS d'une
+            # ligne de facture supprimée AVANT le correctif delete_item :
+            # le FK facture_item_id est passé à NULL (SET NULL) mais
+            # invoiced_at est resté posé → statut « ✓ Refacturé » verrouillé
+            # à tort, réimport impossible (cas 8900 : toutes les lignes
+            # supprimées, achats restés refacturés). Garde de récence 60 j :
+            # l'import pose TOUJOURS facture_item_id depuis longtemps, donc
+            # un lien NULL + invoiced_at RÉCENT = orphelin de ligne
+            # supprimée ; les refacturations anciennes (legacy pré-lien) ne
+            # sont pas touchées.
+            """
+            UPDATE achats
+            SET invoiced_at = NULL
+            WHERE facture_item_id IS NULL
+              AND invoiced_at IS NOT NULL
+              AND invoiced_at >= NOW() - INTERVAL '60 days'
+              AND NOT EXISTS (
+                  SELECT 1 FROM applied_backfills
+                  WHERE key = 'achat_unrefacture_orphans_v1'
+              )
+            """,
+            """
+            UPDATE punches
+            SET invoiced_at = NULL
+            WHERE facture_item_id IS NULL
+              AND invoiced_at IS NOT NULL
+              AND invoiced_at >= NOW() - INTERVAL '60 days'
+              AND NOT EXISTS (
+                  SELECT 1 FROM applied_backfills
+                  WHERE key = 'achat_unrefacture_orphans_v1'
+              )
+            """,
+            """
+            INSERT INTO applied_backfills (key)
+            VALUES ('achat_unrefacture_orphans_v1')
+            ON CONFLICT (key) DO NOTHING
+            """,
         ):
             try:
                 await conn.execute(text(sql))
