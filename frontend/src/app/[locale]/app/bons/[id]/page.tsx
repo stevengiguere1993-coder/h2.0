@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter as useNextRouter } from "next/navigation";
+import {
+  useParams,
+  useRouter as useNextRouter,
+  useSearchParams
+} from "next/navigation";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -152,6 +156,10 @@ export default function BonDetailPage() {
   const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const params = useParams<{ id: string }>();
+  const search = useSearchParams();
+  // Retour contextuel : venu de la Vue d'ensemble (?from=cockpit) → on y
+  // retourne ; sinon vers le board des bons de travail.
+  const fromCockpit = search.get("from") === "cockpit";
   const id = Number(params.id);
   const router = useNextRouter();
 
@@ -649,10 +657,11 @@ export default function BonDetailPage() {
       <div className="p-4 pb-24 lg:p-6 lg:pb-24">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/app/bons" as any}
+          href={(fromCockpit ? "/app/cockpit" : "/app/bons") as any}
           className="inline-flex items-center text-sm text-white/70 hover:text-accent-500"
         >
-          <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux bons
+          <ArrowLeft className="mr-1 h-4 w-4" />{" "}
+          {fromCockpit ? "Retour à la vue d'ensemble" : "Retour aux bons"}
         </Link>
 
         {loading ? (
