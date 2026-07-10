@@ -9,22 +9,20 @@ import {
   Search
 } from "lucide-react";
 
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 import {
   fmtPieces,
-  LogementFiche,
-  type LogementFicheBail,
   type LogementFicheData
 } from "@/components/immobilier/logement-fiche";
 
 /**
  * Logements — vue agrégée de TOUS les logements du portefeuille
  * (entreprise active via le contexte du layout). Filtres client-side :
- * recherche texte, immeuble, statut. Clic sur une ligne → fiche
- * logement partagée (modale) ; la colonne immeuble reste un lien vers
- * la fiche immeuble.
+ * recherche texte, immeuble, statut. Clic sur une ligne → PAGE fiche
+ * logement (/immobilier/logements/{id}) ; la colonne immeuble reste
+ * un lien vers la fiche immeuble.
  */
 
 type ImmeubleLite = {
@@ -72,33 +70,18 @@ function StatutBadge({ status }: { status: string }) {
 
 export default function LogementsPage() {
   const { currentEntrepriseId } = useImmobilierLayout();
+  const router = useRouter();
   const [rows, setRows] = useState<Row[] | null>(null);
   const [immeubles, setImmeubles] = useState<ImmeubleLite[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
   const [statutFilter, setStatutFilter] = useState<string>("all");
-  const [fiche, setFiche] = useState<Row | null>(null);
-  const [ficheBails, setFicheBails] = useState<
-    LogementFicheBail[] | undefined
-  >(undefined);
 
-  // Ouvre la fiche partagée + charge les baux de l'immeuble du logement
-  // (pour la section Occupation).
+  // Clic sur une ligne → page fiche logement (vraie page 360).
   function openFiche(row: Row) {
-    setFiche(row);
-    setFicheBails(undefined);
-    void (async () => {
-      try {
-        const r = await authedFetch(
-          `/api/v1/immobilier/immeubles/${row.immeuble_id}/baux`
-        );
-        if (r.ok) setFicheBails((await r.json()) as LogementFicheBail[]);
-        else setFicheBails([]);
-      } catch {
-        setFicheBails([]);
-      }
-    })();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    router.push(`/immobilier/logements/${row.id}` as any);
   }
 
   useEffect(() => {
@@ -311,28 +294,6 @@ export default function LogementsPage() {
         )}
       </div>
 
-      {fiche ? (
-        <LogementFiche
-          logement={fiche}
-          bails={ficheBails}
-          onClose={() => setFiche(null)}
-          onSaved={(updated) => {
-            setRows(
-              (prev) =>
-                prev?.map((r) =>
-                  r.id === updated.id
-                    ? { ...r, ...updated, immeuble_name: r.immeuble_name }
-                    : r
-                ) ?? prev
-            );
-            setFiche(null);
-          }}
-          onDeleted={(id) => {
-            setRows((prev) => prev?.filter((r) => r.id !== id) ?? prev);
-            setFiche(null);
-          }}
-        />
-      ) : null}
     </>
   );
 }
