@@ -59,6 +59,9 @@ type Immeuble = {
   is_active: boolean;
   cover_photo_url?: string | null;
   has_cover_photo?: boolean;
+  gestion_externe?: boolean;
+  gestionnaire_externe_nom?: string | null;
+  gestionnaire_externe_contact?: string | null;
 };
 
 type Logement = {
@@ -169,6 +172,13 @@ const TABS = [
   { id: "contrat-gestion", label: "Contrat de gestion", icon: FileSignature }
 ] as const;
 
+// Onglets masqués quand l'immeuble est en gestion externe : les baux,
+// paiements, la maintenance et le contrat de gestion sont gérés par la
+// compagnie de gestion externe.
+const TABS_MASQUES_GESTION_EXTERNE: ReadonlyArray<
+  (typeof TABS)[number]["id"]
+> = ["baux", "maintenance", "contrat-gestion"];
+
 function fmtCurrency(n: number | null | undefined): string {
   if (n == null) return "—";
   return new Intl.NumberFormat("fr-CA", {
@@ -223,7 +233,10 @@ export default function ImmeubleDetailPage({
     annee_construction: "",
     nb_logements: "",
     purchase_price: "",
-    urgence_phone: ""
+    urgence_phone: "",
+    gestion_externe: false,
+    gestionnaire_externe_nom: "",
+    gestionnaire_externe_contact: ""
   });
   const [financials, setFinancials] = useState<Financials | null>(null);
   const [logements, setLogements] = useState<Logement[] | null>(null);
@@ -311,6 +324,23 @@ export default function ImmeubleDetailPage({
   }, [immeubleId]);
 
   const ownerId = ownerships[0]?.entreprise_id ?? null;
+
+  const gestionExterne = !!immeuble?.gestion_externe;
+  const visibleTabs = useMemo(
+    () =>
+      gestionExterne
+        ? TABS.filter((t) => !TABS_MASQUES_GESTION_EXTERNE.includes(t.id))
+        : TABS,
+    [gestionExterne]
+  );
+
+  // Si l'onglet actif devient masqué (gestion externe), on retombe sur
+  // la vue d'ensemble.
+  useEffect(() => {
+    if (gestionExterne && TABS_MASQUES_GESTION_EXTERNE.includes(tab)) {
+      setTab("overview");
+    }
+  }, [gestionExterne, tab]);
 
   // Recharge les KPIs financiers (hypothèques, cash flow) après une mutation.
   const refreshFinancials = useCallback(async () => {
@@ -470,7 +500,10 @@ export default function ImmeubleDetailPage({
       purchase_price: immeuble.purchase_price
         ? String(immeuble.purchase_price)
         : "",
-      urgence_phone: immeuble.urgence_phone || ""
+      urgence_phone: immeuble.urgence_phone || "",
+      gestion_externe: !!immeuble.gestion_externe,
+      gestionnaire_externe_nom: immeuble.gestionnaire_externe_nom || "",
+      gestionnaire_externe_contact: immeuble.gestionnaire_externe_contact || ""
     });
     setShowEdit(true);
   }
@@ -498,7 +531,14 @@ export default function ImmeubleDetailPage({
         purchase_price: editForm.purchase_price
           ? Number(editForm.purchase_price)
           : null,
-        urgence_phone: editForm.urgence_phone.trim() || null
+        urgence_phone: editForm.urgence_phone.trim() || null,
+        gestion_externe: editForm.gestion_externe,
+        gestionnaire_externe_nom: editForm.gestion_externe
+          ? editForm.gestionnaire_externe_nom.trim() || null
+          : null,
+        gestionnaire_externe_contact: editForm.gestion_externe
+          ? editForm.gestionnaire_externe_contact.trim() || null
+          : null
       };
       const res = await authedFetch(
         `/api/v1/immobilier/immeubles/${immeubleId}`,
@@ -656,6 +696,9 @@ export default function ImmeubleDetailPage({
                   Inactif
                 </span>
               ) : null}
+              {gestionExterne ? (
+                <span className="badge badge-sky">Gestion externe</span>
+              ) : null}
             </div>
           </div>
 
@@ -776,7 +819,7 @@ export default function ImmeubleDetailPage({
           className="mt-6 flex items-center gap-1 overflow-x-auto"
           style={{ borderBottom: "1px solid #25252d" }}
         >
-          {TABS.map((t) => {
+          {visibleTabs.map((t) => {
             const active = tab === t.id;
             const Icon = t.icon;
             return (
@@ -1152,6 +1195,58 @@ export default function ImmeubleDetailPage({
                   />
                 </EditField>
               </div>
+              <div className="rounded-lg border border-sky-400/30 bg-sky-500/10 p-3">
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-white">
+                  <input
+                    type="checkbox"
+                    checked={editForm.gestion_externe}
+                    onChange={(e) =>
+                      setEditForm((f) => ({
+                        ...f,
+                        gestion_externe: e.target.checked
+                      }))
+                    }
+                    className="h-4 w-4 accent-sky-400"
+                  />
+                  <span className="font-semibold">
+                    Immeuble en gestion externe
+                  </span>
+                </label>
+                <p className="mt-1 text-[11px] text-sky-200/70">
+                  Les paiements, renouvellements, dépôts et relances sont
+                  gérés par la compagnie de gestion — masqués dans Kratos.
+                </p>
+                {editForm.gestion_externe ? (
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <EditField label="Compagnie de gestion">
+                      <input
+                        value={editForm.gestionnaire_externe_nom}
+                        onChange={(e) =>
+                          setEditForm((f) => ({
+                            ...f,
+                            gestionnaire_externe_nom: e.target.value
+                          }))
+                        }
+                        placeholder="ex. Gestion ABC inc."
+                        className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                      />
+                    </EditField>
+                    <EditField label="Contact">
+                      <input
+                        value={editForm.gestionnaire_externe_contact}
+                        onChange={(e) =>
+                          setEditForm((f) => ({
+                            ...f,
+                            gestionnaire_externe_contact: e.target.value
+                          }))
+                        }
+                        placeholder="ex. 514 555-0123 / courriel"
+                        className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                      />
+                    </EditField>
+                  </div>
+                ) : null}
+              </div>
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-brand-800 px-5 py-3">
               <button
@@ -1271,9 +1366,11 @@ function OverviewTab({
   hypotheques: Hypotheque[] | null;
 }) {
   const logMap = new Map((logements || []).map((l) => [l.id, l.numero]));
+  const gestionExterne = !!immeuble.gestion_externe;
 
-  // Baux actifs qui échoient d'ici 90 jours.
-  const bauxBientot = (baux || []).filter((b) => {
+  // Baux actifs qui échoient d'ici 90 jours. En gestion externe, les
+  // baux sont suivis par la compagnie de gestion — pas d'alerte ici.
+  const bauxBientot = (gestionExterne ? [] : baux || []).filter((b) => {
     if (b.status !== "actif" || !b.date_fin) return false;
     const jours =
       (new Date(`${b.date_fin}T00:00:00`).getTime() - Date.now()) /
@@ -1294,6 +1391,25 @@ function OverviewTab({
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
+      {gestionExterne ? (
+        <div className="lg:col-span-2 rounded-2xl border border-sky-400/30 bg-sky-500/10 p-4">
+          <p className="flex items-center gap-2 text-sm font-semibold text-sky-200">
+            <Building2 className="h-4 w-4 flex-shrink-0" />
+            Immeuble en gestion externe
+            {immeuble.gestionnaire_externe_nom
+              ? ` — géré par ${immeuble.gestionnaire_externe_nom}${
+                  immeuble.gestionnaire_externe_contact
+                    ? ` (${immeuble.gestionnaire_externe_contact})`
+                    : ""
+                }`
+              : ""}
+          </p>
+          <p className="mt-1 text-xs text-sky-200/70">
+            Les paiements, renouvellements, dépôts et relances sont gérés
+            par la compagnie de gestion.
+          </p>
+        </div>
+      ) : null}
       <Section title="Caractéristiques">
         <dl className="grid grid-cols-2 gap-y-2 text-sm">
           <dt className="text-white/50">Type</dt>

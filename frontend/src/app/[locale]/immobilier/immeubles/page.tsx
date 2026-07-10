@@ -27,6 +27,7 @@ type ImmeubleListItem = {
   cover_photo_url?: string | null;
   has_cover_photo?: boolean;
   is_active: boolean;
+  gestion_externe?: boolean;
   nb_logements_actifs: number;
   nb_logements_occupes: number;
   revenu_mensuel: number;
@@ -222,8 +223,15 @@ export default function ImmeublesListPage() {
                           )}
                         </div>
                         <div className="min-w-0">
-                          <div className="truncate font-bold text-white">
-                            {imm.name}
+                          <div className="flex items-center gap-2">
+                            <span className="truncate font-bold text-white">
+                              {imm.name}
+                            </span>
+                            {imm.gestion_externe ? (
+                              <span className="badge badge-sky flex-shrink-0">
+                                Gestion externe
+                              </span>
+                            ) : null}
                           </div>
                           <div className="truncate text-[11px] text-white/50">
                             {imm.address}
@@ -343,6 +351,9 @@ function CreateImmeubleModal({
     nb_logements: "",
     purchase_price: ""
   });
+  const [gestionExterne, setGestionExterne] = useState(false);
+  const [gestionNom, setGestionNom] = useState("");
+  const [gestionContact, setGestionContact] = useState("");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -381,6 +392,12 @@ function CreateImmeubleModal({
       if (form.nb_logements) body.nb_logements = Number(form.nb_logements);
       if (form.purchase_price)
         body.purchase_price = Number(form.purchase_price);
+      if (gestionExterne) {
+        body.gestion_externe = true;
+        if (gestionNom.trim()) body.gestionnaire_externe_nom = gestionNom.trim();
+        if (gestionContact.trim())
+          body.gestionnaire_externe_contact = gestionContact.trim();
+      }
 
       const res = await authedFetch("/api/v1/immobilier/immeubles", {
         method: "POST",
@@ -509,6 +526,44 @@ function CreateImmeubleModal({
             min={0}
             step={1000}
           />
+        </div>
+
+        <div className="rounded-lg border border-sky-400/30 bg-sky-500/10 p-3">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-white">
+            <input
+              type="checkbox"
+              checked={gestionExterne}
+              onChange={(e) => setGestionExterne(e.target.checked)}
+              className="h-4 w-4 accent-sky-400"
+            />
+            <span className="font-semibold">Immeuble en gestion externe</span>
+          </label>
+          <p className="mt-1 text-[11px] text-sky-200/70">
+            Les paiements, renouvellements, dépôts et relances sont gérés par
+            la compagnie de gestion — masqués dans Kratos.
+          </p>
+          {gestionExterne ? (
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="label">Compagnie de gestion</label>
+                <input
+                  value={gestionNom}
+                  onChange={(e) => setGestionNom(e.target.value)}
+                  className="input"
+                  placeholder="ex. Gestion ABC inc."
+                />
+              </div>
+              <div>
+                <label className="label">Contact</label>
+                <input
+                  value={gestionContact}
+                  onChange={(e) => setGestionContact(e.target.value)}
+                  className="input"
+                  placeholder="ex. 514 555-0123 / courriel"
+                />
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div>
