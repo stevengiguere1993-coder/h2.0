@@ -462,6 +462,64 @@ class LocataireDossier(BaseModel):
     nb_retards: int = 0
 
 
+# ─── Dossier logement (fiche 360) ───────────────────────────────────────
+
+
+class LogementDossierLocataire(BaseModel):
+    """Locataire tel qu'affiché dans la fiche 360 d'un logement."""
+
+    id: int
+    full_name: str
+
+
+class LogementDossierBail(BaseModel):
+    """Bail tel qu'affiché dans la fiche 360 d'un logement."""
+
+    id: int
+    locataire: Optional[LogementDossierLocataire] = None
+    loyer_mensuel: float
+    date_debut: date
+    date_fin: date
+    status: str
+    document_url: Optional[str] = None
+    signed_at: Optional[datetime] = None
+
+
+class LogementDossierBon(BaseModel):
+    """Bon de travail (réno / maintenance) rattaché au logement."""
+
+    id: int
+    reference: str
+    title: str
+    status: str
+    montant: Optional[float] = None
+    created_at: Optional[datetime] = None
+
+
+class LogementDossierImmeuble(BaseModel):
+    id: int
+    name: str
+    address: Optional[str] = None
+
+
+class LoyerPoint(BaseModel):
+    """Point d'historique de loyer, dérivé des baux (ordre chronologique)."""
+
+    date_debut: date
+    loyer_mensuel: float
+
+
+class LogementDossier(BaseModel):
+    """Vue 360 d'un logement : infos + immeuble, baux (avec locataire),
+    bons de travail et historique de loyer (fluctuation)."""
+
+    logement: LogementRead
+    immeuble: LogementDossierImmeuble
+    baux: List[LogementDossierBail] = Field(default_factory=list)
+    bons_travail: List[LogementDossierBon] = Field(default_factory=list)
+    historique_loyer: List[LoyerPoint] = Field(default_factory=list)
+
+
 # ─── KPIs financiers (calculés) ─────────────────────────────────────────
 
 

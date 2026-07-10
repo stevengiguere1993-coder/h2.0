@@ -97,8 +97,14 @@ from app.schemas.immobilier import (
     DossierBail,
     DossierPaiement,
     LogementCreate,
+    LogementDossier,
+    LogementDossierBail,
+    LogementDossierBon,
+    LogementDossierImmeuble,
+    LogementDossierLocataire,
     LogementRead,
     LogementUpdate,
+    LoyerPoint,
     MaintenanceOrdreCreate,
     MaintenanceOrdreRead,
     MaintenanceOrdreUpdate,
@@ -1623,6 +1629,107 @@ async def delete_logement(
         raise HTTPException(status_code=404, detail="Logement introuvable.")
     await db.delete(obj)
     await db.commit()
+
+
+@router.get(
+    "/logements/{logement_id}/dossier", response_model=LogementDossier
+)
+async def logement_dossier(
+    logement_id: int, db: DBSession, user: CurrentUser
+) -> LogementDossier:
+    """Fiche 360 d'un logement : infos + immeuble, tous ses baux (avec
+    locataire, document, signature), les bons de travail rattachés
+    (rénos / maintenance) et l'historique de loyer dérivé des baux
+    (fluctuation de bail en bail)."""
+    _require_volet(user)
+    lg = await db.get(Logement, logement_id)
+    if lg is None:
+        raise HTTPException(status_code=404, detail="Logement introuvable.")
+    await _require_immeuble_visible(db, user, lg.immeuble_id)
+    imm = await db.get(Immeuble, lg.immeuble_id)
+
+    baux = (
+        await db.execute(
+            select(Bail)
+            .where(Bail.logement_id == logement_id)
+            .order_by(Bail.date_debut.desc())
+        )
+    ).scalars().all()
+
+    loc_ids = {b.locataire_id for b in baux if b.locataire_id}
+    loc_by_id = {}
+    if loc_ids:
+        for loc in (
+            await db.execute(
+                select(Locataire).where(Locataire.id.in_(list(loc_ids)))
+            )
+        ).scalars().all():
+            loc_by_id[loc.id] = loc
+
+    dossier_baux = []
+    for b in baux:
+        loc = loc_by_id.get(b.locataire_id)
+        dossier_baux.append(
+            LogementDossierBail(
+                id=b.id,
+                locataire=(
+                    LogementDossierLocataire(
+                        id=loc.id, full_name=loc.full_name
+                    )
+                    if loc is not None
+                    else None
+                ),
+                loyer_mensuel=float(b.loyer_mensuel or 0),
+                date_debut=b.date_debut,
+                date_fin=b.date_fin,
+                status=b.status,
+                document_url=b.document_url,
+                signed_at=b.signed_at,
+            )
+        )
+
+    bons = (
+        await db.execute(
+            select(BonTravail)
+            .where(BonTravail.logement_id == logement_id)
+            .order_by(BonTravail.created_at.desc())
+        )
+    ).scalars().all()
+    dossier_bons = [
+        LogementDossierBon(
+            id=b.id,
+            reference=b.reference,
+            title=b.title,
+            status=b.status,
+            montant=float(b.amount) if b.amount is not None else None,
+            created_at=b.created_at,
+        )
+        for b in bons
+    ]
+
+    # Fluctuation : loyers de bail en bail, en ordre chronologique.
+    historique = [
+        LoyerPoint(
+            date_debut=b.date_debut,
+            loyer_mensuel=float(b.loyer_mensuel or 0),
+        )
+        for b in sorted(baux, key=lambda x: x.date_debut)
+    ]
+
+    return LogementDossier(
+        logement=LogementRead.model_validate(lg),
+        immeuble=LogementDossierImmeuble(
+            id=(imm.id if imm else lg.immeuble_id),
+            name=(
+                (imm.name or imm.address) if imm
+                else f"Immeuble #{lg.immeuble_id}"
+            ),
+            address=(imm.address if imm else None),
+        ),
+        baux=dossier_baux,
+        bons_travail=dossier_bons,
+        historique_loyer=historique,
+    )
 
 
 # ── Locataires ─────────────────────────────────────────────────────────
