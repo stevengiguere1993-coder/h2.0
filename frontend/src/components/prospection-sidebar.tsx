@@ -171,7 +171,7 @@ export function ProspectionSidebar({
       ) : null}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 flex-col border-r border-brand-800 bg-brand-950 transition-transform lg:static lg:flex lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 w-64 flex-col border-r border-brand-800 bg-brand-950 transition-transform lg:sticky lg:top-0 lg:h-screen lg:flex lg:translate-x-0 ${
           open ? "flex translate-x-0" : "hidden -translate-x-full"
         }`}
       >
