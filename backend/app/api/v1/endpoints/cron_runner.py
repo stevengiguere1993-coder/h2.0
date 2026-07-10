@@ -334,33 +334,14 @@ async def trigger_bail_renouvellements(
     x_cron_secret: Optional[str] = Header(default=None),
     secret: Optional[str] = Query(default=None),
 ) -> BailRenouvellementCronResult:
-    """Cron quotidien : génère et envoie les avis de modification du bail
-    pour les baux dont l'échéance tombe dans 4-6 mois. Idempotent.
-    À planifier ~7h via cron-job.org."""
+    """DÉSACTIVÉ (demande Phil 2026-07-10) : plus AUCUN envoi automatique
+    d'avis aux locataires. Les avis partent uniquement via les boutons de
+    /immobilier/renouvellements (envoi manuel, contenu contrôlé). Le cron
+    « bail-renouvellement-tasks » continue de créer les tâches QG de
+    rappel interne. L'endpoint reste en no-op pour ne pas faire échouer
+    une planification cron-job.org existante."""
     _check_secret(x_cron_secret, secret)
-    from app.db.session import AsyncSessionLocal
-    from app.services.bail_renouvellement import (
-        scan_and_send_due_renouvellements,
-    )
-
-    try:
-        async with AsyncSessionLocal() as db:
-            res = await scan_and_send_due_renouvellements(db)
-    except Exception as exc:
-        log.exception("Cron bail_renouvellements failed: %s", exc)
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            f"Job a échoué : {exc}",
-        )
-    return BailRenouvellementCronResult(
-        ok=True,
-        job="bail-renouvellements",
-        bails_scanned=res.bails_scanned,
-        avis_crees=res.avis_crees,
-        courriels_envoyes=res.courriels_envoyes,
-        skipped=res.skipped,
-        errors=len(res.errors or []),
-    )
+    return BailRenouvellementCronResult(ok=True, job="bail-renouvellements")
 
 
 class CalendarSyncCronResult(BaseModel):

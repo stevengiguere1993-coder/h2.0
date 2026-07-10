@@ -66,6 +66,7 @@ from app.models.immobilier import (
     Logement,
     LogementStatus,
     Locataire,
+    LocataireCommunication,
     MaintenanceOrdre,
     PaiementLoyer,
     RelanceLoyer,
@@ -90,12 +91,15 @@ from app.schemas.immobilier import (
     ImmeubleOwnershipRead,
     ImmeubleRead,
     ImmeubleUpdate,
+    LocataireCommunicationCreate,
+    LocataireCommunicationRead,
     LocataireCreate,
     LocataireDossier,
     LocataireRead,
     LocataireUpdate,
     DossierBail,
     DossierPaiement,
+    DossierRenouvellement,
     LogementCreate,
     LogementDossier,
     LogementDossierBail,
@@ -1895,11 +1899,59 @@ async def locataire_dossier(
                 )
             )
 
+    # Avis d'augmentation / renouvellements de tous ses baux — le hub
+    # locataire montre tout ce qui lui a été envoyé et où ça en est.
+    renouvellements: list[DossierRenouvellement] = []
+    if bail_ids:
+        bail_by_id = {b.id: b for b in baux}
+        for r in (
+            await db.execute(
+                select(BailRenouvellement)
+                .where(BailRenouvellement.bail_id.in_(bail_ids))
+                .order_by(BailRenouvellement.avis_envoye_le.desc())
+            )
+        ).scalars().all():
+            rb = bail_by_id.get(r.bail_id)
+            rlg = log_by_id.get(rb.logement_id) if rb else None
+            rim = imm_by_id.get(rlg.immeuble_id) if rlg else None
+            renouvellements.append(
+                DossierRenouvellement(
+                    id=r.id,
+                    bail_id=r.bail_id,
+                    immeuble_name=(rim.name if rim else "—"),
+                    logement_numero=(rlg.numero if rlg else None),
+                    avis_envoye_le=r.avis_envoye_le,
+                    nouveau_loyer=(
+                        float(r.nouveau_loyer)
+                        if r.nouveau_loyer is not None
+                        else None
+                    ),
+                    nouvelle_date_debut=r.nouvelle_date_debut,
+                    nouvelle_date_fin=r.nouvelle_date_fin,
+                    status=r.status,
+                    locataire_repondu_le=r.locataire_repondu_le,
+                    notes=r.notes,
+                )
+            )
+
+    communications = [
+        LocataireCommunicationRead.model_validate(c)
+        for c in (
+            await db.execute(
+                select(LocataireCommunication)
+                .where(LocataireCommunication.locataire_id == locataire_id)
+                .order_by(LocataireCommunication.created_at.desc())
+            )
+        ).scalars().all()
+    ]
+
     actifs = [b for b in baux if b.status == BailStatus.ACTIF.value]
     return LocataireDossier(
         locataire=LocataireRead.model_validate(loc),
         baux=dossier_baux,
         paiements=paiements,
+        renouvellements=renouvellements,
+        communications=communications,
         nb_baux_actifs=len(actifs),
         loyer_actuel=round(sum(float(b.loyer_mensuel or 0) for b in actifs), 2),
         depot_total=round(
@@ -1911,6 +1963,61 @@ async def locataire_dossier(
         nb_paiements=sum(1 for p in paiements if p.paye_le is not None),
         nb_retards=sum(1 for p in paiements if p.en_retard),
     )
+
+
+# ─── Journal de communications du locataire (manuel) ────────────────────
+# Pas de lien téléphonie (demande Phil 2026-07-10) : l'employé consigne
+# lui-même appels/courriels/notes depuis la fiche du locataire.
+
+
+@router.post(
+    "/locataires/{locataire_id}/communications",
+    response_model=LocataireCommunicationRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_locataire_communication(
+    locataire_id: int,
+    payload: LocataireCommunicationCreate,
+    db: DBSession,
+    user: CurrentUser,
+) -> LocataireCommunicationRead:
+    _require_volet(user)
+    loc = await db.get(Locataire, locataire_id)
+    if loc is None:
+        raise HTTPException(status_code=404, detail="Locataire introuvable.")
+    contenu = (payload.contenu or "").strip()
+    if not contenu:
+        raise HTTPException(status_code=422, detail="Contenu requis.")
+    kind = payload.kind if payload.kind in (
+        "note", "appel", "courriel", "sms", "visite", "autre"
+    ) else "note"
+    obj = LocataireCommunication(
+        locataire_id=locataire_id,
+        kind=kind,
+        contenu=contenu,
+        auteur=getattr(user, "full_name", None) or user.email,
+    )
+    obj.created_at = _now()
+    obj.updated_at = _now()
+    db.add(obj)
+    await db.commit()
+    await db.refresh(obj)
+    return LocataireCommunicationRead.model_validate(obj)
+
+
+@router.delete(
+    "/locataires/communications/{comm_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_locataire_communication(
+    comm_id: int, db: DBSession, user: CurrentUser
+) -> None:
+    _require_volet(user)
+    obj = await db.get(LocataireCommunication, comm_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Entrée introuvable.")
+    await db.delete(obj)
+    await db.commit()
 
 
 def _fmt_money_pdf(n) -> str:
@@ -2616,7 +2723,7 @@ async def loyers_overview(
                 )
             )
         ).scalars().all()
-        rel_by_bail: Dict[int, list] = {}
+        rel_by_bail: dict[int, list] = {}
         for rl in rel_rows:
             rel_by_bail.setdefault(rl.bail_id, []).append(rl)
         for r in rows:
@@ -3456,6 +3563,42 @@ async def list_hypotheques(
     return [HypothequeRead.model_validate(r) for r in rows]
 
 
+def _pmt_hypotheque(obj: Hypotheque) -> float | None:
+    """Paiement mensuel calculé depuis taux/amortissement/composition.
+
+    Même math que le frontend (fiche immeuble) : composition
+    semi-annuelle (standard résidentiel CA) ou mensuelle (commercial/
+    variable), selon ``composition_interets``. Retourne None si les
+    intrants manquent.
+    """
+    taux = float(obj.taux_pct) if obj.taux_pct is not None else None
+    n = int(obj.amortissement_mois or 0)
+    principal = float(
+        obj.balance_actuelle
+        if obj.balance_actuelle is not None
+        else (obj.montant_initial or 0)
+    )
+    if taux is None or n <= 0 or principal <= 0:
+        return None
+    if (obj.composition_interets or "semi") == "mensuelle":
+        i = taux / 100.0 / 12.0
+    else:
+        i = (1.0 + taux / 100.0 / 2.0) ** (2.0 / 12.0) - 1.0
+    if i <= 0:
+        return round(principal / n, 2)
+    return round(principal * i / (1.0 - (1.0 + i) ** (-n)), 2)
+
+
+def _maybe_recompute_pmt(obj: Hypotheque) -> None:
+    """Si aucun paiement mensuel n'est fourni (créations API/MCP), le
+    serveur le calcule — la fiche, le cashflow et les financials lisent
+    tous la valeur persistée."""
+    if obj.paiement_mensuel is None:
+        pmt = _pmt_hypotheque(obj)
+        if pmt is not None:
+            obj.paiement_mensuel = pmt
+
+
 @router.post(
     "/hypotheques",
     response_model=HypothequeRead,
@@ -3467,6 +3610,7 @@ async def create_hypotheque(
     _require_volet(user)
     await _get_immeuble_or_404(db, payload.immeuble_id)
     obj = Hypotheque(**payload.model_dump())
+    _maybe_recompute_pmt(obj)
     obj.created_at = _now()
     obj.updated_at = _now()
     db.add(obj)
@@ -3486,8 +3630,21 @@ async def update_hypotheque(
     obj = await db.get(Hypotheque, hyp_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Hypothèque introuvable.")
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    for k, v in data.items():
         setattr(obj, k, v)
+    # Un intrant du calcul change sans paiement explicite → on recalcule
+    # pour que la liste/cashflow/financials reflètent la modification.
+    calc_keys = {
+        "taux_pct", "amortissement_mois", "composition_interets",
+        "balance_actuelle", "montant_initial",
+    }
+    if calc_keys & data.keys() and "paiement_mensuel" not in data:
+        pmt = _pmt_hypotheque(obj)
+        if pmt is not None:
+            obj.paiement_mensuel = pmt
+    else:
+        _maybe_recompute_pmt(obj)
     obj.updated_at = _now()
     await db.commit()
     await db.refresh(obj)

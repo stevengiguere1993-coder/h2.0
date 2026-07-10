@@ -33,14 +33,10 @@ from app.schemas.immobilier_extras import (
     EnvoyerRenouvellementRequest,
     EnvoyerRenouvellementResult,
     RenouvellementOverview,
-    RenouvellementScanResult,
     TalFormRequest,
     TalFormType,
 )
-from app.services.bail_renouvellement import (
-    scan_and_send_due_renouvellements,
-    send_renouvellement_for_bail,
-)
+from app.services.bail_renouvellement import send_renouvellement_for_bail
 from app.services.tal_forms import (
     TalContext,
     available_form_types,
@@ -229,23 +225,9 @@ async def envoyer_renouvellement(
     )
 
 
-@router.post(
-    "/renouvellements/scan-batch",
-    response_model=RenouvellementScanResult,
-)
-async def scan_renouvellements_now(
-    db: DBSession, user: CurrentUser
-) -> RenouvellementScanResult:
-    """Déclenche manuellement le scan des baux à renouveler (4-6 mois)."""
-    _require_volet(user)
-    res = await scan_and_send_due_renouvellements(db)
-    return RenouvellementScanResult(
-        bails_scanned=res.bails_scanned,
-        avis_crees=res.avis_crees,
-        courriels_envoyes=res.courriels_envoyes,
-        skipped=res.skipped,
-        errors=res.errors or [],
-    )
+# « scan-batch » (envoi en LOT des avis par défaut) retiré — demande
+# Phil 2026-07-10 : les avis partent un par un, via le bouton du bail,
+# avec un contenu vérifié. Rien d'automatique ni de masse.
 
 
 @router.get(
