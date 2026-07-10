@@ -98,6 +98,7 @@ type Evaluation = {
   valeur: number;
   date_evaluation: string;
   source?: string | null;
+  notes?: string | null;
 };
 
 type Maintenance = {
@@ -309,6 +310,26 @@ export default function ImmeubleDetailPage({
       /* silencieux */
     }
   }, [immeubleId]);
+
+  // Dernière évaluation (date la plus récente) + équité :
+  // dernière valeur − somme des balances des hypothèques actives.
+  const lastEval = useMemo(() => {
+    if (!evaluations || evaluations.length === 0) return null;
+    return [...evaluations].sort(
+      (a, b) =>
+        b.date_evaluation.localeCompare(a.date_evaluation) || b.id - a.id
+    )[0];
+  }, [evaluations]);
+
+  const balanceHypoActives = useMemo(
+    () =>
+      (hypotheques || [])
+        .filter((h) => h.status === "active")
+        .reduce((s, h) => s + (h.balance_actuelle ?? 0), 0),
+    [hypotheques]
+  );
+
+  const equite = lastEval ? lastEval.valeur - balanceHypoActives : null;
 
   async function onChangeOwner(entrepriseId: number) {
     if (!entrepriseId || entrepriseId === ownerId) return;
@@ -692,7 +713,7 @@ export default function ImmeubleDetailPage({
 
         {/* KPIs financiers */}
         {financials ? (
-          <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
             <Kpi
               label="Revenu mensuel"
               value={fmtCurrency(financials.revenu_brut_mensuel)}
@@ -722,6 +743,17 @@ export default function ImmeubleDetailPage({
               sub={`${financials.nb_logements_occupes}/${financials.nb_logements_actifs} occupés`}
               icon={Home}
               tone={financials.taux_occupation >= 0.9 ? "emerald" : "amber"}
+            />
+            <Kpi
+              label="Équité"
+              value={fmtCurrency(equite)}
+              sub={
+                lastEval
+                  ? `Valeur ${fmtCurrency(lastEval.valeur)} − hyp. ${fmtCurrency(balanceHypoActives)}`
+                  : "Aucune évaluation"
+              }
+              icon={TrendingUp}
+              tone={(equite ?? 0) >= 0 ? "emerald" : "rose"}
             />
           </section>
         ) : null}
@@ -758,6 +790,9 @@ export default function ImmeubleDetailPage({
               immeuble={immeuble}
               financials={financials}
               logementsCount={logements?.length || 0}
+              baux={baux}
+              logements={logements}
+              hypotheques={hypotheques}
             />
           ) : null}
           {tab === "logements" ? <LogementsTab list={logements} /> : null}
@@ -776,7 +811,16 @@ export default function ImmeubleDetailPage({
               onMutated={() => void refreshFinancials()}
             />
           ) : null}
-          {tab === "evaluations" ? <EvaluationsTab list={evaluations} /> : null}
+          {tab === "evaluations" ? (
+            <EvaluationsTab
+              immeubleId={immeubleId}
+              list={evaluations}
+              setList={setEvaluations}
+              purchasePrice={immeuble.purchase_price ?? null}
+              balanceHypoActives={balanceHypoActives}
+              onMutated={() => void refreshFinancials()}
+            />
+          ) : null}
           {tab === "maintenance" ? (
             <MaintenanceTab list={maintenance} rollup={rollup} />
           ) : null}
@@ -1186,12 +1230,40 @@ function Section({
 function OverviewTab({
   immeuble,
   financials,
-  logementsCount
+  logementsCount,
+  baux,
+  logements,
+  hypotheques
 }: {
   immeuble: Immeuble;
   financials: Financials | null;
   logementsCount: number;
+  baux: Bail[] | null;
+  logements: Logement[] | null;
+  hypotheques: Hypotheque[] | null;
 }) {
+  const logMap = new Map((logements || []).map((l) => [l.id, l.numero]));
+
+  // Baux actifs qui échoient d'ici 90 jours.
+  const bauxBientot = (baux || []).filter((b) => {
+    if (b.status !== "actif" || !b.date_fin) return false;
+    const jours =
+      (new Date(`${b.date_fin}T00:00:00`).getTime() - Date.now()) /
+      (1000 * 60 * 60 * 24);
+    return jours >= 0 && jours < 90;
+  });
+
+  // Hypothèques actives dont le terme se termine dans moins de 6 mois.
+  const termesBientot = (hypotheques || []).filter((h) => {
+    if (h.status !== "active" || !h.date_fin_terme) return false;
+    const mois =
+      (new Date(`${h.date_fin_terme}T00:00:00`).getTime() - Date.now()) /
+      (1000 * 60 * 60 * 24 * 30.44);
+    return mois < 6;
+  });
+
+  const hasAlerts = bauxBientot.length > 0 || termesBientot.length > 0;
+
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <Section title="Caractéristiques">
@@ -1260,6 +1332,64 @@ function OverviewTab({
           </dd>
         </dl>
       </Section>
+
+      <div className="lg:col-span-2">
+        <Section title="À surveiller">
+          {!hasAlerts ? (
+            <p className="text-xs text-white/40">Rien à signaler.</p>
+          ) : (
+            <div className="grid gap-3 lg:grid-cols-2">
+              {bauxBientot.length > 0 ? (
+                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+                  <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                    {bauxBientot.length}{" "}
+                    {bauxBientot.length > 1 ? "baux échoient" : "bail échoit"}{" "}
+                    d&apos;ici 90 jours
+                  </p>
+                  <ul className="mt-2 space-y-1 text-xs text-amber-200/80">
+                    {bauxBientot.map((b) => (
+                      <li
+                        key={b.id}
+                        className="flex items-center justify-between gap-3"
+                      >
+                        <span>
+                          Logement{" "}
+                          {logMap.get(b.logement_id) || `#${b.logement_id}`}
+                        </span>
+                        <span className="font-mono">{b.date_fin}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {termesBientot.length > 0 ? (
+                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+                  <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                    Fin de terme hypothécaire dans moins de 6 mois
+                  </p>
+                  <ul className="mt-2 space-y-1 text-xs text-amber-200/80">
+                    {termesBientot.map((h) => (
+                      <li
+                        key={h.id}
+                        className="flex items-center justify-between gap-3"
+                      >
+                        <span>
+                          {h.preteur} (rang {h.rang})
+                        </span>
+                        <span className="font-mono">
+                          {h.date_fin_terme || "—"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </Section>
+      </div>
     </div>
   );
 }
@@ -2129,41 +2259,352 @@ function HypothequesTab({
   );
 }
 
-function EvaluationsTab({ list }: { list: Evaluation[] | null }) {
-  if (list === null) return <Loading />;
-  if (list.length === 0) return <Empty msg="Aucune évaluation." />;
+const EVAL_KINDS: [string, string][] = [
+  ["municipale", "Municipale"],
+  ["marchande", "Marchande"],
+  ["appraisal", "Rapport d'évaluateur"]
+];
+
+const EVAL_KIND_LABEL: Record<string, string> = {
+  municipale: "Municipale",
+  marchande: "Marchande",
+  appraisal: "Rapport d'évaluateur",
+  auto: "Auto"
+};
+
+const EVAL_KIND_BADGE: Record<string, string> = {
+  municipale: "badge-sky",
+  marchande: "badge-emerald",
+  appraisal: "badge-violet",
+  auto: "badge-neutral"
+};
+
+function EvaluationForm({
+  busy,
+  onCancel,
+  onSubmit
+}: {
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (payload: Record<string, unknown>) => void;
+}) {
+  const [f, setF] = useState({
+    kind: "marchande",
+    valeur: "",
+    date_evaluation: new Date().toISOString().slice(0, 10),
+    source: "",
+    notes: ""
+  });
+
+  const set = (k: keyof typeof f) => (v: string) =>
+    setF((prev) => ({ ...prev, [k]: v }));
+
+  const valid =
+    f.valeur.trim() !== "" &&
+    !Number.isNaN(Number(f.valeur)) &&
+    Number(f.valeur) >= 0 &&
+    f.date_evaluation !== "";
+
+  function submit() {
+    if (!valid) return;
+    onSubmit({
+      kind: f.kind,
+      valeur: Number(f.valeur),
+      date_evaluation: f.date_evaluation,
+      source: f.source.trim() || null,
+      notes: f.notes.trim() || null
+    });
+  }
+
+  const inputCls =
+    "mt-0.5 block w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
+  const labelCls = "text-[11px] font-semibold text-white/60";
+
   return (
-    <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
-      <table className="w-full text-left text-sm">
-        <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
-          <tr>
-            <th className="px-4 py-2.5">Date</th>
-            <th className="px-4 py-2.5">Type</th>
-            <th className="px-4 py-2.5">Source</th>
-            <th className="px-4 py-2.5 text-right">Valeur</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-brand-800">
-          {list.map((e) => (
-            <tr key={e.id}>
-              <td className="px-4 py-2 text-xs text-white/70">
-                {e.date_evaluation}
-              </td>
-              <td className="px-4 py-2 text-xs">
-                <span className="badge badge-neutral font-mono">
-                  {e.kind}
-                </span>
-              </td>
-              <td className="px-4 py-2 text-xs text-white/50">
-                {e.source || "—"}
-              </td>
-              <td className="px-4 py-2 text-right font-mono text-sm font-bold text-white">
-                {fmtCurrency(e.valeur)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+      <p className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
+        Nouvelle évaluation
+      </p>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label className={labelCls}>
+          Type
+          <select
+            value={f.kind}
+            onChange={(e) => set("kind")(e.target.value)}
+            className={inputCls}
+          >
+            {EVAL_KINDS.map(([v, l]) => (
+              <option key={v} value={v} className="bg-brand-950 text-white">
+                {l}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={labelCls}>
+          Valeur ($) *
+          <input
+            inputMode="decimal"
+            value={f.valeur}
+            onChange={(e) => set("valeur")(e.target.value)}
+            placeholder="0.00"
+            className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          Date *
+          <input
+            type="date"
+            value={f.date_evaluation}
+            onChange={(e) => set("date_evaluation")(e.target.value)}
+            className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          Source
+          <input
+            value={f.source}
+            onChange={(e) => set("source")(e.target.value)}
+            placeholder="Évaluateur, rôle municipal…"
+            className={inputCls}
+          />
+        </label>
+        <label className={`${labelCls} sm:col-span-2 lg:col-span-4`}>
+          Notes
+          <textarea
+            rows={2}
+            value={f.notes}
+            onChange={(e) => set("notes")(e.target.value)}
+            placeholder="Contexte, méthode, détails…"
+            className={inputCls}
+          />
+        </label>
+      </div>
+
+      <div className="mt-3 flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          className="btn-secondary btn-sm"
+        >
+          Annuler
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={busy || !valid}
+          className="btn-accent btn-sm disabled:opacity-50"
+        >
+          {busy ? (
+            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Check className="mr-1 h-3.5 w-3.5" />
+          )}
+          Enregistrer
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function EvaluationsTab({
+  immeubleId,
+  list,
+  setList,
+  purchasePrice,
+  balanceHypoActives,
+  onMutated
+}: {
+  immeubleId: number;
+  list: Evaluation[] | null;
+  setList: React.Dispatch<React.SetStateAction<Evaluation[] | null>>;
+  purchasePrice: number | null;
+  balanceHypoActives: number;
+  onMutated: () => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function sortEvals(arr: Evaluation[]): Evaluation[] {
+    return [...arr].sort(
+      (a, b) =>
+        b.date_evaluation.localeCompare(a.date_evaluation) || b.id - a.id
+    );
+  }
+
+  async function create(payload: Record<string, unknown>) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch("/api/v1/immobilier/evaluations", {
+        method: "POST",
+        body: JSON.stringify({ immeuble_id: immeubleId, ...payload })
+      });
+      if (!res.ok)
+        throw new Error((await res.text()).slice(0, 200) || `HTTP ${res.status}`);
+      const created = (await res.json()) as Evaluation;
+      setList((prev) => sortEvals([...(prev || []), created]));
+      setAdding(false);
+      onMutated();
+    } catch (e) {
+      setErr(`Ajout échoué : ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(ev: Evaluation) {
+    if (
+      !window.confirm(
+        `Supprimer l'évaluation « ${EVAL_KIND_LABEL[ev.kind] || ev.kind} » du ${ev.date_evaluation} (${fmtCurrency(ev.valeur)}) ?`
+      )
+    )
+      return;
+    setErr(null);
+    const previous = list;
+    // Optimiste : on retire tout de suite, rollback si le serveur refuse.
+    setList((cur) => (cur || []).filter((x) => x.id !== ev.id));
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/evaluations/${ev.id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      onMutated();
+    } catch (e) {
+      setList(previous);
+      setErr(`Suppression échouée : ${(e as Error).message}`);
+    }
+  }
+
+  if (list === null) return <Loading />;
+
+  const sorted = sortEvals(list);
+  const last = sorted[0] || null;
+  const croissance =
+    last && purchasePrice && purchasePrice > 0
+      ? ((last.valeur - purchasePrice) / purchasePrice) * 100
+      : null;
+  const equite = last ? last.valeur - balanceHypoActives : null;
+
+  return (
+    <div className="space-y-3">
+      {last ? (
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Kpi
+            label="Dernière valeur"
+            value={fmtCurrency(last.valeur)}
+            sub={`${EVAL_KIND_LABEL[last.kind] || last.kind} — ${last.date_evaluation}`}
+            icon={DollarSign}
+            tone="sky"
+          />
+          <Kpi
+            label="Croissance vs achat"
+            value={fmtPct(croissance, 1)}
+            sub={
+              purchasePrice
+                ? `Prix d'achat ${fmtCurrency(purchasePrice)}`
+                : "Prix d'achat inconnu"
+            }
+            icon={TrendingUp}
+            tone={croissance != null && croissance < 0 ? "rose" : "emerald"}
+          />
+          <Kpi
+            label="Équité"
+            value={fmtCurrency(equite)}
+            sub={`Hyp. actives ${fmtCurrency(balanceHypoActives)}`}
+            icon={Banknote}
+            tone={(equite ?? 0) >= 0 ? "emerald" : "rose"}
+          />
+        </div>
+      ) : null}
+
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-white/50">
+          {list.length} évaluation{list.length > 1 ? "s" : ""}
+        </p>
+        {!adding ? (
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20"
+          >
+            <Plus className="h-3.5 w-3.5" /> Ajouter une évaluation
+          </button>
+        ) : null}
+      </div>
+
+      {err ? (
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+          {err}
+        </p>
+      ) : null}
+
+      {adding ? (
+        <EvaluationForm
+          busy={busy}
+          onCancel={() => setAdding(false)}
+          onSubmit={(p) => void create(p)}
+        />
+      ) : null}
+
+      {sorted.length === 0 && !adding ? (
+        <Empty msg="Aucune évaluation." />
+      ) : sorted.length > 0 ? (
+        <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
+              <tr>
+                <th className="px-4 py-2.5">Date</th>
+                <th className="px-4 py-2.5">Type</th>
+                <th className="px-4 py-2.5 text-right">Valeur</th>
+                <th className="px-4 py-2.5">Source</th>
+                <th className="px-4 py-2.5">Notes</th>
+                <th className="px-4 py-2.5 text-right"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-brand-800">
+              {sorted.map((e) => (
+                <tr key={e.id}>
+                  <td className="px-4 py-2 font-mono text-xs text-white/70">
+                    {e.date_evaluation}
+                  </td>
+                  <td className="px-4 py-2 text-xs">
+                    <span
+                      className={`badge ${EVAL_KIND_BADGE[e.kind] || "badge-neutral"}`}
+                    >
+                      {EVAL_KIND_LABEL[e.kind] || e.kind}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono text-sm font-bold text-white">
+                    {fmtCurrency(e.valeur)}
+                  </td>
+                  <td className="px-4 py-2 text-xs text-white/50">
+                    {e.source || "—"}
+                  </td>
+                  <td
+                    className="max-w-[240px] truncate px-4 py-2 text-xs text-white/50"
+                    title={e.notes || undefined}
+                  >
+                    {e.notes || "—"}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <button
+                      type="button"
+                      onClick={() => void remove(e)}
+                      className="btn-outline-rose btn-xs"
+                      title="Supprimer l'évaluation"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </div>
   );
 }
