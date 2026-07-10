@@ -562,6 +562,17 @@ def make_crud_router(
 
                 await bump_to_in_progress_if_needed(db, new_project_id)
                 await db.flush()
+            # Miroir feuille de temps QB : toute modification d'un punch
+            # (heures corrigées, projet changé, désapprobation…) est
+            # reflétée sur sa TimeActivity — mise à jour si éligible,
+            # suppression sinon. Best-effort en arrière-plan ; le filet
+            # horaire rattrape les échecs.
+            if new_project_id or getattr(obj, "qbo_time_activity_id", None):
+                import asyncio as _asyncio
+
+                from app.services.labour_time_qbo import push_punch_time_now
+
+                _asyncio.create_task(push_punch_time_now(int(obj.id)))
         if model is Soumission:
             new_total = getattr(obj, "total", None)
             if new_total != prev_soum_total and new_total is not None:
@@ -649,7 +660,22 @@ def make_crud_router(
                     .values(invoiced_at=None, facture_item_id=None)
                 )
 
+        # Punch supprimé → retirer aussi ses heures du suivi de projet QB
+        # (TimeActivity). Id capturé AVANT le delete, retrait en fond.
+        _punch_ta_id = (
+            (getattr(obj, "qbo_time_activity_id", None) or "").strip()
+            if model is Punch
+            else ""
+        )
         await crud.delete(obj)
+        if _punch_ta_id:
+            import asyncio as _asyncio
+
+            from app.services.labour_time_qbo import (
+                delete_time_activity_now,
+            )
+
+            _asyncio.create_task(delete_time_activity_now(_punch_ta_id))
         from app.services.audit import log_action as _log_action
 
         await _log_action(

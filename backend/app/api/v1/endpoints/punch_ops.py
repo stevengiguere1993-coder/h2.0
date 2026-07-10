@@ -647,6 +647,16 @@ async def approve_punch(
         entity_id=p.id,
         details={"employe_id": p.employe_id, "hours": float(p.hours or 0)},
     )
+    # Heures approuvées + projet → feuille de temps QB (TimeActivity) en
+    # arrière-plan : suivi de projet/rentabilité SANS écriture comptable
+    # (la paie est déjà au grand livre). Best-effort ; le filet horaire
+    # (qbo_nets) rattrape tout échec.
+    if p.project_id:
+        import asyncio as _asyncio
+
+        from app.services.labour_time_qbo import push_punch_time_now
+
+        _asyncio.create_task(push_punch_time_now(int(p.id)))
     emp = (
         await db.execute(select(Employe).where(Employe.id == p.employe_id))
     ).scalar_one_or_none()
@@ -687,8 +697,17 @@ async def reject_punch(
             "hours": float(p.hours) if p.hours is not None else None,
         },
     )
+    # Capture l'id de la feuille de temps QB AVANT le delete pour retirer
+    # aussi les heures du suivi de projet QuickBooks (miroir).
+    _ta_id = (getattr(p, "qbo_time_activity_id", None) or "").strip()
     await db.delete(p)
     await db.flush()
+    if _ta_id:
+        import asyncio as _asyncio
+
+        from app.services.labour_time_qbo import delete_time_activity_now
+
+        _asyncio.create_task(delete_time_activity_now(_ta_id))
 
 
 # ---------- Payroll monthly report (manager+) ----------

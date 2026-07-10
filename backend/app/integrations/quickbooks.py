@@ -678,6 +678,95 @@ class QuickBooksClient:
             return None
 
     # ------------------------------------------------------------------
+    # Employees & TimeActivity (feuilles de temps — suivi de projet)
+    # ------------------------------------------------------------------
+    async def find_employee_by_name(
+        self, name: str
+    ) -> Optional[Dict[str, Any]]:
+        safe = (name or "").replace("'", "''")
+        rows = await self.query(
+            f"SELECT * FROM Employee WHERE DisplayName = '{safe}' "
+            "MAXRESULTS 1"
+        )
+        return rows[0] if rows else None
+
+    async def ensure_employee(
+        self, *, display_name: str
+    ) -> Optional[Dict[str, Any]]:
+        """Find-or-create un employé QBO par DisplayName. Retourne None en
+        cas d'échec — typiquement une COLLISION de nom : dans QBO, les
+        Customer/Vendor/Employee partagent le même espace de noms, un
+        employé homonyme d'un client/fournisseur est refusé. L'appelant
+        saute alors la feuille de temps (best-effort) plutôt que d'échouer."""
+        clean = (display_name or "").strip()
+        if not clean:
+            return None
+        try:
+            found = await self.find_employee_by_name(clean)
+            if found:
+                return found
+            body: Dict[str, Any] = {"DisplayName": clean[:100]}
+            # GivenName / FamilyName aident QBO à afficher l'employé
+            # correctement dans les feuilles de temps.
+            parts = clean.split()
+            if len(parts) >= 2:
+                body["GivenName"] = parts[0][:100]
+                body["FamilyName"] = " ".join(parts[1:])[:100]
+            else:
+                body["GivenName"] = clean[:100]
+            data = await self._request(
+                "POST", "/employee", json_body=body,
+                params={"minorversion": "70"},
+            )
+            return data.get("Employee") or data
+        except QuickBooksError as exc:
+            log.warning("ensure_employee « %s » : %s", clean, exc)
+            return None
+
+    async def get_time_activity(self, ta_id: str) -> Dict[str, Any]:
+        data = await self._request("GET", f"/timeactivity/{ta_id}")
+        return data.get("TimeActivity") or data
+
+    async def create_time_activity(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Crée une feuille de temps (TimeActivity) — les heures comptent
+        dans le SUIVI DE PROJET (rentabilité) sans écriture comptable."""
+        data = await self._request(
+            "POST", "/timeactivity", json_body=payload,
+            params={"minorversion": "70"},
+        )
+        return data.get("TimeActivity") or data
+
+    async def update_time_activity(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        data = await self._request(
+            "POST", "/timeactivity", json_body=payload,
+            params={"minorversion": "70"},
+        )
+        return data.get("TimeActivity") or data
+
+    async def delete_time_activity(self, ta_id: str) -> bool:
+        """Supprime une TimeActivity (best-effort) — miroir d'un punch
+        supprimé/désapprouvé dans Kratos. False sans lever si absente."""
+        try:
+            cur = await self.get_time_activity(str(ta_id))
+            tok = str(cur.get("SyncToken") or "0")
+        except Exception:  # noqa: BLE001
+            return False
+        try:
+            await self._request(
+                "POST",
+                "/timeactivity",
+                json_body={"Id": str(ta_id), "SyncToken": tok},
+                params={"operation": "delete", "minorversion": "70"},
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    # ------------------------------------------------------------------
     # Items (Service catalog)
     # ------------------------------------------------------------------
     async def first_income_account(self) -> Optional[Dict[str, Any]]:
