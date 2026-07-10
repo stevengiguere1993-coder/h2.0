@@ -493,8 +493,8 @@ async def pull_project_costs_from_qbo(
             )
             continue
         if bid in existing_bill:
-            # Déjà importé → on reflète seulement un PAIEMENT QB
-            # (Bill soldé, balance 0) sur un achat pas encore payé.
+            # Déjà importé → on reflète le PAIEMENT QB (Bill soldé) ET les
+            # MODIFICATIONS faites dans QB (montant, description).
             ach = existing_bill[bid]
             # Backfill : fournisseur manquant sur l'achat (importé avant
             # que la création automatique du fournisseur n'existe).
@@ -506,6 +506,25 @@ async def pull_project_costs_from_qbo(
                     (b.get("VendorRef") or {}).get("value"),
                 )
                 await db.flush()
+            # Reflète les MODIFS faites dans QB (montant / description) sur un
+            # coût ORIGINAIRE de QB — stocké en TTC, SANS ventilation de taxe
+            # côté Kratos (amount_taxes == 0). On ne touche PAS un achat
+            # « maître Kratos » (amount = HT + amount_taxes) pour ne pas
+            # écraser sa ventilation. Corrige : « une facture à payer / un
+            # reçu modifié dans QB ne se met pas à jour dans les dépenses ».
+            updated = False
+            if not dry_run and float(ach.amount_taxes or 0) == 0:
+                new_desc = _txn_description(b)
+                if total and round(float(ach.amount or 0), 2) != round(
+                    float(total), 2
+                ):
+                    ach.amount = total
+                    updated = True
+                if new_desc and (ach.description or "") != new_desc:
+                    ach.description = new_desc
+                    updated = True
+                if updated:
+                    await db.flush()
             if paid and ach.status != "paid":
                 if not dry_run:
                     ach.status = "paid"
@@ -521,6 +540,11 @@ async def pull_project_costs_from_qbo(
                     await db.flush()
                 stats["paid_synced"] += 1
                 pv_status = "paiement_synchro"
+            elif updated:
+                stats["updated_from_qbo"] = (
+                    stats.get("updated_from_qbo", 0) + 1
+                )
+                pv_status = "maj_qbo"
             else:
                 stats["skipped_existing"] += 1
                 pv_status = "deja_importe"
@@ -622,6 +646,21 @@ async def pull_project_costs_from_qbo(
                     (p.get("EntityRef") or {}).get("value"),
                 )
                 updated.append("fournisseur")
+            # Reflète les MODIFS QB (montant / description) sur une dépense
+            # ORIGINAIRE de QB (TTC, sans ventilation de taxe Kratos). On ne
+            # touche PAS un achat maître-Kratos (amount = HT + amount_taxes).
+            if float(existing.amount_taxes or 0) == 0:
+                new_desc = _txn_description(p)
+                if total and round(float(existing.amount or 0), 2) != round(
+                    float(total), 2
+                ):
+                    if not dry_run:
+                        existing.amount = total
+                    updated.append("montant")
+                if new_desc and (existing.description or "") != new_desc:
+                    if not dry_run:
+                        existing.description = new_desc
+                    updated.append("description")
             if not dry_run:
                 # Rafraîchit le SyncToken pour un achat poussé depuis Kratos
                 # (évite un « stale token » au prochain push).
