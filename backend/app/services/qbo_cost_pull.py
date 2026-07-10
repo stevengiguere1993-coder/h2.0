@@ -496,23 +496,33 @@ async def pull_project_costs_from_qbo(
             # Déjà importé → on reflète le PAIEMENT QB (Bill soldé) ET les
             # MODIFICATIONS faites dans QB (montant, description).
             ach = existing_bill[bid]
-            # Backfill : fournisseur manquant sur l'achat (importé avant
-            # que la création automatique du fournisseur n'existe).
-            if not dry_run and ach.fournisseur_id is None and vendor:
-                ach.fournisseur_id = await _fournisseur_id_for(
+            updated = False
+            # Fournisseur : backfill s'il manque, ET reflet d'un CHANGEMENT
+            # de fournisseur fait dans QB (avant, seul le backfill existait —
+            # changer le fournisseur d'une facture dans QB ne se voyait pas).
+            if not dry_run and vendor:
+                _fid = await _fournisseur_id_for(
                     db,
                     fourn_by_name,
                     vendor,
                     (b.get("VendorRef") or {}).get("value"),
                 )
-                await db.flush()
+                if _fid and ach.fournisseur_id != _fid:
+                    ach.fournisseur_id = _fid
+                    updated = True
+                    await db.flush()
+            # Date de facture : reflète un changement de TxnDate fait dans QB
+            # (la branche Purchase le faisait déjà, pas celle des Bills).
+            _new_date = _parse_date(b.get("TxnDate"))
+            if not dry_run and _new_date and _new_date != ach.invoice_date:
+                ach.invoice_date = _new_date
+                updated = True
             # Reflète les MODIFS faites dans QB (montant / description) sur un
             # coût ORIGINAIRE de QB — stocké en TTC, SANS ventilation de taxe
             # côté Kratos (amount_taxes == 0). On ne touche PAS un achat
             # « maître Kratos » (amount = HT + amount_taxes) pour ne pas
             # écraser sa ventilation. Corrige : « une facture à payer / un
             # reçu modifié dans QB ne se met pas à jour dans les dépenses ».
-            updated = False
             if not dry_run and float(ach.amount_taxes or 0) == 0:
                 new_desc = _txn_description(b)
                 if total and round(float(ach.amount or 0), 2) != round(
@@ -525,6 +535,29 @@ async def pull_project_costs_from_qbo(
                     updated = True
                 if updated:
                     await db.flush()
+            # RÉAFFECTATION DE PROJET : l'utilisateur a imputé (ou ré-imputé)
+            # cette facture à un projet dans QB (CustomerRef de ligne) APRÈS
+            # son import → on reflète le project_id sur l'achat existant,
+            # sinon elle n'apparaît jamais dans les dépenses du projet (cas
+            # 8900 : facture déjà dans Kratos sans projet, imputée ensuite
+            # dans QB). On n'EFFACE jamais un projet (une facture QB sans
+            # CustomerRef ne retire pas un lien possiblement posé à la main).
+            proj_link = _project_for_txn(b, proj_by_job)
+            if (
+                not dry_run
+                and proj_link is not None
+                and ach.project_id != proj_link.id
+            ):
+                first_link = ach.project_id is None
+                ach.project_id = proj_link.id
+                # Défaut « à refacturer » du projet cible UNIQUEMENT au
+                # premier rattachement (même sémantique qu'un import neuf) et
+                # si pas déjà refacturé ; un simple déplacement de projet ne
+                # touche pas le choix existant.
+                if first_link and ach.invoiced_at is None:
+                    ach.is_billable = _is_billable(proj_link)
+                updated = True
+                await db.flush()
             if paid and ach.status != "paid":
                 if not dry_run:
                     ach.status = "paid"
@@ -661,6 +694,20 @@ async def pull_project_costs_from_qbo(
                     if not dry_run:
                         existing.description = new_desc
                     updated.append("description")
+            # RÉAFFECTATION DE PROJET (cf. branche Bill) : dépense imputée à
+            # un projet dans QB après son import → refléter le project_id.
+            # Jamais d'effacement de projet.
+            proj_link = _project_for_txn(p, proj_by_job)
+            if (
+                proj_link is not None
+                and existing.project_id != proj_link.id
+            ):
+                first_link = existing.project_id is None
+                if not dry_run:
+                    existing.project_id = proj_link.id
+                    if first_link and existing.invoiced_at is None:
+                        existing.is_billable = _is_billable(proj_link)
+                updated.append("projet")
             if not dry_run:
                 # Rafraîchit le SyncToken pour un achat poussé depuis Kratos
                 # (évite un « stale token » au prochain push).
