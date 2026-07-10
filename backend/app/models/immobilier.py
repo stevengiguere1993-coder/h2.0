@@ -505,6 +505,15 @@ class Hypotheque(Base, TimestampUpdateMixin):
         Numeric(10, 2), nullable=True
     )
 
+    # Composition des intérêts choisie dans le calculateur de paiement :
+    # 'semi' (semi-annuelle, standard hypothèques résidentielles CA) ou
+    # 'mensuelle' (prêts commerciaux / variables). Persistée pour que la
+    # préférence ne revienne pas au défaut après sauvegarde.
+    # Colonne additive (cf. db/session.py).
+    composition_interets: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True
+    )
+
     date_debut: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     date_fin_terme: Mapped[Optional[date]] = mapped_column(
         Date, nullable=True, index=True
@@ -549,6 +558,15 @@ class Evaluation(Base):
 
     source: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Évaluation de référence pour le calcul d'équité (valeur actuelle).
+    # Une seule par immeuble : passer à True remet les autres à False
+    # (cf. endpoint PATCH /evaluations/{id}).
+    # Colonne additive (cf. db/session.py).
+    is_reference: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -645,6 +663,18 @@ class DepenseImmeuble(Base, TimestampUpdateMixin):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by_email: Mapped[Optional[str]] = mapped_column(
         String(256), nullable=True
+    )
+
+    # Le montant est un % des loyers mensuels plutôt qu'un montant fixe
+    # (ex. frais de gestion à 5 % des loyers). Colonne additive
+    # (cf. db/session.py).
+    is_pourcentage: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    # Dépense taxable : appliquer TPS+TVQ Québec (×1.14975) dans les
+    # calculs (cashflow, NOI). Colonne additive (cf. db/session.py).
+    taxable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
 
 

@@ -264,6 +264,16 @@ async def ensure_critical_columns() -> None:
         ("imm_immeubles", "gestion_externe", "BOOLEAN NOT NULL DEFAULT FALSE"),
         ("imm_immeubles", "gestionnaire_externe_nom", "VARCHAR(255)"),
         ("imm_immeubles", "gestionnaire_externe_contact", "VARCHAR(255)"),
+        # Finances immobilier 2026-07 : composition des intérêts d'une
+        # hypothèque ('semi'|'mensuelle'), évaluation de référence pour
+        # l'équité, dépenses en % des loyers + taxables (TPS/TVQ).
+        # Tables préexistantes → create_all ne pose pas les colonnes ;
+        # sans elles, tout SELECT sur ces tables plante → 500.
+        ("imm_hypotheques", "composition_interets", "VARCHAR(16)"),
+        ("imm_evaluations", "is_reference", "BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("immeuble_depenses", "is_pourcentage",
+         "BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("immeuble_depenses", "taxable", "BOOLEAN NOT NULL DEFAULT FALSE"),
     )
     for table, column, col_type in critical_columns:
         try:
@@ -967,6 +977,17 @@ async def init_db() -> None:
              "BOOLEAN NOT NULL DEFAULT FALSE"),
             ("imm_immeubles", "gestionnaire_externe_nom", "VARCHAR(255)"),
             ("imm_immeubles", "gestionnaire_externe_contact", "VARCHAR(255)"),
+            # Finances immobilier 2026-07 : composition des intérêts
+            # ('semi'|'mensuelle') persistée sur l'hypothèque, évaluation
+            # de référence pour le calcul d'équité, dépenses en % des
+            # loyers mensuels + taxables (TPS/TVQ ×1.14975).
+            ("imm_hypotheques", "composition_interets", "VARCHAR(16)"),
+            ("imm_evaluations", "is_reference",
+             "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("immeuble_depenses", "is_pourcentage",
+             "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("immeuble_depenses", "taxable",
+             "BOOLEAN NOT NULL DEFAULT FALSE"),
             # Drive : URL du dossier Google Drive lié à l'entité.
             # Bouton « Drive » dans le header de la fiche y mène.
             # NULL = pas configuré.

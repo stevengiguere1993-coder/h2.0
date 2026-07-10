@@ -33,7 +33,7 @@ from fastapi import (
 )
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.permissions import visible_immeuble_ids
@@ -77,6 +77,7 @@ from app.schemas.immobilier import (
     BailUpdate,
     EvaluationCreate,
     EvaluationRead,
+    EvaluationUpdate,
     HypothequeCreate,
     HypothequeRead,
     HypothequeUpdate,
@@ -2866,6 +2867,10 @@ class DepenseRead(BaseModel):
     libelle: str
     montant: float
     frequence: str
+    # montant = % des loyers mensuels (ex. gestion à 5 %) au lieu d'un $.
+    is_pourcentage: bool = False
+    # taxable = appliquer TPS+TVQ Québec (×1.14975) dans les calculs.
+    taxable: bool = False
     date_depense: Optional[date] = None
     notes: Optional[str] = None
 
@@ -2875,6 +2880,8 @@ class DepenseCreate(BaseModel):
     libelle: str
     montant: float = Field(..., ge=0)
     frequence: str = "ponctuel"
+    is_pourcentage: bool = False
+    taxable: bool = False
     date_depense: Optional[date] = None
     notes: Optional[str] = None
 
@@ -2884,6 +2891,8 @@ class DepenseUpdate(BaseModel):
     libelle: Optional[str] = None
     montant: Optional[float] = Field(default=None, ge=0)
     frequence: Optional[str] = None
+    is_pourcentage: Optional[bool] = None
+    taxable: Optional[bool] = None
     date_depense: Optional[date] = None
     notes: Optional[str] = None
 
@@ -2896,6 +2905,8 @@ def _depense_to_read(d: DepenseImmeuble) -> DepenseRead:
         libelle=d.libelle,
         montant=float(d.montant or 0),
         frequence=d.frequence,
+        is_pourcentage=bool(d.is_pourcentage),
+        taxable=bool(d.taxable),
         date_depense=d.date_depense,
         notes=d.notes,
     )
@@ -2944,6 +2955,8 @@ async def create_depense(
             if payload.frequence in ("ponctuel", "mensuel", "annuel")
             else "ponctuel"
         ),
+        is_pourcentage=payload.is_pourcentage,
+        taxable=payload.taxable,
         date_depense=payload.date_depense,
         notes=payload.notes,
         created_by_email=user.email,
@@ -3421,9 +3434,50 @@ async def create_evaluation(
 ) -> EvaluationRead:
     _require_volet(user)
     await _get_immeuble_or_404(db, payload.immeuble_id)
+    if payload.is_reference:
+        # Une seule évaluation de référence par immeuble.
+        await db.execute(
+            update(Evaluation)
+            .where(Evaluation.immeuble_id == payload.immeuble_id)
+            .values(is_reference=False)
+        )
     obj = Evaluation(**payload.model_dump())
     obj.created_at = _now()
     db.add(obj)
+    await db.commit()
+    await db.refresh(obj)
+    return EvaluationRead.model_validate(obj)
+
+
+@router.patch("/evaluations/{eval_id}", response_model=EvaluationRead)
+async def update_evaluation(
+    eval_id: int,
+    payload: EvaluationUpdate,
+    db: DBSession,
+    user: CurrentUser,
+) -> EvaluationRead:
+    """Marque/démarque l'évaluation de référence pour le calcul d'équité.
+
+    Passer ``is_reference=True`` remet automatiquement à False les
+    autres évaluations du même immeuble (une seule référence)."""
+    _require_volet(user)
+    obj = await db.get(Evaluation, eval_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Évaluation introuvable.")
+    data = payload.model_dump(exclude_unset=True)
+    if data.get("is_reference") is True:
+        await db.execute(
+            update(Evaluation)
+            .where(
+                and_(
+                    Evaluation.immeuble_id == obj.immeuble_id,
+                    Evaluation.id != obj.id,
+                )
+            )
+            .values(is_reference=False)
+        )
+    for k, v in data.items():
+        setattr(obj, k, v)
     await db.commit()
     await db.refresh(obj)
     return EvaluationRead.model_validate(obj)
@@ -3748,12 +3802,22 @@ async def get_financials(
         or 0
     )
 
-    # Hypothèques actives
+    # Hypothèques actives. Balance = COALESCE(balance_actuelle,
+    # montant_initial) : une balance jamais saisie n'est PAS une
+    # hypothèque à 0 $ (l'équité était gonflée artificiellement).
     hyp_rows = (
         await db.execute(
             select(
                 func.coalesce(func.sum(Hypotheque.paiement_mensuel), 0),
-                func.coalesce(func.sum(Hypotheque.balance_actuelle), 0),
+                func.coalesce(
+                    func.sum(
+                        func.coalesce(
+                            Hypotheque.balance_actuelle,
+                            Hypotheque.montant_initial,
+                        )
+                    ),
+                    0,
+                ),
             ).where(
                 and_(
                     Hypotheque.immeuble_id == immeuble_id,
@@ -3765,15 +3829,30 @@ async def get_financials(
     paiement_hyp = float(hyp_rows[0] or 0)
     balance_hyp = float(hyp_rows[1] or 0)
 
-    # Valeur la plus récente (toutes catégories)
+    # Valeur actuelle : l'évaluation marquée « référence » prime ;
+    # sinon fallback sur la plus récente (toutes catégories).
     val_row = (
         await db.execute(
             select(Evaluation.valeur)
-            .where(Evaluation.immeuble_id == immeuble_id)
+            .where(
+                and_(
+                    Evaluation.immeuble_id == immeuble_id,
+                    Evaluation.is_reference.is_(True),
+                )
+            )
             .order_by(Evaluation.date_evaluation.desc())
             .limit(1)
         )
     ).scalar()
+    if val_row is None:
+        val_row = (
+            await db.execute(
+                select(Evaluation.valeur)
+                .where(Evaluation.immeuble_id == immeuble_id)
+                .order_by(Evaluation.date_evaluation.desc())
+                .limit(1)
+            )
+        ).scalar()
     valeur_actuelle = float(val_row) if val_row is not None else None
 
     # Valeur municipale (la plus récente du kind=municipale)
@@ -3799,21 +3878,60 @@ async def get_financials(
         or (float(imm.purchase_price) if imm.purchase_price else None)
     )
 
+    # Dépenses récurrentes mensualisées (même logique que l'onglet
+    # Cashflow frontend) : mensuel → montant ; annuel → montant / 12 ;
+    # ponctuel → exclu du flux récurrent. is_pourcentage → le montant
+    # est un % des loyers mensuels. taxable → TPS+TVQ Québec ×1.14975.
+    dep_rows = (
+        await db.execute(
+            select(
+                DepenseImmeuble.montant,
+                DepenseImmeuble.frequence,
+                DepenseImmeuble.is_pourcentage,
+                DepenseImmeuble.taxable,
+            ).where(
+                and_(
+                    DepenseImmeuble.immeuble_id == immeuble_id,
+                    DepenseImmeuble.frequence.in_(("mensuel", "annuel")),
+                )
+            )
+        )
+    ).all()
+    depenses_mensuelles = 0.0
+    for montant, frequence, is_pct, taxable in dep_rows:
+        m = float(montant or 0)
+        if is_pct:
+            m = revenu * m / 100.0
+        if frequence == "annuel":
+            m = m / 12.0
+        if taxable:
+            m *= 1.14975
+        depenses_mensuelles += m
+
     revenu_annuel = revenu * 12
     grm = (
         round(valeur_pour_ratios / revenu_annuel, 2)
         if valeur_pour_ratios and revenu_annuel > 0
         else None
     )
-    # NOI ≈ 50% du revenu brut (règle du 50% — placeholder en attendant
-    # des charges réelles tracées dans le module Achats immobilier).
-    noi_annuel = revenu_annuel * 0.5
+    # NOI : réel si ≥1 dépense récurrente saisie (revenus − dépenses
+    # d'exploitation annualisées, SANS hypothèque), sinon fallback
+    # heuristique NOI ≈ 50 % du revenu brut (règle du 50 %). Le flag
+    # cap_rate_estime permet au front d'adapter le libellé.
+    cap_rate_estime = len(dep_rows) == 0
+    if cap_rate_estime:
+        noi_annuel = revenu_annuel * 0.5
+    else:
+        noi_annuel = revenu_annuel - depenses_mensuelles * 12
     cap_rate = (
         round((noi_annuel / valeur_pour_ratios) * 100, 2)
         if valeur_pour_ratios and valeur_pour_ratios > 0
         else None
     )
-    cash_flow = round(revenu - paiement_hyp, 2) if paiement_hyp >= 0 else None
+    # Cash flow mensuel récurrent = loyers actifs − dépenses récurrentes
+    # mensualisées − paiements hypothécaires actifs (aligné sur l'onglet
+    # Cashflow frontend — le KPI du haut doit raconter la même histoire).
+    cash_flow = round(revenu - depenses_mensuelles - paiement_hyp, 2)
     appreciation = None
     if imm.purchase_price and valeur_pour_ratios and float(imm.purchase_price) > 0:
         appreciation = round(
@@ -3836,6 +3954,7 @@ async def get_financials(
         purchase_price=float(imm.purchase_price) if imm.purchase_price else None,
         grm=grm,
         cap_rate=cap_rate,
+        cap_rate_estime=cap_rate_estime,
         cash_flow_mensuel=cash_flow,
         appreciation_pct=appreciation,
     )

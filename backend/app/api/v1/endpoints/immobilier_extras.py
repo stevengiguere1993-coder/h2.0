@@ -425,15 +425,31 @@ async def _compute_part_metrics(
         or 0
     )
 
-    # Valeur immeuble (eval la plus récente, fallback municipal puis prix achat)
+    # Valeur immeuble : l'évaluation de référence prime, sinon la plus
+    # récente, fallback municipal puis prix d'achat (même logique que
+    # get_financials — l'équité doit raconter la même histoire partout).
     val = (
         await db.execute(
             select(Evaluation.valeur)
-            .where(Evaluation.immeuble_id == immeuble.id)
+            .where(
+                and_(
+                    Evaluation.immeuble_id == immeuble.id,
+                    Evaluation.is_reference.is_(True),
+                )
+            )
             .order_by(Evaluation.date_evaluation.desc())
             .limit(1)
         )
     ).scalar()
+    if val is None:
+        val = (
+            await db.execute(
+                select(Evaluation.valeur)
+                .where(Evaluation.immeuble_id == immeuble.id)
+                .order_by(Evaluation.date_evaluation.desc())
+                .limit(1)
+            )
+        ).scalar()
     if val is None:
         val = (
             await db.execute(
@@ -452,11 +468,22 @@ async def _compute_part_metrics(
         val = immeuble.purchase_price
     valeur_imm = float(val) if val is not None else 0.0
 
-    # Hypothèque active
+    # Hypothèque active. Balance = COALESCE(balance_actuelle,
+    # montant_initial) : balance jamais saisie ≠ hypothèque à 0 $.
     balance_hyp = float(
         (
             await db.execute(
-                select(func.coalesce(func.sum(Hypotheque.balance_actuelle), 0))
+                select(
+                    func.coalesce(
+                        func.sum(
+                            func.coalesce(
+                                Hypotheque.balance_actuelle,
+                                Hypotheque.montant_initial,
+                            )
+                        ),
+                        0,
+                    )
+                )
                 .where(
                     and_(
                         Hypotheque.immeuble_id == immeuble.id,

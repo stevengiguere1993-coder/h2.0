@@ -272,15 +272,30 @@ async def _compute_valeur_part(
     """
     if inv.parts_pct is None or inv.parts_pct == 0:
         return None
-    # Valeur immeuble
+    # Valeur immeuble : l'évaluation de référence prime, sinon la plus
+    # récente (même logique que get_financials).
     val = (
         await db.execute(
             select(Evaluation.valeur)
-            .where(Evaluation.immeuble_id == imm.id)
+            .where(
+                and_(
+                    Evaluation.immeuble_id == imm.id,
+                    Evaluation.is_reference.is_(True),
+                )
+            )
             .order_by(Evaluation.date_evaluation.desc())
             .limit(1)
         )
     ).scalar()
+    if val is None:
+        val = (
+            await db.execute(
+                select(Evaluation.valeur)
+                .where(Evaluation.immeuble_id == imm.id)
+                .order_by(Evaluation.date_evaluation.desc())
+                .limit(1)
+            )
+        ).scalar()
     val_municipale = (
         await db.execute(
             select(Evaluation.valeur)
@@ -306,10 +321,22 @@ async def _compute_valeur_part(
     if valeur_imm is None:
         return None
 
+    # Balance = COALESCE(balance_actuelle, montant_initial) : balance
+    # jamais saisie ≠ hypothèque à 0 $ (équité gonflée sinon).
     balance_hyp = float(
         (
             await db.execute(
-                select(func.coalesce(func.sum(Hypotheque.balance_actuelle), 0))
+                select(
+                    func.coalesce(
+                        func.sum(
+                            func.coalesce(
+                                Hypotheque.balance_actuelle,
+                                Hypotheque.montant_initial,
+                            )
+                        ),
+                        0,
+                    )
+                )
                 .where(
                     and_(
                         Hypotheque.immeuble_id == imm.id,
