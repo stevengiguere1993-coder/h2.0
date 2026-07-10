@@ -44,12 +44,16 @@ async def _autopush_to_qbo(facture_id: int) -> None:
         # ERROR (pas warning) : une facture ENVOYÉE AU CLIENT qui n'atteint
         # pas QuickBooks est exactement l'échec silencieux à rendre visible
         # (motif QBO inclus). Le filet horaire (qbo_nets, non gated) la
-        # re-poussera ; le bouton « Relancer QuickBooks » affiche le motif.
+        # re-poussera ; l'erreur est aussi PERSISTÉE sur la facture pour
+        # s'afficher sur sa fiche.
         log.error(
             "Auto-push QBO facture %s ÉCHOUÉ : %s",
             facture_id,
             exc,
         )
+        from app.services.facture_qbo import record_facture_sync_error
+
+        await record_facture_sync_error(facture_id, str(exc))
 
 
 class FactureSendRequest(BaseModel):

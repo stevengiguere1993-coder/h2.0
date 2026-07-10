@@ -44,6 +44,7 @@ type Facture = {
   next_reminder_at: string | null;
   qbo_invoice_id: string | null;
   qbo_doc_number: string | null;
+  qbo_sync_error: string | null;
   internal_notes: string | null;
   client_note: string | null;
   is_final: boolean;
@@ -928,6 +929,14 @@ export default function FactureDetailPage() {
                 }`}
               >
                 {qboNotice}
+              </p>
+            ) : null}
+            {/* Dernière erreur de synchro QBO PERSISTÉE (backend) : visible
+                automatiquement, sans clic — c'est le motif exact renvoyé
+                par QuickBooks au dernier push (envoi, filet ou resync). */}
+            {!qboNotice && f.qbo_sync_error ? (
+              <p className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-200">
+                ⚠️ Dernière synchro QuickBooks en échec : {f.qbo_sync_error}
               </p>
             ) : null}
             {sendNotice ? (

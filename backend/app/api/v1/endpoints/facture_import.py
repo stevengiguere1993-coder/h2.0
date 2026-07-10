@@ -392,4 +392,14 @@ async def import_into_facture(
     # lit le total en base) affichait un montant différent de l'éditeur
     # (qui calcule depuis les lignes) — ex. 2 618,85 $ vs 6 730,43 $.
     await _recompute_facture_totals(db, facture_id)
+    # MIROIR QB : les lignes importées (achats refacturés, heures) doivent
+    # apparaître aussi sur l'Invoice QuickBooks de la facture — sans clic.
+    # Push en arrière-plan pour une facture ÉMISE ; un brouillon partira
+    # entier à l'envoi au client (sync_facture_to_qbo saute les drafts).
+    if (fa.status or "") not in ("draft", "void"):
+        import asyncio as _asyncio
+
+        from app.services.qbo_auto_sync import push_facture_now
+
+        _asyncio.create_task(push_facture_now(int(fa.id)))
     return ImportResult(added=added)

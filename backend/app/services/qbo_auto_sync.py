@@ -76,7 +76,11 @@ async def push_facture_now(facture_id: int) -> None:
             await sync_facture_to_qbo(db, facture_id)
             await db.commit()
     except Exception as exc:  # noqa: BLE001
-        log.warning("push_facture_now %s: %s", facture_id, exc)
+        log.error("push_facture_now %s: %s", facture_id, exc)
+        # Rend l'échec VISIBLE sur la fiche facture (session fraîche).
+        from app.services.facture_qbo import record_facture_sync_error
+
+        await record_facture_sync_error(facture_id, str(exc))
 
 
 async def autopush_soumission(soumission_id: int) -> None:
