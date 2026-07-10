@@ -208,7 +208,7 @@ export function PaymentsPanel({
                   <button
                     type="button"
                     onClick={() => remove(p.id)}
-                    className="rounded-md p-1.5 text-white/40 hover:bg-rose-500/10 hover:text-rose-300"
+                    className="rounded-md p-1.5 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300"
                     aria-label="Supprimer"
                   >
                     <Trash2 className="h-4 w-4" />

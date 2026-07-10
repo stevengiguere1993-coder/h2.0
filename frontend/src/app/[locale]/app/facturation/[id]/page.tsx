@@ -2125,7 +2125,7 @@ function ItemRow({
         type="button"
         onClick={onDelete}
         disabled={busy}
-        className="btn-outline-rose btn-xs disabled:opacity-40 sm:justify-center"
+        className="btn-xs inline-flex items-center justify-center gap-1 rounded-lg bg-rose-600 font-semibold text-neutral-50 transition hover:bg-rose-700 disabled:opacity-40 sm:justify-center"
         aria-label="Supprimer l'item"
       >
         {busy ? (
