@@ -121,12 +121,19 @@ def _build_line(
         "AccountRef": {"value": str(expense_account_id)},
     }
     # CustomerRef = le client réel. BillableStatus = « Billable »
-    # seulement si on veut le repasser au client dans une facture,
-    # sinon « NotBillable » (coût suivi, non refacturé).
+    # SEULEMENT tant que l'achat n'a pas encore été refacturé dans
+    # Kratos : la refacturation (avec majoration) se fait sur la facture
+    # Kratos → dès que invoiced_at est posé, la dépense repasse
+    # « NotBillable » côté QB pour FAIRE DISPARAÎTRE l'« imputation de
+    # dépense facturable » en attente — sinon QB propose de l'ajouter à
+    # l'Invoice et le montant serait compté en double. Le coût reste
+    # rattaché au projet (CustomerRef), rien ne change à la rentabilité.
     if customer_id:
         detail["CustomerRef"] = {"value": str(customer_id)}
         detail["BillableStatus"] = (
-            "Billable" if achat.is_billable else "NotBillable"
+            "Billable"
+            if (achat.is_billable and achat.invoiced_at is None)
+            else "NotBillable"
         )
     # ClassRef = le projet (chantier), pour le suivi par classe.
     if class_id:

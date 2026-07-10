@@ -192,6 +192,88 @@ async def run_qbo_nets() -> Dict[str, Any]:
             "Décoche QB non-contrat (one-shot) échouée", exc_info=True
         )
 
+    # ── « Imputations de dépense facturable » en attente dans QB pour des
+    # achats DÉJÀ refacturés dans Kratos → one-shot NotBillable ──
+    # Les achats refacturés AVANT le correctif « invoiced_at ⇒ NotBillable »
+    # ont laissé côté QB des imputations en attente : QB propose de les
+    # ajouter à l'Invoice → double comptage (la refacturation majorée est
+    # déjà sur la facture Kratos). On re-pousse une fois chaque achat
+    # refacturé encore lié à QB ; _build_line les passe NotBillable.
+    # Même mécanique que le one-shot « décoche non-contrat » : marqueur
+    # posé seulement si QBO était disponible, borné, journalisé.
+    try:
+        from sqlalchemy import select as _sel2, text as _text2
+
+        from app.integrations.quickbooks import get_qbo as _get_qbo2
+        from app.models.achat import Achat as _Achat2
+        from app.services.achat_qbo import (
+            sync_achat_to_qbo as _sync_achat2,
+        )
+
+        _KEY2 = "achat_notbillable_refactures_v1"
+        async with AsyncSessionLocal() as db:
+            already2 = (
+                await db.execute(
+                    _text2(
+                        "SELECT 1 FROM applied_backfills WHERE key = :k"
+                    ),
+                    {"k": _KEY2},
+                )
+            ).first()
+        if already2 is None:
+            _q2 = _get_qbo2()
+            await _q2._load_refresh_from_db()
+            if _q2.ready:
+                async with AsyncSessionLocal() as db:
+                    aids2 = [
+                        int(r[0])
+                        for r in (
+                            await db.execute(
+                                _sel2(_Achat2.id)
+                                .where(
+                                    _Achat2.invoiced_at.is_not(None),
+                                    (
+                                        _Achat2.qbo_bill_id.is_not(None)
+                                        | _Achat2.qbo_purchase_id.is_not(
+                                            None
+                                        )
+                                    ),
+                                )
+                                .limit(500)
+                            )
+                        ).all()
+                    ]
+                ok2 = ko2 = 0
+                for aid in aids2:
+                    try:
+                        async with AsyncSessionLocal() as s:
+                            await _sync_achat2(s, aid)
+                            await s.commit()
+                        ok2 += 1
+                    except Exception as exc:  # noqa: BLE001
+                        ko2 += 1
+                        log.error(
+                            "NotBillable QB achat %s échoué : %s", aid, exc
+                        )
+                async with AsyncSessionLocal() as s:
+                    await s.execute(
+                        _text2(
+                            "INSERT INTO applied_backfills (key) "
+                            "VALUES (:k) ON CONFLICT (key) DO NOTHING"
+                        ),
+                        {"k": _KEY2},
+                    )
+                    await s.commit()
+                out["notbillable_refactures"] = {
+                    "candidats": len(aids2),
+                    "ok": ok2,
+                    "ko": ko2,
+                }
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "NotBillable refacturés (one-shot) échoué", exc_info=True
+        )
+
     # ── Pull QB → Kratos (coûts, fournisseurs, paiements, reçus) ──
     # TOUJOURS exécuté (non conditionné à l'interrupteur de migration) : ce
     # pull est le FILET DE SECOURS du webhook Intuit — si un webhook se perd
