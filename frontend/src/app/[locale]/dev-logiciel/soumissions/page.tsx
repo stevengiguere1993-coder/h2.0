@@ -7,6 +7,7 @@ import {
   type Dispatch,
   type SetStateAction
 } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   FileText,
   Loader2,
@@ -108,7 +109,11 @@ export default function SoumissionsPage() {
   // Phase 6 (juin 2026) : modale « Valeurs par défaut » des soumissions
   // devis_dev (taux, marges, commission closer, fonctionnalités par défaut
   // de chaque module, tâches du chargé de projet par défaut).
-  const [showDefaults, setShowDefaults] = useState(false);
+  // `?defaults=1` (carte du hub Paramètres) ouvre la modale à l'arrivée.
+  const qs = useSearchParams();
+  const [showDefaults, setShowDefaults] = useState(
+    qs.get("defaults") === "1"
+  );
 
   // Fallback : somme des items par soumission. Utilisé quand le total
   // persisté en DB est null/0 (cas legacy ou items ajoutés sans
