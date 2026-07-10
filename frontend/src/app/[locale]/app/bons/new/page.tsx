@@ -51,15 +51,26 @@ export default function NewBonPage() {
     let cancelled = false;
     async function load() {
       try {
-        const [eRes, sRes, uRes] = await Promise.all([
+        const [eRes, sRes, uRes, dRes] = await Promise.all([
           authedFetch("/api/v1/entreprises?limit=500"),
           authedFetch("/api/v1/sous-traitants?limit=500"),
-          authedFetch("/api/v1/users")
+          authedFetch("/api/v1/users"),
+          authedFetch("/api/v1/construction/bon-defaults")
         ]);
         if (cancelled) return;
         if (eRes.ok) setEntreprises((await eRes.json()) as Entreprise[]);
         if (sRes.ok) setSousTraitants((await sRes.json()) as SousTraitant[]);
         if (uRes.ok) setUsers((await uRes.json()) as User[]);
+        // Marge par défaut configurable (Paramètres → Bons de travail) —
+        // pré-remplit le champ ; retombe sur "10" si absent/indispo.
+        if (dRes.ok) {
+          const d = (await dRes.json()) as {
+            default_marge_pct: number | null;
+          };
+          if (d.default_marge_pct != null) {
+            setMargePct(String(d.default_marge_pct));
+          }
+        }
       } catch {
         /* ignore */
       }

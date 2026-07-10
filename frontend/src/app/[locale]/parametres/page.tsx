@@ -197,6 +197,13 @@ const SECTIONS: Section[] = [
         minRole: "admin"
       },
       {
+        title: "Bons de travail",
+        desc: "Valeurs par défaut de coût, de refacturation et de marge des lignes de bon.",
+        href: "/app/parametres/bons-travail",
+        icon: Wrench,
+        minRole: "admin"
+      },
+      {
         title: "Connexions",
         desc: "Aperçu des sources externes du pôle Construction (QBO, calendrier, données).",
         href: "/app/parametres/connexions",

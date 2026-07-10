@@ -194,6 +194,13 @@ export default function BonDetailPage() {
   const [sendTo, setSendTo] = useState("");
   const [sendSubject, setSendSubject] = useState("");
   const [sendMessage, setSendMessage] = useState("");
+  // Défauts coût/refac/marge configurables (Paramètres → Bons de travail).
+  // Pré-remplissent les lignes d'heures ajoutées ici ; fallback 35/55/10.
+  const [bonDefaults, setBonDefaults] = useState({
+    cost: 35,
+    bill: 55,
+    marge: 10
+  });
 
   const isInternal = (b?.kind ?? "construction") === "interne";
 
@@ -202,11 +209,12 @@ export default function BonDetailPage() {
     async function load() {
       setLoading(true);
       try {
-        const [bRes, iRes, rRes, pRes] = await Promise.all([
+        const [bRes, iRes, rRes, pRes, dRes] = await Promise.all([
           authedFetch(`/api/v1/bons-travail/${id}`),
           authedFetch(`/api/v1/bons-travail/${id}/items`),
           authedFetch(`/api/v1/bons-travail/${id}/recap`),
-          authedFetch(`/api/v1/bons-travail/${id}/punches`)
+          authedFetch(`/api/v1/bons-travail/${id}/punches`),
+          authedFetch("/api/v1/construction/bon-defaults")
         ]);
         if (!bRes.ok) throw new Error(`http_${bRes.status}`);
         const bd = (await bRes.json()) as Bon;
@@ -216,6 +224,18 @@ export default function BonDetailPage() {
         setB(bd);
         setItems(iData);
         setPunches(pData);
+        if (dRes.ok) {
+          const dd = (await dRes.json()) as {
+            default_cost_rate: number | null;
+            default_bill_rate: number | null;
+            default_marge_pct: number | null;
+          };
+          setBonDefaults({
+            cost: dd.default_cost_rate ?? 35,
+            bill: dd.default_bill_rate ?? 55,
+            marge: dd.default_marge_pct ?? 10
+          });
+        }
         setWorkNotes(bd.work_notes || "");
         setDesc(bd.description || "");
         if ((bd.kind ?? "construction") === "interne") void loadPhotos();
@@ -446,7 +466,7 @@ export default function BonDetailPage() {
   // Ligne de refacturation typée (bon interne).
   async function addTypedItem(itemType: "heure" | "materiel" | "sous_traitant") {
     setItemBusy("new");
-    const marge = b?.marge_pct != null ? Number(b.marge_pct) : 10;
+    const marge = b?.marge_pct != null ? Number(b.marge_pct) : bonDefaults.marge;
     const base: Record<string, unknown> = {
       position: items.length,
       item_type: itemType,
@@ -455,8 +475,8 @@ export default function BonDetailPage() {
     };
     if (itemType === "heure") {
       base.description = "Main-d'œuvre";
-      base.cost_rate = 35;
-      base.bill_rate = 55;
+      base.cost_rate = bonDefaults.cost;
+      base.bill_rate = bonDefaults.bill;
       base.unit = "h";
     } else if (itemType === "materiel") {
       base.description = "Matériel";
@@ -484,7 +504,7 @@ export default function BonDetailPage() {
 
   // Verse un punch pointé sur ce bon en ligne d'heures refacturable.
   async function importPunch(p: BonPunch) {
-    const marge = b?.marge_pct != null ? Number(b.marge_pct) : 10;
+    const marge = b?.marge_pct != null ? Number(b.marge_pct) : bonDefaults.marge;
     const hours = p.hours ?? 0;
     const desc =
       "Main-d'œuvre" +
@@ -500,8 +520,8 @@ export default function BonDetailPage() {
           item_type: "heure",
           description: desc,
           quantity: hours,
-          cost_rate: 35,
-          bill_rate: 55,
+          cost_rate: bonDefaults.cost,
+          bill_rate: bonDefaults.bill,
           marge_pct: marge,
           unit: "h"
         })
