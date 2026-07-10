@@ -49,6 +49,7 @@ export default function DepotsPage() {
   const [statutFilter, setStatutFilter] = useState<
     "all" | "detenu" | "a_rendre"
   >("all");
+  const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,12 +68,23 @@ export default function DepotsPage() {
     void load();
   }, [load]);
 
+  // Immeubles distincts présents dans les rows chargées (pour le select).
+  const immeubles = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const r of data?.rows || []) m.set(r.immeuble_id, r.immeuble_name);
+    return [...m.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+  }, [data]);
+
   // Filtres client-side sur les rows chargées.
   const filteredRows = useMemo(() => {
     if (!data) return [];
     const q = search.trim().toLowerCase();
     return data.rows.filter((r) => {
       if (statutFilter !== "all" && r.statut !== statutFilter) return false;
+      if (immeubleFilter !== "all" && r.immeuble_id !== immeubleFilter)
+        return false;
       if (q) {
         const hay = `${r.locataire_name || ""} ${r.immeuble_name} ${
           r.logement_numero || ""
@@ -81,7 +93,7 @@ export default function DepotsPage() {
       }
       return true;
     });
-  }, [data, search, statutFilter]);
+  }, [data, search, statutFilter, immeubleFilter]);
 
   return (
     <>
@@ -150,6 +162,22 @@ export default function DepotsPage() {
               className="input w-full pl-9"
             />
           </div>
+          <select
+            value={immeubleFilter === "all" ? "all" : String(immeubleFilter)}
+            onChange={(e) =>
+              setImmeubleFilter(
+                e.target.value === "all" ? "all" : Number(e.target.value)
+              )
+            }
+            className="input w-auto max-w-[220px] text-sm"
+          >
+            <option value="all">Tous les immeubles</option>
+            {immeubles.map((imm) => (
+              <option key={imm.id} value={imm.id}>
+                {imm.name}
+              </option>
+            ))}
+          </select>
           <FilterPill
             label="Tous"
             active={statutFilter === "all"}
