@@ -211,6 +211,20 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet pull coûts échoué", exc_info=True)
 
+    # ── Heures approuvées sans feuille de temps QB → push ──
+    # Punches approuvés + terminés + liés à un projet dont la TimeActivity
+    # QB n'existe pas encore (push immédiat échoué ou antérieur à la
+    # fonctionnalité). Suivi de projet SANS écriture comptable ; idempotent
+    # (Punch.qbo_time_activity_id) → non gated.
+    try:
+        from app.services.labour_time_qbo import push_pending_punch_times
+
+        async with AsyncSessionLocal() as db:
+            out["heures"] = await push_pending_punch_times(db)
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("Filet feuilles de temps échoué", exc_info=True)
+
     # Les filets de CRÉATION en masse (factures/dépenses sans miroir QB)
     # restent conditionnés à l'interrupteur de migration : tant qu'il est
     # OFF, on ne (re)crée RIEN automatiquement pour ne pas produire de

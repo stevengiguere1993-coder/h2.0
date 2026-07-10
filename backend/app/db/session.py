@@ -257,6 +257,10 @@ async def ensure_critical_columns() -> None:
         ("facture_items", "soumission_item_id", "INTEGER"),
         ("qbo_account_maps", "labour_expense_account", "VARCHAR(255)"),
         ("qbo_account_maps", "labour_clearing_account", "VARCHAR(255)"),
+        # Feuille de temps QBO liée à un punch (heures → suivi de projet QB
+        # sans écriture comptable). Table préexistante → create_all ne la
+        # pose pas.
+        ("punches", "qbo_time_activity_id", "VARCHAR(64)"),
         # Gestion externe d'un immeuble (compagnie tierce) : sans ces
         # colonnes, tout SELECT sur imm_immeubles plante → 500 sur tout
         # le volet immobilier. Table préexistante → create_all ne les

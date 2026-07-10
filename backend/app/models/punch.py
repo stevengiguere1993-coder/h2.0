@@ -58,3 +58,12 @@ class Punch(Base, TimestampUpdateMixin):
         nullable=True,
         index=True,
     )
+
+    # Feuille de temps QBO (TimeActivity) créée pour ce punch — les heures
+    # apparaissent dans le SUIVI DE PROJET QuickBooks (rentabilité) SANS
+    # écriture comptable (la paie est déjà au grand livre). Idempotence du
+    # push : un punch déjà lié n'est pas recréé ; supprimé/désapprouvé →
+    # le TimeActivity QB est retiré.
+    qbo_time_activity_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
