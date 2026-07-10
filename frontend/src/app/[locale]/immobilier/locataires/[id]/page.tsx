@@ -146,7 +146,7 @@ export default function LocataireDetailPage({
           { label: loc?.full_name || "Locataire" }
         ]}
       />
-      <div className="p-4 lg:p-6">
+      <div className="p-4 pb-28 lg:p-6 lg:pb-28">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/immobilier/locataires" as any}

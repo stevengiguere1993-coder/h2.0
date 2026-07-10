@@ -421,7 +421,7 @@ export default function BonsTravailPage() {
           { label: "Bons de travail" }
         ]}
       />
-      <div className="p-4 pb-24 lg:p-6">
+      <div className="p-4 pb-28 lg:p-6 lg:pb-28">
         <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex items-start gap-3">
             <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-300">
