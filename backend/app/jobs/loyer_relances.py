@@ -18,7 +18,13 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from app.db.session import AsyncSessionLocal
-from app.models.immobilier import Bail, BailStatus, PaiementLoyer
+from app.models.immobilier import (
+    Bail,
+    BailStatus,
+    Immeuble,
+    Logement,
+    PaiementLoyer,
+)
 from app.services.notifications import notify_role
 
 
@@ -33,9 +39,18 @@ async def _run() -> None:
             return
         month_start = today.replace(day=1)
 
+        # Immeubles en GESTION EXTERNE exclus : la perception des loyers
+        # (et les relances) relève du gestionnaire tiers. isnot(True)
+        # couvre aussi les NULL (lignes d'avant le backfill du default).
         baux = (
             await db.execute(
-                select(Bail).where(Bail.status == BailStatus.ACTIF.value)
+                select(Bail)
+                .join(Logement, Logement.id == Bail.logement_id)
+                .join(Immeuble, Immeuble.id == Logement.immeuble_id)
+                .where(
+                    Bail.status == BailStatus.ACTIF.value,
+                    Immeuble.gestion_externe.isnot(True),
+                )
             )
         ).scalars().all()
         if not baux:

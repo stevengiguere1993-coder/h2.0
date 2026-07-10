@@ -164,6 +164,20 @@ class Immeuble(Base, TimestampUpdateMixin):
         Boolean, nullable=False, default=True, server_default="true"
     )
 
+    # Gestion externe : l'immeuble est géré par une compagnie tierce →
+    # exclu des flux opérationnels (paiements de loyers, renouvellements,
+    # dépôts, relances). Les finances macro (P&L, prévisionnel) restent
+    # incluses. Colonnes additives (cf. db/session.py).
+    gestion_externe: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    gestionnaire_externe_nom: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    gestionnaire_externe_contact: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+
     # Scope du catalogue (immeubles créés depuis le picker de tâche).
     # Au plus l'un des deux est rempli. Tous deux NULL = immeuble
     # « global » (legacy ou créé via le CRUD complet du volet immo).

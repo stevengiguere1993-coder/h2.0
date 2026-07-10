@@ -257,6 +257,13 @@ async def ensure_critical_columns() -> None:
         ("facture_items", "soumission_item_id", "INTEGER"),
         ("qbo_account_maps", "labour_expense_account", "VARCHAR(255)"),
         ("qbo_account_maps", "labour_clearing_account", "VARCHAR(255)"),
+        # Gestion externe d'un immeuble (compagnie tierce) : sans ces
+        # colonnes, tout SELECT sur imm_immeubles plante → 500 sur tout
+        # le volet immobilier. Table préexistante → create_all ne les
+        # pose pas ; on les garantit ici (transaction par colonne).
+        ("imm_immeubles", "gestion_externe", "BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("imm_immeubles", "gestionnaire_externe_nom", "VARCHAR(255)"),
+        ("imm_immeubles", "gestionnaire_externe_contact", "VARCHAR(255)"),
     )
     for table, column, col_type in critical_columns:
         try:
@@ -953,6 +960,13 @@ async def init_db() -> None:
             # la fois (immeuble appartient à une entreprise OU un deal).
             ("imm_immeubles", "owner_entreprise_id", "INTEGER"),
             ("imm_immeubles", "owner_deal_id", "INTEGER"),
+            # Gestion externe : immeuble géré par une compagnie tierce →
+            # exclu des flux opérationnels (loyers, renouvellements,
+            # dépôts, relances). Nom/contact du gestionnaire tiers.
+            ("imm_immeubles", "gestion_externe",
+             "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("imm_immeubles", "gestionnaire_externe_nom", "VARCHAR(255)"),
+            ("imm_immeubles", "gestionnaire_externe_contact", "VARCHAR(255)"),
             # Drive : URL du dossier Google Drive lié à l'entité.
             # Bouton « Drive » dans le header de la fiche y mène.
             # NULL = pas configuré.
