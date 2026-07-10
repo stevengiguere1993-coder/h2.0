@@ -614,12 +614,37 @@ async def _compute_finances(
     # facture a été créée avant l'auto-recompute (PR #396) OU quand
     # un item a été modifié hors de notre endpoint (import QBO, etc.).
     if factures:
+        from sqlalchemy import func as _func
+
         from app.api.v1.endpoints.facture_items import (
             _recompute_facture_totals,
         )
+        from app.models.facture_item import FactureItem as _FIHeal
 
+        # Somme réelle des items PAR facture (1 requête) : l'ancienne
+        # garde ne réparait que les totaux NULL/0 — un total POSITIF mais
+        # désynchronisé (ex. 2 618,85 $ stocké vs 5 853,82 $ d'items après
+        # un import qui ne recalculait pas) passait à travers et faussait
+        # « Facturé à date » / le kanban.
+        _sums = {
+            int(fid): round(float(s or 0), 2)
+            for fid, s in (
+                await db.execute(
+                    select(_FIHeal.facture_id, _func.sum(_FIHeal.total))
+                    .where(
+                        _FIHeal.facture_id.in_([f.id for f in factures])
+                    )
+                    .group_by(_FIHeal.facture_id)
+                )
+            ).all()
+        }
         for f in factures:
-            if not (f.total and f.total > 0):
+            item_sum = _sums.get(int(f.id), 0.0)
+            stored_sub = round(float(f.subtotal or 0), 2)
+            needs_heal = (
+                not (f.total and f.total > 0) and item_sum > 0
+            ) or (item_sum > 0 and abs(stored_sub - item_sum) > 0.01)
+            if needs_heal:
                 await _recompute_facture_totals(db, f.id)
         # Rafraîchit pour avoir les nouveaux totaux.
         await db.flush()
