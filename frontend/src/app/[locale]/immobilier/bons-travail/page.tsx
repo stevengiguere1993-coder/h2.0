@@ -591,7 +591,17 @@ export default function BonsTravailPage() {
           <div className="mt-6 grid grid-cols-3 gap-3">
             <StatCard
               label="Urgences"
-              value={bons.filter((b) => b.is_urgent).length}
+              // Seuls les bons encore ACTIFS comptent comme urgences — un
+              // bon urgent complété/facturé/annulé n'est plus une urgence.
+              value={
+                bons.filter(
+                  (b) =>
+                    b.is_urgent &&
+                    ["draft", "accepte_a_planifier", "planifie"].includes(
+                      b.status
+                    )
+                ).length
+              }
               tone="border-rose-500/40 bg-rose-500/10 text-rose-300"
             />
             <StatCard

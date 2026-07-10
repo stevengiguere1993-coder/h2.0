@@ -352,7 +352,13 @@ class TaskUpdate(BaseModel):
         default=None, pattern=TASK_PRIORITY_PATTERN
     )
     due_date: Optional[date] = None
-    position: Optional[int] = Field(default=None, ge=0)
+    # ⚠️ Pas de ge=0 : le réordonnancement du kanban insère « avant la
+    # cible » avec position-1 — quand tout est encore à 0 (défaut), ça
+    # donne des positions négatives, valides pour le tri. Le ge=0
+    # historique faisait échouer ces drags en HTTP 422 (bug Phil
+    # 2026-07-10) alors que le schéma des tâches d'entreprise les
+    # acceptait déjà.
+    position: Optional[int] = None
     # Permet de déplacer une tâche vers un autre deal (bouton
     # « Déplacer » du kanban). Le deal cible doit exister.
     deal_id: Optional[int] = Field(default=None, gt=0)

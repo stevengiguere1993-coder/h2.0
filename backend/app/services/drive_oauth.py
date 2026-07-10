@@ -90,7 +90,15 @@ DEFAULT_SCOPES = (
 _STATE_TTL_SECONDS = 600
 
 # Marge de sécurité sur expires_at avant de déclencher un refresh.
-_REFRESH_BUFFER_SECONDS = 60
+# ⚠️ 3000 s (50 min) VOLONTAIREMENT agressif : les access tokens Google
+# vivent 60 min → on ne sert jamais un token de plus de ~10 min d'âge.
+# Avant (60 s), un access token révoqué côté Google mais « valide
+# localement » était servi pendant jusqu'à 59 min → les sections Drive
+# affichaient un faux « Connexion Drive requise » (bug Phil 2026-07-10).
+# Le refresh est un POST léger (~100 ms), déclenché au plus une fois par
+# ~10 min par utilisateur actif ; s'il échoue avec invalid_grant, c'est
+# un VRAI « reconnecte-toi » (session Google morte).
+_REFRESH_BUFFER_SECONDS = 3000
 
 
 # ---------------------------------------------------------------------------

@@ -270,7 +270,14 @@ export default function MesTachesPage() {
             body: JSON.stringify(patch)
           }
         );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          // Remonter le détail de validation (422) plutôt qu'un code nu.
+          const detail = await res
+            .json()
+            .then((d) => JSON.stringify(d?.detail ?? d))
+            .catch(() => "");
+          throw new Error(`HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
+        }
         const updated = (await res.json()) as TacheEnt;
         setTachesEnt((prev) =>
           prev.map((t) => (t.id === taskId ? { ...t, ...updated } : t))
@@ -293,7 +300,13 @@ export default function MesTachesPage() {
             body: JSON.stringify(patch)
           }
         );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          const detail = await res
+            .json()
+            .then((d) => JSON.stringify(d?.detail ?? d))
+            .catch(() => "");
+          throw new Error(`HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
+        }
         const updated = (await res.json()) as TacheDeal;
         setTachesDeal((prev) =>
           prev.map((t) => (t.id === taskId ? { ...t, ...updated } : t))
