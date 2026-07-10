@@ -489,14 +489,22 @@ async def ensure_role_permissions_tables() -> None:
 
     log = logging.getLogger("db.ensure_role_permissions_tables")
     try:
+        from app.core.access_registry import PAGE_KEY_PREFIX, PAGES
         from app.core.capabilities import CAPABILITIES
         from app.db.base import Base
         from app.models.role_permission import RolePermission  # noqa: F401
+        from app.models.user_access_override import (  # noqa: F401
+            UserAccessOverride,
+        )
 
         async with engine.begin() as conn:
             await conn.run_sync(
                 lambda c: Base.metadata.create_all(
-                    c, tables=[RolePermission.__table__]
+                    c,
+                    tables=[
+                        RolePermission.__table__,
+                        UserAccessOverride.__table__,
+                    ],
                 )
             )
             # Seed des défauts (rôle minimum actuel de chaque capacité).
@@ -507,6 +515,21 @@ async def ensure_role_permissions_tables() -> None:
                         "VALUES (:cap, :role) ON CONFLICT (capability) DO NOTHING"
                     ),
                     {"cap": cap.id, "role": cap.default_min_role},
+                )
+            # Seed des PAGES du registre central (refonte permissions
+            # 2026-07) : même table, clé préfixée `page:`. Défauts = les
+            # seuils des sidebars avant la refonte → aucun changement
+            # visible tant que l'owner ne modifie rien.
+            for page in PAGES:
+                await conn.execute(
+                    text(
+                        "INSERT INTO role_permissions (capability, min_role) "
+                        "VALUES (:cap, :role) ON CONFLICT (capability) DO NOTHING"
+                    ),
+                    {
+                        "cap": f"{PAGE_KEY_PREFIX}{page.key}",
+                        "role": page.default_min_role,
+                    },
                 )
     except Exception as exc:  # noqa: BLE001
         log.warning("ensure_role_permissions_tables failed: %s", exc)

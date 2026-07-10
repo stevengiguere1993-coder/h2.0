@@ -133,22 +133,21 @@ async def register(
     summary="Get current user",
     description="Retrieve the profile of the currently authenticated user.",
 )
-async def get_me(current_user: CurrentUser) -> UserRead:
+async def get_me(current_user: CurrentUser, db: DBSession) -> UserRead:
     """
     Get current authenticated user's profile.
 
     Returns the user information associated with the provided access token.
-    Inclut ``access`` : les capacités « accès de page » (P-05d) évaluées
-    pour ce compte, que le front utilise pour ganter Téléphonie / Dev.
+    Inclut ``access`` : le dict d'accès COMPLET calculé (refonte permissions
+    2026-07) — volets (``volet:x``), pages (``page:<key>``) et capacités —
+    consommé par le garde frontend, les sidebars et le masquage d'actions.
+    Les anciennes clés (telephonie.access, devlog.access) restent présentes.
     """
     # Import local : évite tout cycle d'import à l'assemblage du routeur.
-    from app.services.permissions_service import get_min_role
+    from app.services.access_service import compute_access
 
     out = UserRead.model_validate(current_user)
-    out.access = {
-        cap: current_user.has_min_role(await get_min_role(cap))
-        for cap in ("telephonie.access", "devlog.access")
-    }
+    out.access = await compute_access(db, current_user)
     return out
 
 
