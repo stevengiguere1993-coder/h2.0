@@ -85,21 +85,23 @@ async def generate_bt_reference(
     date_format: str = "%y%m%d-%H%M%S",
     now: "datetime | None" = None,
 ) -> str:
-    """Renvoie une référence de bon de travail garantie unique en base.
+    """Renvoie une référence de bon de travail COURTE et lisible, garantie
+    unique en base : ``{prefix}{AA}-{NNN}`` (ex. ``BT-26-001``). Séquence par
+    année, remise à zéro le 1er janvier, zéro-paddée sur 3 chiffres — assez
+    courte pour être dictée à un fournisseur au téléphone.
 
-    `prefix`/`date_format` couvrent les deux motifs existants sans changer
-    l'apparence : `BT-AAMMJJ-HHMMSS` (Construction / corrections) et
-    `BON-AAAAMMJJ-HHMMSS` (Gestion locative). Le suffixe `-N` n'est ajouté
-    que sur collision réelle, donc le cas nominal reste rigoureusement le
-    format d'origine.
+    (L'ancien format horodaté ``AAMMJJ-HHMMSS`` était beaucoup trop long.)
+    `date_format` est conservé dans la signature pour compat d'appel mais
+    n'est plus utilisé. Le numéro se déduit du plus grand déjà attribué pour
+    l'année en cours ; en cas d'égalité concurrente, le retry IntegrityError
+    à l'insertion tranche le cas extrême.
     """
     from sqlalchemy import select
 
+    _ = date_format  # conservé pour compat d'appel, désormais inutilisé
     moment = now or datetime.now(timezone.utc)
-    base = f"{prefix}{moment.strftime(date_format)}"
+    base = f"{prefix}{moment.strftime('%y')}-"  # ex. « BT-26- »
 
-    # Sonde les références déjà prises qui partagent la même base (base seule
-    # + variantes suffixées), pour choisir le premier index libre.
     existing = set(
         (
             await db.execute(
@@ -111,18 +113,18 @@ async def generate_bt_reference(
         .scalars()
         .all()
     )
-    if base not in existing:
-        return base
-    # Base prise : cherche le premier suffixe libre `-2`, `-3`, … en bornant
-    # sur la longueur de colonne (String(32)) par sécurité. La borne 999 est
-    # un garde-fou terminant : atteindre 1000 bons dans la même seconde est
-    # irréaliste sur cet intranet ; on renvoie alors la dernière variante et on
-    # laisse le retry IntegrityError côté insertion trancher le cas extrême.
-    for suffix in range(2, 1000):
-        candidate = f"{base}-{suffix}"
-        if candidate not in existing and len(candidate) <= 32:
+    # Plus grand numéro déjà pris pour l'année en cours → on repart de +1.
+    max_seq = 0
+    for ref in existing:
+        suffix = ref[len(base):]
+        if suffix.isdigit():
+            max_seq = max(max_seq, int(suffix))
+    # Premier numéro libre à partir de max+1 (garde-fou large).
+    for seq in range(max_seq + 1, max_seq + 10001):
+        candidate = f"{base}{seq:03d}"
+        if candidate not in existing:
             return candidate
-    return f"{base}-{1000}"
+    raise RuntimeError(f"Cannot generate unique bon reference (base={base})")
 
 
 # Anti-doublon opportuniste : on déclenche une déduplication des achats au

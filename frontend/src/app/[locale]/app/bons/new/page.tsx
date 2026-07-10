@@ -26,6 +26,8 @@ export default function NewBonPage() {
   // Exécutant.
   const [executantType, setExecutantType] = useState("nos_hommes");
   const [sousTraitantId, setSousTraitantId] = useState("");
+  const [sousTraitantSearch, setSousTraitantSearch] = useState("");
+  const [sousTraitantOpen, setSousTraitantOpen] = useState(false);
   // Méta.
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -362,19 +364,73 @@ export default function NewBonPage() {
                   Quel sous-traitant ?{" "}
                   <span className="text-rose-400">*</span>
                 </label>
-                <select
-                  id="sous_traitant"
-                  value={sousTraitantId}
-                  onChange={(e) => setSousTraitantId(e.target.value)}
-                  className="input"
-                >
-                  <option value="">— Choisir —</option>
-                  {sousTraitants.map((s) => (
-                    <option key={s.id} value={String(s.id)}>
-                      {s.full_name}
-                    </option>
-                  ))}
-                </select>
+                {(() => {
+                  const q = sousTraitantSearch.trim().toLowerCase();
+                  const filtered = q
+                    ? sousTraitants.filter((s) =>
+                        s.full_name.toLowerCase().includes(q)
+                      )
+                    : sousTraitants;
+                  const selected = sousTraitants.find(
+                    (s) => String(s.id) === sousTraitantId
+                  );
+                  return (
+                    <div className="relative">
+                      <input
+                        id="sous_traitant"
+                        type="text"
+                        autoComplete="off"
+                        value={
+                          sousTraitantOpen
+                            ? sousTraitantSearch
+                            : selected?.full_name || ""
+                        }
+                        onChange={(e) => {
+                          setSousTraitantSearch(e.target.value);
+                          setSousTraitantOpen(true);
+                        }}
+                        onFocus={() => {
+                          setSousTraitantOpen(true);
+                          setSousTraitantSearch("");
+                        }}
+                        onBlur={() =>
+                          setTimeout(() => setSousTraitantOpen(false), 150)
+                        }
+                        placeholder="Écrire le nom du sous-traitant…"
+                        className="input"
+                      />
+                      {sousTraitantOpen ? (
+                        <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-brand-700 bg-brand-900 shadow-card">
+                          {filtered.length === 0 ? (
+                            <p className="px-3 py-2 text-sm text-white/40">
+                              Aucun sous-traitant trouvé.
+                            </p>
+                          ) : (
+                            filtered.map((s) => (
+                              <button
+                                key={s.id}
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => {
+                                  setSousTraitantId(String(s.id));
+                                  setSousTraitantOpen(false);
+                                  setSousTraitantSearch("");
+                                }}
+                                className={`flex w-full items-center px-3 py-2 text-left text-sm hover:bg-brand-800 ${
+                                  String(s.id) === sousTraitantId
+                                    ? "text-accent-500"
+                                    : "text-white/80"
+                                }`}
+                              >
+                                {s.full_name}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })()}
               </div>
             ) : null}
           </fieldset>

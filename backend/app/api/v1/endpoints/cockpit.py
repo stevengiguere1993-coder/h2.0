@@ -352,7 +352,12 @@ async def cockpit_overview(
         await db.execute(
             select(BonTravail).where(
                 BonTravail.kind == "interne",
-                BonTravail.status.notin_(["facture", "cancelled"]),
+                # Vue d'ensemble = seulement les bons « en amont » :
+                # brouillon, accepté à planifier, planifié. On masque les
+                # à-refacturer / facturés / annulés (gérés ailleurs).
+                BonTravail.status.in_(
+                    ["draft", "accepte_a_planifier", "planifie"]
+                ),
             )
         )
     ).scalars().all()

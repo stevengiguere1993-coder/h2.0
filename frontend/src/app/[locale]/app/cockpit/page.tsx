@@ -93,14 +93,21 @@ const PROJECT_STATUS_BADGE: Record<string, string> = {
   correction: "badge-rose"
 };
 
-const BON_STATUS_LABELS: Record<string, string> = {
-  draft: "Brouillon",
-  accepte_a_planifier: "Accepté à planifier",
-  planifie: "Planifié",
-  complete_a_refacturer: "À refacturer",
-  sent: "Envoyé",
-  signed: "Signé"
-};
+// Statuts sélectionnables directement depuis la liste de la Vue d'ensemble.
+const COCKPIT_BON_STATUS_OPTIONS: { value: string; label: string }[] = [
+  { value: "draft", label: "Brouillon" },
+  { value: "accepte_a_planifier", label: "Accepté à planifier" },
+  { value: "planifie", label: "Planifié" },
+  { value: "complete_a_refacturer", label: "À refacturer" },
+  { value: "cancelled", label: "Annulé" }
+];
+
+// Statuts encore affichés dans la Vue d'ensemble (miroir du filtre backend).
+const COCKPIT_VISIBLE_BON_STATUSES = [
+  "draft",
+  "accepte_a_planifier",
+  "planifie"
+];
 
 function money(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "—";
@@ -171,6 +178,34 @@ export default function CockpitPage() {
   }, [data, scope, user?.id]);
   const bons = data?.bons || [];
   const poSent = data?.po_sent || [];
+
+  // Changement de statut direct depuis la liste (optimiste). Le bon disparaît
+  // s'il quitte la Vue d'ensemble (À refacturer / Annulé). Le tick 45 s
+  // rétablit la vérité si le PATCH échoue.
+  async function handleBonStatus(bonId: number, newStatus: string) {
+    setData((d) =>
+      d
+        ? {
+            ...d,
+            bons: d.bons
+              .map((x) => (x.id === bonId ? { ...x, status: newStatus } : x))
+              .filter((x) =>
+                COCKPIT_VISIBLE_BON_STATUSES.includes(x.status)
+              )
+          }
+        : d
+    );
+    try {
+      const res = await authedFetch(`/api/v1/bons-travail/${bonId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch {
+      setError("Changement de statut échoué — réessaie.");
+    }
+  }
 
   // ── Dérivés « À l'action » ────────────────────────────────────────────
   const urgentBons = bons.filter(
@@ -411,7 +446,11 @@ export default function CockpitPage() {
                     </thead>
                     <tbody className="divide-y divide-brand-800">
                       {bons.map((b) => (
-                        <BonRow key={b.id} b={b} />
+                        <BonRow
+                          key={b.id}
+                          b={b}
+                          onStatusChange={handleBonStatus}
+                        />
                       ))}
                     </tbody>
                   </table>
@@ -543,13 +582,19 @@ function ProjectRow({ p }: { p: CockpitProject }) {
   );
 }
 
-function BonRow({ b }: { b: CockpitBon }) {
+function BonRow({
+  b,
+  onStatusChange
+}: {
+  b: CockpitBon;
+  onStatusChange: (id: number, status: string) => void;
+}) {
   return (
     <tr className={b.is_urgent ? "bg-rose-500/[0.05]" : "hover:bg-brand-800/30"}>
       <td className="px-3 py-2">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={`/app/bons/${b.id}` as any}
+          href={`/app/bons/${b.id}?from=cockpit` as any}
           className="font-semibold text-white hover:text-accent-400"
         >
           {b.is_urgent ? (
@@ -562,9 +607,18 @@ function BonRow({ b }: { b: CockpitBon }) {
         </p>
       </td>
       <td className="px-3 py-2">
-        <span className="badge badge-neutral">
-          {BON_STATUS_LABELS[b.status] || b.status}
-        </span>
+        <select
+          value={b.status}
+          onChange={(e) => onStatusChange(b.id, e.target.value)}
+          className="input w-full max-w-[11rem] py-1 text-xs"
+          aria-label="Changer le statut du bon"
+        >
+          {COCKPIT_BON_STATUS_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
       </td>
       <td className="px-3 py-2 text-[11px]">
         {b.executant_type === "sous_traitant" ? (
