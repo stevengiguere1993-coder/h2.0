@@ -381,7 +381,15 @@ async def import_into_facture(
     await db.flush()
     # Regroupe les lignes importées par type (service → extra → frais
     # → rabais) — cohérent avec l'ajout manuel.
-    from app.api.v1.endpoints.facture_items import _reorder_items_by_kind
+    from app.api.v1.endpoints.facture_items import (
+        _recompute_facture_totals,
+        _reorder_items_by_kind,
+    )
 
     await _reorder_items_by_kind(db, facture_id)
+    # Recalcule subtotal/TPS/TVQ/total STOCKÉS depuis les items importés.
+    # Sans ça, Facture.total restait à l'ancienne valeur → le kanban (qui
+    # lit le total en base) affichait un montant différent de l'éditeur
+    # (qui calcule depuis les lignes) — ex. 2 618,85 $ vs 6 730,43 $.
+    await _recompute_facture_totals(db, facture_id)
     return ImportResult(added=added)
