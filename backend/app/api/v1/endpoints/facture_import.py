@@ -24,6 +24,24 @@ from app.models.soumission import Soumission, SoumissionStatus
 from app.models.soumission_item import SoumissionItem
 
 
+# Taux plancher à l'IMPORT des heures sur une facture client (modifiable
+# ensuite sur la ligne) : 90 $/h minimum pour les heures de PROJET ; les
+# heures pointées sur un BON DE TRAVAIL interne partent à 55 $/h.
+HOURS_RATE_FLOOR = 90.0
+BON_HOURS_RATE = 55.0
+
+
+def _merge_label_key(label: str) -> str:
+    """Clé de REGROUPEMENT des lignes d'achat au même descriptif : accents
+    retirés, casse et espaces normalisés — « Matériel — Matériaux Divers »
+    et « Matériel — Materiaux Divers » fusionnent sur la même ligne."""
+    import unicodedata
+
+    s = unicodedata.normalize("NFKD", label or "")
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return " ".join(s.lower().split())
+
+
 def _compute_billed_amount(
     ac: Achat,
     markup_overrides: dict[int, float],
@@ -197,12 +215,16 @@ async def import_into_facture(
                     await db.execute(select(Employe).where(Employe.id.in_(emp_ids)))
                 ).scalars().all()
             }
-            # UNE SEULE ligne « Main-d'œuvre » totale (toutes les heures
-            # additionnées, AUCUN nom d'employé sur la facture client).
-            # Prix unitaire = moyenne pondérée des taux pour garder le
-            # total exact.
-            total_hours = 0.0
-            total_amount = 0.0
+            # Lignes « Main-d'œuvre » agrégées (AUCUN nom d'employé sur la
+            # facture client), avec TAUX PLANCHER à l'import :
+            #   - heures de PROJET : max(taux employé, 90 $/h)
+            #   - heures liées à un BON DE TRAVAIL : 55 $/h
+            # Deux lignes distinctes si les deux types coexistent ; prix
+            # unitaire = moyenne pondérée du groupe ; modifiable ensuite.
+            buckets: dict[str, list[float]] = {
+                "projet": [0.0, 0.0],  # [heures, montant]
+                "bon": [0.0, 0.0],
+            }
             for p in punches:
                 emp = emps.get(p.employe_id)
                 if emp and emp.billing_rate is not None:
@@ -211,32 +233,51 @@ async def import_into_facture(
                     rate = float(emp.hourly_rate)
                 else:
                     rate = 0.0
+                if p.bon_travail_id:
+                    rate = BON_HOURS_RATE
+                    key = "bon"
+                else:
+                    rate = max(rate, HOURS_RATE_FLOOR)
+                    key = "projet"
                 h = float(p.hours or 0)
-                total_hours += h
-                total_amount += h * rate
-            total_hours = round(total_hours, 2)
-            total_amount = round(total_amount, 2)
+                buckets[key][0] += h
+                buckets[key][1] += h * rate
 
-            if total_hours > 0:
-                unit_price = round(total_amount / total_hours, 2)
+            items_by_key: dict[str, FactureItem] = {}
+            for key, (b_hours, b_amount) in buckets.items():
+                b_hours = round(b_hours, 2)
+                b_amount = round(b_amount, 2)
+                if b_hours <= 0:
+                    continue
                 item = FactureItem(
                     facture_id=fa.id,
                     position=pos,
-                    description="Main-d'œuvre",
+                    description=(
+                        "Main-d'œuvre"
+                        if key == "projet"
+                        else "Main-d'œuvre — bons de travail"
+                    ),
                     unit="h",
-                    quantity=total_hours,
-                    unit_price=unit_price,
-                    total=total_amount,
+                    quantity=b_hours,
+                    unit_price=round(b_amount / b_hours, 2),
+                    total=b_amount,
                     kind="extra",
                 )
                 db.add(item)
+                items_by_key[key] = item
                 pos += 1
                 added += 1
+            if items_by_key:
                 await db.flush()
                 now = datetime.now(timezone.utc)
                 for p in punches:
+                    it = items_by_key.get(
+                        "bon" if p.bon_travail_id else "projet"
+                    )
+                    if it is None:
+                        continue
                     p.invoiced_at = now
-                    p.facture_item_id = item.id
+                    p.facture_item_id = it.id
 
     # 3) Achats — refacturation avec markup OU contrat sous-traitant et
     #    flag anti-doublon. On ne tire QUE les achats refacturables non
@@ -272,6 +313,15 @@ async def import_into_facture(
             contracts_by_st = {c.sous_traitant_id: c for c in ctr_rows}
 
         new_items: list[tuple[Achat, FactureItem]] = []
+        # REGROUPEMENT : plusieurs achats au MÊME descriptif (accents/casse
+        # ignorés) fusionnent en UNE seule ligne dont le montant additionne
+        # chaque facture sélectionnée AVEC sa majoration (ex. 6 factures
+        # Rona « Matériel — Materiaux Divers » → une ligne au total cumulé).
+        # Les lignes HORAIRES (contrat sous-traitant flat_hourly, quantité =
+        # heures × taux) ne fusionnent jamais. Chaque achat garde son lien
+        # retour (facture_item_id → la ligne fusionnée) pour la
+        # dé-refacturation à la suppression de la facture.
+        merged: dict[str, FactureItem] = {}
         for ac in achats:
             billed, _rule_label = _compute_billed_amount(
                 ac, data.achat_markup_overrides, contracts_by_st
@@ -282,39 +332,40 @@ async def import_into_facture(
             )
             # La majoration / règle (`rule_label`) est INTERNE : appliquée
             # au montant mais jamais affichée dans la description client.
-            desc = base_desc
+            label = f"{line_prefix} — {base_desc}"
+            contract = (
+                contracts_by_st.get(ac.sous_traitant_id or 0)
+                if ac.kind == "sub_invoice"
+                else None
+            )
+            is_hourly = bool(
+                contract and contract.billing_mode == "flat_hourly"
+            )
+            if not is_hourly:
+                existing = merged.get(_merge_label_key(label))
+                if existing is not None:
+                    existing.total = round(
+                        float(existing.total) + billed, 2
+                    )
+                    existing.unit_price = existing.total
+                    new_items.append((ac, existing))
+                    continue
             item = FactureItem(
                 facture_id=fa.id,
                 position=pos,
-                description=f"{line_prefix} — {desc}",
-                unit="h" if (
-                    ac.kind == "sub_invoice"
-                    and contracts_by_st.get(ac.sous_traitant_id or 0)
-                    and contracts_by_st[ac.sous_traitant_id].billing_mode
-                    == "flat_hourly"
-                ) else "lot",
-                quantity=(
-                    float(ac.hours or 0)
-                    if ac.kind == "sub_invoice"
-                    and contracts_by_st.get(ac.sous_traitant_id or 0)
-                    and contracts_by_st[ac.sous_traitant_id].billing_mode
-                    == "flat_hourly"
-                    else 1
-                ),
+                description=label,
+                unit="h" if is_hourly else "lot",
+                quantity=float(ac.hours or 0) if is_hourly else 1,
                 unit_price=(
-                    float(
-                        contracts_by_st[ac.sous_traitant_id].flat_hourly_rate
-                        or 0
-                    )
-                    if ac.kind == "sub_invoice"
-                    and contracts_by_st.get(ac.sous_traitant_id or 0)
-                    and contracts_by_st[ac.sous_traitant_id].billing_mode
-                    == "flat_hourly"
+                    float(contract.flat_hourly_rate or 0)
+                    if is_hourly
                     else billed
                 ),
                 total=billed,
             )
             db.add(item)
+            if not is_hourly:
+                merged[_merge_label_key(label)] = item
             new_items.append((ac, item))
             pos += 1
             added += 1

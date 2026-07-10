@@ -352,12 +352,22 @@ async def convert_project_to_facture(
                 ).scalars().all()
             }
 
-            # UNE SEULE ligne « Main-d'œuvre » totale sur la facture
-            # client : toutes les heures additionnées, AUCUN nom d'employé
-            # (le client ne doit pas les voir). Prix unitaire = moyenne
-            # pondérée des taux, pour que le total reste exact.
-            total_hours = 0.0
-            total_amount = 0.0
+            # Lignes « Main-d'œuvre » agrégées (AUCUN nom d'employé — le
+            # client ne doit pas les voir), avec TAUX PLANCHER à l'import :
+            #   - heures de PROJET : max(taux de facturation employé, 90 $/h)
+            #   - heures liées à un BON DE TRAVAIL interne : 55 $/h
+            # Deux lignes distinctes si les deux types coexistent (sinon le
+            # 55 $ se noierait dans la moyenne). Prix unitaire = moyenne
+            # pondérée du groupe ; tout reste modifiable sur la facture.
+            from app.api.v1.endpoints.facture_import import (
+                BON_HOURS_RATE,
+                HOURS_RATE_FLOOR,
+            )
+
+            buckets: dict[str, list[float]] = {
+                "projet": [0.0, 0.0],  # [heures, montant]
+                "bon": [0.0, 0.0],
+            }
             for p in punches:
                 emp = emps.get(p.employe_id)
                 if emp and emp.billing_rate is not None:
@@ -366,33 +376,52 @@ async def convert_project_to_facture(
                     rate = float(emp.hourly_rate)
                 else:
                     rate = 0.0
+                if p.bon_travail_id:
+                    rate = BON_HOURS_RATE
+                    key = "bon"
+                else:
+                    rate = max(rate, HOURS_RATE_FLOOR)
+                    key = "projet"
                 h = float(p.hours or 0)
-                total_hours += h
-                total_amount += h * rate
-            total_hours = round(total_hours, 2)
-            total_amount = round(total_amount, 2)
+                buckets[key][0] += h
+                buckets[key][1] += h * rate
 
-            if total_hours > 0:
-                unit_price = round(total_amount / total_hours, 2)
+            from datetime import datetime as _dt2, timezone as _tz2
+            now_h = _dt2.now(_tz2.utc)
+            items_by_key: dict[str, FactureItem] = {}
+            for key, (b_hours, b_amount) in buckets.items():
+                b_hours = round(b_hours, 2)
+                b_amount = round(b_amount, 2)
+                if b_hours <= 0:
+                    continue
                 item = FactureItem(
                     facture_id=facture.id,
                     position=pos,
-                    description="Main-d'œuvre",
+                    description=(
+                        "Main-d'œuvre"
+                        if key == "projet"
+                        else "Main-d'œuvre — bons de travail"
+                    ),
                     unit="h",
-                    quantity=total_hours,
-                    unit_price=unit_price,
-                    total=total_amount,
+                    quantity=b_hours,
+                    unit_price=round(b_amount / b_hours, 2),
+                    total=b_amount,
                     # Heures T&M = hors soumission de base → extra.
                     kind="extra",
                 )
                 db.add(item)
+                items_by_key[key] = item
                 pos += 1
+            if items_by_key:
                 await db.flush()
-                from datetime import datetime as _dt2, timezone as _tz2
-                now_h = _dt2.now(_tz2.utc)
                 for p in punches:
+                    it = items_by_key.get(
+                        "bon" if p.bon_travail_id else "projet"
+                    )
+                    if it is None:
+                        continue  # groupe sans ligne (0 h) → punch libre
                     p.invoiced_at = now_h
-                    p.facture_item_id = item.id
+                    p.facture_item_id = it.id
 
     # 3) Achats — refacturation avec markup OU contrat sous-traitant et
     #    flag anti-doublon. Seuls les achats `is_billable=True` non
@@ -426,6 +455,14 @@ async def convert_project_to_facture(
             contracts_by_st = {c.sous_traitant_id: c for c in ctr_rows}
 
         new_items: list[tuple[Achat, FactureItem]] = []
+        # REGROUPEMENT : plusieurs achats au MÊME descriptif (accents/casse
+        # ignorés) fusionnent en UNE ligne dont le montant additionne chaque
+        # facture sélectionnée AVEC sa majoration. Les lignes horaires
+        # (contrat flat_hourly) ne fusionnent jamais. Chaque achat garde son
+        # lien retour (facture_item_id) pour la dé-refacturation.
+        from app.api.v1.endpoints.facture_import import _merge_label_key
+
+        merged: dict[str, FactureItem] = {}
         for ac in achats:
             billed, _rule_label = _compute_billed_amount(
                 ac, data.achat_markup_overrides, contracts_by_st
@@ -437,13 +474,26 @@ async def convert_project_to_facture(
             # La majoration / règle de facturation (`rule_label`) est
             # INTERNE : on l'applique au montant (`billed`) mais on ne
             # l'affiche JAMAIS dans la description vue par le client.
-            desc = base_desc
+            label = f"{line_prefix} — {base_desc}"
             contract = (
                 contracts_by_st.get(ac.sous_traitant_id or 0)
                 if ac.kind == "sub_invoice"
                 else None
             )
-            if contract is not None and contract.billing_mode == "flat_hourly":
+            is_hourly = bool(
+                contract is not None
+                and contract.billing_mode == "flat_hourly"
+            )
+            if not is_hourly:
+                existing = merged.get(_merge_label_key(label))
+                if existing is not None:
+                    existing.total = round(
+                        float(existing.total) + billed, 2
+                    )
+                    existing.unit_price = existing.total
+                    new_items.append((ac, existing))
+                    continue
+            if is_hourly:
                 unit = "h"
                 qty = float(ac.hours or 0)
                 up = float(contract.flat_hourly_rate or 0)
@@ -454,7 +504,7 @@ async def convert_project_to_facture(
             item = FactureItem(
                 facture_id=facture.id,
                 position=pos,
-                description=f"{line_prefix} — {desc}",
+                description=label,
                 unit=unit,
                 quantity=qty,
                 unit_price=up,
@@ -464,6 +514,8 @@ async def convert_project_to_facture(
                 kind="extra",
             )
             db.add(item)
+            if not is_hourly:
+                merged[_merge_label_key(label)] = item
             new_items.append((ac, item))
             pos += 1
 
