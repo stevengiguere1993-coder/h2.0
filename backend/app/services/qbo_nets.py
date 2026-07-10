@@ -264,6 +264,12 @@ async def run_qbo_nets() -> Dict[str, Any]:
                 log.error(
                     "Facture %s : push QB échoué : %s", ref or fid, exc
                 )
+                # …et sur la FICHE facture (session fraîche, best-effort).
+                from app.services.facture_qbo import (
+                    record_facture_sync_error,
+                )
+
+                await record_facture_sync_error(int(fid), str(exc))
         out["factures"] = {
             "candidates": len(rows),
             "pushed": pushed,

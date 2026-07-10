@@ -244,6 +244,25 @@ async def list_items(
     return out
 
 
+def _autopush_if_emise(fa: Facture) -> None:
+    """Reflète en arrière-plan toute mutation de LIGNE sur l'Invoice QB
+    d'une facture ÉMISE (sent/overdue) : le miroir QuickBooks doit suivre
+    l'éditeur SANS clic (lignes importées, ajoutées, modifiées,
+    supprimées). Les brouillons partent entiers à l'envoi au client ;
+    push_facture_now est délibéré (non gated) et idempotent
+    (qbo_invoice_id → mise à jour sparse, jamais de doublon)."""
+    if (fa.status or "") in ("draft", "void"):
+        return
+    import asyncio
+
+    from app.services.qbo_auto_sync import push_facture_now
+
+    try:
+        asyncio.create_task(push_facture_now(int(fa.id)))
+    except RuntimeError:
+        pass
+
+
 @router.post(
     "/{facture_id}/items",
     response_model=FactureItemRead,
@@ -256,7 +275,7 @@ async def create_item(
     db: DBSession,
     _: CurrentUser,
 ) -> FactureItemRead:
-    await _ensure_facture_editable(db, facture_id)
+    fa = await _ensure_facture_editable(db, facture_id)
     # « rabais » = ligne négative obligatoire.
     qty = data.quantity
     unit_price = data.unit_price
@@ -288,6 +307,7 @@ async def create_item(
     await _recompute_facture_totals(db, facture_id)
     await _reorder_items_by_kind(db, facture_id)
     await db.refresh(item)
+    _autopush_if_emise(fa)
     return FactureItemRead.model_validate(item)
 
 
@@ -303,7 +323,7 @@ async def update_item(
     db: DBSession,
     _: CurrentUser,
 ) -> FactureItemRead:
-    await _ensure_facture_editable(db, facture_id)
+    fa = await _ensure_facture_editable(db, facture_id)
     item = (
         await db.execute(
             select(FactureItem).where(
@@ -332,6 +352,7 @@ async def update_item(
     # Un changement de type peut déplacer la ligne dans un autre groupe.
     await _reorder_items_by_kind(db, facture_id)
     await db.refresh(item)
+    _autopush_if_emise(fa)
     return FactureItemRead.model_validate(item)
 
 
@@ -346,7 +367,7 @@ async def delete_item(
     db: DBSession,
     _: CurrentUser,
 ) -> None:
-    await _ensure_facture_editable(db, facture_id)
+    fa = await _ensure_facture_editable(db, facture_id)
     item = (
         await db.execute(
             select(FactureItem).where(
@@ -382,6 +403,7 @@ async def delete_item(
     await db.delete(item)
     await db.flush()
     await _recompute_facture_totals(db, facture_id)
+    _autopush_if_emise(fa)
 
 
 # Backfill : resynchronise les totaux de TOUTES les factures

@@ -27,6 +27,27 @@ class FactureSyncError(Exception):
     pass
 
 
+async def record_facture_sync_error(
+    facture_id: int, message: Optional[str]
+) -> None:
+    """Persiste (session FRAÎCHE) la dernière erreur de synchro QBO sur la
+    facture — pour qu'elle soit AFFICHÉE sur la fiche sans que l'utilisateur
+    lise les logs. Session dédiée : la session appelante a généralement été
+    invalidée par l'exception qu'on enregistre. None efface l'erreur."""
+    try:
+        from app.db.session import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            fa = await _load_facture(db, facture_id)
+            if fa is not None:
+                fa.qbo_sync_error = (str(message)[:500] if message else None)
+                await db.commit()
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "record_facture_sync_error %s: échec", facture_id, exc_info=True
+        )
+
+
 async def _load_facture(db: AsyncSession, facture_id: int) -> Optional[Facture]:
     return (
         await db.execute(select(Facture).where(Facture.id == facture_id))
@@ -704,6 +725,13 @@ async def sync_facture_to_qbo(
     }
     if warnings:
         result["sync_warning"] = " | ".join(warnings)
+    # Persiste l'état de la dernière synchro sur la facture : l'échec
+    # partiel (paiement refusé, corps non mis à jour) devient VISIBLE sur
+    # la fiche ; une synchro propre efface l'erreur précédente.
+    fa.qbo_sync_error = (
+        result.get("sync_warning") or ""
+    )[:500] or None
+    await db.flush()
     return result
 
 

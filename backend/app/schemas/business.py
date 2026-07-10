@@ -453,6 +453,9 @@ class FactureRead(_Base):
     next_reminder_at: Optional[datetime] = None
     qbo_invoice_id: Optional[str]
     qbo_doc_number: Optional[str]
+    # Dernière erreur de synchro QBO — affichée automatiquement sur la
+    # fiche facture (NULL = dernière synchro OK).
+    qbo_sync_error: Optional[str] = None
     internal_notes: Optional[str] = None
     client_note: Optional[str] = None
     is_final: bool = False

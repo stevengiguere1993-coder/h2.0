@@ -35,6 +35,12 @@ async def sync_facture(
     try:
         result = await sync_facture_to_qbo(db, facture_id)
     except FactureSyncError as exc:
+        # Persiste le motif sur la facture (session fraîche — celle de la
+        # requête est invalidée par l'exception) pour l'afficher sur la
+        # fiche même après fermeture de la bannière.
+        from app.services.facture_qbo import record_facture_sync_error
+
+        await record_facture_sync_error(facture_id, str(exc))
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
     return QboSyncResult(
         qbo_invoice_id=str(result.get("qbo_invoice_id") or ""),

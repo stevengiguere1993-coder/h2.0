@@ -60,6 +60,13 @@ class Facture(Base, TimestampUpdateMixin):
     # (solde la facture côté QBO). Clé d'idempotence : on ne recrée pas
     # un paiement déjà transféré.
     qbo_payment_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Dernière ERREUR de synchro QBO (push à l'envoi, filet horaire,
+    # resync) — persistée pour être AFFICHÉE sur la fiche facture, sans
+    # que l'utilisateur ait à cliquer ni à lire les logs serveur.
+    # NULL = dernière synchro OK (ou jamais tentée).
+    qbo_sync_error: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )
 
     # Automatic reminders (cron). last_reminder_at is null until a
     # first reminder fires; reminder_count lets us escalate the tone
