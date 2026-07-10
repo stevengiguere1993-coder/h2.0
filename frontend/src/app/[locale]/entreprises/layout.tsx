@@ -324,7 +324,7 @@ export default function EntreprisesLayout({
         ) : null}
 
         <aside
-          className={`fixed inset-y-0 left-0 z-50 w-60 flex-col transition-transform lg:static lg:flex lg:translate-x-0 ${
+          className={`fixed inset-y-0 left-0 z-50 w-60 flex-col transition-transform lg:sticky lg:top-0 lg:h-screen lg:flex lg:translate-x-0 ${
             sidebarOpen
               ? "flex translate-x-0"
               : "hidden -translate-x-full"

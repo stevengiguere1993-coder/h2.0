@@ -15,7 +15,7 @@
  * sauf `onNavigate` (fermer la sidebar mobile au clic).
  */
 
-import { Home, LogOut, Settings } from "lucide-react";
+import { LogOut, Settings } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { AccountBadge } from "@/components/account-badge";
@@ -48,14 +48,8 @@ export function SidebarFooter({ onNavigate }: { onNavigate?: () => void }) {
         >
           <Settings className="h-4 w-4 flex-shrink-0" /> Paramètres
         </Link>
-        <Link
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/connexion" as any}
-          onClick={onNavigate}
-          className={itemCls}
-        >
-          <Home className="h-4 w-4 flex-shrink-0" /> Accueil du portail
-        </Link>
+        {/* « Accueil du portail » retiré (retour Phil) : le clic sur le
+            logo du pôle fait déjà ce chemin. */}
         <InstallAppButton variant="sidebar" />
         <button
           type="button"
