@@ -32,12 +32,14 @@ type ImmeubleLite = {
   name: string;
   address: string;
   city?: string | null;
+  gestion_externe?: boolean;
 };
 
 type Logement = LogementFicheData;
 
 type Row = Logement & {
   immeuble_name: string;
+  immeuble_gestion_externe: boolean;
 };
 
 const STATUTS = [
@@ -123,7 +125,11 @@ export default function LogementsPage() {
             );
             if (!r.ok) return [] as Row[];
             const logs = (await r.json()) as Logement[];
-            return logs.map((l) => ({ ...l, immeuble_name: imm.name }));
+            return logs.map((l) => ({
+              ...l,
+              immeuble_name: imm.name,
+              immeuble_gestion_externe: !!imm.gestion_externe
+            }));
           })
         );
         if (cancelled) return;
@@ -278,6 +284,11 @@ export default function LogementsPage() {
                           <Building2 className="h-3.5 w-3.5 text-white/40" />
                           {l.immeuble_name}
                         </Link>
+                        {l.immeuble_gestion_externe ? (
+                          <span className="ml-1.5 badge badge-sky">
+                            Gestion externe
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 text-xs text-white/60">
                         {l.type}
