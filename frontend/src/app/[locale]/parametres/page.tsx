@@ -19,6 +19,7 @@ import {
   Cloud,
   Database,
   FileSignature,
+  Hash,
   KeyRound,
   LayoutGrid,
   Mail,
@@ -182,10 +183,24 @@ const SECTIONS: Section[] = [
         minRole: "manager"
       },
       {
-        title: "Comptabilité & numérotation",
-        desc: "QuickBooks (connexion, comptes), numérotation factures / devis / PO, calendrier.",
-        href: "/app/parametres",
+        title: "Comptabilité — QuickBooks",
+        desc: "QuickBooks Online (connexion, diagnostic) et mapping des comptes par mode de paiement.",
+        href: "/app/parametres/comptabilite",
         icon: Calculator,
+        minRole: "admin"
+      },
+      {
+        title: "Numérotation",
+        desc: "Compteurs séquentiels factures / devis / PO, alignés sur QuickBooks.",
+        href: "/app/parametres/numerotation",
+        icon: Hash,
+        minRole: "admin"
+      },
+      {
+        title: "Connexions",
+        desc: "Aperçu des sources externes du pôle Construction (QBO, calendrier, données).",
+        href: "/app/parametres/connexions",
+        icon: Plug,
         minRole: "manager"
       },
       {

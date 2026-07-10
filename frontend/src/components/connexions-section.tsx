@@ -67,7 +67,7 @@ const CONNECTIONS: ConnectionDef[] = [
     name: "QuickBooks Online",
     description:
       "Synchronisation des clients, soumissions, factures et achats vers ta comptabilité.",
-    href: "/app/parametres"
+    href: "/app/parametres/comptabilite"
   },
   {
     id: "calendar_ics",
@@ -77,7 +77,7 @@ const CONNECTIONS: ConnectionDef[] = [
     name: "Calendrier externe (Google/Outlook/Apple/Proton)",
     description:
       "Import iCal des plages occupées en mode anonyme — évite le double-booking.",
-    href: "/app/parametres"
+    href: "/entreprises/reglages/calendriers"
   },
   // ─── PROSPECTION ───
   {
