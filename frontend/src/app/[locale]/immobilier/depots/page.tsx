@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AlertTriangle, Loader2, Search, ShieldCheck } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
@@ -45,6 +45,10 @@ export default function DepotsPage() {
   const { currentEntrepriseId } = useImmobilierLayout();
   const [data, setData] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [statutFilter, setStatutFilter] = useState<
+    "all" | "detenu" | "a_rendre"
+  >("all");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,6 +66,22 @@ export default function DepotsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Filtres client-side sur les rows chargées.
+  const filteredRows = useMemo(() => {
+    if (!data) return [];
+    const q = search.trim().toLowerCase();
+    return data.rows.filter((r) => {
+      if (statutFilter !== "all" && r.statut !== statutFilter) return false;
+      if (q) {
+        const hay = `${r.locataire_name || ""} ${r.immeuble_name} ${
+          r.logement_numero || ""
+        }`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [data, search, statutFilter]);
 
   return (
     <>
@@ -119,7 +139,40 @@ export default function DepotsPage() {
           </div>
         </div>
 
-        <div className="mt-6 overflow-x-auto rounded-2xl border border-brand-800">
+        {/* Filtres */}
+        <div className="mt-6 flex flex-wrap items-center gap-2">
+          <div className="relative max-w-md flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Recherche locataire / immeuble / logement…"
+              className="input w-full pl-9"
+            />
+          </div>
+          <FilterPill
+            label="Tous"
+            active={statutFilter === "all"}
+            onClick={() => setStatutFilter("all")}
+          />
+          <FilterPill
+            label="Détenus"
+            active={statutFilter === "detenu"}
+            onClick={() => setStatutFilter("detenu")}
+          />
+          <FilterPill
+            label="À rendre"
+            active={statutFilter === "a_rendre"}
+            onClick={() => setStatutFilter("a_rendre")}
+          />
+          {data ? (
+            <span className="text-xs text-white/50">
+              {filteredRows.length} / {data.rows.length}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="mt-4 overflow-x-auto rounded-2xl border border-brand-800">
           <table className="w-full min-w-[720px] text-sm">
             <thead>
               <tr className="border-b border-brand-800 bg-brand-900 text-left text-[11px] uppercase tracking-wider text-white/45">
@@ -138,14 +191,16 @@ export default function DepotsPage() {
                     Chargement…
                   </td>
                 </tr>
-              ) : !data || data.rows.length === 0 ? (
+              ) : !data || filteredRows.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-3 py-12 text-center text-white/50">
-                    Aucun dépôt de garantie enregistré.
+                    {data && data.rows.length > 0
+                      ? "Aucun dépôt correspondant aux filtres."
+                      : "Aucun dépôt de garantie enregistré."}
                   </td>
                 </tr>
               ) : (
-                data.rows.map((r) => (
+                filteredRows.map((r) => (
                   <tr
                     key={r.bail_id}
                     className={`border-b border-brand-800/60 hover:bg-brand-900/40 ${
@@ -204,5 +259,29 @@ export default function DepotsPage() {
         </div>
       </div>
     </>
+  );
+}
+
+function FilterPill({
+  label,
+  active,
+  onClick
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+        active
+          ? "bg-brand-900 text-white"
+          : "border border-white/10 bg-brand-950 text-white/60 hover:text-white"
+      }`}
+    >
+      {label}
+    </button>
   );
 }

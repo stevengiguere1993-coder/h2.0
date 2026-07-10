@@ -24,10 +24,20 @@ type Locataire = {
   revenu_annuel?: number | null;
 };
 
+type ScoreFilter = "all" | "lt70" | "70_89" | "gte90";
+
+const SCORE_FILTERS: { value: ScoreFilter; label: string }[] = [
+  { value: "all", label: "Tous" },
+  { value: "lt70", label: "Score < 70" },
+  { value: "70_89", label: "70–89" },
+  { value: "gte90", label: "≥ 90" }
+];
+
 export default function LocatairesPage() {
   const [list, setList] = useState<Locataire[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [scoreFilter, setScoreFilter] = useState<ScoreFilter>("all");
   const [showCreate, setShowCreate] = useState(false);
 
   async function reload() {
@@ -50,6 +60,19 @@ export default function LocatairesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
+  // Filtre par score de paiement — client-side sur les rows chargées.
+  const filtered =
+    list === null
+      ? null
+      : list.filter((l) => {
+          if (scoreFilter === "all") return true;
+          if (l.paiement_score == null) return false;
+          if (scoreFilter === "lt70") return l.paiement_score < 70;
+          if (scoreFilter === "70_89")
+            return l.paiement_score >= 70 && l.paiement_score < 90;
+          return l.paiement_score >= 90;
+        });
+
   return (
     <>
       <ImmobilierTopbar
@@ -70,14 +93,29 @@ export default function LocatairesPage() {
       />
 
       <div className="p-4 lg:p-6">
-        <div className="relative mb-4 max-w-md">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Recherche par nom…"
-            className="input w-full pl-9"
-          />
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <div className="relative max-w-md flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Recherche par nom…"
+              className="input w-full pl-9"
+            />
+          </div>
+          {SCORE_FILTERS.map((f) => (
+            <FilterPill
+              key={f.value}
+              label={f.label}
+              active={scoreFilter === f.value}
+              onClick={() => setScoreFilter(f.value)}
+            />
+          ))}
+          {filtered && list ? (
+            <span className="text-xs text-white/50">
+              {filtered.length} / {list.length}
+            </span>
+          ) : null}
         </div>
 
         {error ? (
@@ -87,11 +125,12 @@ export default function LocatairesPage() {
           </p>
         ) : null}
 
-        {list === null ? (
+        {filtered === null ? (
           <Loading />
-        ) : list.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <p className="rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
-            Aucun locataire {search ? "correspondant" : "enregistré"}.
+            Aucun locataire{" "}
+            {search || scoreFilter !== "all" ? "correspondant" : "enregistré"}.
           </p>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
@@ -106,7 +145,7 @@ export default function LocatairesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-800">
-                {list.map((l) => (
+                {filtered.map((l) => (
                   <tr key={l.id} className="group hover:bg-brand-950/50">
                     <td className="px-4 py-3">
                       <Link
@@ -332,5 +371,29 @@ function Loading() {
     <p className="text-xs text-white/50">
       <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Chargement…
     </p>
+  );
+}
+
+function FilterPill({
+  label,
+  active,
+  onClick
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+        active
+          ? "bg-brand-900 text-white"
+          : "border border-white/10 bg-brand-950 text-white/60 hover:text-white"
+      }`}
+    >
+      {label}
+    </button>
   );
 }

@@ -15,6 +15,7 @@ import {
   ChevronDown,
   CircleDollarSign,
   ClipboardList,
+  DoorOpen,
   Hammer,
   Loader2,
   Menu,
@@ -48,10 +49,11 @@ type NavItem = {
 
 const NAV: NavItem[] = [
   { href: "/immobilier", label: "Vue d'ensemble", icon: Building2 },
+  { href: "/immobilier/finances", label: "Finances", icon: CircleDollarSign },
   { href: "/immobilier/immeubles", label: "Immeubles", icon: Building2 },
+  { href: "/immobilier/logements", label: "Logements", icon: DoorOpen },
   { href: "/immobilier/locataires", label: "Locataires", icon: Users },
   { href: "/immobilier/baux", label: "Baux & paiements", icon: ClipboardList },
-  { href: "/immobilier/finances", label: "Finances", icon: CircleDollarSign },
   { href: "/immobilier/renouvellements", label: "Renouvellements", icon: ClipboardList },
   { href: "/immobilier/depots", label: "Dépôts de garantie", icon: ShieldCheck },
   { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer }
