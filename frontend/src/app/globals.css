@@ -266,6 +266,38 @@ html[data-portal-theme="light"] .placeholder\:text-white\/40::placeholder { colo
 html[data-portal-theme="light"] .placeholder\:text-brand-300::placeholder { color: #94a3b8 !important; }
 
 /* =====================================================================
+ * Mode clair — classes COMPOSANT (@layer components). Leurs couleurs
+ * sont INLINÉES par @apply : les remaps d'utilitaires ci-dessus (qui
+ * ciblent .text-rose-300, .text-white/70, …) ne les atteignent PAS.
+ * Sans ces overrides, l'encre pastel pensée pour fond sombre devient
+ * invisible sur fond clair — ex. la POUBELLE des lignes de facture
+ * (.btn-outline-rose : icône rose-300 pastel sur fond rose pâle).
+ * Mêmes tons foncés que les remaps d'utilitaires (rose→#be123c,
+ * emerald→#047857, amber→#b45309, sky→#0369a1, blue→#1d4ed8,
+ * violet→#6d28d9, blanc→#0f172a). Cf. règle lisibilité CLAUDE.md.
+ * ===================================================================== */
+html[data-portal-theme="light"] .btn-outline-rose { color: #be123c !important; }
+html[data-portal-theme="light"] .btn-outline-accent { color: #b45309 !important; }
+html[data-portal-theme="light"] .btn-ghost { color: rgb(15 23 42 / 0.78) !important; }
+html[data-portal-theme="light"] .btn-ghost:hover { color: #0f172a !important; background-color: #eef2f6 !important; }
+html[data-portal-theme="light"] .btn-secondary { color: #0f172a !important; border-color: rgb(15 23 42 / 0.25) !important; background-color: rgb(15 23 42 / 0.04) !important; }
+html[data-portal-theme="light"] .btn-secondary:hover { background-color: rgb(15 23 42 / 0.08) !important; }
+html[data-portal-theme="light"] .section-title { color: rgb(15 23 42 / 0.55) !important; }
+html[data-portal-theme="light"] .empty-state { color: rgb(15 23 42 / 0.65) !important; border-color: #e2e8f0 !important; background-color: rgb(248 250 252 / 0.6) !important; }
+html[data-portal-theme="light"] .panel,
+html[data-portal-theme="light"] .panel-soft,
+html[data-portal-theme="light"] .kpi-card { color: #0f172a !important; background-color: #f8fafc !important; border-color: #e2e8f0 !important; }
+html[data-portal-theme="light"] .input { color: #0f172a !important; background-color: #ffffff !important; border-color: #cbd5e1 !important; }
+html[data-portal-theme="light"] .input::placeholder { color: #94a3b8 !important; }
+html[data-portal-theme="light"] .badge-neutral { color: rgb(15 23 42 / 0.78) !important; background-color: #eef2f6 !important; }
+html[data-portal-theme="light"] .badge-emerald { color: #047857 !important; background-color: rgb(209 250 229 / 0.85) !important; }
+html[data-portal-theme="light"] .badge-amber { color: #b45309 !important; background-color: rgb(254 243 199 / 0.8) !important; }
+html[data-portal-theme="light"] .badge-rose { color: #be123c !important; background-color: rgb(255 228 230 / 0.85) !important; }
+html[data-portal-theme="light"] .badge-sky { color: #0369a1 !important; background-color: rgb(224 242 254 / 0.85) !important; }
+html[data-portal-theme="light"] .badge-blue { color: #1d4ed8 !important; background-color: rgb(219 234 254 / 0.85) !important; }
+html[data-portal-theme="light"] .badge-violet { color: #6d28d9 !important; background-color: rgb(237 233 254 / 0.85) !important; }
+
+/* =====================================================================
  * Palette QG (volet entreprises). Le QG utilise des inline styles pour
  * matcher la maquette Bloomberg-terminal, donc les overrides via classes
  * Tailwind ci-dessus ne suffisent pas. On expose les couleurs via des
