@@ -29,6 +29,7 @@ import { authedFetch } from "@/lib/auth";
 import { TAX_FACTOR } from "@/lib/tax";
 import { useConfirm } from "@/components/confirm-dialog";
 import { MultiSelectDropdown } from "@/components/multi-select-dropdown";
+import { ProjectHoursSection } from "@/components/project-hours-section";
 import {
   AchatMarkPaidModal,
   type MarkPaidAchat
@@ -2218,6 +2219,10 @@ function FinancesTab({
           tone={data.actual_profit >= 0 ? "emerald" : "rose"}
         />
       </div>
+
+      {/* Heures pointées par employé (demande du partner 2026-07-10) :
+          qui a travaillé combien sur ce projet, avec détail des punchs. */}
+      <ProjectHoursSection projectId={projectId} />
 
       {/* Décomposition du profit réel — TOUT en HT, taxes retirées.
           Séparé du bloc taxes pour éviter toute confusion. */}
