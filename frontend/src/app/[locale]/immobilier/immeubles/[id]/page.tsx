@@ -18,8 +18,10 @@ import {
   Pencil,
   Percent,
   Plus,
+  Receipt,
   Trash2,
   TrendingUp,
+  Wallet,
   Wrench,
   X
 } from "lucide-react";
@@ -152,6 +154,7 @@ const TABS = [
   { id: "baux", label: "Baux", icon: ClipboardList },
   { id: "hypotheques", label: "Hypothèques", icon: Banknote },
   { id: "evaluations", label: "Évaluations", icon: TrendingUp },
+  { id: "cashflow", label: "Cashflow", icon: Wallet },
   { id: "maintenance", label: "Maintenance", icon: Wrench },
   { id: "contrat-gestion", label: "Contrat de gestion", icon: FileSignature }
 ] as const;
@@ -819,6 +822,13 @@ export default function ImmeubleDetailPage({
               purchasePrice={immeuble.purchase_price ?? null}
               balanceHypoActives={balanceHypoActives}
               onMutated={() => void refreshFinancials()}
+            />
+          ) : null}
+          {tab === "cashflow" ? (
+            <CashflowTab
+              immeubleId={immeubleId}
+              baux={baux}
+              hypotheques={hypotheques}
             />
           ) : null}
           {tab === "maintenance" ? (
@@ -1687,30 +1697,91 @@ const HYPO_STATUS_BADGE: Record<string, string> = {
 };
 
 /**
- * Paiement mensuel d'une hypothèque canadienne : intérêt composé
- * semi-annuellement, converti en taux mensuel équivalent.
+ * Paiement mensuel d'une hypothèque canadienne.
+ *
+ * Composition des intérêts (préférence de calcul UI, non persistée —
+ * seul le paiement_mensuel résultant est enregistré) :
+ *  - "semi"      : composé semi-annuellement, converti en taux mensuel
+ *                  équivalent (résidentiel canadien, Loi sur l'intérêt) ;
+ *  - "mensuelle" : composé mensuellement (prêts commerciaux
+ *                  multi-logements / taux variables).
  */
+type CompositionInterets = "semi" | "mensuelle";
+
 function computePaiementMensuel(
   tauxPct: number,
   amortissementMois: number,
-  balance: number
+  balance: number,
+  composition: CompositionInterets = "semi"
 ): number | null {
   if (!(balance > 0) || !(amortissementMois > 0) || Number.isNaN(tauxPct))
     return null;
   if (tauxPct <= 0) return balance / amortissementMois;
-  const iMensuel = Math.pow(1 + tauxPct / 100 / 2, 2 / 12) - 1;
+  const iMensuel =
+    composition === "mensuelle"
+      ? tauxPct / 100 / 12
+      : Math.pow(1 + tauxPct / 100 / 2, 2 / 12) - 1;
   const pmt =
     (balance * iMensuel) / (1 - Math.pow(1 + iMensuel, -amortissementMois));
   return Number.isFinite(pmt) ? pmt : null;
 }
 
-function TermeBadge({ date }: { date?: string | null }) {
+/**
+ * Ajoute un nombre d'années (décimales acceptées, ex. 5 ou 2.5) à une
+ * date ISO (YYYY-MM-DD). Mois entiers d'abord (jour borné à la fin du
+ * mois cible), puis le reste converti en jours — arrondi au jour.
+ */
+function addAnneesIso(dateIso: string, annees: number): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateIso);
+  if (!m || !Number.isFinite(annees) || annees <= 0) return null;
+  const totalMois = annees * 12;
+  const moisEntiers = Math.floor(totalMois + 1e-9);
+  const joursFrac = Math.round((totalMois - moisEntiers) * 30.44);
+  const jour = Number(m[3]);
+  const cible = new Date(Number(m[1]), Number(m[2]) - 1 + moisEntiers, 1);
+  const dernierJour = new Date(
+    cible.getFullYear(),
+    cible.getMonth() + 1,
+    0
+  ).getDate();
+  cible.setDate(Math.min(jour, dernierJour));
+  if (joursFrac > 0) cible.setDate(cible.getDate() + joursFrac);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${cible.getFullYear()}-${pad(cible.getMonth() + 1)}-${pad(cible.getDate())}`;
+}
+
+/** Terme en années entre deux dates ISO, arrondi à 0.5 près (> 0). */
+function termeAnneesArrondi(
+  debutIso: string,
+  finIso: string
+): number | null {
+  const debut = new Date(`${debutIso}T00:00:00`).getTime();
+  const fin = new Date(`${finIso}T00:00:00`).getTime();
+  if (!Number.isFinite(debut) || !Number.isFinite(fin) || fin <= debut)
+    return null;
+  const annees = (fin - debut) / (1000 * 60 * 60 * 24 * 365.25);
+  const arrondi = Math.round(annees * 2) / 2;
+  return arrondi > 0 ? arrondi : null;
+}
+
+function fmtTermeAnnees(n: number): string {
+  return `${n.toLocaleString("fr-CA")} ${n >= 2 ? "ans" : "an"}`;
+}
+
+function TermeBadge({
+  date,
+  dateDebut
+}: {
+  date?: string | null;
+  dateDebut?: string | null;
+}) {
   if (!date)
     return <span className="text-[11px] text-white/40">Fin du terme —</span>;
   const fin = new Date(`${date}T00:00:00`);
   const moisRestants =
     (fin.getTime() - Date.now()) / (1000 * 60 * 60 * 24 * 30.44);
   const bientot = moisRestants < 6;
+  const terme = dateDebut ? termeAnneesArrondi(dateDebut, date) : null;
   return (
     <span
       className={`badge font-mono ${bientot ? "badge-amber" : "badge-neutral"}`}
@@ -1720,7 +1791,9 @@ function TermeBadge({ date }: { date?: string | null }) {
           : "Fin du terme hypothécaire"
       }
     >
-      Fin du terme {date}
+      {terme != null
+        ? `Terme ${fmtTermeAnnees(terme)} · fin ${date}`
+        : `Fin du terme ${date}`}
     </span>
   );
 }
@@ -1732,10 +1805,15 @@ type HypoFormState = {
   balance_actuelle: string;
   taux_pct: string;
   type_taux: string;
+  // Préférence de calcul UI seulement (pas de champ backend) : le
+  // paiement_mensuel calculé reste la seule valeur persistée.
+  composition: string;
   amortissement_annees: string;
   paiement_mensuel: string;
   date_debut: string;
-  date_fin_terme: string;
+  // Saisi en années (décimales acceptées) ; date_fin_terme (backend
+  // inchangé) est calculée = date_debut + terme.
+  terme_annees: string;
   status: string;
   notes: string;
 };
@@ -1747,10 +1825,11 @@ const HYPO_FORM_EMPTY: HypoFormState = {
   balance_actuelle: "",
   taux_pct: "",
   type_taux: "fixe",
+  composition: "semi",
   amortissement_annees: "25",
   paiement_mensuel: "",
   date_debut: "",
-  date_fin_terme: "",
+  terme_annees: "",
   status: "active",
   notes: ""
 };
@@ -1781,6 +1860,7 @@ function HypothequeForm({
               : "",
           taux_pct: initial.taux_pct != null ? String(initial.taux_pct) : "",
           type_taux: initial.type_taux || "fixe",
+          composition: "semi",
           amortissement_annees:
             initial.amortissement_mois != null
               ? String(Math.round((initial.amortissement_mois / 12) * 10) / 10)
@@ -1790,7 +1870,17 @@ function HypothequeForm({
               ? String(initial.paiement_mensuel)
               : "",
           date_debut: initial.date_debut || "",
-          date_fin_terme: initial.date_fin_terme || "",
+          // Terme pré-rempli depuis les dates existantes (arrondi 0.5).
+          terme_annees:
+            initial.date_debut && initial.date_fin_terme
+              ? (() => {
+                  const t = termeAnneesArrondi(
+                    initial.date_debut,
+                    initial.date_fin_terme
+                  );
+                  return t != null ? String(t) : "";
+                })()
+              : "",
           status: initial.status || "active",
           notes: initial.notes || ""
         }
@@ -1813,14 +1903,26 @@ function HypothequeForm({
       ? Number(f.montant_initial)
       : 0;
 
+  const compositionChoisie: CompositionInterets =
+    f.composition === "mensuelle" ? "mensuelle" : "semi";
+
   const computedPmt = useMemo(() => {
     if (f.taux_pct.trim() === "") return null;
     return computePaiementMensuel(
       Number(f.taux_pct),
       amortissementMois,
-      balanceRef
+      balanceRef,
+      compositionChoisie
     );
-  }, [f.taux_pct, amortissementMois, balanceRef]);
+  }, [f.taux_pct, amortissementMois, balanceRef, compositionChoisie]);
+
+  // Fin du terme calculée = date_debut + terme (années, décimales OK).
+  const finTermeCalculee = useMemo(() => {
+    if (!f.date_debut || f.terme_annees.trim() === "") return null;
+    const annees = Number(f.terme_annees);
+    if (!Number.isFinite(annees) || annees <= 0) return null;
+    return addAnneesIso(f.date_debut, annees);
+  }, [f.date_debut, f.terme_annees]);
 
   const pmtDisplay = pmtOverride
     ? f.paiement_mensuel
@@ -1857,7 +1959,12 @@ function HypothequeForm({
           ? pmtEffective
           : null,
       date_debut: f.date_debut || null,
-      date_fin_terme: f.date_fin_terme || null,
+      // Calculée = date_debut + terme. Sans date de début on ne peut
+      // rien calculer : on préserve la fin de terme existante plutôt
+      // que de l'effacer en silence.
+      date_fin_terme:
+        finTermeCalculee ??
+        (!f.date_debut ? (initial?.date_fin_terme ?? null) : null),
       status: f.status,
       notes: f.notes.trim() || null
     });
@@ -1953,6 +2060,21 @@ function HypothequeForm({
           </select>
         </label>
         <label className={labelCls}>
+          Composition des intérêts
+          <select
+            value={f.composition}
+            onChange={(e) => set("composition")(e.target.value)}
+            className={inputCls}
+          >
+            <option value="semi" className="bg-brand-950 text-white">
+              Semi-annuelle (résidentiel)
+            </option>
+            <option value="mensuelle" className="bg-brand-950 text-white">
+              Mensuelle (commercial / variable)
+            </option>
+          </select>
+        </label>
+        <label className={labelCls}>
           Amortissement (années)
           <input
             inputMode="decimal"
@@ -1986,13 +2108,21 @@ function HypothequeForm({
           />
         </label>
         <label className={labelCls}>
-          Fin du terme
+          Terme (années)
           <input
-            type="date"
-            value={f.date_fin_terme}
-            onChange={(e) => set("date_fin_terme")(e.target.value)}
+            inputMode="decimal"
+            value={f.terme_annees}
+            onChange={(e) => set("terme_annees")(e.target.value)}
+            placeholder="ex. 5"
             className={inputCls}
           />
+          <span className="mt-1 block text-[10px] font-normal text-white/40">
+            {finTermeCalculee
+              ? `Fin du terme : ${finTermeCalculee}`
+              : f.terme_annees.trim() !== "" && !f.date_debut
+                ? "Renseigne la date de début pour calculer la fin du terme"
+                : "Fin du terme = date de début + terme"}
+          </span>
         </label>
         <label className={`${labelCls} sm:col-span-2 lg:col-span-3`}>
           Notes
@@ -2010,7 +2140,10 @@ function HypothequeForm({
         <p className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
           Paiement mensuel calculé : {fmtCurrency(computedPmt)}
           <span className="ml-1 text-emerald-300/60">
-            (composé semi-annuellement
+            (composé{" "}
+            {compositionChoisie === "mensuelle"
+              ? "mensuellement"
+              : "semi-annuellement"}
             {pmtOverride ? " — valeur surchargée manuellement" : ""})
           </span>
         </p>
@@ -2020,6 +2153,10 @@ function HypothequeForm({
           calculer le paiement mensuel automatiquement.
         </p>
       )}
+      <p className="mt-1.5 text-[10px] text-white/35">
+        Résidentiel = composé semi-annuellement · Commercial/variable =
+        mensuellement
+      </p>
 
       <div className="mt-3 flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
         <button
@@ -2212,7 +2349,10 @@ function HypothequesTab({
                           ? `${h.taux_pct}% ${h.type_taux || ""}`.trim()
                           : "Taux ?"}
                       </span>
-                      <TermeBadge date={h.date_fin_terme} />
+                      <TermeBadge
+                        date={h.date_fin_terme}
+                        dateDebut={h.date_debut}
+                      />
                     </p>
                     {h.notes ? (
                       <p className="mt-2 text-xs text-white/60">{h.notes}</p>
@@ -2605,6 +2745,446 @@ function EvaluationsTab({
           </table>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ─── Cashflow ────────────────────────────────────────────────────────────
+
+type Depense = {
+  id: number;
+  immeuble_id: number;
+  categorie: string;
+  libelle: string;
+  montant: number;
+  frequence: string;
+  date_depense: string | null;
+  notes: string | null;
+};
+
+const DEPENSE_CATEGORIES: [string, string][] = [
+  ["taxes_municipales", "Taxes municipales"],
+  ["taxes_scolaires", "Taxes scolaires"],
+  ["assurances", "Assurances"],
+  ["energie", "Énergie"],
+  ["entretien", "Entretien"],
+  ["deneigement", "Déneigement"],
+  ["conciergerie", "Conciergerie"],
+  ["gestion", "Gestion"],
+  ["autre", "Autre"]
+];
+
+const DEPENSE_CAT_LABEL: Record<string, string> =
+  Object.fromEntries(DEPENSE_CATEGORIES);
+
+function CashflowTab({
+  immeubleId,
+  baux,
+  hypotheques
+}: {
+  immeubleId: number;
+  baux: Bail[] | null;
+  hypotheques: Hypotheque[] | null;
+}) {
+  const [depenses, setDepenses] = useState<Depense[] | null>(null);
+  const [mode, setMode] = useState<"mensuel" | "annuel">("mensuel");
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [fCat, setFCat] = useState("taxes_municipales");
+  const [fLib, setFLib] = useState("");
+  const [fMontant, setFMontant] = useState("");
+  const [fFreq, setFFreq] = useState("annuel");
+
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch(`/api/v1/immobilier/immeubles/${immeubleId}/depenses`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => {
+        if (!cancelled) setDepenses(Array.isArray(d) ? d : []);
+      })
+      .catch(() => {
+        if (!cancelled) setDepenses([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [immeubleId]);
+
+  // Récurrentes seulement : le cashflow est un flux mensuel/annuel
+  // régulier (les ponctuelles vivent dans Finances).
+  const recurrentes = useMemo(
+    () =>
+      (depenses || []).filter(
+        (d) => d.frequence === "mensuel" || d.frequence === "annuel"
+      ),
+    [depenses]
+  );
+  const nbPonctuelles = (depenses || []).length - recurrentes.length;
+
+  const bauxActifs = (baux || []).filter((b) => b.status === "actif");
+  const revenusMensuel = bauxActifs.reduce(
+    (s, b) => s + (b.loyer_mensuel || 0),
+    0
+  );
+  // Annualisation : mensuel×12 + annuel×1.
+  const depensesAnnuel = recurrentes.reduce(
+    (s, d) => s + (d.frequence === "mensuel" ? d.montant * 12 : d.montant),
+    0
+  );
+  const hyposActives = (hypotheques || []).filter(
+    (h) => h.status === "active"
+  );
+  const hypoMensuel = hyposActives.reduce(
+    (s, h) => s + (h.paiement_mensuel ?? 0),
+    0
+  );
+
+  const facteur = mode === "mensuel" ? 1 : 12;
+  const revenus = revenusMensuel * facteur;
+  const depensesAffichees =
+    mode === "mensuel" ? depensesAnnuel / 12 : depensesAnnuel;
+  const hypo = hypoMensuel * facteur;
+  const cashflow = revenus - depensesAffichees - hypo;
+  const suffixe = mode === "mensuel" ? "/mois" : "/an";
+
+  function montantSelonMode(d: Depense): number {
+    if (mode === "mensuel")
+      return d.frequence === "mensuel" ? d.montant : d.montant / 12;
+    return d.frequence === "mensuel" ? d.montant * 12 : d.montant;
+  }
+
+  async function add() {
+    if (
+      !fLib.trim() ||
+      !fMontant.trim() ||
+      Number.isNaN(Number(fMontant)) ||
+      Number(fMontant) < 0
+    )
+      return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/immeubles/${immeubleId}/depenses`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            categorie: fCat,
+            libelle: fLib.trim(),
+            // Stockée telle que saisie (fréquence + montant), la
+            // conversion ×12/÷12 est purement affichage.
+            montant: Number(fMontant),
+            frequence: fFreq,
+            date_depense: null
+          })
+        }
+      );
+      if (!res.ok)
+        throw new Error((await res.text()).slice(0, 200) || `HTTP ${res.status}`);
+      const created = (await res.json()) as Depense;
+      setDepenses((prev) => [created, ...(prev || [])]);
+      setFLib("");
+      setFMontant("");
+      setAdding(false);
+    } catch (e) {
+      setErr(`Ajout échoué : ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(d: Depense) {
+    if (!window.confirm(`Supprimer la dépense « ${d.libelle} » ?`)) return;
+    setErr(null);
+    const previous = depenses;
+    // Optimiste : on retire tout de suite, rollback si le serveur refuse.
+    setDepenses((cur) => (cur || []).filter((x) => x.id !== d.id));
+    try {
+      const res = await authedFetch(`/api/v1/immobilier/depenses/${d.id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      setDepenses(previous);
+      setErr(`Suppression échouée : ${(e as Error).message}`);
+    }
+  }
+
+  if (depenses === null) return <Loading />;
+
+  const inputCls =
+    "mt-0.5 block w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
+  const labelCls = "text-[11px] font-semibold text-white/60";
+
+  return (
+    <div className="space-y-4">
+      {/* Toggle Mensuel / Annuel */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-white/50">
+          Cashflow récurrent — baux actifs, dépenses récurrentes et
+          hypothèques actives.
+        </p>
+        <div className="inline-flex rounded-lg border border-brand-800 bg-brand-950 p-0.5">
+          {(["mensuel", "annuel"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              className={`rounded-md px-3 py-1 text-xs font-semibold transition ${
+                mode === m
+                  ? "bg-accent-500/20 text-accent-500"
+                  : "text-white/50 hover:text-white"
+              }`}
+            >
+              {m === "mensuel" ? "Mensuel" : "Annuel"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Sommaire */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Kpi
+          label={`Revenus ${suffixe}`}
+          value={fmtCurrency(revenus)}
+          sub={`${bauxActifs.length} ${bauxActifs.length > 1 ? "baux actifs" : "bail actif"}`}
+          icon={TrendingUp}
+          tone="sky"
+        />
+        <Kpi
+          label={`Dépenses ${suffixe}`}
+          value={fmtCurrency(depensesAffichees)}
+          sub={`${recurrentes.length} dépense${recurrentes.length > 1 ? "s" : ""} récurrente${recurrentes.length > 1 ? "s" : ""}`}
+          icon={Receipt}
+          tone="amber"
+        />
+        <Kpi
+          label={`Hypothèque ${suffixe}`}
+          value={fmtCurrency(hypo)}
+          sub={`${hyposActives.length} hypothèque${hyposActives.length > 1 ? "s" : ""} active${hyposActives.length > 1 ? "s" : ""} · auto`}
+          icon={Banknote}
+          tone="rose"
+        />
+        {/* Tuile cashflow mise en avant */}
+        <div
+          className={`rounded-xl border p-5 ${
+            cashflow >= 0
+              ? "border-emerald-500/40 bg-emerald-500/10"
+              : "border-rose-500/40 bg-rose-500/10"
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span
+              className={`text-[10px] font-semibold uppercase tracking-wider ${
+                cashflow >= 0 ? "text-emerald-300/80" : "text-rose-300/80"
+              }`}
+            >
+              Cashflow {suffixe}
+            </span>
+            <span
+              className={`flex h-8 w-8 items-center justify-center rounded-lg ${
+                cashflow >= 0
+                  ? "bg-emerald-500/15 text-emerald-300"
+                  : "bg-rose-500/15 text-rose-300"
+              }`}
+            >
+              <Wallet className="h-4 w-4" />
+            </span>
+          </div>
+          <div
+            className={`mt-3 text-2xl font-bold ${
+              cashflow >= 0 ? "text-emerald-300" : "text-rose-300"
+            }`}
+          >
+            {fmtCurrency(cashflow)}
+          </div>
+          <div
+            className={`mt-1 text-xs ${
+              cashflow >= 0 ? "text-emerald-300/60" : "text-rose-300/60"
+            }`}
+          >
+            Revenus − Dépenses − Hypothèque
+          </div>
+        </div>
+      </div>
+
+      {/* Dépenses récurrentes */}
+      <Section title="Dépenses récurrentes">
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-white/50">
+            {recurrentes.length} dépense{recurrentes.length > 1 ? "s" : ""}{" "}
+            récurrente{recurrentes.length > 1 ? "s" : ""}
+            {nbPonctuelles > 0
+              ? ` · ${nbPonctuelles} ponctuelle${nbPonctuelles > 1 ? "s" : ""} non incluse${nbPonctuelles > 1 ? "s" : ""} (voir Finances)`
+              : ""}
+          </p>
+          {!adding ? (
+            <button
+              type="button"
+              onClick={() => setAdding(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20"
+            >
+              <Plus className="h-3.5 w-3.5" /> Ajouter une dépense
+            </button>
+          ) : null}
+        </div>
+
+        {err ? (
+          <p className="mt-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+            {err}
+          </p>
+        ) : null}
+
+        {adding ? (
+          <div className="mt-3 rounded-2xl border border-brand-800 bg-brand-950/60 p-4">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <label className={labelCls}>
+                Catégorie
+                <select
+                  value={fCat}
+                  onChange={(e) => setFCat(e.target.value)}
+                  className={inputCls}
+                >
+                  {DEPENSE_CATEGORIES.map(([v, l]) => (
+                    <option
+                      key={v}
+                      value={v}
+                      className="bg-brand-950 text-white"
+                    >
+                      {l}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={labelCls}>
+                Libellé *
+                <input
+                  value={fLib}
+                  onChange={(e) => setFLib(e.target.value)}
+                  placeholder="Taxes 2026, assurance bâtiment…"
+                  className={inputCls}
+                />
+              </label>
+              <label className={labelCls}>
+                Montant ($) *
+                <input
+                  inputMode="decimal"
+                  value={fMontant}
+                  onChange={(e) => setFMontant(e.target.value)}
+                  placeholder="0.00"
+                  className={inputCls}
+                />
+              </label>
+              <label className={labelCls}>
+                Fréquence
+                <select
+                  value={fFreq}
+                  onChange={(e) => setFFreq(e.target.value)}
+                  className={inputCls}
+                >
+                  <option value="mensuel" className="bg-brand-950 text-white">
+                    Mensuel
+                  </option>
+                  <option value="annuel" className="bg-brand-950 text-white">
+                    Annuel
+                  </option>
+                </select>
+              </label>
+            </div>
+            <div className="mt-3 flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
+              <button
+                type="button"
+                onClick={() => setAdding(false)}
+                disabled={busy}
+                className="btn-secondary btn-sm"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={() => void add()}
+                disabled={
+                  busy ||
+                  !fLib.trim() ||
+                  !fMontant.trim() ||
+                  Number.isNaN(Number(fMontant))
+                }
+                className="btn-accent btn-sm disabled:opacity-50"
+              >
+                {busy ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Check className="mr-1 h-3.5 w-3.5" />
+                )}
+                Enregistrer
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {recurrentes.length === 0 && hypoMensuel <= 0 && !adding ? (
+          <p className="mt-3 rounded-lg border border-brand-800 bg-brand-950/60 px-4 py-3 text-sm text-white/60">
+            Aucune dépense récurrente — ajoute taxes, assurances,
+            déneigement… pour un cashflow réaliste.
+          </p>
+        ) : (
+          <ul className="mt-3 divide-y divide-brand-800 rounded-lg border border-brand-800">
+            {recurrentes.map((d) => (
+              <li
+                key={d.id}
+                className="flex items-center justify-between gap-2 px-3 py-2 text-xs"
+              >
+                <span className="min-w-0">
+                  <span className="font-medium text-white/80">
+                    {d.libelle}
+                  </span>
+                  <span className="badge badge-neutral ml-2">
+                    {DEPENSE_CAT_LABEL[d.categorie] || d.categorie}
+                  </span>
+                </span>
+                <span className="flex flex-shrink-0 items-center gap-2">
+                  <span className="text-right">
+                    <span className="font-mono font-semibold text-white">
+                      {fmtCurrency(montantSelonMode(d))}
+                      {suffixe}
+                    </span>
+                    <span className="ml-2 text-[10px] text-white/40">
+                      saisi {fmtCurrency(d.montant)}
+                      {d.frequence === "mensuel" ? "/mois" : "/an"}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void remove(d)}
+                    className="btn-outline-rose btn-xs"
+                    title="Supprimer la dépense"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </span>
+              </li>
+            ))}
+            {hypoMensuel > 0 ? (
+              <li className="flex items-center justify-between gap-2 bg-brand-950/60 px-3 py-2 text-xs opacity-70">
+                <span className="min-w-0">
+                  <span className="font-medium text-white/60">
+                    Hypothèque
+                  </span>
+                  <span className="badge badge-neutral ml-2">auto</span>
+                  <span className="ml-2 text-[10px] text-white/40">
+                    calculée depuis l&apos;onglet Hypothèques
+                  </span>
+                </span>
+                <span className="flex-shrink-0 font-mono font-semibold text-white/60">
+                  {fmtCurrency(hypo)}
+                  {suffixe}
+                </span>
+              </li>
+            ) : null}
+          </ul>
+        )}
+      </Section>
     </div>
   );
 }
