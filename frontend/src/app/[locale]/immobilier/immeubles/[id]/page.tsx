@@ -31,6 +31,10 @@ import { authedFetch, getToken } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../../layout";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { ContratGestionTab } from "./contrat-gestion-tab";
+import {
+  fmtPieces,
+  LogementFiche
+} from "@/components/immobilier/logement-fiche";
 
 type Ownership = {
   id: number;
@@ -59,11 +63,17 @@ type Immeuble = {
 
 type Logement = {
   id: number;
+  immeuble_id: number;
   numero: string;
   nb_pieces_decimal?: number | null;
+  nb_chambres?: number | null;
+  nb_sdb?: number | null;
   superficie_pi2?: number | null;
+  etage?: number | null;
+  type: string;
   status: string;
   loyer_demande?: number | null;
+  notes?: string | null;
 };
 
 type Bail = {
@@ -151,7 +161,7 @@ type RollupImmeuble = {
 const TABS = [
   { id: "overview", label: "Vue d'ensemble", icon: Building2 },
   { id: "logements", label: "Logements", icon: Home },
-  { id: "baux", label: "Baux", icon: ClipboardList },
+  { id: "baux", label: "Baux & paiements", icon: ClipboardList },
   { id: "hypotheques", label: "Hypothèques", icon: Banknote },
   { id: "evaluations", label: "Évaluations", icon: TrendingUp },
   { id: "cashflow", label: "Cashflow", icon: Wallet },
@@ -798,9 +808,17 @@ export default function ImmeubleDetailPage({
               hypotheques={hypotheques}
             />
           ) : null}
-          {tab === "logements" ? <LogementsTab list={logements} /> : null}
+          {tab === "logements" ? (
+            <LogementsTab
+              immeubleId={immeubleId}
+              list={logements}
+              baux={baux}
+              setList={setLogements}
+            />
+          ) : null}
           {tab === "baux" ? (
             <BauxTab
+              immeubleId={immeubleId}
               list={baux}
               logements={logements}
               locataires={locataires}
@@ -1404,7 +1422,54 @@ function OverviewTab({
   );
 }
 
-function LogementsTab({ list }: { list: Logement[] | null }) {
+function LogementsTab({
+  immeubleId,
+  list,
+  baux,
+  setList
+}: {
+  immeubleId: number;
+  list: Logement[] | null;
+  baux: Bail[] | null;
+  setList: React.Dispatch<React.SetStateAction<Logement[] | null>>;
+}) {
+  // Fiche partagée : null = fermée, "create" = création, sinon édition.
+  const [fiche, setFiche] = useState<Logement | "create" | null>(null);
+
+  const addButton = (
+    <button
+      type="button"
+      onClick={() => setFiche("create")}
+      className="btn-outline-accent btn-sm"
+    >
+      <Plus className="h-3.5 w-3.5" /> Ajouter un logement
+    </button>
+  );
+
+  const modal =
+    fiche !== null ? (
+      <LogementFiche
+        logement={fiche === "create" ? null : fiche}
+        immeubleId={immeubleId}
+        bails={baux ?? undefined}
+        onClose={() => setFiche(null)}
+        onSaved={(saved) => {
+          setList((prev) => {
+            if (fiche === "create") return [...(prev ?? []), saved];
+            return (
+              prev?.map((l) => (l.id === saved.id ? { ...l, ...saved } : l)) ??
+              prev
+            );
+          });
+          setFiche(null);
+        }}
+        onDeleted={(id) => {
+          setList((prev) => prev?.filter((l) => l.id !== id) ?? prev);
+          setFiche(null);
+        }}
+      />
+    ) : null;
+
   if (list === null)
     return (
       <p className="text-xs text-white/50">
@@ -1413,110 +1478,379 @@ function LogementsTab({ list }: { list: Logement[] | null }) {
     );
   if (list.length === 0)
     return (
-      <p className="rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
-        Aucun logement créé.
-      </p>
+      <div className="space-y-3">
+        <div className="flex justify-end">{addButton}</div>
+        <p className="rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
+          Aucun logement créé.
+        </p>
+        {modal}
+      </div>
     );
   return (
-    <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
-      <table className="w-full text-left text-sm">
-        <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
-          <tr>
-            <th className="px-4 py-2.5">Numéro</th>
-            <th className="px-4 py-2.5">Pièces</th>
-            <th className="px-4 py-2.5 text-right">Superficie</th>
-            <th className="px-4 py-2.5">Statut</th>
-            <th className="px-4 py-2.5 text-right">Loyer demandé</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-brand-800">
-          {list.map((l) => (
-            <tr key={l.id}>
-              <td className="px-4 py-2 font-bold text-white">{l.numero}</td>
-              <td className="px-4 py-2 text-xs text-white/70">
-                {l.nb_pieces_decimal != null
-                  ? `${l.nb_pieces_decimal}½`
-                  : "—"}
-              </td>
-              <td className="px-4 py-2 text-right font-mono text-xs text-white/70">
-                {l.superficie_pi2 ? `${l.superficie_pi2} pi²` : "—"}
-              </td>
-              <td className="px-4 py-2 text-xs">
-                <StatusBadge status={l.status} />
-              </td>
-              <td className="px-4 py-2 text-right font-mono text-xs text-white/70">
-                {fmtCurrency(l.loyer_demande)}
-              </td>
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-white/50">
+          Clique sur un logement pour ouvrir sa fiche.
+        </p>
+        {addButton}
+      </div>
+      <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
+        <table className="w-full text-left text-sm">
+          <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
+            <tr>
+              <th className="px-4 py-2.5">Numéro</th>
+              <th className="px-4 py-2.5">Pièces</th>
+              <th className="px-4 py-2.5 text-right">Superficie</th>
+              <th className="px-4 py-2.5">Statut</th>
+              <th className="px-4 py-2.5 text-right">Loyer demandé</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-brand-800">
+            {list.map((l) => (
+              <tr
+                key={l.id}
+                onClick={() => setFiche(l)}
+                className="cursor-pointer transition hover:bg-brand-800/40"
+              >
+                <td className="px-4 py-2 font-bold text-white">{l.numero}</td>
+                <td className="px-4 py-2 text-xs text-white/70">
+                  {fmtPieces(l.nb_pieces_decimal)}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-xs text-white/70">
+                  {l.superficie_pi2 ? `${l.superficie_pi2} pi²` : "—"}
+                </td>
+                <td className="px-4 py-2 text-xs">
+                  <StatusBadge status={l.status} />
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-xs text-white/70">
+                  {fmtCurrency(l.loyer_demande)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {modal}
     </div>
   );
 }
 
 function BauxTab({
+  immeubleId,
   list,
   logements,
   locataires
 }: {
+  immeubleId: number;
   list: Bail[] | null;
   logements: Logement[] | null;
   locataires: { id: number; full_name: string }[];
 }) {
-  if (list === null) return <Loading />;
-  if (list.length === 0) return <Empty msg="Aucun bail." />;
   const logMap = new Map((logements || []).map((l) => [l.id, l.numero]));
   const locMap = new Map(locataires.map((l) => [l.id, l.full_name]));
   return (
-    <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
-      <table className="w-full text-left text-sm">
-        <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
-          <tr>
-            <th className="px-4 py-2.5">Logement</th>
-            <th className="px-4 py-2.5">Locataire</th>
-            <th className="px-4 py-2.5">Période</th>
-            <th className="px-4 py-2.5 text-right">Loyer/m</th>
-            <th className="px-4 py-2.5">Statut</th>
-            <th className="px-4 py-2.5">Signature</th>
-            <th className="px-4 py-2.5 text-right">Documents TAL</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-brand-800">
-          {list.map((b) => (
-            <tr key={b.id}>
-              <td className="px-4 py-2 font-mono text-xs text-white">
-                {logMap.get(b.logement_id) || `#${b.logement_id}`}
-              </td>
-              <td className="px-4 py-2 text-xs">
-                <Link
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  href={`/immobilier/locataires/${b.locataire_id}` as any}
-                  className="font-medium text-accent-500 hover:underline"
-                >
-                  {locMap.get(b.locataire_id) || `Locataire #${b.locataire_id}`}
-                </Link>
-              </td>
-              <td className="px-4 py-2 text-xs text-white/70">
-                {b.date_debut} → {b.date_fin}
-              </td>
-              <td className="px-4 py-2 text-right font-mono text-xs text-white/80">
-                {fmtCurrency(b.loyer_mensuel)}
-              </td>
-              <td className="px-4 py-2 text-xs">
-                <StatusBadge status={b.status} />
-              </td>
-              <td className="px-4 py-2 text-xs">
-                <BailSignButton bailId={b.id} signed={!!b.signed_at} />
-              </td>
-              <td className="px-4 py-2 text-right">
-                <TalFormDropdown bailId={b.id} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="space-y-4">
+      <PaiementsMoisSection immeubleId={immeubleId} />
+      {list === null ? (
+        <Loading />
+      ) : list.length === 0 ? (
+        <Empty msg="Aucun bail." />
+      ) : (
+        <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
+              <tr>
+                <th className="px-4 py-2.5">Logement</th>
+                <th className="px-4 py-2.5">Locataire</th>
+                <th className="px-4 py-2.5">Période</th>
+                <th className="px-4 py-2.5 text-right">Loyer/m</th>
+                <th className="px-4 py-2.5">Statut</th>
+                <th className="px-4 py-2.5">Signature</th>
+                <th className="px-4 py-2.5 text-right">Documents TAL</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-brand-800">
+              {list.map((b) => (
+                <tr key={b.id}>
+                  <td className="px-4 py-2 font-mono text-xs text-white">
+                    {logMap.get(b.logement_id) || `#${b.logement_id}`}
+                  </td>
+                  <td className="px-4 py-2 text-xs">
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={`/immobilier/locataires/${b.locataire_id}` as any}
+                      className="font-medium text-accent-500 hover:underline"
+                    >
+                      {locMap.get(b.locataire_id) ||
+                        `Locataire #${b.locataire_id}`}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-2 text-xs text-white/70">
+                    {b.date_debut} → {b.date_fin}
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono text-xs text-white/80">
+                    {fmtCurrency(b.loyer_mensuel)}
+                  </td>
+                  <td className="px-4 py-2 text-xs">
+                    <StatusBadge status={b.status} />
+                  </td>
+                  <td className="px-4 py-2 text-xs">
+                    <BailSignButton bailId={b.id} signed={!!b.signed_at} />
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <TalFormDropdown bailId={b.id} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
+  );
+}
+
+// ── Paiements du mois courant (miroir de la page Baux & paiements) ─────
+
+type LoyerRow = {
+  bail_id: number;
+  immeuble_id: number;
+  logement_numero: string | null;
+  locataire_id: number | null;
+  locataire_name: string | null;
+  loyer_mensuel: number;
+  montant_paye: number | null;
+  paye_le: string | null;
+  etat: string; // "paye" | "retard" | "attente"
+};
+
+function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
+  const [rows, setRows] = useState<LoyerRow[] | null>(null);
+  const [mois, setMois] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [err, setErr] = useState<string | null>(null);
+  const [payingId, setPayingId] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/loyers/overview?mois=${mois}`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as { rows: LoyerRow[] };
+      // L'API ne filtre pas par immeuble → filtrage client-side.
+      setRows(d.rows.filter((row) => row.immeuble_id === immeubleId));
+    } catch (e) {
+      setErr((e as Error).message);
+      setRows([]);
+    }
+  }, [mois, immeubleId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function marquerPaye(row: LoyerRow) {
+    setPayingId(row.bail_id);
+    setErr(null);
+    try {
+      const today = new Date();
+      const payeLe = `${today.getFullYear()}-${String(
+        today.getMonth() + 1
+      ).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      const r = await authedFetch("/api/v1/immobilier/paiements", {
+        method: "POST",
+        body: JSON.stringify({
+          bail_id: row.bail_id,
+          mois_couvert: `${mois}-01`,
+          montant: row.loyer_mensuel,
+          paye_le: payeLe
+        })
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      await load();
+    } catch (e) {
+      setErr(`Marquer payé a échoué : ${(e as Error).message}`);
+    } finally {
+      setPayingId(null);
+    }
+  }
+
+  const moisLisible = (() => {
+    const [y, m] = mois.split("-").map(Number);
+    return new Date(y, (m || 1) - 1, 1).toLocaleDateString("fr-CA", {
+      month: "long",
+      year: "numeric"
+    });
+  })();
+
+  const totalAttendu = (rows || []).reduce(
+    (s, r) => s + (r.loyer_mensuel || 0),
+    0
+  );
+  const totalRecu = (rows || []).reduce(
+    (s, r) => s + (r.etat === "paye" ? r.montant_paye || 0 : 0),
+    0
+  );
+  const nbRetards = (rows || []).filter((r) => r.etat === "retard").length;
+
+  return (
+    <Section title={`Paiements — ${moisLisible}`}>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-3 text-xs text-white/60">
+          <span>
+            Reçu{" "}
+            <strong className="text-emerald-300">
+              {fmtCurrency(totalRecu)}
+            </strong>{" "}
+            / {fmtCurrency(totalAttendu)}
+          </span>
+          {nbRetards > 0 ? (
+            <span className="badge badge-rose">
+              {nbRetards} retard{nbRetards > 1 ? "s" : ""}
+            </span>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-950 px-1 py-0.5">
+            <button
+              type="button"
+              onClick={() =>
+                setMois((m) => {
+                  const [y, mm] = m.split("-").map(Number);
+                  const d = new Date(y, (mm || 1) - 2, 1);
+                  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+                })
+              }
+              className="btn-ghost btn-xs"
+              aria-label="Mois précédent"
+            >
+              ‹
+            </button>
+            <span className="min-w-[110px] text-center text-xs font-semibold capitalize text-white">
+              {moisLisible}
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                setMois((m) => {
+                  const [y, mm] = m.split("-").map(Number);
+                  const d = new Date(y, mm || 1, 1);
+                  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+                })
+              }
+              className="btn-ghost btn-xs"
+              aria-label="Mois suivant"
+            >
+              ›
+            </button>
+          </div>
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/immobilier/baux" as any}
+            className="text-xs text-accent-500 hover:underline"
+          >
+            Vue complète →
+          </Link>
+        </div>
+      </div>
+
+      {err ? (
+        <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {err}
+        </p>
+      ) : null}
+
+      {rows === null ? (
+        <Loading />
+      ) : rows.length === 0 ? (
+        <p className="text-xs text-white/50">
+          Aucun bail actif dans cet immeuble pour ce mois.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-left text-sm">
+            <thead className="text-[10px] uppercase tracking-wider text-white/45">
+              <tr>
+                <th className="py-2 pr-3">État</th>
+                <th className="py-2 pr-3">Locataire</th>
+                <th className="py-2 pr-3">Logement</th>
+                <th className="py-2 pr-3 text-right">Loyer</th>
+                <th className="py-2 pr-3 text-right">Payé le</th>
+                <th className="py-2 text-right"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-brand-800/70">
+              {rows.map((r) => (
+                <tr
+                  key={r.bail_id}
+                  className={r.etat === "retard" ? "bg-rose-500/5" : ""}
+                >
+                  <td className="py-2 pr-3">
+                    {r.etat === "paye" ? (
+                      <span className="badge badge-emerald">Payé</span>
+                    ) : r.etat === "retard" ? (
+                      <span className="badge badge-rose">Retard</span>
+                    ) : (
+                      <span className="badge badge-neutral">Attente</span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-3">
+                    {r.locataire_id != null ? (
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={
+                          `/immobilier/locataires/${r.locataire_id}` as any
+                        }
+                        className="font-medium text-accent-500 hover:underline"
+                      >
+                        {r.locataire_name || `Locataire #${r.locataire_id}`}
+                      </Link>
+                    ) : (
+                      <span className="text-white/60">
+                        {r.locataire_name || "—"}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-3 font-mono text-xs text-white/70">
+                    {r.logement_numero || "—"}
+                  </td>
+                  <td className="py-2 pr-3 text-right font-mono text-xs text-white/80">
+                    {fmtCurrency(r.loyer_mensuel)}
+                  </td>
+                  <td className="py-2 pr-3 text-right text-xs text-white/60">
+                    {r.paye_le || "—"}
+                  </td>
+                  <td className="py-2 text-right">
+                    {r.etat !== "paye" ? (
+                      <button
+                        type="button"
+                        onClick={() => void marquerPaye(r)}
+                        disabled={payingId === r.bail_id}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                      >
+                        {payingId === r.bail_id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Check className="h-3 w-3" />
+                        )}
+                        Marquer payé
+                      </button>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Section>
   );
 }
 
