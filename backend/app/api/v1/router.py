@@ -35,6 +35,7 @@ from app.api.v1.endpoints import (
     calendar,
     clients,
     cockpit,
+    construction_bon_defaults,
     devlog,
     devlog_soumission_defaults,
     drive_auth,
@@ -338,6 +339,7 @@ api_router.include_router(agenda_router)
 api_router.include_router(bon_items.router)
 api_router.include_router(bon_send.router)
 api_router.include_router(bons_router)
+api_router.include_router(construction_bon_defaults.router)
 # punch_ops FIRST so its literal paths (/me, /debug, /weekly, ...)
 # are matched before the generic /{item_id} from punch_router, which
 # would otherwise try to coerce "me"/"debug"/"weekly" to an int and

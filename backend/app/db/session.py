@@ -3220,6 +3220,31 @@ async def init_db() -> None:
             # tourné) — retentera au prochain démarrage.
             log.warning("init_db: seed devlog_soumission_defaults échouée: %s", exc)
 
+        # ── Seed des valeurs par défaut coût/refac/marge des bons de travail
+        # (Construction) ─────────────────────────────────────────────────
+        # Table singleton `construction_bon_defaults` (id=1) créée par
+        # `create_all`. On insère les valeurs historiques (coût 35, refac 55,
+        # marge 10) UNIQUEMENT si la ligne est absente — ON CONFLICT DO NOTHING
+        # préserve les réglages déjà modifiés par Phil depuis l'UI. Idempotent
+        # au boot. Lue par la fiche bon, le formulaire de création et le moteur
+        # de refacturation (filet).
+        try:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO construction_bon_defaults
+                      (id, default_cost_rate, default_bill_rate,
+                       default_marge_pct, updated_at)
+                    VALUES (1, 35, 55, 10, NOW())
+                    ON CONFLICT (id) DO NOTHING
+                    """
+                )
+            )
+        except Exception as exc:
+            log.warning(
+                "init_db: seed construction_bon_defaults échouée: %s", exc
+            )
+
 
 async def close_db() -> None:
     """

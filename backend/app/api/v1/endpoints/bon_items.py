@@ -24,6 +24,7 @@ from app.models.bon_item import BonItem
 from app.models.bon_travail import BonTravail
 from app.models.employe import Employe
 from app.models.punch import Punch
+from app.services.bon_defaults import get_bon_defaults
 
 
 router = APIRouter(prefix="/bons-travail", tags=["bon-items"])
@@ -215,14 +216,30 @@ async def update_work_notes(
 async def create_item(
     bon_id: int, data: BonItemCreate, db: DBSession, _: CurrentUser
 ) -> BonItemRead:
-    await _ensure_bon(db, bon_id)
+    bon = await _ensure_bon(db, bon_id)
+    # Défauts configurables (Paramètres → Bons de travail) en FILET : une ligne
+    # d'heures arrivée sans coût/refac, ou n'importe quelle ligne sans marge,
+    # retombe sur le réglage. Les valeurs explicites (envoyées par la fiche bon)
+    # priment toujours — comportement inchangé pour les payloads complets.
+    d_cost, d_bill, d_marge = await get_bon_defaults(db)
+    item_type = data.item_type or "materiel"
+    cost_rate = data.cost_rate
+    bill_rate = data.bill_rate
+    marge_pct = data.marge_pct
+    if marge_pct is None:
+        marge_pct = bon.marge_pct if bon.marge_pct is not None else d_marge
+    if item_type == "heure":
+        if cost_rate is None:
+            cost_rate = d_cost
+        if bill_rate is None:
+            bill_rate = d_bill
     total, cost_total = _compute_totals(
-        data.item_type,
+        item_type,
         data.quantity,
-        data.cost_rate,
-        data.bill_rate,
+        cost_rate,
+        bill_rate,
         data.unit_price,
-        data.marge_pct,
+        marge_pct,
     )
     item = BonItem(
         bon_id=bon_id,
@@ -232,10 +249,10 @@ async def create_item(
         quantity=data.quantity,
         unit_price=data.unit_price,
         total=total,
-        item_type=data.item_type or "materiel",
-        cost_rate=data.cost_rate,
-        bill_rate=data.bill_rate,
-        marge_pct=data.marge_pct,
+        item_type=item_type,
+        cost_rate=cost_rate,
+        bill_rate=bill_rate,
+        marge_pct=marge_pct,
         cost_total=cost_total,
         employe_id=data.employe_id,
         sous_traitant_id=data.sous_traitant_id,

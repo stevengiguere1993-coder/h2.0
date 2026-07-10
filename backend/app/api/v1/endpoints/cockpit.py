@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from app.api.deps import DBSession, RequireManager
+from app.services.bon_defaults import get_bon_defaults
 
 router = APIRouter(prefix="/cockpit", tags=["cockpit"])
 
@@ -182,7 +183,14 @@ async def cockpit_overview(
             achats_by_proj[pid] = float(total or 0)
             last_achat_by_proj[pid] = last
 
-    # ── Main-d'œuvre : heures × coût employé (fallback 35 $) ────────────
+    # ── Main-d'œuvre : heures × coût employé (fallback = coût horaire par
+    # défaut CONFIGURABLE dans Paramètres → Bons de travail ; 35 $ historique
+    # si le réglage est absent). ─────────────────────────────────────────
+    default_cost = DEFAULT_HOURLY_COST
+    try:
+        default_cost = (await get_bon_defaults(db))[0]
+    except Exception:  # pragma: no cover — ne jamais bloquer le cockpit
+        default_cost = DEFAULT_HOURLY_COST
     emp_rates: dict = {}
     emp_names: dict = {}
     emps = (await db.execute(select(Employe))).scalars().all()
@@ -190,10 +198,10 @@ async def cockpit_overview(
         emp_names[e.id] = e.full_name
         try:
             emp_rates[e.id] = (
-                float(e.hourly_rate) if e.hourly_rate else DEFAULT_HOURLY_COST
+                float(e.hourly_rate) if e.hourly_rate else default_cost
             )
         except (TypeError, ValueError):
-            emp_rates[e.id] = DEFAULT_HOURLY_COST
+            emp_rates[e.id] = default_cost
 
     hours_by_proj: dict = {}
     labor_by_proj: dict = {}
@@ -218,7 +226,7 @@ async def cockpit_overview(
             h = float(hrs or 0)
             hours_by_proj[pid] = hours_by_proj.get(pid, 0.0) + h
             labor_by_proj[pid] = labor_by_proj.get(pid, 0.0) + h * emp_rates.get(
-                emp_id, DEFAULT_HOURLY_COST
+                emp_id, default_cost
             )
             prev = last_punch_by_proj.get(pid)
             if last is not None and (prev is None or last > prev):
