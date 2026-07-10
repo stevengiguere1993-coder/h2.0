@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Briefcase, ClipboardCheck, Loader2 } from "lucide-react";
+import { Briefcase, ChevronDown, ClipboardCheck, Loader2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
@@ -108,6 +108,17 @@ const COCKPIT_VISIBLE_BON_STATUSES = [
   "accepte_a_planifier",
   "planifie"
 ];
+
+// Teinte du sélecteur de statut selon la valeur (bordure + fond doux). Sort du
+// gris monotone tout en gardant un texte lisible dans les deux thèmes
+// (text-white/* est recalé en sombre côté clair via globals.css).
+const BON_STATUS_SELECT_TONE: Record<string, string> = {
+  draft: "border-brand-700 bg-brand-950 text-white/85",
+  accepte_a_planifier: "border-violet-400/40 bg-violet-500/10 text-white/90",
+  planifie: "border-sky-400/40 bg-sky-500/10 text-white/90",
+  complete_a_refacturer: "border-amber-400/40 bg-amber-500/10 text-white/90",
+  cancelled: "border-rose-400/40 bg-rose-500/10 text-white/90"
+};
 
 function money(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "—";
@@ -383,7 +394,7 @@ export default function CockpitPage() {
             </section>
 
             {/* ── Santé des projets ── */}
-            <section className="rounded-xl border border-brand-800 bg-brand-900">
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 shadow-card">
               <div className="border-b border-brand-800 px-4 py-3">
                 <h2 className="section-title flex items-center gap-2">
                   <Briefcase className="h-4 w-4" /> Projets en cours (
@@ -397,15 +408,15 @@ export default function CockpitPage() {
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead className="border-b border-brand-800 bg-brand-950/50 text-left text-[11px] uppercase tracking-wider text-white/50">
+                    <thead className="border-b border-brand-800 text-left text-[11px] font-medium uppercase tracking-wider text-white/40">
                       <tr>
-                        <th className="px-3 py-2">Projet</th>
-                        <th className="px-3 py-2">Statut</th>
-                        <th className="w-56 px-3 py-2">Budget vs réel</th>
-                        <th className="px-3 py-2 text-right">Heures</th>
-                        <th className="px-3 py-2">Phase</th>
-                        <th className="px-3 py-2">Signature</th>
-                        <th className="px-3 py-2">Sur place</th>
+                        <th className="px-4 py-2.5">Projet</th>
+                        <th className="px-4 py-2.5">Statut</th>
+                        <th className="w-56 px-4 py-2.5">Budget vs réel</th>
+                        <th className="px-4 py-2.5 text-right">Heures</th>
+                        <th className="px-4 py-2.5">Phase</th>
+                        <th className="px-4 py-2.5">Signature</th>
+                        <th className="px-4 py-2.5">Sur place</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-brand-800">
@@ -419,7 +430,7 @@ export default function CockpitPage() {
             </section>
 
             {/* ── Bons de travail actifs ── */}
-            <section className="rounded-xl border border-brand-800 bg-brand-900">
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 shadow-card">
               <div className="border-b border-brand-800 px-4 py-3">
                 <h2 className="section-title flex items-center gap-2">
                   <ClipboardCheck className="h-4 w-4" /> Bons de travail
@@ -433,15 +444,15 @@ export default function CockpitPage() {
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead className="border-b border-brand-800 bg-brand-950/50 text-left text-[11px] uppercase tracking-wider text-white/50">
+                    <thead className="border-b border-brand-800 text-left text-[11px] font-medium uppercase tracking-wider text-white/40">
                       <tr>
-                        <th className="px-3 py-2">Bon</th>
-                        <th className="px-3 py-2">Statut</th>
-                        <th className="px-3 py-2">Exécutant</th>
-                        <th className="px-3 py-2 text-right">Montant</th>
-                        <th className="px-3 py-2 text-right">Âge</th>
-                        <th className="px-3 py-2 text-right">Heures</th>
-                        <th className="px-3 py-2">Sur place</th>
+                        <th className="px-4 py-2.5">Bon</th>
+                        <th className="px-4 py-2.5">Statut</th>
+                        <th className="px-4 py-2.5">Exécutant</th>
+                        <th className="px-4 py-2.5 text-right">Montant</th>
+                        <th className="px-4 py-2.5 text-right">Âge</th>
+                        <th className="px-4 py-2.5 text-right">Heures</th>
+                        <th className="px-4 py-2.5">Sur place</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-brand-800">
@@ -505,8 +516,8 @@ function ProjectRow({ p }: { p: CockpitProject }) {
           ? "bg-amber-500"
           : "bg-emerald-500";
   return (
-    <tr className="hover:bg-brand-800/30">
-      <td className="px-3 py-2">
+    <tr className="transition-colors hover:bg-brand-800/40">
+      <td className="px-4 py-2.5">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={`/app/projets/${p.id}` as any}
@@ -519,14 +530,14 @@ function ProjectRow({ p }: { p: CockpitProject }) {
           {p.responsible_name ? ` · ${p.responsible_name}` : ""}
         </p>
       </td>
-      <td className="px-3 py-2">
+      <td className="px-4 py-2.5">
         <span
           className={`badge ${PROJECT_STATUS_BADGE[p.status] || "badge-neutral"}`}
         >
           {PROJECT_STATUS_LABELS[p.status] || p.status}
         </span>
       </td>
-      <td className="px-3 py-2">
+      <td className="px-4 py-2.5">
         <div className="flex items-center justify-between gap-2 text-[11px]">
           <span className="font-semibold text-white">{money(spent)}</span>
           <span className="text-white/50">
@@ -543,10 +554,10 @@ function ProjectRow({ p }: { p: CockpitProject }) {
           />
         </div>
       </td>
-      <td className="px-3 py-2 text-right text-white/80">
+      <td className="px-4 py-2.5 text-right text-white/80">
         {p.hours ? `${p.hours.toLocaleString("fr-CA")} h` : "—"}
       </td>
-      <td className="px-3 py-2 text-[11px]">
+      <td className="px-4 py-2.5 text-[11px]">
         {p.phase_name ? (
           <span className="text-white/80">{p.phase_name}</span>
         ) : p.late_days > 0 ? (
@@ -557,7 +568,7 @@ function ProjectRow({ p }: { p: CockpitProject }) {
           <span className="text-white/40">—</span>
         )}
       </td>
-      <td className="px-3 py-2">
+      <td className="px-4 py-2.5">
         {p.has_signed_bon ? (
           <span className="badge badge-emerald">Signé</span>
         ) : p.awaiting_signature ? (
@@ -568,7 +579,7 @@ function ProjectRow({ p }: { p: CockpitProject }) {
           <span className="text-[11px] text-white/30">—</span>
         )}
       </td>
-      <td className="px-3 py-2 text-[11px]">
+      <td className="px-4 py-2.5 text-[11px]">
         {p.workers_now.length > 0 ? (
           <span className="inline-flex items-center gap-1.5 text-emerald-300">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
@@ -590,8 +601,14 @@ function BonRow({
   onStatusChange: (id: number, status: string) => void;
 }) {
   return (
-    <tr className={b.is_urgent ? "bg-rose-500/[0.05]" : "hover:bg-brand-800/30"}>
-      <td className="px-3 py-2">
+    <tr
+      className={`transition-colors ${
+        b.is_urgent
+          ? "bg-rose-500/[0.06] hover:bg-rose-500/10"
+          : "hover:bg-brand-800/40"
+      }`}
+    >
+      <td className="px-4 py-2.5">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={`/app/bons/${b.id}?from=cockpit` as any}
@@ -606,21 +623,27 @@ function BonRow({
           {b.address || b.reference}
         </p>
       </td>
-      <td className="px-3 py-2">
-        <select
-          value={b.status}
-          onChange={(e) => onStatusChange(b.id, e.target.value)}
-          className="input w-full max-w-[11rem] py-1 text-xs"
-          aria-label="Changer le statut du bon"
-        >
-          {COCKPIT_BON_STATUS_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+      <td className="px-4 py-2.5">
+        <div className="relative inline-flex w-full max-w-[12rem]">
+          <select
+            value={b.status}
+            onChange={(e) => onStatusChange(b.id, e.target.value)}
+            aria-label="Changer le statut du bon"
+            className={`w-full cursor-pointer appearance-none rounded-lg border py-1.5 pl-3 pr-8 text-xs font-medium shadow-sm transition hover:border-accent-500/60 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-500/25 ${
+              BON_STATUS_SELECT_TONE[b.status] ||
+              "border-brand-700 bg-brand-950 text-white/85"
+            }`}
+          >
+            {COCKPIT_BON_STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
+        </div>
       </td>
-      <td className="px-3 py-2 text-[11px]">
+      <td className="px-4 py-2.5 text-[11px]">
         {b.executant_type === "sous_traitant" ? (
           <span className="text-orange-300">Sous-traitant</span>
         ) : b.executant_type === "nos_hommes" ? (
@@ -629,20 +652,20 @@ function BonRow({
           <span className="font-semibold text-amber-300">À classifier</span>
         )}
       </td>
-      <td className="px-3 py-2 text-right font-semibold text-white">
+      <td className="px-4 py-2.5 text-right font-semibold text-white">
         {money(b.amount)}
       </td>
       <td
-        className={`px-3 py-2 text-right text-[11px] ${
+        className={`px-4 py-2.5 text-right text-[11px] ${
           b.age_days >= 14 ? "font-semibold text-amber-300" : "text-white/60"
         }`}
       >
         {b.age_days} j
       </td>
-      <td className="px-3 py-2 text-right text-white/80">
+      <td className="px-4 py-2.5 text-right text-white/80">
         {b.hours ? `${b.hours.toLocaleString("fr-CA")} h` : "—"}
       </td>
-      <td className="px-3 py-2 text-[11px]">
+      <td className="px-4 py-2.5 text-[11px]">
         {b.workers_now.length > 0 ? (
           <span className="inline-flex items-center gap-1.5 text-emerald-300">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
