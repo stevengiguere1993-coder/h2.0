@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -8,6 +8,7 @@ import {
   Building2,
   Calendar,
   Camera,
+  Check,
   ClipboardList,
   DollarSign,
   Home,
@@ -16,6 +17,7 @@ import {
   Loader2,
   Pencil,
   Percent,
+  Plus,
   Trash2,
   TrendingUp,
   Wrench,
@@ -78,11 +80,16 @@ type Hypotheque = {
   id: number;
   rang: number;
   preteur: string;
+  montant_initial: number;
   balance_actuelle?: number | null;
   taux_pct?: number | null;
+  type_taux?: string | null;
+  amortissement_mois?: number | null;
   paiement_mensuel?: number | null;
+  date_debut?: string | null;
   date_fin_terme?: string | null;
   status: string;
+  notes?: string | null;
 };
 
 type Evaluation = {
@@ -290,6 +297,18 @@ export default function ImmeubleDetailPage({
   }, [immeubleId]);
 
   const ownerId = ownerships[0]?.entreprise_id ?? null;
+
+  // Recharge les KPIs financiers (hypothèques, cash flow) après une mutation.
+  const refreshFinancials = useCallback(async () => {
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/immeubles/${immeubleId}/financials`
+      );
+      if (res.ok) setFinancials((await res.json()) as Financials);
+    } catch {
+      /* silencieux */
+    }
+  }, [immeubleId]);
 
   async function onChangeOwner(entrepriseId: number) {
     if (!entrepriseId || entrepriseId === ownerId) return;
@@ -749,7 +768,14 @@ export default function ImmeubleDetailPage({
               locataires={locataires}
             />
           ) : null}
-          {tab === "hypotheques" ? <HypothequesTab list={hypotheques} /> : null}
+          {tab === "hypotheques" ? (
+            <HypothequesTab
+              immeubleId={immeubleId}
+              list={hypotheques}
+              setList={setHypotheques}
+              onMutated={() => void refreshFinancials()}
+            />
+          ) : null}
           {tab === "evaluations" ? <EvaluationsTab list={evaluations} /> : null}
           {tab === "maintenance" ? (
             <MaintenanceTab list={maintenance} rollup={rollup} />
@@ -1514,40 +1540,591 @@ function TalFormDropdown({ bailId }: { bailId: number }) {
   );
 }
 
-function HypothequesTab({ list }: { list: Hypotheque[] | null }) {
-  if (list === null) return <Loading />;
-  if (list.length === 0) return <Empty msg="Aucune hypothèque enregistrée." />;
+const HYPO_STATUS: [string, string][] = [
+  ["active", "Active"],
+  ["remboursee", "Remboursée"],
+  ["refinancee", "Refinancée"]
+];
+
+const HYPO_STATUS_LABEL: Record<string, string> = Object.fromEntries(
+  HYPO_STATUS
+);
+
+const HYPO_STATUS_BADGE: Record<string, string> = {
+  active: "badge-emerald",
+  remboursee: "badge-neutral",
+  refinancee: "badge-sky"
+};
+
+/**
+ * Paiement mensuel d'une hypothèque canadienne : intérêt composé
+ * semi-annuellement, converti en taux mensuel équivalent.
+ */
+function computePaiementMensuel(
+  tauxPct: number,
+  amortissementMois: number,
+  balance: number
+): number | null {
+  if (!(balance > 0) || !(amortissementMois > 0) || Number.isNaN(tauxPct))
+    return null;
+  if (tauxPct <= 0) return balance / amortissementMois;
+  const iMensuel = Math.pow(1 + tauxPct / 100 / 2, 2 / 12) - 1;
+  const pmt =
+    (balance * iMensuel) / (1 - Math.pow(1 + iMensuel, -amortissementMois));
+  return Number.isFinite(pmt) ? pmt : null;
+}
+
+function TermeBadge({ date }: { date?: string | null }) {
+  if (!date)
+    return <span className="text-[11px] text-white/40">Fin du terme —</span>;
+  const fin = new Date(`${date}T00:00:00`);
+  const moisRestants =
+    (fin.getTime() - Date.now()) / (1000 * 60 * 60 * 24 * 30.44);
+  const bientot = moisRestants < 6;
   return (
-    <div className="grid gap-3">
-      {list.map((h) => (
-        <div
-          key={h.id}
-          className="rounded-2xl border border-brand-800 bg-brand-900 p-4"
+    <span
+      className={`badge font-mono ${bientot ? "badge-amber" : "badge-neutral"}`}
+      title={
+        bientot
+          ? "Terme à renouveler dans moins de 6 mois"
+          : "Fin du terme hypothécaire"
+      }
+    >
+      Fin du terme {date}
+    </span>
+  );
+}
+
+type HypoFormState = {
+  preteur: string;
+  rang: string;
+  montant_initial: string;
+  balance_actuelle: string;
+  taux_pct: string;
+  type_taux: string;
+  amortissement_annees: string;
+  paiement_mensuel: string;
+  date_debut: string;
+  date_fin_terme: string;
+  status: string;
+  notes: string;
+};
+
+const HYPO_FORM_EMPTY: HypoFormState = {
+  preteur: "",
+  rang: "1",
+  montant_initial: "",
+  balance_actuelle: "",
+  taux_pct: "",
+  type_taux: "fixe",
+  amortissement_annees: "25",
+  paiement_mensuel: "",
+  date_debut: "",
+  date_fin_terme: "",
+  status: "active",
+  notes: ""
+};
+
+function HypothequeForm({
+  initial,
+  busy,
+  onCancel,
+  onSubmit
+}: {
+  initial: Hypotheque | null;
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (payload: Record<string, unknown>) => void;
+}) {
+  const [f, setF] = useState<HypoFormState>(() =>
+    initial
+      ? {
+          preteur: initial.preteur || "",
+          rang: String(initial.rang ?? 1),
+          montant_initial:
+            initial.montant_initial != null
+              ? String(initial.montant_initial)
+              : "",
+          balance_actuelle:
+            initial.balance_actuelle != null
+              ? String(initial.balance_actuelle)
+              : "",
+          taux_pct: initial.taux_pct != null ? String(initial.taux_pct) : "",
+          type_taux: initial.type_taux || "fixe",
+          amortissement_annees:
+            initial.amortissement_mois != null
+              ? String(Math.round((initial.amortissement_mois / 12) * 10) / 10)
+              : "25",
+          paiement_mensuel:
+            initial.paiement_mensuel != null
+              ? String(initial.paiement_mensuel)
+              : "",
+          date_debut: initial.date_debut || "",
+          date_fin_terme: initial.date_fin_terme || "",
+          status: initial.status || "active",
+          notes: initial.notes || ""
+        }
+      : HYPO_FORM_EMPTY
+  );
+  // Le paiement est auto-calculé tant que l'usager ne l'a pas surchargé.
+  const [pmtOverride, setPmtOverride] = useState<boolean>(
+    initial?.paiement_mensuel != null
+  );
+
+  const set = (k: keyof HypoFormState) => (v: string) =>
+    setF((prev) => ({ ...prev, [k]: v }));
+
+  const amortissementMois = f.amortissement_annees.trim()
+    ? Math.round(Number(f.amortissement_annees) * 12)
+    : 0;
+  const balanceRef = f.balance_actuelle.trim()
+    ? Number(f.balance_actuelle)
+    : f.montant_initial.trim()
+      ? Number(f.montant_initial)
+      : 0;
+
+  const computedPmt = useMemo(() => {
+    if (f.taux_pct.trim() === "") return null;
+    return computePaiementMensuel(
+      Number(f.taux_pct),
+      amortissementMois,
+      balanceRef
+    );
+  }, [f.taux_pct, amortissementMois, balanceRef]);
+
+  const pmtDisplay = pmtOverride
+    ? f.paiement_mensuel
+    : computedPmt != null
+      ? computedPmt.toFixed(2)
+      : "";
+
+  const pmtEffective =
+    pmtOverride && f.paiement_mensuel.trim() !== ""
+      ? Number(f.paiement_mensuel)
+      : computedPmt != null
+        ? Math.round(computedPmt * 100) / 100
+        : null;
+
+  const valid =
+    f.preteur.trim() !== "" &&
+    f.montant_initial.trim() !== "" &&
+    !Number.isNaN(Number(f.montant_initial));
+
+  function submit() {
+    if (!valid) return;
+    onSubmit({
+      rang: f.rang.trim() ? Math.max(1, Math.round(Number(f.rang))) : 1,
+      preteur: f.preteur.trim(),
+      montant_initial: Number(f.montant_initial),
+      balance_actuelle: f.balance_actuelle.trim()
+        ? Number(f.balance_actuelle)
+        : null,
+      taux_pct: f.taux_pct.trim() ? Number(f.taux_pct) : null,
+      type_taux: f.type_taux || null,
+      amortissement_mois: amortissementMois > 0 ? amortissementMois : null,
+      paiement_mensuel:
+        pmtEffective != null && !Number.isNaN(pmtEffective) && pmtEffective >= 0
+          ? pmtEffective
+          : null,
+      date_debut: f.date_debut || null,
+      date_fin_terme: f.date_fin_terme || null,
+      status: f.status,
+      notes: f.notes.trim() || null
+    });
+  }
+
+  const inputCls =
+    "mt-0.5 block w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
+  const labelCls = "text-[11px] font-semibold text-white/60";
+
+  return (
+    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+      <p className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
+        {initial ? "Modifier l'hypothèque" : "Nouvelle hypothèque"}
+      </p>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <label className={labelCls}>
+          Prêteur *
+          <input
+            value={f.preteur}
+            onChange={(e) => set("preteur")(e.target.value)}
+            placeholder="Desjardins, BNC…"
+            className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          Rang
+          <input
+            type="number"
+            min={1}
+            max={9}
+            value={f.rang}
+            onChange={(e) => set("rang")(e.target.value)}
+            className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          Statut
+          <select
+            value={f.status}
+            onChange={(e) => set("status")(e.target.value)}
+            className={inputCls}
+          >
+            {HYPO_STATUS.map(([v, l]) => (
+              <option key={v} value={v} className="bg-brand-950 text-white">
+                {l}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={labelCls}>
+          Montant initial *
+          <input
+            inputMode="decimal"
+            value={f.montant_initial}
+            onChange={(e) => set("montant_initial")(e.target.value)}
+            placeholder="0.00"
+            className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          Balance actuelle
+          <input
+            inputMode="decimal"
+            value={f.balance_actuelle}
+            onChange={(e) => set("balance_actuelle")(e.target.value)}
+            placeholder="Vide = montant initial"
+            className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          Taux (%)
+          <input
+            inputMode="decimal"
+            value={f.taux_pct}
+            onChange={(e) => set("taux_pct")(e.target.value)}
+            placeholder="ex. 4.89"
+            className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          Type de taux
+          <select
+            value={f.type_taux}
+            onChange={(e) => set("type_taux")(e.target.value)}
+            className={inputCls}
+          >
+            <option value="fixe" className="bg-brand-950 text-white">
+              Fixe
+            </option>
+            <option value="variable" className="bg-brand-950 text-white">
+              Variable
+            </option>
+          </select>
+        </label>
+        <label className={labelCls}>
+          Amortissement (années)
+          <input
+            inputMode="decimal"
+            value={f.amortissement_annees}
+            onChange={(e) => set("amortissement_annees")(e.target.value)}
+            placeholder="ex. 25"
+            className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          Paiement mensuel ($)
+          <input
+            inputMode="decimal"
+            value={pmtDisplay}
+            onChange={(e) => {
+              const v = e.target.value;
+              setF((prev) => ({ ...prev, paiement_mensuel: v }));
+              setPmtOverride(v.trim() !== "");
+            }}
+            placeholder="Auto-calculé"
+            className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          Date de début
+          <input
+            type="date"
+            value={f.date_debut}
+            onChange={(e) => set("date_debut")(e.target.value)}
+            className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          Fin du terme
+          <input
+            type="date"
+            value={f.date_fin_terme}
+            onChange={(e) => set("date_fin_terme")(e.target.value)}
+            className={inputCls}
+          />
+        </label>
+        <label className={`${labelCls} sm:col-span-2 lg:col-span-3`}>
+          Notes
+          <textarea
+            rows={2}
+            value={f.notes}
+            onChange={(e) => set("notes")(e.target.value)}
+            placeholder="Clauses, pénalités, contact…"
+            className={inputCls}
+          />
+        </label>
+      </div>
+
+      {computedPmt != null ? (
+        <p className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          Paiement mensuel calculé : {fmtCurrency(computedPmt)}
+          <span className="ml-1 text-emerald-300/60">
+            (composé semi-annuellement
+            {pmtOverride ? " — valeur surchargée manuellement" : ""})
+          </span>
+        </p>
+      ) : (
+        <p className="mt-3 text-[11px] text-white/40">
+          Renseigne balance (ou montant initial), taux et amortissement pour
+          calculer le paiement mensuel automatiquement.
+        </p>
+      )}
+
+      <div className="mt-3 flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          className="btn-secondary btn-sm"
         >
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-bold text-white">
-                {h.preteur}{" "}
-                <span className="badge badge-neutral ml-1 font-mono">
-                  Rang {h.rang}
-                </span>
-              </p>
-              <p className="mt-1 text-xs text-white/50">
-                {h.taux_pct ? `${h.taux_pct}%` : "Taux ?"} · Renouv.{" "}
-                {h.date_fin_terme || "—"}
-              </p>
-            </div>
-            <div className="text-right">
-              <div className="font-mono text-sm font-bold text-white">
-                {fmtCurrency(h.balance_actuelle)}
+          Annuler
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={busy || !valid}
+          className="btn-accent btn-sm disabled:opacity-50"
+        >
+          {busy ? (
+            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Check className="mr-1 h-3.5 w-3.5" />
+          )}
+          Enregistrer
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function HypothequesTab({
+  immeubleId,
+  list,
+  setList,
+  onMutated
+}: {
+  immeubleId: number;
+  list: Hypotheque[] | null;
+  setList: React.Dispatch<React.SetStateAction<Hypotheque[] | null>>;
+  onMutated: () => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function sortHypos(arr: Hypotheque[]): Hypotheque[] {
+    return [...arr].sort((a, b) => a.rang - b.rang || a.id - b.id);
+  }
+
+  async function create(payload: Record<string, unknown>) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch("/api/v1/immobilier/hypotheques", {
+        method: "POST",
+        body: JSON.stringify({ immeuble_id: immeubleId, ...payload })
+      });
+      if (!res.ok)
+        throw new Error((await res.text()).slice(0, 200) || `HTTP ${res.status}`);
+      const created = (await res.json()) as Hypotheque;
+      setList((prev) => sortHypos([...(prev || []), created]));
+      setAdding(false);
+      onMutated();
+    } catch (e) {
+      setErr(`Ajout échoué : ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function update(id: number, payload: Record<string, unknown>) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(`/api/v1/immobilier/hypotheques/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok)
+        throw new Error((await res.text()).slice(0, 200) || `HTTP ${res.status}`);
+      const updated = (await res.json()) as Hypotheque;
+      setList((prev) =>
+        sortHypos((prev || []).map((h) => (h.id === id ? updated : h)))
+      );
+      setEditingId(null);
+      onMutated();
+    } catch (e) {
+      setErr(`Modification échouée : ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(h: Hypotheque) {
+    if (
+      !window.confirm(
+        `Supprimer l'hypothèque « ${h.preteur} » (rang ${h.rang}) ?`
+      )
+    )
+      return;
+    setErr(null);
+    const previous = list;
+    // Optimiste : on retire tout de suite, rollback si le serveur refuse.
+    setList((cur) => (cur || []).filter((x) => x.id !== h.id));
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/hypotheques/${h.id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      onMutated();
+    } catch (e) {
+      setList(previous);
+      setErr(`Suppression échouée : ${(e as Error).message}`);
+    }
+  }
+
+  if (list === null) return <Loading />;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-white/50">
+          {list.length} hypothèque{list.length > 1 ? "s" : ""}
+        </p>
+        {!adding ? (
+          <button
+            type="button"
+            onClick={() => {
+              setEditingId(null);
+              setAdding(true);
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20"
+          >
+            <Plus className="h-3.5 w-3.5" /> Ajouter une hypothèque
+          </button>
+        ) : null}
+      </div>
+
+      {err ? (
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+          {err}
+        </p>
+      ) : null}
+
+      {adding ? (
+        <HypothequeForm
+          initial={null}
+          busy={busy}
+          onCancel={() => setAdding(false)}
+          onSubmit={(p) => void create(p)}
+        />
+      ) : null}
+
+      {list.length === 0 && !adding ? (
+        <Empty msg="Aucune hypothèque enregistrée." />
+      ) : (
+        <div className="grid gap-3">
+          {list.map((h) =>
+            editingId === h.id ? (
+              <HypothequeForm
+                key={h.id}
+                initial={h}
+                busy={busy}
+                onCancel={() => setEditingId(null)}
+                onSubmit={(p) => void update(h.id, p)}
+              />
+            ) : (
+              <div
+                key={h.id}
+                className="rounded-2xl border border-brand-800 bg-brand-900 p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="flex flex-wrap items-center gap-2 text-sm font-bold text-white">
+                      {h.preteur}
+                      <span className="badge badge-neutral font-mono">
+                        Rang {h.rang}
+                      </span>
+                      <span
+                        className={`badge font-mono uppercase ${
+                          HYPO_STATUS_BADGE[h.status] || "badge-neutral"
+                        }`}
+                      >
+                        {HYPO_STATUS_LABEL[h.status] || h.status}
+                      </span>
+                    </p>
+                    <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-white/50">
+                      <span>
+                        {h.taux_pct != null
+                          ? `${h.taux_pct}% ${h.type_taux || ""}`.trim()
+                          : "Taux ?"}
+                      </span>
+                      <TermeBadge date={h.date_fin_terme} />
+                    </p>
+                    {h.notes ? (
+                      <p className="mt-2 text-xs text-white/60">{h.notes}</p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-shrink-0 items-center gap-3">
+                    <div className="text-right">
+                      <div className="font-mono text-sm font-bold text-white">
+                        {fmtCurrency(h.balance_actuelle ?? h.montant_initial)}
+                      </div>
+                      <div className="text-[11px] text-white/50">
+                        Paiement {fmtCurrency(h.paiement_mensuel)}/m
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAdding(false);
+                          setEditingId(h.id);
+                        }}
+                        className="btn-outline-accent btn-xs"
+                        title="Modifier l'hypothèque"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void remove(h)}
+                        className="btn-outline-rose btn-xs"
+                        title="Supprimer l'hypothèque"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="text-[11px] text-white/50">
-                Paiement {fmtCurrency(h.paiement_mensuel)}/m
-              </div>
-            </div>
-          </div>
+            )
+          )}
         </div>
-      ))}
+      )}
     </div>
   );
 }
