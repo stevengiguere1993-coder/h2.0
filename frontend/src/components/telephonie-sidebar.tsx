@@ -11,21 +11,19 @@ import {
   Clock,
   Filter,
   Home,
-  LogOut,
   MessageSquare,
   Phone,
   PhoneCall,
   Sparkles,
   TrendingUp,
-  UserCircle,
   X,
   Zap
 } from "lucide-react";
 
 import { useEffect, useState } from "react";
 
-import { AccountBadge } from "@/components/account-badge";
 import { HorizonLogo } from "@/components/horizon-logo";
+import { SidebarFooter } from "@/components/sidebar-footer";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 
@@ -47,16 +45,16 @@ const SECTIONS: {
 export function TelephonieSidebar({
   open,
   onClose,
-  userEmail: _userEmail,
-  onSignOut,
   section,
   onSectionChange,
   showAcquisition = false
 }: {
   open: boolean;
   onClose: () => void;
+  // Conservés dans la signature pour ne pas casser les appels existants —
+  // le footer unifié (SidebarFooter) gère user + signOut lui-même.
   userEmail?: string;
-  onSignOut: () => void;
+  onSignOut?: () => void;
   section: TelephonieSection;
   onSectionChange: (s: TelephonieSection) => void;
   showAcquisition?: boolean;
@@ -201,39 +199,9 @@ export function TelephonieSidebar({
             </div>
           ) : null}
 
-          <div className="mt-6 border-t border-brand-800 pt-3">
-            <Link
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={"/connexion" as any}
-              onClick={onClose}
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-white/70 hover:bg-brand-900 hover:text-white"
-            >
-              <Home className="h-4 w-4" />
-              Retour au sélecteur de portail
-            </Link>
-          </div>
         </nav>
 
-        <div className="border-t border-brand-800 px-3 py-4">
-          <AccountBadge />
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/profil" as any}
-            onClick={onClose}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/70 transition hover:bg-brand-900 hover:text-white"
-          >
-            <UserCircle className="h-4 w-4" />
-            <span>Mon profil</span>
-          </Link>
-          <button
-            type="button"
-            onClick={onSignOut}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/70 transition hover:bg-brand-900 hover:text-white"
-          >
-            <LogOut className="h-4 w-4" />
-            <span>Se déconnecter</span>
-          </button>
-        </div>
+        <SidebarFooter onNavigate={onClose} />
       </aside>
     </>
   );

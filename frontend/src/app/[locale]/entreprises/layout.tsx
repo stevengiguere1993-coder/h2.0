@@ -19,14 +19,11 @@ import {
   Contact as ContactIcon,
   CreditCard,
   ExternalLink,
-  Home,
   Grid3x3,
   LayoutGrid,
   Loader2,
-  LogOut,
   Menu,
   Plus,
-  Settings,
   Target,
   Users,
   X
@@ -41,6 +38,7 @@ import { KratosLogo } from "@/components/kratos-logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { KratosFloating } from "@/components/kratos-floating";
 import { QGCommandBar } from "@/components/qg-command-bar";
+import { SidebarFooter } from "@/components/sidebar-footer";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useNavAccess } from "@/hooks/use-nav-access";
@@ -84,7 +82,7 @@ export default function EntreprisesLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { user, loading, signOut } = useCurrentUser();
+  const { user, loading } = useCurrentUser();
   // Filtre d'accès par page (refonte permissions) — appliqué à côté
   // du gating par volet/rôle existant, sans le remplacer.
   const canSeeHref = useNavAccess(user);
@@ -299,10 +297,6 @@ export default function EntreprisesLayout({
       : [])
   ];
 
-  const REGLAGES: NavItem[] = [
-    { href: "/parametres", label: "Réglages", icon: Settings }
-  ];
-
   function isActive(href: string) {
     if (href === "/entreprises")
       return pathname.endsWith("/entreprises");
@@ -375,47 +369,11 @@ export default function EntreprisesLayout({
                 aux entreprises individuelles via la page
                 /entreprises (lien « Entreprises » ci-dessus). */}
 
-            <SidebarSection title="Réglages">
-              {REGLAGES.filter((item) => canSeeHref(item.href)).map((item) => (
-                <SidebarLink
-                  key={item.href}
-                  item={item}
-                  active={isActive(item.href)}
-                  onClick={() => setSidebarOpen(false)}
-                />
-              ))}
-            </SidebarSection>
+            {/* Réglages / profil / déconnexion → footer unifié
+                (SidebarFooter) ci-dessous. */}
           </nav>
 
-          <div
-            className="px-3 py-4"
-            style={{ borderTop: "1px solid var(--qg-border)" }}
-          >
-            {user.email ? (
-              <p
-                className="mb-2 truncate px-3 text-[10px] text-[var(--qg-text-soft)]"
-                title={user.email}
-              >
-                {user.email}
-              </p>
-            ) : null}
-            <Link
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={"/connexion" as any}
-              className="mb-1 flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[12px] text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
-            >
-              <Home className="h-3.5 w-3.5" />
-              Accueil portail
-            </Link>
-            <button
-              type="button"
-              onClick={signOut}
-              className="flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-[12px] text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-              Se déconnecter
-            </button>
-          </div>
+          <SidebarFooter onNavigate={() => setSidebarOpen(false)} />
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">

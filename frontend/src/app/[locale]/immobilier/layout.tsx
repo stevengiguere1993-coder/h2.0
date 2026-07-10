@@ -16,13 +16,10 @@ import {
   CircleDollarSign,
   ClipboardList,
   Hammer,
-  Home,
   Loader2,
-  LogOut,
   Menu,
   Pencil,
   Plus,
-  Settings,
   ShieldCheck,
   Sparkles,
   Unlink,
@@ -35,6 +32,7 @@ import { AccessGuard } from "@/components/access-guard";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { HelpButton } from "@/components/help-button";
+import { SidebarFooter } from "@/components/sidebar-footer";
 import { KratosLogo } from "@/components/kratos-logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
@@ -56,10 +54,8 @@ const NAV: NavItem[] = [
   { href: "/immobilier/finances", label: "Finances", icon: CircleDollarSign },
   { href: "/immobilier/renouvellements", label: "Renouvellements", icon: ClipboardList },
   { href: "/immobilier/depots", label: "Dépôts de garantie", icon: ShieldCheck },
-  { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer },
-  // Paramètres → hub unifié /parametres (point d'entrée unique, identique
-  // depuis tous les pôles). La gestion des utilisateurs y est accessible.
-  { href: "/parametres", label: "Paramètres", icon: Settings }
+  { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer }
+  // Paramètres → via le footer unifié (SidebarFooter).
 ];
 
 // ─── Context : entreprise active dans le volet immobilier ────────────
@@ -95,7 +91,7 @@ export default function ImmobilierLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { user, loading, signOut } = useCurrentUser();
+  const { user, loading } = useCurrentUser();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const pathname = usePathname() || "";
   // Filtre d'accès par page (refonte permissions) — appliqué à côté
@@ -250,33 +246,9 @@ export default function ImmobilierLayout({
               </ul>
             </div>
 
-            <div className="mt-6 border-t border-brand-800 pt-3">
-              <Link
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={"/connexion" as any}
-                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-white/70 hover:bg-brand-900 hover:text-white"
-              >
-                <Home className="h-4 w-4" />
-                Accueil du portail
-              </Link>
-            </div>
           </nav>
 
-          <div className="border-t border-brand-800 px-3 py-4">
-            {user.email ? (
-              <p className="mb-2 truncate px-3 text-xs text-white/50" title={user.email}>
-                {user.email}
-              </p>
-            ) : null}
-            <button
-              type="button"
-              onClick={signOut}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/70 transition hover:bg-brand-900 hover:text-white"
-            >
-              <LogOut className="h-4 w-4" />
-              <span>Se déconnecter</span>
-            </button>
-          </div>
+          <SidebarFooter onNavigate={() => setSidebarOpen(false)} />
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
