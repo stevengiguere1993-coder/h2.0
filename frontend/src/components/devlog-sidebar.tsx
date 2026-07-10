@@ -20,6 +20,8 @@ import {
 import { Link } from "@/i18n/navigation";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { AccountBadge } from "@/components/account-badge";
+import { useCurrentUser } from "@/hooks/use-current-user";
+import { useNavAccess } from "@/hooks/use-nav-access";
 
 type NavItem = {
   href: string;
@@ -104,6 +106,14 @@ export function DevlogSidebar({
   onSignOut: () => void;
 }) {
   const pathname = usePathname();
+  const { user } = useCurrentUser();
+  // Filtre d'accès par page (refonte permissions) — fail-open si l'accès
+  // n'est pas chargé. Le layout garde déjà l'entrée du pôle (owner/admin).
+  const canSeeHref = useNavAccess(user);
+  const visibleSections = DEVLOG_SECTIONS.map((s) => ({
+    ...s,
+    items: s.items.filter((it) => canSeeHref(it.href))
+  })).filter((s) => s.items.length > 0);
 
   function isActive(href: string) {
     if (href === "/dev-logiciel") {
@@ -143,7 +153,7 @@ export function DevlogSidebar({
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-3">
-          {DEVLOG_SECTIONS.map((section, idx) => (
+          {visibleSections.map((section, idx) => (
             <div key={section.label} className={idx === 0 ? "" : "mt-4"}>
               <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-accent-500">
                 {section.label}

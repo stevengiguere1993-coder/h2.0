@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 
+import { AccessGuard } from "@/components/access-guard";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
@@ -42,7 +43,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               {/* #20 — overflow-x-auto (et non hidden) : sur mobile, un
                   contenu plus large que l'écran reste atteignable en
                   défilant horizontalement au lieu d'être coupé. */}
-              <main className="flex-1 overflow-x-auto">{children}</main>
+              <main className="flex-1 overflow-x-auto">
+                <AccessGuard>{children}</AccessGuard>
+              </main>
               {/* Kratos est désormais intégré dans le AppTopbar de
                   chaque page (statique, ne chevauche plus le contenu). */}
               <KratosFloating />

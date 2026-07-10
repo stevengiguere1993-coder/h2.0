@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { useRouter } from "@/i18n/navigation";
+import { AccessGuard } from "@/components/access-guard";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
 import { KratosFloating } from "@/components/kratos-floating";
@@ -60,7 +61,9 @@ export default function DevlogLayout({
           >
             <ConfirmProvider>
               {/* Chaque page rend son propre <AppTopbar>. */}
-              <main className="flex-1 overflow-x-hidden">{children}</main>
+              <main className="flex-1 overflow-x-hidden">
+                <AccessGuard>{children}</AccessGuard>
+              </main>
               <KratosFloating />
               <HelpButton />
             </ConfirmProvider>

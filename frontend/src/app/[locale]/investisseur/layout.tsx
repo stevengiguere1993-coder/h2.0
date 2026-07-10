@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { AccessGuard } from "@/components/access-guard";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { HelpButton } from "@/components/help-button";
@@ -164,7 +165,7 @@ export default function InvestisseurLayout({
           <ctx.Provider value={{ onOpenSidebar: () => setSidebarOpen(true) }}>
             <ConfirmProvider>
               <main className="flex-1 overflow-x-hidden">
-                {allowed ? children : <NoAccess />}
+                {allowed ? <AccessGuard>{children}</AccessGuard> : <NoAccess />}
               </main>
               {/* Kratos + ThemeToggle intégrés dans InvestisseurTopbar */}
               <HelpButton />

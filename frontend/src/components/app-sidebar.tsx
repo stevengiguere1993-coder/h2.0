@@ -27,6 +27,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch, type UserRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { useNavAccess } from "@/hooks/use-nav-access";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { InstallAppButton } from "@/components/install-app-button";
 import { AccountBadge } from "@/components/account-badge";
@@ -95,16 +96,19 @@ export function AppSidebar({
   const [pendingLeaves, setPendingLeaves] = useState(0);
   const { user } = useCurrentUser();
   const role = (user?.role as UserRole | undefined) || "employee";
+  // Filtre d'accès par page (refonte permissions) — appliqué à côté du
+  // filtre de rôle historique, fail-open si l'accès n'est pas chargé.
+  const canSeeHref = useNavAccess(user);
 
-  // Filter nav items based on the signed-in user's role.
-  const visibleConstruction = CONSTRUCTION_NAV.filter((i) =>
-    canSee(role, i.minRole)
+  // Filter nav items based on the signed-in user's role + page access.
+  const visibleConstruction = CONSTRUCTION_NAV.filter(
+    (i) => canSee(role, i.minRole) && canSeeHref(i.href)
   );
-  const visibleAdministration = ADMINISTRATION_NAV.filter((i) =>
-    canSee(role, i.minRole)
+  const visibleAdministration = ADMINISTRATION_NAV.filter(
+    (i) => canSee(role, i.minRole) && canSeeHref(i.href)
   );
-  const visibleResources = RESOURCES_NAV.filter((i) =>
-    canSee(role, i.minRole)
+  const visibleResources = RESOURCES_NAV.filter(
+    (i) => canSee(role, i.minRole) && canSeeHref(i.href)
   );
 
   useEffect(() => {

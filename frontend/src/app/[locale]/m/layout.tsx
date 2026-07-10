@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { AccessGuard } from "@/components/access-guard";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
 import { KratosLogo } from "@/components/kratos-logo";
@@ -108,7 +109,7 @@ export default function MobileLayout({
       </div>
 
       <div className={inProspection ? "flex-1" : "flex-1 pb-20"}>
-        {children}
+        <AccessGuard>{children}</AccessGuard>
       </div>
 
       {inProspection ? null : (
