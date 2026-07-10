@@ -12,7 +12,8 @@ import {
   Gavel,
   Loader2,
   Mail,
-  Phone
+  Phone,
+  Search
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
@@ -115,6 +116,10 @@ export default function BauxPage() {
   const [relancingId, setRelancingId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [echeances, setEcheances] = useState<EcheanceData | null>(null);
+  const [search, setSearch] = useState("");
+  const [etatFilter, setEtatFilter] = useState<
+    "all" | "paye" | "retard" | "attente"
+  >("all");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -241,6 +246,22 @@ export default function BauxPage() {
     return Math.round((data.total_recu / data.total_attendu) * 100);
   }, [data]);
 
+  // Filtres client-side sur les rows du mois chargé.
+  const filteredRows = useMemo(() => {
+    if (!data) return [];
+    const q = search.trim().toLowerCase();
+    return data.rows.filter((r) => {
+      if (etatFilter !== "all" && r.etat !== etatFilter) return false;
+      if (q) {
+        const hay = `${r.locataire_name || ""} ${r.immeuble_name} ${
+          r.logement_numero || ""
+        }`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [data, search, etatFilter]);
+
   return (
     <>
       <ImmobilierTopbar
@@ -332,17 +353,61 @@ export default function BauxPage() {
           <EcheancesSection data={echeances} />
         ) : null}
 
+        {/* Filtres */}
+        <div className="mt-5 flex flex-wrap items-center gap-2">
+          <div className="relative max-w-md flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Recherche locataire / immeuble…"
+              className="input w-full pl-9"
+            />
+          </div>
+          <FilterPill
+            label="Tous"
+            active={etatFilter === "all"}
+            onClick={() => setEtatFilter("all")}
+          />
+          <FilterPill
+            label="Payés"
+            active={etatFilter === "paye"}
+            onClick={() => setEtatFilter("paye")}
+          />
+          <FilterPill
+            label="Retards"
+            active={etatFilter === "retard"}
+            onClick={() => setEtatFilter("retard")}
+          />
+          <FilterPill
+            label="En attente"
+            active={etatFilter === "attente"}
+            onClick={() => setEtatFilter("attente")}
+          />
+          {data ? (
+            <span className="text-xs text-white/50">
+              {filteredRows.length} / {data.rows.length}
+            </span>
+          ) : null}
+        </div>
+
         {/* Tableau */}
-        <div className="mt-5 overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
+        <div className="mt-4 overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
             </div>
-          ) : !data || data.rows.length === 0 ? (
+          ) : !data || filteredRows.length === 0 ? (
             <div className="p-10 text-center text-sm text-white/50">
-              Aucun bail actif dans le portefeuille
-              {currentEntrepriseId != null ? " de cette entreprise" : ""}.
-              Crée des baux depuis les fiches immeubles.
+              {data && data.rows.length > 0 ? (
+                "Aucun bail correspondant aux filtres."
+              ) : (
+                <>
+                  Aucun bail actif dans le portefeuille
+                  {currentEntrepriseId != null ? " de cette entreprise" : ""}.
+                  Crée des baux depuis les fiches immeubles.
+                </>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -358,7 +423,7 @@ export default function BauxPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-brand-800">
-                  {data.rows.map((r) => (
+                  {filteredRows.map((r) => (
                     <tr
                       key={r.bail_id}
                       className={`transition hover:bg-brand-800/40 ${
@@ -564,6 +629,30 @@ function EcheancesSection({ data }: { data: EcheanceData }) {
         })}
       </div>
     </div>
+  );
+}
+
+function FilterPill({
+  label,
+  active,
+  onClick
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+        active
+          ? "bg-brand-900 text-white"
+          : "border border-white/10 bg-brand-950 text-white/60 hover:text-white"
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 
