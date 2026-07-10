@@ -12,7 +12,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { ImmobilierTopbar } from "../layout";
+import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 
 type Locataire = {
   id: number;
@@ -22,6 +22,17 @@ type Locataire = {
   paiement_score?: number | null;
   employeur?: string | null;
   revenu_annuel?: number | null;
+};
+
+type ImmeubleLite = {
+  id: number;
+  name: string;
+};
+
+type BailLite = {
+  id: number;
+  locataire_id: number;
+  status: string;
 };
 
 type ScoreFilter = "all" | "lt70" | "70_89" | "gte90";
@@ -34,11 +45,18 @@ const SCORE_FILTERS: { value: ScoreFilter; label: string }[] = [
 ];
 
 export default function LocatairesPage() {
+  const { currentEntrepriseId } = useImmobilierLayout();
   const [list, setList] = useState<Locataire[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>("all");
   const [showCreate, setShowCreate] = useState(false);
+  const [immeubles, setImmeubles] = useState<ImmeubleLite[]>([]);
+  const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
+  // Locataires ayant un bail ACTIF dans l'immeuble choisi (null = pas chargé).
+  const [immeubleLocataireIds, setImmeubleLocataireIds] =
+    useState<Set<number> | null>(null);
+  const [loadingImmeuble, setLoadingImmeuble] = useState(false);
 
   async function reload() {
     setError(null);
@@ -60,11 +78,77 @@ export default function LocatairesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
-  // Filtre par score de paiement — client-side sur les rows chargées.
+  // Liste des immeubles pour le filtre (entreprise active du layout).
+  useEffect(() => {
+    let cancelled = false;
+    setImmeubleFilter("all");
+    void (async () => {
+      try {
+        const url =
+          currentEntrepriseId != null
+            ? `/api/v1/immobilier/immeubles?entreprise_id=${currentEntrepriseId}`
+            : "/api/v1/immobilier/immeubles";
+        const res = await authedFetch(url);
+        if (res.ok && !cancelled)
+          setImmeubles((await res.json()) as ImmeubleLite[]);
+      } catch {
+        // Filtre non bloquant — le select reste vide.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentEntrepriseId]);
+
+  // Immeuble choisi → baux de l'immeuble → Set des locataire_id (baux actifs).
+  useEffect(() => {
+    if (immeubleFilter === "all") {
+      setImmeubleLocataireIds(null);
+      setLoadingImmeuble(false);
+      return;
+    }
+    let cancelled = false;
+    setLoadingImmeuble(true);
+    setImmeubleLocataireIds(null);
+    void (async () => {
+      try {
+        const res = await authedFetch(
+          `/api/v1/immobilier/immeubles/${immeubleFilter}/baux`
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const baux = (await res.json()) as BailLite[];
+        if (cancelled) return;
+        setImmeubleLocataireIds(
+          new Set(
+            baux
+              .filter((b) => b.status === "actif")
+              .map((b) => b.locataire_id)
+          )
+        );
+      } catch (err) {
+        if (!cancelled) setError((err as Error).message);
+      } finally {
+        if (!cancelled) setLoadingImmeuble(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [immeubleFilter]);
+
+  // Filtres client-side sur les rows chargées : immeuble (via baux actifs)
+  // puis score de paiement. Pendant le fetch des baux (ids null), on ne
+  // filtre pas encore — le loader discret indique le chargement.
   const filtered =
     list === null
       ? null
       : list.filter((l) => {
+          if (
+            immeubleFilter !== "all" &&
+            immeubleLocataireIds !== null &&
+            !immeubleLocataireIds.has(l.id)
+          )
+            return false;
           if (scoreFilter === "all") return true;
           if (l.paiement_score == null) return false;
           if (scoreFilter === "lt70") return l.paiement_score < 70;
@@ -103,6 +187,26 @@ export default function LocatairesPage() {
               className="input w-full pl-9"
             />
           </div>
+          <select
+            value={immeubleFilter === "all" ? "all" : String(immeubleFilter)}
+            onChange={(e) =>
+              setImmeubleFilter(
+                e.target.value === "all" ? "all" : Number(e.target.value)
+              )
+            }
+            className="input w-auto max-w-[220px] text-sm"
+            aria-label="Filtrer par immeuble"
+          >
+            <option value="all">Tous les immeubles</option>
+            {immeubles.map((imm) => (
+              <option key={imm.id} value={imm.id}>
+                {imm.name}
+              </option>
+            ))}
+          </select>
+          {loadingImmeuble ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" />
+          ) : null}
           {SCORE_FILTERS.map((f) => (
             <FilterPill
               key={f.value}
@@ -130,7 +234,9 @@ export default function LocatairesPage() {
         ) : filtered.length === 0 ? (
           <p className="rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
             Aucun locataire{" "}
-            {search || scoreFilter !== "all" ? "correspondant" : "enregistré"}.
+            {search || scoreFilter !== "all" || immeubleFilter !== "all"
+              ? "correspondant"
+              : "enregistré"}.
           </p>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">

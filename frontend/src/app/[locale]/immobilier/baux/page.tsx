@@ -120,6 +120,7 @@ export default function BauxPage() {
   const [etatFilter, setEtatFilter] = useState<
     "all" | "paye" | "retard" | "attente"
   >("all");
+  const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -144,6 +145,11 @@ export default function BauxPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Changement d'entreprise → le portefeuille change, on repart sur « Tous ».
+  useEffect(() => {
+    setImmeubleFilter("all");
+  }, [currentEntrepriseId]);
 
   useEffect(() => {
     void (async () => {
@@ -241,16 +247,53 @@ export default function BauxPage() {
     }
   }
 
-  const tauxCollecte = useMemo(() => {
-    if (!data || data.total_attendu <= 0) return null;
-    return Math.round((data.total_recu / data.total_attendu) * 100);
+  // Immeubles distincts présents dans les rows du mois chargé.
+  const immeubleOptions = useMemo(() => {
+    if (!data) return [];
+    const m = new Map<number, string>();
+    for (const r of data.rows) {
+      if (!m.has(r.immeuble_id)) m.set(r.immeuble_id, r.immeuble_name);
+    }
+    return [...m.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, "fr"));
   }, [data]);
+
+  // Tuiles KPI : suivent le filtre immeuble (voir l'état d'UN immeuble),
+  // mais ignorent le filtre état + la recherche.
+  const kpi = useMemo(() => {
+    if (!data) return null;
+    if (immeubleFilter === "all") {
+      return {
+        total_attendu: data.total_attendu,
+        total_recu: data.total_recu,
+        nb_retards: data.nb_retards,
+        nb_attente: data.nb_attente,
+        nb_baux: data.rows.length
+      };
+    }
+    const rows = data.rows.filter((r) => r.immeuble_id === immeubleFilter);
+    return {
+      total_attendu: rows.reduce((s, r) => s + r.loyer_mensuel, 0),
+      total_recu: rows.reduce((s, r) => s + (r.montant_paye ?? 0), 0),
+      nb_retards: rows.filter((r) => r.etat === "retard").length,
+      nb_attente: rows.filter((r) => r.etat === "attente").length,
+      nb_baux: rows.length
+    };
+  }, [data, immeubleFilter]);
+
+  const tauxCollecte = useMemo(() => {
+    if (!kpi || kpi.total_attendu <= 0) return null;
+    return Math.round((kpi.total_recu / kpi.total_attendu) * 100);
+  }, [kpi]);
 
   // Filtres client-side sur les rows du mois chargé.
   const filteredRows = useMemo(() => {
     if (!data) return [];
     const q = search.trim().toLowerCase();
     return data.rows.filter((r) => {
+      if (immeubleFilter !== "all" && r.immeuble_id !== immeubleFilter)
+        return false;
       if (etatFilter !== "all" && r.etat !== etatFilter) return false;
       if (q) {
         const hay = `${r.locataire_name || ""} ${r.immeuble_name} ${
@@ -260,7 +303,7 @@ export default function BauxPage() {
       }
       return true;
     });
-  }, [data, search, etatFilter]);
+  }, [data, search, etatFilter, immeubleFilter]);
 
   return (
     <>
@@ -317,17 +360,17 @@ export default function BauxPage() {
           </p>
         ) : null}
 
-        {/* Tuiles de synthèse */}
-        {data ? (
+        {/* Tuiles de synthèse — suivent le filtre immeuble */}
+        {kpi ? (
           <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatTile
               label="Attendu"
-              value={fmtMoney(data.total_attendu)}
-              sub={`${data.rows.length} bail${data.rows.length > 1 ? "s" : ""} actif${data.rows.length > 1 ? "s" : ""}`}
+              value={fmtMoney(kpi.total_attendu)}
+              sub={`${kpi.nb_baux} bail${kpi.nb_baux > 1 ? "s" : ""} actif${kpi.nb_baux > 1 ? "s" : ""}`}
             />
             <StatTile
               label="Reçu"
-              value={fmtMoney(data.total_recu)}
+              value={fmtMoney(kpi.total_recu)}
               sub={
                 tauxCollecte != null
                   ? `${tauxCollecte} % collecté`
@@ -337,13 +380,13 @@ export default function BauxPage() {
             />
             <StatTile
               label="En retard"
-              value={String(data.nb_retards)}
-              sub={data.nb_retards > 0 ? "à relancer 👇" : "rien à signaler"}
-              tone={data.nb_retards > 0 ? "rose" : undefined}
+              value={String(kpi.nb_retards)}
+              sub={kpi.nb_retards > 0 ? "à relancer 👇" : "rien à signaler"}
+              tone={kpi.nb_retards > 0 ? "rose" : undefined}
             />
             <StatTile
               label="En attente"
-              value={String(data.nb_attente)}
+              value={String(kpi.nb_attente)}
               sub="avant le 5 du mois"
             />
           </div>
@@ -364,6 +407,23 @@ export default function BauxPage() {
               className="input w-full pl-9"
             />
           </div>
+          <select
+            value={immeubleFilter === "all" ? "all" : String(immeubleFilter)}
+            onChange={(e) =>
+              setImmeubleFilter(
+                e.target.value === "all" ? "all" : Number(e.target.value)
+              )
+            }
+            className="input w-auto max-w-[220px] text-sm"
+            aria-label="Filtrer par immeuble"
+          >
+            <option value="all">Tous les immeubles</option>
+            {immeubleOptions.map((imm) => (
+              <option key={imm.id} value={imm.id}>
+                {imm.name}
+              </option>
+            ))}
+          </select>
           <FilterPill
             label="Tous"
             active={etatFilter === "all"}
