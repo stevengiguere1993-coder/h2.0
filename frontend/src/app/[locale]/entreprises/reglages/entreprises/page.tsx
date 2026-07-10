@@ -297,13 +297,13 @@ export default function ReglagesEntreprisesPage() {
                         {e.name}
                       </Link>
                       {!e.is_active ? (
-                        <span className="rounded-full border border-white/20 px-2 py-0.5 text-[10px] uppercase tracking-wider text-white/50">
+                        <span className="badge badge-neutral uppercase tracking-wider">
                           Inactif
                         </span>
                       ) : null}
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-white/50">
-                      <span className="rounded bg-brand-950 px-1.5 py-0.5">
+                      <span className="badge badge-neutral">
                         {e.type}
                       </span>
                       {e.neq ? (

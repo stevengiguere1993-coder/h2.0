@@ -221,11 +221,11 @@ const PROJECT_STATUS_LABELS: Record<string, string> = {
 };
 
 const PROJECT_STATUS_TONE: Record<string, string> = {
-  planifie: "bg-white/10 text-white/70",
-  en_attente: "bg-amber-500/15 text-amber-300",
-  en_cours: "bg-blue-500/15 text-blue-300",
-  suspendu: "bg-rose-500/15 text-rose-300",
-  livre: "bg-emerald-500/15 text-emerald-300"
+  planifie: "badge-neutral",
+  en_attente: "badge-amber",
+  en_cours: "badge-blue",
+  suspendu: "badge-rose",
+  livre: "badge-emerald"
 };
 
 const INVOICE_STATUS_LABELS: Record<string, string> = {
@@ -236,10 +236,10 @@ const INVOICE_STATUS_LABELS: Record<string, string> = {
 };
 
 const INVOICE_STATUS_TONE: Record<string, string> = {
-  brouillon: "bg-white/10 text-white/70",
-  envoyee: "bg-amber-500/15 text-amber-300",
-  payee: "bg-emerald-500/15 text-emerald-300",
-  annulee: "bg-rose-500/15 text-rose-300"
+  brouillon: "badge-neutral",
+  envoyee: "badge-amber",
+  payee: "badge-emerald",
+  annulee: "badge-rose"
 };
 
 const CONTRACT_STATUS_LABELS: Record<string, string> = {
@@ -250,10 +250,10 @@ const CONTRACT_STATUS_LABELS: Record<string, string> = {
 };
 
 const CONTRACT_STATUS_TONE: Record<string, string> = {
-  brouillon: "bg-white/10 text-white/70",
-  envoye: "bg-amber-500/15 text-amber-300",
-  signe: "bg-emerald-500/15 text-emerald-300",
-  annule: "bg-rose-500/15 text-rose-300"
+  brouillon: "badge-neutral",
+  envoye: "badge-amber",
+  signe: "badge-emerald",
+  annule: "badge-rose"
 };
 
 const SOUMISSION_STATUS_LABELS: Record<string, string> = {
@@ -265,11 +265,11 @@ const SOUMISSION_STATUS_LABELS: Record<string, string> = {
 };
 
 const SOUMISSION_STATUS_TONE: Record<string, string> = {
-  brouillon: "bg-white/10 text-white/70",
-  envoyee: "bg-amber-500/15 text-amber-300",
-  acceptee: "bg-emerald-500/15 text-emerald-300",
-  refusee: "bg-rose-500/15 text-rose-300",
-  expiree: "bg-white/5 text-white/40"
+  brouillon: "badge-neutral",
+  envoyee: "badge-amber",
+  acceptee: "badge-emerald",
+  refusee: "badge-rose",
+  expiree: "badge-neutral"
 };
 
 // ---------------------------------------------------------------------------
@@ -426,11 +426,11 @@ function ClientAccount({
                 {client.name}
               </h1>
               <p className="mt-0.5 text-xs text-white/60">
-                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 font-medium text-emerald-300">
+                <span className="badge badge-emerald">
                   <CheckCircle2 className="h-3 w-3" /> Client depuis le {fmtDate(clientSince)}
                 </span>
                 {client.status === "archived" ? (
-                  <span className="ml-2 rounded-full bg-white/10 px-2 py-0.5 text-white/60">
+                  <span className="badge badge-neutral ml-2">
                     Archivé
                   </span>
                 ) : null}
@@ -678,7 +678,7 @@ function KpiCard({
       ? "border-emerald-500/30 bg-emerald-500/5"
       : tone === "amber"
       ? "border-amber-500/30 bg-amber-500/5"
-      : "border-brand-800 bg-brand-900";
+      : "";
   const valueTone =
     tone === "emerald"
       ? "text-emerald-300"
@@ -692,7 +692,7 @@ function KpiCard({
       ? "text-amber-300"
       : "text-accent-500";
   return (
-    <div className={`rounded-xl border ${toneClasses} p-4`}>
+    <div className={`kpi-card p-4 ${toneClasses}`}>
       <div className={`flex items-center gap-2 text-xs uppercase tracking-wider ${iconTone}`}>
         {icon}
         <span>{label}</span>
@@ -717,7 +717,7 @@ function SectionHeader({
       <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
         {title}
         {typeof count === "number" ? (
-          <span className="ml-2 rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70">
+          <span className="badge badge-neutral ml-2">
             {count}
           </span>
         ) : null}
@@ -736,7 +736,7 @@ function EmptyHint({ children }: { children: React.ReactNode }) {
 }
 
 function ProjectCard({ project }: { project: Project }) {
-  const tone = PROJECT_STATUS_TONE[project.status] || "bg-white/10 text-white/70";
+  const tone = PROJECT_STATUS_TONE[project.status] || "badge-neutral";
   const label = PROJECT_STATUS_LABELS[project.status] || project.status;
   return (
     <Link
@@ -748,7 +748,7 @@ function ProjectCard({ project }: { project: Project }) {
         <p className="line-clamp-2 text-sm font-semibold text-white group-hover:text-accent-500">
           {project.name}
         </p>
-        <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] uppercase ${tone}`}>
+        <span className={`badge ${tone} shrink-0 uppercase`}>
           {label}
         </span>
       </div>
@@ -786,7 +786,7 @@ function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
           {invoices.map((inv) => {
             const label = INVOICE_STATUS_LABELS[inv.status] || inv.status;
             const tone =
-              INVOICE_STATUS_TONE[inv.status] || "bg-white/10 text-white/70";
+              INVOICE_STATUS_TONE[inv.status] || "badge-neutral";
             return (
               <tr key={inv.id} className="hover:bg-brand-950/40">
                 <td className="px-3 py-2 font-medium text-white">
@@ -799,7 +799,7 @@ function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                   {fmtMoney(inv.amount)}
                 </td>
                 <td className="px-3 py-2">
-                  <span className={`rounded px-2 py-0.5 text-[10px] uppercase ${tone}`}>
+                  <span className={`badge ${tone} uppercase`}>
                     {label}
                   </span>
                   {inv.paid_at ? (
@@ -842,7 +842,7 @@ function ContractsTable({ contracts }: { contracts: Contract[] }) {
           {contracts.map((c) => {
             const label = CONTRACT_STATUS_LABELS[c.status] || c.status;
             const tone =
-              CONTRACT_STATUS_TONE[c.status] || "bg-white/10 text-white/70";
+              CONTRACT_STATUS_TONE[c.status] || "badge-neutral";
             return (
               <tr key={c.id} className="hover:bg-brand-950/40">
                 <td className="px-3 py-2">
@@ -855,7 +855,7 @@ function ContractsTable({ contracts }: { contracts: Contract[] }) {
                   </Link>
                 </td>
                 <td className="px-3 py-2">
-                  <span className={`rounded px-2 py-0.5 text-[10px] uppercase ${tone}`}>
+                  <span className={`badge ${tone} uppercase`}>
                     {label}
                   </span>
                 </td>
@@ -910,12 +910,12 @@ function SoumissionsTable({ soumissions }: { soumissions: Soumission[] }) {
           {soumissions.map((s) => {
             const label = SOUMISSION_STATUS_LABELS[s.status] || s.status;
             const tone =
-              SOUMISSION_STATUS_TONE[s.status] || "bg-white/10 text-white/70";
+              SOUMISSION_STATUS_TONE[s.status] || "badge-neutral";
             return (
               <tr key={s.id} className="hover:bg-brand-950/40">
                 <td className="px-3 py-2 font-medium text-white">{s.title}</td>
                 <td className="px-3 py-2">
-                  <span className={`rounded px-2 py-0.5 text-[10px] uppercase ${tone}`}>
+                  <span className={`badge ${tone} uppercase`}>
                     {label}
                   </span>
                 </td>
@@ -971,7 +971,7 @@ function CollapsibleSection({
         )}
         <span className="uppercase tracking-wider text-accent-500">{title}</span>
         {typeof count === "number" ? (
-          <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70">
+          <span className="badge badge-neutral">
             {count}
           </span>
         ) : null}

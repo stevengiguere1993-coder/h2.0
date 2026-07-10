@@ -570,7 +570,7 @@ function MoveTaskToDealDialog({
             <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
           </div>
         ) : list.length === 0 ? (
-          <p className="mt-4 rounded-md border border-dashed border-brand-800 bg-brand-900/40 px-3 py-3 text-center text-xs text-white/50">
+          <p className="empty-state mt-4">
             Aucun autre deal — créez-en un dans Pipeline.
           </p>
         ) : (

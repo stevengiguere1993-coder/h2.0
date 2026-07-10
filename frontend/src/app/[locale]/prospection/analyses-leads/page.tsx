@@ -626,7 +626,7 @@ export default function AnalysesLeadsPage() {
                       {col.label}
                     </span>
                   </div>
-                  <span className="rounded-full bg-brand-800 px-1.5 py-0.5 text-[10px] tabular-nums text-white/60">
+                  <span className="badge badge-neutral tabular-nums">
                     {items.length}
                   </span>
                 </header>

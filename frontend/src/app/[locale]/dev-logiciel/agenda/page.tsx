@@ -351,7 +351,7 @@ export default function DevlogAgendaPage() {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : groupedByDate.length === 0 ? (
-          <p className="rounded-xl border border-brand-800 bg-brand-900 p-6 text-center text-sm text-white/40">
+          <p className="empty-state">
             Aucun événement à afficher.
           </p>
         ) : (
@@ -384,9 +384,7 @@ export default function DevlogAgendaPage() {
                     const meta = KIND_META[e.kind];
                     const content = (
                       <div className="flex items-center gap-3 px-4 py-2.5">
-                        <span
-                          className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${meta.cls}`}
-                        >
+                        <span className={`badge ${meta.badgeTone}`}>
                           {meta.icon}
                           {meta.label}
                         </span>

@@ -1822,7 +1822,7 @@ function NodeRow({
           </span>
         ) : node.assignee_external_name ? (
           <span
-            className="inline-flex items-center gap-0.5 rounded bg-violet-500/10 px-1 py-0 text-violet-300"
+            className="badge badge-violet"
             title="Externe (freelance / sous-traitant / partenaire)"
           >
             <Briefcase className="h-2.5 w-2.5" />
@@ -1831,7 +1831,7 @@ function NodeRow({
         ) : null}
         {coOwnerNodes.length > 0 ? (
           <span
-            className="inline-flex items-center gap-0.5 rounded bg-sky-500/10 px-1 py-0 text-sky-300"
+            className="badge badge-sky"
             title="Détenu aussi par ces entités (co-détention)"
           >
             <Link2 className="h-2.5 w-2.5" />

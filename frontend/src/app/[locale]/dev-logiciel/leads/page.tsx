@@ -389,7 +389,7 @@ export default function DevlogCrmPage() {
                       </h2>
                     </button>
                     <div className="flex items-center gap-2">
-                      <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                      <span className="badge badge-neutral">
                         {cards.length}
                       </span>
                       {col.custom ? (
@@ -526,7 +526,7 @@ function LeadCard({
           </p>
         ) : null}
         <div className="mt-2 flex items-center justify-between">
-          <span className="inline-flex rounded-md bg-blue-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-blue-400">
+          <span className="badge badge-blue uppercase tracking-wider">
             {PROJECT_LABEL[p.project_type] || p.project_type}
           </span>
           <span className="text-[10px] text-white/40">

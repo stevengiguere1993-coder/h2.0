@@ -557,13 +557,9 @@ function KpiCard({
   return (
     <Wrapper
       {...wrapperProps}
-      className={`rounded-xl px-5 py-5 ${
+      className={`kpi-card ${
         href ? "transition hover:border-accent-500" : ""
       }`}
-      style={{
-        backgroundColor: "var(--qg-card-bg)",
-        border: "1px solid var(--qg-border)"
-      }}
     >
       <p className="text-xs font-medium uppercase tracking-wider text-[var(--qg-text-soft)]">
         {label}
@@ -682,7 +678,7 @@ function EntrepriseRow({
       </td>
       <td className="px-3 py-3 text-right">
         {overdueAlert ? (
-          <span className="inline-flex items-center gap-1 rounded-md border border-rose-400/40 bg-rose-400/10 px-1.5 py-0.5 text-[11px] font-semibold text-rose-400">
+          <span className="badge badge-rose">
             <AlertTriangle className="h-2.5 w-2.5" />
             {e.taches_open} <span className="opacity-50">/ {e.taches_total}</span>
           </span>

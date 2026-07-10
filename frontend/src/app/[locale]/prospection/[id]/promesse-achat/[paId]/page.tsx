@@ -109,12 +109,12 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const STATUS_COLOR: Record<string, string> = {
-  draft: "bg-white/10 text-white/70",
-  pending_buyer_signature: "bg-amber-500/20 text-amber-200",
-  pending_seller_signature: "bg-blue-500/20 text-blue-200",
-  accepted: "bg-emerald-500/20 text-emerald-200",
-  rejected: "bg-rose-500/20 text-rose-200",
-  expired: "bg-white/10 text-white/40",
+  draft: "badge-neutral",
+  pending_buyer_signature: "badge-amber",
+  pending_seller_signature: "badge-blue",
+  accepted: "badge-emerald",
+  rejected: "badge-rose",
+  expired: "badge-neutral",
 };
 
 export default function PAEditorPage() {
@@ -217,9 +217,7 @@ export default function PAEditorPage() {
             Promesse d&apos;achat — {pa.reference}
           </h1>
           <span
-            className={`rounded-full px-3 py-1 text-xs font-semibold ${
-              STATUS_COLOR[pa.status] || "bg-white/10 text-white/60"
-            }`}
+            className={`badge ${STATUS_COLOR[pa.status] || "badge-neutral"}`}
           >
             {STATUS_LABEL[pa.status] || pa.status}
           </span>

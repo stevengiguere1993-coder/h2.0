@@ -683,7 +683,7 @@ export default function PlanSuiviPage() {
                       className={`h-2.5 w-2.5 rounded-full ${poleColor(pole)}`}
                     />
                     <h3 className="text-sm font-bold text-white">{pole}</h3>
-                    <span className="rounded-full bg-white/5 px-2 text-[10px] font-semibold text-white/50">
+                    <span className="badge badge-neutral">
                       {list.length}
                     </span>
                   </div>
@@ -707,18 +707,18 @@ export default function PlanSuiviPage() {
                                   {t.label}
                                 </span>
                                 {isKratos ? (
-                                  <span className="inline-flex items-center gap-0.5 rounded bg-blue-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-300">
+                                  <span className="badge badge-blue uppercase tracking-wide">
                                     <Bot className="h-2.5 w-2.5" />
                                     Kratos
                                   </span>
                                 ) : null}
                                 {t.execution_tier === "direction" ? (
-                                  <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-300">
+                                  <span className="badge badge-amber uppercase tracking-wide">
                                     Direction
                                   </span>
                                 ) : null}
                                 {isProposal ? (
-                                  <span className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-300">
+                                  <span className="badge badge-violet uppercase tracking-wide">
                                     💡 Proposition
                                   </span>
                                 ) : null}
@@ -731,10 +731,10 @@ export default function PlanSuiviPage() {
                                   const isKratosResp = resp === "Kratos";
                                   return (
                                     <span
-                                      className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                      className={`badge uppercase tracking-wide ${
                                         isKratosResp
-                                          ? "bg-blue-500/15 text-blue-300"
-                                          : "bg-violet-500/15 text-violet-300"
+                                          ? "badge-blue"
+                                          : "badge-violet"
                                       }`}
                                       title="Responsable intérim"
                                     >
@@ -818,7 +818,7 @@ function KpiCard({
   color: string;
 }) {
   return (
-    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+    <div className="kpi-card">
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
           {label}

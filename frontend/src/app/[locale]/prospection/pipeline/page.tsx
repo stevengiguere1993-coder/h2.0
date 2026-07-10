@@ -285,7 +285,7 @@ export default function PipelineDealsListPage() {
       <div className="p-4 lg:p-6">
         <header className="mb-4 flex items-center gap-3">
           <h1 className="text-2xl font-bold text-white">Pipeline</h1>
-          <span className="rounded-md bg-brand-900 px-2 py-1 text-xs text-white/60">
+          <span className="badge badge-neutral">
             {deals.length} deal{deals.length > 1 ? "s" : ""}
           </span>
         </header>
@@ -511,7 +511,7 @@ function PipelineSection({
           aria-hidden
         />
         <h2 className="text-sm font-semibold text-white/90">{title}</h2>
-        <span className="rounded-md bg-brand-900 px-2 py-0.5 text-[11px] text-white/60">
+        <span className="badge badge-neutral">
           {deals.length}
         </span>
       </header>

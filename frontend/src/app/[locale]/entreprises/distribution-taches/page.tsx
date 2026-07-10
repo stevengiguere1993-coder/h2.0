@@ -419,7 +419,7 @@ export default function DistributionTachesPage() {
       ) : error ? (
         <p className="py-8 text-center text-sm text-rose-400">{error}</p>
       ) : people.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-[var(--qg-border)] px-6 py-12 text-center text-sm text-[var(--qg-text-muted)]">
+        <div className="empty-state">
           Ajoute une <strong>personne</strong> (un compte Kratos) et une{" "}
           <strong>tâche</strong> pour commencer.
         </div>

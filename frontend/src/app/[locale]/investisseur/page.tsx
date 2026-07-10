@@ -212,7 +212,7 @@ function Kpi({
     rose: "bg-rose-500/15 text-rose-300"
   };
   return (
-    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+    <div className="kpi-card">
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
           {label}
@@ -254,7 +254,7 @@ function InvestissementCard({ inv }: { inv: Investissement }) {
               {inv.immeuble_name}
             </h3>
             {inv.status !== "actif" ? (
-              <span className="rounded-full border border-white/15 px-1.5 py-0.5 text-[10px] uppercase text-white/50">
+              <span className="badge badge-neutral uppercase">
                 {inv.status}
               </span>
             ) : null}
@@ -316,7 +316,7 @@ function InvestissementCard({ inv }: { inv: Investissement }) {
 
 function EmptyState() {
   return (
-    <div className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-8 text-center">
+    <div className="empty-state">
       <Wallet className="mx-auto h-10 w-10 text-white/30" />
       <h3 className="mt-3 text-sm font-bold text-white">
         Aucun investissement enregistré
@@ -325,7 +325,7 @@ function EmptyState() {
         Les administrateurs créent les investissements au closing — ils
         apparaîtront automatiquement ici.
       </p>
-      <p className="mt-4 inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold text-emerald-200">
+      <p className="badge badge-emerald mt-4">
         <Sparkles className="h-3 w-3" />
         Volet en lancement progressif
       </p>

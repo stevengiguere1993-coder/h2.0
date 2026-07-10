@@ -389,7 +389,7 @@ export default function ProspectionWebPage() {
                 Chargement…
               </div>
             ) : filtered.length === 0 ? (
-              <div className="m-4 rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-6 text-center text-xs text-white/50">
+              <div className="empty-state m-4 text-xs">
                 Aucun prospect.
                 <br />
                 Va sur mobile pour ajouter ton premier en mode drive-by.
@@ -761,7 +761,7 @@ function RouteModal({
                           </span>
                         ) : null}
                       </span>
-                      <span className="rounded bg-brand-800 px-1.5 py-0.5 text-[10px] text-white/60">
+                      <span className="badge badge-neutral">
                         {l.score}
                       </span>
                     </label>

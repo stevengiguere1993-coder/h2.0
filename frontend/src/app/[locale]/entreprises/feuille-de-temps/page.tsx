@@ -148,19 +148,19 @@ const STATUS_META: Record<
 > = {
   brouillon: {
     label: "Brouillon",
-    cls: "bg-slate-500/15 text-slate-300 border-slate-500/30"
+    cls: "badge-neutral"
   },
   soumis: {
     label: "Soumis",
-    cls: "bg-amber-500/15 text-amber-300 border-amber-500/30"
+    cls: "badge-amber"
   },
   approuve: {
     label: "Approuvé",
-    cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+    cls: "badge-emerald"
   },
   vide: {
     label: "Vide",
-    cls: "bg-slate-500/10 text-slate-400 border-slate-500/20"
+    cls: "badge-neutral"
   }
 };
 
@@ -540,7 +540,7 @@ export default function FeuilleDeTempsPage() {
           <>
             {/* Bandeau statut + taux */}
             <div className="flex flex-wrap items-center gap-3">
-              <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold ${statusMeta.cls}`}>
+              <span className={`badge ${statusMeta.cls}`}>
                 {statusMeta.label}
               </span>
               <RateField
@@ -951,7 +951,7 @@ function TeamView({
               <tr key={r.user_id} className="border-b border-[var(--qg-border)]/50">
                 <td className="px-3 py-2.5 font-medium">{r.employee_name}</td>
                 <td className="px-3 py-2.5">
-                  <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${sm.cls}`}>
+                  <span className={`badge ${sm.cls}`}>
                     {sm.label}
                   </span>
                 </td>
@@ -1090,7 +1090,7 @@ function CompaniesManager() {
                   {c.label}
                 </span>
                 {!c.is_active && (
-                  <span className="rounded-full bg-slate-500/15 px-2 py-0.5 text-xs text-slate-400">
+                  <span className="badge badge-neutral">
                     inactive
                   </span>
                 )}

@@ -421,11 +421,11 @@ function UsersTable({
               </td>
               <td className="px-4 py-2.5">
                 {u.is_active ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-300">
+                  <span className="badge badge-emerald">
                     <Check className="h-3 w-3" /> Actif
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-[11px] text-rose-300">
+                  <span className="badge badge-rose">
                     <X className="h-3 w-3" /> Inactif
                   </span>
                 )}

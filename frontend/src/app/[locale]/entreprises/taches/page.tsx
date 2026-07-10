@@ -454,7 +454,7 @@ export default function MesTachesPage() {
       if (!ent) return null;
       return (
         <span
-          className="inline-flex items-center gap-1 rounded-full bg-white/5 px-1.5 py-0.5 text-[9px] font-medium text-white/60"
+          className="badge badge-neutral"
           title={`Entreprise : ${ent.name}`}
         >
           <span
@@ -469,7 +469,7 @@ export default function MesTachesPage() {
     if (!deal) return null;
     return (
       <span
-        className="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-200"
+        className="badge badge-violet"
         title={`Deal : ${deal.address}`}
       >
         <span className="h-1.5 w-1.5 rounded-full bg-violet-400" />

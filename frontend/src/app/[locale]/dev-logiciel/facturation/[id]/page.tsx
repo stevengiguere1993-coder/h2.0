@@ -66,10 +66,10 @@ const STATUS_OPTIONS = [
 ];
 
 const STATUS_CLS: Record<string, string> = {
-  brouillon: "bg-white/5 text-white/60",
-  envoyee: "bg-blue-500/15 text-blue-300",
-  payee: "bg-emerald-500/15 text-emerald-300",
-  annulee: "bg-rose-500/15 text-rose-300"
+  brouillon: "badge-neutral",
+  envoyee: "badge-blue",
+  payee: "badge-emerald",
+  annulee: "badge-rose"
 };
 
 function fmtAmount(n: number | null): string {
@@ -453,8 +453,8 @@ export default function DevlogInvoiceDetailPage() {
                 </h1>
                 <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-white/50">
                   <span
-                    className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                      STATUS_CLS[inv.status] ?? "bg-white/5 text-white/50"
+                    className={`badge uppercase tracking-wide ${
+                      STATUS_CLS[inv.status] ?? "badge-neutral"
                     }`}
                   >
                     {STATUS_OPTIONS.find((s) => s.key === inv.status)?.label ??
@@ -699,7 +699,7 @@ export default function DevlogInvoiceDetailPage() {
                               className="w-full rounded border border-brand-700 bg-brand-950 px-1.5 py-1 text-white"
                             />
                             {it.source_kind ? (
-                              <span className="mt-0.5 inline-block rounded bg-white/5 px-1 text-[9px] uppercase text-white/30">
+                              <span className="badge badge-neutral mt-0.5 uppercase">
                                 {it.source_kind}
                               </span>
                             ) : null}

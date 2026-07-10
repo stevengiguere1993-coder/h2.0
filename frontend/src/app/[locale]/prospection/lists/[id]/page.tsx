@@ -59,13 +59,13 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const STATUS_COLOR: Record<string, string> = {
-  a_visiter: "bg-emerald-500/20 text-emerald-300",
-  visite: "bg-blue-500/20 text-blue-300",
-  a_contacter: "bg-amber-500/20 text-amber-300",
-  contacte: "bg-violet-500/20 text-violet-300",
-  soumissionne: "bg-pink-500/20 text-pink-300",
-  converti: "bg-green-500/30 text-green-200",
-  perdu: "bg-rose-500/20 text-rose-300"
+  a_visiter: "badge-emerald",
+  visite: "badge-blue",
+  a_contacter: "badge-amber",
+  contacte: "badge-violet",
+  soumissionne: "badge-rose",
+  converti: "badge-emerald",
+  perdu: "badge-rose"
 };
 
 function fmtMoney(n: number | null | undefined): string {
@@ -254,7 +254,7 @@ export default function ProspectionListDetailPage() {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : sorted.length === 0 ? (
-          <div className="mt-8 rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-12 text-center">
+          <div className="empty-state mt-8">
             <MapPin className="mx-auto h-8 w-8 text-white/20" />
             <p className="mt-3 text-sm text-white/50">
               Aucun lead dans cette liste.
@@ -315,7 +315,7 @@ export default function ProspectionListDetailPage() {
                         </Link>
                         {(l.multi_properties_count ?? 0) > 0 ? (
                           <span
-                            className="ml-2 inline-flex items-center rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] text-violet-200"
+                            className="badge badge-violet ml-2"
                             title="Le proprio possède d'autres immeubles dans la liste"
                           >
                             +{l.multi_properties_count}
@@ -372,9 +372,8 @@ export default function ProspectionListDetailPage() {
                       </td>
                       <td className="px-3 py-2.5">
                         <span
-                          className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                            STATUS_COLOR[l.status] ||
-                            "bg-brand-800 text-white/60"
+                          className={`badge ${
+                            STATUS_COLOR[l.status] || "badge-neutral"
                           }`}
                         >
                           {STATUS_LABEL[l.status] || l.status}

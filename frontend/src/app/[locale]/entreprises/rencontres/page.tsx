@@ -476,17 +476,17 @@ export default function RencontresListPage() {
                         ) : null}
                         <span>{r.sections_count} section{r.sections_count > 1 ? "s" : ""}</span>
                         {r.status === "done" ? (
-                          <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0 text-[10px] font-semibold text-emerald-300">
+                          <span className="badge badge-emerald">
                             résumée
                           </span>
                         ) : (
-                          <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0 text-[10px] font-semibold text-amber-300">
+                          <span className="badge badge-amber">
                             brouillon
                           </span>
                         )}
                         {teamsImportedIds.has(r.id) ? (
                           <span
-                            className="inline-flex items-center gap-0.5 rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 py-0 text-[10px] font-semibold text-sky-300"
+                            className="badge badge-sky"
                             title="Importée automatiquement depuis Teams"
                           >
                             <Video className="h-2.5 w-2.5" />

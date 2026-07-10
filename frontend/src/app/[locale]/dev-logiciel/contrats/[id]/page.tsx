@@ -72,10 +72,10 @@ const STATUS_OPTIONS = [
 ];
 
 const STATUS_CLS: Record<string, string> = {
-  brouillon: "bg-white/5 text-white/60",
-  envoye: "bg-blue-500/15 text-blue-300",
-  signe: "bg-emerald-500/15 text-emerald-300",
-  annule: "bg-rose-500/15 text-rose-300"
+  brouillon: "badge-neutral",
+  envoye: "badge-blue",
+  signe: "badge-emerald",
+  annule: "badge-rose"
 };
 
 function fmtMoney(cents: number | null): string {
@@ -344,9 +344,8 @@ export default function ContractDetailPage() {
                   </h1>
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                     <span
-                      className={`rounded px-2 py-0.5 font-semibold uppercase tracking-wide ${
-                        STATUS_CLS[contract.status] ??
-                        "bg-white/5 text-white/50"
+                      className={`badge uppercase tracking-wide ${
+                        STATUS_CLS[contract.status] ?? "badge-neutral"
                       }`}
                     >
                       {STATUS_OPTIONS.find(
@@ -357,12 +356,12 @@ export default function ContractDetailPage() {
                       Créé le {fmtDate(contract.created_at)}
                     </span>
                     {contract.sent_at ? (
-                      <span className="rounded bg-blue-500/15 px-2 py-0.5 font-semibold text-blue-300">
+                      <span className="badge badge-blue">
                         Envoyé le {fmtDate(contract.sent_at)}
                       </span>
                     ) : null}
                     {contract.signed_at ? (
-                      <span className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-2 py-0.5 font-semibold text-emerald-300">
+                      <span className="badge badge-emerald">
                         <CheckCircle2 className="h-3 w-3" />
                         Signé le {fmtDate(contract.signed_at)}
                         {contract.signed_name

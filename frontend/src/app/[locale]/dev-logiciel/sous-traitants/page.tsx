@@ -273,13 +273,13 @@ export default function DevlogSousTraitantsPage() {
                       {fmtRate(s.hourly_rate)}
                     </span>
                     {s.rating ? (
-                      <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-300">
+                      <span className="badge badge-amber">
                         <Star className="h-3 w-3 fill-amber-300" />
                         {s.rating}/5
                       </span>
                     ) : null}
                     {!s.active ? (
-                      <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-white/40">
+                      <span className="badge badge-neutral uppercase tracking-wide">
                         Inactif
                       </span>
                     ) : null}
