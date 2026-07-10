@@ -75,6 +75,12 @@ services:
         sync: false
       - key: QBO_REALM_ID
         sync: false
+      # Jeton de vérification des webhooks Intuit (portail développeur →
+      # Webhooks → « Verifier Token »). SANS lui, le endpoint
+      # /api/v1/qbo/webhook rejette tout en 401 (fail-closed) → AUCUNE
+      # synchro live QB → Kratos. Obligatoire pour le miroir temps réel.
+      - key: QBO_WEBHOOK_VERIFIER_TOKEN
+        sync: false
       - key: AZURE_TENANT_ID
         sync: false
       - key: AZURE_CLIENT_ID

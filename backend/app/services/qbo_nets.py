@@ -192,10 +192,29 @@ async def run_qbo_nets() -> Dict[str, Any]:
             "Décoche QB non-contrat (one-shot) échouée", exc_info=True
         )
 
-    # Les filets de CRÉATION en masse (factures/dépenses sans miroir QB) et
-    # le pull QB → Kratos restent conditionnés à l'interrupteur de migration :
-    # tant qu'il est OFF, on ne (re)crée RIEN automatiquement pour ne pas
-    # produire de doublons pendant que tous les ID QBO ne sont pas reliés.
+    # ── Pull QB → Kratos (coûts, fournisseurs, paiements, reçus) ──
+    # TOUJOURS exécuté (non conditionné à l'interrupteur de migration) : ce
+    # pull est le FILET DE SECOURS du webhook Intuit — si un webhook se perd
+    # (service endormi, signature rejetée, réseau), c'est lui qui fait
+    # converger Kratos vers QB dans l'heure. Il est idempotent (clés = Id
+    # QBO + dédup après import) : le gater derrière `qbo_auto_sync` (OFF en
+    # régime normal) laissait toute modification QB manquée invisible pour
+    # toujours — contraire au miroir attendu.
+    try:
+        from app.services.qbo_cost_pull import pull_project_costs_from_qbo
+
+        async with AsyncSessionLocal() as db:
+            out["cost_pull"] = await pull_project_costs_from_qbo(
+                db, dry_run=False
+            )
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("Filet pull coûts échoué", exc_info=True)
+
+    # Les filets de CRÉATION en masse (factures/dépenses sans miroir QB)
+    # restent conditionnés à l'interrupteur de migration : tant qu'il est
+    # OFF, on ne (re)crée RIEN automatiquement pour ne pas produire de
+    # doublons pendant que tous les ID QBO ne sont pas reliés.
     if not await is_qbo_auto_sync_enabled():
         out["skipped_migration_nets"] = "qbo_auto_sync_off"
         log.info("Filets QBO exécutés : %s", out)
@@ -286,18 +305,6 @@ async def run_qbo_nets() -> Dict[str, Any]:
         }
     except Exception:  # noqa: BLE001
         log.warning("Filet achats échoué", exc_info=True)
-
-    # ── Pull QB → Kratos (coûts, fournisseurs, paiements, reçus) ──
-    try:
-        from app.services.qbo_cost_pull import pull_project_costs_from_qbo
-
-        async with AsyncSessionLocal() as db:
-            out["cost_pull"] = await pull_project_costs_from_qbo(
-                db, dry_run=False
-            )
-            await db.commit()
-    except Exception:  # noqa: BLE001
-        log.warning("Filet pull coûts échoué", exc_info=True)
 
     log.info("Filets QBO exécutés : %s", out)
     return out

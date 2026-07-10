@@ -98,6 +98,24 @@ async def qbo_webhook(request: Request) -> Response:
     signature = request.headers.get("intuit-signature", "")
     if not _verify_signature(raw, signature):
         # 401 : Intuit réessaiera. On ne traite jamais un corps non vérifié.
+        # ERROR explicite : un rejet silencieux ici = TOUTE la synchro live
+        # QB → Kratos morte sans trace. Cause n°1 : la variable d'env
+        # QBO_WEBHOOK_VERIFIER_TOKEN absente/erronée sur le serveur (elle
+        # doit valoir le « Verifier Token » affiché dans le portail
+        # développeur Intuit, section Webhooks de l'app).
+        if not settings.qbo_webhook_verifier_token:
+            log.error(
+                "Webhook QBO rejeté : QBO_WEBHOOK_VERIFIER_TOKEN n'est PAS "
+                "configuré sur le serveur → aucune synchro live possible. "
+                "Copier le Verifier Token du portail Intuit dans les env "
+                "vars Render."
+            )
+        else:
+            log.error(
+                "Webhook QBO rejeté : signature invalide (jeton configuré "
+                "≠ Verifier Token Intuit ? en-tête absent=%s)",
+                not signature,
+            )
         return Response(status_code=status.HTTP_401_UNAUTHORIZED)
 
     try:
@@ -167,37 +185,49 @@ async def qbo_webhook(request: Request) -> Response:
     return Response(status_code=status.HTTP_200_OK)
 
 
-# Débounce du pull complet déclenché par webhook : une rafale de
-# notifications Intuit (plusieurs entités modifiées d'un coup) ne doit
-# lancer qu'UN import, et jamais deux en parallèle.
+# Coalescence du pull complet déclenché par webhook. L'ANCIEN débounce
+# PERDAIT des événements : un webhook arrivant pendant un pull en cours, ou
+# dans les 30 s suivant un pull, était JETÉ (return sec) — la modification
+# QB correspondante n'était alors JAMAIS reflétée dans Kratos avant le
+# prochain événement ou le filet horaire (« j'ai refait des modifs et ça
+# n'a pas changé »). Nouveau contrat : AUCUN événement perdu. Chaque
+# webhook pose un drapeau `_pull_pending` ; une seule boucle (sous verrou)
+# consomme le drapeau : courte attente de coalescence (absorbe la rafale
+# Intuit d'une même action), puis pull. Tout événement arrivant PENDANT le
+# pull re-pose le drapeau → un pull de rattrapage suit immédiatement.
+# Latence max ≈ attente de coalescence + durée d'un pull.
 _pull_lock = asyncio.Lock()
-_last_pull_monotonic: float = 0.0
-_PULL_DEBOUNCE_SECONDS = 30.0
+_pull_pending = False
+_PULL_COALESCE_SECONDS = 3.0
 
 
 async def _run_cost_pull_debounced() -> None:
-    global _last_pull_monotonic
-    import time
-
+    global _pull_pending
+    _pull_pending = True
     if _pull_lock.locked():
-        return  # un pull est déjà en cours — il couvrira ces événements
+        # La boucle sous verrou verra le drapeau et refera un pull après
+        # celui en cours — l'événement n'est PAS perdu.
+        return
     async with _pull_lock:
-        if time.monotonic() - _last_pull_monotonic < _PULL_DEBOUNCE_SECONDS:
-            return
-        _last_pull_monotonic = time.monotonic()
-        try:
-            from app.services.qbo_cost_pull import (
-                pull_project_costs_from_qbo,
-            )
+        while _pull_pending:
+            # Laisse la rafale d'événements Intuit se terminer : tout ce qui
+            # arrive pendant cette attente sera couvert par CE pull (l'état
+            # QB est relu au moment du pull).
+            await asyncio.sleep(_PULL_COALESCE_SECONDS)
+            _pull_pending = False
+            try:
+                from app.services.qbo_cost_pull import (
+                    pull_project_costs_from_qbo,
+                )
 
-            async with AsyncSessionLocal() as db:
-                res = await pull_project_costs_from_qbo(db, dry_run=False)
-                await db.commit()
-            log.info("Pull QB→Kratos déclenché par webhook : %s", res)
-        except Exception:  # noqa: BLE001
-            log.warning(
-                "Pull QB→Kratos (webhook) échoué", exc_info=True
-            )
+                async with AsyncSessionLocal() as db:
+                    res = await pull_project_costs_from_qbo(db, dry_run=False)
+                    await db.commit()
+                log.info("Pull QB→Kratos déclenché par webhook : %s", res)
+            except Exception:  # noqa: BLE001
+                log.warning(
+                    "Pull QB→Kratos (webhook) échoué", exc_info=True
+                )
 
 
 async def _apply_reverse_sync(
