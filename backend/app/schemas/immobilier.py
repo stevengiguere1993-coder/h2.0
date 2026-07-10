@@ -256,6 +256,8 @@ class HypothequeBase(BaseModel):
     type_taux: Optional[str] = Field(default=None, max_length=32)
     amortissement_mois: Optional[int] = Field(default=None, ge=1)
     paiement_mensuel: Optional[float] = Field(default=None, ge=0)
+    # 'semi' (composition semi-annuelle, standard CA) | 'mensuelle'.
+    composition_interets: Optional[str] = Field(default=None, max_length=16)
     date_debut: Optional[date] = None
     date_fin_terme: Optional[date] = None
     status: str = Field(default="active", max_length=16)
@@ -275,6 +277,7 @@ class HypothequeUpdate(BaseModel):
     type_taux: Optional[str] = Field(default=None, max_length=32)
     amortissement_mois: Optional[int] = Field(default=None, ge=1)
     paiement_mensuel: Optional[float] = Field(default=None, ge=0)
+    composition_interets: Optional[str] = Field(default=None, max_length=16)
     date_debut: Optional[date] = None
     date_fin_terme: Optional[date] = None
     status: Optional[str] = Field(default=None, max_length=16)
@@ -298,10 +301,17 @@ class EvaluationBase(BaseModel):
     date_evaluation: date
     source: Optional[str] = Field(default=None, max_length=128)
     notes: Optional[str] = None
+    # Évaluation de référence pour le calcul d'équité (une seule par
+    # immeuble — l'API remet les autres à False quand on passe à True).
+    is_reference: bool = False
 
 
 class EvaluationCreate(EvaluationBase):
     pass
+
+
+class EvaluationUpdate(BaseModel):
+    is_reference: Optional[bool] = None
 
 
 class EvaluationRead(EvaluationBase):
@@ -479,9 +489,12 @@ class ImmeubleFinancials(BaseModel):
     valeur_municipale: Optional[float] = None
     purchase_price: Optional[float] = None
 
-    # Ratios (formules approximatives — sans NOI précis on utilise 50% rule)
+    # Ratios. Cap rate : NOI réel (revenus − dépenses d'exploitation
+    # récurrentes, sans hypothèque) si ≥1 dépense récurrente est saisie ;
+    # sinon fallback heuristique NOI ≈ 50 % du revenu brut.
     grm: Optional[float] = None         # Gross Rent Multiplier = valeur / revenu_annuel
-    cap_rate: Optional[float] = None    # NOI estimé / valeur (NOI ≈ 50% revenu brut)
+    cap_rate: Optional[float] = None    # NOI / valeur
+    cap_rate_estime: bool = True        # True = heuristique 50 %, False = NOI réel
     cash_flow_mensuel: Optional[float] = None
     appreciation_pct: Optional[float] = None  # vs purchase_price
 
