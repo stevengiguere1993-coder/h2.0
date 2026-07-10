@@ -236,7 +236,7 @@ function Row({
             </p>
           ) : null}
         </div>
-        <span className="shrink-0 rounded bg-white/5 px-2 py-0.5 text-[10px] uppercase text-white/50">
+        <span className="badge badge-neutral shrink-0 uppercase">
           {f.subject_type === "prospect" ? "Prospect" : "Soumission"}
         </span>
       </Link>

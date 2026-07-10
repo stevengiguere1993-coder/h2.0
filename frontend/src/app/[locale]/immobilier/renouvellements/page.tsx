@@ -42,7 +42,7 @@ const FENETRE_TONE: Record<RenouvellementOverview["fenetre"], string> = {
   imminente: "badge-rose",
   a_envoyer: "badge-amber",
   envoye: "badge-emerald",
-  hors_fenetre: "bg-white/5 text-white/40"
+  hors_fenetre: "badge-neutral"
 };
 
 function fmtCurrency(n: number | null | undefined): string {

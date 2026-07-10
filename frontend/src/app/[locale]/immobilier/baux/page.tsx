@@ -375,7 +375,7 @@ export default function BauxPage() {
                             <AlertTriangle className="h-3 w-3" /> Retard
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-white/60">
+                          <span className="badge badge-neutral">
                             <Clock className="h-3 w-3" /> Attente
                           </span>
                         )}
@@ -579,7 +579,7 @@ function StatTile({
   tone?: "emerald" | "rose";
 }) {
   return (
-    <div className="rounded-xl border border-brand-800 bg-brand-900 px-4 py-3">
+    <div className="kpi-card">
       <p className="text-[11px] uppercase tracking-wider text-white/50">
         {label}
       </p>

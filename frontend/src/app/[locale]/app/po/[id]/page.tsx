@@ -70,10 +70,10 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_BG: Record<string, string> = {
-  draft: "bg-white/10 text-white/70 border-white/20",
-  sent: "bg-blue-500/15 text-blue-300 border-blue-500/30",
-  fulfilled: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  cancelled: "bg-rose-500/15 text-rose-300 border-rose-500/30"
+  draft: "badge-neutral",
+  sent: "badge-blue",
+  fulfilled: "badge-emerald",
+  cancelled: "badge-rose"
 };
 
 export default function PurchaseOrderDetailPage() {
@@ -291,9 +291,8 @@ export default function PurchaseOrderDetailPage() {
                     {po.reference}
                   </h1>
                   <span
-                    className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                      STATUS_BG[po.status] ||
-                      "border-white/20 bg-white/10 text-white/70"
+                    className={`badge ${
+                      STATUS_BG[po.status] || "badge-neutral"
                     }`}
                   >
                     {STATUS_LABELS[po.status] || po.status}

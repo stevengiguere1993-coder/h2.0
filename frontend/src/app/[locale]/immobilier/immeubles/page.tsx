@@ -139,12 +139,12 @@ export default function ImmeublesListPage() {
 
       <div className="p-4 lg:p-6">
         {currentEnt ? (
-          <p className="mb-3 inline-flex items-center gap-2 rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold text-sky-200">
+          <p className="mb-3 badge badge-sky">
             <Building2 className="h-3 w-3" />
             Suivi pour <strong className="text-white">{currentEnt.name}</strong> · les immeubles affichés sont ceux qu&apos;elle détient.
           </p>
         ) : (
-          <p className="mb-3 inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold text-amber-200">
+          <p className="mb-3 badge badge-amber">
             <AlertTriangle className="h-3 w-3" />
             Aucune entreprise sélectionnée — sélectionne-en une dans la barre latérale pour pouvoir ajouter un immeuble.
           </p>
@@ -937,20 +937,20 @@ function PlexPreview({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2 text-[11px]">
-        <span className="rounded-full bg-brand-900 px-2.5 py-1 text-white/70">
+        <span className="badge badge-neutral">
           {t.companies_matched ?? 0}/{t.companies ?? 0} compagnies reconnues
         </span>
-        <span className="rounded-full bg-brand-900 px-2.5 py-1 text-white/70">
+        <span className="badge badge-neutral">
           {t.buildings ?? 0} immeubles
         </span>
-        <span className="rounded-full bg-brand-900 px-2.5 py-1 text-white/70">
+        <span className="badge badge-neutral">
           {t.units ?? 0} logements
         </span>
-        <span className="rounded-full bg-brand-900 px-2.5 py-1 text-white/70">
+        <span className="badge badge-neutral">
           {t.leases ?? 0} baux
         </span>
         {t.buildings_duplicate ? (
-          <span className="rounded-full bg-amber-500/15 px-2.5 py-1 text-amber-200">
+          <span className="badge badge-amber">
             {t.buildings_duplicate} déjà présent(s)
           </span>
         ) : null}
@@ -1018,7 +1018,7 @@ function PlexPreview({
                       — {b.nb_units} logements · {b.nb_leases} baux
                     </span>
                     {b.already_exists ? (
-                      <span className="ml-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-200">
+                      <span className="ml-1 badge badge-amber">
                         déjà importé
                       </span>
                     ) : null}

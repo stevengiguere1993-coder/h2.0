@@ -103,12 +103,12 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_CLASS: Record<string, string> = {
-  draft: "bg-white/10 text-white",
-  sent: "bg-blue-500/20 text-blue-300",
-  accepted: "bg-emerald-500/20 text-emerald-300",
-  rejected: "bg-rose-500/20 text-rose-300",
-  expired: "bg-amber-500/20 text-amber-300",
-  spam: "bg-rose-500/20 text-rose-300"
+  draft: "badge-neutral",
+  sent: "badge-blue",
+  accepted: "badge-emerald",
+  rejected: "badge-rose",
+  expired: "badge-amber",
+  spam: "badge-rose"
 };
 
 function fmtMoney(n: number | null): string {
@@ -814,7 +814,7 @@ export default function SoumissionDetailPage() {
                     : ""}
                 </p>
                 {isQboSynced ? (
-                  <p className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                  <p className="badge badge-emerald mt-2">
                     <Check className="h-3 w-3" /> QuickBooks Estimate #
                     {s.qbo_doc_number || s.qbo_estimate_id}
                   </p>
@@ -822,8 +822,8 @@ export default function SoumissionDetailPage() {
               </div>
               <div className="flex flex-wrap items-end gap-3">
                 <span
-                  className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
-                    STATUS_CLASS[s.status] || "bg-white/10 text-white"
+                  className={`badge ${
+                    STATUS_CLASS[s.status] || "badge-neutral"
                   }`}
                 >
                   {STATUS_LABELS[s.status] || s.status}
@@ -863,7 +863,7 @@ export default function SoumissionDetailPage() {
               <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
                 {s.client_opened_at ? (
                   <span
-                    className="inline-flex items-center gap-1.5 rounded-md border border-blue-500/40 bg-blue-500/10 px-2.5 py-1 font-semibold text-blue-200"
+                    className="badge badge-blue"
                     title={
                       s.client_last_opened_at &&
                       s.client_last_opened_at !== s.client_opened_at
@@ -878,19 +878,19 @@ export default function SoumissionDetailPage() {
                       : ""}
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1.5 rounded-md border border-white/15 bg-white/5 px-2.5 py-1 font-semibold text-white/60">
+                  <span className="badge badge-neutral">
                     <EyeOff className="h-3 w-3" />
                     Pas encore ouverte par le client
                   </span>
                 )}
                 {s.signed_name && s.accepted_at ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 font-semibold text-emerald-200">
+                  <span className="badge badge-emerald">
                     <Check className="h-3 w-3" />
                     Signée par {s.signed_name} le{" "}
                     {fmtDateTime(s.accepted_at)}
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1.5 rounded-md border border-white/15 bg-white/5 px-2.5 py-1 font-semibold text-white/60">
+                  <span className="badge badge-neutral">
                     Non signée par le client
                   </span>
                 )}
@@ -1248,7 +1248,7 @@ export default function SoumissionDetailPage() {
                       {s.contractor_signature_token &&
                       s.contractor_opened_at ? (
                         <p
-                          className="inline-flex items-center gap-1.5 rounded-md border border-blue-500/40 bg-blue-500/10 px-2.5 py-1 text-[11px] font-semibold text-blue-200"
+                          className="badge badge-blue"
                           title={
                             s.contractor_last_opened_at &&
                             s.contractor_last_opened_at !==
@@ -1959,7 +1959,7 @@ function ItemRow({
           {fmtMoney(computedTotal)}
         </span>
         {item.kind !== "service" ? (
-          <span className="ml-1 rounded bg-white/10 px-1 py-0.5 text-[9px] uppercase text-white/60">
+          <span className="badge badge-neutral ml-1 uppercase">
             {item.kind}
           </span>
         ) : null}

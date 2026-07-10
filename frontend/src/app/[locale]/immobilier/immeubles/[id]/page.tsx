@@ -585,21 +585,21 @@ export default function ImmeubleDetailPage({
               {immeuble.postal_code ? ` (${immeuble.postal_code})` : ""}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
-              <span className="rounded bg-brand-900 px-2 py-0.5 font-mono text-white/70">
+              <span className="badge badge-neutral font-mono">
                 {immeuble.type}
               </span>
               {immeuble.annee_construction ? (
-                <span className="rounded bg-brand-900 px-2 py-0.5 text-white/70">
+                <span className="badge badge-neutral">
                   {immeuble.annee_construction}
                 </span>
               ) : null}
               {immeuble.matricule ? (
-                <span className="rounded bg-brand-900 px-2 py-0.5 font-mono text-white/50">
+                <span className="badge badge-neutral font-mono">
                   Matricule {immeuble.matricule}
                 </span>
               ) : null}
               {!immeuble.is_active ? (
-                <span className="rounded bg-amber-500/15 px-2 py-0.5 font-semibold text-amber-300">
+                <span className="badge badge-amber">
                   Inactif
                 </span>
               ) : null}
@@ -1120,7 +1120,7 @@ function Kpi({
     rose: "bg-rose-500/15 text-rose-300"
   };
   return (
-    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+    <div className="kpi-card">
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
           {label}
@@ -1528,7 +1528,7 @@ function HypothequesTab({ list }: { list: Hypotheque[] | null }) {
             <div>
               <p className="text-sm font-bold text-white">
                 {h.preteur}{" "}
-                <span className="ml-1 rounded bg-brand-950 px-1.5 py-0.5 font-mono text-[10px] text-white/50">
+                <span className="badge badge-neutral ml-1 font-mono">
                   Rang {h.rang}
                 </span>
               </p>
@@ -1573,7 +1573,7 @@ function EvaluationsTab({ list }: { list: Evaluation[] | null }) {
                 {e.date_evaluation}
               </td>
               <td className="px-4 py-2 text-xs">
-                <span className="rounded bg-brand-950 px-1.5 py-0.5 font-mono text-white/70">
+                <span className="badge badge-neutral font-mono">
                   {e.kind}
                 </span>
               </td>
@@ -1723,24 +1723,22 @@ function MaintenanceTab({
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
-    occupe: "bg-emerald-500/15 text-emerald-300",
-    actif: "bg-emerald-500/15 text-emerald-300",
-    vacant: "bg-amber-500/15 text-amber-300",
-    reserve: "bg-sky-500/15 text-sky-300",
-    propose: "bg-sky-500/15 text-sky-300",
-    termine: "bg-white/10 text-white/50",
-    resilie: "bg-rose-500/15 text-rose-300",
-    hors_location: "bg-white/10 text-white/50",
-    ouvert: "bg-amber-500/15 text-amber-300",
-    en_cours: "bg-sky-500/15 text-sky-300",
-    en_attente: "bg-violet-500/15 text-violet-300",
-    annule: "bg-white/10 text-white/40"
+    occupe: "badge-emerald",
+    actif: "badge-emerald",
+    vacant: "badge-amber",
+    reserve: "badge-sky",
+    propose: "badge-sky",
+    termine: "badge-neutral",
+    resilie: "badge-rose",
+    hors_location: "badge-neutral",
+    ouvert: "badge-amber",
+    en_cours: "badge-sky",
+    en_attente: "badge-violet",
+    annule: "badge-neutral"
   };
-  const cls = map[status] || "bg-white/10 text-white/60";
+  const cls = map[status] || "badge-neutral";
   return (
-    <span
-      className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase ${cls}`}
-    >
+    <span className={`badge font-mono uppercase ${cls}`}>
       {status}
     </span>
   );
@@ -1748,16 +1746,14 @@ function StatusBadge({ status }: { status: string }) {
 
 function PrioriteBadge({ priorite }: { priorite: string }) {
   const map: Record<string, string> = {
-    urgence: "bg-rose-500/20 text-rose-300",
-    haute: "bg-amber-500/15 text-amber-300",
-    normale: "bg-white/10 text-white/60",
-    basse: "bg-white/5 text-white/40"
+    urgence: "badge-rose",
+    haute: "badge-amber",
+    normale: "badge-neutral",
+    basse: "badge-neutral"
   };
   return (
     <span
-      className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase ${
-        map[priorite] || "bg-white/10 text-white/60"
-      }`}
+      className={`badge font-mono uppercase ${map[priorite] || "badge-neutral"}`}
     >
       {priorite}
     </span>

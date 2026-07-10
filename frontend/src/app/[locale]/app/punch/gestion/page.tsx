@@ -673,7 +673,7 @@ export default function PunchGestionPage() {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : visible.length === 0 ? (
-          <p className="mt-4 rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+          <p className="empty-state mt-4 text-sm">
             {viewMode === "month"
               ? selectedDay
                 ? `Aucun punch le ${shortISO(selectedDay)}.`
