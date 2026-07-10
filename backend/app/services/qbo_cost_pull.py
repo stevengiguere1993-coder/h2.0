@@ -206,6 +206,63 @@ def _txn_customer_refs(txn: dict) -> set[str]:
     return out
 
 
+def _local_name_of(row: dict) -> str:
+    fqn = row.get("FullyQualifiedName") or ""
+    seg = fqn.split(":")[-1] if fqn else (row.get("DisplayName") or "")
+    return seg.strip().lower()
+
+
+async def _resolve_converted_job_id(
+    qbo, project: Project, parent_id: str, active_ids: Optional[set[str]]
+) -> Optional[str]:
+    """Si `project.qbo_job_id` est PÉRIMÉ (sous-client converti en PROJET
+    dans QB, ancien id supprimé), retrouve le nouvel id sous le client
+    parent par nom/adresse. Ne CRÉE rien et ne retombe PAS sur le parent
+    (contrairement à resolve_project_customer_id, trop lourd/side-effect
+    pour un pull en lecture). Renvoie None si rien de sûr — l'appelant
+    garde alors l'id existant.
+
+    `active_ids` = ensemble des Customer.Id ACTIFS (résolu une fois) pour
+    éviter une requête QB par projet ; None = on ne sait pas → on ne
+    répare pas (prudent)."""
+    jid = (getattr(project, "qbo_job_id", None) or "").strip()
+    if not jid or active_ids is None:
+        return None
+    if jid in active_ids:
+        return None  # encore valide → rien à réparer
+    try:
+        subs = await qbo.find_subcustomers(parent_id)
+    except Exception:  # noqa: BLE001
+        return None
+    targets = [
+        t
+        for t in (
+            (getattr(project, "address", None) or "").strip().lower(),
+            (project.name or "").strip().lower(),
+        )
+        if t
+    ]
+    for row in subs:
+        if not row.get("Id"):
+            continue
+        ln = _local_name_of(row)
+        if not ln:
+            continue
+        for t in targets:
+            if (
+                ln == t
+                or ln.startswith(t)
+                or t.startswith(ln)
+                or t in ln
+                or ln in t
+            ):
+                return str(row["Id"])
+    usable = [r for r in subs if r.get("Id")]
+    if len(usable) == 1:
+        return str(usable[0]["Id"])
+    return None
+
+
 async def pull_project_costs_from_qbo(
     db: AsyncSession,
     *,
@@ -276,10 +333,71 @@ async def pull_project_costs_from_qbo(
     pstmt = select(Project).where(Project.qbo_job_id.is_not(None))
     if client_id is not None:
         pstmt = pstmt.where(Project.client_id == client_id)
+    _projects = list((await db.execute(pstmt)).scalars().all())
     proj_by_job: dict[str, Project] = {
-        str(p.qbo_job_id): p
-        for p in (await db.execute(pstmt)).scalars().all()
+        str(p.qbo_job_id): p for p in _projects
     }
+
+    # RÉPARATION des qbo_job_id PÉRIMÉS (sous-client converti en projet QB) :
+    # sans ça, les coûts du projet converti pointent vers le nouvel id, que
+    # proj_by_job ne connaît pas → « sans projet », jamais importés (cas
+    # 8900 St-Hubert). On résout une fois l'ensemble des Customer.Id actifs,
+    # puis pour chaque projet dont l'id est périmé on retrouve le nouvel id
+    # sous le client parent (par nom/adresse). Best-effort, borné.
+    active_ids: Optional[set[str]] = None
+    try:
+        active_ids = {
+            str(c["Id"])
+            for c in await qbo.query(
+                "SELECT Id FROM Customer MAXRESULTS 1000"
+            )
+            if c.get("Id")
+        }
+    except Exception:  # noqa: BLE001
+        active_ids = None
+    if active_ids is not None and _projects:
+        from app.models.client import Client as _ClientM
+
+        _cids = {p.client_id for p in _projects if p.client_id}
+        _parents = (
+            {
+                c.id: c
+                for c in (
+                    await db.execute(
+                        select(_ClientM).where(_ClientM.id.in_(_cids))
+                    )
+                ).scalars().all()
+            }
+            if _cids
+            else {}
+        )
+        _resolved: dict[int, str] = {}
+        _repaired = 0
+        for p in _projects:
+            cur = str(p.qbo_job_id or "")
+            cl = _parents.get(p.client_id) if p.client_id else None
+            parent = (getattr(cl, "qbo_customer_id", None) or "") if cl else ""
+            newid = None
+            if parent:
+                try:
+                    newid = await _resolve_converted_job_id(
+                        qbo, p, str(parent), active_ids
+                    )
+                except Exception:  # noqa: BLE001
+                    newid = None
+            if newid and newid != cur:
+                _repaired += 1
+                if not dry_run:
+                    p.qbo_job_id = newid
+                _resolved[p.id] = newid
+            elif cur:
+                _resolved[p.id] = cur
+        if _repaired and not dry_run:
+            await db.flush()
+        # Reconstruit le mapping avec les ids réparés (couvre le converti).
+        proj_by_job = {
+            _resolved[p.id]: p for p in _projects if _resolved.get(p.id)
+        }
     # Refs QB du client (parent + sous-clients) : ne garder que ses
     # dépenses dans l'aperçu détaillé scopé.
     client_refs: Optional[set[str]] = None
