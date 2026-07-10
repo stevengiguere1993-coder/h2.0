@@ -214,6 +214,16 @@ async def _compute_finances(
                 else (sm.pricing_kind or "forfaitaire")
             )
 
+    if sm is None:
+        # Projet SANS soumission (« fait sur le fly ») : on facture au
+        # réel, comme un contrat. Le PROFIT RÉEL se calcule alors sur le
+        # montant FACTURÉ (invoiced_ex_tax), pas sur le budget — qui n'est
+        # qu'un repère indicatif, pas un prix garanti. Sans ça, le défaut
+        # « forfaitaire » prenait le budget comme assiette de revenu
+        # (ex. revenu 6 523,16 $ = budget ÷ 1,14975 alors que la facture
+        # réelle disait autre chose).
+        billing_kind = "contrat"
+
     # Revenu contractuel = total de la soumission (TTC) si liée, sinon
     # le budget du projet (synchronisé sur la soumission, ou saisi
     # manuellement). C'est le « montant de la soumission » du calcul de
