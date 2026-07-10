@@ -17,19 +17,24 @@ import {
   Calendar,
   ChevronRight,
   Cloud,
+  Code2,
   Database,
   FileSignature,
+  HardHat,
   Hash,
+  Home,
   KeyRound,
   LayoutGrid,
   Mail,
   Map as MapIcon,
+  Phone,
   Plug,
   RefreshCw,
   Repeat,
   ScrollText,
   Settings,
   ShieldCheck,
+  TrendingUp,
   UserCog,
   Users,
   Wrench,
@@ -54,6 +59,9 @@ type Section = {
   title: string; // titre complet de section
   icon: LucideIcon;
   cards: Card[];
+  // Pôle sans réglage pour l'instant : la section reste affichée avec ce
+  // message (structure claire par pôle, prête à recevoir ses réglages).
+  emptyNote?: string;
 };
 
 const SECTIONS: Section[] = [
@@ -102,6 +110,100 @@ const SECTIONS: Section[] = [
         desc: "Connecter Outlook / Google / Apple (ICS) en lecture seule.",
         href: "/entreprises/reglages/calendriers",
         icon: Calendar
+      }
+    ]
+  },
+  {
+    key: "construction",
+    label: "Construction",
+    title: "Construction",
+    icon: HardHat,
+    cards: [
+      {
+        title: "Bons de travail",
+        desc: "Valeurs par défaut de coût, de refacturation et de marge des lignes de bon.",
+        href: "/app/parametres/bons-travail",
+        icon: Wrench,
+        minRole: "admin"
+      },
+      {
+        title: "Agenda — rôles & types de RV",
+        desc: "Rôles fonctionnels de l'équipe et types de rendez-vous.",
+        href: "/app/agenda/parametres",
+        icon: Calendar,
+        minRole: "admin"
+      },
+      {
+        title: "Templates de courriels",
+        desc: "Messages-types (relance, bienvenue, signature) avec variables.",
+        href: "/app/templates-courriels",
+        icon: Mail,
+        minRole: "manager"
+      },
+      {
+        title: "Relances automatiques",
+        desc: "Séquence de relance (appels + courriels) appliquée aux leads.",
+        href: "/app/relances",
+        icon: Repeat,
+        minRole: "manager"
+      },
+      {
+        title: "Connexions",
+        desc: "Aperçu des sources externes du pôle Construction (QBO, calendrier, données).",
+        href: "/app/parametres/connexions",
+        icon: Plug,
+        minRole: "manager"
+      }
+    ]
+  },
+  {
+    key: "entreprise",
+    label: "Gestion d'entreprise",
+    title: "Gestion d'entreprise & comptabilité",
+    icon: Building2,
+    cards: [
+      {
+        title: "Entreprises du portefeuille",
+        desc: "Nom, NEQ, couleur, entreprise mère du groupe.",
+        href: "/entreprises/reglages/entreprises",
+        icon: Building2,
+        minRole: "manager"
+      },
+      {
+        title: "Comptabilité — QuickBooks",
+        desc: "QuickBooks Online (connexion, diagnostic) et mapping des comptes par mode de paiement.",
+        href: "/app/parametres/comptabilite",
+        icon: Calculator,
+        minRole: "admin"
+      },
+      {
+        title: "Numérotation",
+        desc: "Compteurs séquentiels factures / devis / PO, alignés sur QuickBooks.",
+        href: "/app/parametres/numerotation",
+        icon: Hash,
+        minRole: "admin"
+      },
+      {
+        title: "Migration QuickBooks",
+        desc: "Envoyer clients, projets et factures vers QB (aperçu + migration).",
+        href: "/app/parametres/qbo-migration",
+        icon: RefreshCw,
+        minRole: "admin"
+      }
+    ]
+  },
+  {
+    key: "immobilier",
+    label: "Gestion immobilière",
+    title: "Gestion immobilière",
+    icon: Home,
+    cards: [
+      {
+        title: "Contrat de gestion — modèle",
+        desc: "Gabarit par défaut de la convention de gestion (tous les immeubles).",
+        href: "/app/parametres/contrat-gestion",
+        icon: FileSignature,
+        minRole: "admin"
       }
     ]
   },
@@ -155,90 +257,37 @@ const SECTIONS: Section[] = [
     ]
   },
   {
-    key: "immobilier",
-    label: "Immobilier",
-    title: "Immobilier",
-    icon: Building2,
+    key: "investisseurs",
+    label: "Investisseurs",
+    title: "Investisseurs",
+    icon: TrendingUp,
+    cards: [],
+    emptyNote:
+      "Aucun réglage pour ce pôle pour l'instant. Les réglages du volet Investisseurs apparaîtront ici."
+  },
+  {
+    key: "devlogiciel",
+    label: "Dev logiciel",
+    title: "Développement logiciel",
+    icon: Code2,
     cards: [
       {
-        title: "Contrat de gestion — modèle",
-        desc: "Gabarit par défaut de la convention de gestion (tous les immeubles).",
-        href: "/app/parametres/contrat-gestion",
-        icon: FileSignature,
+        title: "Soumissions — valeurs par défaut",
+        desc: "Taux horaires dev / chargé de projet, commission closer, marges, fonctionnalités et tâches par défaut.",
+        href: "/dev-logiciel/soumissions?defaults=1",
+        icon: Calculator,
         minRole: "admin"
       }
     ]
   },
   {
-    key: "entreprise",
-    label: "Entreprise & compta",
-    title: "Gestion d'entreprise & comptabilité",
-    icon: Building2,
-    cards: [
-      {
-        title: "Entreprises du portefeuille",
-        desc: "Nom, NEQ, couleur, entreprise mère du groupe.",
-        href: "/entreprises/reglages/entreprises",
-        icon: Building2,
-        minRole: "manager"
-      },
-      {
-        title: "Comptabilité — QuickBooks",
-        desc: "QuickBooks Online (connexion, diagnostic) et mapping des comptes par mode de paiement.",
-        href: "/app/parametres/comptabilite",
-        icon: Calculator,
-        minRole: "admin"
-      },
-      {
-        title: "Numérotation",
-        desc: "Compteurs séquentiels factures / devis / PO, alignés sur QuickBooks.",
-        href: "/app/parametres/numerotation",
-        icon: Hash,
-        minRole: "admin"
-      },
-      {
-        title: "Bons de travail",
-        desc: "Valeurs par défaut de coût, de refacturation et de marge des lignes de bon.",
-        href: "/app/parametres/bons-travail",
-        icon: Wrench,
-        minRole: "admin"
-      },
-      {
-        title: "Connexions",
-        desc: "Aperçu des sources externes du pôle Construction (QBO, calendrier, données).",
-        href: "/app/parametres/connexions",
-        icon: Plug,
-        minRole: "manager"
-      },
-      {
-        title: "Migration QuickBooks",
-        desc: "Envoyer clients, projets et factures vers QB (aperçu + migration).",
-        href: "/app/parametres/qbo-migration",
-        icon: RefreshCw,
-        minRole: "admin"
-      },
-      {
-        title: "Agenda — rôles & types de RV",
-        desc: "Rôles fonctionnels de l'équipe et types de rendez-vous.",
-        href: "/app/agenda/parametres",
-        icon: Calendar,
-        minRole: "admin"
-      },
-      {
-        title: "Templates de courriels",
-        desc: "Messages-types (relance, bienvenue, signature) avec variables.",
-        href: "/app/templates-courriels",
-        icon: Mail,
-        minRole: "manager"
-      },
-      {
-        title: "Relances automatiques",
-        desc: "Séquence de relance (appels + courriels) appliquée aux leads.",
-        href: "/app/relances",
-        icon: Repeat,
-        minRole: "manager"
-      }
-    ]
+    key: "telephonie",
+    label: "Téléphonie",
+    title: "Téléphonie",
+    icon: Phone,
+    cards: [],
+    emptyNote:
+      "Aucun réglage pour ce pôle pour l'instant. Les réglages de la téléphonie apparaîtront ici."
   }
 ];
 
@@ -248,13 +297,14 @@ export default function ParametresHubPage() {
   const [active, setActive] = useState<string>("all");
 
   // Filtre par rôle d'abord : une section sans carte visible disparaît
-  // (et son onglet de filtre aussi).
+  // (et son onglet de filtre aussi) — SAUF les pôles structurellement vides
+  // (emptyNote) qu'on garde affichés pour la structure par pôle.
   const visibleSections = useMemo(
     () =>
       SECTIONS.map((s) => ({
         ...s,
         cards: s.cards.filter((c) => !c.minRole || hasMinRole(user, c.minRole))
-      })).filter((s) => s.cards.length > 0),
+      })).filter((s) => s.cards.length > 0 || s.emptyNote),
     [user]
   );
 
@@ -309,9 +359,15 @@ export default function ParametresHubPage() {
       <div className="mt-8 space-y-8">
         {shown.map((section) => (
           <section key={section.key}>
-            <h2 className="mb-3 text-xs font-bold uppercase tracking-wider text-accent-400">
+            <h2 className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-accent-400">
+              <section.icon className="h-4 w-4" />
               {section.title}
             </h2>
+            {section.cards.length === 0 ? (
+              <p className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-5 text-sm text-white/40">
+                {section.emptyNote}
+              </p>
+            ) : null}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {section.cards.map((c) => {
                 const Icon = c.icon;
