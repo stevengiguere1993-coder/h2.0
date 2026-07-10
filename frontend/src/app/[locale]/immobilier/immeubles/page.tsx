@@ -15,7 +15,11 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
-import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
+import {
+  EntrepriseSelector,
+  ImmobilierTopbar,
+  useImmobilierLayout
+} from "../layout";
 
 type ImmeubleListItem = {
   id: number;
@@ -52,7 +56,12 @@ function fmtCurrency(n: number): string {
 }
 
 export default function ImmeublesListPage() {
-  const { currentEntrepriseId, entreprises } = useImmobilierLayout();
+  const {
+    currentEntrepriseId,
+    setCurrentEntrepriseId,
+    entreprises,
+    refreshEntreprises
+  } = useImmobilierLayout();
   const [list, setList] = useState<ImmeubleListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -126,7 +135,7 @@ export default function ImmeublesListPage() {
               disabled={currentEntrepriseId == null}
               title={
                 currentEntrepriseId == null
-                  ? "Sélectionne une entreprise dans la barre latérale d'abord"
+                  ? "Sélectionne une entreprise (à côté de la recherche) d'abord"
                   : `Créer un immeuble pour ${currentEnt?.name}`
               }
               className="btn-outline-accent btn-sm disabled:cursor-not-allowed disabled:opacity-50"
@@ -138,7 +147,8 @@ export default function ImmeublesListPage() {
         }
       />
 
-      <div className="p-4 lg:p-6">
+      {/* pb-28 : le contenu ne doit pas passer sous le bouton Aide flottant */}
+      <div className="p-4 pb-28 lg:p-6 lg:pb-28">
         {currentEnt ? (
           <p className="mb-3 badge badge-sky">
             <Building2 className="h-3 w-3" />
@@ -147,12 +157,12 @@ export default function ImmeublesListPage() {
         ) : (
           <p className="mb-3 badge badge-amber">
             <AlertTriangle className="h-3 w-3" />
-            Aucune entreprise sélectionnée — sélectionne-en une dans la barre latérale pour pouvoir ajouter un immeuble.
+            Aucune entreprise sélectionnée — sélectionne-en une à côté de la barre de recherche pour pouvoir ajouter un immeuble.
           </p>
         )}
 
-        <div className="mb-4 flex items-center gap-2">
-          <div className="relative max-w-md flex-1">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <div className="relative w-full max-w-md flex-1 sm:w-auto">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
             <input
               value={search}
@@ -161,6 +171,13 @@ export default function ImmeublesListPage() {
               className="input w-full pl-9"
             />
           </div>
+          {/* Sélecteur d'entreprise active (déplacé de la sidebar) */}
+          <EntrepriseSelector
+            entreprises={entreprises}
+            currentId={currentEntrepriseId}
+            onChange={setCurrentEntrepriseId}
+            onAdded={refreshEntreprises}
+          />
           {filtered ? (
             <span className="text-xs text-white/50">
               {filtered.length} / {list?.length || 0}
@@ -372,7 +389,7 @@ function CreateImmeubleModal({
     e.preventDefault();
     if (entrepriseId == null) {
       setErr(
-        "Sélectionne une entreprise propriétaire dans la barre latérale avant de créer un immeuble."
+        "Sélectionne une entreprise propriétaire (sélecteur à côté de la recherche) avant de créer un immeuble."
       );
       return;
     }

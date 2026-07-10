@@ -313,7 +313,7 @@ export default function BauxPage() {
           { label: "Baux & paiements" }
         ]}
       />
-      <div className="p-4 lg:p-6">
+      <div className="p-4 pb-28 lg:p-6 lg:pb-28">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-start gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">

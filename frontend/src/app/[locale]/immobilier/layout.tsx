@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState
 } from "react";
 import { usePathname } from "next/navigation";
@@ -206,14 +207,9 @@ export default function ImmobilierLayout({
             </button>
           </div>
 
-          {/* Sélecteur d'entreprise active (contexte du portefeuille) */}
-          <EntrepriseSelector
-            entreprises={entreprises}
-            currentId={currentEntrepriseId}
-            onChange={setCurrentEntrepriseId}
-            onAdded={refreshEntreprises}
-          />
-
+          {/* Le sélecteur d'entreprise active vit maintenant sur la page
+              Immeubles (à côté de la recherche) — le contexte, lui,
+              reste ici dans le layout. */}
           <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
             <div>
               <p className="mb-2 flex items-center gap-1.5 px-3 text-xs font-semibold uppercase tracking-wider text-accent-500">
@@ -354,9 +350,10 @@ export function ImmobilierTopbar({
   );
 }
 
-// ─── Sélecteur d'entreprise active dans la sidebar ─────────────────────
+// ─── Sélecteur d'entreprise active (rendu par la page Immeubles, à
+//     côté de la barre de recherche — le contexte reste dans le layout) ──
 
-function EntrepriseSelector({
+export function EntrepriseSelector({
   entreprises,
   currentId,
   onChange,
@@ -368,6 +365,7 @@ function EntrepriseSelector({
   onAdded: () => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showAddExisting, setShowAddExisting] = useState(false);
   const [counts, setCounts] = useState<Record<number, number>>({});
@@ -409,6 +407,19 @@ function EntrepriseSelector({
   useEffect(() => {
     void loadCounts();
   }, [entreprises.length]);
+
+  // Fermeture au clic extérieur (le menu est maintenant en pleine page,
+  // pas dans la sidebar).
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
 
   async function renameEntreprise(e: EntrepriseLite) {
     const name = window.prompt(`Nouveau nom pour « ${e.name} » :`, e.name);
@@ -466,13 +477,11 @@ function EntrepriseSelector({
   }
 
   return (
-    <div className="border-b border-brand-800 px-3 py-3">
-      <p className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
-        Suivi pour
-      </p>
+    <div ref={rootRef} className="relative w-full sm:w-72">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        title="Entreprise active — filtre le portefeuille immobilier"
         className="flex w-full items-center justify-between gap-2 rounded-lg border border-brand-700 bg-brand-900 px-3 py-2 text-left text-sm transition hover:border-accent-500/50"
       >
         {current ? (
@@ -495,7 +504,7 @@ function EntrepriseSelector({
         />
       </button>
       {open ? (
-        <div className="mt-1 max-h-72 overflow-y-auto rounded-lg border border-brand-700 bg-brand-950 py-1 shadow-2xl">
+        <div className="absolute left-0 right-0 z-40 mt-1 max-h-72 overflow-y-auto rounded-lg border border-brand-700 bg-brand-950 py-1 shadow-2xl">
           <button
             type="button"
             onClick={() => {

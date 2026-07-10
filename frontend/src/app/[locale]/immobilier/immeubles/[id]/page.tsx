@@ -9,6 +9,7 @@ import {
   Calendar,
   Camera,
   Check,
+  ChevronDown,
   ClipboardList,
   DollarSign,
   Home,
@@ -19,6 +20,7 @@ import {
   Percent,
   Plus,
   Receipt,
+  Star,
   Trash2,
   TrendingUp,
   Wallet,
@@ -101,6 +103,8 @@ type Hypotheque = {
   type_taux?: string | null;
   amortissement_mois?: number | null;
   paiement_mensuel?: number | null;
+  // 'semi' (composition semi-annuelle, standard CA) | 'mensuelle'.
+  composition_interets?: string | null;
   date_debut?: string | null;
   date_fin_terme?: string | null;
   status: string;
@@ -114,6 +118,9 @@ type Evaluation = {
   date_evaluation: string;
   source?: string | null;
   notes?: string | null;
+  // Évaluation de référence pour le calcul d'équité (une seule par
+  // immeuble — le backend décoche les autres quand on passe à true).
+  is_reference?: boolean;
 };
 
 type Maintenance = {
@@ -140,6 +147,9 @@ type Financials = {
   purchase_price?: number | null;
   grm?: number | null;
   cap_rate?: number | null;
+  // true = cap rate heuristique (NOI ≈ 50 % du brut, aucune dépense
+  // récurrente saisie) ; false = NOI réel calculé des dépenses.
+  cap_rate_estime?: boolean;
   cash_flow_mensuel?: number | null;
   appreciation_pct?: number | null;
 };
@@ -354,21 +364,25 @@ export default function ImmeubleDetailPage({
     }
   }, [immeubleId]);
 
-  // Dernière évaluation (date la plus récente) + équité :
-  // dernière valeur − somme des balances des hypothèques actives.
+  // Évaluation retenue pour l'équité : celle marquée « référence »
+  // prime ; sinon la plus récente (aligné backend /financials).
   const lastEval = useMemo(() => {
     if (!evaluations || evaluations.length === 0) return null;
+    const ref = evaluations.find((e) => e.is_reference);
+    if (ref) return ref;
     return [...evaluations].sort(
       (a, b) =>
         b.date_evaluation.localeCompare(a.date_evaluation) || b.id - a.id
     )[0];
   }, [evaluations]);
 
+  // Balance = balance_actuelle sinon montant_initial (aligné backend :
+  // une balance jamais saisie n'est pas une hypothèque à 0 $).
   const balanceHypoActives = useMemo(
     () =>
       (hypotheques || [])
         .filter((h) => h.status === "active")
-        .reduce((s, h) => s + (h.balance_actuelle ?? 0), 0),
+        .reduce((s, h) => s + (h.balance_actuelle ?? h.montant_initial ?? 0), 0),
     [hypotheques]
   );
 
@@ -599,7 +613,8 @@ export default function ImmeubleDetailPage({
         ]}
       />
 
-      <div className="p-4 lg:p-6">
+      {/* pb-28 : le contenu ne doit pas passer sous le bouton Aide flottant */}
+      <div className="p-4 pb-28 lg:p-6 lg:pb-28">
         <EntityDriveSection
           entityType="Immeuble"
           entityId={immeuble.id}
@@ -729,35 +744,15 @@ export default function ImmeubleDetailPage({
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-accent-500" />
               ) : null}
             </label>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={openEdit}
-                className="btn-outline-accent btn-sm"
-                title="Modifier l'immeuble (nom, adresse, etc.)"
-              >
-                <Pencil className="h-3.5 w-3.5" /> Modifier
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setBonResult(null);
-                  setBonForm({ titre: "", description: "", logement: "" });
-                  setShowBon(true);
-                }}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:bg-amber-500/20"
-                title="Créer un bon de travail (réparation) dans le volet Construction"
-              >
-                <Wrench className="h-3.5 w-3.5" /> Bon de travail
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowDelete(true)}
-                className="btn-outline-rose btn-sm"
-              >
-                <Trash2 className="h-3.5 w-3.5" /> Supprimer
-              </button>
-            </div>
+            <ActionsMenu
+              onEdit={openEdit}
+              onBonTravail={() => {
+                setBonResult(null);
+                setBonForm({ titre: "", description: "", logement: "" });
+                setShowBon(true);
+              }}
+              onDelete={() => setShowDelete(true)}
+            />
           </div>
         </header>
 
@@ -787,9 +782,13 @@ export default function ImmeubleDetailPage({
               }
             />
             <Kpi
-              label="Cap rate (NOI ≈ 50%)"
+              label="Cap rate"
               value={fmtPct(financials.cap_rate, 2)}
-              sub={`GRM ${financials.grm ?? "—"}`}
+              sub={
+                financials.cap_rate_estime
+                  ? "estimé (NOI ≈ 50 %)"
+                  : "NOI réel (dépenses saisies)"
+              }
               icon={Percent}
               tone="sky"
             />
@@ -805,7 +804,7 @@ export default function ImmeubleDetailPage({
               value={fmtCurrency(equite)}
               sub={
                 lastEval
-                  ? `Valeur ${fmtCurrency(lastEval.valeur)} − hyp. ${fmtCurrency(balanceHypoActives)}`
+                  ? `${lastEval.is_reference ? "Réf." : "Valeur"} ${fmtCurrency(lastEval.valeur)} − hyp. ${fmtCurrency(balanceHypoActives)}`
                   : "Aucune évaluation"
               }
               icon={TrendingUp}
@@ -890,6 +889,7 @@ export default function ImmeubleDetailPage({
               immeubleId={immeubleId}
               baux={baux}
               hypotheques={hypotheques}
+              onMutated={() => void refreshFinancials()}
             />
           ) : null}
           {tab === "maintenance" ? (
@@ -1276,6 +1276,90 @@ export default function ImmeubleDetailPage({
   );
 }
 
+/** Menu « Actions » du header de fiche — regroupe Modifier / Bon de
+ *  travail / Supprimer (fermé au clic extérieur, pattern des menus du
+ *  repo). */
+function ActionsMenu({
+  onEdit,
+  onBonTravail,
+  onDelete
+}: {
+  onEdit: () => void;
+  onBonTravail: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const itemCls =
+    "flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-white/80 transition hover:bg-brand-900 hover:text-white";
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="btn-outline-accent btn-sm"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        Actions
+        <ChevronDown
+          className={`h-3.5 w-3.5 transition ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open ? (
+        <div className="absolute right-0 z-30 mt-1 w-56 rounded-lg border border-brand-700 bg-brand-950 py-1 shadow-2xl">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onEdit();
+            }}
+            className={itemCls}
+            title="Modifier l'immeuble (nom, adresse, etc.)"
+          >
+            <Pencil className="h-3.5 w-3.5" /> Modifier
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onBonTravail();
+            }}
+            className={itemCls}
+            title="Créer un bon de travail (réparation) dans le volet Construction"
+          >
+            <Wrench className="h-3.5 w-3.5" /> Créer un bon de travail
+          </button>
+          <div className="my-1 border-t border-brand-800" />
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-rose-300 transition hover:bg-rose-500/10 hover:text-rose-200"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Supprimer
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function EditField({
   label,
   children
@@ -1549,42 +1633,37 @@ function LogementsTab({
   baux: Bail[] | null;
   setList: React.Dispatch<React.SetStateAction<Logement[] | null>>;
 }) {
-  // Fiche partagée : null = fermée, "create" = création, sinon édition.
-  const [fiche, setFiche] = useState<Logement | "create" | null>(null);
+  const router = useRouter();
+  // La modale ne sert plus qu'à la création — le clic sur une ligne
+  // navigue vers la page dédiée du logement.
+  const [showCreate, setShowCreate] = useState(false);
 
   const addButton = (
     <button
       type="button"
-      onClick={() => setFiche("create")}
+      onClick={() => setShowCreate(true)}
       className="btn-outline-accent btn-sm"
     >
       <Plus className="h-3.5 w-3.5" /> Ajouter un logement
     </button>
   );
 
-  const modal =
-    fiche !== null ? (
-      <LogementFiche
-        logement={fiche === "create" ? null : fiche}
-        immeubleId={immeubleId}
-        bails={baux ?? undefined}
-        onClose={() => setFiche(null)}
-        onSaved={(saved) => {
-          setList((prev) => {
-            if (fiche === "create") return [...(prev ?? []), saved];
-            return (
-              prev?.map((l) => (l.id === saved.id ? { ...l, ...saved } : l)) ??
-              prev
-            );
-          });
-          setFiche(null);
-        }}
-        onDeleted={(id) => {
-          setList((prev) => prev?.filter((l) => l.id !== id) ?? prev);
-          setFiche(null);
-        }}
-      />
-    ) : null;
+  const modal = showCreate ? (
+    <LogementFiche
+      logement={null}
+      immeubleId={immeubleId}
+      bails={baux ?? undefined}
+      onClose={() => setShowCreate(false)}
+      onSaved={(saved) => {
+        setList((prev) => [...(prev ?? []), saved]);
+        setShowCreate(false);
+      }}
+      onDeleted={(id) => {
+        setList((prev) => prev?.filter((l) => l.id !== id) ?? prev);
+        setShowCreate(false);
+      }}
+    />
+  ) : null;
 
   if (list === null)
     return (
@@ -1625,7 +1704,10 @@ function LogementsTab({
             {list.map((l) => (
               <tr
                 key={l.id}
-                onClick={() => setFiche(l)}
+                onClick={() =>
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  router.push(`/immobilier/logements/${l.id}` as any)
+                }
                 className="cursor-pointer transition hover:bg-brand-800/40"
               >
                 <td className="px-4 py-2 font-bold text-white">{l.numero}</td>
@@ -2149,8 +2231,8 @@ const HYPO_STATUS_BADGE: Record<string, string> = {
 /**
  * Paiement mensuel d'une hypothèque canadienne.
  *
- * Composition des intérêts (préférence de calcul UI, non persistée —
- * seul le paiement_mensuel résultant est enregistré) :
+ * Composition des intérêts (persistée sur l'hypothèque via
+ * composition_interets, rechargée en édition) :
  *  - "semi"      : composé semi-annuellement, converti en taux mensuel
  *                  équivalent (résidentiel canadien, Loi sur l'intérêt) ;
  *  - "mensuelle" : composé mensuellement (prêts commerciaux
@@ -2255,8 +2337,8 @@ type HypoFormState = {
   balance_actuelle: string;
   taux_pct: string;
   type_taux: string;
-  // Préférence de calcul UI seulement (pas de champ backend) : le
-  // paiement_mensuel calculé reste la seule valeur persistée.
+  // Persistée backend (composition_interets 'semi'|'mensuelle') — le
+  // paiement_mensuel calculé est aussi enregistré.
   composition: string;
   amortissement_annees: string;
   paiement_mensuel: string;
@@ -2310,7 +2392,10 @@ function HypothequeForm({
               : "",
           taux_pct: initial.taux_pct != null ? String(initial.taux_pct) : "",
           type_taux: initial.type_taux || "fixe",
-          composition: "semi",
+          composition:
+            initial.composition_interets === "mensuelle"
+              ? "mensuelle"
+              : "semi",
           amortissement_annees:
             initial.amortissement_mois != null
               ? String(Math.round((initial.amortissement_mois / 12) * 10) / 10)
@@ -2403,6 +2488,7 @@ function HypothequeForm({
         : null,
       taux_pct: f.taux_pct.trim() ? Number(f.taux_pct) : null,
       type_taux: f.type_taux || null,
+      composition_interets: compositionChoisie,
       amortissement_mois: amortissementMois > 0 ? amortissementMois : null,
       paiement_mensuel:
         pmtEffective != null && !Number.isNaN(pmtEffective) && pmtEffective >= 0
@@ -3014,6 +3100,7 @@ function EvaluationsTab({
 }) {
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [refBusyId, setRefBusyId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   function sortEvals(arr: Evaluation[]): Evaluation[] {
@@ -3021,6 +3108,39 @@ function EvaluationsTab({
       (a, b) =>
         b.date_evaluation.localeCompare(a.date_evaluation) || b.id - a.id
     );
+  }
+
+  async function setReference(ev: Evaluation) {
+    if (ev.is_reference || refBusyId != null) return;
+    setRefBusyId(ev.id);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/evaluations/${ev.id}`,
+        { method: "PATCH", body: JSON.stringify({ is_reference: true }) }
+      );
+      if (!res.ok)
+        throw new Error((await res.text()).slice(0, 200) || `HTTP ${res.status}`);
+      // Recharge la liste : le backend a décoché les autres références.
+      const r = await authedFetch(
+        `/api/v1/immobilier/immeubles/${immeubleId}/evaluations`
+      );
+      if (r.ok) {
+        setList((await r.json()) as Evaluation[]);
+      } else {
+        const updated = (await res.json()) as Evaluation;
+        setList((prev) =>
+          (prev || []).map((x) =>
+            x.id === updated.id ? updated : { ...x, is_reference: false }
+          )
+        );
+      }
+      onMutated();
+    } catch (e) {
+      setErr(`Référence échouée : ${(e as Error).message}`);
+    } finally {
+      setRefBusyId(null);
+    }
   }
 
   async function create(payload: Record<string, unknown>) {
@@ -3071,7 +3191,9 @@ function EvaluationsTab({
   if (list === null) return <Loading />;
 
   const sorted = sortEvals(list);
-  const last = sorted[0] || null;
+  // Évaluation retenue : la référence prime, sinon la plus récente
+  // (même logique que l'équité des tuiles du haut / backend).
+  const last = list.find((e) => e.is_reference) || sorted[0] || null;
   const croissance =
     last && purchasePrice && purchasePrice > 0
       ? ((last.valeur - purchasePrice) / purchasePrice) * 100
@@ -3083,7 +3205,7 @@ function EvaluationsTab({
       {last ? (
         <div className="grid gap-3 sm:grid-cols-3">
           <Kpi
-            label="Dernière valeur"
+            label={last.is_reference ? "Valeur de référence" : "Dernière valeur"}
             value={fmtCurrency(last.valeur)}
             sub={`${EVAL_KIND_LABEL[last.kind] || last.kind} — ${last.date_evaluation}`}
             icon={DollarSign}
@@ -3151,6 +3273,7 @@ function EvaluationsTab({
                 <th className="px-4 py-2.5 text-right">Valeur</th>
                 <th className="px-4 py-2.5">Source</th>
                 <th className="px-4 py-2.5">Notes</th>
+                <th className="px-4 py-2.5">Référence</th>
                 <th className="px-4 py-2.5 text-right"></th>
               </tr>
             </thead>
@@ -3178,6 +3301,31 @@ function EvaluationsTab({
                     title={e.notes || undefined}
                   >
                     {e.notes || "—"}
+                  </td>
+                  <td className="px-4 py-2 text-xs">
+                    {e.is_reference ? (
+                      <span
+                        className="badge badge-amber"
+                        title="Évaluation utilisée pour le calcul d'équité"
+                      >
+                        <Star className="h-3 w-3 fill-current" /> Référence
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void setReference(e)}
+                        disabled={refBusyId != null}
+                        className="inline-flex items-center gap-1 rounded-md border border-brand-700 px-2 py-1 text-[11px] font-semibold text-white/50 transition hover:border-amber-400/50 hover:text-amber-300 disabled:opacity-50"
+                        title="Utiliser cette évaluation comme référence pour l'équité"
+                      >
+                        {refBusyId === e.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Star className="h-3 w-3" />
+                        )}
+                        Référence
+                      </button>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-right">
                     <button
@@ -3208,9 +3356,30 @@ type Depense = {
   libelle: string;
   montant: number;
   frequence: string;
+  // montant = % des loyers mensuels (ex. gestion à 5 %) au lieu d'un $.
+  is_pourcentage?: boolean;
+  // taxable = TPS+TVQ Québec appliquées (×1.14975) dans les calculs.
+  taxable?: boolean;
   date_depense: string | null;
   notes: string | null;
 };
+
+// TPS 5 % + TVQ 9,975 % (Québec) — même facteur que le backend.
+const TAUX_TAXES = 1.14975;
+
+/**
+ * Montant mensuel effectif d'une dépense récurrente — mêmes formules
+ * que le backend (/financials) : % des loyers d'abord, fréquence
+ * ensuite (annuel ÷ 12), taxes à la fin (×1.14975 si taxable).
+ */
+function montantMensuelDepense(d: Depense, revenusMensuel: number): number {
+  let m = d.is_pourcentage
+    ? (revenusMensuel * (d.montant || 0)) / 100
+    : d.montant || 0;
+  if (d.frequence === "annuel") m = m / 12;
+  if (d.taxable) m *= TAUX_TAXES;
+  return m;
+}
 
 const DEPENSE_CATEGORIES: [string, string][] = [
   ["taxes_municipales", "Taxes municipales"],
@@ -3230,11 +3399,13 @@ const DEPENSE_CAT_LABEL: Record<string, string> =
 function CashflowTab({
   immeubleId,
   baux,
-  hypotheques
+  hypotheques,
+  onMutated
 }: {
   immeubleId: number;
   baux: Bail[] | null;
   hypotheques: Hypotheque[] | null;
+  onMutated: () => void;
 }) {
   const [depenses, setDepenses] = useState<Depense[] | null>(null);
   const [mode, setMode] = useState<"mensuel" | "annuel">("mensuel");
@@ -3245,6 +3416,8 @@ function CashflowTab({
   const [fLib, setFLib] = useState("");
   const [fMontant, setFMontant] = useState("");
   const [fFreq, setFFreq] = useState("annuel");
+  const [fPct, setFPct] = useState(false);
+  const [fTaxable, setFTaxable] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -3277,9 +3450,10 @@ function CashflowTab({
     (s, b) => s + (b.loyer_mensuel || 0),
     0
   );
-  // Annualisation : mensuel×12 + annuel×1.
-  const depensesAnnuel = recurrentes.reduce(
-    (s, d) => s + (d.frequence === "mensuel" ? d.montant * 12 : d.montant),
+  // Mensualisation (mêmes règles que le backend) : % des loyers,
+  // annuel ÷ 12, ×1.14975 si taxable.
+  const depensesMensuelles = recurrentes.reduce(
+    (s, d) => s + montantMensuelDepense(d, revenusMensuel),
     0
   );
   const hyposActives = (hypotheques || []).filter(
@@ -3292,16 +3466,13 @@ function CashflowTab({
 
   const facteur = mode === "mensuel" ? 1 : 12;
   const revenus = revenusMensuel * facteur;
-  const depensesAffichees =
-    mode === "mensuel" ? depensesAnnuel / 12 : depensesAnnuel;
+  const depensesAffichees = depensesMensuelles * facteur;
   const hypo = hypoMensuel * facteur;
   const cashflow = revenus - depensesAffichees - hypo;
   const suffixe = mode === "mensuel" ? "/mois" : "/an";
 
   function montantSelonMode(d: Depense): number {
-    if (mode === "mensuel")
-      return d.frequence === "mensuel" ? d.montant : d.montant / 12;
-    return d.frequence === "mensuel" ? d.montant * 12 : d.montant;
+    return montantMensuelDepense(d, revenusMensuel) * facteur;
   }
 
   async function add() {
@@ -3322,10 +3493,12 @@ function CashflowTab({
           body: JSON.stringify({
             categorie: fCat,
             libelle: fLib.trim(),
-            // Stockée telle que saisie (fréquence + montant), la
-            // conversion ×12/÷12 est purement affichage.
+            // Stockée telle que saisie (fréquence + montant ou %), la
+            // conversion ×12/÷12/% est purement affichage.
             montant: Number(fMontant),
             frequence: fFreq,
+            is_pourcentage: fPct,
+            taxable: fTaxable,
             date_depense: null
           })
         }
@@ -3336,7 +3509,11 @@ function CashflowTab({
       setDepenses((prev) => [created, ...(prev || [])]);
       setFLib("");
       setFMontant("");
+      setFPct(false);
+      setFTaxable(false);
       setAdding(false);
+      // Le KPI cashflow du haut doit suivre immédiatement.
+      onMutated();
     } catch (e) {
       setErr(`Ajout échoué : ${(e as Error).message}`);
     } finally {
@@ -3355,6 +3532,8 @@ function CashflowTab({
         method: "DELETE"
       });
       if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      // Le KPI cashflow du haut doit suivre immédiatement.
+      onMutated();
     } catch (e) {
       setDepenses(previous);
       setErr(`Suppression échouée : ${(e as Error).message}`);
@@ -3517,12 +3696,12 @@ function CashflowTab({
                 />
               </label>
               <label className={labelCls}>
-                Montant ($) *
+                {fPct ? "% des loyers *" : "Montant ($) *"}
                 <input
                   inputMode="decimal"
                   value={fMontant}
                   onChange={(e) => setFMontant(e.target.value)}
-                  placeholder="0.00"
+                  placeholder={fPct ? "ex. 5" : "0.00"}
                   className={inputCls}
                 />
               </label>
@@ -3542,6 +3721,61 @@ function CashflowTab({
                 </select>
               </label>
             </div>
+            <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-white/80">
+                <input
+                  type="checkbox"
+                  checked={fPct}
+                  onChange={(e) => setFPct(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-accent-500"
+                />
+                Montant en % des loyers
+                <span className="text-[10px] text-white/40">
+                  (ex. gestion à 5 %)
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-white/80">
+                <input
+                  type="checkbox"
+                  checked={fTaxable}
+                  onChange={(e) => setFTaxable(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-accent-500"
+                />
+                Taxable
+                <span className="text-[10px] text-white/40">
+                  (TPS+TVQ ×1.14975)
+                </span>
+              </label>
+            </div>
+            {fMontant.trim() !== "" &&
+            !Number.isNaN(Number(fMontant)) &&
+            (fPct || fTaxable) ? (
+              <p className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+                Montant effectif :{" "}
+                {fmtCurrency(
+                  montantMensuelDepense(
+                    {
+                      id: 0,
+                      immeuble_id: immeubleId,
+                      categorie: fCat,
+                      libelle: "",
+                      montant: Number(fMontant),
+                      frequence: fFreq,
+                      is_pourcentage: fPct,
+                      taxable: fTaxable,
+                      date_depense: null,
+                      notes: null
+                    },
+                    revenusMensuel
+                  )
+                )}
+                /mois
+                {fPct
+                  ? ` (${Number(fMontant)} % × ${fmtCurrency(revenusMensuel)} de loyers)`
+                  : ""}
+                {fTaxable ? " · taxes incluses" : ""}
+              </p>
+            ) : null}
             <div className="mt-3 flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
               <button
                 type="button"
@@ -3592,6 +3826,14 @@ function CashflowTab({
                   <span className="badge badge-neutral ml-2">
                     {DEPENSE_CAT_LABEL[d.categorie] || d.categorie}
                   </span>
+                  {d.taxable ? (
+                    <span
+                      className="badge badge-sky ml-1.5"
+                      title="TPS+TVQ appliquées (×1.14975)"
+                    >
+                      +tx
+                    </span>
+                  ) : null}
                 </span>
                 <span className="flex flex-shrink-0 items-center gap-2">
                   <span className="text-right">
@@ -3600,8 +3842,12 @@ function CashflowTab({
                       {suffixe}
                     </span>
                     <span className="ml-2 text-[10px] text-white/40">
-                      saisi {fmtCurrency(d.montant)}
+                      saisi{" "}
+                      {d.is_pourcentage
+                        ? `${d.montant} % des loyers`
+                        : fmtCurrency(d.montant)}
                       {d.frequence === "mensuel" ? "/mois" : "/an"}
+                      {d.taxable ? " +tx" : ""}
                     </span>
                   </span>
                   <button
