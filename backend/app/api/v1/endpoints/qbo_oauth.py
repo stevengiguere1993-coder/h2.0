@@ -172,7 +172,7 @@ async def qbo_callback(
         # par défaut (fr) NE doit PAS être préfixée dans l'URL, sinon
         # Next.js renvoie 404. On cible donc directement /app/...
         return RedirectResponse(
-            f"{frontend}/app/parametres?qbo={reason}",
+            f"{frontend}/app/parametres/comptabilite?qbo={reason}",
             status_code=status.HTTP_302_FOUND,
         )
 
