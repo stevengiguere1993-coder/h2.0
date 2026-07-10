@@ -323,42 +323,59 @@ export function ImmobilierTopbar({
 }) {
   const { onOpenSidebar } = useImmobilierLayout();
   return (
-    <header className="sticky top-0 z-30 flex min-h-[64px] items-center gap-3 border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:min-h-[152px] lg:px-6">
-      <button
-        type="button"
-        onClick={onOpenSidebar}
-        className="rounded-md p-2 text-white/80 hover:bg-brand-900 hover:text-white lg:hidden"
-        aria-label="Ouvrir la barre latérale"
-      >
-        <Menu className="h-5 w-5" />
-      </button>
-      <nav className="flex min-w-0 flex-1 items-center gap-2">
-        {breadcrumbs.map((c, i) => {
-          const isLast = i === breadcrumbs.length - 1;
-          const cls = `truncate text-sm font-medium ${
-            isLast ? "text-white" : c.href ? "text-white/60 hover:text-accent-500" : "text-white/50"
-          }`;
-          return (
-            <span key={i} className="flex items-center gap-2">
-              {i > 0 ? <span className="text-white/30">/</span> : null}
-              {!isLast && c.href ? (
-                <Link
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  href={c.href as any}
-                  className={cls}
-                >
-                  {c.label}
-                </Link>
-              ) : (
-                <span className={cls}>{c.label}</span>
-              )}
-            </span>
-          );
-        })}
-      </nav>
-      {rightSlot ? <div className="flex items-center gap-2">{rightSlot}</div> : null}
-      <ThemeToggle />
-      <KratosLogo size={144} floating={false} />
+    <header
+      className="sticky top-0 z-30 border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:px-6"
+      style={{ paddingTop: "env(safe-area-inset-top)" }}
+    >
+      {/* Ligne 1 : menu + breadcrumb + toggle + Kratos. Le rightSlot
+          (bouton d'action) n'y vit qu'en desktop — sur mobile il passe
+          sur la ligne 2, sinon il chevauche le titre (même pattern que
+          AppTopbar Construction). */}
+      <div className="flex min-h-[64px] items-center gap-3 lg:min-h-[152px]">
+        <button
+          type="button"
+          onClick={onOpenSidebar}
+          className="rounded-md p-2 text-white/80 hover:bg-brand-900 hover:text-white lg:hidden"
+          aria-label="Ouvrir la barre latérale"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+        <nav className="flex min-w-0 flex-1 items-center gap-2">
+          {breadcrumbs.map((c, i) => {
+            const isLast = i === breadcrumbs.length - 1;
+            const cls = `truncate text-sm font-medium ${
+              isLast ? "text-white" : c.href ? "text-white/60 hover:text-accent-500" : "text-white/50"
+            }`;
+            return (
+              <span key={i} className="flex min-w-0 items-center gap-2">
+                {i > 0 ? <span className="text-white/30">/</span> : null}
+                {!isLast && c.href ? (
+                  <Link
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    href={c.href as any}
+                    className={cls}
+                  >
+                    {c.label}
+                  </Link>
+                ) : (
+                  <span className={cls}>{c.label}</span>
+                )}
+              </span>
+            );
+          })}
+        </nav>
+        {rightSlot ? (
+          <div className="hidden items-center gap-2 lg:flex">{rightSlot}</div>
+        ) : null}
+        <ThemeToggle />
+        <KratosLogo size={144} floating={false} />
+      </div>
+      {/* Ligne 2 mobile : le bouton d'action de la page. */}
+      {rightSlot ? (
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 lg:hidden">
+          {rightSlot}
+        </div>
+      ) : null}
     </header>
   );
 }

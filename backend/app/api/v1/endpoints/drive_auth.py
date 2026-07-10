@@ -52,6 +52,10 @@ class StatusResponse(BaseModel):
     # False, l'UI affiche un message d'aide pour configurer Render plutôt
     # qu'un bouton mort.
     server_configured: bool
+    # True quand des tokens existent en base mais que la session Google
+    # est RÉELLEMENT morte (refresh refusé par Google) : l'UI doit dire
+    # « expiré — reconnecte-toi » au lieu d'un faux « Connecté ».
+    expired: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +137,24 @@ async def auth_status(
         return StatusResponse(
             connected=False, server_configured=server_configured
         )
+    # Vérification RÉELLE : avant, on affichait « Connecté » dès qu'une
+    # ligne de tokens existait — même si Google avait révoqué la session.
+    # Résultat : les sections Drive disaient « Connexion requise » pendant
+    # que Paramètres → Drive disait « Connecté » (bug Phil 2026-07-10).
+    # On tente d'obtenir un access token valide (refresh au besoin) : un
+    # refus Google = session morte → connected=False + expired=True.
+    try:
+        await drive_oauth.get_valid_access_token(db, user_id=user.id)
+    except drive_oauth.DriveAuthError:
+        return StatusResponse(
+            connected=False,
+            google_email=row.google_email,
+            updated_at=row.updated_at,
+            server_configured=server_configured,
+            expired=True,
+        )
+    except Exception:  # noqa: BLE001 — réseau/Google down : ne pas mentir
+        pass  # on garde l'affichage « connecté » (erreur transitoire)
     return StatusResponse(
         connected=True,
         google_email=row.google_email,

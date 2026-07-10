@@ -422,6 +422,13 @@ export function TaskBoard({
             values={extraColumn.filterValues}
           />
         ) : null}
+        <CriterionPicker
+          label="Création"
+          state={criteria.created}
+          onChange={(s) => setCriterion("created", s)}
+          values={[]}
+          sortLabel="Plus récent en haut"
+        />
       </div>
       )}
 
@@ -502,7 +509,8 @@ type CriterionKey =
   | "priority"
   | "due_date"
   | "immeuble"
-  | "extra";
+  | "extra"
+  | "created";
 
 type CriterionState =
   | { kind: "all" }
@@ -515,7 +523,8 @@ const DEFAULT_FILTERS: Record<CriterionKey, CriterionState> = {
   priority: { kind: "all" },
   due_date: { kind: "all" },
   immeuble: { kind: "all" },
-  extra: { kind: "all" }
+  extra: { kind: "all" },
+  created: { kind: "all" }
 };
 
 const PRIORITY_RANK: Record<string, number> = {
@@ -537,13 +546,16 @@ function CriterionPicker({
   label,
   state,
   onChange,
-  values
+  values,
+  sortLabel
 }: {
   label: string;
   state: CriterionState;
   onChange: (s: CriterionState) => void;
   /** Valeurs concrètes filtrables (label affiché, value envoyée). */
   values: Array<{ value: string; label: string }>;
+  /** Libellé de l'option de tri (défaut « Trier »). */
+  sortLabel?: string;
 }) {
   // Encode l'état sur une seule clé string pour le <select>.
   const current =
@@ -566,10 +578,12 @@ function CriterionPicker({
         className="rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
       >
         <option value="__all">Tous</option>
-        <option value="__sort">Trier</option>
-        <option disabled value="__sep">
-          ──────────
-        </option>
+        <option value="__sort">{sortLabel || "Trier"}</option>
+        {values.length > 0 ? (
+          <option disabled value="__sep">
+            ──────────
+          </option>
+        ) : null}
         {values.map((o) => (
           <option key={o.value} value={`v:${o.value}`}>
             {o.label}
@@ -714,6 +728,10 @@ function sortTasks(
         (v) => v.value === id
       );
       return (found?.label || id).toLowerCase();
+    }
+    if (sortKey === "created") {
+      // Plus récent EN HAUT : clé négative → ordre croissant = desc réel.
+      return -(t.created_at ? Date.parse(t.created_at) : 0);
     }
     return 0;
   }

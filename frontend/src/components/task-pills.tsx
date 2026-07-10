@@ -503,6 +503,20 @@ export function DatePill({
   onChange: (d: string | null) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // Valeur en cours d'édition dans le picker natif. Commitée SEULEMENT à
+  // la fermeture (blur) : committer au `change` déclenchait un PATCH → le
+  // parent re-rendait → l'input (key) était remonté → le calendrier natif
+  // se FERMAIT tout seul en figeant une valeur intermédiaire quand on
+  // naviguait entre les mois (bug Phil 2026-07-10).
+  const pendingRef = useRef<string | null>(null);
+
+  function commitPending() {
+    const v = pendingRef.current;
+    pendingRef.current = null;
+    if (v === null) return; // rien touché pendant l'ouverture
+    const next = v || null;
+    if (next !== (value ?? null)) onChange(next);
+  }
 
   function open() {
     const el = inputRef.current;
@@ -552,16 +566,18 @@ export function DatePill({
         )}
       </button>
       <input
-        // key + defaultValue → input NON contrôlé : un re-render du tableau
-        // (tri, refresh) pendant que le pop-up natif est ouvert ne ré-assigne
-        // plus la valeur, donc naviguer entre les mois ne ferme plus le
-        // calendrier ni ne sélectionne une date par accident. La key se met à
-        // jour quand la valeur change réellement (sélection), remontant l'input.
+        // key + defaultValue → input NON contrôlé, et commit AU BLUR
+        // uniquement : tant que le calendrier natif est ouvert, aucun
+        // PATCH ne part (donc aucun re-render/remontage qui le fermerait).
+        // La sélection est envoyée quand le focus quitte l'input.
         key={value || "empty"}
         ref={inputRef}
         type="date"
         defaultValue={value || ""}
-        onChange={(e) => onChange(e.target.value || null)}
+        onChange={(e) => {
+          pendingRef.current = e.target.value;
+        }}
+        onBlur={commitPending}
         className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
       />
     </div>
