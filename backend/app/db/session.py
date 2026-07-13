@@ -221,6 +221,18 @@ async def ensure_critical_columns() -> None:
         ("bons_travail", "signature_ip", "VARCHAR(64)"),
         ("bons_travail", "signature_image", "BYTEA"),
         ("bons_travail", "signature_image_content_type", "VARCHAR(100)"),
+        # Signature de la FACTURE FINALE (page publique /facture/{token}).
+        # Même piège que les soumissions ci-dessus : ces colonnes n'étaient
+        # que dans le bloc additif d'init_db → `signature_image` (deferred,
+        # donc jamais SELECTée) manquait en prod et le POST /sign plantait
+        # en HTTP 500 à l'écriture (retour Phil 2026-07-10).
+        ("factures", "is_final", "BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("factures", "signature_token", "VARCHAR(64)"),
+        ("factures", "signed_name", "VARCHAR(255)"),
+        ("factures", "signed_ip", "VARCHAR(64)"),
+        ("factures", "signed_at", "TIMESTAMP WITH TIME ZONE"),
+        ("factures", "signature_image", "BYTEA"),
+        ("factures", "signature_image_content_type", "VARCHAR(100)"),
         # Refonte Bon de travail 2026-06-30 : bon INTERNE (entretien de nos
         # immeubles) + moteur de refacturation. Ces colonnes n'étaient que
         # dans `additive_columns` (init_db) → si init_db abort, elles ne sont
