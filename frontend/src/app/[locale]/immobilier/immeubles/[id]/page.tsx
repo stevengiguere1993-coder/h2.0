@@ -16,6 +16,7 @@ import {
   FileDown,
   FileSignature,
   Loader2,
+  Mail,
   Pencil,
   Percent,
   Plus,
@@ -176,7 +177,10 @@ type RollupImmeuble = {
 const TABS = [
   { id: "overview", label: "Vue d'ensemble", icon: Building2 },
   { id: "logements", label: "Logements", icon: Home },
-  { id: "baux", label: "Baux & paiements", icon: ClipboardList },
+  // « Baux & paiements » séparé en deux (retour Phil 2026-07-10) :
+  // Paiements = suivi des loyers du mois, Baux & locataires = contrats.
+  { id: "paiements", label: "Paiements", icon: Receipt },
+  { id: "baux", label: "Baux & locataires", icon: ClipboardList },
   { id: "hypotheques", label: "Hypothèques", icon: Banknote },
   { id: "evaluations", label: "Évaluations", icon: TrendingUp },
   { id: "cashflow", label: "Cashflow", icon: Wallet },
@@ -189,7 +193,7 @@ const TABS = [
 // compagnie de gestion externe.
 const TABS_MASQUES_GESTION_EXTERNE: ReadonlyArray<
   (typeof TABS)[number]["id"]
-> = ["baux", "maintenance", "contrat-gestion"];
+> = ["paiements", "baux", "maintenance", "contrat-gestion"];
 
 function fmtCurrency(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -225,6 +229,13 @@ export default function ImmeubleDetailPage({
       ? (wanted as (typeof TABS)[number]["id"])
       : "overview";
   });
+  // ?bail=<id> (depuis la fiche locataire) : surligne le bail visé dans
+  // l'onglet Baux & locataires pour qu'on le repère d'un coup d'œil.
+  const highlightBailId = (() => {
+    const raw = searchParams.get("bail");
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) ? n : null;
+  })();
   const switchTab = useCallback((next: (typeof TABS)[number]["id"]) => {
     setTab(next);
     // replaceState : pas de re-render Next, pas d'entrée d'historique par
@@ -863,12 +874,16 @@ export default function ImmeubleDetailPage({
               setList={setLogements}
             />
           ) : null}
+          {tab === "paiements" ? (
+            <PaiementsMoisSection immeubleId={immeubleId} />
+          ) : null}
           {tab === "baux" ? (
             <BauxTab
               immeubleId={immeubleId}
               list={baux}
               logements={logements}
               locataires={locataires}
+              highlightBailId={highlightBailId}
             />
           ) : null}
           {tab === "hypotheques" ? (
@@ -1751,18 +1766,19 @@ function BauxTab({
   immeubleId,
   list,
   logements,
-  locataires
+  locataires,
+  highlightBailId
 }: {
   immeubleId: number;
   list: Bail[] | null;
   logements: Logement[] | null;
   locataires: { id: number; full_name: string }[];
+  highlightBailId: number | null;
 }) {
   const logMap = new Map((logements || []).map((l) => [l.id, l.numero]));
   const locMap = new Map(locataires.map((l) => [l.id, l.full_name]));
   return (
     <div className="space-y-4">
-      <PaiementsMoisSection immeubleId={immeubleId} />
       {list === null ? (
         <Loading />
       ) : list.length === 0 ? (
@@ -1783,14 +1799,34 @@ function BauxTab({
             </thead>
             <tbody className="divide-y divide-brand-800">
               {list.map((b) => (
-                <tr key={b.id}>
+                <tr
+                  key={b.id}
+                  // Bail ciblé depuis la fiche locataire (?bail=…) :
+                  // surligné + amené à l'écran.
+                  ref={
+                    b.id === highlightBailId
+                      ? (el) =>
+                          el?.scrollIntoView({
+                            block: "center",
+                            behavior: "smooth"
+                          })
+                      : undefined
+                  }
+                  className={
+                    b.id === highlightBailId
+                      ? "bg-accent-500/10 ring-1 ring-inset ring-accent-500/40"
+                      : ""
+                  }
+                >
                   <td className="px-4 py-2 font-mono text-xs text-white">
                     {logMap.get(b.logement_id) || `#${b.logement_id}`}
                   </td>
                   <td className="px-4 py-2 text-xs">
                     <Link
                       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      href={`/immobilier/locataires/${b.locataire_id}` as any}
+                      href={
+                        `/immobilier/locataires/${b.locataire_id}?from=immeuble&imm=${immeubleId}` as any
+                      }
                       className="font-medium text-accent-500 hover:underline"
                     >
                       {locMap.get(b.locataire_id) ||
@@ -1844,6 +1880,8 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
   });
   const [err, setErr] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<number | null>(null);
+  const [relancingId, setRelancingId] = useState<number | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -1891,6 +1929,37 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
       setErr(`Marquer payé a échoué : ${(e as Error).message}`);
     } finally {
       setPayingId(null);
+    }
+  }
+
+  // Rappel de paiement MANUEL : courriel au locataire via Microsoft
+  // Graph (expéditeur = boîte configurée, cf. Paramètres). Rien
+  // d'automatique — chaque envoi est un clic (retour Phil 2026-07-10).
+  async function relancer(row: LoyerRow) {
+    setRelancingId(row.bail_id);
+    setInfo(null);
+    setErr(null);
+    try {
+      const r = await authedFetch("/api/v1/immobilier/loyers/relance", {
+        method: "POST",
+        body: JSON.stringify({ bail_id: row.bail_id, mois })
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      const res = (await r.json()) as {
+        niveau: number;
+        destinataire: string;
+      };
+      setInfo(
+        `Rappel ${res.niveau > 1 ? `(niveau ${res.niveau}) ` : ""}envoyé à ${res.destinataire}.`
+      );
+      await load();
+    } catch (e) {
+      setErr(`Rappel échoué : ${(e as Error).message}`);
+    } finally {
+      setRelancingId(null);
     }
   }
 
@@ -1978,6 +2047,11 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
           {err}
         </p>
       ) : null}
+      {info ? (
+        <p className="mb-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          {info}
+        </p>
+      ) : null}
 
       {rows === null ? (
         <Loading />
@@ -2018,7 +2092,7 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                       <Link
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         href={
-                          `/immobilier/locataires/${r.locataire_id}` as any
+                          `/immobilier/locataires/${r.locataire_id}?from=immeuble&imm=${immeubleId}` as any
                         }
                         className="font-medium text-accent-500 hover:underline"
                       >
@@ -2041,19 +2115,35 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                   </td>
                   <td className="py-2 text-right">
                     {r.etat !== "paye" ? (
-                      <button
-                        type="button"
-                        onClick={() => void marquerPaye(r)}
-                        disabled={payingId === r.bail_id}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                      >
-                        {payingId === r.bail_id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <Check className="h-3 w-3" />
-                        )}
-                        Marquer payé
-                      </button>
+                      <span className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => void relancer(r)}
+                          disabled={relancingId === r.bail_id}
+                          title="Envoyer un courriel de rappel au locataire (manuel)"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
+                        >
+                          {relancingId === r.bail_id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Mail className="h-3 w-3" />
+                          )}
+                          Rappel courriel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void marquerPaye(r)}
+                          disabled={payingId === r.bail_id}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                        >
+                          {payingId === r.bail_id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Check className="h-3 w-3" />
+                          )}
+                          Marquer payé
+                        </button>
+                      </span>
                     ) : null}
                   </td>
                 </tr>

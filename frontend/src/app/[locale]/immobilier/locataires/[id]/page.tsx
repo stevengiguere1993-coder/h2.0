@@ -18,9 +18,12 @@ import {
   StickyNote,
   Trash2,
   User,
-  Wallet
+  Wallet,
+  X
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+
+import { useSearchParams } from "next/navigation";
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
@@ -194,9 +197,23 @@ export default function LocataireDetailPage({
   const { id } = use(params);
   const locataireId = Number(id);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // ?from=immeuble&imm=<id> : le bouton retour ramène à la fiche de
+  // l'immeuble (d'où on est arrivé) plutôt qu'à la liste des locataires.
+  const fromImmeubleId = (() => {
+    if (searchParams.get("from") !== "immeuble") return null;
+    const n = Number(searchParams.get("imm"));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  })();
   const [dossier, setDossier] = useState<Dossier | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
+
+  // Édition inline du LOYER d'un bail (le loyer vit sur le bail — le
+  // modifier ici est répercuté partout : fiche immeuble, logement, KPIs).
+  const [editingBailId, setEditingBailId] = useState<number | null>(null);
+  const [loyerDraft, setLoyerDraft] = useState("");
+  const [savingLoyer, setSavingLoyer] = useState(false);
 
   // Édition inline de l'identité
   const [editing, setEditing] = useState(false);
@@ -241,6 +258,28 @@ export default function LocataireDetailPage({
   useEffect(() => {
     void loadDossier();
   }, [loadDossier]);
+
+  async function saveLoyer(bailId: number) {
+    const montant = Number(loyerDraft);
+    if (!Number.isFinite(montant) || montant < 0) return;
+    setSavingLoyer(true);
+    try {
+      const r = await authedFetch(`/api/v1/immobilier/baux/${bailId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ loyer_mensuel: montant })
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      setEditingBailId(null);
+      await loadDossier();
+    } catch (e) {
+      setError(`Loyer : ${(e as Error).message}`);
+    } finally {
+      setSavingLoyer(false);
+    }
+  }
 
   // Synchronise le brouillon de notes quand les notes serveur changent
   const serverNotes = dossier?.locataire.notes ?? "";
@@ -406,13 +445,27 @@ export default function LocataireDetailPage({
         ]}
       />
       <div className="p-4 pb-28 lg:p-6 lg:pb-28">
-        <Link
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/immobilier/locataires" as any}
-          className="inline-flex items-center text-xs text-white/50 hover:text-accent-500"
-        >
-          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Locataires
-        </Link>
+        {/* Retour CONTEXTUEL (retour Phil 2026-07-10) : arrivé depuis la
+            fiche immeuble (onglets Paiements / Baux & locataires) → on y
+            retourne ; sinon → liste des locataires. */}
+        {fromImmeubleId != null ? (
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={`/immobilier/immeubles/${fromImmeubleId}?tab=baux` as any}
+            className="inline-flex items-center text-xs text-white/50 hover:text-accent-500"
+          >
+            <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Immeuble · Baux &amp;
+            locataires
+          </Link>
+        ) : (
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/immobilier/locataires" as any}
+            className="inline-flex items-center text-xs text-white/50 hover:text-accent-500"
+          >
+            <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Locataires
+          </Link>
+        )}
 
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
@@ -599,6 +652,11 @@ export default function LocataireDetailPage({
                 </form>
               ) : (
                 <dl className="grid gap-x-8 gap-y-1.5 text-sm sm:grid-cols-2">
+                  {/* Courriel + téléphone listés ICI aussi (retour Phil
+                      2026-07-10 : saisis en édition mais invisibles en
+                      lecture — ils n'étaient que dans l'en-tête). */}
+                  <Row label="Courriel" value={loc.email || "—"} />
+                  <Row label="Téléphone" value={loc.phone || "—"} />
                   <Row label="Employeur" value={loc.employeur || "—"} />
                   <Row label="Revenu annuel" value={money(loc.revenu_annuel)} />
                   <Row
@@ -686,18 +744,20 @@ export default function LocataireDetailPage({
                           key={b.id}
                           onClick={() =>
                             router.push(
+                              // &bail=… : la fiche immeuble SURLIGNE ce
+                              // bail dans l'onglet Baux & locataires.
                               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                              `/immobilier/immeubles/${b.immeuble_id}?tab=baux` as any
+                              `/immobilier/immeubles/${b.immeuble_id}?tab=baux&bail=${b.id}` as any
                             )
                           }
                           className="group cursor-pointer transition-colors hover:bg-brand-800/30"
-                          title="Voir le bail sur la fiche de l'immeuble"
+                          title="Voir le bail sur la fiche de l'immeuble (il sera surligné)"
                         >
                           <td className="py-2.5 pr-3">
                             <Link
                               // eslint-disable-next-line @typescript-eslint/no-explicit-any
                               href={
-                                `/immobilier/immeubles/${b.immeuble_id}?tab=baux` as any
+                                `/immobilier/immeubles/${b.immeuble_id}?tab=baux&bail=${b.id}` as any
                               }
                               onClick={(e) => e.stopPropagation()}
                               className="font-medium text-white group-hover:underline group-hover:text-accent-500"
@@ -714,8 +774,63 @@ export default function LocataireDetailPage({
                           <td className="py-2.5 pr-3 text-xs text-white/60">
                             {b.date_debut} → {b.date_fin}
                           </td>
-                          <td className="py-2.5 pr-3 text-right text-white/80">
-                            {money(b.loyer_mensuel)}
+                          <td
+                            className="py-2.5 pr-3 text-right text-white/80"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {editingBailId === b.id ? (
+                              <span className="inline-flex items-center gap-1">
+                                <input
+                                  autoFocus
+                                  inputMode="decimal"
+                                  value={loyerDraft}
+                                  onChange={(e) =>
+                                    setLoyerDraft(e.target.value)
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Escape")
+                                      setEditingBailId(null);
+                                    if (e.key === "Enter")
+                                      void saveLoyer(b.id);
+                                  }}
+                                  className="w-24 rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-right text-xs text-white outline-none focus:border-accent-500"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={savingLoyer}
+                                  onClick={() => void saveLoyer(b.id)}
+                                  className="rounded-md border border-emerald-400/30 bg-emerald-500/10 p-1 text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-40"
+                                >
+                                  {savingLoyer ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <Check className="h-3 w-3" />
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingBailId(null)}
+                                  className="rounded-md border border-white/10 p-1 text-white/50 hover:text-white"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5">
+                                {money(b.loyer_mensuel)}
+                                <button
+                                  type="button"
+                                  title="Modifier le loyer de ce bail (répercuté partout)"
+                                  onClick={() => {
+                                    setEditingBailId(b.id);
+                                    setLoyerDraft(String(b.loyer_mensuel));
+                                  }}
+                                  className="rounded p-1 text-white/30 hover:bg-brand-800 hover:text-white"
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </button>
+                              </span>
+                            )}
                           </td>
                           <td className="py-2.5 pr-3 text-right text-white/60">
                             {b.depot_garantie != null
