@@ -28,6 +28,8 @@ import {
   X
 } from "lucide-react";
 
+import { useSearchParams } from "next/navigation";
+
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../../layout";
@@ -212,8 +214,26 @@ export default function ImmeubleDetailPage({
   const { id } = use(params);
   const immeubleId = Number(id);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { entreprises } = useImmobilierLayout();
-  const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("overview");
+  // L'onglet vit aussi dans l'URL (?tab=…) : les pages croisées (fiche
+  // locataire → onglet Baux, page logement → onglet Logements) peuvent
+  // ouvrir directement le bon onglet, et F5 le conserve.
+  const [tab, setTab] = useState<(typeof TABS)[number]["id"]>(() => {
+    const wanted = searchParams.get("tab");
+    return TABS.some((t) => t.id === wanted)
+      ? (wanted as (typeof TABS)[number]["id"])
+      : "overview";
+  });
+  const switchTab = useCallback((next: (typeof TABS)[number]["id"]) => {
+    setTab(next);
+    // replaceState : pas de re-render Next, pas d'entrée d'historique par
+    // clic d'onglet — le back du navigateur reste « quitter la fiche ».
+    const url = new URL(window.location.href);
+    if (next === "overview") url.searchParams.delete("tab");
+    else url.searchParams.set("tab", next);
+    window.history.replaceState(window.history.state, "", url.toString());
+  }, []);
   const [immeuble, setImmeuble] = useState<Immeuble | null>(null);
   const [ownerships, setOwnerships] = useState<Ownership[]>([]);
   const [showDelete, setShowDelete] = useState(false);
@@ -348,9 +368,9 @@ export default function ImmeubleDetailPage({
   // la vue d'ensemble.
   useEffect(() => {
     if (gestionExterne && TABS_MASQUES_GESTION_EXTERNE.includes(tab)) {
-      setTab("overview");
+      switchTab("overview");
     }
-  }, [gestionExterne, tab]);
+  }, [gestionExterne, tab, switchTab]);
 
   // Recharge les KPIs financiers (hypothèques, cash flow) après une mutation.
   const refreshFinancials = useCallback(async () => {
@@ -746,11 +766,6 @@ export default function ImmeubleDetailPage({
             </label>
             <ActionsMenu
               onEdit={openEdit}
-              onBonTravail={() => {
-                setBonResult(null);
-                setBonForm({ titre: "", description: "", logement: "" });
-                setShowBon(true);
-              }}
               onDelete={() => setShowDelete(true)}
             />
           </div>
@@ -764,7 +779,7 @@ export default function ImmeubleDetailPage({
 
         {/* KPIs financiers */}
         {financials ? (
-          <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+          <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Kpi
               label="Revenu mensuel"
               value={fmtCurrency(financials.revenu_brut_mensuel)}
@@ -781,17 +796,7 @@ export default function ImmeubleDetailPage({
                 (financials.cash_flow_mensuel || 0) >= 0 ? "emerald" : "rose"
               }
             />
-            <Kpi
-              label="Cap rate"
-              value={fmtPct(financials.cap_rate, 2)}
-              sub={
-                financials.cap_rate_estime
-                  ? "estimé (NOI ≈ 50 %)"
-                  : "NOI réel (dépenses saisies)"
-              }
-              icon={Percent}
-              tone="sky"
-            />
+            {/* Tuile « Cap rate » retirée (retour Phil 2026-07-10). */}
             <Kpi
               label="Occupation"
               value={`${(financials.taux_occupation * 100).toFixed(0)}%`}
@@ -825,7 +830,7 @@ export default function ImmeubleDetailPage({
               <button
                 key={t.id}
                 type="button"
-                onClick={() => setTab(t.id)}
+                onClick={() => switchTab(t.id)}
                 className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-4 py-2 text-sm font-medium transition ${
                   active
                     ? "border-accent-500 text-accent-500"
@@ -893,7 +898,25 @@ export default function ImmeubleDetailPage({
             />
           ) : null}
           {tab === "maintenance" ? (
-            <MaintenanceTab list={maintenance} rollup={rollup} />
+            <>
+              {/* Bouton déplacé du menu « Actions » (retour Phil) : le bon
+                  de travail est une action de maintenance. */}
+              <div className="mb-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBonResult(null);
+                    setBonForm({ titre: "", description: "", logement: "" });
+                    setShowBon(true);
+                  }}
+                  className="btn-outline-accent btn-sm"
+                  title="Créer un bon de travail (réparation) dans le volet Construction"
+                >
+                  <Wrench className="h-3.5 w-3.5" /> + Bon de travail
+                </button>
+              </div>
+              <MaintenanceTab list={maintenance} rollup={rollup} />
+            </>
           ) : null}
           {tab === "contrat-gestion" ? (
             <ContratGestionTab immeubleId={immeubleId} />
@@ -1281,11 +1304,9 @@ export default function ImmeubleDetailPage({
  *  repo). */
 function ActionsMenu({
   onEdit,
-  onBonTravail,
   onDelete
 }: {
   onEdit: () => void;
-  onBonTravail: () => void;
   onDelete: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -1332,17 +1353,8 @@ function ActionsMenu({
           >
             <Pencil className="h-3.5 w-3.5" /> Modifier
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onBonTravail();
-            }}
-            className={itemCls}
-            title="Créer un bon de travail (réparation) dans le volet Construction"
-          >
-            <Wrench className="h-3.5 w-3.5" /> Créer un bon de travail
-          </button>
+          {/* « Bon de travail » déplacé dans l'onglet Maintenance
+              (retour Phil 2026-07-10). */}
           <div className="my-1 border-t border-brand-800" />
           <button
             type="button"
@@ -1705,8 +1717,10 @@ function LogementsTab({
               <tr
                 key={l.id}
                 onClick={() =>
+                  // ?from=immeuble : le bouton retour de la page logement
+                  // ramène ici, onglet Logements (retour Phil 2026-07-10).
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  router.push(`/immobilier/logements/${l.id}` as any)
+                  router.push(`/immobilier/logements/${l.id}?from=immeuble` as any)
                 }
                 className="cursor-pointer transition hover:bg-brand-800/40"
               >
@@ -2422,12 +2436,40 @@ function HypothequeForm({
       : HYPO_FORM_EMPTY
   );
   // Le paiement est auto-calculé tant que l'usager ne l'a pas surchargé.
-  const [pmtOverride, setPmtOverride] = useState<boolean>(
-    initial?.paiement_mensuel != null
-  );
+  // ⚠️ Bug corrigé (retour Phil 2026-07-10) : en édition, le paiement
+  // STOCKÉ était traité comme une surcharge manuelle → changer la
+  // composition (semi → mensuelle) recalculait à l'écran mais sauvait
+  // l'ancien montant. On ne considère la valeur stockée comme manuelle
+  // que si elle DIFFÈRE du paiement calculable avec les intrants stockés.
+  const [pmtOverride, setPmtOverride] = useState<boolean>(() => {
+    if (initial?.paiement_mensuel == null) return false;
+    if (initial.taux_pct == null) return true; // pas calculable → manuel
+    const principal =
+      initial.balance_actuelle ?? initial.montant_initial ?? 0;
+    const calc = computePaiementMensuel(
+      Number(initial.taux_pct),
+      Number(initial.amortissement_mois || 0),
+      Number(principal),
+      initial.composition_interets === "mensuelle" ? "mensuelle" : "semi"
+    );
+    if (calc == null) return true;
+    return Math.abs(Number(initial.paiement_mensuel) - calc) > 0.05;
+  });
 
-  const set = (k: keyof HypoFormState) => (v: string) =>
+  // Champs qui alimentent le calcul du paiement : les modifier remet le
+  // paiement en mode auto (la nouvelle valeur calculée sera enregistrée).
+  const CALC_KEYS: ReadonlyArray<keyof HypoFormState> = [
+    "taux_pct",
+    "amortissement_annees",
+    "composition",
+    "balance_actuelle",
+    "montant_initial"
+  ];
+
+  const set = (k: keyof HypoFormState) => (v: string) => {
     setF((prev) => ({ ...prev, [k]: v }));
+    if (CALC_KEYS.includes(k)) setPmtOverride(false);
+  };
 
   const amortissementMois = f.amortissement_annees.trim()
     ? Math.round(Number(f.amortissement_annees) * 12)

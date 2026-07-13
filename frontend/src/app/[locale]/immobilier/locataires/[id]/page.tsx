@@ -1,30 +1,38 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
+  Check,
+  ChevronRight,
   Download,
   FileText,
+  Home,
   Loader2,
   Mail,
+  MessageSquare,
+  MoreHorizontal,
   Pencil,
   Phone,
+  StickyNote,
+  Trash2,
   User,
-  Wallet,
-  X
+  Wallet
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../../layout";
-import { CommunicationsTimeline } from "@/components/communications-timeline";
 
 type Locataire = {
   id: number;
   full_name: string;
   email?: string | null;
   phone?: string | null;
+  nas_last4?: string | null;
+  date_naissance?: string | null;
   employeur?: string | null;
   revenu_annuel?: number | null;
   paiement_score?: number | null;
@@ -53,10 +61,39 @@ type DossierPaiement = {
   en_retard: boolean;
 };
 
+type RenouvellementStatus = "propose" | "accepte" | "refuse" | "en_negociation";
+
+type DossierRenouvellement = {
+  id: number;
+  bail_id: number;
+  immeuble_name: string;
+  logement_numero: string | null;
+  avis_envoye_le: string;
+  nouveau_loyer: number | null;
+  nouvelle_date_debut: string | null;
+  nouvelle_date_fin: string | null;
+  status: RenouvellementStatus;
+  locataire_repondu_le: string | null;
+  notes: string | null;
+};
+
+type CommKind = "note" | "appel" | "courriel" | "sms" | "visite" | "autre";
+
+type Communication = {
+  id: number;
+  locataire_id: number;
+  kind: CommKind;
+  contenu: string;
+  auteur: string | null;
+  created_at: string;
+};
+
 type Dossier = {
   locataire: Locataire;
   baux: DossierBail[];
   paiements: DossierPaiement[];
+  renouvellements: DossierRenouvellement[];
+  communications: Communication[];
   nb_baux_actifs: number;
   loyer_actuel: number;
   depot_total: number;
@@ -72,11 +109,62 @@ const BAIL_STATUS_LABEL: Record<string, string> = {
   propose: "Proposé"
 };
 
+const RENOUVELLEMENT_STATUS: Record<
+  string,
+  { label: string; badge: string }
+> = {
+  propose: { label: "En attente de réponse", badge: "badge-amber" },
+  accepte: { label: "Accepté", badge: "badge-emerald" },
+  refuse: { label: "Refusé", badge: "badge-rose" },
+  en_negociation: { label: "En négociation", badge: "badge-blue" }
+};
+
+const COMM_KINDS: { value: CommKind; label: string }[] = [
+  { value: "note", label: "Note 📝" },
+  { value: "appel", label: "Appel 📞" },
+  { value: "courriel", label: "Courriel ✉️" },
+  { value: "sms", label: "SMS 💬" },
+  { value: "visite", label: "Visite 🏠" },
+  { value: "autre", label: "Autre" }
+];
+
+const COMM_ICONS: Record<string, LucideIcon> = {
+  note: StickyNote,
+  appel: Phone,
+  courriel: Mail,
+  sms: MessageSquare,
+  visite: Home,
+  autre: MoreHorizontal
+};
+
+const INPUT_CLS =
+  "rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
+
 function moisLabel(d: string): string {
   // d = "YYYY-MM-DD" → "mois AAAA"
   const dt = new Date(`${d}T00:00:00`);
   if (Number.isNaN(dt.getTime())) return d;
   return dt.toLocaleDateString("fr-CA", { month: "long", year: "numeric" });
+}
+
+function dateLabel(d: string | null | undefined): string {
+  if (!d) return "—";
+  const dt = new Date(d.includes("T") ? d : `${d}T00:00:00`);
+  if (Number.isNaN(dt.getTime())) return d;
+  return dt.toLocaleDateString("fr-CA", {
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  });
+}
+
+function dateTimeLabel(d: string): string {
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return d;
+  return dt.toLocaleString("fr-CA", {
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
 }
 
 function money(n: number | null | undefined): string {
@@ -88,6 +176,16 @@ function money(n: number | null | undefined): string {
   }).format(n);
 }
 
+type IdentityForm = {
+  full_name: string;
+  email: string;
+  phone: string;
+  date_naissance: string;
+  employeur: string;
+  revenu_annuel: string;
+  nas_last4: string;
+};
+
 export default function LocataireDetailPage({
   params
 }: {
@@ -95,11 +193,60 @@ export default function LocataireDetailPage({
 }) {
   const { id } = use(params);
   const locataireId = Number(id);
+  const router = useRouter();
   const [dossier, setDossier] = useState<Dossier | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
-  const [showEdit, setShowEdit] = useState(false);
+
+  // Édition inline de l'identité
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<IdentityForm>({
+    full_name: "",
+    email: "",
+    phone: "",
+    date_naissance: "",
+    employeur: "",
+    revenu_annuel: "",
+    nas_last4: ""
+  });
+  const [savingIdentity, setSavingIdentity] = useState(false);
+  const [identityErr, setIdentityErr] = useState<string | null>(null);
+
+  // Notes
+  const [notesDraft, setNotesDraft] = useState("");
+  const [savingNotes, setSavingNotes] = useState(false);
+  const [notesErr, setNotesErr] = useState<string | null>(null);
+  const [notesSaved, setNotesSaved] = useState(false);
+
+  // Communications (journal manuel)
+  const [commKind, setCommKind] = useState<CommKind>("note");
+  const [commContenu, setCommContenu] = useState("");
+  const [commSaving, setCommSaving] = useState(false);
+  const [commErr, setCommErr] = useState<string | null>(null);
+
   const loc = dossier?.locataire ?? null;
+
+  const loadDossier = useCallback(async () => {
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataireId}/dossier`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setDossier((await r.json()) as Dossier);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [locataireId]);
+
+  useEffect(() => {
+    void loadDossier();
+  }, [loadDossier]);
+
+  // Synchronise le brouillon de notes quand les notes serveur changent
+  const serverNotes = dossier?.locataire.notes ?? "";
+  useEffect(() => {
+    setNotesDraft(serverNotes);
+  }, [serverNotes]);
 
   async function etatDeCompte() {
     setPdfLoading(true);
@@ -119,23 +266,135 @@ export default function LocataireDetailPage({
     }
   }
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await authedFetch(
-          `/api/v1/immobilier/locataires/${locataireId}/dossier`
-        );
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        if (!cancelled) setDossier((await r.json()) as Dossier);
-      } catch (e) {
-        if (!cancelled) setError((e as Error).message);
+  function startEdit() {
+    if (!loc) return;
+    setForm({
+      full_name: loc.full_name,
+      email: loc.email ?? "",
+      phone: loc.phone ?? "",
+      date_naissance: loc.date_naissance ?? "",
+      employeur: loc.employeur ?? "",
+      revenu_annuel:
+        loc.revenu_annuel != null ? String(loc.revenu_annuel) : "",
+      nas_last4: loc.nas_last4 ?? ""
+    });
+    setIdentityErr(null);
+    setEditing(true);
+  }
+
+  function setField<K extends keyof IdentityForm>(k: K, v: string) {
+    setForm((f) => ({ ...f, [k]: v }));
+  }
+
+  async function saveIdentity(e: React.FormEvent) {
+    e.preventDefault();
+    if (!form.full_name.trim()) return;
+    setSavingIdentity(true);
+    setIdentityErr(null);
+    try {
+      const body: Record<string, unknown> = {
+        full_name: form.full_name.trim(),
+        email: form.email.trim() || null,
+        phone: form.phone.trim() || null,
+        date_naissance: form.date_naissance || null,
+        employeur: form.employeur.trim() || null,
+        revenu_annuel: form.revenu_annuel.trim()
+          ? Number(form.revenu_annuel)
+          : null,
+        nas_last4: form.nas_last4.trim() || null
+      };
+      const res = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataireId}`,
+        { method: "PATCH", body: JSON.stringify(body) }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [locataireId]);
+      await loadDossier();
+      setEditing(false);
+    } catch (e2) {
+      setIdentityErr((e2 as Error).message);
+    } finally {
+      setSavingIdentity(false);
+    }
+  }
+
+  async function saveNotes() {
+    setSavingNotes(true);
+    setNotesErr(null);
+    setNotesSaved(false);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataireId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            notes: notesDraft.trim() ? notesDraft : null
+          })
+        }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      await loadDossier();
+      setNotesSaved(true);
+      window.setTimeout(() => setNotesSaved(false), 2500);
+    } catch (e2) {
+      setNotesErr((e2 as Error).message);
+    } finally {
+      setSavingNotes(false);
+    }
+  }
+
+  async function addCommunication(e: React.FormEvent) {
+    e.preventDefault();
+    if (!commContenu.trim()) return;
+    setCommSaving(true);
+    setCommErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataireId}/communications`,
+        {
+          method: "POST",
+          body: JSON.stringify({ kind: commKind, contenu: commContenu.trim() })
+        }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      setCommContenu("");
+      await loadDossier();
+    } catch (e2) {
+      setCommErr((e2 as Error).message);
+    } finally {
+      setCommSaving(false);
+    }
+  }
+
+  async function deleteCommunication(commId: number) {
+    if (!window.confirm("Supprimer cette entrée du journal ?")) return;
+    setCommErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/locataires/communications/${commId}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setDossier((d) =>
+        d
+          ? {
+              ...d,
+              communications: d.communications.filter((c) => c.id !== commId)
+            }
+          : d
+      );
+    } catch (e2) {
+      setCommErr(`Suppression : ${(e2 as Error).message}`);
+    }
+  }
 
   return (
     <>
@@ -192,8 +451,9 @@ export default function LocataireDetailPage({
               <div className="ml-auto flex shrink-0 items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowEdit(true)}
-                  className="btn-secondary btn-sm"
+                  onClick={startEdit}
+                  disabled={editing}
+                  className="btn-secondary btn-sm disabled:opacity-50"
                   title="Modifier les informations du locataire"
                 >
                   <Pencil className="h-4 w-4" />
@@ -216,16 +476,138 @@ export default function LocataireDetailPage({
               </div>
             </header>
 
-            <section className="grid gap-4 sm:grid-cols-2">
-              <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Informations
-                </h2>
-                <dl className="space-y-1.5 text-sm">
+            {/* Informations — lecture ou édition inline */}
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
+                Informations
+              </h2>
+              {editing ? (
+                <form onSubmit={saveIdentity} className="space-y-3">
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+                        Nom complet *
+                      </label>
+                      <input
+                        required
+                        value={form.full_name}
+                        onChange={(e) => setField("full_name", e.target.value)}
+                        className={INPUT_CLS}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+                        Courriel
+                      </label>
+                      <input
+                        type="email"
+                        value={form.email}
+                        onChange={(e) => setField("email", e.target.value)}
+                        className={INPUT_CLS}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+                        Téléphone
+                      </label>
+                      <input
+                        value={form.phone}
+                        onChange={(e) => setField("phone", e.target.value)}
+                        className={`${INPUT_CLS} font-mono`}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+                        Date de naissance
+                      </label>
+                      <input
+                        type="date"
+                        value={form.date_naissance}
+                        onChange={(e) =>
+                          setField("date_naissance", e.target.value)
+                        }
+                        className={INPUT_CLS}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+                        Employeur
+                      </label>
+                      <input
+                        value={form.employeur}
+                        onChange={(e) => setField("employeur", e.target.value)}
+                        className={INPUT_CLS}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+                        Revenu annuel (CAD)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1000}
+                        value={form.revenu_annuel}
+                        onChange={(e) =>
+                          setField("revenu_annuel", e.target.value)
+                        }
+                        className={`${INPUT_CLS} font-mono`}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+                        NAS (4 derniers chiffres)
+                      </label>
+                      <input
+                        maxLength={4}
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={form.nas_last4}
+                        onChange={(e) => setField("nas_last4", e.target.value)}
+                        className={`${INPUT_CLS} font-mono`}
+                      />
+                    </div>
+                  </div>
+
+                  {identityErr ? (
+                    <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                      <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+                      {identityErr}
+                    </p>
+                  ) : null}
+
+                  <div className="flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
+                    <button
+                      type="button"
+                      onClick={() => setEditing(false)}
+                      disabled={savingIdentity}
+                      className="btn-secondary btn-sm"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingIdentity || !form.full_name.trim()}
+                      className="btn-accent btn-sm inline-flex items-center disabled:opacity-60"
+                    >
+                      {savingIdentity ? (
+                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      ) : null}
+                      Enregistrer
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <dl className="grid gap-x-8 gap-y-1.5 text-sm sm:grid-cols-2">
                   <Row label="Employeur" value={loc.employeur || "—"} />
+                  <Row label="Revenu annuel" value={money(loc.revenu_annuel)} />
                   <Row
-                    label="Revenu annuel"
-                    value={money(loc.revenu_annuel)}
+                    label="Date de naissance"
+                    value={dateLabel(loc.date_naissance)}
+                  />
+                  <Row
+                    label="NAS"
+                    value={loc.nas_last4 ? `•••• ${loc.nas_last4}` : "—"}
                   />
                   <Row
                     label="Score de paiement"
@@ -236,21 +618,7 @@ export default function LocataireDetailPage({
                     }
                   />
                 </dl>
-                {loc.notes ? (
-                  <p className="mt-3 whitespace-pre-wrap border-t border-brand-800 pt-3 text-xs text-white/70">
-                    {loc.notes}
-                  </p>
-                ) : null}
-              </div>
-
-              <CommunicationsTimeline
-                entityType="locataire"
-                entityId={loc.id}
-                title="Communications"
-                emptyHint="Aucun appel, SMS ni courriel avec ce locataire."
-                replyToE164={loc.phone || null}
-                email={loc.email || null}
-              />
+              )}
             </section>
 
             {/* KPIs gestion locative */}
@@ -309,18 +677,30 @@ export default function LocataireDetailPage({
                         <th className="py-2 pr-3 text-right">Loyer</th>
                         <th className="py-2 pr-3 text-right">Dépôt</th>
                         <th className="py-2 text-right">Statut</th>
+                        <th className="py-2" aria-hidden="true" />
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-brand-800/70">
                       {dossier.baux.map((b) => (
-                        <tr key={b.id}>
+                        <tr
+                          key={b.id}
+                          onClick={() =>
+                            router.push(
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                              `/immobilier/immeubles/${b.immeuble_id}?tab=baux` as any
+                            )
+                          }
+                          className="group cursor-pointer transition-colors hover:bg-brand-800/30"
+                          title="Voir le bail sur la fiche de l'immeuble"
+                        >
                           <td className="py-2.5 pr-3">
                             <Link
                               // eslint-disable-next-line @typescript-eslint/no-explicit-any
                               href={
-                                `/immobilier/immeubles/${b.immeuble_id}` as any
+                                `/immobilier/immeubles/${b.immeuble_id}?tab=baux` as any
                               }
-                              className="font-medium text-white hover:text-accent-500"
+                              onClick={(e) => e.stopPropagation()}
+                              className="font-medium text-white group-hover:underline group-hover:text-accent-500"
                             >
                               {b.immeuble_name}
                             </Link>
@@ -353,11 +733,92 @@ export default function LocataireDetailPage({
                               {BAIL_STATUS_LABEL[b.status] ?? b.status}
                             </span>
                           </td>
+                          <td className="py-2.5 pl-2 text-right">
+                            <ChevronRight className="ml-auto h-4 w-4 text-white/25 transition group-hover:translate-x-0.5 group-hover:text-accent-500" />
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+              )}
+            </section>
+
+            {/* Avis & renouvellements */}
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
+                Avis &amp; renouvellements
+              </h2>
+              {!dossier || dossier.renouvellements.length === 0 ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <p className="text-sm text-white/50">Aucun avis envoyé.</p>
+                  <Link
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    href={"/immobilier/renouvellements" as any}
+                    className="text-xs font-medium text-accent-500 hover:underline"
+                  >
+                    Gérer les renouvellements →
+                  </Link>
+                </div>
+              ) : (
+                <ul className="divide-y divide-brand-800/70">
+                  {dossier.renouvellements.map((r) => {
+                    const st = RENOUVELLEMENT_STATUS[r.status] ?? {
+                      label: r.status,
+                      badge: "badge-neutral"
+                    };
+                    return (
+                      <li
+                        key={r.id}
+                        className="flex flex-wrap items-start gap-x-4 gap-y-1 py-3 first:pt-0 last:pb-0"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-white">
+                            {r.immeuble_name}
+                            {r.logement_numero ? (
+                              <span className="text-white/40">
+                                {" "}
+                                · {r.logement_numero}
+                              </span>
+                            ) : null}
+                          </p>
+                          <p className="mt-0.5 text-xs text-white/60">
+                            Avis envoyé le {dateLabel(r.avis_envoye_le)}
+                            {r.nouveau_loyer != null ? (
+                              <>
+                                {" "}
+                                · nouveau loyer proposé :{" "}
+                                <span className="font-semibold text-white">
+                                  {money(r.nouveau_loyer)}
+                                </span>
+                              </>
+                            ) : null}
+                          </p>
+                          {r.nouvelle_date_debut && r.nouvelle_date_fin ? (
+                            <p className="text-xs text-white/45">
+                              Nouveau bail : {r.nouvelle_date_debut} →{" "}
+                              {r.nouvelle_date_fin}
+                            </p>
+                          ) : null}
+                          {r.locataire_repondu_le ? (
+                            <p className="text-xs text-white/50">
+                              Réponse du locataire le{" "}
+                              {dateLabel(r.locataire_repondu_le)}
+                            </p>
+                          ) : null}
+                          {r.notes ? (
+                            <p className="mt-1 text-xs italic text-white/45">
+                              {r.notes}
+                            </p>
+                          ) : null}
+                        </div>
+                        <span className={`badge ${st.badge} shrink-0`}>
+                          {st.label}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
               )}
             </section>
 
@@ -433,183 +894,138 @@ export default function LocataireDetailPage({
                 </div>
               )}
             </section>
+
+            {/* Communications — journal manuel */}
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
+                Communications
+              </h2>
+
+              <form
+                onSubmit={addCommunication}
+                className="mb-4 space-y-2 rounded-xl border border-brand-800 bg-brand-950/60 p-3"
+              >
+                <div className="flex flex-wrap items-start gap-2">
+                  <select
+                    value={commKind}
+                    onChange={(e) => setCommKind(e.target.value as CommKind)}
+                    className={`${INPUT_CLS} shrink-0`}
+                    aria-label="Type de communication"
+                  >
+                    {COMM_KINDS.map((k) => (
+                      <option key={k.value} value={k.value}>
+                        {k.label}
+                      </option>
+                    ))}
+                  </select>
+                  <textarea
+                    rows={2}
+                    value={commContenu}
+                    onChange={(e) => setCommContenu(e.target.value)}
+                    placeholder="Consigner un échange, une entente, un suivi…"
+                    className={`${INPUT_CLS} min-w-[200px] flex-1 resize-y`}
+                  />
+                  <button
+                    type="submit"
+                    disabled={commSaving || !commContenu.trim()}
+                    className="btn-accent btn-sm inline-flex shrink-0 items-center disabled:opacity-60"
+                  >
+                    {commSaving ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : null}
+                    Consigner
+                  </button>
+                </div>
+              </form>
+
+              {commErr ? (
+                <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                  <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+                  {commErr}
+                </p>
+              ) : null}
+
+              {!dossier || dossier.communications.length === 0 ? (
+                <p className="text-sm text-white/50">
+                  Aucune communication consignée pour ce locataire.
+                </p>
+              ) : (
+                <ul className="space-y-3">
+                  {dossier.communications.map((c) => {
+                    const Icon = COMM_ICONS[c.kind] ?? MoreHorizontal;
+                    return (
+                      <li key={c.id} className="group flex gap-3">
+                        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-500/10 text-accent-500">
+                          <Icon className="h-3.5 w-3.5" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-baseline gap-x-2 text-[11px] text-white/45">
+                            <span>{dateTimeLabel(c.created_at)}</span>
+                            {c.auteur ? <span>· {c.auteur}</span> : null}
+                          </div>
+                          <p className="mt-0.5 whitespace-pre-wrap text-sm text-white/85">
+                            {c.contenu}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void deleteCommunication(c.id)}
+                          className="self-start rounded p-1 text-white/25 transition hover:bg-rose-500/10 hover:text-rose-300"
+                          title="Supprimer cette entrée"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+
+            {/* Notes */}
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
+                Notes
+              </h2>
+              <textarea
+                rows={4}
+                value={notesDraft}
+                onChange={(e) => {
+                  setNotesDraft(e.target.value);
+                  setNotesSaved(false);
+                }}
+                placeholder="Notes internes sur ce locataire…"
+                className={`${INPUT_CLS} w-full resize-y`}
+              />
+              {notesErr ? (
+                <p className="mt-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                  <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+                  {notesErr}
+                </p>
+              ) : null}
+              <div className="mt-2 flex items-center justify-end gap-3">
+                {notesSaved ? (
+                  <span className="inline-flex items-center gap-1 text-xs text-emerald-300">
+                    <Check className="h-3.5 w-3.5" /> Enregistré
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => void saveNotes()}
+                  disabled={savingNotes}
+                  className="btn-accent btn-sm inline-flex items-center disabled:opacity-60"
+                >
+                  {savingNotes ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : null}
+                  Enregistrer
+                </button>
+              </div>
+            </section>
           </div>
         )}
       </div>
-
-      {showEdit && loc ? (
-        <EditLocataireModal
-          locataire={loc}
-          onClose={() => setShowEdit(false)}
-          onSaved={(updated) => {
-            setDossier((d) =>
-              d ? { ...d, locataire: { ...d.locataire, ...updated } } : d
-            );
-            setShowEdit(false);
-          }}
-        />
-      ) : null}
     </>
-  );
-}
-
-function EditLocataireModal({
-  locataire,
-  onClose,
-  onSaved
-}: {
-  locataire: Locataire;
-  onClose: () => void;
-  onSaved: (l: Locataire) => void;
-}) {
-  const [form, setForm] = useState({
-    full_name: locataire.full_name,
-    email: locataire.email ?? "",
-    phone: locataire.phone ?? "",
-    employeur: locataire.employeur ?? "",
-    revenu_annuel:
-      locataire.revenu_annuel != null ? String(locataire.revenu_annuel) : "",
-    notes: locataire.notes ?? ""
-  });
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  function set<K extends keyof typeof form>(k: K, v: string) {
-    setForm((f) => ({ ...f, [k]: v }));
-  }
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.full_name.trim()) return;
-    setSaving(true);
-    setErr(null);
-    try {
-      const body: Record<string, unknown> = {
-        full_name: form.full_name.trim(),
-        email: form.email.trim() || null,
-        phone: form.phone.trim() || null,
-        employeur: form.employeur.trim() || null,
-        revenu_annuel: form.revenu_annuel.trim()
-          ? Number(form.revenu_annuel)
-          : null,
-        notes: form.notes.trim() ? form.notes : null
-      };
-      const res = await authedFetch(
-        `/api/v1/immobilier/locataires/${locataire.id}`,
-        { method: "PATCH", body: JSON.stringify(body) }
-      );
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
-      }
-      onSaved((await res.json()) as Locataire);
-    } catch (e2) {
-      setErr((e2 as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
-      <div className="my-8 w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
-          <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-accent-500">
-            <Pencil className="h-4 w-4" /> Modifier le locataire
-          </h2>
-          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <form onSubmit={submit} className="grid gap-4 p-5">
-          <div>
-            <label className="label">Nom complet *</label>
-            <input
-              required
-              value={form.full_name}
-              onChange={(e) => set("full_name", e.target.value)}
-              className="input"
-            />
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="label">Email</label>
-              <input
-                type="email"
-                value={form.email}
-                onChange={(e) => set("email", e.target.value)}
-                className="input"
-              />
-            </div>
-            <div>
-              <label className="label">Téléphone</label>
-              <input
-                value={form.phone}
-                onChange={(e) => set("phone", e.target.value)}
-                className="input font-mono"
-              />
-            </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="label">Employeur</label>
-              <input
-                value={form.employeur}
-                onChange={(e) => set("employeur", e.target.value)}
-                className="input"
-              />
-            </div>
-            <div>
-              <label className="label">Revenu annuel (CAD)</label>
-              <input
-                type="number"
-                min={0}
-                step={1000}
-                value={form.revenu_annuel}
-                onChange={(e) => set("revenu_annuel", e.target.value)}
-                className="input font-mono"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="label">Notes</label>
-            <textarea
-              rows={3}
-              value={form.notes}
-              onChange={(e) => set("notes", e.target.value)}
-              className="input"
-            />
-          </div>
-
-          {err ? (
-            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-              {err}
-            </p>
-          ) : null}
-
-          <div className="flex items-center justify-end gap-2 border-t border-brand-800 pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className="btn-secondary btn-sm"
-            >
-              Annuler
-            </button>
-            <button
-              type="submit"
-              disabled={saving || !form.full_name.trim()}
-              className="btn-accent btn-sm inline-flex items-center disabled:opacity-60"
-            >
-              {saving ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : null}
-              Enregistrer
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
   );
 }
 
