@@ -225,6 +225,8 @@ class BailUpdate(BaseModel):
     date_fin: Optional[date] = None
     loyer_mensuel: Optional[float] = Field(default=None, ge=0)
     depot_garantie: Optional[float] = Field(default=None, ge=0)
+    # Date de remise du dépôt (page Dépôts → « Marquer rendu »).
+    depot_rendu_le: Optional[date] = None
     chauffage_inclus: Optional[bool] = None
     eau_chaude_inclus: Optional[bool] = None
     electricite_inclus: Optional[bool] = None
@@ -237,6 +239,7 @@ class BailUpdate(BaseModel):
 class BailRead(BailBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    depot_rendu_le: Optional[date] = None
     created_at: datetime
     updated_at: datetime
     signed_at: Optional[datetime] = None

@@ -623,7 +623,13 @@ export default function BonsTravailPage() {
               ))}
             </select>
             <span className="text-xs text-white/50">
-              {visibleBons.length} / {bons.length}
+              {/* « 15 / 15 » sans filtre était cryptique (retour Phil) :
+                  on n'affiche le ratio que quand un immeuble est filtré. */}
+              {filterImmeubleId === "all"
+                ? `${bons.length} bon${bons.length > 1 ? "s" : ""}`
+                : `${visibleBons.length} de ${bons.length} bon${
+                    bons.length > 1 ? "s" : ""
+                  }`}
             </span>
           </div>
         ) : null}

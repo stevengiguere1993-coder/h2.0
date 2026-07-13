@@ -1,34 +1,38 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useState } from "react";
 import {
   ArrowLeft,
   Building2,
+  Check,
   DoorOpen,
   FileText,
   Loader2,
   Pencil,
+  StickyNote,
+  Trash2,
   TrendingUp,
   User,
-  Wrench
+  Wrench,
+  X
 } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../../layout";
 import {
   fmtPieces,
-  LogementFiche,
-  type LogementFicheBail,
   type LogementFicheData
 } from "@/components/immobilier/logement-fiche";
 
 /**
- * Fiche logement — VRAIE page 360 d'un logement : infos, locataire
- * actuel, historique des locataires (tous les baux), fluctuation du
- * loyer de bail en bail, rénos/maintenance (bons de travail) et
- * documents (baux). L'édition réutilise la modale partagée
- * LogementFiche.
+ * Fiche logement — VRAIE page 360 d'un logement : infos (ÉDITABLES
+ * directement dans la page — retour Phil 2026-07-10, plus de modale),
+ * mini-KPIs, locataire actuel, historique des locataires, fluctuation
+ * du loyer, rénos/maintenance, documents et notes. Le bouton retour est
+ * contextuel : ?from=immeuble → fiche immeuble onglet Logements, sinon
+ * liste des logements.
  */
 
 type DossierLocataire = { id: number; full_name: string };
@@ -132,27 +136,143 @@ export default function LogementDetailPage({
   const { id } = use(params);
   const logementId = Number(id);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const fromImmeuble = searchParams.get("from") === "immeuble";
   const [dossier, setDossier] = useState<Dossier | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showEdit, setShowEdit] = useState(false);
+
+  // Édition INLINE des infos (plus de modale) + notes.
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editErr, setEditErr] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    numero: "",
+    nb_pieces_decimal: "",
+    nb_chambres: "",
+    nb_sdb: "",
+    superficie_pi2: "",
+    etage: "",
+    type: "residentiel",
+    status: "vacant",
+    loyer_demande: ""
+  });
+  const [notesDraft, setNotesDraft] = useState("");
+  const [notesSaving, setNotesSaving] = useState(false);
+  const [notesSaved, setNotesSaved] = useState(false);
+
+  const loadDossier = useCallback(async () => {
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/logements/${logementId}/dossier`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as Dossier;
+      setDossier(d);
+      setNotesDraft(d.logement.notes || "");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [logementId]);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await authedFetch(
-          `/api/v1/immobilier/logements/${logementId}/dossier`
-        );
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        if (!cancelled) setDossier((await r.json()) as Dossier);
-      } catch (e) {
-        if (!cancelled) setError((e as Error).message);
+    void loadDossier();
+  }, [loadDossier]);
+
+  function startEdit() {
+    const l = dossier?.logement;
+    if (!l) return;
+    setForm({
+      numero: l.numero || "",
+      nb_pieces_decimal:
+        l.nb_pieces_decimal != null ? String(l.nb_pieces_decimal) : "",
+      nb_chambres: l.nb_chambres != null ? String(l.nb_chambres) : "",
+      nb_sdb: l.nb_sdb != null ? String(l.nb_sdb) : "",
+      superficie_pi2:
+        l.superficie_pi2 != null ? String(l.superficie_pi2) : "",
+      etage: l.etage != null ? String(l.etage) : "",
+      type: l.type || "residentiel",
+      status: l.status || "vacant",
+      loyer_demande: l.loyer_demande != null ? String(l.loyer_demande) : ""
+    });
+    setEditErr(null);
+    setEditing(true);
+  }
+
+  async function saveEdit() {
+    setSaving(true);
+    setEditErr(null);
+    try {
+      const num = (v: string) => (v.trim() === "" ? null : Number(v));
+      const r = await authedFetch(
+        `/api/v1/immobilier/logements/${logementId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            numero: form.numero.trim() || undefined,
+            nb_pieces_decimal: num(form.nb_pieces_decimal),
+            nb_chambres: num(form.nb_chambres),
+            nb_sdb: num(form.nb_sdb),
+            superficie_pi2: num(form.superficie_pi2),
+            etage: num(form.etage),
+            type: form.type,
+            status: form.status,
+            loyer_demande: num(form.loyer_demande)
+          })
+        }
+      );
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [logementId]);
+      await loadDossier();
+      setEditing(false);
+    } catch (e) {
+      setEditErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveNotes() {
+    setNotesSaving(true);
+    setNotesSaved(false);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/logements/${logementId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            notes: notesDraft.trim() ? notesDraft : null
+          })
+        }
+      );
+      if (r.ok) {
+        setNotesSaved(true);
+        window.setTimeout(() => setNotesSaved(false), 2500);
+      }
+    } finally {
+      setNotesSaving(false);
+    }
+  }
+
+  async function deleteLogement() {
+    if (
+      !window.confirm(
+        "Supprimer ce logement ? Ses baux et son historique seront supprimés."
+      )
+    )
+      return;
+    const r = await authedFetch(
+      `/api/v1/immobilier/logements/${logementId}`,
+      { method: "DELETE" }
+    );
+    if (r.ok) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      router.push("/immobilier/logements" as any);
+    } else {
+      setEditErr("Suppression impossible.");
+    }
+  }
 
   const lg = dossier?.logement ?? null;
   const bailActif = dossier
@@ -170,18 +290,6 @@ export default function LogementDetailPage({
     ? Math.max(...dossier.historique_loyer.map((p) => p.loyer_mensuel), 1)
     : 1;
 
-  // Baux au format attendu par la modale partagée (section Occupation).
-  const ficheBails: LogementFicheBail[] =
-    dossier?.baux.map((b) => ({
-      id: b.id,
-      logement_id: logementId,
-      locataire_id: b.locataire?.id ?? 0,
-      date_debut: b.date_debut,
-      date_fin: b.date_fin,
-      loyer_mensuel: b.loyer_mensuel,
-      status: b.status
-    })) ?? [];
-
   return (
     <>
       <ImmobilierTopbar
@@ -192,14 +300,19 @@ export default function LogementDetailPage({
         ]}
       />
       <div className="p-4 lg:p-6 pb-28">
-        {dossier ? (
+        {/* Retour CONTEXTUEL (retour Phil 2026-07-10) : arrivé depuis la
+            fiche immeuble → on y retourne, onglet Logements ouvert ;
+            sinon → liste des logements. */}
+        {fromImmeuble && dossier ? (
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={`/immobilier/immeubles/${dossier.immeuble.id}` as any}
+            href={
+              `/immobilier/immeubles/${dossier.immeuble.id}?tab=logements` as any
+            }
             className="inline-flex items-center text-xs text-white/50 hover:text-accent-500"
           >
             <ArrowLeft className="mr-1 h-3.5 w-3.5" />
-            {dossier.immeuble.name}
+            {dossier.immeuble.name} · Logements
           </Link>
         ) : (
           <Link
@@ -237,17 +350,82 @@ export default function LogementDetailPage({
                 </p>
               </div>
               <div className="ml-auto flex shrink-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowEdit(true)}
-                  className="btn-secondary btn-sm"
-                  title="Modifier les informations du logement"
-                >
-                  <Pencil className="h-4 w-4" />
-                  Modifier
-                </button>
+                {editing ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={deleteLogement}
+                      className="btn-sm inline-flex items-center gap-1.5 rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 hover:bg-rose-500/20"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Supprimer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditing(false)}
+                      className="btn-secondary btn-sm"
+                    >
+                      <X className="h-4 w-4" /> Annuler
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveEdit}
+                      disabled={saving}
+                      className="btn-accent btn-sm disabled:opacity-60"
+                    >
+                      {saving ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Check className="h-4 w-4" />
+                      )}
+                      Enregistrer
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={startEdit}
+                    className="btn-secondary btn-sm"
+                    title="Modifier les informations directement dans la page"
+                  >
+                    <Pencil className="h-4 w-4" />
+                    Modifier
+                  </button>
+                )}
               </div>
             </header>
+
+            {editErr ? (
+              <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                {editErr}
+              </p>
+            ) : null}
+
+            {/* Mini-KPIs */}
+            <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <MiniKpi
+                label="Loyer actuel"
+                value={bailActif ? money(bailActif.loyer_mensuel) : "Vacant"}
+              />
+              <MiniKpi
+                label="Loyer demandé"
+                value={
+                  lg.loyer_demande != null ? money(lg.loyer_demande) : "—"
+                }
+              />
+              <MiniKpi
+                label="Occupé depuis"
+                value={bailActif ? fmtDate(bailActif.date_debut) : "—"}
+              />
+              <MiniKpi
+                label="Rénos & maintenance"
+                value={money(
+                  dossier.bons_travail.reduce(
+                    (s, b) => s + (b.montant || 0),
+                    0
+                  )
+                )}
+              />
+            </section>
 
             {/* (a) Infos + (b) Locataire actuel & bail actif */}
             <section className="grid gap-4 lg:grid-cols-2">
@@ -255,36 +433,160 @@ export default function LogementDetailPage({
                 <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
                   Infos
                 </h2>
-                <dl className="space-y-1.5 text-sm">
-                  <Row label="Type" value={lg.type} />
-                  <Row label="Pièces" value={fmtPieces(lg.nb_pieces_decimal)} />
-                  <Row
-                    label="Chambres"
-                    value={lg.nb_chambres != null ? String(lg.nb_chambres) : "—"}
-                  />
-                  <Row
-                    label="Salles de bain"
-                    value={lg.nb_sdb != null ? String(lg.nb_sdb) : "—"}
-                  />
-                  <Row
-                    label="Superficie"
-                    value={
-                      lg.superficie_pi2 != null
-                        ? `${lg.superficie_pi2} pi²`
-                        : "—"
-                    }
-                  />
-                  <Row
-                    label="Étage"
-                    value={lg.etage != null ? String(lg.etage) : "—"}
-                  />
-                  <Row label="Loyer demandé" value={money(lg.loyer_demande)} />
-                </dl>
-                {lg.notes ? (
-                  <p className="mt-3 whitespace-pre-wrap border-t border-brand-800 pt-3 text-xs text-white/70">
-                    {lg.notes}
-                  </p>
-                ) : null}
+                {editing ? (
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <EditField label="Numéro">
+                      <input
+                        value={form.numero}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, numero: e.target.value }))
+                        }
+                        className={inputCls}
+                      />
+                    </EditField>
+                    <EditField label="Pièces (ex. 3.5 = 3½)">
+                      <input
+                        inputMode="decimal"
+                        value={form.nb_pieces_decimal}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            nb_pieces_decimal: e.target.value
+                          }))
+                        }
+                        className={inputCls}
+                      />
+                    </EditField>
+                    <EditField label="Chambres">
+                      <input
+                        inputMode="numeric"
+                        value={form.nb_chambres}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            nb_chambres: e.target.value
+                          }))
+                        }
+                        className={inputCls}
+                      />
+                    </EditField>
+                    <EditField label="Salles de bain">
+                      <input
+                        inputMode="decimal"
+                        value={form.nb_sdb}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, nb_sdb: e.target.value }))
+                        }
+                        className={inputCls}
+                      />
+                    </EditField>
+                    <EditField label="Superficie (pi²)">
+                      <input
+                        inputMode="decimal"
+                        value={form.superficie_pi2}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            superficie_pi2: e.target.value
+                          }))
+                        }
+                        className={inputCls}
+                      />
+                    </EditField>
+                    <EditField label="Étage">
+                      <input
+                        inputMode="numeric"
+                        value={form.etage}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, etage: e.target.value }))
+                        }
+                        className={inputCls}
+                      />
+                    </EditField>
+                    <EditField label="Type">
+                      <select
+                        value={form.type}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, type: e.target.value }))
+                        }
+                        className={inputCls}
+                      >
+                        <option value="residentiel">Résidentiel</option>
+                        <option value="commercial">Commercial</option>
+                        <option value="mixte">Mixte</option>
+                        <option value="unifamilial">Unifamilial</option>
+                        <option value="autre">Autre</option>
+                      </select>
+                    </EditField>
+                    <EditField label="Statut">
+                      <select
+                        value={form.status}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, status: e.target.value }))
+                        }
+                        className={inputCls}
+                      >
+                        <option value="occupe">Occupé</option>
+                        <option value="vacant">Vacant</option>
+                        <option value="reserve">Réservé</option>
+                        <option value="hors_location">Hors location</option>
+                      </select>
+                    </EditField>
+                    <EditField label="Loyer demandé ($/mois)">
+                      <input
+                        inputMode="decimal"
+                        value={form.loyer_demande}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            loyer_demande: e.target.value
+                          }))
+                        }
+                        className={inputCls}
+                      />
+                    </EditField>
+                  </div>
+                ) : (
+                  <dl className="space-y-1.5 text-sm">
+                    <Row label="Type" value={lg.type} />
+                    <Row
+                      label="Pièces"
+                      value={fmtPieces(lg.nb_pieces_decimal)}
+                    />
+                    <Row
+                      label="Chambres"
+                      value={
+                        lg.nb_chambres != null ? String(lg.nb_chambres) : "—"
+                      }
+                    />
+                    <Row
+                      label="Salles de bain"
+                      value={lg.nb_sdb != null ? String(lg.nb_sdb) : "—"}
+                    />
+                    <Row
+                      label="Superficie"
+                      value={
+                        lg.superficie_pi2 != null
+                          ? `${lg.superficie_pi2} pi²`
+                          : "—"
+                      }
+                    />
+                    <Row
+                      label="Étage"
+                      value={lg.etage != null ? String(lg.etage) : "—"}
+                    />
+                    <Row
+                      label="Loyer demandé"
+                      value={
+                        lg.loyer_demande != null
+                          ? money(lg.loyer_demande)
+                          : bailActif
+                            ? "Non défini"
+                            : "—"
+                      }
+                    />
+                  </dl>
+                )}
               </div>
 
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
@@ -577,28 +879,76 @@ export default function LogementDetailPage({
                 </ul>
               )}
             </section>
+
+            {/* (g) Notes */}
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+              <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-accent-500">
+                <StickyNote className="h-4 w-4" />
+                Notes
+              </h2>
+              <textarea
+                rows={4}
+                value={notesDraft}
+                onChange={(e) => setNotesDraft(e.target.value)}
+                placeholder="Particularités du logement, travaux à prévoir, clés/serrures, électros inclus…"
+                className="block w-full rounded-md border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none focus:border-accent-500"
+              />
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={saveNotes}
+                  disabled={notesSaving}
+                  className="btn-secondary btn-sm disabled:opacity-60"
+                >
+                  {notesSaving ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Check className="h-3.5 w-3.5" />
+                  )}
+                  Enregistrer les notes
+                </button>
+                {notesSaved ? (
+                  <span className="text-xs text-emerald-300">
+                    Notes enregistrées.
+                  </span>
+                ) : null}
+              </div>
+            </section>
           </div>
         )}
       </div>
-
-      {showEdit && lg ? (
-        <LogementFiche
-          logement={lg}
-          bails={ficheBails}
-          onClose={() => setShowEdit(false)}
-          onSaved={(updated) => {
-            setDossier((d) =>
-              d ? { ...d, logement: { ...d.logement, ...updated } } : d
-            );
-            setShowEdit(false);
-          }}
-          onDeleted={() => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            router.push("/immobilier/logements" as any);
-          }}
-        />
-      ) : null}
     </>
+  );
+}
+
+const inputCls =
+  "mt-0.5 block w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
+
+function EditField({
+  label,
+  children
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="text-[11px] font-semibold text-white/60">
+      {label}
+      {children}
+    </label>
+  );
+}
+
+function MiniKpi({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-3.5">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-white/45">
+        {label}
+      </div>
+      <div className="mt-0.5 truncate text-lg font-bold text-white">
+        {value}
+      </div>
+    </div>
   );
 }
 

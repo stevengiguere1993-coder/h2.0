@@ -353,6 +353,9 @@ class Bail(Base, TimestampUpdateMixin):
     depot_garantie: Mapped[Optional[float]] = mapped_column(
         Numeric(10, 2), nullable=True
     )
+    # Date de REMISE du dépôt au locataire (bail terminé → dépôt rendu).
+    # NULL = toujours détenu (ou à rendre si le bail est terminé/résilié).
+    depot_rendu_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     # Inclusions (chauffage, eau chaude, électricité, internet…)
     chauffage_inclus: Mapped[bool] = mapped_column(

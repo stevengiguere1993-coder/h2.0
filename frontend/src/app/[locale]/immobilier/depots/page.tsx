@@ -1,15 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Loader2, Search, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  Loader2,
+  Pencil,
+  RotateCcw,
+  Search,
+  ShieldCheck,
+  X
+} from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 
 /**
- * Dépôts de garantie — suivi des dépôts détenus (baux actifs) et à rendre
- * (baux terminés/résiliés). Évite d'oublier de rembourser un locataire.
+ * Dépôts de garantie — OPÉRATIONNEL (retour Phil 2026-07-10) : on peut
+ * saisir/modifier le montant du dépôt de chaque bail directement ici
+ * (PATCH bail), marquer un dépôt comme rendu au locataire, et les baux
+ * actifs SANS dépôt apparaissent comme lignes « à saisir ».
  */
 
 type DepotRow = {
@@ -20,7 +31,8 @@ type DepotRow = {
   locataire_id: number | null;
   locataire_name: string | null;
   montant: number;
-  statut: string; // "detenu" | "a_rendre"
+  statut: string; // "detenu" | "a_rendre" | "rendu" | "aucun"
+  depot_rendu_le: string | null;
   date_debut: string;
   date_fin: string;
 };
@@ -30,6 +42,8 @@ type Overview = {
   total_detenu: number;
   total_a_rendre: number;
   nb_a_rendre: number;
+  total_rendu: number;
+  nb_sans_depot: number;
 };
 
 function money(n: number | null | undefined): string {
@@ -47,9 +61,27 @@ export default function DepotsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statutFilter, setStatutFilter] = useState<
-    "all" | "detenu" | "a_rendre"
+    "all" | "detenu" | "a_rendre" | "aucun" | "rendu"
   >("all");
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
+  const [actionErr, setActionErr] = useState<string | null>(null);
+
+  async function patchBail(
+    bailId: number,
+    body: Record<string, unknown>
+  ): Promise<boolean> {
+    setActionErr(null);
+    const r = await authedFetch(`/api/v1/immobilier/baux/${bailId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      setActionErr(t.slice(0, 200) || `HTTP ${r.status}`);
+      return false;
+    }
+    return true;
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -193,12 +225,25 @@ export default function DepotsPage() {
             active={statutFilter === "a_rendre"}
             onClick={() => setStatutFilter("a_rendre")}
           />
-          {data ? (
-            <span className="text-xs text-white/50">
-              {filteredRows.length} / {data.rows.length}
-            </span>
-          ) : null}
+          <FilterPill
+            label={`À saisir${
+              data?.nb_sans_depot ? ` (${data.nb_sans_depot})` : ""
+            }`}
+            active={statutFilter === "aucun"}
+            onClick={() => setStatutFilter("aucun")}
+          />
+          <FilterPill
+            label="Rendus"
+            active={statutFilter === "rendu"}
+            onClick={() => setStatutFilter("rendu")}
+          />
         </div>
+
+        {actionErr ? (
+          <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+            {actionErr}
+          </p>
+        ) : null}
 
         <div className="mt-4 overflow-x-auto rounded-2xl border border-brand-800">
           <table className="w-full min-w-[720px] text-sm">
@@ -265,18 +310,65 @@ export default function DepotsPage() {
                     <td className="px-3 py-2.5 text-xs text-white/60">
                       {r.date_debut} → {r.date_fin}
                     </td>
-                    <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-white">
-                      {money(r.montant)}
+                    <td className="px-3 py-2.5 text-right">
+                      <MontantCell
+                        row={r}
+                        onSave={async (montant) => {
+                          const ok = await patchBail(r.bail_id, {
+                            depot_garantie: montant
+                          });
+                          if (ok) void load();
+                          return ok;
+                        }}
+                      />
                     </td>
                     <td className="px-3 py-2.5 text-right">
                       {r.statut === "a_rendre" ? (
-                        <span className="badge badge-rose">
-                          À rendre
+                        <span className="inline-flex items-center gap-2">
+                          <span className="badge badge-rose">À rendre</span>
+                          <button
+                            type="button"
+                            title="Le dépôt a été remboursé au locataire"
+                            onClick={async () => {
+                              const today = new Date()
+                                .toISOString()
+                                .slice(0, 10);
+                              const ok = await patchBail(r.bail_id, {
+                                depot_rendu_le: today
+                              });
+                              if (ok) void load();
+                            }}
+                            className="rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/20"
+                          >
+                            <Check className="mr-1 inline h-3 w-3" />
+                            Marquer rendu
+                          </button>
+                        </span>
+                      ) : r.statut === "rendu" ? (
+                        <span className="inline-flex items-center gap-2">
+                          <span className="badge badge-emerald">
+                            Rendu{r.depot_rendu_le ? ` le ${r.depot_rendu_le}` : ""}
+                          </span>
+                          <button
+                            type="button"
+                            title="Annuler — le dépôt n'a pas été rendu"
+                            onClick={async () => {
+                              const ok = await patchBail(r.bail_id, {
+                                depot_rendu_le: null
+                              });
+                              if (ok) void load();
+                            }}
+                            className="rounded-md border border-white/10 px-1.5 py-1 text-white/50 hover:text-white"
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ) : r.statut === "aucun" ? (
+                        <span className="badge border border-white/10 text-white/50">
+                          À saisir
                         </span>
                       ) : (
-                        <span className="badge badge-violet">
-                          Détenu
-                        </span>
+                        <span className="badge badge-violet">Détenu</span>
                       )}
                     </td>
                   </tr>
@@ -287,6 +379,88 @@ export default function DepotsPage() {
         </div>
       </div>
     </>
+  );
+}
+
+function MontantCell({
+  row,
+  onSave
+}: {
+  row: DepotRow;
+  onSave: (montant: number) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  if (!editing) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <span
+          className={`font-semibold tabular-nums ${
+            row.montant > 0 ? "text-white" : "text-white/35"
+          }`}
+        >
+          {row.montant > 0 ? money(row.montant) : "—"}
+        </span>
+        <button
+          type="button"
+          title={row.montant > 0 ? "Modifier le dépôt" : "Saisir le dépôt"}
+          onClick={() => {
+            setVal(row.montant > 0 ? String(row.montant) : "");
+            setEditing(true);
+          }}
+          className="rounded p-1 text-white/35 hover:bg-brand-900 hover:text-white"
+        >
+          <Pencil className="h-3 w-3" />
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      <input
+        autoFocus
+        type="number"
+        min={0}
+        step={0.01}
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        onKeyDown={async (e) => {
+          if (e.key === "Escape") setEditing(false);
+          if (e.key === "Enter" && val.trim() !== "") {
+            setSaving(true);
+            if (await onSave(Number(val))) setEditing(false);
+            setSaving(false);
+          }
+        }}
+        className="w-24 rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-right text-xs text-white outline-none focus:border-accent-500"
+        placeholder="0,00"
+      />
+      <button
+        type="button"
+        disabled={saving || val.trim() === "" || Number.isNaN(Number(val))}
+        onClick={async () => {
+          setSaving(true);
+          if (await onSave(Number(val))) setEditing(false);
+          setSaving(false);
+        }}
+        className="rounded-md border border-emerald-400/30 bg-emerald-500/10 p-1 text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-40"
+      >
+        {saving ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : (
+          <Check className="h-3 w-3" />
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={() => setEditing(false)}
+        className="rounded-md border border-white/10 p-1 text-white/50 hover:text-white"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </span>
   );
 }
 

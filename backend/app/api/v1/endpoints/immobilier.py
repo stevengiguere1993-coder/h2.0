@@ -2257,7 +2257,10 @@ class DepotRow(BaseModel):
     locataire_id: Optional[int] = None
     locataire_name: Optional[str] = None
     montant: float
-    statut: str  # "detenu" | "a_rendre"
+    # "detenu" | "a_rendre" | "rendu" | "aucun" (bail actif sans dépôt
+    # saisi — permet de le saisir directement depuis la page Dépôts).
+    statut: str
+    depot_rendu_le: Optional[date] = None
     date_debut: date
     date_fin: date
 
@@ -2267,6 +2270,8 @@ class DepotOverview(BaseModel):
     total_detenu: float = 0.0
     total_a_rendre: float = 0.0
     nb_a_rendre: int = 0
+    total_rendu: float = 0.0
+    nb_sans_depot: int = 0
 
 
 @router.get("/depots/overview", response_model=DepotOverview)
@@ -2301,12 +2306,12 @@ async def depots_overview(
     if not log_by_id:
         return DepotOverview(rows=[])
 
+    # TOUS les baux visibles — y compris les actifs SANS dépôt saisi
+    # (statut « aucun ») pour permettre la saisie depuis la page Dépôts.
     baux = (
         await db.execute(
             select(Bail).where(
                 Bail.logement_id.in_(list(log_by_id.keys())),
-                Bail.depot_garantie.is_not(None),
-                Bail.depot_garantie > 0,
             )
         )
     ).scalars().all()
@@ -2328,17 +2333,29 @@ async def depots_overview(
     rows: List[DepotRow] = []
     total_detenu = 0.0
     total_a_rendre = 0.0
+    total_rendu = 0.0
     for b in baux:
         lg = log_by_id.get(b.logement_id)
         im = imm_by_id.get(lg.immeuble_id) if lg else None
         if im is None:
             continue
         montant = float(b.depot_garantie or 0)
-        statut = "a_rendre" if b.status in a_rendre_status else "detenu"
-        if statut == "a_rendre":
+        if montant <= 0:
+            # Bail sans dépôt : on n'affiche que les ACTIFS, comme ligne
+            # « à saisir » — les baux passés sans dépôt n'apportent rien.
+            if b.status != BailStatus.ACTIF.value:
+                continue
+            statut = "aucun"
+        elif b.depot_rendu_le is not None:
+            statut = "rendu"
+            total_rendu += montant
+        elif b.status in a_rendre_status:
+            statut = "a_rendre"
             total_a_rendre += montant
-        elif b.status == BailStatus.ACTIF.value:
-            total_detenu += montant
+        else:
+            statut = "detenu"
+            if b.status == BailStatus.ACTIF.value:
+                total_detenu += montant
         loc = loc_by_id.get(b.locataire_id)
         rows.append(DepotRow(
             bail_id=b.id,
@@ -2349,17 +2366,20 @@ async def depots_overview(
             locataire_name=loc.full_name if loc else None,
             montant=montant,
             statut=statut,
+            depot_rendu_le=b.depot_rendu_le,
             date_debut=b.date_debut,
             date_fin=b.date_fin,
         ))
 
-    rank = {"a_rendre": 0, "detenu": 1}
+    rank = {"a_rendre": 0, "detenu": 1, "aucun": 2, "rendu": 3}
     rows.sort(key=lambda r: (rank.get(r.statut, 9), r.immeuble_name))
     return DepotOverview(
         rows=rows,
         total_detenu=round(total_detenu, 2),
         total_a_rendre=round(total_a_rendre, 2),
         nb_a_rendre=sum(1 for r in rows if r.statut == "a_rendre"),
+        total_rendu=round(total_rendu, 2),
+        nb_sans_depot=sum(1 for r in rows if r.statut == "aucun"),
     )
 
 

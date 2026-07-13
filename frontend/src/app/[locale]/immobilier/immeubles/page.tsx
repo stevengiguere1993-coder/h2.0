@@ -132,13 +132,12 @@ export default function ImmeublesListPage() {
             <button
               type="button"
               onClick={() => setShowCreate(true)}
-              disabled={currentEntrepriseId == null}
               title={
-                currentEntrepriseId == null
-                  ? "Sélectionne une entreprise (à côté de la recherche) d'abord"
-                  : `Créer un immeuble pour ${currentEnt?.name}`
+                currentEnt
+                  ? `Créer un immeuble pour ${currentEnt.name}`
+                  : "Créer un immeuble (l'entreprise propriétaire se choisit dans le formulaire)"
               }
-              className="btn-outline-accent btn-sm disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn-outline-accent btn-sm"
             >
               <Plus className="h-3.5 w-3.5" />
               Nouvel immeuble
@@ -288,7 +287,7 @@ export default function ImmeublesListPage() {
       {showCreate ? (
         <CreateImmeubleModal
           entrepriseId={currentEntrepriseId}
-          entrepriseName={currentEnt?.name || null}
+          entreprises={entreprises}
           onClose={() => setShowCreate(false)}
           onSaved={() => {
             setShowCreate(false);
@@ -350,15 +349,19 @@ function ModalShell({
 
 function CreateImmeubleModal({
   entrepriseId,
-  entrepriseName,
+  entreprises,
   onClose,
   onSaved
 }: {
   entrepriseId: number | null;
-  entrepriseName: string | null;
+  entreprises: { id: number; name: string }[];
   onClose: () => void;
   onSaved: () => void;
 }) {
+  // Entreprise propriétaire choisie DANS le formulaire (pré-remplie si un
+  // filtre entreprise est actif sur la page) — le bouton « Nouvel
+  // immeuble » n'est plus jamais grisé (retour Phil 2026-07-10).
+  const [entId, setEntId] = useState<number | null>(entrepriseId);
   const [form, setForm] = useState({
     address: "",
     city: "",
@@ -387,10 +390,8 @@ function CreateImmeubleModal({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (entrepriseId == null) {
-      setErr(
-        "Sélectionne une entreprise propriétaire (sélecteur à côté de la recherche) avant de créer un immeuble."
-      );
+    if (entId == null) {
+      setErr("Choisis l'entreprise propriétaire de l'immeuble.");
       return;
     }
     setSaving(true);
@@ -400,7 +401,7 @@ function CreateImmeubleModal({
       const body: Record<string, unknown> = {
         address: form.address.trim(),
         type: form.type,
-        entreprise_id: entrepriseId // auto-rattache l'ownership 100%
+        entreprise_id: entId // auto-rattache l'ownership 100%
       };
       if (form.city.trim()) body.city = form.city.trim();
       if (form.postal_code.trim()) body.postal_code = form.postal_code.trim();
@@ -458,11 +459,30 @@ function CreateImmeubleModal({
   return (
     <ModalShell title="Nouvel immeuble" onClose={onClose}>
       <form onSubmit={submit} className="grid gap-4">
-        {entrepriseName ? (
-          <p className="rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
-            Cet immeuble sera rattaché à <strong className="text-white">{entrepriseName}</strong> à 100 %. Tu pourras ajuster les parts plus tard depuis la fiche immeuble &gt; section Ownership.
+        <div>
+          <label className="label">Entreprise propriétaire</label>
+          <select
+            required
+            value={entId == null ? "" : String(entId)}
+            onChange={(e) =>
+              setEntId(e.target.value ? Number(e.target.value) : null)
+            }
+            className="input"
+          >
+            <option value="" disabled>
+              Choisir l&apos;entreprise…
+            </option>
+            {entreprises.map((ent) => (
+              <option key={ent.id} value={ent.id}>
+                {ent.name}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[10px] text-white/40">
+            L&apos;immeuble lui sera rattaché à 100 % — les parts s&apos;ajustent
+            ensuite dans la fiche immeuble, section Ownership.
           </p>
-        ) : null}
+        </div>
         <div>
           <label className="label">Adresse</label>
           <input

@@ -293,6 +293,9 @@ async def ensure_critical_columns() -> None:
         ("immeuble_depenses", "is_pourcentage",
          "BOOLEAN NOT NULL DEFAULT FALSE"),
         ("immeuble_depenses", "taxable", "BOOLEAN NOT NULL DEFAULT FALSE"),
+        # Dépôts de garantie opérationnels 2026-07 : date de remise du
+        # dépôt au locataire (page Dépôts → « Marquer rendu »).
+        ("imm_baux", "depot_rendu_le", "DATE"),
     )
     for table, column, col_type in critical_columns:
         try:
