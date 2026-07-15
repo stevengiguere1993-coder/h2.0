@@ -296,6 +296,24 @@ async def ensure_critical_columns() -> None:
         # Dépôts de garantie opérationnels 2026-07 : date de remise du
         # dépôt au locataire (page Dépôts → « Marquer rendu »).
         ("imm_baux", "depot_rendu_le", "DATE"),
+        # Contrat de gestion 2026-07 : accusé de lecture du MANDATAIRE,
+        # distinct de celui du Mandant (opened_at/open_count) — sinon
+        # l'ouverture du lien mandataire est attribuée au mandant.
+        (
+            "contrats_gestion",
+            "mandataire_opened_at",
+            "TIMESTAMP WITH TIME ZONE",
+        ),
+        (
+            "contrats_gestion",
+            "mandataire_last_opened_at",
+            "TIMESTAMP WITH TIME ZONE",
+        ),
+        (
+            "contrats_gestion",
+            "mandataire_open_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
     )
     for table, column, col_type in critical_columns:
         try:

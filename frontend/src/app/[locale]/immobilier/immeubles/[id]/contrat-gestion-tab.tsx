@@ -51,8 +51,11 @@ type Contrat = {
   mandataire_courriel: string | null;
   status: string;
   sent_at: string | null;
+  // Accusés de lecture par partie : opened_* = Mandant seulement.
   opened_at: string | null;
   open_count: number;
+  mandataire_opened_at: string | null;
+  mandataire_open_count: number;
   mandataire_signed_at: string | null;
   mandataire_signed_name: string | null;
   signed_at: string | null;
@@ -348,7 +351,11 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
                 <strong>Mandataire (MGV)</strong> —{" "}
                 {selected.mandataire_signed_at
                   ? `signé le ${fmtDate(selected.mandataire_signed_at)}`
-                  : "en attente de signature"}
+                  : `en attente de signature${
+                      (selected.mandataire_open_count || 0) > 0
+                        ? ` · ouvert ${selected.mandataire_open_count}×`
+                        : ""
+                    }`}
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -698,8 +705,12 @@ export function ContratGestionTab({ immeubleId }: { immeubleId: number }) {
                 </div>
                 <p className="mt-0.5 truncate text-xs text-white/50">
                   {c.mandant_courriel || "—"}
+                  {c.status === "attente_mgv" &&
+                  (c.mandataire_open_count || 0) > 0
+                    ? ` · Ouvert par MGV ${c.mandataire_open_count}×`
+                    : ""}
                   {c.status === "attente_client" && c.open_count > 0
-                    ? ` · Ouvert ${c.open_count}×`
+                    ? ` · Ouvert par le mandant ${c.open_count}×`
                     : ""}
                   {c.status === "signe"
                     ? ` · Signé le ${fmtDate(c.signed_at)}`

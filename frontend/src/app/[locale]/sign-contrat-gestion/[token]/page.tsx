@@ -37,6 +37,8 @@ type PublicContrat = {
   mandataire_name: string;
   compagnie: string | null;
   representant_nom: string | null;
+  // Nom à préremplir selon la partie (mandataire vs mandant).
+  prefill_name: string | null;
   caution_requise: boolean;
   already_signed: boolean;
   signed_name: string | null;
@@ -81,7 +83,9 @@ export default function SignContratGestionPage() {
       if (!res.ok) throw new Error(`http_${res.status}`);
       const json = (await res.json()) as PublicContrat;
       setData(json);
-      if (!signedName) setSignedName(json.representant_nom || "");
+      // Préremplissage PAR PARTIE (bug : le nom du représentant du
+      // MANDANT apparaissait aussi sur la page du MANDATAIRE).
+      if (!signedName) setSignedName(json.prefill_name || "");
     } catch {
       setError("Lien invalide ou expiré.");
     } finally {

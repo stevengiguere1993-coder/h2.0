@@ -63,6 +63,11 @@ class PublicContrat(BaseModel):
     signed_name: Optional[str]
     signed_at: Optional[datetime]
     body_markdown: str
+    # Nom à PRÉREMPLIR dans le champ signature, selon la partie :
+    # mandataire → signataire MGV (mandataire_nom), mandant →
+    # représentant du mandant. Bug 2026-07-10 : le frontend préremplissait
+    # toujours le représentant du mandant, même côté mandataire.
+    prefill_name: Optional[str] = None
 
 
 class SignRequest(BaseModel):
@@ -148,6 +153,11 @@ async def _to_public(
         signed_name=who,
         signed_at=when,
         body_markdown=body,
+        prefill_name=(
+            contrat.mandataire_nom
+            if party == "mandataire"
+            else contrat.representant_nom
+        ),
     )
 
 
@@ -155,12 +165,22 @@ async def _to_public(
 async def read_contrat(token: str, db: DBSession) -> PublicContrat:
     contrat, party = await _load_by_token(db, token)
     if contrat.status != ContratGestionStatus.SIGNE.value:
+        # Accusé de lecture PAR PARTIE (bug 2026-07-10 : l'ouverture du
+        # lien mandataire était comptée comme une ouverture du mandant).
         try:
             now = datetime.now(timezone.utc)
-            if contrat.opened_at is None:
-                contrat.opened_at = now
-            contrat.last_opened_at = now
-            contrat.open_count = (contrat.open_count or 0) + 1
+            if party == "mandataire":
+                if contrat.mandataire_opened_at is None:
+                    contrat.mandataire_opened_at = now
+                contrat.mandataire_last_opened_at = now
+                contrat.mandataire_open_count = (
+                    contrat.mandataire_open_count or 0
+                ) + 1
+            else:
+                if contrat.opened_at is None:
+                    contrat.opened_at = now
+                contrat.last_opened_at = now
+                contrat.open_count = (contrat.open_count or 0) + 1
             await db.commit()
         except Exception:
             await db.rollback()

@@ -104,8 +104,12 @@ class ContratRead(BaseModel):
     mandataire_courriel: Optional[str] = None
     status: str
     sent_at: Optional[str] = None
+    # Accusés de lecture PAR PARTIE : opened_at/open_count = Mandant
+    # uniquement ; mandataire_opened_at/mandataire_open_count = Mandataire.
     opened_at: Optional[str] = None
     open_count: int = 0
+    mandataire_opened_at: Optional[str] = None
+    mandataire_open_count: int = 0
     mandataire_signed_at: Optional[str] = None
     mandataire_signed_name: Optional[str] = None
     signed_at: Optional[str] = None
@@ -182,6 +186,8 @@ def _to_read(contrat: ContratGestion) -> ContratRead:
         sent_at=_iso(contrat.sent_at),
         opened_at=_iso(contrat.opened_at),
         open_count=contrat.open_count or 0,
+        mandataire_opened_at=_iso(contrat.mandataire_opened_at),
+        mandataire_open_count=contrat.mandataire_open_count or 0,
         mandataire_signed_at=_iso(contrat.mandataire_signed_at),
         mandataire_signed_name=contrat.mandataire_signed_name,
         signed_at=_iso(contrat.signed_at),
