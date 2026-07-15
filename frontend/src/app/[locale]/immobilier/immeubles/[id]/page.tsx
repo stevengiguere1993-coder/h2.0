@@ -23,6 +23,7 @@ import {
   Percent,
   Plus,
   Receipt,
+  Settings as SettingsIcon,
   Star,
   Trash2,
   TrendingUp,
@@ -105,6 +106,9 @@ type Hypotheque = {
   preteur: string;
   montant_initial: number;
   balance_actuelle?: number | null;
+  // Balance théorique au jour J (tableau d'amortissement, calculée
+  // par le backend) — utilisée quand aucune balance n'est saisie.
+  balance_calculee?: number | null;
   taux_pct?: number | null;
   type_taux?: string | null;
   amortissement_mois?: number | null;
@@ -411,13 +415,21 @@ export default function ImmeubleDetailPage({
     )[0];
   }, [evaluations]);
 
-  // Balance = balance_actuelle sinon montant_initial (aligné backend :
-  // une balance jamais saisie n'est pas une hypothèque à 0 $).
+  // Balance = saisie > calculée (amortissement au jour J, backend) >
+  // montant initial — même priorité que le backend (balance_effective).
   const balanceHypoActives = useMemo(
     () =>
       (hypotheques || [])
         .filter((h) => h.status === "active")
-        .reduce((s, h) => s + (h.balance_actuelle ?? h.montant_initial ?? 0), 0),
+        .reduce(
+          (s, h) =>
+            s +
+            (h.balance_actuelle ??
+              h.balance_calculee ??
+              h.montant_initial ??
+              0),
+          0
+        ),
     [hypotheques]
   );
 
@@ -835,7 +847,7 @@ export default function ImmeubleDetailPage({
 
         {/* Tabs */}
         <nav
-          className="mt-6 flex items-center gap-1 overflow-x-auto"
+          className="mt-6 flex items-center gap-1 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           style={{ borderBottom: "1px solid #25252d" }}
         >
           {visibleTabs.map((t) => {
@@ -1474,22 +1486,42 @@ function Kpi({
 function Section({
   title,
   children,
+  action,
   empty = "—"
 }: {
   title: string;
   children: React.ReactNode;
+  // Contrôle optionnel affiché à droite du titre (ex. engrenage).
+  action?: React.ReactNode;
   empty?: string;
 }) {
   void empty;
   return (
     <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
-        {title}
-      </h2>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          {title}
+        </h2>
+        {action || null}
+      </div>
       {children}
     </section>
   );
 }
+
+type AlertesConfig = {
+  bail_fin_enabled: boolean;
+  bail_fin_jours: number;
+  terme_hypo_enabled: boolean;
+  terme_hypo_mois: number;
+};
+
+const ALERTES_DEFAUTS: AlertesConfig = {
+  bail_fin_enabled: true,
+  bail_fin_jours: 90,
+  terme_hypo_enabled: true,
+  terme_hypo_mois: 6
+};
 
 function OverviewTab({
   immeuble,
@@ -1509,23 +1541,48 @@ function OverviewTab({
   const logMap = new Map((logements || []).map((l) => [l.id, l.numero]));
   const gestionExterne = !!immeuble.gestion_externe;
 
-  // Baux actifs qui échoient d'ici 90 jours. En gestion externe, les
-  // baux sont suivis par la compagnie de gestion — pas d'alerte ici.
-  const bauxBientot = (gestionExterne ? [] : baux || []).filter((b) => {
+  // Seuils configurables des alertes (globaux au pôle) — engrenage de
+  // la section « À surveiller » (retour Phil 2026-07-14).
+  const [alertesCfg, setAlertesCfg] =
+    useState<AlertesConfig>(ALERTES_DEFAUTS);
+  const [showAlertesCfg, setShowAlertesCfg] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch("/api/v1/immobilier/alertes-config")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d) setAlertesCfg({ ...ALERTES_DEFAUTS, ...d });
+      })
+      .catch(() => {
+        /* défauts conservés */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Baux actifs qui échoient d'ici N jours (configurable). En gestion
+  // externe, les baux sont suivis par la compagnie — pas d'alerte ici.
+  const bauxBientot = (
+    gestionExterne || !alertesCfg.bail_fin_enabled ? [] : baux || []
+  ).filter((b) => {
     if (b.status !== "actif" || !b.date_fin) return false;
     const jours =
       (new Date(`${b.date_fin}T00:00:00`).getTime() - Date.now()) /
       (1000 * 60 * 60 * 24);
-    return jours >= 0 && jours < 90;
+    return jours >= 0 && jours < alertesCfg.bail_fin_jours;
   });
 
-  // Hypothèques actives dont le terme se termine dans moins de 6 mois.
-  const termesBientot = (hypotheques || []).filter((h) => {
+  // Hypothèques actives dont le terme finit dans moins de N mois.
+  const termesBientot = (
+    alertesCfg.terme_hypo_enabled ? hypotheques || [] : []
+  ).filter((h) => {
     if (h.status !== "active" || !h.date_fin_terme) return false;
     const mois =
       (new Date(`${h.date_fin_terme}T00:00:00`).getTime() - Date.now()) /
       (1000 * 60 * 60 * 24 * 30.44);
-    return mois < 6;
+    return mois < alertesCfg.terme_hypo_mois;
   });
 
   const hasAlerts = bauxBientot.length > 0 || termesBientot.length > 0;
@@ -1619,9 +1676,27 @@ function OverviewTab({
       </Section>
 
       <div className="lg:col-span-2">
-        <Section title="À surveiller">
+        <Section
+          title="À surveiller"
+          action={
+            <button
+              type="button"
+              onClick={() => setShowAlertesCfg(true)}
+              className="btn-ghost btn-xs"
+              title="Configurer les alertes (seuils, activation)"
+            >
+              <SettingsIcon className="h-3.5 w-3.5" />
+            </button>
+          }
+        >
           {!hasAlerts ? (
-            <p className="text-xs text-white/40">Rien à signaler.</p>
+            <p className="text-xs text-white/40">
+              Rien à signaler
+              {!alertesCfg.bail_fin_enabled &&
+              !alertesCfg.terme_hypo_enabled
+                ? " — toutes les alertes sont désactivées (engrenage pour les réactiver)."
+                : "."}
+            </p>
           ) : (
             <div className="grid gap-3 lg:grid-cols-2">
               {bauxBientot.length > 0 ? (
@@ -1630,9 +1705,11 @@ function OverviewTab({
                     <AlertTriangle className="h-4 w-4 flex-shrink-0" />
                     {bauxBientot.length}{" "}
                     {bauxBientot.length > 1 ? "baux échoient" : "bail échoit"}{" "}
-                    d&apos;ici 90 jours
+                    d&apos;ici {alertesCfg.bail_fin_jours} jours
                   </p>
-                  <ul className="mt-2 space-y-1 text-xs text-amber-200/80">
+                  {/* text-amber-200 SANS alpha : la variante /80 échappe au
+                      remap du thème clair → texte illisible (retour Phil). */}
+                  <ul className="mt-2 space-y-1 text-xs text-amber-200 opacity-90">
                     {bauxBientot.map((b) => (
                       <li
                         key={b.id}
@@ -1652,9 +1729,12 @@ function OverviewTab({
                 <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
                   <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
                     <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                    Fin de terme hypothécaire dans moins de 6 mois
+                    Fin de terme hypothécaire dans moins de{" "}
+                    {alertesCfg.terme_hypo_mois} mois
                   </p>
-                  <ul className="mt-2 space-y-1 text-xs text-amber-200/80">
+                  {/* text-amber-200 SANS alpha : la variante /80 échappe au
+                      remap du thème clair → texte illisible (retour Phil). */}
+                  <ul className="mt-2 space-y-1 text-xs text-amber-200 opacity-90">
                     {termesBientot.map((h) => (
                       <li
                         key={h.id}
@@ -1674,6 +1754,173 @@ function OverviewTab({
             </div>
           )}
         </Section>
+      </div>
+
+      {showAlertesCfg ? (
+        <AlertesCfgModal
+          initial={alertesCfg}
+          onClose={() => setShowAlertesCfg(false)}
+          onSaved={(cfg) => {
+            setAlertesCfg(cfg);
+            setShowAlertesCfg(false);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function AlertesCfgModal({
+  initial,
+  onClose,
+  onSaved
+}: {
+  initial: AlertesConfig;
+  onClose: () => void;
+  onSaved: (cfg: AlertesConfig) => void;
+}) {
+  const [bailOn, setBailOn] = useState(initial.bail_fin_enabled);
+  const [bailJours, setBailJours] = useState(String(initial.bail_fin_jours));
+  const [hypoOn, setHypoOn] = useState(initial.terme_hypo_enabled);
+  const [hypoMois, setHypoMois] = useState(String(initial.terme_hypo_mois));
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const jours = Number(bailJours);
+  const mois = Number(hypoMois);
+  const valid =
+    Number.isInteger(jours) &&
+    jours >= 1 &&
+    jours <= 730 &&
+    Number.isInteger(mois) &&
+    mois >= 1 &&
+    mois <= 36;
+
+  async function save() {
+    if (!valid) return;
+    setSaving(true);
+    setErr(null);
+    const cfg: AlertesConfig = {
+      bail_fin_enabled: bailOn,
+      bail_fin_jours: jours,
+      terme_hypo_enabled: hypoOn,
+      terme_hypo_mois: mois
+    };
+    try {
+      const res = await authedFetch("/api/v1/immobilier/alertes-config", {
+        method: "PUT",
+        body: JSON.stringify(cfg)
+      });
+      if (!res.ok)
+        throw new Error(
+          (await res.text()).slice(0, 200) || `HTTP ${res.status}`
+        );
+      onSaved(cfg);
+    } catch (e) {
+      setErr(`Enregistrement échoué : ${(e as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const rowCls =
+    "flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-800 bg-brand-950/60 px-4 py-3";
+  const numCls =
+    "w-20 rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-center text-xs text-white outline-none focus:border-accent-500";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+      <div className="my-8 w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-accent-500">
+            <SettingsIcon className="h-4 w-4" /> Alertes « À surveiller »
+          </h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="space-y-3 p-5">
+          <p className="text-xs text-white/50">
+            Réglages globaux — appliqués à la section « À surveiller » de
+            tous les immeubles.
+          </p>
+
+          <div className={rowCls}>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-white">
+              <input
+                type="checkbox"
+                checked={bailOn}
+                onChange={(e) => setBailOn(e.target.checked)}
+                className="h-4 w-4 accent-accent-500"
+              />
+              Baux qui échoient bientôt
+            </label>
+            <span className="flex items-center gap-2 text-xs text-white/60">
+              d&apos;ici
+              <input
+                inputMode="numeric"
+                value={bailJours}
+                onChange={(e) => setBailJours(e.target.value)}
+                disabled={!bailOn}
+                className={`${numCls} disabled:opacity-40`}
+              />
+              jours
+            </span>
+          </div>
+
+          <div className={rowCls}>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-white">
+              <input
+                type="checkbox"
+                checked={hypoOn}
+                onChange={(e) => setHypoOn(e.target.checked)}
+                className="h-4 w-4 accent-accent-500"
+              />
+              Fins de terme hypothécaire
+            </label>
+            <span className="flex items-center gap-2 text-xs text-white/60">
+              d&apos;ici
+              <input
+                inputMode="numeric"
+                value={hypoMois}
+                onChange={(e) => setHypoMois(e.target.value)}
+                disabled={!hypoOn}
+                className={`${numCls} disabled:opacity-40`}
+              />
+              mois
+            </span>
+          </div>
+
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              {err}
+            </p>
+          ) : null}
+
+          <div className="flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="btn-secondary btn-sm"
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={saving || !valid}
+              className="btn-accent btn-sm disabled:opacity-50"
+            >
+              {saving ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Check className="mr-1 h-3.5 w-3.5" />
+              )}
+              Enregistrer
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1714,6 +1961,11 @@ function LogementsTab({
       onSaved={(saved) => {
         setList((prev) => [...(prev ?? []), saved]);
         setShowCreate(false);
+        // Ouvrir directement la fiche du logement créé (retour Phil) —
+        // le retour contextuel ramène à l'onglet Logements de l'immeuble.
+        router.push(
+          `/immobilier/logements/${saved.id}?from=immeuble` as any
+        );
       }}
       onDeleted={(id) => {
         setList((prev) => prev?.filter((l) => l.id !== id) ?? prev);
@@ -2408,6 +2660,46 @@ function computePaiementMensuel(
 }
 
 /**
+ * Balance théorique au jour J selon le tableau d'amortissement canadien
+ * — miroir du backend (services/hypotheque_calc.py) pour l'aperçu live
+ * du formulaire : B = P·(1+i)^k − PMT·((1+i)^k − 1)/i.
+ */
+function computeBalanceCalculee(
+  montantInitial: number,
+  tauxPct: number,
+  amortissementMois: number,
+  composition: CompositionInterets,
+  dateDebutIso: string
+): number | null {
+  if (!(montantInitial > 0) || !(amortissementMois > 0)) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateDebutIso);
+  if (!m || Number.isNaN(tauxPct)) return null;
+  const debut = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const now = new Date();
+  let k =
+    (now.getFullYear() - debut.getFullYear()) * 12 +
+    (now.getMonth() - debut.getMonth());
+  if (now.getDate() < debut.getDate()) k -= 1;
+  k = Math.max(0, Math.min(k, amortissementMois));
+  if (k <= 0) return montantInitial;
+  const pmt = computePaiementMensuel(
+    tauxPct,
+    amortissementMois,
+    montantInitial,
+    composition
+  );
+  if (pmt == null) return null;
+  if (tauxPct <= 0) return Math.max(0, montantInitial - pmt * k);
+  const iMensuel =
+    composition === "mensuelle"
+      ? tauxPct / 100 / 12
+      : Math.pow(1 + tauxPct / 100 / 2, 2 / 12) - 1;
+  const facteur = Math.pow(1 + iMensuel, k);
+  const b = montantInitial * facteur - (pmt * (facteur - 1)) / iMensuel;
+  return Number.isFinite(b) ? Math.max(0, b) : null;
+}
+
+/**
  * Ajoute un nombre d'années (décimales acceptées, ex. 5 ou 2.5) à une
  * date ISO (YYYY-MM-DD). Mois entiers d'abord (jour borné à la fin du
  * mois cible), puis le reste converti en jours — arrondi au jour.
@@ -2628,6 +2920,31 @@ function HypothequeForm({
     );
   }, [f.taux_pct, amortissementMois, balanceRef, compositionChoisie]);
 
+  // Aperçu de la balance auto (miroir du calcul backend) — affiché
+  // sous l'input Balance tant qu'aucune valeur n'est saisie à la main.
+  const balanceAutoApercu = useMemo(() => {
+    if (
+      f.montant_initial.trim() === "" ||
+      f.taux_pct.trim() === "" ||
+      !f.date_debut ||
+      amortissementMois <= 0
+    )
+      return null;
+    return computeBalanceCalculee(
+      Number(f.montant_initial),
+      Number(f.taux_pct),
+      amortissementMois,
+      compositionChoisie,
+      f.date_debut
+    );
+  }, [
+    f.montant_initial,
+    f.taux_pct,
+    f.date_debut,
+    amortissementMois,
+    compositionChoisie
+  ]);
+
   // Fin du terme calculée = date_debut + terme (années, décimales OK).
   const finTermeCalculee = useMemo(() => {
     if (!f.date_debut || f.terme_annees.trim() === "") return null;
@@ -2743,9 +3060,19 @@ function HypothequeForm({
             inputMode="decimal"
             value={f.balance_actuelle}
             onChange={(e) => set("balance_actuelle")(e.target.value)}
-            placeholder="Vide = montant initial"
+            placeholder="Vide = calcul automatique"
             className={inputCls}
           />
+          {f.balance_actuelle.trim() === "" && balanceAutoApercu != null ? (
+            <span className="mt-1 block text-[10px] font-normal normal-case text-emerald-300">
+              Auto : {fmtCurrency(balanceAutoApercu)} aujourd&apos;hui
+              (amortissement depuis le début) — se met à jour chaque mois.
+            </span>
+          ) : f.balance_actuelle.trim() !== "" ? (
+            <span className="mt-1 block text-[10px] font-normal normal-case text-white/40">
+              Saisie manuelle — remplace le calcul automatique.
+            </span>
+          ) : null}
         </label>
         <label className={labelCls}>
           Taux (%)
@@ -3074,7 +3401,20 @@ function HypothequesTab({
                   <div className="flex flex-shrink-0 items-center gap-3">
                     <div className="text-right">
                       <div className="font-mono text-sm font-bold text-white">
-                        {fmtCurrency(h.balance_actuelle ?? h.montant_initial)}
+                        {fmtCurrency(
+                          h.balance_actuelle ??
+                            h.balance_calculee ??
+                            h.montant_initial
+                        )}
+                        {h.balance_actuelle == null &&
+                        h.balance_calculee != null ? (
+                          <span
+                            className="ml-1.5 badge badge-neutral font-sans normal-case"
+                            title="Balance calculée automatiquement depuis le tableau d'amortissement (montant initial, taux, date de début) — saisis une balance pour la remplacer."
+                          >
+                            auto
+                          </span>
+                        ) : null}
                       </div>
                       <div className="text-[11px] text-white/50">
                         Paiement {fmtCurrency(h.paiement_mensuel)}/m
@@ -3587,6 +3927,7 @@ function CashflowTab({
   const [depenses, setDepenses] = useState<Depense[] | null>(null);
   const [mode, setMode] = useState<"mensuel" | "annuel">("mensuel");
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Depense | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [fCat, setFCat] = useState("taxes_municipales");
@@ -3652,7 +3993,30 @@ function CashflowTab({
     return montantMensuelDepense(d, revenusMensuel) * facteur;
   }
 
-  async function add() {
+  function resetForm() {
+    setFCat("taxes_municipales");
+    setFLib("");
+    setFMontant("");
+    setFFreq("annuel");
+    setFPct(false);
+    setFTaxable(false);
+    setAdding(false);
+    setEditing(null);
+  }
+
+  function startEdit(d: Depense) {
+    setFCat(d.categorie);
+    setFLib(d.libelle);
+    setFMontant(String(d.montant));
+    setFFreq(d.frequence);
+    setFPct(!!d.is_pourcentage);
+    setFTaxable(!!d.taxable);
+    setEditing(d);
+    setAdding(true);
+    setErr(null);
+  }
+
+  async function save() {
     if (
       !fLib.trim() ||
       !fMontant.trim() ||
@@ -3662,37 +4026,44 @@ function CashflowTab({
       return;
     setBusy(true);
     setErr(null);
+    const payload: Record<string, unknown> = {
+      categorie: fCat,
+      libelle: fLib.trim(),
+      // Stockée telle que saisie (fréquence + montant ou %), la
+      // conversion ×12/÷12/% est purement affichage.
+      montant: Number(fMontant),
+      frequence: fFreq,
+      is_pourcentage: fPct,
+      taxable: fTaxable
+    };
+    // À la création on force date_depense=null (récurrente) ; en édition
+    // on n'y touche pas (le PUT est en exclude_unset côté serveur).
+    if (!editing) payload.date_depense = null;
     try {
       const res = await authedFetch(
-        `/api/v1/immobilier/immeubles/${immeubleId}/depenses`,
+        editing
+          ? `/api/v1/immobilier/depenses/${editing.id}`
+          : `/api/v1/immobilier/immeubles/${immeubleId}/depenses`,
         {
-          method: "POST",
-          body: JSON.stringify({
-            categorie: fCat,
-            libelle: fLib.trim(),
-            // Stockée telle que saisie (fréquence + montant ou %), la
-            // conversion ×12/÷12/% est purement affichage.
-            montant: Number(fMontant),
-            frequence: fFreq,
-            is_pourcentage: fPct,
-            taxable: fTaxable,
-            date_depense: null
-          })
+          method: editing ? "PUT" : "POST",
+          body: JSON.stringify(payload)
         }
       );
       if (!res.ok)
         throw new Error((await res.text()).slice(0, 200) || `HTTP ${res.status}`);
-      const created = (await res.json()) as Depense;
-      setDepenses((prev) => [created, ...(prev || [])]);
-      setFLib("");
-      setFMontant("");
-      setFPct(false);
-      setFTaxable(false);
-      setAdding(false);
+      const saved = (await res.json()) as Depense;
+      setDepenses((prev) =>
+        editing
+          ? (prev || []).map((x) => (x.id === saved.id ? saved : x))
+          : [saved, ...(prev || [])]
+      );
+      resetForm();
       // Le KPI cashflow du haut doit suivre immédiatement.
       onMutated();
     } catch (e) {
-      setErr(`Ajout échoué : ${(e as Error).message}`);
+      setErr(
+        `${editing ? "Modification échouée" : "Ajout échoué"} : ${(e as Error).message}`
+      );
     } finally {
       setBusy(false);
     }
@@ -3844,6 +4215,11 @@ function CashflowTab({
 
         {adding ? (
           <div className="mt-3 rounded-2xl border border-brand-800 bg-brand-950/60 p-4">
+            {editing ? (
+              <p className="mb-3 text-xs font-semibold text-accent-500">
+                Modifier « {editing.libelle} »
+              </p>
+            ) : null}
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <label className={labelCls}>
                 Catégorie
@@ -3956,7 +4332,7 @@ function CashflowTab({
             <div className="mt-3 flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
               <button
                 type="button"
-                onClick={() => setAdding(false)}
+                onClick={resetForm}
                 disabled={busy}
                 className="btn-secondary btn-sm"
               >
@@ -3964,7 +4340,7 @@ function CashflowTab({
               </button>
               <button
                 type="button"
-                onClick={() => void add()}
+                onClick={() => void save()}
                 disabled={
                   busy ||
                   !fLib.trim() ||
@@ -4027,6 +4403,14 @@ function CashflowTab({
                       {d.taxable ? " +tx" : ""}
                     </span>
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => startEdit(d)}
+                    className="btn-secondary btn-xs"
+                    title="Modifier la dépense"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </button>
                   <button
                     type="button"
                     onClick={() => void remove(d)}

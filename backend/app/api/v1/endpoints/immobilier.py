@@ -188,6 +188,58 @@ def _immeuble_to_read(obj: Immeuble) -> ImmeubleRead:
     return out
 
 
+# ── Alertes « À surveiller » (configurables) ────────────────────────────
+# Config globale du pôle, stockée dans automation_settings (clé unique,
+# JSON) — modifiable depuis l'engrenage de la section « À surveiller »
+# de la fiche immeuble (retour Phil 2026-07-14 : « une place pour jouer
+# avec les alertes »).
+
+_ALERTES_KEY = "immo.alertes_surveiller"
+
+_ALERTES_DEFAUTS: dict = {
+    # Bail actif qui échoit dans moins de N jours.
+    "bail_fin_enabled": True,
+    "bail_fin_jours": 90,
+    # Terme hypothécaire qui se termine dans moins de N mois.
+    "terme_hypo_enabled": True,
+    "terme_hypo_mois": 6,
+}
+
+
+class AlertesConfig(BaseModel):
+    bail_fin_enabled: bool = True
+    bail_fin_jours: int = Field(default=90, ge=1, le=730)
+    terme_hypo_enabled: bool = True
+    terme_hypo_mois: int = Field(default=6, ge=1, le=36)
+
+
+@router.get("/alertes-config", response_model=AlertesConfig)
+async def get_alertes_config(db: DBSession, user: CurrentUser) -> AlertesConfig:
+    _require_volet(user)
+    from app.services.automation_state import get_automation_config
+
+    cfg = await get_automation_config(_ALERTES_KEY)
+    merged = {**_ALERTES_DEFAUTS, **cfg}
+    try:
+        return AlertesConfig(**merged)
+    except Exception:  # noqa: BLE001 — config corrompue → défauts
+        return AlertesConfig()
+
+
+@router.put("/alertes-config", response_model=AlertesConfig)
+async def put_alertes_config(
+    payload: AlertesConfig, db: DBSession, user: CurrentUser
+) -> AlertesConfig:
+    _require_volet(user)
+    from app.services.automation_state import set_automation_config
+
+    await set_automation_config(
+        db, _ALERTES_KEY, payload.model_dump(), user_id=user.id
+    )
+    await db.commit()
+    return payload
+
+
 # ── Immeubles : liste + KPIs agrégés ────────────────────────────────────
 
 
@@ -3741,6 +3793,15 @@ async def finances_previsionnel(
     "/immeubles/{immeuble_id}/hypotheques",
     response_model=List[HypothequeRead],
 )
+def _hyp_read(obj: Hypotheque) -> HypothequeRead:
+    """HypothequeRead + balance THÉORIQUE du jour (amortissement)."""
+    from app.services.hypotheque_calc import balance_calculee_de
+
+    r = HypothequeRead.model_validate(obj)
+    r.balance_calculee = balance_calculee_de(obj)
+    return r
+
+
 async def list_hypotheques(
     immeuble_id: int, db: DBSession, user: CurrentUser
 ) -> List[HypothequeRead]:
@@ -3752,7 +3813,7 @@ async def list_hypotheques(
             .order_by(Hypotheque.rang.asc())
         )
     ).scalars().all()
-    return [HypothequeRead.model_validate(r) for r in rows]
+    return [_hyp_read(r) for r in rows]
 
 
 def _pmt_hypotheque(obj: Hypotheque) -> float | None:
@@ -3808,7 +3869,7 @@ async def create_hypotheque(
     db.add(obj)
     await db.commit()
     await db.refresh(obj)
-    return HypothequeRead.model_validate(obj)
+    return _hyp_read(obj)
 
 
 @router.patch("/hypotheques/{hyp_id}", response_model=HypothequeRead)
@@ -3840,7 +3901,7 @@ async def update_hypotheque(
     obj.updated_at = _now()
     await db.commit()
     await db.refresh(obj)
-    return HypothequeRead.model_validate(obj)
+    return _hyp_read(obj)
 
 
 @router.delete(
@@ -4241,49 +4302,60 @@ async def get_financials(
     nb_occ = sts.get(LogementStatus.OCCUPE.value, 0)
     taux = (nb_occ / nb_actifs) if nb_actifs > 0 else 0.0
 
-    # Revenu brut mensuel = Σ baux actifs
-    revenu = float(
-        (
-            await db.execute(
-                select(func.coalesce(func.sum(Bail.loyer_mensuel), 0))
-                .join(Logement, Logement.id == Bail.logement_id)
-                .where(
-                    and_(
-                        Logement.immeuble_id == immeuble_id,
-                        Bail.status == BailStatus.ACTIF.value,
-                    )
+    # Revenu brut mensuel PAR LOGEMENT : loyer du bail actif s'il existe,
+    # SINON loyer demandé du logement (retour Phil 2026-07-10 : un
+    # immeuble en gestion externe n'a pas de baux dans Kratos mais ses
+    # loyers sont connus — le revenu ne doit pas afficher 0). Les
+    # logements hors location sont exclus du fallback.
+    logements_imm = (
+        await db.execute(
+            select(Logement).where(Logement.immeuble_id == immeuble_id)
+        )
+    ).scalars().all()
+    baux_actifs_par_logement: dict[int, float] = {}
+    for b in (
+        await db.execute(
+            select(Bail)
+            .join(Logement, Logement.id == Bail.logement_id)
+            .where(
+                and_(
+                    Logement.immeuble_id == immeuble_id,
+                    Bail.status == BailStatus.ACTIF.value,
                 )
             )
-        ).scalar()
-        or 0
-    )
+        )
+    ).scalars().all():
+        baux_actifs_par_logement[b.logement_id] = baux_actifs_par_logement.get(
+            b.logement_id, 0.0
+        ) + float(b.loyer_mensuel or 0)
+    revenu = 0.0
+    for lg in logements_imm:
+        if lg.id in baux_actifs_par_logement:
+            revenu += baux_actifs_par_logement[lg.id]
+        elif (
+            lg.status != LogementStatus.HORS_LOC.value
+            and lg.loyer_demande is not None
+        ):
+            revenu += float(lg.loyer_demande)
 
-    # Hypothèques actives. Balance = COALESCE(balance_actuelle,
-    # montant_initial) : une balance jamais saisie n'est PAS une
-    # hypothèque à 0 $ (l'équité était gonflée artificiellement).
-    hyp_rows = (
+    # Hypothèques actives. Balance EFFECTIVE par hypothèque : la balance
+    # saisie prime, sinon la balance CALCULÉE au jour J (tableau
+    # d'amortissement — « s'update toute seule », retour Phil 2026-07-10),
+    # sinon le montant initial.
+    from app.services.hypotheque_calc import balance_effective
+
+    hyps_actives = (
         await db.execute(
-            select(
-                func.coalesce(func.sum(Hypotheque.paiement_mensuel), 0),
-                func.coalesce(
-                    func.sum(
-                        func.coalesce(
-                            Hypotheque.balance_actuelle,
-                            Hypotheque.montant_initial,
-                        )
-                    ),
-                    0,
-                ),
-            ).where(
+            select(Hypotheque).where(
                 and_(
                     Hypotheque.immeuble_id == immeuble_id,
                     Hypotheque.status == HypothequeStatus.ACTIVE.value,
                 )
             )
         )
-    ).one()
-    paiement_hyp = float(hyp_rows[0] or 0)
-    balance_hyp = float(hyp_rows[1] or 0)
+    ).scalars().all()
+    paiement_hyp = sum(float(h.paiement_mensuel or 0) for h in hyps_actives)
+    balance_hyp = round(sum(balance_effective(h) for h in hyps_actives), 2)
 
     # Valeur actuelle : l'évaluation marquée « référence » prime ;
     # sinon fallback sur la plus récente (toutes catégories).

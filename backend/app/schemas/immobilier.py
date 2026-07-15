@@ -296,6 +296,9 @@ class HypothequeUpdate(BaseModel):
 class HypothequeRead(HypothequeBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    # Balance THÉORIQUE au jour J (tableau d'amortissement) — calculée
+    # à la volée, jamais stockée. La balance saisie prime toujours.
+    balance_calculee: Optional[float] = None
     created_at: datetime
     updated_at: datetime
 
