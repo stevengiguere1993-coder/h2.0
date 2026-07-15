@@ -40,6 +40,10 @@ type Locataire = {
   revenu_annuel?: number | null;
   paiement_score?: number | null;
   notes?: string | null;
+  // Dépôt préautorisé (DPA) : aucun | envoye | actif | refuse.
+  dpa_statut?: string;
+  dpa_envoye_le?: string | null;
+  dpa_signe_le?: string | null;
 };
 
 type DossierBail = {
@@ -219,6 +223,78 @@ export default function LocataireDetailPage({
   // relocation dans Locations, prérempli depuis le bail.
   const [departBusy, setDepartBusy] = useState<number | null>(null);
   const [departMsg, setDepartMsg] = useState<string | null>(null);
+
+  // Dépôt préautorisé (DPA) — envoi manuel de la documentation +
+  // suivi du statut (Règle H1, perception Desjardins).
+  const [dpaBusy, setDpaBusy] = useState(false);
+  const [dpaMsg, setDpaMsg] = useState<string | null>(null);
+
+  async function dpaEnvoyer() {
+    setDpaBusy(true);
+    setDpaMsg(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataireId}/dpa/envoyer`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      const res = (await r.json()) as { destinataire: string };
+      setDpaMsg(`Documentation DPA envoyée à ${res.destinataire}.`);
+      await loadDossier();
+    } catch (e) {
+      setDpaMsg((e as Error).message);
+    } finally {
+      setDpaBusy(false);
+    }
+  }
+
+  async function dpaStatut(statut: string) {
+    setDpaBusy(true);
+    setDpaMsg(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataireId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(
+            statut === "aucun"
+              ? { dpa_statut: "aucun", dpa_signe_le: null }
+              : { dpa_statut: statut }
+          )
+        }
+      );
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      await loadDossier();
+    } catch (e) {
+      setDpaMsg((e as Error).message);
+    } finally {
+      setDpaBusy(false);
+    }
+  }
+
+  async function dpaPdf() {
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataireId}/dpa/pdf`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "accord-dpa.pdf";
+      a.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (e) {
+      setDpaMsg(`PDF : ${(e as Error).message}`);
+    }
+  }
 
   async function confirmerDepart(bailId: number) {
     setDepartBusy(bailId);
@@ -919,6 +995,100 @@ export default function LocataireDetailPage({
                   </table>
                 </div>
               )}
+            </section>
+
+            {/* Dépôt préautorisé (DPA) */}
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  Dépôt préautorisé (DPA)
+                </h2>
+                {loc.dpa_statut === "actif" ? (
+                  <span className="badge badge-emerald">
+                    Actif{loc.dpa_signe_le ? ` · signé le ${loc.dpa_signe_le}` : ""}
+                  </span>
+                ) : loc.dpa_statut === "envoye" ? (
+                  <span className="badge badge-sky">
+                    Documentation envoyée
+                    {loc.dpa_envoye_le ? ` le ${loc.dpa_envoye_le}` : ""}
+                  </span>
+                ) : loc.dpa_statut === "refuse" ? (
+                  <span className="badge badge-rose">Refusé</span>
+                ) : (
+                  <span className="badge badge-neutral">Non proposé</span>
+                )}
+              </div>
+              <p className="mb-3 text-xs text-white/50">
+                Prélèvement automatique du loyer (Règle H1 de Paiements
+                Canada, perception Desjardins). Le locataire doit signer
+                l&apos;accord et fournir un spécimen de chèque AVANT tout
+                prélèvement — il peut annuler en tout temps (préavis 30
+                jours). Conserve l&apos;accord signé.
+              </p>
+              {dpaMsg ? (
+                <p className="mb-3 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
+                  {dpaMsg}
+                </p>
+              ) : null}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void dpaPdf()}
+                  className="btn-secondary btn-sm"
+                  title="Télécharger le formulaire d'accord DPA prérempli (loyer du bail actif)"
+                >
+                  <Download className="h-3.5 w-3.5" /> Formulaire (PDF)
+                </button>
+                <button
+                  type="button"
+                  disabled={dpaBusy || !(loc.email || "").trim()}
+                  onClick={() => void dpaEnvoyer()}
+                  title={
+                    (loc.email || "").trim()
+                      ? "Envoyer la documentation DPA par courriel au locataire (manuel)"
+                      : "Ajoute d'abord le courriel du locataire"
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1.5 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+                >
+                  {dpaBusy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Mail className="h-3.5 w-3.5" />
+                  )}
+                  Envoyer la documentation
+                </button>
+                {loc.dpa_statut !== "actif" ? (
+                  <button
+                    type="button"
+                    disabled={dpaBusy}
+                    onClick={() => void dpaStatut("actif")}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                    title="L'accord signé (avec spécimen) a été reçu — le DPA est en vigueur"
+                  >
+                    <Check className="h-3.5 w-3.5" /> Accord signé reçu
+                  </button>
+                ) : null}
+                {loc.dpa_statut !== "refuse" && loc.dpa_statut !== "actif" ? (
+                  <button
+                    type="button"
+                    disabled={dpaBusy}
+                    onClick={() => void dpaStatut("refuse")}
+                    className="text-xs text-white/40 hover:text-rose-300"
+                  >
+                    Marquer refusé
+                  </button>
+                ) : null}
+                {loc.dpa_statut !== "aucun" ? (
+                  <button
+                    type="button"
+                    disabled={dpaBusy}
+                    onClick={() => void dpaStatut("aucun")}
+                    className="text-xs text-white/40 hover:text-white/70"
+                  >
+                    Réinitialiser
+                  </button>
+                ) : null}
+              </div>
             </section>
 
             {/* Avis & renouvellements */}

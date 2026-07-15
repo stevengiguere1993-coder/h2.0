@@ -295,6 +295,16 @@ class Locataire(Base, TimestampUpdateMixin):
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # ── Dépôt préautorisé (DPA) — Règle H1 de Paiements Canada.
+    # Suivi de l'accord de prélèvement du loyer (perception Desjardins) :
+    # 'aucun' | 'envoye' (documentation transmise) | 'actif' (accord
+    # signé reçu) | 'refuse'. Colonnes additives → ensure_critical_columns.
+    dpa_statut: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="aucun", server_default="aucun"
+    )
+    dpa_envoye_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    dpa_signe_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
 
 class LocataireCommunication(Base, TimestampUpdateMixin):
     """Entrée MANUELLE d'historique de communication avec un locataire.

@@ -307,6 +307,15 @@ async def ensure_critical_columns() -> None:
         ("imm_location_visites", "candidat_email", "VARCHAR(320)"),
         ("imm_location_visites", "candidat_phone", "VARCHAR(50)"),
         ("imm_location_dossiers", "nouveau_bail_id", "INTEGER"),
+        # DPA (dépôt préautorisé) du loyer — suivi sur le locataire
+        # (Règle H1 Paiements Canada, perception Desjardins).
+        (
+            "imm_locataires",
+            "dpa_statut",
+            "VARCHAR(16) NOT NULL DEFAULT 'aucun'",
+        ),
+        ("imm_locataires", "dpa_envoye_le", "DATE"),
+        ("imm_locataires", "dpa_signe_le", "DATE"),
         # Contrat de gestion 2026-07 : accusé de lecture du MANDATAIRE,
         # distinct de celui du Mandant (opened_at/open_count) — sinon
         # l'ouverture du lien mandataire est attribuée au mandant.
