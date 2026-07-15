@@ -57,6 +57,7 @@ from app.api.v1.endpoints import (
     contrats_gestion,
     immobilier,
     immobilier_extras,
+    immobilier_import_excel,
     immobilier_locations,
     investissements,
     dashboard,
@@ -447,6 +448,10 @@ api_router.include_router(immobilier_extras.router, dependencies=DEP_IMMOBILIER)
 # Pipeline « Locations » (relocation) — avant immobilier.router aussi.
 api_router.include_router(
     immobilier_locations.router, dependencies=DEP_IMMOBILIER
+)
+# Import Excel d'un immeuble complet (modèle + upload tout-ou-rien).
+api_router.include_router(
+    immobilier_import_excel.router, dependencies=DEP_IMMOBILIER
 )
 # Images immobilier : PAS de dépendance routeur — auth par ?t=<jwt> dans
 # l'endpoint lui-même (les <img> ne portent pas de header Authorization).
