@@ -255,6 +255,39 @@ export default function LogementDetailPage({
     }
   }
 
+  // « Départ » / « Relouer » : ouvre un dossier de relocation dans
+  // Locations (depuis le bail actif, ou le logement s'il est vacant).
+  const [relocBusy, setRelocBusy] = useState(false);
+  const [relocMsg, setRelocMsg] = useState<string | null>(null);
+
+  async function ouvrirRelocation(bailId: number | null) {
+    setRelocBusy(true);
+    setRelocMsg(null);
+    try {
+      const r = await authedFetch("/api/v1/immobilier/locations", {
+        method: "POST",
+        body: JSON.stringify(
+          bailId != null
+            ? { bail_id: bailId }
+            : { logement_id: logementId }
+        )
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(
+          t.includes("déjà en cours")
+            ? "Une relocation est déjà en cours pour ce logement."
+            : t.slice(0, 200) || `HTTP ${r.status}`
+        );
+      }
+      setRelocMsg("Dossier de relocation créé — suivi dans Locations.");
+    } catch (e) {
+      setRelocMsg((e as Error).message);
+    } finally {
+      setRelocBusy(false);
+    }
+  }
+
   async function deleteLogement() {
     if (
       !window.confirm(
@@ -590,9 +623,41 @@ export default function LogementDetailPage({
               </div>
 
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Locataire actuel &amp; bail actif
-                </h2>
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Locataire actuel &amp; bail actif
+                  </h2>
+                  <button
+                    type="button"
+                    disabled={relocBusy}
+                    title={
+                      bailActif
+                        ? "Le locataire confirme son départ — ouvrir un dossier de relocation (Locations)"
+                        : "Ouvrir un dossier de relocation pour ce logement vacant"
+                    }
+                    onClick={() =>
+                      void ouvrirRelocation(bailActif ? bailActif.id : null)
+                    }
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
+                  >
+                    {relocBusy ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : null}
+                    {bailActif ? "Départ" : "Relouer"}
+                  </button>
+                </div>
+                {relocMsg ? (
+                  <p className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                    {relocMsg}{" "}
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={"/immobilier/locations" as any}
+                      className="underline-offset-2 hover:underline"
+                    >
+                      Ouvrir Locations →
+                    </Link>
+                  </p>
+                ) : null}
                 {bailActif ? (
                   <div className="space-y-2 text-sm">
                     {bailActif.locataire ? (

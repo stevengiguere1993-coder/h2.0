@@ -48,7 +48,9 @@ type Visite = {
   dossier_id: number;
   quand: string | null;
   candidat_nom: string;
-  candidat_contact: string | null;
+  candidat_contact: string | null; // legacy (tél/courriel mélangés)
+  candidat_email: string | null;
+  candidat_phone: string | null;
   statut: string; // planifiee | faite | absent | annulee
   interesse: boolean | null;
   notes: string | null;
@@ -91,7 +93,7 @@ type Overview = {
 const COLUMNS: Array<{ id: string; label: string; dot: string }> = [
   { id: "avis_recu", label: "Départ confirmé", dot: "bg-amber-400" },
   { id: "annonce_publiee", label: "Annonce publiée", dot: "bg-sky-400" },
-  { id: "visites", label: "Visites en cours", dot: "bg-violet-400" },
+  { id: "visites", label: "Visite prévue", dot: "bg-violet-400" },
   { id: "candidat_retenu", label: "Candidat retenu", dot: "bg-blue-400" },
   { id: "reloue", label: "Reloué", dot: "bg-emerald-400" }
 ];
@@ -552,7 +554,8 @@ function DossierModal({
   const [annPlateforme, setAnnPlateforme] = useState("Marketplace");
   const [annUrl, setAnnUrl] = useState("");
   const [visNom, setVisNom] = useState("");
-  const [visContact, setVisContact] = useState("");
+  const [visEmail, setVisEmail] = useState("");
+  const [visPhone, setVisPhone] = useState("");
   const [visQuand, setVisQuand] = useState("");
 
   const retenu = d.visites.find((v) => v.retenu) || null;
@@ -591,43 +594,101 @@ function DossierModal({
       >
         {/* En-tête */}
         <div className="flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <h2 className="text-lg font-bold text-white">
-              Logement {d.logement_numero} — {d.immeuble_name}
-            </h2>
-            <p className="mt-0.5 text-xs text-white/55">
-              {d.locataire_sortant
-                ? `${d.locataire_sortant} quitte · `
-                : ""}
-              Départ : {fmtDate(d.date_depart)}
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
+                <KeyRound className="h-4.5 w-4.5" />
+              </span>
+              <h2 className="text-lg font-bold text-white">
+                Logement {d.logement_numero}
+              </h2>
+              <span
+                className={`badge ${
+                  d.statut === "reloue"
+                    ? "badge-emerald"
+                    : d.statut === "annule"
+                      ? "badge-neutral"
+                      : "badge-amber"
+                }`}
+              >
+                {STATUT_LABEL[d.statut] ?? d.statut}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-white/55">
+              {d.immeuble_name}
+              {d.locataire_sortant ? ` · ${d.locataire_sortant} quitte` : ""}
               {d.loyer_ancien != null
                 ? ` · ancien loyer ${money(d.loyer_ancien)}`
                 : ""}
             </p>
           </div>
-          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
-            <X className="h-4 w-4" />
-          </button>
+          <span className="flex items-center gap-2">
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={`/immobilier/logements/${d.logement_id}` as any}
+              className="text-xs text-accent-500 hover:underline"
+            >
+              Fiche du logement →
+            </Link>
+            <button
+              type="button"
+              onClick={onClose}
+              className="btn-ghost btn-xs"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </span>
         </div>
 
-        {/* Statut + champs */}
-        <div className="mt-4 flex flex-wrap items-center gap-2">
+        {/* Stepper de statut — cliquer une étape déplace le dossier. */}
+        <div className="mt-4 flex items-center gap-0 overflow-x-auto rounded-xl border border-brand-800 bg-brand-900/60 p-1.5">
+          {COLUMNS.map((col, i) => {
+            const activeIdx = COLUMNS.findIndex((c) => c.id === d.statut);
+            const isActive = d.statut === col.id;
+            const isPast = activeIdx >= 0 && i < activeIdx;
+            return (
+              <div key={col.id} className="flex flex-1 items-center">
+                {i > 0 ? (
+                  <span
+                    className={`h-px w-3 flex-shrink-0 sm:w-5 ${
+                      isPast || isActive ? "bg-accent-500/60" : "bg-brand-800"
+                    }`}
+                  />
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() =>
+                    !isActive ? void onPatch({ statut: col.id }) : undefined
+                  }
+                  title={`Passer à « ${col.label} »`}
+                  className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-[11px] font-semibold transition ${
+                    isActive
+                      ? "bg-accent-500/15 text-accent-500 ring-1 ring-inset ring-accent-500/40"
+                      : isPast
+                        ? "text-white/70 hover:bg-brand-800"
+                        : "text-white/35 hover:bg-brand-800 hover:text-white/70"
+                  }`}
+                >
+                  {isPast ? (
+                    <Check className="h-3 w-3 text-accent-500/70" />
+                  ) : (
+                    <span
+                      className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${col.dot} ${
+                        isActive ? "" : "opacity-40"
+                      }`}
+                    />
+                  )}
+                  {col.label}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Champs clés */}
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
           <label className="text-[11px] font-semibold text-white/60">
-            Statut
-            <select
-              value={d.statut}
-              onChange={(e) => void onPatch({ statut: e.target.value })}
-              className={`${INPUT_CLS} ml-2 w-auto`}
-            >
-              {Object.entries(STATUT_LABEL).map(([id, label]) => (
-                <option key={id} value={id}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-[11px] font-semibold text-white/60">
-            Départ
+            Date de départ
             <input
               type="date"
               defaultValue={d.date_depart || ""}
@@ -636,11 +697,11 @@ function DossierModal({
                   ? void onPatch({ date_depart: e.target.value || null })
                   : undefined
               }
-              className={`${INPUT_CLS} ml-2 w-auto`}
+              className={`${INPUT_CLS} mt-0.5 block w-full`}
             />
           </label>
           <label className="text-[11px] font-semibold text-white/60">
-            Loyer demandé ($)
+            Loyer demandé ($/mois)
             <input
               inputMode="decimal"
               defaultValue={
@@ -652,30 +713,34 @@ function DossierModal({
                 if (v !== "" && Number.isNaN(n)) return;
                 if (n !== d.loyer_demande) void onPatch({ loyer_demande: n });
               }}
-              className={`${INPUT_CLS} ml-2 w-24`}
+              className={`${INPUT_CLS} mt-0.5 block w-full`}
             />
           </label>
-          <span className="ml-auto flex items-center gap-2">
-            <Link
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={`/immobilier/logements/${d.logement_id}` as any}
-              className="text-xs text-accent-500 hover:underline"
-            >
-              Fiche du logement →
-            </Link>
-            <button
-              type="button"
-              title="Supprimer ce dossier"
-              onClick={async () => {
-                if (window.confirm("Supprimer ce dossier de relocation ?")) {
-                  if (await api(`/${d.id}`, "DELETE")) onDeleted();
-                }
-              }}
-              className="rounded-md border border-rose-400/30 bg-rose-500/10 p-1.5 text-rose-300 hover:bg-rose-500/20"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </span>
+          {d.loyer_ancien != null ? (
+            <div className="text-[11px] font-semibold text-white/60">
+              Ancien loyer
+              <div className="mt-0.5 rounded-md border border-brand-800/60 bg-brand-900/50 px-2 py-1.5 font-mono text-xs text-white/60">
+                {money(d.loyer_ancien)}
+                {d.loyer_demande != null && d.loyer_ancien > 0 ? (
+                  <span
+                    className={
+                      d.loyer_demande >= d.loyer_ancien
+                        ? "ml-1 text-emerald-300"
+                        : "ml-1 text-rose-300"
+                    }
+                  >
+                    (
+                    {d.loyer_demande >= d.loyer_ancien ? "+" : ""}
+                    {(
+                      ((d.loyer_demande - d.loyer_ancien) / d.loyer_ancien) *
+                      100
+                    ).toFixed(0)}
+                    &nbsp;%)
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {/* Dépôt du locataire sortant (interconnexion Dépôts) */}
@@ -883,24 +948,31 @@ function DossierModal({
               ))}
             </ul>
           )}
-          <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-brand-800 pt-3">
+          <div className="mt-3 grid gap-1.5 border-t border-brand-800 pt-3 sm:grid-cols-2 lg:grid-cols-5">
             <input
               value={visNom}
               onChange={(e) => setVisNom(e.target.value)}
               placeholder="Nom du candidat"
-              className={`${INPUT_CLS} min-w-0 flex-1`}
+              className={`${INPUT_CLS} lg:col-span-1`}
             />
             <input
-              value={visContact}
-              onChange={(e) => setVisContact(e.target.value)}
-              placeholder="Tél. / courriel"
-              className={`${INPUT_CLS} w-36`}
+              type="email"
+              value={visEmail}
+              onChange={(e) => setVisEmail(e.target.value)}
+              placeholder="Courriel"
+              className={INPUT_CLS}
+            />
+            <input
+              value={visPhone}
+              onChange={(e) => setVisPhone(e.target.value)}
+              placeholder="Téléphone"
+              className={INPUT_CLS}
             />
             <input
               type="datetime-local"
               value={visQuand}
               onChange={(e) => setVisQuand(e.target.value)}
-              className={`${INPUT_CLS} w-auto`}
+              className={INPUT_CLS}
             />
             <button
               type="button"
@@ -909,12 +981,14 @@ function DossierModal({
                 if (
                   await api(`/${d.id}/visites`, "POST", {
                     candidat_nom: visNom.trim(),
-                    candidat_contact: visContact.trim() || null,
+                    candidat_email: visEmail.trim() || null,
+                    candidat_phone: visPhone.trim() || null,
                     quand: visQuand ? new Date(visQuand).toISOString() : null
                   })
                 ) {
                   setVisNom("");
-                  setVisContact("");
+                  setVisEmail("");
+                  setVisPhone("");
                   setVisQuand("");
                 }
               }}
@@ -923,6 +997,37 @@ function DossierModal({
               <Plus className="h-3.5 w-3.5" /> Ajouter
             </button>
           </div>
+        </div>
+
+        {/* Pied de fiche : actions destructives discrètes */}
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-brand-800 pt-3">
+          {d.statut !== "annule" && d.statut !== "reloue" ? (
+            <button
+              type="button"
+              onClick={() => void onPatch({ statut: "annule" })}
+              className="text-xs text-white/40 hover:text-white/70"
+            >
+              Annuler la relocation
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={async () => {
+              if (window.confirm("Supprimer ce dossier de relocation ?")) {
+                if (await api(`/${d.id}`, "DELETE")) onDeleted();
+              }
+            }}
+            className="inline-flex items-center gap-1 text-xs text-rose-300/60 hover:text-rose-300"
+          >
+            <Trash2 className="h-3 w-3" /> Supprimer le dossier
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-secondary btn-sm ml-auto"
+          >
+            Fermer
+          </button>
         </div>
       </div>
 
@@ -995,7 +1100,13 @@ function CandidatRow({
       <div className="flex flex-wrap items-center gap-2 text-xs text-white/75">
         {v.retenu ? <Star className="h-3.5 w-3.5 text-blue-300" /> : null}
         <span className="font-medium text-white">{v.candidat_nom}</span>
-        {v.candidat_contact ? (
+        {v.candidat_email ? (
+          <span className="text-white/45">{v.candidat_email}</span>
+        ) : null}
+        {v.candidat_phone ? (
+          <span className="text-white/45">{v.candidat_phone}</span>
+        ) : null}
+        {!v.candidat_email && !v.candidat_phone && v.candidat_contact ? (
           <span className="text-white/45">{v.candidat_contact}</span>
         ) : null}
         <span className="text-white/40">{fmtDateTime(v.quand)}</span>
@@ -1094,35 +1205,53 @@ function CandidatRow({
           {v.retenu ? "Retenu" : "Retenir"}
         </button>
       </div>
-      {/* Notes d'enquête */}
-      <EnqueteNotes v={v} onApi={onApi} />
+      {/* Notes du candidat + notes d'enquête */}
+      <InlineNote
+        label="Notes du candidat"
+        placeholder="Impressions après la visite, besoins particuliers, à relancer…"
+        value={v.notes}
+        onSave={(txt) =>
+          onApi(`/visites/${v.id}`, "PATCH", { notes: txt })
+        }
+      />
+      <InlineNote
+        label="Notes d'enquête"
+        placeholder="Résultat de l'enquête de crédit, références du proprio précédent, emploi vérifié…"
+        value={v.enquete_notes}
+        onSave={(txt) =>
+          onApi(`/visites/${v.id}`, "PATCH", { enquete_notes: txt })
+        }
+      />
     </li>
   );
 }
 
-function EnqueteNotes({
-  v,
-  onApi
+function InlineNote({
+  label,
+  placeholder,
+  value,
+  onSave
 }: {
-  v: Visite;
-  onApi: (
-    path: string,
-    method: string,
-    body?: Record<string, unknown>
-  ) => Promise<boolean>;
+  label: string;
+  placeholder: string;
+  value: string | null;
+  onSave: (txt: string | null) => Promise<boolean>;
 }) {
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState(v.enquete_notes || "");
+  const [draft, setDraft] = useState(value || "");
   if (!open) {
     return (
       <button
         type="button"
-        onClick={() => setOpen(true)}
-        className="mt-1 text-[10px] text-white/35 hover:text-white/70"
+        onClick={() => {
+          setDraft(value || "");
+          setOpen(true);
+        }}
+        className="mt-1 block text-left text-[10px] text-white/35 hover:text-white/70"
       >
-        {v.enquete_notes
-          ? `Notes d'enquête : ${v.enquete_notes.slice(0, 60)}${v.enquete_notes.length > 60 ? "…" : ""}`
-          : "+ Notes d'enquête / références"}
+        {value
+          ? `${label} : ${value.slice(0, 70)}${value.length > 70 ? "…" : ""}`
+          : `+ ${label}`}
       </button>
     );
   }
@@ -1132,19 +1261,14 @@ function EnqueteNotes({
         rows={2}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        placeholder="Résultat de l'enquête de crédit, références du propriétaire précédent, emploi vérifié…"
+        placeholder={placeholder}
         className="block w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-[11px] text-white outline-none focus:border-accent-500"
       />
       <div className="mt-1 flex gap-1.5">
         <button
           type="button"
           onClick={async () => {
-            if (
-              await onApi(`/visites/${v.id}`, "PATCH", {
-                enquete_notes: draft.trim() ? draft : null
-              })
-            )
-              setOpen(false);
+            if (await onSave(draft.trim() ? draft : null)) setOpen(false);
           }}
           className="btn-secondary btn-xs"
         >
@@ -1175,9 +1299,14 @@ function ConvertModal({
   onClose: () => void;
   onDone: () => void;
 }) {
-  // Préremplissage : contact « intelligent » (courriel si @, sinon tél.).
+  // Préremplissage : courriel + téléphone du candidat (champs distincts) ;
+  // repli sur le vieux champ contact mélangé pour les données existantes.
   const contact = (candidat.candidat_contact || "").trim();
   const isEmail = contact.includes("@");
+  const prefillEmail =
+    (candidat.candidat_email || "").trim() || (isEmail ? contact : "");
+  const prefillPhone =
+    (candidat.candidat_phone || "").trim() || (isEmail ? "" : contact);
   const defaultDebut = (() => {
     if (d.date_depart) {
       const dt = new Date(`${d.date_depart}T00:00:00`);
@@ -1189,8 +1318,8 @@ function ConvertModal({
   })();
 
   const [nom, setNom] = useState(candidat.candidat_nom);
-  const [email, setEmail] = useState(isEmail ? contact : "");
-  const [phone, setPhone] = useState(isEmail ? "" : contact);
+  const [email, setEmail] = useState(prefillEmail);
+  const [phone, setPhone] = useState(prefillPhone);
   const [debut, setDebut] = useState(defaultDebut);
   const [fin, setFin] = useState(addMonthsIso(defaultDebut, 12));
   const [loyer, setLoyer] = useState(

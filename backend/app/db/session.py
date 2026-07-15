@@ -304,6 +304,8 @@ async def ensure_critical_columns() -> None:
         ("imm_location_visites", "enquete_emploi", "BOOLEAN"),
         ("imm_location_visites", "enquete_notes", "TEXT"),
         ("imm_location_visites", "retenu", "BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("imm_location_visites", "candidat_email", "VARCHAR(320)"),
+        ("imm_location_visites", "candidat_phone", "VARCHAR(50)"),
         ("imm_location_dossiers", "nouveau_bail_id", "INTEGER"),
         # Contrat de gestion 2026-07 : accusé de lecture du MANDATAIRE,
         # distinct de celui du Mandant (opened_at/open_count) — sinon

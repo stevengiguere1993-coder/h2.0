@@ -101,7 +101,9 @@ class VisiteRead(BaseModel):
     dossier_id: int
     quand: Optional[datetime] = None
     candidat_nom: str
-    candidat_contact: Optional[str] = None
+    candidat_contact: Optional[str] = None  # legacy (tél/courriel mélangés)
+    candidat_email: Optional[str] = None
+    candidat_phone: Optional[str] = None
     statut: str
     interesse: Optional[bool] = None
     notes: Optional[str] = None
@@ -117,6 +119,8 @@ class VisiteCreate(BaseModel):
     quand: Optional[datetime] = None
     candidat_nom: str = Field(..., min_length=1, max_length=255)
     candidat_contact: Optional[str] = Field(default=None, max_length=255)
+    candidat_email: Optional[str] = Field(default=None, max_length=320)
+    candidat_phone: Optional[str] = Field(default=None, max_length=50)
     notes: Optional[str] = None
 
 
@@ -124,6 +128,8 @@ class VisiteUpdate(BaseModel):
     quand: Optional[datetime] = None
     candidat_nom: Optional[str] = Field(default=None, max_length=255)
     candidat_contact: Optional[str] = Field(default=None, max_length=255)
+    candidat_email: Optional[str] = Field(default=None, max_length=320)
+    candidat_phone: Optional[str] = Field(default=None, max_length=50)
     statut: Optional[str] = Field(default=None, max_length=16)
     interesse: Optional[bool] = None
     notes: Optional[str] = None
@@ -254,6 +260,42 @@ async def _to_row(db, d: LocationDossier) -> DossierRow:
         visites=[VisiteRead.model_validate(v) for v in visites],
         created_at=d.created_at,
     )
+
+
+async def _regress_si_plus_de_visites(db, dossier_id: int) -> None:
+    """Si le dossier est à « Visite prévue » mais qu'il ne reste AUCUNE
+    visite planifiée (elles ont été faites sans retenir personne, ou
+    annulées/absents/supprimées), il RECULE à « Annonce publiée » (ou
+    « Départ confirmé » s'il n'y a pas d'annonce active) — demande Phil
+    2026-07-10."""
+    dossier = await db.get(LocationDossier, dossier_id)
+    if dossier is None or dossier.statut != LocationDossierStatut.VISITES.value:
+        return
+    visites = (
+        await db.execute(
+            select(LocationVisite).where(
+                LocationVisite.dossier_id == dossier_id
+            )
+        )
+    ).scalars().all()
+    if any(v.retenu for v in visites):
+        return
+    if any(v.statut == "planifiee" for v in visites):
+        return
+    annonces_actives = (
+        await db.execute(
+            select(LocationAnnonce).where(
+                LocationAnnonce.dossier_id == dossier_id,
+                LocationAnnonce.active.is_(True),
+            )
+        )
+    ).scalars().first()
+    dossier.statut = (
+        LocationDossierStatut.ANNONCE_PUBLIEE.value
+        if annonces_actives is not None
+        else LocationDossierStatut.AVIS_RECU.value
+    )
+    dossier.updated_at = _now()
 
 
 # ─── Overview ───────────────────────────────────────────────────────────
@@ -526,10 +568,39 @@ async def convertir_dossier(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Logement introuvable.")
 
     now = _now()
+
+    # Transfert de la PRÉLOCATION : le candidat retenu emporte ses
+    # résultats d'enquête et ses notes dans la fiche du locataire.
+    retenu = (
+        await db.execute(
+            select(LocationVisite).where(
+                LocationVisite.dossier_id == dossier.id,
+                LocationVisite.retenu.is_(True),
+            )
+        )
+    ).scalars().first()
+    notes_locataire = None
+    if retenu is not None:
+        def _lbl(v: Optional[bool]) -> str:
+            return "OK" if v is True else "refusé" if v is False else "non faite"
+
+        lignes = [
+            "Prélocation (dossier de relocation) :",
+            f"- Enquête de crédit : {_lbl(retenu.enquete_credit)}",
+            f"- Références : {_lbl(retenu.enquete_references)}",
+            f"- Vérification d'emploi : {_lbl(retenu.enquete_emploi)}",
+        ]
+        if (retenu.enquete_notes or "").strip():
+            lignes.append(f"Notes d'enquête : {retenu.enquete_notes.strip()}")
+        if (retenu.notes or "").strip():
+            lignes.append(f"Notes du candidat : {retenu.notes.strip()}")
+        notes_locataire = "\n".join(lignes)
+
     locataire = Locataire(
         full_name=payload.locataire_nom.strip(),
         email=(payload.locataire_email or "").strip() or None,
         phone=(payload.locataire_phone or "").strip() or None,
+        notes=notes_locataire,
     )
     locataire.created_at = now
     locataire.updated_at = now
@@ -656,6 +727,8 @@ async def create_visite(
         quand=payload.quand,
         candidat_nom=payload.candidat_nom.strip(),
         candidat_contact=(payload.candidat_contact or "").strip() or None,
+        candidat_email=(payload.candidat_email or "").strip() or None,
+        candidat_phone=(payload.candidat_phone or "").strip() or None,
         notes=payload.notes,
     )
     obj.created_at = _now()
@@ -711,6 +784,12 @@ async def update_visite(
         if dossier is not None and dossier.statut in STATUTS_ACTIFS:
             dossier.statut = LocationDossierStatut.CANDIDAT_RETENU.value
             dossier.updated_at = _now()
+    # Une visite qui n'aboutit pas (faite/absent/annulée sans retenir) et
+    # plus rien de planifié → le dossier recule à « Annonce publiée ».
+    if data.get("statut") in ("faite", "absent", "annulee") or (
+        data.get("retenu") is False
+    ):
+        await _regress_si_plus_de_visites(db, obj.dossier_id)
     obj.updated_at = _now()
     await db.commit()
     await db.refresh(obj)
@@ -728,5 +807,8 @@ async def delete_visite(
     obj = await db.get(LocationVisite, visite_id)
     if obj is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Visite introuvable.")
+    dossier_id = obj.dossier_id
     await db.delete(obj)
+    await db.flush()
+    await _regress_si_plus_de_visites(db, dossier_id)
     await db.commit()

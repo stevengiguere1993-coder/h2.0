@@ -411,8 +411,16 @@ class LocationVisite(Base, TimestampUpdateMixin):
         DateTime(timezone=True), nullable=True
     )
     candidat_nom: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Champ legacy (téléphone OU courriel mélangés) — remplacé par les
+    # deux champs distincts ci-dessous, gardé pour les données existantes.
     candidat_contact: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
+    )
+    candidat_email: Mapped[Optional[str]] = mapped_column(
+        String(320), nullable=True
+    )
+    candidat_phone: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
     )
     # planifiee | faite | absent | annulee
     statut: Mapped[str] = mapped_column(
