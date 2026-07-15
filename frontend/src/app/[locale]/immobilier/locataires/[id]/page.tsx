@@ -215,6 +215,37 @@ export default function LocataireDetailPage({
   const [loyerDraft, setLoyerDraft] = useState("");
   const [savingLoyer, setSavingLoyer] = useState(false);
 
+  // « Départ » : le locataire confirme qu'il quitte → dossier de
+  // relocation dans Locations, prérempli depuis le bail.
+  const [departBusy, setDepartBusy] = useState<number | null>(null);
+  const [departMsg, setDepartMsg] = useState<string | null>(null);
+
+  async function confirmerDepart(bailId: number) {
+    setDepartBusy(bailId);
+    setDepartMsg(null);
+    try {
+      const r = await authedFetch("/api/v1/immobilier/locations", {
+        method: "POST",
+        body: JSON.stringify({ bail_id: bailId })
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(
+          t.includes("déjà en cours")
+            ? "Une relocation est déjà en cours pour ce logement."
+            : t.slice(0, 200) || `HTTP ${r.status}`
+        );
+      }
+      setDepartMsg(
+        "Dossier de relocation créé — suivi dans la page Locations."
+      );
+    } catch (e) {
+      setDepartMsg((e as Error).message);
+    } finally {
+      setDepartBusy(null);
+    }
+  }
+
   // Édition inline de l'identité
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<IdentityForm>({
@@ -721,6 +752,18 @@ export default function LocataireDetailPage({
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
                 Baux
               </h2>
+              {departMsg ? (
+                <p className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                  {departMsg}{" "}
+                  <Link
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    href={"/immobilier/locations" as any}
+                    className="underline-offset-2 hover:underline"
+                  >
+                    Ouvrir Locations →
+                  </Link>
+                </p>
+              ) : null}
               {!dossier || dossier.baux.length === 0 ? (
                 <p className="text-sm text-white/50">
                   Aucun bail associé à ce locataire.
@@ -837,15 +880,34 @@ export default function LocataireDetailPage({
                               ? money(b.depot_garantie)
                               : "—"}
                           </td>
-                          <td className="py-2.5 text-right">
-                            <span
-                              className={`badge ${
-                                b.status === "actif"
-                                  ? "badge-emerald"
-                                  : "badge-neutral"
-                              }`}
-                            >
-                              {BAIL_STATUS_LABEL[b.status] ?? b.status}
+                          <td
+                            className="py-2.5 text-right"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <span className="inline-flex items-center gap-1.5">
+                              <span
+                                className={`badge ${
+                                  b.status === "actif"
+                                    ? "badge-emerald"
+                                    : "badge-neutral"
+                                }`}
+                              >
+                                {BAIL_STATUS_LABEL[b.status] ?? b.status}
+                              </span>
+                              {b.status === "actif" ? (
+                                <button
+                                  type="button"
+                                  title="Le locataire confirme son départ — ouvrir un dossier de relocation (page Locations)"
+                                  disabled={departBusy === b.id}
+                                  onClick={() => void confirmerDepart(b.id)}
+                                  className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
+                                >
+                                  {departBusy === b.id ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : null}
+                                  Départ
+                                </button>
+                              ) : null}
                             </span>
                           </td>
                           <td className="py-2.5 pl-2 text-right">

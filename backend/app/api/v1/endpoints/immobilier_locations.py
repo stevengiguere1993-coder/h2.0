@@ -105,6 +105,12 @@ class VisiteRead(BaseModel):
     statut: str
     interesse: Optional[bool] = None
     notes: Optional[str] = None
+    # Prélocation : null = pas faite, true = OK, false = KO.
+    enquete_credit: Optional[bool] = None
+    enquete_references: Optional[bool] = None
+    enquete_emploi: Optional[bool] = None
+    enquete_notes: Optional[str] = None
+    retenu: bool = False
 
 
 class VisiteCreate(BaseModel):
@@ -121,6 +127,11 @@ class VisiteUpdate(BaseModel):
     statut: Optional[str] = Field(default=None, max_length=16)
     interesse: Optional[bool] = None
     notes: Optional[str] = None
+    enquete_credit: Optional[bool] = None
+    enquete_references: Optional[bool] = None
+    enquete_emploi: Optional[bool] = None
+    enquete_notes: Optional[str] = None
+    retenu: Optional[bool] = None
 
 
 class DossierRow(BaseModel):
@@ -137,6 +148,12 @@ class DossierRow(BaseModel):
     loyer_ancien: Optional[float] = None
     reloue_le: Optional[date] = None
     notes: Optional[str] = None
+    # Dépôt de garantie du LOCATAIRE SORTANT (interconnexion Dépôts) :
+    # à rendre à son départ — rappel affiché sur le dossier.
+    depot_sortant: Optional[float] = None
+    depot_sortant_rendu_le: Optional[date] = None
+    # Bail créé par la conversion « candidat retenu → bail » (lien).
+    nouveau_bail_id: Optional[int] = None
     annonces: List[AnnonceRead] = Field(default_factory=list)
     visites: List[VisiteRead] = Field(default_factory=list)
     created_at: Optional[datetime] = None
@@ -148,10 +165,16 @@ class LocationsOverview(BaseModel):
     nb_annonces_actives: int = 0
     nb_visites_a_venir: int = 0
     nb_reloues_90j: int = 0
+    # Jours de vacance moyens des dossiers actifs dont le locataire est
+    # déjà parti (aujourd'hui − date de départ).
+    jours_vacants_moyens: Optional[float] = None
 
 
 class DossierCreate(BaseModel):
-    logement_id: int
+    # logement_id OU bail_id : avec seulement bail_id (boutons « bail non
+    # prolongé » des pages Renouvellements/Locataire), le logement est
+    # dérivé du bail.
+    logement_id: Optional[int] = None
     bail_id: Optional[int] = None
     date_depart: Optional[date] = None
     loyer_demande: Optional[float] = Field(default=None, ge=0)
@@ -182,11 +205,16 @@ async def _to_row(db, d: LocationDossier) -> DossierRow:
     lg = await db.get(Logement, d.logement_id)
     im = await db.get(Immeuble, lg.immeuble_id) if lg else None
     locataire_sortant = None
+    depot_sortant = None
+    depot_sortant_rendu_le = None
     if d.bail_id:
         bail = await db.get(Bail, d.bail_id)
         if bail:
             loc = await db.get(Locataire, bail.locataire_id)
             locataire_sortant = loc.full_name if loc else None
+            if bail.depot_garantie is not None and float(bail.depot_garantie) > 0:
+                depot_sortant = float(bail.depot_garantie)
+                depot_sortant_rendu_le = bail.depot_rendu_le
     annonces = (
         await db.execute(
             select(LocationAnnonce)
@@ -219,6 +247,9 @@ async def _to_row(db, d: LocationDossier) -> DossierRow:
         ),
         reloue_le=d.reloue_le,
         notes=d.notes,
+        depot_sortant=depot_sortant,
+        depot_sortant_rendu_le=depot_sortant_rendu_le,
+        nouveau_bail_id=d.nouveau_bail_id,
         annonces=[AnnonceRead.model_validate(a) for a in annonces],
         visites=[VisiteRead.model_validate(v) for v in visites],
         created_at=d.created_at,
@@ -292,6 +323,14 @@ async def locations_overview(
         for v in r.visites
         if v.statut == "planifiee" and (v.quand is None or v.quand >= now)
     )
+    # Vacance moyenne : dossiers actifs dont le locataire est déjà parti.
+    vacances = [
+        (today - r.date_depart).days
+        for r in rows
+        if r.statut in STATUTS_ACTIFS
+        and r.date_depart is not None
+        and r.date_depart <= today
+    ]
     return LocationsOverview(
         rows=rows,
         nb_actifs=sum(1 for r in rows if r.statut in STATUTS_ACTIFS),
@@ -303,6 +342,9 @@ async def locations_overview(
             if r.statut == LocationDossierStatut.RELOUE.value
             and r.reloue_le is not None
             and r.reloue_le >= today - timedelta(days=90)
+        ),
+        jours_vacants_moyens=(
+            round(sum(vacances) / len(vacances), 1) if vacances else None
         ),
     )
 
@@ -322,7 +364,18 @@ async def create_dossier(
     photographie son loyer (delta affichable) et propose sa fin comme
     date de départ."""
     _require_volet(user)
-    lg = await db.get(Logement, payload.logement_id)
+    # logement_id dérivable du bail (boutons « bail non prolongé »).
+    logement_id = payload.logement_id
+    if logement_id is None and payload.bail_id is not None:
+        b = await db.get(Bail, payload.bail_id)
+        if b is not None:
+            logement_id = b.logement_id
+    if logement_id is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "logement_id ou bail_id requis.",
+        )
+    lg = await db.get(Logement, logement_id)
     if lg is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Logement introuvable.")
 
@@ -330,7 +383,7 @@ async def create_dossier(
     existing = (
         await db.execute(
             select(LocationDossier).where(
-                LocationDossier.logement_id == payload.logement_id,
+                LocationDossier.logement_id == logement_id,
                 LocationDossier.statut.in_(list(STATUTS_ACTIFS)),
             )
         )
@@ -355,7 +408,7 @@ async def create_dossier(
                 date_depart = bail.date_fin
 
     obj = LocationDossier(
-        logement_id=payload.logement_id,
+        logement_id=logement_id,
         bail_id=payload.bail_id,
         date_depart=date_depart,
         loyer_demande=(
@@ -418,6 +471,99 @@ async def delete_dossier(
     obj = await _dossier_or_404(db, dossier_id)
     await db.delete(obj)
     await db.commit()
+
+
+# ─── Conversion candidat retenu → locataire + bail ──────────────────────
+
+
+class ConvertirRequest(BaseModel):
+    """Tout est prérempli côté UI mais MODIFIABLE avant confirmation —
+    rien ne se crée sans l'accord explicite de l'usager."""
+
+    locataire_nom: str = Field(..., min_length=2, max_length=255)
+    locataire_email: Optional[str] = Field(default=None, max_length=320)
+    locataire_phone: Optional[str] = Field(default=None, max_length=50)
+    date_debut: date
+    date_fin: date
+    loyer_mensuel: float = Field(..., ge=0)
+    depot_garantie: Optional[float] = Field(default=None, ge=0)
+
+
+class ConvertirResult(BaseModel):
+    locataire_id: int
+    bail_id: int
+    immeuble_id: int
+
+
+@router.post(
+    "/locations/{dossier_id}/convertir",
+    response_model=ConvertirResult,
+    status_code=status.HTTP_201_CREATED,
+)
+async def convertir_dossier(
+    dossier_id: int,
+    payload: ConvertirRequest,
+    db: DBSession,
+    user: CurrentUser,
+) -> ConvertirResult:
+    """Le candidat retenu devient LOCATAIRE avec son BAIL (statut
+    « proposé » — l'envoi pour signature se fait depuis l'onglet Baux &
+    locataires). Le dossier passe à « reloué » et le logement à
+    « réservé » (occupé quand le bail commencera)."""
+    _require_volet(user)
+    dossier = await _dossier_or_404(db, dossier_id)
+    if dossier.statut == LocationDossierStatut.RELOUE.value:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Ce dossier est déjà reloué."
+        )
+    if payload.date_fin <= payload.date_debut:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "La fin du bail doit être après son début.",
+        )
+    lg = await db.get(Logement, dossier.logement_id)
+    if lg is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Logement introuvable.")
+
+    now = _now()
+    locataire = Locataire(
+        full_name=payload.locataire_nom.strip(),
+        email=(payload.locataire_email or "").strip() or None,
+        phone=(payload.locataire_phone or "").strip() or None,
+    )
+    locataire.created_at = now
+    locataire.updated_at = now
+    db.add(locataire)
+    await db.flush()
+
+    bail = Bail(
+        logement_id=dossier.logement_id,
+        locataire_id=locataire.id,
+        date_debut=payload.date_debut,
+        date_fin=payload.date_fin,
+        loyer_mensuel=payload.loyer_mensuel,
+        depot_garantie=payload.depot_garantie,
+        status="propose",
+    )
+    bail.created_at = now
+    bail.updated_at = now
+    db.add(bail)
+    await db.flush()
+
+    dossier.statut = LocationDossierStatut.RELOUE.value
+    dossier.reloue_le = now.date()
+    dossier.nouveau_bail_id = bail.id
+    dossier.updated_at = now
+    # Réservé = bail signé/à signer pas encore commencé (le passage à
+    # « occupé » suit le cycle normal du bail).
+    lg.status = LogementStatus.RESERVE.value
+
+    await db.commit()
+    return ConvertirResult(
+        locataire_id=locataire.id,
+        bail_id=bail.id,
+        immeuble_id=lg.immeuble_id,
+    )
 
 
 # ─── Annonces ───────────────────────────────────────────────────────────
@@ -547,6 +693,24 @@ async def update_visite(
         )
     for k, v in data.items():
         setattr(obj, k, v)
+    # « Retenu » est EXCLUSIF par dossier : retenir ce candidat déretient
+    # les autres et fait avancer le dossier à « candidat retenu ».
+    if data.get("retenu") is True:
+        autres = (
+            await db.execute(
+                select(LocationVisite).where(
+                    LocationVisite.dossier_id == obj.dossier_id,
+                    LocationVisite.id != obj.id,
+                    LocationVisite.retenu.is_(True),
+                )
+            )
+        ).scalars().all()
+        for a in autres:
+            a.retenu = False
+        dossier = await db.get(LocationDossier, obj.dossier_id)
+        if dossier is not None and dossier.statut in STATUTS_ACTIFS:
+            dossier.statut = LocationDossierStatut.CANDIDAT_RETENU.value
+            dossier.updated_at = _now()
     obj.updated_at = _now()
     await db.commit()
     await db.refresh(obj)
