@@ -205,6 +205,18 @@ class ContratGestion(Base, TimestampUpdateMixin):
     mandataire_signature_image_content_type: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True
     )
+    # Accusé de lecture du MANDATAIRE — distinct de opened_at/open_count
+    # qui ne comptent QUE le Mandant (bug 2026-07-10 : l'ouverture du
+    # lien mandataire était attribuée au mandant dans le suivi).
+    mandataire_opened_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    mandataire_last_opened_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    mandataire_open_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
 
     # PDF signé immuable (généré à la signature publique).
     signed_pdf_blob: Mapped[Optional[bytes]] = mapped_column(
