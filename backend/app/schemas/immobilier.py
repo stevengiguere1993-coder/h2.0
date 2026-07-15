@@ -187,12 +187,18 @@ class LocataireUpdate(BaseModel):
     employeur: Optional[str] = Field(default=None, max_length=255)
     revenu_annuel: Optional[float] = Field(default=None, ge=0)
     notes: Optional[str] = None
+    # Suivi DPA (Règle H1) : 'aucun' | 'envoye' | 'actif' | 'refuse'.
+    dpa_statut: Optional[str] = Field(default=None, max_length=16)
+    dpa_signe_le: Optional[date] = None
 
 
 class LocataireRead(LocataireBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     paiement_score: Optional[int] = None
+    dpa_statut: str = "aucun"
+    dpa_envoye_le: Optional[date] = None
+    dpa_signe_le: Optional[date] = None
     created_at: datetime
     updated_at: datetime
 

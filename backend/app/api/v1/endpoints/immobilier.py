@@ -129,6 +129,15 @@ from app.services.plexflow_import import parse_plexflow
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/immobilier", tags=["immobilier"])
 
+# Routeur SANS la garde Bearer de niveau routeur (DEP_IMMOBILIER) : les
+# endpoints d'images s'authentifient EUX-MÊMES via `?t=<jwt>` parce que
+# `<img src>` ne peut pas envoyer de header Authorization. La garde de
+# routeur ajoutée par la refonte permissions (P2b) bloquait ces requêtes
+# en 401 avant même d'atteindre l'endpoint → photos d'immeubles cassées
+# (retour Phil 2026-07-10). La sécurité reste équivalente :
+# _resolve_user_for_image() valide le JWT + _require_volet().
+router_images = APIRouter(prefix="/immobilier", tags=["immobilier"])
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -565,7 +574,7 @@ async def _resolve_user_for_image(
     return user
 
 
-@router.get("/immeubles/{immeuble_id}/cover-photo")
+@router_images.get("/immeubles/{immeuble_id}/cover-photo")
 async def stream_cover_photo(
     immeuble_id: int,
     db: DBSession,
@@ -1791,8 +1800,16 @@ async def update_locataire(
     obj = await db.get(Locataire, locataire_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Locataire introuvable.")
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if "dpa_statut" in data and data["dpa_statut"] not in (
+        "aucun", "envoye", "actif", "refuse"
+    ):
+        raise HTTPException(status_code=422, detail="Statut DPA invalide.")
+    for k, v in data.items():
         setattr(obj, k, v)
+    # Marquer l'accord signé/actif date automatiquement la signature.
+    if data.get("dpa_statut") == "actif" and obj.dpa_signe_le is None:
+        obj.dpa_signe_le = _now().date()
     obj.updated_at = _now()
     await db.commit()
     await db.refresh(obj)
@@ -2018,6 +2035,161 @@ async def delete_locataire_communication(
         raise HTTPException(status_code=404, detail="Entrée introuvable.")
     await db.delete(obj)
     await db.commit()
+
+
+# ─── Dépôt préautorisé (DPA) — Règle H1, perception Desjardins ─────────
+
+
+async def _dpa_contexte(db, locataire_id: int) -> dict:
+    """Contexte du DPA depuis le bail ACTIF du locataire : loyer,
+    adresse du logement, entreprise propriétaire (créancier)."""
+    loc = await db.get(Locataire, locataire_id)
+    if loc is None:
+        raise HTTPException(status_code=404, detail="Locataire introuvable.")
+    bail = (
+        await db.execute(
+            select(Bail)
+            .where(
+                Bail.locataire_id == locataire_id,
+                Bail.status == BailStatus.ACTIF.value,
+            )
+            .order_by(Bail.date_debut.desc())
+        )
+    ).scalars().first()
+    loyer = float(bail.loyer_mensuel) if bail and bail.loyer_mensuel else None
+    adresse = ""
+    creancier = "Le locateur"
+    if bail is not None:
+        lg = await db.get(Logement, bail.logement_id)
+        im = await db.get(Immeuble, lg.immeuble_id) if lg else None
+        if im is not None:
+            adresse = f"{im.address}{', app. ' + lg.numero if lg else ''}"
+            ownership = (
+                await db.execute(
+                    select(ImmeubleOwnership)
+                    .where(ImmeubleOwnership.immeuble_id == im.id)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if ownership is not None:
+                ent = await db.get(Entreprise, ownership.entreprise_id)
+                if ent is not None:
+                    creancier = ent.name
+    return {
+        "locataire": loc,
+        "loyer": loyer,
+        "adresse": adresse,
+        "creancier": creancier,
+    }
+
+
+@router.get("/locataires/{locataire_id}/dpa/pdf")
+async def dpa_pdf(
+    locataire_id: int, db: DBSession, user: CurrentUser
+) -> Response:
+    """Formulaire d'accord DPA prérempli (PDF) — à faire remplir et
+    signer par le locataire (renseignements bancaires + spécimen)."""
+    _require_volet(user)
+    from app.services.dpa_form import generate_dpa_pdf
+
+    ctx = await _dpa_contexte(db, locataire_id)
+    pdf = generate_dpa_pdf(
+        locataire_nom=ctx["locataire"].full_name,
+        logement_adresse=ctx["adresse"],
+        creancier_nom=ctx["creancier"],
+        loyer_mensuel=ctx["loyer"],
+    )
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="accord-dpa-{locataire_id}.pdf"'
+            )
+        },
+    )
+
+
+class DpaEnvoiResult(BaseModel):
+    courriel_envoye: bool
+    destinataire: Optional[str] = None
+
+
+@router.post(
+    "/locataires/{locataire_id}/dpa/envoyer",
+    response_model=DpaEnvoiResult,
+)
+async def dpa_envoyer(
+    locataire_id: int, db: DBSession, user: CurrentUser
+) -> DpaEnvoiResult:
+    """Envoi MANUEL de la documentation DPA au locataire (bouton —
+    rien d'automatique) : courriel + formulaire d'accord PDF en pièce
+    jointe. Le statut passe à « documentation envoyée »."""
+    _require_volet(user)
+    from app.integrations.email_graph import EmailAttachment, GraphMailer
+    from app.services.dpa_form import generate_dpa_pdf
+
+    ctx = await _dpa_contexte(db, locataire_id)
+    loc = ctx["locataire"]
+    if not (loc.email or "").strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Le locataire n'a pas de courriel — ajoute-le d'abord.",
+        )
+    mailer = GraphMailer()
+    if not mailer.ready:
+        raise HTTPException(
+            status_code=503,
+            detail="Envoi courriel non configuré (Microsoft Graph).",
+        )
+
+    pdf = generate_dpa_pdf(
+        locataire_nom=loc.full_name,
+        logement_adresse=ctx["adresse"],
+        creancier_nom=ctx["creancier"],
+        loyer_mensuel=ctx["loyer"],
+    )
+    body_html = f"""
+    <p>Bonjour {loc.full_name},</p>
+    <p>Pour simplifier le paiement de votre loyer, nous vous proposons le
+    <b>prélèvement bancaire préautorisé (DPA)</b> : le loyer est prélevé
+    automatiquement de votre compte chaque mois — plus de chèque ni de
+    virement à penser.</p>
+    <p>Pour y adhérer :</p>
+    <ol>
+      <li>Remplissez et signez le formulaire ci-joint
+      (« Accord de débit préautorisé ») ;</li>
+      <li>Joignez un spécimen de chèque portant la mention « ANNULÉ » ;</li>
+      <li>Retournez le tout en répondant à ce courriel.</li>
+    </ol>
+    <p>Vous pouvez annuler cette autorisation en tout temps avec un
+    préavis écrit de 30 jours. Vos droits d'annulation et de
+    remboursement sont détaillés dans le formulaire (www.paiements.ca).</p>
+    <p>Cordialement,<br/>{ctx["creancier"]}</p>
+    """.strip()
+    try:
+        await mailer.send(
+            to=[loc.email],
+            subject="Paiement du loyer par prélèvement préautorisé (DPA)",
+            html_body=body_html,
+            attachments=[
+                EmailAttachment(
+                    name="accord-dpa.pdf",
+                    content_bytes=pdf,
+                    content_type="application/pdf",
+                )
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502, detail=f"Envoi du courriel échoué : {exc}"
+        )
+
+    loc.dpa_statut = "envoye"
+    loc.dpa_envoye_le = _now().date()
+    loc.updated_at = _now()
+    await db.commit()
+    return DpaEnvoiResult(courriel_envoye=True, destinataire=loc.email)
 
 
 def _fmt_money_pdf(n) -> str:
