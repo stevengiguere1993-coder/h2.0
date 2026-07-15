@@ -321,6 +321,104 @@ class LocataireCommunication(Base, TimestampUpdateMixin):
     auteur: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
 
+# ─── RELOCATION (pipeline « Locations » / vacances) ─────────────────────
+
+
+class LocationDossierStatut(str, Enum):
+    AVIS_RECU = "avis_recu"              # le locataire a confirmé son départ
+    ANNONCE_PUBLIEE = "annonce_publiee"  # l'annonce est en ligne
+    VISITES = "visites"                  # visites en cours
+    CANDIDAT_RETENU = "candidat_retenu"  # candidat choisi, bail à signer
+    RELOUE = "reloue"                    # nouveau bail signé
+    ANNULE = "annule"                    # départ annulé / logement retiré
+
+
+class LocationDossier(Base, TimestampUpdateMixin):
+    """Dossier de RELOCATION d'un logement (un épisode de vacance).
+
+    Créé quand un locataire confirme son départ (bouton sur le bail) ou
+    à la main pour un logement déjà vacant. Suit les annonces, les
+    visites et l'avancement jusqu'au nouveau bail. Aucun automatisme
+    externe (Facebook, etc.) — l'employé consigne tout ici.
+    """
+
+    __tablename__ = "imm_location_dossiers"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    logement_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_logements.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    # Bail SORTANT à l'origine du dossier (nullable : logement déjà vide).
+    bail_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_baux.id", ondelete="SET NULL"), nullable=True
+    )
+
+    statut: Mapped[str] = mapped_column(
+        String(24), nullable=False,
+        default=LocationDossierStatut.AVIS_RECU.value,
+        server_default=LocationDossierStatut.AVIS_RECU.value,
+        index=True,
+    )
+    # Date de départ prévue du locataire sortant (souvent = fin du bail).
+    date_depart: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    # Loyer affiché pour la relocation vs loyer du bail sortant (delta).
+    loyer_demande: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+    loyer_ancien: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+    reloue_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class LocationAnnonce(Base, TimestampUpdateMixin):
+    """Annonce publiée pour un dossier de relocation (suivi manuel)."""
+
+    __tablename__ = "imm_location_annonces"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    dossier_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_location_dossiers.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    # Kijiji, Marketplace, LesPAC, affiche, autre…
+    plateforme: Mapped[str] = mapped_column(String(64), nullable=False)
+    url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    publiee_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+
+
+class LocationVisite(Base, TimestampUpdateMixin):
+    """Visite planifiée/faite avec un candidat pour un dossier."""
+
+    __tablename__ = "imm_location_visites"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    dossier_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_location_dossiers.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    quand: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    candidat_nom: Mapped[str] = mapped_column(String(255), nullable=False)
+    candidat_contact: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    # planifiee | faite | absent | annulee
+    statut: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="planifiee",
+        server_default="planifiee",
+    )
+    # Le candidat est-il intéressé après la visite ? (null = pas encore su)
+    interesse: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
 # ─── BAIL ───────────────────────────────────────────────────────────────
 
 

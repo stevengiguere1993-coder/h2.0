@@ -15,7 +15,9 @@ import {
   Home,
   FileDown,
   FileSignature,
+  KeyRound,
   Loader2,
+  LogOut,
   Mail,
   Pencil,
   Percent,
@@ -40,6 +42,7 @@ import {
   fmtPieces,
   LogementFiche
 } from "@/components/immobilier/logement-fiche";
+import { LocationsBoard } from "@/components/immobilier/locations-board";
 
 type Ownership = {
   id: number;
@@ -181,6 +184,7 @@ const TABS = [
   // Paiements = suivi des loyers du mois, Baux & locataires = contrats.
   { id: "paiements", label: "Paiements", icon: Receipt },
   { id: "baux", label: "Baux & locataires", icon: ClipboardList },
+  { id: "locations", label: "Locations", icon: KeyRound },
   { id: "hypotheques", label: "Hypothèques", icon: Banknote },
   { id: "evaluations", label: "Évaluations", icon: TrendingUp },
   { id: "cashflow", label: "Cashflow", icon: Wallet },
@@ -193,7 +197,7 @@ const TABS = [
 // compagnie de gestion externe.
 const TABS_MASQUES_GESTION_EXTERNE: ReadonlyArray<
   (typeof TABS)[number]["id"]
-> = ["paiements", "baux", "maintenance", "contrat-gestion"];
+> = ["paiements", "baux", "locations", "maintenance", "contrat-gestion"];
 
 function fmtCurrency(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -884,7 +888,33 @@ export default function ImmeubleDetailPage({
               logements={logements}
               locataires={locataires}
               highlightBailId={highlightBailId}
+              onRelocation={async (b) => {
+                setActionErr(null);
+                const r = await authedFetch(
+                  "/api/v1/immobilier/locations",
+                  {
+                    method: "POST",
+                    body: JSON.stringify({
+                      logement_id: b.logement_id,
+                      bail_id: b.id
+                    })
+                  }
+                );
+                if (!r.ok) {
+                  const t = await r.text();
+                  setActionErr(
+                    t.includes("déjà en cours")
+                      ? "Une relocation est déjà en cours pour ce logement — voir l'onglet Locations."
+                      : t.slice(0, 200) || `HTTP ${r.status}`
+                  );
+                  return;
+                }
+                switchTab("locations");
+              }}
             />
+          ) : null}
+          {tab === "locations" ? (
+            <LocationsBoard immeubleId={immeubleId} />
           ) : null}
           {tab === "hypotheques" ? (
             <HypothequesTab
@@ -1767,13 +1797,15 @@ function BauxTab({
   list,
   logements,
   locataires,
-  highlightBailId
+  highlightBailId,
+  onRelocation
 }: {
   immeubleId: number;
   list: Bail[] | null;
   logements: Logement[] | null;
   locataires: { id: number; full_name: string }[];
   highlightBailId: number | null;
+  onRelocation: (b: Bail) => void | Promise<void>;
 }) {
   const logMap = new Map((logements || []).map((l) => [l.id, l.numero]));
   const locMap = new Map(locataires.map((l) => [l.id, l.full_name]));
@@ -1795,6 +1827,7 @@ function BauxTab({
                 <th className="px-4 py-2.5">Statut</th>
                 <th className="px-4 py-2.5">Signature</th>
                 <th className="px-4 py-2.5 text-right">Documents TAL</th>
+                <th className="px-4 py-2.5 text-right">Départ</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-brand-800">
@@ -1847,6 +1880,18 @@ function BauxTab({
                   </td>
                   <td className="px-4 py-2 text-right">
                     <TalFormDropdown bailId={b.id} />
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    {b.status === "actif" ? (
+                      <button
+                        type="button"
+                        title="Le locataire a confirmé son départ — ouvrir un dossier de relocation (onglet Locations)"
+                        onClick={() => void onRelocation(b)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20"
+                      >
+                        <LogOut className="h-3 w-3" /> Départ
+                      </button>
+                    ) : null}
                   </td>
                 </tr>
               ))}

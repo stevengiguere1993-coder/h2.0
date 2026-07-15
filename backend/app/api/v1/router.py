@@ -57,6 +57,7 @@ from app.api.v1.endpoints import (
     contrats_gestion,
     immobilier,
     immobilier_extras,
+    immobilier_locations,
     investissements,
     dashboard,
     help,
@@ -443,6 +444,10 @@ api_router.include_router(entreprise_partners_links.router, dependencies=DEP_ENT
 # /immobilier/tal/* et /immobilier/renouvellements/* matchent avant les
 # routes plus génériques de /immobilier.
 api_router.include_router(immobilier_extras.router, dependencies=DEP_IMMOBILIER)
+# Pipeline « Locations » (relocation) — avant immobilier.router aussi.
+api_router.include_router(
+    immobilier_locations.router, dependencies=DEP_IMMOBILIER
+)
 api_router.include_router(contrats_gestion.router, dependencies=DEP_IMMOBILIER)
 api_router.include_router(immobilier.router, dependencies=DEP_IMMOBILIER)
 api_router.include_router(investissements.router, dependencies=DEP_INVESTISSEUR)
