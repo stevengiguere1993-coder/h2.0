@@ -321,31 +321,26 @@ async def _compute_valeur_part(
     if valeur_imm is None:
         return None
 
-    # Balance = COALESCE(balance_actuelle, montant_initial) : balance
-    # jamais saisie ≠ hypothèque à 0 $ (équité gonflée sinon).
-    balance_hyp = float(
-        (
-            await db.execute(
-                select(
-                    func.coalesce(
-                        func.sum(
-                            func.coalesce(
-                                Hypotheque.balance_actuelle,
-                                Hypotheque.montant_initial,
-                            )
-                        ),
-                        0,
+    # Balance EFFECTIVE : saisie > calculée au jour J (amortissement) >
+    # montant initial — même logique que la fiche immeuble.
+    from app.services.hypotheque_calc import balance_effective
+
+    balance_hyp = round(
+        sum(
+            balance_effective(h)
+            for h in (
+                await db.execute(
+                    select(Hypotheque).where(
+                        and_(
+                            Hypotheque.immeuble_id == imm.id,
+                            Hypotheque.status
+                            == HypothequeStatus.ACTIVE.value,
+                        )
                     )
                 )
-                .where(
-                    and_(
-                        Hypotheque.immeuble_id == imm.id,
-                        Hypotheque.status == HypothequeStatus.ACTIVE.value,
-                    )
-                )
-            )
-        ).scalar()
-        or 0
+            ).scalars().all()
+        ),
+        2,
     )
     pct = float(inv.parts_pct) / 100.0
     return round((valeur_imm - balance_hyp) * pct, 2)

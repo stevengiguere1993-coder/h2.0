@@ -10,7 +10,7 @@ import {
   X
 } from "lucide-react";
 
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 
@@ -45,6 +45,7 @@ const SCORE_FILTERS: { value: ScoreFilter; label: string }[] = [
 ];
 
 export default function LocatairesPage() {
+  const router = useRouter();
   const { currentEntrepriseId } = useImmobilierLayout();
   const [list, setList] = useState<Locataire[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -314,9 +315,10 @@ export default function LocatairesPage() {
       {showCreate ? (
         <CreateLocataireModal
           onClose={() => setShowCreate(false)}
-          onSaved={() => {
+          onSaved={(createdId) => {
             setShowCreate(false);
-            void reload();
+            // Ouvrir directement le hub du locataire créé (retour Phil).
+            router.push(`/immobilier/locataires/${createdId}` as any);
           }}
         />
       ) : null}
@@ -329,7 +331,7 @@ function CreateLocataireModal({
   onSaved
 }: {
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (createdId: number) => void;
 }) {
   const [form, setForm] = useState({
     full_name: "",
@@ -362,7 +364,8 @@ function CreateLocataireModal({
         const t = await res.text();
         throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
       }
-      onSaved();
+      const created = (await res.json()) as { id: number };
+      onSaved(created.id);
     } catch (e2) {
       setErr((e2 as Error).message);
     } finally {

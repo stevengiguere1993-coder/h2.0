@@ -580,7 +580,9 @@ function UsersTab({ canEdit }: { canEdit: boolean }) {
         className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition disabled:cursor-default ${
           ok
             ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-            : "border-brand-800 bg-brand-950 text-white/35"
+            : // text-white SANS alpha (la variante /35 échappe au remap du
+              // thème clair → chips illisibles) + opacité séparée.
+              "border-brand-800 bg-brand-950 text-white opacity-50"
         } ${ov ? "ring-1 ring-accent-500/60" : ""} ${
           canEdit ? "hover:border-accent-500/50" : ""
         }`}

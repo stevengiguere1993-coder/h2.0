@@ -450,31 +450,27 @@ async def _compute_part_metrics(
         val = immeuble.purchase_price
     valeur_imm = float(val) if val is not None else 0.0
 
-    # Hypothèque active. Balance = COALESCE(balance_actuelle,
-    # montant_initial) : balance jamais saisie ≠ hypothèque à 0 $.
-    balance_hyp = float(
-        (
-            await db.execute(
-                select(
-                    func.coalesce(
-                        func.sum(
-                            func.coalesce(
-                                Hypotheque.balance_actuelle,
-                                Hypotheque.montant_initial,
-                            )
-                        ),
-                        0,
+    # Hypothèque active. Balance EFFECTIVE : saisie > calculée au jour J
+    # (tableau d'amortissement) > montant initial — même logique que la
+    # fiche immeuble.
+    from app.services.hypotheque_calc import balance_effective
+
+    balance_hyp = round(
+        sum(
+            balance_effective(h)
+            for h in (
+                await db.execute(
+                    select(Hypotheque).where(
+                        and_(
+                            Hypotheque.immeuble_id == immeuble.id,
+                            Hypotheque.status
+                            == HypothequeStatus.ACTIVE.value,
+                        )
                     )
                 )
-                .where(
-                    and_(
-                        Hypotheque.immeuble_id == immeuble.id,
-                        Hypotheque.status == HypothequeStatus.ACTIVE.value,
-                    )
-                )
-            )
-        ).scalar()
-        or 0
+            ).scalars().all()
+        ),
+        2,
     )
 
     return (

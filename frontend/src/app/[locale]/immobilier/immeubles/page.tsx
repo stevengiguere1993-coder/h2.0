@@ -13,7 +13,7 @@ import {
   X
 } from "lucide-react";
 
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
 import {
   EntrepriseSelector,
@@ -56,6 +56,7 @@ function fmtCurrency(n: number): string {
 }
 
 export default function ImmeublesListPage() {
+  const router = useRouter();
   const {
     currentEntrepriseId,
     setCurrentEntrepriseId,
@@ -289,9 +290,10 @@ export default function ImmeublesListPage() {
           entrepriseId={currentEntrepriseId}
           entreprises={entreprises}
           onClose={() => setShowCreate(false)}
-          onSaved={() => {
+          onSaved={(createdId) => {
             setShowCreate(false);
-            void reload();
+            // Ouvrir directement la fiche du nouvel immeuble (retour Phil).
+            router.push(`/immobilier/immeubles/${createdId}` as any);
           }}
         />
       ) : null}
@@ -356,7 +358,7 @@ function CreateImmeubleModal({
   entrepriseId: number | null;
   entreprises: { id: number; name: string }[];
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (createdId: number) => void;
 }) {
   // Entreprise propriétaire choisie DANS le formulaire (pré-remplie si un
   // filtre entreprise est actif sur la page) — le bouton « Nouvel
@@ -444,7 +446,7 @@ function CreateImmeubleModal({
       }
 
       if (photoPreview) URL.revokeObjectURL(photoPreview);
-      onSaved();
+      onSaved(created.id);
     } catch (e2) {
       setErr((e2 as Error).message);
     } finally {

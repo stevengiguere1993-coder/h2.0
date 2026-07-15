@@ -563,7 +563,12 @@ export function DriveFolderExplorer({
 
       let cmp = 0;
       if (sortField === "name") {
-        cmp = a.name.localeCompare(b.name, "fr", { sensitivity: "base" });
+        // numeric: true = tri NATUREL des nombres dans les noms
+        // (« 7 - Août » avant « 11 - Novembre » — retour Phil).
+        cmp = a.name.localeCompare(b.name, "fr", {
+          sensitivity: "base",
+          numeric: true
+        });
       } else if (sortField === "modified_time") {
         const am = a.modified_time ? Date.parse(a.modified_time) : 0;
         const bm = b.modified_time ? Date.parse(b.modified_time) : 0;
