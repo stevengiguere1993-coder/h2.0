@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ClipboardPaste,
   Download,
+  FileSpreadsheet,
   Loader2,
   Plus,
   Search,
@@ -69,6 +70,7 @@ export default function ImmeublesListPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showPlex, setShowPlex] = useState(false);
+  const [showExcel, setShowExcel] = useState(false);
 
   const currentEnt = entreprises.find((e) => e.id === currentEntrepriseId) || null;
 
@@ -129,6 +131,15 @@ export default function ImmeublesListPage() {
             >
               <Download className="h-3.5 w-3.5" />
               Import matricule
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowExcel(true)}
+              title="Télécharger le modèle Excel, le remplir (immeuble, hypothèques, logements, locataires) et l'importer"
+              className="btn-secondary btn-sm"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5" />
+              Importer (Excel)
             </button>
             <button
               type="button"
@@ -313,6 +324,19 @@ export default function ImmeublesListPage() {
           entreprises={entreprises}
           onClose={() => setShowPlex(false)}
           onImported={() => void reload()}
+        />
+      ) : null}
+
+      {showExcel ? (
+        <ImportExcelModal
+          entrepriseId={currentEntrepriseId}
+          entreprises={entreprises}
+          onClose={() => setShowExcel(false)}
+          onImported={(immeubleId) => {
+            setShowExcel(false);
+            // Ouvrir directement la fiche de l'immeuble importé.
+            router.push(`/immobilier/immeubles/${immeubleId}` as any);
+          }}
         />
       ) : null}
     </>
@@ -1155,5 +1179,220 @@ function PlexPreview({
         ))}
       </div>
     </div>
+  );
+}
+
+type ImportExcelResult = {
+  immeuble_id: number;
+  immeuble_name: string;
+  nb_hypotheques: number;
+  nb_logements: number;
+  nb_locataires: number;
+  nb_baux: number;
+};
+
+function ImportExcelModal({
+  entrepriseId,
+  entreprises,
+  onClose,
+  onImported
+}: {
+  entrepriseId: number | null;
+  entreprises: { id: number; name: string }[];
+  onClose: () => void;
+  onImported: (immeubleId: number) => void;
+}) {
+  const [entId, setEntId] = useState<number | null>(entrepriseId);
+  const [file, setFile] = useState<File | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [erreurs, setErreurs] = useState<string[] | null>(null);
+  const [result, setResult] = useState<ImportExcelResult | null>(null);
+
+  async function downloadModele() {
+    setDownloading(true);
+    setErreurs(null);
+    try {
+      const res = await authedFetch("/api/v1/immobilier/import-excel/modele");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "modele-immeuble-kratos.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setErreurs([
+        `Téléchargement du modèle échoué : ${(e as Error).message}`
+      ]);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function importer() {
+    if (!file || entId == null) return;
+    setImporting(true);
+    setErreurs(null);
+    try {
+      const fd = new FormData();
+      fd.append("entreprise_id", String(entId));
+      fd.append("file", file);
+      const res = await authedFetch("/api/v1/immobilier/import-excel", {
+        method: "POST",
+        body: fd
+      });
+      if (!res.ok) {
+        // 400 = liste d'erreurs de fichier {detail: {erreurs: [...]}}.
+        let msgs: string[] = [`HTTP ${res.status}`];
+        try {
+          const data = (await res.json()) as {
+            detail?: { erreurs?: string[] } | string;
+          };
+          if (typeof data.detail === "string") msgs = [data.detail];
+          else if (data.detail?.erreurs?.length) msgs = data.detail.erreurs;
+        } catch {
+          /* corps non-JSON — on garde le code HTTP */
+        }
+        setErreurs(msgs);
+        return;
+      }
+      setResult((await res.json()) as ImportExcelResult);
+    } catch (e) {
+      setErreurs([`Import échoué : ${(e as Error).message}`]);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <ModalShell title="Importer un immeuble (Excel)" onClose={onClose}>
+      {result ? (
+        <div className="grid gap-4">
+          <p className="flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2.5 text-sm text-emerald-300">
+            <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+            «&nbsp;{result.immeuble_name}&nbsp;» créé :{" "}
+            {result.nb_logements} logement
+            {result.nb_logements > 1 ? "s" : ""}, {result.nb_baux} bail
+            {result.nb_baux > 1 ? "x" : ""}, {result.nb_locataires} locataire
+            {result.nb_locataires > 1 ? "s" : ""}, {result.nb_hypotheques}{" "}
+            hypothèque{result.nb_hypotheques > 1 ? "s" : ""}.
+          </p>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => onImported(result.immeuble_id)}
+              className="btn-accent btn-sm"
+            >
+              Ouvrir la fiche
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          <div className="rounded-xl border border-brand-800 bg-brand-900/60 p-4">
+            <p className="text-xs text-white/70">
+              <strong className="text-white">Étape 1</strong> — télécharge le
+              modèle, remplis les feuilles Immeuble, Hypothèques, Logements et
+              Locataires &amp; baux (les colonnes * sont obligatoires).
+            </p>
+            <button
+              type="button"
+              onClick={() => void downloadModele()}
+              disabled={downloading}
+              className="btn-secondary btn-sm mt-3"
+            >
+              {downloading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+              Télécharger le modèle
+            </button>
+          </div>
+
+          <div className="rounded-xl border border-brand-800 bg-brand-900/60 p-4">
+            <p className="mb-3 text-xs text-white/70">
+              <strong className="text-white">Étape 2</strong> — choisis
+              l&apos;entreprise propriétaire et téléverse le fichier rempli.
+              Tout est créé d&apos;un coup ; s&apos;il reste des erreurs, rien
+              n&apos;est créé et elles te sont listées.
+            </p>
+            <div className="grid gap-3">
+              <div>
+                <label className="label">Entreprise propriétaire</label>
+                <select
+                  value={entId == null ? "" : String(entId)}
+                  onChange={(e) =>
+                    setEntId(e.target.value ? Number(e.target.value) : null)
+                  }
+                  className="input"
+                >
+                  <option value="" disabled>
+                    Choisir l&apos;entreprise…
+                  </option>
+                  {entreprises.map((ent) => (
+                    <option key={ent.id} value={ent.id}>
+                      {ent.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Fichier rempli (.xlsx)</label>
+                <input
+                  type="file"
+                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={(e) => setFile(e.target.files?.[0] || null)}
+                  className="block w-full text-xs text-white/70 file:mr-3 file:rounded-lg file:border-0 file:bg-brand-800 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-brand-700"
+                />
+              </div>
+            </div>
+          </div>
+
+          {erreurs ? (
+            <div className="max-h-48 overflow-y-auto rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2">
+              <p className="mb-1 text-xs font-semibold text-rose-200">
+                {erreurs.length > 1
+                  ? `${erreurs.length} erreurs — corrige le fichier puis réessaie :`
+                  : "Erreur :"}
+              </p>
+              <ul className="list-inside list-disc space-y-0.5 text-xs text-rose-200/90">
+                {erreurs.map((e, i) => (
+                  <li key={i}>{e}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          <div className="flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={importing}
+              className="btn-secondary btn-sm"
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              onClick={() => void importer()}
+              disabled={importing || !file || entId == null}
+              className="btn-accent btn-sm disabled:opacity-50"
+            >
+              {importing ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FileSpreadsheet className="mr-1 h-3.5 w-3.5" />
+              )}
+              Importer
+            </button>
+          </div>
+        </div>
+      )}
+    </ModalShell>
   );
 }
