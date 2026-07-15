@@ -296,6 +296,15 @@ async def ensure_critical_columns() -> None:
         # Dépôts de garantie opérationnels 2026-07 : date de remise du
         # dépôt au locataire (page Dépôts → « Marquer rendu »).
         ("imm_baux", "depot_rendu_le", "DATE"),
+        # Locations v2 2026-07 : enquêtes de prélocation + candidat retenu
+        # sur les visites (table créée au déploiement précédent SANS ces
+        # colonnes → additif obligatoire ici).
+        ("imm_location_visites", "enquete_credit", "BOOLEAN"),
+        ("imm_location_visites", "enquete_references", "BOOLEAN"),
+        ("imm_location_visites", "enquete_emploi", "BOOLEAN"),
+        ("imm_location_visites", "enquete_notes", "TEXT"),
+        ("imm_location_visites", "retenu", "BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("imm_location_dossiers", "nouveau_bail_id", "INTEGER"),
         # Contrat de gestion 2026-07 : accusé de lecture du MANDATAIRE,
         # distinct de celui du Mandant (opened_at/open_count) — sinon
         # l'ouverture du lien mandataire est attribuée au mandant.

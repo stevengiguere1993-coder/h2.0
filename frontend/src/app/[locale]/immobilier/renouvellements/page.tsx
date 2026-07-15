@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   ClipboardList,
+  KeyRound,
   Loader2,
   Mail,
   Search
@@ -62,6 +63,7 @@ export default function RenouvellementsPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sendingFor, setSendingFor] = useState<number | null>(null);
+  const [relocatingId, setRelocatingId] = useState<number | null>(null);
   const [prepFor, setPrepFor] = useState<RenouvellementOverview | null>(null);
 
   async function reload() {
@@ -82,6 +84,34 @@ export default function RenouvellementsPage() {
 
   // « Scanner & envoyer » (batch) retiré — demande Phil 2026-07-10 :
   // aucun envoi de masse, chaque avis part via son bouton, vérifié.
+
+  // « Non renouvelé » : le bail ne sera pas prolongé → ouvre un dossier
+  // de relocation dans Locations (prérempli depuis le bail).
+  async function nonRenouvele(bailId: number) {
+    setRelocatingId(bailId);
+    setMsg(null);
+    try {
+      const r = await authedFetch("/api/v1/immobilier/locations", {
+        method: "POST",
+        body: JSON.stringify({ bail_id: bailId })
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(
+          t.includes("déjà en cours")
+            ? "Une relocation est déjà en cours pour ce logement."
+            : t.slice(0, 200) || `HTTP ${r.status}`
+        );
+      }
+      setMsg(
+        "Dossier de relocation créé — suivi dans la page Locations."
+      );
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setRelocatingId(null);
+    }
+  }
 
   async function sendNow(bailId: number) {
     setSendingFor(bailId);
@@ -290,14 +320,30 @@ export default function RenouvellementsPage() {
                       ) : null}
                     </td>
                     <td className="px-4 py-2.5 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setPrepFor(r)}
-                        className="btn-secondary btn-sm"
-                      >
-                        <Mail className="h-3.5 w-3.5" />
-                        Préparer
-                      </button>
+                      <span className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setPrepFor(r)}
+                          className="btn-secondary btn-sm"
+                        >
+                          <Mail className="h-3.5 w-3.5" />
+                          Préparer
+                        </button>
+                        <button
+                          type="button"
+                          title="Le bail ne sera PAS renouvelé — ouvrir un dossier de relocation dans Locations"
+                          disabled={relocatingId === r.bail_id}
+                          onClick={() => void nonRenouvele(r.bail_id)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
+                        >
+                          {relocatingId === r.bail_id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <KeyRound className="h-3.5 w-3.5" />
+                          )}
+                          Non renouvelé
+                        </button>
+                      </span>
                     </td>
                   </tr>
                 ))}

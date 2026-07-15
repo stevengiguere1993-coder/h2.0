@@ -371,6 +371,11 @@ class LocationDossier(Base, TimestampUpdateMixin):
     )
     reloue_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Bail créé par la conversion « candidat retenu → locataire + bail »
+    # (colonne ajoutée après création de la table → ensure_critical_columns).
+    nouveau_bail_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_baux.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class LocationAnnonce(Base, TimestampUpdateMixin):
@@ -417,6 +422,24 @@ class LocationVisite(Base, TimestampUpdateMixin):
     # Le candidat est-il intéressé après la visite ? (null = pas encore su)
     interesse: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # ── Prélocation (enquêtes) — null = pas faite, true = OK, false = KO.
+    # Colonnes ajoutées après la création de la table → cf.
+    # ensure_critical_columns (session.py).
+    enquete_credit: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True
+    )
+    enquete_references: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True
+    )
+    enquete_emploi: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True
+    )
+    enquete_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Candidat RETENU pour le logement (exclusif par dossier).
+    retenu: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
 
 # ─── BAIL ───────────────────────────────────────────────────────────────
