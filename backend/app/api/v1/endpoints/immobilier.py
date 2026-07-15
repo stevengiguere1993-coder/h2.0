@@ -3789,10 +3789,6 @@ async def finances_previsionnel(
 # ── Hypothèques ────────────────────────────────────────────────────────
 
 
-@router.get(
-    "/immeubles/{immeuble_id}/hypotheques",
-    response_model=List[HypothequeRead],
-)
 def _hyp_read(obj: Hypotheque) -> HypothequeRead:
     """HypothequeRead + balance THÉORIQUE du jour (amortissement)."""
     from app.services.hypotheque_calc import balance_calculee_de
@@ -3802,6 +3798,10 @@ def _hyp_read(obj: Hypotheque) -> HypothequeRead:
     return r
 
 
+@router.get(
+    "/immeubles/{immeuble_id}/hypotheques",
+    response_model=List[HypothequeRead],
+)
 async def list_hypotheques(
     immeuble_id: int, db: DBSession, user: CurrentUser
 ) -> List[HypothequeRead]:
