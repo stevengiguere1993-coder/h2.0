@@ -18,6 +18,7 @@ import {
   ClipboardList,
   DoorOpen,
   Hammer,
+  KeyRound,
   Loader2,
   Menu,
   Pencil,
@@ -55,6 +56,7 @@ const NAV: NavItem[] = [
   { href: "/immobilier/logements", label: "Logements", icon: DoorOpen },
   { href: "/immobilier/locataires", label: "Locataires", icon: Users },
   { href: "/immobilier/baux", label: "Baux & paiements", icon: ClipboardList },
+  { href: "/immobilier/locations", label: "Locations", icon: KeyRound },
   { href: "/immobilier/renouvellements", label: "Renouvellements", icon: ClipboardList },
   { href: "/immobilier/depots", label: "Dépôts de garantie", icon: ShieldCheck },
   { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer }
