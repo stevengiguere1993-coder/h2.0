@@ -4328,15 +4328,26 @@ async def get_financials(
         baux_actifs_par_logement[b.logement_id] = baux_actifs_par_logement.get(
             b.logement_id, 0.0
         ) + float(b.loyer_mensuel or 0)
+    # `revenu` = unités LOUÉES seulement : bail actif, ou statut « occupé »
+    # sans bail (gestion externe — les baux vivent chez le gestionnaire).
+    # `revenu_toutes_unites` = potentiel : + loyer demandé des vacantes
+    # (retour Phil 2026-07-16 : le montant principal doit refléter ce qui
+    # rentre vraiment ; le potentiel s'affiche en petit à côté).
     revenu = 0.0
+    revenu_toutes_unites = 0.0
     for lg in logements_imm:
         if lg.id in baux_actifs_par_logement:
-            revenu += baux_actifs_par_logement[lg.id]
+            m = baux_actifs_par_logement[lg.id]
+            revenu += m
+            revenu_toutes_unites += m
         elif (
             lg.status != LogementStatus.HORS_LOC.value
             and lg.loyer_demande is not None
         ):
-            revenu += float(lg.loyer_demande)
+            m = float(lg.loyer_demande)
+            revenu_toutes_unites += m
+            if lg.status == LogementStatus.OCCUPE.value:
+                revenu += m
 
     # Hypothèques actives. Balance EFFECTIVE par hypothèque : la balance
     # saisie prime, sinon la balance CALCULÉE au jour J (tableau
@@ -4475,6 +4486,7 @@ async def get_financials(
         taux_occupation=round(taux, 4),
         revenu_brut_mensuel=round(revenu, 2),
         revenu_brut_annuel=round(revenu_annuel, 2),
+        revenu_brut_mensuel_toutes_unites=round(revenu_toutes_unites, 2),
         paiement_hypotheque_mensuel=round(paiement_hyp, 2),
         balance_hypothecaire=round(balance_hyp, 2),
         valeur_actuelle=valeur_actuelle,
