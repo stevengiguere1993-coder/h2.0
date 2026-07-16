@@ -490,6 +490,36 @@ async def list_immeubles(
     ).all()
     rev_by_imm = {r[0]: float(r[1] or 0) for r in bail_rows}
 
+    # + logements OCCUPÉS sans bail actif au loyer demandé (gestion
+    # externe : les baux vivent chez le gestionnaire) — même définition
+    # « unités louées » que les financials de la fiche.
+    bail_actif_exists = (
+        select(Bail.id)
+        .where(
+            Bail.logement_id == Logement.id,
+            Bail.status == BailStatus.ACTIF.value,
+        )
+        .exists()
+    )
+    occ_rows = (
+        await db.execute(
+            select(
+                Logement.immeuble_id,
+                func.coalesce(func.sum(Logement.loyer_demande), 0),
+            )
+            .where(
+                and_(
+                    Logement.immeuble_id.in_([i.id for i in immeubles]),
+                    Logement.status == LogementStatus.OCCUPE.value,
+                    ~bail_actif_exists,
+                )
+            )
+            .group_by(Logement.immeuble_id)
+        )
+    ).all()
+    for imm_id, somme in occ_rows:
+        rev_by_imm[imm_id] = rev_by_imm.get(imm_id, 0.0) + float(somme or 0)
+
     out: List[ImmeubleListItem] = []
     for imm in immeubles:
         sts = logs_by_imm.get(imm.id, {})
