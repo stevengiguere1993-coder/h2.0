@@ -148,8 +148,10 @@ type Financials = {
   nb_logements_actifs: number;
   nb_logements_occupes: number;
   taux_occupation: number;
+  // Principal = unités louées ; toutes_unites = potentiel avec vacantes.
   revenu_brut_mensuel: number;
   revenu_brut_annuel: number;
+  revenu_brut_mensuel_toutes_unites?: number;
   paiement_hypotheque_mensuel: number;
   balance_hypothecaire: number;
   valeur_actuelle?: number | null;
@@ -809,8 +811,23 @@ export default function ImmeubleDetailPage({
           <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Kpi
               label="Revenu mensuel"
-              value={fmtCurrency(financials.revenu_brut_mensuel)}
-              sub={`${fmtCurrency(financials.revenu_brut_annuel)} / an`}
+              value={
+                <span className="flex flex-wrap items-baseline gap-x-2">
+                  {fmtCurrency(financials.revenu_brut_mensuel)}
+                  {financials.revenu_brut_mensuel_toutes_unites != null ? (
+                    <span
+                      className="text-xs font-normal text-white/50"
+                      title="Potentiel toutes unités (louées + vacantes au loyer demandé)"
+                    >
+                      {fmtCurrency(
+                        financials.revenu_brut_mensuel_toutes_unites
+                      )}{" "}
+                      toutes unités
+                    </span>
+                  ) : null}
+                </span>
+              }
+              sub={`${fmtCurrency(financials.revenu_brut_annuel)} / an — unités louées`}
               icon={DollarSign}
               tone="emerald"
             />
@@ -950,6 +967,7 @@ export default function ImmeubleDetailPage({
             <CashflowTab
               immeubleId={immeubleId}
               baux={baux}
+              logements={logements}
               hypotheques={hypotheques}
               onMutated={() => void refreshFinancials()}
             />
@@ -1454,7 +1472,7 @@ function Kpi({
   tone
 }: {
   label: string;
-  value: string;
+  value: React.ReactNode;
   sub?: string;
   icon: React.ComponentType<{ className?: string }>;
   tone: "sky" | "emerald" | "amber" | "rose";
@@ -3916,11 +3934,13 @@ const DEPENSE_CAT_LABEL: Record<string, string> =
 function CashflowTab({
   immeubleId,
   baux,
+  logements,
   hypotheques,
   onMutated
 }: {
   immeubleId: number;
   baux: Bail[] | null;
+  logements: Logement[] | null;
   hypotheques: Hypotheque[] | null;
   onMutated: () => void;
 }) {
@@ -3963,11 +3983,41 @@ function CashflowTab({
   );
   const nbPonctuelles = (depenses || []).length - recurrentes.length;
 
+  // Revenus PAR LOGEMENT, même logique que le backend (financials) :
+  // bail actif → son loyer ; sinon statut « occupé » → loyer demandé
+  // (gestion externe : les baux vivent chez le gestionnaire). Le
+  // potentiel « toutes unités » ajoute les vacantes au loyer demandé.
   const bauxActifs = (baux || []).filter((b) => b.status === "actif");
-  const revenusMensuel = bauxActifs.reduce(
-    (s, b) => s + (b.loyer_mensuel || 0),
-    0
-  );
+  const loyerBailParLogement = new Map<number, number>();
+  for (const b of bauxActifs) {
+    loyerBailParLogement.set(
+      b.logement_id,
+      (loyerBailParLogement.get(b.logement_id) || 0) + (b.loyer_mensuel || 0)
+    );
+  }
+  let revenusMensuel = 0; // unités louées seulement
+  let revenusToutesUnites = 0;
+  let nbUnitesLouees = 0;
+  for (const lg of logements || []) {
+    const loyerBail = loyerBailParLogement.get(lg.id);
+    if (loyerBail != null) {
+      revenusMensuel += loyerBail;
+      revenusToutesUnites += loyerBail;
+      nbUnitesLouees += 1;
+    } else if (lg.status !== "hors_location" && lg.loyer_demande != null) {
+      revenusToutesUnites += lg.loyer_demande;
+      if (lg.status === "occupe") {
+        revenusMensuel += lg.loyer_demande;
+        nbUnitesLouees += 1;
+      }
+    }
+  }
+  // Filet : baux actifs orphelins (logements pas encore chargés/supprimés).
+  if ((logements || []).length === 0 && bauxActifs.length > 0) {
+    revenusMensuel = bauxActifs.reduce((s, b) => s + (b.loyer_mensuel || 0), 0);
+    revenusToutesUnites = revenusMensuel;
+    nbUnitesLouees = bauxActifs.length;
+  }
   // Mensualisation (mêmes règles que le backend) : % des loyers,
   // annuel ÷ 12, ×1.14975 si taxable.
   const depensesMensuelles = recurrentes.reduce(
@@ -3984,6 +4034,7 @@ function CashflowTab({
 
   const facteur = mode === "mensuel" ? 1 : 12;
   const revenus = revenusMensuel * facteur;
+  const revenusToutes = revenusToutesUnites * facteur;
   const depensesAffichees = depensesMensuelles * facteur;
   const hypo = hypoMensuel * facteur;
   const cashflow = revenus - depensesAffichees - hypo;
@@ -4099,7 +4150,7 @@ function CashflowTab({
       {/* Toggle Mensuel / Annuel */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-xs text-white/50">
-          Cashflow récurrent — baux actifs, dépenses récurrentes et
+          Cashflow récurrent — unités louées, dépenses récurrentes et
           hypothèques actives.
         </p>
         <div className="inline-flex rounded-lg border border-brand-800 bg-brand-950 p-0.5">
@@ -4124,8 +4175,18 @@ function CashflowTab({
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Kpi
           label={`Revenus ${suffixe}`}
-          value={fmtCurrency(revenus)}
-          sub={`${bauxActifs.length} ${bauxActifs.length > 1 ? "baux actifs" : "bail actif"}`}
+          value={
+            <span className="flex flex-wrap items-baseline gap-x-2">
+              {fmtCurrency(revenus)}
+              <span
+                className="text-xs font-normal text-white/50"
+                title="Potentiel toutes unités (louées + vacantes au loyer demandé)"
+              >
+                {fmtCurrency(revenusToutes)} toutes unités
+              </span>
+            </span>
+          }
+          sub={`${nbUnitesLouees} unité${nbUnitesLouees > 1 ? "s" : ""} louée${nbUnitesLouees > 1 ? "s" : ""}`}
           icon={TrendingUp}
           tone="sky"
         />

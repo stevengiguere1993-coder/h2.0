@@ -584,9 +584,12 @@ class ImmeubleFinancials(BaseModel):
     nb_logements_occupes: int = 0
     taux_occupation: float = 0.0  # 0..1
 
-    # Revenus
+    # Revenus. Le montant PRINCIPAL = unités louées seulement (bail actif,
+    # ou statut « occupé » en gestion externe). toutes_unites = potentiel
+    # incluant les vacantes au loyer demandé (hors location exclu).
     revenu_brut_mensuel: float = 0.0
     revenu_brut_annuel: float = 0.0
+    revenu_brut_mensuel_toutes_unites: float = 0.0
 
     # Hypothèque
     paiement_hypotheque_mensuel: float = 0.0

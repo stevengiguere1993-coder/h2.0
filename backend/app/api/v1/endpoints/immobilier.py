@@ -490,6 +490,36 @@ async def list_immeubles(
     ).all()
     rev_by_imm = {r[0]: float(r[1] or 0) for r in bail_rows}
 
+    # + logements OCCUPÉS sans bail actif au loyer demandé (gestion
+    # externe : les baux vivent chez le gestionnaire) — même définition
+    # « unités louées » que les financials de la fiche.
+    bail_actif_exists = (
+        select(Bail.id)
+        .where(
+            Bail.logement_id == Logement.id,
+            Bail.status == BailStatus.ACTIF.value,
+        )
+        .exists()
+    )
+    occ_rows = (
+        await db.execute(
+            select(
+                Logement.immeuble_id,
+                func.coalesce(func.sum(Logement.loyer_demande), 0),
+            )
+            .where(
+                and_(
+                    Logement.immeuble_id.in_([i.id for i in immeubles]),
+                    Logement.status == LogementStatus.OCCUPE.value,
+                    ~bail_actif_exists,
+                )
+            )
+            .group_by(Logement.immeuble_id)
+        )
+    ).all()
+    for imm_id, somme in occ_rows:
+        rev_by_imm[imm_id] = rev_by_imm.get(imm_id, 0.0) + float(somme or 0)
+
     out: List[ImmeubleListItem] = []
     for imm in immeubles:
         sts = logs_by_imm.get(imm.id, {})
@@ -4328,15 +4358,26 @@ async def get_financials(
         baux_actifs_par_logement[b.logement_id] = baux_actifs_par_logement.get(
             b.logement_id, 0.0
         ) + float(b.loyer_mensuel or 0)
+    # `revenu` = unités LOUÉES seulement : bail actif, ou statut « occupé »
+    # sans bail (gestion externe — les baux vivent chez le gestionnaire).
+    # `revenu_toutes_unites` = potentiel : + loyer demandé des vacantes
+    # (retour Phil 2026-07-16 : le montant principal doit refléter ce qui
+    # rentre vraiment ; le potentiel s'affiche en petit à côté).
     revenu = 0.0
+    revenu_toutes_unites = 0.0
     for lg in logements_imm:
         if lg.id in baux_actifs_par_logement:
-            revenu += baux_actifs_par_logement[lg.id]
+            m = baux_actifs_par_logement[lg.id]
+            revenu += m
+            revenu_toutes_unites += m
         elif (
             lg.status != LogementStatus.HORS_LOC.value
             and lg.loyer_demande is not None
         ):
-            revenu += float(lg.loyer_demande)
+            m = float(lg.loyer_demande)
+            revenu_toutes_unites += m
+            if lg.status == LogementStatus.OCCUPE.value:
+                revenu += m
 
     # Hypothèques actives. Balance EFFECTIVE par hypothèque : la balance
     # saisie prime, sinon la balance CALCULÉE au jour J (tableau
@@ -4475,6 +4516,7 @@ async def get_financials(
         taux_occupation=round(taux, 4),
         revenu_brut_mensuel=round(revenu, 2),
         revenu_brut_annuel=round(revenu_annuel, 2),
+        revenu_brut_mensuel_toutes_unites=round(revenu_toutes_unites, 2),
         paiement_hypotheque_mensuel=round(paiement_hyp, 2),
         balance_hypothecaire=round(balance_hyp, 2),
         valeur_actuelle=valeur_actuelle,
