@@ -2328,6 +2328,27 @@ async def dpa_envoyer(
     loc.dpa_statut = "envoye"
     loc.dpa_envoye_le = _now().date()
     loc.updated_at = _now()
+
+    # Conserve le PDF envoyé dans la bibliothèque de documents.
+    try:
+        from app.api.v1.endpoints.immobilier_documents import save_document
+
+        doc = await save_document(
+            db,
+            bail_id=None,
+            locataire_id=loc.id,
+            immeuble_id=None,
+            doc_type="dpa",
+            titre="Accord de débit préautorisé (DPA)",
+            params=None,
+            pdf=pdf,
+            created_by_email=user.email,
+        )
+        doc.envoye_le = _now()
+        doc.envoye_a = loc.email
+    except Exception:  # noqa: BLE001 — l'envoi prime sur l'archivage
+        pass
+
     await db.commit()
     return DpaEnvoiResult(courriel_envoye=True, destinataire=loc.email)
 

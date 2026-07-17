@@ -77,7 +77,9 @@ async def send_bail_for_signature(
     if not bail.signature_token:
         bail.signature_token = secrets.token_urlsafe(32)
         await db.flush()
-    url = f"{public_base()}/bail/{bail.signature_token}"
+    # ⚠️ la page publique frontend vit à /sign-bail — l'ancien lien /bail
+    # menait à un 404 (mismatch détecté 2026-07-17).
+    url = f"{public_base()}/sign-bail/{bail.signature_token}"
 
     try:
         await mailer.send(

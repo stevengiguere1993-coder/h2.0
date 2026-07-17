@@ -33,6 +33,10 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import {
+  BailSignature,
+  TalFormDropdown
+} from "@/components/immobilier/tal-avis";
 
 type Annonce = {
   id: number;
@@ -789,6 +793,10 @@ function DossierModal({
         ) : d.statut === "reloue" && d.nouveau_bail_id ? (
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
             <Check className="h-3.5 w-3.5" /> Reloué — bail créé.
+            {/* Interconnexion (retour Phil) : générer la trousse/les avis
+                et envoyer pour signature SANS quitter le dossier. */}
+            <TalFormDropdown bailId={d.nouveau_bail_id} />
+            <BailSignature bailId={d.nouveau_bail_id} />
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={
@@ -796,7 +804,7 @@ function DossierModal({
               }
               className="ml-auto underline-offset-2 hover:underline"
             >
-              Voir le bail (signature) →
+              Voir le bail →
             </Link>
           </div>
         ) : null}

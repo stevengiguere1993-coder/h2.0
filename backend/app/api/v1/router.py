@@ -56,6 +56,7 @@ from app.api.v1.endpoints import (
     entreprise_partners_links,
     contrats_gestion,
     immobilier,
+    immobilier_documents,
     immobilier_extras,
     immobilier_import_excel,
     immobilier_locations,
@@ -100,6 +101,7 @@ from app.api.v1.endpoints import (
     project_to_facture,
     projects,
     public_bail,
+    public_document,
     public_bon,
     public_contrat_gestion,
     public_devlog_contact,
@@ -269,6 +271,7 @@ api_router.include_router(contract_sign.router)
 api_router.include_router(contract_sign.docs_router)
 api_router.include_router(public_bon.router)
 api_router.include_router(public_bail.router)
+api_router.include_router(public_document.router)
 api_router.include_router(public_contrat_gestion.router)
 api_router.include_router(push.router)
 api_router.include_router(appointment_types.router)
@@ -452,6 +455,10 @@ api_router.include_router(
 # Import Excel d'un immeuble complet (modèle + upload tout-ou-rien).
 api_router.include_router(
     immobilier_import_excel.router, dependencies=DEP_IMMOBILIER
+)
+# Documents locatifs conservés (avis TAL, trousse, DPA) + envoi signature.
+api_router.include_router(
+    immobilier_documents.router, dependencies=DEP_IMMOBILIER
 )
 # Images immobilier : PAS de dépendance routeur — auth par ?t=<jwt> dans
 # l'endpoint lui-même (les <img> ne portent pas de header Authorization).

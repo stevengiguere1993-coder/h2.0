@@ -42,6 +42,7 @@ const PORTAL_PREFIXES = [
   "/soumission",
   "/sign-nda",
   "/sign-bail",
+  "/sign-document",
   "/sign-offer",
   "/sign-devlog",
   "/sign-contrat-gestion"

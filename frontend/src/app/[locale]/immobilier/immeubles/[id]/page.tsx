@@ -44,7 +44,10 @@ import {
   LogementFiche
 } from "@/components/immobilier/logement-fiche";
 import { LocationsBoard } from "@/components/immobilier/locations-board";
-import { TalFormDropdown } from "@/components/immobilier/tal-avis";
+import {
+  BailSignature,
+  TalFormDropdown
+} from "@/components/immobilier/tal-avis";
 
 type Ownership = {
   id: number;
@@ -2711,8 +2714,6 @@ function BailSignButton({
   bailId: number;
   signed: boolean;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
   const [dl, setDl] = useState(false);
 
   async function downloadSigned() {
@@ -2757,43 +2758,10 @@ function BailSignButton({
     );
   }
 
-  async function send() {
-    setBusy(true);
-    setMsg(null);
-    try {
-      const res = await authedFetch(
-        `/api/v1/immobilier/baux/${bailId}/send`,
-        { method: "POST", body: JSON.stringify({}) }
-      );
-      if (!res.ok) {
-        setMsg((await res.text()).slice(0, 120) || `HTTP ${res.status}`);
-        return;
-      }
-      const d = (await res.json()) as { sent_to: string | null };
-      setMsg(`Envoyé à ${d.sent_to || "—"}`);
-    } catch (e) {
-      setMsg((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className="flex flex-col gap-0.5">
-      <button
-        type="button"
-        onClick={() => void send()}
-        disabled={busy}
-        className="btn-outline-accent btn-xs w-fit disabled:opacity-50"
-        title="Envoyer le bail au locataire pour signature"
-      >
-        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-        Envoyer pour signature
-      </button>
-      {msg ? (
-        <span className="text-[10px] text-white/50">{msg}</span>
-      ) : null}
-    </div>
-  );
+  // Signature PILOTÉE PAR DOCUMENT (retour Phil 2026-07-17) : le bouton
+  // est grisé tant qu'aucun document n'a été généré via « Générer ▾ » ;
+  // il ouvre ensuite la bibliothèque (voir/modifier/envoyer/suivre).
+  return <BailSignature bailId={bailId} />;
 }
 
 const HYPO_STATUS: [string, string][] = [

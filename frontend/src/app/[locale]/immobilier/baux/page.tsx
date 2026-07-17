@@ -18,7 +18,10 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
-import { TalFormDropdown } from "@/components/immobilier/tal-avis";
+import {
+  BailSignature,
+  TalFormDropdown
+} from "@/components/immobilier/tal-avis";
 
 /**
  * Baux & paiements — vue transversale « collection des loyers ».
@@ -557,6 +560,7 @@ export default function BauxPage() {
                                 Relancer
                               </button>
                               <TalFormDropdown bailId={r.bail_id} />
+                              <BailSignature bailId={r.bail_id} />
                             </div>
                             {r.nb_relances > 0 ? (
                               <span className="text-[10px] text-white/40">

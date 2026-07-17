@@ -454,6 +454,7 @@ async def ensure_immobilier_aux_tables() -> None:
     try:
         from app.db.base import Base
         from app.models.immobilier import (  # noqa: F401
+            ImmDocument,
             LocataireCommunication,
             LocationAnnonce,
             LocationDossier,
@@ -471,6 +472,7 @@ async def ensure_immobilier_aux_tables() -> None:
                         LocationDossier.__table__,
                         LocationAnnonce.__table__,
                         LocationVisite.__table__,
+                        ImmDocument.__table__,
                     ],
                 )
             )

@@ -207,6 +207,31 @@ async def generate_bail_tal_pdf(
 
     ctx = await _build_ctx_from_bail(db, bail, payload)
     pdf_bytes = generate_tal_pdf(form_type, ctx)
+
+    # CONSERVE le document (retour Phil 2026-07-17 : « ces documents-là,
+    # ils sont où ? ») — visible/modifiable/envoyable depuis la fiche.
+    try:
+        from app.api.v1.endpoints.immobilier_documents import save_document
+
+        logement = await db.get(Logement, bail.logement_id)
+        label, _desc = _TAL_LABELS.get(
+            form_type, (form_type.replace("_", " ").title(), "")
+        )
+        await save_document(
+            db,
+            bail_id=bail.id,
+            locataire_id=bail.locataire_id,
+            immeuble_id=logement.immeuble_id if logement else None,
+            doc_type=form_type,
+            titre=label,
+            params=payload.model_dump(exclude_none=True, mode="json"),
+            pdf=pdf_bytes,
+            created_by_email=getattr(user, "email", None),
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001 — la génération prime sur l'archivage
+        log.exception("Sauvegarde du document TAL échouée (bail %s)", bail_id)
+
     filename = f"{form_type.replace('_', '-')}-bail-{bail_id}.pdf"
     return Response(
         content=pdf_bytes,
