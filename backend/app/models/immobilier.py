@@ -945,3 +945,28 @@ class ImmDocument(Base, TimestampUpdateMixin):
     signature_image_content_type: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
     )
+
+
+class ImmDocTemplate(Base, TimestampUpdateMixin):
+    """PDF MODÈLE remplaçant un formulaire officiel embarqué.
+
+    Les formulaires TAL livrés avec l'app (assets/tal/*.pdf) peuvent être
+    remplacés depuis Paramètres → Modèles de documents quand le TAL publie
+    une nouvelle version (retour Phil 2026-07-17 : « il va falloir pouvoir
+    modifier ces documents au besoin »). Une ligne par type ; absence de
+    ligne = PDF d'origine. Nouvelle table → ensure_immobilier_aux_tables.
+    """
+
+    __tablename__ = "imm_doc_templates"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    type: Mapped[str] = mapped_column(
+        String(48), nullable=False, unique=True, index=True
+    )
+    filename: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    pdf_blob = deferred(mapped_column(LargeBinary, nullable=False))
+    uploaded_by_email: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True
+    )
