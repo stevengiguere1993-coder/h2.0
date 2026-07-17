@@ -119,6 +119,78 @@ async def list_tal_forms(user: CurrentUser) -> List[TalFormType]:
     return out
 
 
+@router.get("/tal/apercu/{form_type}.pdf")
+async def apercu_tal_pdf(form_type: str, user: CurrentUser) -> Response:
+    """Aperçu d'un MODÈLE avec des données d'exemple — page Paramètres →
+    Modèles de documents (retour Phil 2026-07-17 : « ils sont où les
+    modèles ? »). La vraie génération se fait depuis un bail (préremplie)."""
+    _require_volet(user)
+    from datetime import date as _date, timedelta as _td
+
+    demo_debut = _date.today().replace(day=1)
+    if form_type == "dpa":
+        from app.services.dpa_form import generate_dpa_pdf
+
+        pdf = generate_dpa_pdf(
+            locataire_nom="Jean Tremblay (exemple)",
+            logement_adresse="123 rue Exemple, app. 4, Montréal",
+            creancier_nom="Horizon Services Immobiliers",
+            loyer_mensuel=1250.0,
+        )
+    else:
+        if form_type not in available_form_types():
+            raise HTTPException(
+                status_code=404, detail="Modèle inconnu."
+            )
+        ctx = TalContext(
+            locateur_nom="Horizon Services Immobiliers (exemple)",
+            locateur_adresse="500 rue du Locateur, Montréal",
+            locateur_telephone="514 555-0100",
+            locateur_courriel="info@immohorizon.com",
+            locataire_nom="Jean Tremblay (exemple)",
+            locataire_email="jean@example.com",
+            logement_adresse="123 rue Exemple",
+            logement_numero="App. 4",
+            logement_ville="Montréal",
+            bail_date_debut=demo_debut,
+            bail_date_fin=demo_debut + _td(days=364),
+            bail_loyer_mensuel=1250.0,
+            bail_chauffage_inclus=True,
+            depot_garantie=625.0,
+            nouveau_loyer=1300.0,
+            nouvelle_date_debut=demo_debut + _td(days=365),
+            nouvelle_date_fin=demo_debut + _td(days=729),
+            montant_du=1250.0,
+            mois_concerne=demo_debut,
+            motif_fin_bail="reprise du logement (exemple)",
+            reprise_date=demo_debut + _td(days=365),
+            reprise_beneficiaire="Philippe Meuser (exemple)",
+            reprise_lien="moi-même",
+            travaux_description="Réfection complète de la salle de bain (exemple)",
+            travaux_date_debut=demo_debut + _td(days=30),
+            travaux_duree="environ 2 semaines",
+            travaux_evacuation=True,
+            travaux_evacuation_duree="5 jours",
+            travaux_indemnite=500.0,
+            acces_date=demo_debut + _td(days=7),
+            acces_plage="entre 9 h et 12 h",
+            acces_motif="vérification de l'état du logement (exemple)",
+            cession_type="cession",
+            cession_candidat="Marie Gagnon (exemple)",
+            cession_accepte=True,
+        )
+        pdf = generate_tal_pdf(form_type, ctx)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="apercu-{form_type}.pdf"'
+            )
+        },
+    )
+
+
 # ─── PDF generation pour un bail donné ─────────────────────────────────
 
 
