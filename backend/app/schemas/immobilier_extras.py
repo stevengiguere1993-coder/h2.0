@@ -33,6 +33,32 @@ class TalFormRequest(BaseModel):
     mois_concerne: Optional[date] = None
     delai_paiement_jours: Optional[int] = Field(default=None, ge=1, le=60)
 
+    # avis_reprise (art. 1957-1963 C.c.Q.)
+    reprise_date: Optional[date] = None
+    reprise_beneficiaire: Optional[str] = Field(default=None, max_length=255)
+    reprise_lien: Optional[str] = Field(default=None, max_length=255)
+
+    # avis_travaux_majeurs (art. 1922-1923 C.c.Q.)
+    travaux_description: Optional[str] = None
+    travaux_date_debut: Optional[date] = None
+    travaux_duree: Optional[str] = Field(default=None, max_length=255)
+    travaux_evacuation: bool = False
+    travaux_evacuation_duree: Optional[str] = Field(
+        default=None, max_length=255
+    )
+    travaux_indemnite: Optional[float] = Field(default=None, ge=0)
+
+    # avis_acces (art. 1931-1933 C.c.Q.)
+    acces_date: Optional[date] = None
+    acces_plage: Optional[str] = Field(default=None, max_length=128)
+    acces_motif: Optional[str] = Field(default=None, max_length=500)
+
+    # reponse_cession (art. 1870-1871 C.c.Q.)
+    cession_type: str = Field(default="cession", max_length=16)
+    cession_candidat: Optional[str] = Field(default=None, max_length=255)
+    cession_accepte: bool = True
+    cession_motif_refus: Optional[str] = None
+
 
 # ─── Renouvellement workflow ──────────────────────────────────────────
 
