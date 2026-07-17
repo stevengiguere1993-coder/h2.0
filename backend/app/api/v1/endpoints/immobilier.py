@@ -191,26 +191,84 @@ def _immeuble_to_read(obj: Immeuble) -> ImmeubleRead:
 # ── Alertes « À surveiller » (configurables) ────────────────────────────
 # Config globale du pôle, stockée dans automation_settings (clé unique,
 # JSON) — modifiable depuis l'engrenage de la section « À surveiller »
-# de la fiche immeuble (retour Phil 2026-07-14 : « une place pour jouer
-# avec les alertes »).
+# de la fiche immeuble. v2 (retour Phil 2026-07-17 : « je ne peux pas en
+# rajouter ») : CATALOGUE de types d'alertes — l'utilisateur active,
+# retire et règle le seuil de chacune ; les types désactivés restent
+# proposés dans « + Ajouter une alerte ».
 
 _ALERTES_KEY = "immo.alertes_surveiller"
 
-_ALERTES_DEFAUTS: dict = {
-    # Bail actif qui échoit dans moins de N jours.
-    "bail_fin_enabled": True,
-    "bail_fin_jours": 90,
-    # Terme hypothécaire qui se termine dans moins de N mois.
-    "terme_hypo_enabled": True,
-    "terme_hypo_mois": 6,
+# Catalogue : type → (seuil par défaut ou None, borne min, borne max).
+# Les seuils s'expriment en jours ou en mois selon le type (le frontend
+# porte les libellés) ; None = alerte sans seuil (simple on/off).
+_ALERTES_CATALOGUE: dict[str, tuple[Optional[int], int, int]] = {
+    "bail_fin": (90, 1, 730),        # bail actif qui échoit dans N jours
+    "terme_hypo": (6, 1, 36),        # fin de terme hypothécaire dans N mois
+    "logement_vacant": (None, 0, 0),  # logements vacants (on/off)
+    "bail_propose": (None, 0, 0),     # baux en attente de signature (on/off)
+    "evaluation_agee": (24, 6, 120),  # aucune évaluation depuis N mois
 }
+
+_ALERTES_DEFAUT_ACTIFS = {"bail_fin", "terme_hypo"}
+
+
+class AlerteRegle(BaseModel):
+    type: str
+    enabled: bool = True
+    seuil: Optional[int] = None
 
 
 class AlertesConfig(BaseModel):
-    bail_fin_enabled: bool = True
-    bail_fin_jours: int = Field(default=90, ge=1, le=730)
-    terme_hypo_enabled: bool = True
-    terme_hypo_mois: int = Field(default=6, ge=1, le=36)
+    regles: list[AlerteRegle] = Field(default_factory=list)
+
+
+def _alertes_defauts() -> AlertesConfig:
+    return AlertesConfig(
+        regles=[
+            AlerteRegle(
+                type=t,
+                enabled=t in _ALERTES_DEFAUT_ACTIFS,
+                seuil=defaut,
+            )
+            for t, (defaut, _mn, _mx) in _ALERTES_CATALOGUE.items()
+        ]
+    )
+
+
+def _alertes_normalise(cfg: dict) -> AlertesConfig:
+    """Complète la config stockée avec le catalogue (nouveaux types →
+    désactivés par défaut) et migre l'ancien format v1 à clés plates."""
+    regles: dict[str, AlerteRegle] = {
+        r.type: r for r in _alertes_defauts().regles
+    }
+    # v1 (PR #1206) : {bail_fin_enabled, bail_fin_jours, terme_hypo_...}
+    if "bail_fin_enabled" in cfg or "terme_hypo_enabled" in cfg:
+        regles["bail_fin"] = AlerteRegle(
+            type="bail_fin",
+            enabled=bool(cfg.get("bail_fin_enabled", True)),
+            seuil=int(cfg.get("bail_fin_jours", 90) or 90),
+        )
+        regles["terme_hypo"] = AlerteRegle(
+            type="terme_hypo",
+            enabled=bool(cfg.get("terme_hypo_enabled", True)),
+            seuil=int(cfg.get("terme_hypo_mois", 6) or 6),
+        )
+    for raw in cfg.get("regles", []):
+        try:
+            r = AlerteRegle(**raw)
+        except Exception:  # noqa: BLE001 — règle corrompue → ignorée
+            continue
+        if r.type in _ALERTES_CATALOGUE:
+            regles[r.type] = r
+    # Clamp des seuils sur les bornes du catalogue.
+    for t, (defaut, mn, mx) in _ALERTES_CATALOGUE.items():
+        r = regles[t]
+        if defaut is None:
+            r.seuil = None
+        else:
+            s = r.seuil if r.seuil is not None else defaut
+            r.seuil = max(mn, min(mx, int(s)))
+    return AlertesConfig(regles=list(regles.values()))
 
 
 @router.get("/alertes-config", response_model=AlertesConfig)
@@ -219,11 +277,10 @@ async def get_alertes_config(db: DBSession, user: CurrentUser) -> AlertesConfig:
     from app.services.automation_state import get_automation_config
 
     cfg = await get_automation_config(_ALERTES_KEY)
-    merged = {**_ALERTES_DEFAUTS, **cfg}
     try:
-        return AlertesConfig(**merged)
+        return _alertes_normalise(cfg)
     except Exception:  # noqa: BLE001 — config corrompue → défauts
-        return AlertesConfig()
+        return _alertes_defauts()
 
 
 @router.put("/alertes-config", response_model=AlertesConfig)
@@ -233,11 +290,12 @@ async def put_alertes_config(
     _require_volet(user)
     from app.services.automation_state import set_automation_config
 
+    clean = _alertes_normalise(payload.model_dump())
     await set_automation_config(
-        db, _ALERTES_KEY, payload.model_dump(), user_id=user.id
+        db, _ALERTES_KEY, clean.model_dump(), user_id=user.id
     )
     await db.commit()
-    return payload
+    return clean
 
 
 # ── Immeubles : liste + KPIs agrégés ────────────────────────────────────
