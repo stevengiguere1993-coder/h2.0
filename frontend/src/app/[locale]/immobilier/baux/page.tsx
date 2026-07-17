@@ -9,7 +9,6 @@ import {
   ChevronRight,
   ClipboardList,
   Clock,
-  Gavel,
   Loader2,
   Mail,
   Phone,
@@ -19,6 +18,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
+import { TalFormDropdown } from "@/components/immobilier/tal-avis";
 
 /**
  * Baux & paiements — vue transversale « collection des loyers ».
@@ -222,28 +222,6 @@ export default function BauxPage() {
       setError(`Relance échouée : ${(e as Error).message}`);
     } finally {
       setRelancingId(null);
-    }
-  }
-
-  async function miseEnDemeure(row: Row) {
-    try {
-      const r = await authedFetch(
-        `/api/v1/immobilier/baux/${row.bail_id}/tal/mise_en_demeure.pdf`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            montant_du: row.loyer_mensuel,
-            mois_concerne: `${mois}-01`
-          })
-        }
-      );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
-    } catch (e) {
-      setError(`Mise en demeure : ${(e as Error).message}`);
     }
   }
 
@@ -578,17 +556,7 @@ export default function BauxPage() {
                                 )}
                                 Relancer
                               </button>
-                              {r.etat === "retard" ? (
-                                <button
-                                  type="button"
-                                  onClick={() => void miseEnDemeure(r)}
-                                  title="Générer la mise en demeure (TAL) en PDF"
-                                  className="btn-outline-rose btn-sm"
-                                >
-                                  <Gavel className="h-3 w-3" />
-                                  Mise en demeure
-                                </button>
-                              ) : null}
+                              <TalFormDropdown bailId={r.bail_id} />
                             </div>
                             {r.nb_relances > 0 ? (
                               <span className="text-[10px] text-white/40">
