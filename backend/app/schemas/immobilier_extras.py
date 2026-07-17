@@ -3,7 +3,7 @@ renouvellements automatiques, vue par entreprise propriétaire)."""
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,6 +16,13 @@ class TalFormType(BaseModel):
     code: str
     label: str
     description: str
+    #: True = formulaire OFFICIEL du TAL (PDF gouvernemental rempli).
+    officiel: bool = False
+    #: False = envoi par simple courriel avec PDF joint, sans signature.
+    signature_requise: bool = True
+    #: PDF modèle remplacé par l'utilisateur (imm_doc_templates).
+    custom_filename: Optional[str] = None
+    custom_uploaded_at: Optional[datetime] = None
 
 
 class TalFormRequest(BaseModel):
@@ -25,38 +32,47 @@ class TalFormRequest(BaseModel):
     immeuble. Permet à l'utilisateur de saisir un nouveau loyer / nouvelle
     date sans modifier le bail courant.
     """
+    # avis_modification (TAL-806) — une des 3 formes de hausse
+    modif_mode: Optional[str] = Field(default=None, max_length=24)
     nouveau_loyer: Optional[float] = Field(default=None, ge=0)
+    hausse_montant: Optional[float] = Field(default=None, ge=0)
+    hausse_pct: Optional[float] = Field(default=None, ge=0, le=100)
     nouvelle_date_debut: Optional[date] = None
     nouvelle_date_fin: Optional[date] = None
-    motif: Optional[str] = None
+    motif: Optional[str] = None  # « Autre(s) modification(s) »
+
+    # rappel_paiement (avis de retard — paiement immédiat)
     montant_du: Optional[float] = Field(default=None, ge=0)
     mois_concerne: Optional[date] = None
-    delai_paiement_jours: Optional[int] = Field(default=None, ge=1, le=60)
 
-    # avis_reprise (art. 1957-1963 C.c.Q.)
+    # avis_non_reconduction (TAL-807 — avis du locataire)
+    depart_date: Optional[date] = None
+
+    # avis_reprise (TAL-809, art. 1960 C.c.Q.)
     reprise_date: Optional[date] = None
     reprise_beneficiaire: Optional[str] = Field(default=None, max_length=255)
     reprise_lien: Optional[str] = Field(default=None, max_length=255)
 
-    # avis_travaux_majeurs (art. 1922-1923 C.c.Q.)
+    # avis_travaux_majeurs (TAL-808, art. 1922-1923 C.c.Q.)
     travaux_description: Optional[str] = None
     travaux_date_debut: Optional[date] = None
-    travaux_duree: Optional[str] = Field(default=None, max_length=255)
+    travaux_duree_valeur: Optional[str] = Field(default=None, max_length=16)
+    travaux_duree_unite: Optional[str] = Field(default=None, max_length=16)
     travaux_evacuation: bool = False
-    travaux_evacuation_duree: Optional[str] = Field(
-        default=None, max_length=255
-    )
+    travaux_evacuation_du: Optional[date] = None
+    travaux_evacuation_au: Optional[date] = None
     travaux_indemnite: Optional[float] = Field(default=None, ge=0)
+    travaux_conditions: Optional[str] = None
 
     # avis_acces (art. 1931-1933 C.c.Q.)
     acces_date: Optional[date] = None
     acces_plage: Optional[str] = Field(default=None, max_length=128)
     acces_motif: Optional[str] = Field(default=None, max_length=500)
 
-    # reponse_cession (art. 1870-1871 C.c.Q.)
-    cession_type: str = Field(default="cession", max_length=16)
-    cession_candidat: Optional[str] = Field(default=None, max_length=255)
-    cession_accepte: bool = True
+    # reponse_cession (TAL-828, art. 1871 / 1978.2 C.c.Q.)
+    cession_decision: Optional[str] = Field(default=None, max_length=16)
+    cession_date: Optional[date] = None
+    cession_accepte: bool = True  # héritage (anciens documents)
     cession_motif_refus: Optional[str] = None
 
 

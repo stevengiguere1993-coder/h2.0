@@ -26,7 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import undefer
 
 from app.api.deps import CurrentUser, DBSession
-from app.integrations.email_graph import get_mailer
+from app.integrations.email_graph import EmailAttachment, get_mailer
 from app.models.immobilier import (
     Bail,
     ImmDocument,
@@ -34,6 +34,7 @@ from app.models.immobilier import (
     LocataireCommunication,
 )
 from app.services.public_links import public_base
+from app.services.tal_forms import SIGNATURE_NON_REQUISE
 
 log = logging.getLogger(__name__)
 
@@ -215,6 +216,32 @@ async def delete_document(
     await db.commit()
 
 
+async def _resolve_destinataire(
+    db, d: ImmDocument, email: Optional[str]
+) -> tuple[Optional[Locataire], str]:
+    """Destinataire d'un envoi : email explicite sinon le courriel du
+    locataire (direct ou via le bail). 400 si aucun."""
+    locataire: Optional[Locataire] = None
+    if d.locataire_id:
+        locataire = await db.get(Locataire, d.locataire_id)
+    elif d.bail_id:
+        bail = await db.get(Bail, d.bail_id)
+        if bail:
+            locataire = await db.get(Locataire, bail.locataire_id)
+    dest = (email or "").strip() or (
+        (locataire.email or "").strip() if locataire else ""
+    )
+    if not dest:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Aucun courriel destinataire — ajoute un courriel au "
+                "locataire ou fournis-en un."
+            ),
+        )
+    return locataire, dest
+
+
 class EnvoyerSignatureRequest(BaseModel):
     email: Optional[EmailStr] = None  # défaut : courriel du locataire
 
@@ -267,27 +294,16 @@ async def envoyer_signature(
             status_code=status.HTTP_409_CONFLICT,
             detail="Ce document est déjà signé.",
         )
-
-    # Destinataire : payload.email sinon le courriel du locataire (direct
-    # ou via le bail).
-    locataire: Optional[Locataire] = None
-    if d.locataire_id:
-        locataire = await db.get(Locataire, d.locataire_id)
-    elif d.bail_id:
-        bail = await db.get(Bail, d.bail_id)
-        if bail:
-            locataire = await db.get(Locataire, bail.locataire_id)
-    dest = (payload.email or "").strip() or (
-        (locataire.email or "").strip() if locataire else ""
-    )
-    if not dest:
+    if d.type in SIGNATURE_NON_REQUISE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Aucun courriel destinataire — ajoute un courriel au "
-                "locataire ou fournis-en un."
+                "Ce document ne requiert pas de signature — utilise "
+                "l'envoi par courriel."
             ),
         )
+
+    locataire, dest = await _resolve_destinataire(db, d, payload.email)
 
     if not d.signature_token:
         d.signature_token = secrets.token_urlsafe(32)
@@ -342,4 +358,109 @@ async def envoyer_signature(
         envoye_a=dest,
         envoye_le=d.envoye_le,
         url=url,
+    )
+
+
+class EnvoyerCourrielResult(BaseModel):
+    document_id: int
+    envoye_a: str
+    envoye_le: datetime
+
+
+def _mail_html_piece_jointe(titre: str, locataire_name: str, doc_type: str) -> str:
+    first = (locataire_name or "").strip().split(" ")[0] or "Bonjour"
+    ligne_extra = ""
+    if doc_type == "rappel_paiement":
+        ligne_extra = (
+            "<p><strong>Le paiement de votre loyer est exigé "
+            "immédiatement.</strong></p>"
+        )
+    return f"""\
+<div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:640px">
+  <p>Bonjour {first},</p>
+  <p>Veuillez trouver ci-joint le document suivant :
+     <strong>{titre}</strong>.</p>
+  {ligne_extra}
+  <p style="margin:24px 0 0 0;color:#555;font-size:12px">
+    Horizon Services Immobiliers<br>info@immohorizon.com
+  </p>
+</div>
+"""
+
+
+@router.post(
+    "/documents/{doc_id}/envoyer-courriel",
+    response_model=EnvoyerCourrielResult,
+)
+async def envoyer_courriel(
+    doc_id: int,
+    payload: EnvoyerSignatureRequest,
+    db: DBSession,
+    user: CurrentUser,
+) -> EnvoyerCourrielResult:
+    """Envoie le document par SIMPLE COURRIEL avec le PDF en pièce
+    jointe — pour les documents sans signature (avis de retard, avis
+    d'accès…). Envoi MANUEL uniquement."""
+    _require_volet(user)
+    d = (
+        await db.execute(
+            select(ImmDocument)
+            .options(undefer(ImmDocument.pdf_blob))
+            .where(ImmDocument.id == doc_id)
+        )
+    ).scalar_one_or_none()
+    if d is None or not d.pdf_blob:
+        raise HTTPException(status_code=404, detail="Document introuvable.")
+
+    locataire, dest = await _resolve_destinataire(db, d, payload.email)
+
+    mailer = get_mailer()
+    try:
+        await mailer.send(
+            to=[dest],
+            subject=f"{d.titre} — Horizon Services Immobiliers",
+            html_body=_mail_html_piece_jointe(
+                d.titre,
+                locataire.full_name if locataire else "",
+                d.type,
+            ),
+            reply_to=mailer.sender,
+            attachments=[
+                EmailAttachment(
+                    name=f"{d.type.replace('_', '-')}.pdf",
+                    content_bytes=d.pdf_blob,
+                    content_type="application/pdf",
+                )
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001 — réseau/Graph
+        log.exception("Envoi courriel document %s échoué", doc_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Envoi courriel échoué : {exc}",
+        )
+
+    d.envoye_le = _now()
+    d.envoye_a = dest[:320]
+
+    if locataire is not None:
+        try:
+            db.add(
+                LocataireCommunication(
+                    locataire_id=locataire.id,
+                    kind="courriel",
+                    contenu=(
+                        f"Document envoyé par courriel : {d.titre} "
+                        f"(à {dest})"
+                    ),
+                    auteur=user.email,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    await db.commit()
+    await db.refresh(d)
+    return EnvoyerCourrielResult(
+        document_id=d.id, envoye_a=dest, envoye_le=d.envoye_le
     )

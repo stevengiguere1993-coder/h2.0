@@ -48,18 +48,67 @@ function notifyDocumentsChanged(bailId: number): void {
   );
 }
 
-const TAL_FORMS: { code: string; label: string; avecParams?: boolean }[] = [
-  { code: "trousse_bail", label: "Trousse bail (données pour le TAL)" },
-  { code: "sommaire_bail", label: "Sommaire du bail" },
-  { code: "avis_modification", label: "Avis de modification" },
-  { code: "avis_fin_bail", label: "Avis de non-renouvellement" },
-  { code: "rappel_paiement", label: "Rappel de paiement" },
-  { code: "mise_en_demeure", label: "Mise en demeure" },
-  { code: "avis_reprise", label: "Avis de reprise du logement", avecParams: true },
-  { code: "avis_travaux_majeurs", label: "Avis de travaux majeurs", avecParams: true },
-  { code: "avis_acces", label: "Avis d'accès au logement", avecParams: true },
-  { code: "reponse_cession", label: "Réponse cession / sous-location", avecParams: true }
+// Catalogue 2026-07-17 : les 5 premiers = formulaires OFFICIELS du TAL
+// (PDF gouvernemental rempli tel quel) ; les 2 derniers = lettres maison
+// envoyées par courriel SANS signature (avis de retard, avis d'accès).
+const TAL_FORMS: {
+  code: string;
+  label: string;
+  avecParams?: boolean;
+  officiel?: boolean;
+  sansSignature?: boolean;
+}[] = [
+  {
+    code: "avis_modification",
+    label: "Avis d'augmentation / modification (TAL-806)",
+    avecParams: true,
+    officiel: true
+  },
+  {
+    code: "avis_non_reconduction",
+    label: "Avis de non-reconduction — locataire (TAL-807)",
+    avecParams: true,
+    officiel: true
+  },
+  {
+    code: "avis_reprise",
+    label: "Avis de reprise de logement (TAL-809)",
+    avecParams: true,
+    officiel: true
+  },
+  {
+    code: "avis_travaux_majeurs",
+    label: "Avis de travaux majeurs (TAL-808)",
+    avecParams: true,
+    officiel: true
+  },
+  {
+    code: "reponse_cession",
+    label: "Réponse à une cession de bail (TAL-828)",
+    avecParams: true,
+    officiel: true
+  },
+  {
+    code: "rappel_paiement",
+    label: "Avis de retard de paiement",
+    avecParams: true,
+    sansSignature: true
+  },
+  {
+    code: "avis_acces",
+    label: "Avis d'accès au logement",
+    avecParams: true,
+    sansSignature: true
+  }
 ];
+
+// Types envoyés par simple courriel (PDF joint) — aucun flux de
+// signature en ligne.
+export const SANS_SIGNATURE = new Set(
+  TAL_FORMS.filter((t) => t.sansSignature).map((t) => t.code)
+);
+
+const MOI_MEME = new Set(["moi-même", "moi-meme", "moi même", "moi meme"]);
 
 async function downloadTalPdf(
   bailId: number,
@@ -164,9 +213,11 @@ function TalAvisModal({
 }) {
   const [f, setF] = useState<Record<string, string>>(() => {
     const base: Record<string, string> = {
-      cession_type: "cession",
-      cession_accepte: "oui",
-      travaux_evacuation: "non"
+      modif_mode: "nouveau_loyer",
+      cession_decision: "accepte",
+      travaux_evacuation: "non",
+      travaux_duree_unite: "jours",
+      reprise_pour: "moi"
     };
     for (const [k, v] of Object.entries(initialParams || {})) {
       if (v == null) continue;
@@ -175,6 +226,20 @@ function TalAvisModal({
       } else {
         base[k] = String(v);
       }
+    }
+    // Normalisation des anciens documents (« Modifier » sur un doc créé
+    // avant le passage aux formulaires officiels).
+    if (base.mois_concerne && base.mois_concerne.length >= 7) {
+      base.mois_concerne = base.mois_concerne.slice(0, 7);
+    }
+    if (!initialParams?.cession_decision && base.cession_accepte === "non") {
+      base.cession_decision = "refus_serieux";
+    }
+    if (
+      base.reprise_beneficiaire &&
+      !MOI_MEME.has(base.reprise_beneficiaire.trim().toLowerCase())
+    ) {
+      base.reprise_pour = "proche";
     }
     return base;
   });
@@ -189,17 +254,31 @@ function TalAvisModal({
 
   const valid = (() => {
     switch (code) {
+      case "avis_modification": {
+        const mode = f.modif_mode || "nouveau_loyer";
+        if (mode === "nouveau_loyer") return !!f.nouveau_loyer;
+        if (mode === "hausse_montant") return !!f.hausse_montant;
+        return !!f.hausse_pct;
+      }
+      case "avis_non_reconduction":
+        return true;
+      case "rappel_paiement":
+        return !!(f.montant_du && f.mois_concerne);
       case "avis_reprise":
-        return !!(f.reprise_date && f.reprise_beneficiaire?.trim());
+        return (
+          f.reprise_pour !== "proche" || !!f.reprise_beneficiaire?.trim()
+        );
       case "avis_travaux_majeurs":
         return !!(f.travaux_description?.trim() && f.travaux_date_debut);
       case "avis_acces":
         return !!(f.acces_date && f.acces_motif?.trim());
-      case "reponse_cession":
-        return (
-          !!f.cession_candidat?.trim() &&
-          (f.cession_accepte === "oui" || !!f.cession_motif_refus?.trim())
-        );
+      case "reponse_cession": {
+        const d = f.cession_decision || "accepte";
+        if (d === "accepte") return !!f.cession_date;
+        if (d === "refus_autre")
+          return !!(f.cession_date && f.cession_motif_refus?.trim());
+        return !!f.cession_motif_refus?.trim();
+      }
       default:
         return true;
     }
@@ -209,35 +288,56 @@ function TalAvisModal({
     if (!valid) return;
     setBusy(true);
     setErr(null);
+    const num = (s?: string) =>
+      s?.trim() ? Number(s.replace(/\s/g, "").replace(",", ".")) : null;
     const body: Record<string, unknown> = {};
-    if (code === "avis_reprise") {
-      body.reprise_date = f.reprise_date;
-      body.reprise_beneficiaire = f.reprise_beneficiaire?.trim();
-      body.reprise_lien = f.reprise_lien?.trim() || null;
+    if (code === "avis_modification") {
+      const mode = f.modif_mode || "nouveau_loyer";
+      body.modif_mode = mode;
+      if (mode === "nouveau_loyer") body.nouveau_loyer = num(f.nouveau_loyer);
+      else if (mode === "hausse_montant")
+        body.hausse_montant = num(f.hausse_montant);
+      else body.hausse_pct = num(f.hausse_pct);
+      body.nouvelle_date_debut = f.nouvelle_date_debut || null;
+      body.nouvelle_date_fin = f.nouvelle_date_fin || null;
+      body.motif = f.motif?.trim() || null;
+    } else if (code === "avis_non_reconduction") {
+      body.depart_date = f.depart_date || null;
+    } else if (code === "rappel_paiement") {
+      body.montant_du = num(f.montant_du);
+      body.mois_concerne = f.mois_concerne
+        ? `${f.mois_concerne.slice(0, 7)}-01`
+        : null;
+    } else if (code === "avis_reprise") {
+      if (f.reprise_pour === "proche") {
+        body.reprise_beneficiaire = f.reprise_beneficiaire?.trim();
+        body.reprise_lien = f.reprise_lien?.trim() || null;
+      } else {
+        body.reprise_lien = "moi-même";
+      }
+      body.reprise_date = f.reprise_date || null;
     } else if (code === "avis_travaux_majeurs") {
       body.travaux_description = f.travaux_description?.trim();
       body.travaux_date_debut = f.travaux_date_debut;
-      body.travaux_duree = f.travaux_duree?.trim() || null;
+      body.travaux_duree_valeur = f.travaux_duree_valeur?.trim() || null;
+      body.travaux_duree_unite = f.travaux_duree_unite || "jours";
       body.travaux_evacuation = f.travaux_evacuation === "oui";
       if (f.travaux_evacuation === "oui") {
-        body.travaux_evacuation_duree =
-          f.travaux_evacuation_duree?.trim() || null;
-        body.travaux_indemnite = f.travaux_indemnite
-          ? Number(f.travaux_indemnite)
-          : null;
+        body.travaux_evacuation_du = f.travaux_evacuation_du || null;
+        body.travaux_evacuation_au = f.travaux_evacuation_au || null;
+        body.travaux_indemnite = num(f.travaux_indemnite);
       }
+      body.travaux_conditions = f.travaux_conditions?.trim() || null;
     } else if (code === "avis_acces") {
       body.acces_date = f.acces_date;
       body.acces_plage = f.acces_plage?.trim() || null;
       body.acces_motif = f.acces_motif?.trim();
     } else if (code === "reponse_cession") {
-      body.cession_type = f.cession_type;
-      body.cession_candidat = f.cession_candidat?.trim();
-      body.cession_accepte = f.cession_accepte === "oui";
+      const d = f.cession_decision || "accepte";
+      body.cession_decision = d;
+      body.cession_date = f.cession_date || null;
       body.cession_motif_refus =
-        f.cession_accepte === "oui"
-          ? null
-          : f.cession_motif_refus?.trim();
+        d === "accepte" ? null : f.cession_motif_refus?.trim();
     }
     try {
       await downloadTalPdf(bailId, code, body);
@@ -266,14 +366,204 @@ function TalAvisModal({
           </button>
         </div>
         <div className="grid gap-3 p-5">
+          {code === "avis_modification" ? (
+            <>
+              <p className="text-xs text-white/50">
+                Formulaire officiel TAL-806, prérempli avec le bail. À
+                transmettre de 3 à 6 mois avant la fin du bail (12 mois
+                et plus) ; le locataire a 1 mois pour répondre.
+              </p>
+              <label className={labelCls}>
+                Forme de la hausse
+                <select
+                  value={f.modif_mode || "nouveau_loyer"}
+                  onChange={(e) => set("modif_mode")(e.target.value)}
+                  className={inputCls}
+                >
+                  <option value="nouveau_loyer" className="bg-brand-950 text-white">
+                    Nouveau loyer ($ / mois)
+                  </option>
+                  <option value="hausse_montant" className="bg-brand-950 text-white">
+                    Hausse en dollars (+ $ / mois)
+                  </option>
+                  <option value="hausse_pct" className="bg-brand-950 text-white">
+                    Hausse en pourcentage (%)
+                  </option>
+                </select>
+              </label>
+              {(f.modif_mode || "nouveau_loyer") === "nouveau_loyer" ? (
+                <label className={labelCls}>
+                  Nouveau loyer mensuel ($) *
+                  <input
+                    inputMode="decimal"
+                    value={f.nouveau_loyer || ""}
+                    onChange={(e) => set("nouveau_loyer")(e.target.value)}
+                    placeholder="ex. 1300"
+                    className={inputCls}
+                  />
+                </label>
+              ) : f.modif_mode === "hausse_montant" ? (
+                <label className={labelCls}>
+                  Montant de la hausse ($ / mois) *
+                  <input
+                    inputMode="decimal"
+                    value={f.hausse_montant || ""}
+                    onChange={(e) => set("hausse_montant")(e.target.value)}
+                    placeholder="ex. 50"
+                    className={inputCls}
+                  />
+                </label>
+              ) : (
+                <label className={labelCls}>
+                  Pourcentage de la hausse (%) *
+                  <input
+                    inputMode="decimal"
+                    value={f.hausse_pct || ""}
+                    onChange={(e) => set("hausse_pct")(e.target.value)}
+                    placeholder="ex. 4"
+                    className={inputCls}
+                  />
+                </label>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <label className={labelCls}>
+                  Bail renouvelé du
+                  <input
+                    type="date"
+                    value={f.nouvelle_date_debut || ""}
+                    onChange={(e) =>
+                      set("nouvelle_date_debut")(e.target.value)
+                    }
+                    className={inputCls}
+                  />
+                </label>
+                <label className={labelCls}>
+                  au
+                  <input
+                    type="date"
+                    value={f.nouvelle_date_fin || ""}
+                    onChange={(e) =>
+                      set("nouvelle_date_fin")(e.target.value)
+                    }
+                    className={inputCls}
+                  />
+                </label>
+              </div>
+              <p className="text-[10px] text-white/40">
+                Laisse les dates vides pour reprendre automatiquement la
+                durée du bail actuel.
+              </p>
+              <label className={labelCls}>
+                Autre(s) modification(s) (garage, chauffage…)
+                <textarea
+                  value={f.motif || ""}
+                  onChange={(e) => set("motif")(e.target.value)}
+                  rows={2}
+                  placeholder="Laisser vide si seule la hausse s'applique"
+                  className={inputCls}
+                />
+              </label>
+            </>
+          ) : null}
+
+          {code === "avis_non_reconduction" ? (
+            <>
+              <p className="text-xs text-white/50">
+                Formulaire officiel TAL-807 — avis donné <b>par le
+                locataire</b> qui quitte à la fin de son bail
+                (art. 1946 C.c.Q.). Envoie-le-lui pour signature en
+                ligne : c&apos;est lui qui le signe.
+              </p>
+              <label className={labelCls}>
+                Date de départ (vide = fin du bail)
+                <input
+                  type="date"
+                  value={f.depart_date || ""}
+                  onChange={(e) => set("depart_date")(e.target.value)}
+                  className={inputCls}
+                />
+              </label>
+            </>
+          ) : null}
+
+          {code === "rappel_paiement" ? (
+            <>
+              <p className="text-xs text-white/50">
+                Paiement exigé <b>immédiatement</b>. S&apos;envoie par
+                courriel (PDF joint) — aucune signature requise.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <label className={labelCls}>
+                  Montant dû ($) *
+                  <input
+                    inputMode="decimal"
+                    value={f.montant_du || ""}
+                    onChange={(e) => set("montant_du")(e.target.value)}
+                    placeholder="ex. 1250"
+                    className={inputCls}
+                  />
+                </label>
+                <label className={labelCls}>
+                  Mois concerné *
+                  <input
+                    type="month"
+                    value={f.mois_concerne || ""}
+                    onChange={(e) => set("mois_concerne")(e.target.value)}
+                    className={inputCls}
+                  />
+                </label>
+              </div>
+            </>
+          ) : null}
+
           {code === "avis_reprise" ? (
             <>
               <p className="text-xs text-white/50">
-                À transmettre au moins 6 mois avant la fin du bail. Le
-                locataire a 1 mois pour répondre (silence = refus).
+                Formulaire officiel TAL-809. À transmettre au moins 6 mois
+                avant la fin du bail ; le locataire a 1 mois pour répondre
+                (silence = refus).
               </p>
               <label className={labelCls}>
-                Date prévue de la reprise *
+                Le logement sera habité par
+                <select
+                  value={f.reprise_pour || "moi"}
+                  onChange={(e) => set("reprise_pour")(e.target.value)}
+                  className={inputCls}
+                >
+                  <option value="moi" className="bg-brand-950 text-white">
+                    Moi-même (le locateur-propriétaire)
+                  </option>
+                  <option value="proche" className="bg-brand-950 text-white">
+                    Un proche (parent, enfant…)
+                  </option>
+                </select>
+              </label>
+              {f.reprise_pour === "proche" ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <label className={labelCls}>
+                    Nom du bénéficiaire *
+                    <input
+                      value={f.reprise_beneficiaire || ""}
+                      onChange={(e) =>
+                        set("reprise_beneficiaire")(e.target.value)
+                      }
+                      placeholder="ex. Océane Meuser"
+                      className={inputCls}
+                    />
+                  </label>
+                  <label className={labelCls}>
+                    Lien de parenté
+                    <input
+                      value={f.reprise_lien || ""}
+                      onChange={(e) => set("reprise_lien")(e.target.value)}
+                      placeholder="ex. ma conjointe, mon père…"
+                      className={inputCls}
+                    />
+                  </label>
+                </div>
+              ) : null}
+              <label className={labelCls}>
+                Date de reprise (bail à durée indéterminée seulement)
                 <input
                   type="date"
                   value={f.reprise_date || ""}
@@ -281,34 +571,18 @@ function TalAvisModal({
                   className={inputCls}
                 />
               </label>
-              <label className={labelCls}>
-                Bénéficiaire de la reprise *
-                <input
-                  value={f.reprise_beneficiaire || ""}
-                  onChange={(e) =>
-                    set("reprise_beneficiaire")(e.target.value)
-                  }
-                  placeholder="ex. Philippe Meuser"
-                  className={inputCls}
-                />
-              </label>
-              <label className={labelCls}>
-                Lien avec le locateur
-                <input
-                  value={f.reprise_lien || ""}
-                  onChange={(e) => set("reprise_lien")(e.target.value)}
-                  placeholder="ex. moi-même, mon père, ma fille…"
-                  className={inputCls}
-                />
-              </label>
+              <p className="text-[10px] text-white/40">
+                Bail à durée fixe : la date de fin du bail est reprise
+                automatiquement sur le formulaire.
+              </p>
             </>
           ) : null}
 
           {code === "avis_travaux_majeurs" ? (
             <>
               <p className="text-xs text-white/50">
-                Préavis de 10 jours (3 mois si évacuation de plus d&apos;une
-                semaine).
+                Formulaire officiel TAL-808. Préavis de 10 jours (3 mois
+                si évacuation de plus de 7 jours).
               </p>
               <label className={labelCls}>
                 Nature des travaux *
@@ -322,7 +596,7 @@ function TalAvisModal({
                   className={inputCls}
                 />
               </label>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <label className={labelCls}>
                   Date de début *
                   <input
@@ -337,11 +611,34 @@ function TalAvisModal({
                 <label className={labelCls}>
                   Durée estimée
                   <input
-                    value={f.travaux_duree || ""}
-                    onChange={(e) => set("travaux_duree")(e.target.value)}
-                    placeholder="ex. environ 2 semaines"
+                    inputMode="numeric"
+                    value={f.travaux_duree_valeur || ""}
+                    onChange={(e) =>
+                      set("travaux_duree_valeur")(e.target.value)
+                    }
+                    placeholder="ex. 2"
                     className={inputCls}
                   />
+                </label>
+                <label className={labelCls}>
+                  Unité
+                  <select
+                    value={f.travaux_duree_unite || "jours"}
+                    onChange={(e) =>
+                      set("travaux_duree_unite")(e.target.value)
+                    }
+                    className={inputCls}
+                  >
+                    <option value="jours" className="bg-brand-950 text-white">
+                      jours
+                    </option>
+                    <option value="semaines" className="bg-brand-950 text-white">
+                      semaines
+                    </option>
+                    <option value="mois" className="bg-brand-950 text-white">
+                      mois
+                    </option>
+                  </select>
                 </label>
               </div>
               <label className="flex cursor-pointer items-center gap-2 text-xs text-white/80">
@@ -358,15 +655,26 @@ function TalAvisModal({
                 Évacuation temporaire requise
               </label>
               {f.travaux_evacuation === "oui" ? (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   <label className={labelCls}>
-                    Durée de l&apos;évacuation
+                    Évacuation du
                     <input
-                      value={f.travaux_evacuation_duree || ""}
+                      type="date"
+                      value={f.travaux_evacuation_du || ""}
                       onChange={(e) =>
-                        set("travaux_evacuation_duree")(e.target.value)
+                        set("travaux_evacuation_du")(e.target.value)
                       }
-                      placeholder="ex. 5 jours"
+                      className={inputCls}
+                    />
+                  </label>
+                  <label className={labelCls}>
+                    au
+                    <input
+                      type="date"
+                      value={f.travaux_evacuation_au || ""}
+                      onChange={(e) =>
+                        set("travaux_evacuation_au")(e.target.value)
+                      }
                       className={inputCls}
                     />
                   </label>
@@ -384,6 +692,18 @@ function TalAvisModal({
                   </label>
                 </div>
               ) : null}
+              <label className={labelCls}>
+                Autres conditions (facultatif)
+                <textarea
+                  value={f.travaux_conditions || ""}
+                  onChange={(e) =>
+                    set("travaux_conditions")(e.target.value)
+                  }
+                  rows={2}
+                  placeholder="ex. accès à l'eau coupé de 9 h à 12 h le premier jour"
+                  className={inputCls}
+                />
+              </label>
             </>
           ) : null}
 
@@ -428,56 +748,48 @@ function TalAvisModal({
           {code === "reponse_cession" ? (
             <>
               <p className="text-xs text-white/50">
-                Réponse à transmettre dans les 15 jours de l&apos;avis du
-                locataire. Un refus doit reposer sur un motif sérieux.
+                Formulaire officiel TAL-828 (avis reçus depuis le
+                21 février 2024). Réponse à transmettre dans les
+                15 jours — sans réponse, tu es réputé avoir consenti.
               </p>
-              <div className="grid grid-cols-2 gap-3">
-                <label className={labelCls}>
-                  Type de demande
-                  <select
-                    value={f.cession_type}
-                    onChange={(e) => set("cession_type")(e.target.value)}
-                    className={inputCls}
-                  >
-                    <option value="cession" className="bg-brand-950 text-white">
-                      Cession de bail
-                    </option>
-                    <option
-                      value="sous_location"
-                      className="bg-brand-950 text-white"
-                    >
-                      Sous-location
-                    </option>
-                  </select>
-                </label>
-                <label className={labelCls}>
-                  Décision
-                  <select
-                    value={f.cession_accepte}
-                    onChange={(e) => set("cession_accepte")(e.target.value)}
-                    className={inputCls}
-                  >
-                    <option value="oui" className="bg-brand-950 text-white">
-                      Consentement
-                    </option>
-                    <option value="non" className="bg-brand-950 text-white">
-                      Refus motivé
-                    </option>
-                  </select>
-                </label>
-              </div>
               <label className={labelCls}>
-                Candidat proposé *
-                <input
-                  value={f.cession_candidat || ""}
-                  onChange={(e) => set("cession_candidat")(e.target.value)}
-                  placeholder="Nom de la personne proposée par le locataire"
+                Décision
+                <select
+                  value={f.cession_decision || "accepte"}
+                  onChange={(e) => set("cession_decision")(e.target.value)}
                   className={inputCls}
-                />
+                >
+                  <option value="accepte" className="bg-brand-950 text-white">
+                    J&apos;accepte la cession de bail
+                  </option>
+                  <option
+                    value="refus_serieux"
+                    className="bg-brand-950 text-white"
+                  >
+                    Je refuse — motif sérieux (le bail continue)
+                  </option>
+                  <option
+                    value="refus_autre"
+                    className="bg-brand-950 text-white"
+                  >
+                    Je refuse — autre motif (le bail est résilié)
+                  </option>
+                </select>
               </label>
-              {f.cession_accepte === "non" ? (
+              {(f.cession_decision || "accepte") !== "refus_serieux" ? (
                 <label className={labelCls}>
-                  Motif sérieux du refus *
+                  Date de cession (inscrite dans l&apos;avis du locataire) *
+                  <input
+                    type="date"
+                    value={f.cession_date || ""}
+                    onChange={(e) => set("cession_date")(e.target.value)}
+                    className={inputCls}
+                  />
+                </label>
+              ) : null}
+              {(f.cession_decision || "accepte") !== "accepte" ? (
+                <label className={labelCls}>
+                  Motif du refus *
                   <textarea
                     value={f.cession_motif_refus || ""}
                     onChange={(e) =>
@@ -559,6 +871,10 @@ export function BailSignature({ bailId }: { bailId: number }) {
   const n = docs?.length ?? 0;
   const signe = (docs || []).some((d) => d.signed_at);
   const envoye = !signe && (docs || []).some((d) => d.envoye_le);
+  // Tous les documents du bail sont « sans signature » (avis de retard,
+  // accès) → le bouton parle d'envoi par courriel, pas de signature.
+  const tousCourriel =
+    n > 0 && (docs || []).every((d) => SANS_SIGNATURE.has(d.type));
 
   return (
     <>
@@ -586,6 +902,10 @@ export function BailSignature({ bailId }: { bailId: number }) {
         ) : envoye ? (
           <>
             <Mail className="h-3.5 w-3.5" /> Envoyé — suivre
+          </>
+        ) : tousCourriel ? (
+          <>
+            <Mail className="h-3.5 w-3.5" /> Envoyer par courriel
           </>
         ) : (
           <>
@@ -659,9 +979,12 @@ function DocumentsModal({
   }
 
   async function envoyer(d: BailDocument) {
+    const sansSig = SANS_SIGNATURE.has(d.type);
     if (
       !window.confirm(
-        `Envoyer « ${d.titre} » au locataire pour signature en ligne ?`
+        sansSig
+          ? `Envoyer « ${d.titre} » au locataire par courriel (PDF joint) ?`
+          : `Envoyer « ${d.titre} » au locataire pour signature en ligne ?`
       )
     )
       return;
@@ -669,7 +992,9 @@ function DocumentsModal({
     setErr(null);
     try {
       const r = await authedFetch(
-        `/api/v1/immobilier/documents/${d.id}/envoyer-signature`,
+        `/api/v1/immobilier/documents/${d.id}/${
+          sansSig ? "envoyer-courriel" : "envoyer-signature"
+        }`,
         { method: "POST", body: JSON.stringify({}) }
       );
       if (!r.ok)
@@ -677,7 +1002,11 @@ function DocumentsModal({
           (await r.text()).slice(0, 200) || `HTTP ${r.status}`
         );
       const res = (await r.json()) as { envoye_a: string };
-      setFlash(`Envoyé à ${res.envoye_a} — suivi d'ouverture actif.`);
+      setFlash(
+        sansSig
+          ? `Envoyé à ${res.envoye_a} (PDF joint).`
+          : `Envoyé à ${res.envoye_a} — suivi d'ouverture actif.`
+      );
       onChanged();
     } catch (e) {
       setErr(`Envoi échoué : ${(e as Error).message}`);
@@ -722,8 +1051,9 @@ function DocumentsModal({
           <p className="text-xs text-white/50">
             Chaque génération est conservée ici. « Modifier » rouvre le
             formulaire prérempli et crée une nouvelle version ; « Envoyer »
-            transmet le document au locataire pour signature en ligne avec
-            preuve d&apos;ouverture.
+            transmet le document au locataire — signature en ligne avec
+            preuve d&apos;ouverture, ou simple courriel avec PDF joint pour
+            les avis sans signature (retard, accès).
           </p>
 
           {flash ? (
@@ -752,6 +1082,11 @@ function DocumentsModal({
                     <span className="text-sm font-medium text-white">
                       {d.titre}
                     </span>
+                    {SANS_SIGNATURE.has(d.type) ? (
+                      <span className="ml-2 rounded bg-white/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-white/50">
+                        courriel
+                      </span>
+                    ) : null}
                     <span className="ml-2 text-[10px] text-white/40">
                       {fmtDateTime(d.created_at)}
                     </span>

@@ -1,19 +1,22 @@
-"""Génération PDF des formulaires usuels du Tribunal administratif du
-logement (TAL, ex-Régie du logement).
+"""Génération PDF des documents locatifs (TAL + lettres maison).
 
-Les formulaires officiels TAL sont des PDF gouvernementaux qu'on ne peut
-pas redistribuer tels quels. Ce module produit donc des **lettres
-officielles équivalentes** pré-remplies avec les bonnes mentions
-juridiques, dans un format PDF propre signable et imprimable. Couvre
-les communications les plus fréquentes :
+Depuis 2026-07-17 (exigence Phil), les 5 avis encadrés par un formulaire
+du TAL utilisent **exactement les PDF officiels**, remplis champ par
+champ — voir ``tal_officiel.py`` :
 
-- ``avis_modification`` : avis au locataire de modification du bail
-  (hausse de loyer + autres modifs) — délais 3-6 mois selon durée du bail.
-- ``avis_fin_bail`` : avis de non-renouvellement par le locateur
-  (cas légalement permis, délai 6 mois pour bail >= 12 mois).
-- ``rappel_paiement`` : rappel amiable de paiement de loyer en retard.
-- ``mise_en_demeure`` : mise en demeure formelle avant recours TAL.
-- ``sommaire_bail`` : résumé du bail courant pour archivage interne.
+- ``avis_modification``      (TAL-806)  ``avis_non_reconduction`` (TAL-807)
+- ``avis_travaux_majeurs``   (TAL-808)  ``avis_reprise``          (TAL-809)
+- ``reponse_cession``        (TAL-828)
+
+Ce module conserve les 2 LETTRES maison (aucun formulaire TAL n'existe),
+générées reportlab, envoyées par courriel SANS signature :
+
+- ``rappel_paiement`` : avis de retard — paiement exigé IMMÉDIATEMENT.
+- ``avis_acces`` : accès au logement, préavis 24 h (art. 1931-1933).
+
+Retirés (2026-07-17) : mise_en_demeure (« on n'envoie pas de mise en
+demeure au Québec »), sommaire_bail (inutile), trousse_bail (bail = en
+pause, licence Publications du Québec ou service externe à venir).
 
 API : ``generate_tal_pdf(form_type, context)`` → ``bytes`` PDF.
 """
@@ -75,45 +78,54 @@ class TalContext:
     bail_electricite_inclus: bool = False
     bail_internet_inclus: bool = False
 
-    # Dépôt de garantie (trousse_bail)
+    # Dépôt de garantie (héritage — plus utilisé depuis le retrait de la
+    # trousse bail, conservé pour les anciens params sauvegardés)
     depot_garantie: Optional[float] = None
 
-    # Modifications proposées (avis_modification + sommaire_bail)
+    # Avis de modification TAL-806 : une des 3 formes de hausse
+    # (modif_mode 'nouveau_loyer' | 'hausse_montant' | 'hausse_pct',
+    # inféré du champ fourni si absent) + renouvellement + autres modifs.
+    modif_mode: Optional[str] = None
     nouveau_loyer: Optional[float] = None
+    hausse_montant: Optional[float] = None
+    hausse_pct: Optional[float] = None
     nouvelle_date_debut: Optional[date] = None
     nouvelle_date_fin: Optional[date] = None
-    motif_modification: Optional[str] = None
+    motif_modification: Optional[str] = None  # « Autre(s) modification(s) »
 
-    # Paiements (rappel + mise en demeure)
+    # Avis de retard (rappel_paiement) — paiement IMMÉDIAT exigé.
     montant_du: Optional[float] = None
     mois_concerne: Optional[date] = None  # ex. 2025-04 → "avril 2025"
-    delai_paiement_jours: int = 10
 
-    # Motif fin de bail
-    motif_fin_bail: Optional[str] = None
+    # Non-reconduction du bail par le locataire (TAL-807)
+    depart_date: Optional[date] = None  # défaut : fin du bail
 
-    # Reprise du logement (avis_reprise — art. 1957-1963 CcQ)
-    reprise_date: Optional[date] = None
+    # Reprise du logement (avis_reprise — TAL-809, art. 1960 CcQ)
+    reprise_date: Optional[date] = None  # si bail à durée indéterminée
     reprise_beneficiaire: Optional[str] = None
     reprise_lien: Optional[str] = None  # ex. « moi-même », « mon père »
 
-    # Travaux majeurs (avis_travaux_majeurs — art. 1922-1923 CcQ)
+    # Travaux majeurs (avis_travaux_majeurs — TAL-808, art. 1922-1923)
     travaux_description: Optional[str] = None
     travaux_date_debut: Optional[date] = None
-    travaux_duree: Optional[str] = None  # ex. « environ 2 semaines »
+    travaux_duree_valeur: Optional[str] = None  # ex. « 2 »
+    travaux_duree_unite: Optional[str] = None  # jours | semaines | mois
     travaux_evacuation: bool = False
-    travaux_evacuation_duree: Optional[str] = None
+    travaux_evacuation_du: Optional[date] = None
+    travaux_evacuation_au: Optional[date] = None
     travaux_indemnite: Optional[float] = None  # offerte si évacuation
+    travaux_conditions: Optional[str] = None  # autres conditions
 
     # Accès au logement (avis_acces — art. 1931-1933 CcQ)
     acces_date: Optional[date] = None
     acces_plage: Optional[str] = None  # ex. « entre 9 h et 12 h »
     acces_motif: Optional[str] = None
 
-    # Réponse à une demande de cession / sous-location (art. 1870-1871)
-    cession_type: str = "cession"  # 'cession' | 'sous_location'
-    cession_candidat: Optional[str] = None
-    cession_accepte: bool = True
+    # Réponse à un avis de cession de bail (TAL-828, art. 1871/1978.2) :
+    # cession_decision 'accepte' | 'refus_serieux' | 'refus_autre'.
+    cession_decision: Optional[str] = None
+    cession_date: Optional[date] = None  # date de cession de l'avis reçu
+    cession_accepte: bool = True  # héritage (anciens params)
     cession_motif_refus: Optional[str] = None
 
     # Date du document (default = aujourd'hui à la génération)
@@ -251,11 +263,14 @@ def _destinataire(ctx: TalContext, styles: dict) -> list:
     return [Paragraph(body, styles["body"]), Spacer(1, 0.3 * cm)]
 
 
-def _signature_block(styles: dict) -> list:
+def _signature_block(ctx: TalContext, styles: dict) -> list:
+    """Bloc de clôture des lettres SANS signature en ligne : nom du
+    locateur en toutes lettres (la lettre part par courriel telle
+    quelle, personne n'y appose de signature électronique)."""
     return [
         Spacer(1, 1.2 * cm),
         Paragraph(
-            "____________________________________<br/>Signature du locateur",
+            f"{_fmt_or(ctx.locateur_nom)}<br/>Le locateur",
             styles["small"],
         ),
     ]
@@ -264,155 +279,14 @@ def _signature_block(styles: dict) -> list:
 # --- Builders par type de formulaire --------------------------------------
 
 
-def _build_avis_modification(ctx: TalContext, styles: dict) -> list:
-    flow: list = []
-    flow.extend(_header_block(ctx, styles))
-    flow.append(
-        Paragraph(
-            "AVIS DE MODIFICATION DU BAIL",
-            styles["title"],
-        )
-    )
-    flow.extend(_destinataire(ctx, styles))
-
-    flow.append(
-        Paragraph(
-            (
-                f"Conformément aux articles 1942 et suivants du <i>Code civil "
-                f"du Québec</i>, je vous transmets par les présentes un "
-                f"avis de modification du bail concernant le logement situé "
-                f"au <b>{_fmt_adresse_complete(ctx)}</b>."
-            ),
-            styles["body"],
-        )
-    )
-
-    # Tableau bail courant vs proposé
-    rows = [
-        ["", "Bail courant", "Renouvellement proposé"],
-        [
-            "Loyer mensuel",
-            _fmt_money(ctx.bail_loyer_mensuel),
-            _fmt_money(ctx.nouveau_loyer),
-        ],
-        [
-            "Date de début",
-            _fmt_date(ctx.bail_date_debut),
-            _fmt_date(ctx.nouvelle_date_debut),
-        ],
-        [
-            "Date de fin",
-            _fmt_date(ctx.bail_date_fin),
-            _fmt_date(ctx.nouvelle_date_fin),
-        ],
-    ]
-    t = Table(rows, colWidths=[5 * cm, 6 * cm, 6 * cm])
-    t.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f0f0")),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#bbbbbb")),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ]
-        )
-    )
-    flow.append(t)
-    flow.append(Spacer(1, 0.4 * cm))
-
-    if ctx.motif_modification:
-        flow.append(
-            Paragraph(
-                f"<b>Motifs des modifications :</b> {ctx.motif_modification}",
-                styles["body"],
-            )
-        )
-
-    flow.append(
-        Paragraph(
-            (
-                "<b>Délai de réponse :</b> Vous disposez d'un délai d'<b>un (1) "
-                "mois</b> à compter de la réception du présent avis pour "
-                "accepter ou refuser les modifications proposées en m'en "
-                "informant par écrit. À défaut de réponse de votre part, vous "
-                "serez réputé avoir accepté les modifications. Si vous refusez, "
-                "je devrai m'adresser au Tribunal administratif du logement "
-                "dans le mois suivant votre refus pour fixation du loyer."
-            ),
-            styles["body"],
-        )
-    )
-
-    flow.append(
-        Paragraph(
-            (
-                "Pour toute question, vous pouvez communiquer avec moi aux "
-                "coordonnées indiquées en en-tête."
-            ),
-            styles["body"],
-        )
-    )
-
-    flow.extend(_signature_block(styles))
-    return flow
-
-
-def _build_avis_fin_bail(ctx: TalContext, styles: dict) -> list:
-    flow: list = []
-    flow.extend(_header_block(ctx, styles))
-    flow.append(Paragraph("AVIS DE NON-RENOUVELLEMENT DU BAIL", styles["title"]))
-    flow.extend(_destinataire(ctx, styles))
-
-    flow.append(
-        Paragraph(
-            (
-                f"Je vous avise par les présentes que le bail concernant "
-                f"le logement situé au <b>{_fmt_adresse_complete(ctx)}</b>, "
-                f"actuellement en vigueur jusqu'au "
-                f"<b>{_fmt_date(ctx.bail_date_fin)}</b>, ne sera pas renouvelé."
-            ),
-            styles["body"],
-        )
-    )
-
-    motif = ctx.motif_fin_bail or "[motif légal à compléter]"
-    flow.append(
-        Paragraph(
-            (
-                f"<b>Motif :</b> {motif}.<br/>Cet avis est donné conformément "
-                f"aux articles 1959 à 1968 du <i>Code civil du Québec</i>, qui "
-                f"encadrent les cas où un locateur peut reprendre ou évincer "
-                f"un locataire."
-            ),
-            styles["body"],
-        )
-    )
-
-    flow.append(
-        Paragraph(
-            (
-                "<b>Délai de contestation :</b> Vous disposez d'<b>un (1) "
-                "mois</b> à compter de la réception du présent avis pour "
-                "vous y opposer en saisissant le Tribunal administratif "
-                "du logement, à défaut de quoi vous serez réputé avoir "
-                "consenti à quitter le logement à l'échéance du bail."
-            ),
-            styles["body"],
-        )
-    )
-
-    flow.extend(_signature_block(styles))
-    return flow
-
-
 def _build_rappel_paiement(ctx: TalContext, styles: dict) -> list:
+    # Exigence Phil 2026-07-17 : « il doit payer IMMÉDIATEMENT » — pas de
+    # délai de grâce, pas de signature.
     flow: list = []
     flow.extend(_header_block(ctx, styles))
-    flow.append(Paragraph("RAPPEL — LOYER EN RETARD", styles["title"]))
+    flow.append(
+        Paragraph("AVIS DE RETARD — LOYER IMPAYÉ", styles["title"])
+    )
     flow.extend(_destinataire(ctx, styles))
 
     flow.append(
@@ -429,9 +303,8 @@ def _build_rappel_paiement(ctx: TalContext, styles: dict) -> list:
     flow.append(
         Paragraph(
             (
-                f"Nous vous prions de bien vouloir régulariser la situation "
-                f"dans un délai de <b>{ctx.delai_paiement_jours} jours</b> à "
-                f"compter de la réception du présent rappel."
+                "Le loyer est payable le premier jour du mois. <b>Vous devez "
+                "acquitter ce montant IMMÉDIATEMENT.</b>"
             ),
             styles["body"],
         )
@@ -439,314 +312,16 @@ def _build_rappel_paiement(ctx: TalContext, styles: dict) -> list:
     flow.append(
         Paragraph(
             (
-                "Si vous éprouvez des difficultés financières ponctuelles, "
-                "n'hésitez pas à communiquer avec nous afin de convenir "
-                "d'une entente."
+                "À défaut de paiement, nous nous réservons tous les recours "
+                "prévus par la loi, y compris une demande au Tribunal "
+                "administratif du logement en recouvrement du loyer et, si "
+                "le retard dépasse trois semaines, en résiliation du bail "
+                "(art. 1971 du <i>Code civil du Québec</i>)."
             ),
             styles["body"],
         )
     )
-    flow.extend(_signature_block(styles))
-    return flow
-
-
-def _build_mise_en_demeure(ctx: TalContext, styles: dict) -> list:
-    flow: list = []
-    flow.extend(_header_block(ctx, styles))
-    flow.append(
-        Paragraph(
-            "MISE EN DEMEURE — DÉFAUT DE PAIEMENT DU LOYER",
-            styles["title"],
-        )
-    )
-    flow.extend(_destinataire(ctx, styles))
-
-    flow.append(
-        Paragraph(
-            (
-                f"Malgré nos avis précédents, le loyer du mois de "
-                f"<b>{_fmt_mois(ctx.mois_concerne)}</b> pour le logement "
-                f"<b>{_fmt_adresse_complete(ctx)}</b>, au montant de "
-                f"<b>{_fmt_money(ctx.montant_du)}</b>, demeure impayé."
-            ),
-            styles["body"],
-        )
-    )
-
-    flow.append(
-        Paragraph(
-            (
-                f"<b>Vous êtes par les présentes mis en demeure</b> de "
-                f"verser cette somme dans un délai de "
-                f"<b>{ctx.delai_paiement_jours} jours</b> à compter de la "
-                f"réception du présent avis."
-            ),
-            styles["body"],
-        )
-    )
-
-    flow.append(
-        Paragraph(
-            (
-                "À défaut, je me verrai dans l'obligation d'introduire "
-                "sans autre avis ni délai un recours devant le Tribunal "
-                "administratif du logement, conformément à l'article 1971 "
-                "du <i>Code civil du Québec</i>, en vue notamment de la "
-                "résiliation du bail, de l'expulsion du logement et du "
-                "recouvrement des sommes dues, intérêts et frais en sus."
-            ),
-            styles["body"],
-        )
-    )
-
-    flow.append(
-        Paragraph(
-            (
-                "Le présent avis vaut mise en demeure conformément aux "
-                "articles 1594 et suivants du <i>Code civil du Québec</i>."
-            ),
-            styles["small"],
-        )
-    )
-
-    flow.extend(_signature_block(styles))
-    return flow
-
-
-def _build_sommaire_bail(ctx: TalContext, styles: dict) -> list:
-    flow: list = []
-    flow.extend(_header_block(ctx, styles))
-    flow.append(Paragraph("SOMMAIRE DU BAIL", styles["title"]))
-
-    inclusions: list[str] = []
-    if ctx.bail_chauffage_inclus:
-        inclusions.append("chauffage")
-    if ctx.bail_eau_chaude_inclus:
-        inclusions.append("eau chaude")
-    if ctx.bail_electricite_inclus:
-        inclusions.append("électricité")
-    if ctx.bail_internet_inclus:
-        inclusions.append("Internet")
-    inclusions_str = ", ".join(inclusions) if inclusions else "Aucune"
-
-    rows = [
-        ["Locateur", _fmt_or(ctx.locateur_nom)],
-        ["Locataire", _fmt_or(ctx.locataire_nom)],
-        ["Logement", _fmt_adresse_complete(ctx)],
-        ["Date de début", _fmt_date(ctx.bail_date_debut)],
-        ["Date de fin", _fmt_date(ctx.bail_date_fin)],
-        ["Loyer mensuel", _fmt_money(ctx.bail_loyer_mensuel)],
-        ["Inclusions", inclusions_str],
-    ]
-    t = Table(rows, colWidths=[5 * cm, 12 * cm])
-    t.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f7f7f7")),
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ]
-        )
-    )
-    flow.append(t)
-    flow.append(Spacer(1, 0.5 * cm))
-    flow.append(
-        Paragraph(
-            (
-                "Document interne généré par h2.0 — sert d'aide-mémoire et "
-                "ne se substitue pas au bail signé. Vérifier que les "
-                "informations correspondent au bail officiel avant tout usage."
-            ),
-            styles["small"],
-        )
-    )
-    return flow
-
-
-def _build_avis_reprise(ctx: TalContext, styles: dict) -> list:
-    flow: list = []
-    flow.extend(_header_block(ctx, styles))
-    flow.append(Paragraph("AVIS DE REPRISE DU LOGEMENT", styles["title"]))
-    flow.extend(_destinataire(ctx, styles))
-
-    flow.append(
-        Paragraph(
-            (
-                f"Conformément aux articles 1957 et suivants du <i>Code "
-                f"civil du Québec</i>, je vous avise de mon intention de "
-                f"reprendre le logement situé au "
-                f"<b>{_fmt_adresse_complete(ctx)}</b>, que vous occupez en "
-                f"vertu d'un bail se terminant le "
-                f"<b>{_fmt_date(ctx.bail_date_fin)}</b>."
-            ),
-            styles["body"],
-        )
-    )
-
-    rows = [
-        ["Date prévue de la reprise", _fmt_date(ctx.reprise_date)],
-        ["Bénéficiaire de la reprise", _fmt_or(ctx.reprise_beneficiaire)],
-        [
-            "Lien avec le locateur",
-            _fmt_or(ctx.reprise_lien),
-        ],
-    ]
-    t = Table(rows, colWidths=[7 * cm, 10 * cm])
-    t.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f7f7f7")),
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ]
-        )
-    )
-    flow.append(t)
-    flow.append(Spacer(1, 0.4 * cm))
-
-    flow.append(
-        Paragraph(
-            (
-                "<b>Délai de réponse :</b> Conformément à l'article 1962 du "
-                "<i>Code civil du Québec</i>, vous disposez d'<b>un (1) "
-                "mois</b> à compter de la réception du présent avis pour "
-                "m'aviser par écrit de votre intention de vous conformer à "
-                "l'avis ou de refuser de quitter le logement. <b>À défaut de "
-                "réponse dans ce délai, vous êtes réputé avoir refusé</b> de "
-                "quitter le logement, auquel cas je pourrai m'adresser au "
-                "Tribunal administratif du logement dans le mois suivant "
-                "votre refus pour obtenir l'autorisation de reprendre le "
-                "logement."
-            ),
-            styles["body"],
-        )
-    )
-    flow.append(
-        Paragraph(
-            (
-                "Le présent avis est donné au moins six (6) mois avant "
-                "l'expiration du bail, conformément à l'article 1960 du "
-                "<i>Code civil du Québec</i>."
-            ),
-            styles["small"],
-        )
-    )
-
-    flow.extend(_signature_block(styles))
-    return flow
-
-
-def _build_avis_travaux_majeurs(ctx: TalContext, styles: dict) -> list:
-    flow: list = []
-    flow.extend(_header_block(ctx, styles))
-    flow.append(
-        Paragraph(
-            "AVIS DE TRAVAUX — AMÉLIORATIONS OU RÉPARATIONS MAJEURES",
-            styles["title"],
-        )
-    )
-    flow.extend(_destinataire(ctx, styles))
-
-    flow.append(
-        Paragraph(
-            (
-                f"Conformément aux articles 1922 et 1923 du <i>Code civil "
-                f"du Québec</i>, je vous avise que des travaux "
-                f"d'amélioration ou de réparation majeure, non urgents, "
-                f"seront effectués dans le logement situé au "
-                f"<b>{_fmt_adresse_complete(ctx)}</b>."
-            ),
-            styles["body"],
-        )
-    )
-
-    rows = [
-        ["Nature des travaux", _fmt_or(ctx.travaux_description)],
-        ["Date de début", _fmt_date(ctx.travaux_date_debut)],
-        ["Durée estimée", _fmt_or(ctx.travaux_duree)],
-        [
-            "Évacuation requise",
-            "Oui" if ctx.travaux_evacuation else "Non",
-        ],
-    ]
-    if ctx.travaux_evacuation:
-        rows.append(
-            ["Durée de l'évacuation", _fmt_or(ctx.travaux_evacuation_duree)]
-        )
-        rows.append(
-            ["Indemnité offerte", _fmt_money(ctx.travaux_indemnite)]
-        )
-    t = Table(rows, colWidths=[7 * cm, 10 * cm])
-    t.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f7f7f7")),
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ]
-        )
-    )
-    flow.append(t)
-    flow.append(Spacer(1, 0.4 * cm))
-
-    if ctx.travaux_evacuation:
-        flow.append(
-            Paragraph(
-                (
-                    "<b>Délai de réponse :</b> Comme les travaux exigent votre "
-                    "évacuation temporaire, vous disposez de <b>dix (10) "
-                    "jours</b> à compter de la réception du présent avis pour "
-                    "m'aviser de votre intention de vous y conformer ou non. "
-                    "À défaut de réponse, vous êtes réputé avoir refusé de "
-                    "quitter le logement et je pourrai demander au Tribunal "
-                    "administratif du logement de statuer sur l'opportunité "
-                    "de l'évacuation."
-                ),
-                styles["body"],
-            )
-        )
-    else:
-        flow.append(
-            Paragraph(
-                (
-                    "Ces travaux ne nécessitent pas votre évacuation. Vous "
-                    "conservez néanmoins le droit de demander au Tribunal "
-                    "administratif du logement de se prononcer sur le "
-                    "caractère abusif d'une condition des travaux."
-                ),
-                styles["body"],
-            )
-        )
-
-    flow.append(
-        Paragraph(
-            (
-                "Le présent avis est donné au moins dix (10) jours avant le "
-                "début des travaux (trois mois si une évacuation de plus "
-                "d'une semaine est requise), conformément à l'article 1923 "
-                "du <i>Code civil du Québec</i>."
-            ),
-            styles["small"],
-        )
-    )
-
-    flow.extend(_signature_block(styles))
+    flow.extend(_signature_block(ctx, styles))
     return flow
 
 
@@ -806,207 +381,43 @@ def _build_avis_acces(ctx: TalContext, styles: dict) -> list:
         )
     )
 
-    flow.extend(_signature_block(styles))
+    flow.extend(_signature_block(ctx, styles))
     return flow
 
 
-def _build_reponse_cession(ctx: TalContext, styles: dict) -> list:
-    est_cession = (ctx.cession_type or "cession") != "sous_location"
-    objet = "cession de bail" if est_cession else "sous-location"
-
-    flow: list = []
-    flow.extend(_header_block(ctx, styles))
-    flow.append(
-        Paragraph(
-            f"RÉPONSE À VOTRE AVIS DE {objet.upper()}",
-            styles["title"],
-        )
-    )
-    flow.extend(_destinataire(ctx, styles))
-
-    flow.append(
-        Paragraph(
-            (
-                f"J'ai bien reçu votre avis m'informant de votre intention "
-                f"de procéder à une {objet} du logement situé au "
-                f"<b>{_fmt_adresse_complete(ctx)}</b> en faveur de "
-                f"<b>{_fmt_or(ctx.cession_candidat)}</b>."
-            ),
-            styles["body"],
-        )
-    )
-
-    if ctx.cession_accepte:
-        flow.append(
-            Paragraph(
-                (
-                    f"<b>Je consens à cette {objet}</b>, conformément à "
-                    f"l'article 1870 du <i>Code civil du Québec</i>. Seuls "
-                    f"les frais raisonnables résultant de la {objet} "
-                    f"pourront vous être réclamés, le cas échéant "
-                    f"(art. 1872)."
-                ),
-                styles["body"],
-            )
-        )
-    else:
-        motif = ctx.cession_motif_refus or "[motif sérieux à compléter]"
-        flow.append(
-            Paragraph(
-                (
-                    f"<b>Je refuse de consentir à cette {objet}</b> pour le "
-                    f"motif sérieux suivant, conformément à l'article 1871 "
-                    f"du <i>Code civil du Québec</i> :<br/><br/>{motif}"
-                ),
-                styles["body"],
-            )
-        )
-
-    flow.append(
-        Paragraph(
-            (
-                "La présente réponse vous est transmise dans les quinze "
-                "(15) jours de la réception de votre avis, conformément à "
-                "l'article 1871 du <i>Code civil du Québec</i>."
-            ),
-            styles["small"],
-        )
-    )
-
-    flow.extend(_signature_block(styles))
-    return flow
-
-
-def _build_trousse_bail(ctx: TalContext, styles: dict) -> list:
-    """Fiche de données à REPORTER dans le bail électronique officiel du
-    TAL (tal.gouv.qc.ca/fr/bail-electronique, 2,99 $ + tx) — le formulaire
-    de bail est obligatoire et protégé, on ne le reproduit pas ; on
-    prépare tout pour le remplir en 2 minutes."""
-    flow: list = []
-    flow.extend(_header_block(ctx, styles))
-    flow.append(Paragraph("TROUSSE BAIL — DONNÉES POUR LE BAIL TAL", styles["title"]))
-
-    flow.append(
-        Paragraph(
-            (
-                "Toutes les informations ci-dessous sont prêtes à être "
-                "reportées dans le <b>bail électronique officiel</b> du "
-                "Tribunal administratif du logement "
-                "(tal.gouv.qc.ca → Bail électronique, 2,99 $ + tx). Le "
-                "formulaire de bail est obligatoire et protégé par droit "
-                "d'auteur — cette trousse ne le remplace pas."
-            ),
-            styles["small"],
-        )
-    )
-    flow.append(Spacer(1, 0.3 * cm))
-
-    inclusions: list[str] = []
-    if ctx.bail_chauffage_inclus:
-        inclusions.append("chauffage")
-    if ctx.bail_eau_chaude_inclus:
-        inclusions.append("eau chaude")
-    if ctx.bail_electricite_inclus:
-        inclusions.append("électricité")
-    if ctx.bail_internet_inclus:
-        inclusions.append("Internet")
-    inclusions_str = ", ".join(inclusions) if inclusions else "Aucune"
-
-    def _section(titre: str, rows: list[list[str]]) -> None:
-        flow.append(Paragraph(titre, styles["h2"]))
-        t = Table(rows, colWidths=[6 * cm, 11 * cm])
-        t.setStyle(
-            TableStyle(
-                [
-                    ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-                    ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f7f7f7")),
-                    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-                    ("FONTSIZE", (0, 0), (-1, -1), 10),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                    ("TOPPADDING", (0, 0), (-1, -1), 5),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-                ]
-            )
-        )
-        flow.append(t)
-
-    _section(
-        "A. Le locateur",
-        [
-            ["Nom", _fmt_or(ctx.locateur_nom)],
-            ["Adresse", _fmt_or(ctx.locateur_adresse)],
-            ["Téléphone", _fmt_or(ctx.locateur_telephone)],
-            ["Courriel", _fmt_or(ctx.locateur_courriel)],
-        ],
-    )
-    _section(
-        "B. Le locataire",
-        [
-            ["Nom", _fmt_or(ctx.locataire_nom)],
-            ["Courriel (signature électronique)", _fmt_or(ctx.locataire_email)],
-        ],
-    )
-    _section(
-        "C. Le logement loué",
-        [
-            ["Adresse", _fmt_adresse_complete(ctx)],
-        ],
-    )
-    _section(
-        "D. Durée du bail",
-        [
-            ["Début", _fmt_date(ctx.bail_date_debut)],
-            ["Fin", _fmt_date(ctx.bail_date_fin)],
-        ],
-    )
-    _section(
-        "E. Loyer",
-        [
-            ["Loyer mensuel", _fmt_money(ctx.bail_loyer_mensuel)],
-            ["Services inclus", inclusions_str],
-            [
-                "Dépôt de garantie (le cas échéant)",
-                _fmt_money(ctx.depot_garantie)
-                if ctx.depot_garantie is not None
-                else "Aucun",
-            ],
-        ],
-    )
-    flow.append(Spacer(1, 0.4 * cm))
-    flow.append(
-        Paragraph(
-            (
-                "Document interne généré par h2.0 — vérifier chaque valeur "
-                "avant de conclure le bail officiel."
-            ),
-            styles["small"],
-        )
-    )
-    return flow
-
-
+#: Lettres maison (reportlab). Les 5 formulaires officiels sont servis
+#: par tal_officiel.fill_official_pdf.
 _BUILDERS = {
-    "trousse_bail": _build_trousse_bail,
-    "avis_modification": _build_avis_modification,
-    "avis_fin_bail": _build_avis_fin_bail,
     "rappel_paiement": _build_rappel_paiement,
-    "mise_en_demeure": _build_mise_en_demeure,
-    "sommaire_bail": _build_sommaire_bail,
-    "avis_reprise": _build_avis_reprise,
-    "avis_travaux_majeurs": _build_avis_travaux_majeurs,
     "avis_acces": _build_avis_acces,
-    "reponse_cession": _build_reponse_cession,
 }
+
+#: Types dont l'envoi se fait par simple courriel avec PDF joint — AUCUNE
+#: signature en ligne (exigence Phil 2026-07-17, points 4 et 7).
+SIGNATURE_NON_REQUISE = {"rappel_paiement", "avis_acces"}
 
 
 def available_form_types() -> list[str]:
-    return list(_BUILDERS.keys())
+    from app.services.tal_officiel import OFFICIAL_FORMS
+
+    return [*OFFICIAL_FORMS.keys(), *_BUILDERS.keys()]
 
 
-def generate_tal_pdf(form_type: str, ctx: TalContext) -> bytes:
-    """Génère le PDF demandé. Lève KeyError si form_type inconnu."""
+def generate_tal_pdf(
+    form_type: str,
+    ctx: TalContext,
+    template_bytes: Optional[bytes] = None,
+) -> bytes:
+    """Génère le PDF demandé — formulaire OFFICIEL rempli pour les 5
+    types TAL, lettre reportlab sinon. Lève KeyError si inconnu.
+
+    ``template_bytes`` : PDF modèle de remplacement (imm_doc_templates)
+    pour les formulaires officiels ; ignoré pour les lettres."""
+    from app.services.tal_officiel import fill_official_pdf, is_official
+
+    if is_official(form_type):
+        return fill_official_pdf(form_type, ctx, template_bytes)
+
     builder = _BUILDERS[form_type]
     styles = _build_styles()
 

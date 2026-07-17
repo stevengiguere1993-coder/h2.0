@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import and_, func, select
+from sqlalchemy.orm import undefer
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.entreprise import Entreprise
@@ -21,6 +22,7 @@ from app.models.immobilier import (
     EvaluationKind,
     Hypotheque,
     HypothequeStatus,
+    ImmDocTemplate,
     Immeuble,
     ImmeubleOwnership,
     Logement,
@@ -38,10 +40,12 @@ from app.schemas.immobilier_extras import (
 )
 from app.services.bail_renouvellement import send_renouvellement_for_bail
 from app.services.tal_forms import (
+    SIGNATURE_NON_REQUISE,
     TalContext,
     available_form_types,
     generate_tal_pdf,
 )
+from app.services.tal_officiel import is_official, validate_template
 
 
 log = logging.getLogger(__name__)
@@ -61,66 +65,158 @@ def _require_volet(user: CurrentUser) -> None:
 
 
 _TAL_LABELS = {
-    "trousse_bail": (
-        "Trousse bail (données pour le TAL)",
-        "Toutes les données du bail prêtes à reporter dans le bail "
-        "électronique officiel du TAL (tal.gouv.qc.ca, 2,99 $).",
-    ),
     "avis_modification": (
-        "Avis de modification du bail",
-        "Avis officiel au locataire — hausse de loyer ou autre modification.",
+        "Avis d'augmentation / modification du bail",
+        "Formulaire officiel TAL-806 — hausse de loyer et modification "
+        "d'une autre condition du bail (art. 1942-1943 C.c.Q., réponse "
+        "du locataire en 1 mois).",
     ),
-    "avis_fin_bail": (
-        "Avis de non-renouvellement",
-        "Avis de reprise / éviction conformément aux articles 1959-1968 C.c.Q.",
-    ),
-    "rappel_paiement": (
-        "Rappel amiable de paiement",
-        "Premier rappel courtois pour un loyer en retard.",
-    ),
-    "mise_en_demeure": (
-        "Mise en demeure (défaut de paiement)",
-        "Mise en demeure formelle préalable à un recours TAL.",
-    ),
-    "sommaire_bail": (
-        "Sommaire du bail",
-        "Document interne récapitulant les conditions du bail courant.",
+    "avis_non_reconduction": (
+        "Avis de non-reconduction (par le locataire)",
+        "Formulaire officiel TAL-807 — le locataire avise qu'il quitte à "
+        "la fin du bail (art. 1946 C.c.Q.) ; c'est lui qui le signe.",
     ),
     "avis_reprise": (
-        "Avis de reprise du logement",
-        "Reprise pour s'y loger ou y loger un proche — art. 1957-1963 C.c.Q. "
-        "(6 mois avant la fin du bail, réponse du locataire en 1 mois).",
+        "Avis de reprise de logement",
+        "Formulaire officiel TAL-809 — reprise pour s'y loger ou y loger "
+        "un proche (art. 1960 C.c.Q., 6 mois avant la fin du bail, "
+        "réponse du locataire en 1 mois).",
     ),
     "avis_travaux_majeurs": (
-        "Avis de travaux majeurs",
-        "Améliorations/réparations majeures non urgentes — art. 1922-1923 "
-        "C.c.Q. (10 jours d'avis, 3 mois si évacuation > 1 semaine).",
+        "Avis de réparation ou d'amélioration majeure",
+        "Formulaire officiel TAL-808 — travaux majeurs non urgents "
+        "(art. 1922-1923 C.c.Q., 10 jours d'avis, 3 mois si évacuation "
+        "de plus de 7 jours).",
+    ),
+    "reponse_cession": (
+        "Réponse à un avis de cession de bail",
+        "Formulaire officiel TAL-828 (avis reçus depuis le 21 février "
+        "2024) — accepter ou refuser dans les 15 jours (art. 1871 et "
+        "1978.2 C.c.Q.).",
+    ),
+    "rappel_paiement": (
+        "Avis de retard de paiement",
+        "Lettre exigeant le paiement IMMÉDIAT du loyer impayé — envoi "
+        "par courriel, sans signature.",
     ),
     "avis_acces": (
         "Avis d'accès au logement",
-        "Visite ou travaux mineurs avec préavis de 24 h — art. 1931-1933 "
-        "C.c.Q.",
-    ),
-    "reponse_cession": (
-        "Réponse à une cession / sous-location",
-        "Consentement ou refus motivé dans les 15 jours — art. 1870-1871 "
-        "C.c.Q.",
+        "Visite ou travaux mineurs avec préavis de 24 h (art. 1931-1933 "
+        "C.c.Q.) — envoi par courriel, sans signature.",
     ),
 }
 
 
+async def _template_override(
+    db, form_type: str, *, with_blob: bool = False
+) -> Optional[ImmDocTemplate]:
+    """PDF modèle remplacé par l'utilisateur pour ce formulaire, s'il y
+    en a un (Paramètres → Modèles de documents)."""
+    q = select(ImmDocTemplate).where(ImmDocTemplate.type == form_type)
+    if with_blob:
+        q = q.options(undefer(ImmDocTemplate.pdf_blob))
+    return (await db.execute(q)).scalar_one_or_none()
+
+
 @router.get("/tal/forms", response_model=List[TalFormType])
-async def list_tal_forms(user: CurrentUser) -> List[TalFormType]:
+async def list_tal_forms(db: DBSession, user: CurrentUser) -> List[TalFormType]:
     _require_volet(user)
+    overrides = {
+        t.type: t
+        for t in (await db.execute(select(ImmDocTemplate))).scalars().all()
+    }
     out: List[TalFormType] = []
     for code in available_form_types():
         label, desc = _TAL_LABELS.get(code, (code.replace("_", " ").title(), ""))
-        out.append(TalFormType(code=code, label=label, description=desc))
+        ov = overrides.get(code)
+        out.append(
+            TalFormType(
+                code=code,
+                label=label,
+                description=desc,
+                officiel=is_official(code),
+                signature_requise=code not in SIGNATURE_NON_REQUISE,
+                custom_filename=ov.filename if ov else None,
+                custom_uploaded_at=ov.updated_at if ov else None,
+            )
+        )
     return out
 
 
+@router.post("/tal/modeles/{form_type}/pdf", response_model=TalFormType)
+async def upload_tal_template(
+    form_type: str,
+    db: DBSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+) -> TalFormType:
+    """Remplace le PDF modèle d'un formulaire officiel (nouvelle version
+    publiée par le TAL). Les noms de champs requis sont validés — un PDF
+    incompatible est refusé plutôt que de générer des avis à blanc."""
+    _require_volet(user)
+    if not is_official(form_type):
+        raise HTTPException(
+            status_code=400,
+            detail="Seuls les formulaires officiels TAL sont remplaçables.",
+        )
+    data = await file.read()
+    if not data or not data[:5].startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="Le fichier doit être un PDF.")
+    if len(data) > 15_000_000:
+        raise HTTPException(status_code=400, detail="PDF trop volumineux (max 15 Mo).")
+    try:
+        missing = validate_template(form_type, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "PDF incompatible — champs manquants : "
+                + ", ".join(missing[:8])
+                + ("…" if len(missing) > 8 else "")
+            ),
+        )
+    existing = await _template_override(db, form_type)
+    if existing is None:
+        existing = ImmDocTemplate(type=form_type, pdf_blob=data)
+        db.add(existing)
+    else:
+        existing.pdf_blob = data
+    existing.filename = (file.filename or "modele.pdf")[:255]
+    existing.uploaded_by_email = getattr(user, "email", None)
+    await db.commit()
+    await db.refresh(existing)
+    label, desc = _TAL_LABELS.get(form_type, (form_type, ""))
+    return TalFormType(
+        code=form_type,
+        label=label,
+        description=desc,
+        officiel=True,
+        signature_requise=form_type not in SIGNATURE_NON_REQUISE,
+        custom_filename=existing.filename,
+        custom_uploaded_at=existing.updated_at,
+    )
+
+
+@router.delete(
+    "/tal/modeles/{form_type}/pdf", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_tal_template(
+    form_type: str, db: DBSession, user: CurrentUser
+) -> None:
+    """Revient au PDF officiel embarqué d'origine."""
+    _require_volet(user)
+    existing = await _template_override(db, form_type)
+    if existing is not None:
+        await db.delete(existing)
+        await db.commit()
+
+
 @router.get("/tal/apercu/{form_type}.pdf")
-async def apercu_tal_pdf(form_type: str, user: CurrentUser) -> Response:
+async def apercu_tal_pdf(
+    form_type: str, db: DBSession, user: CurrentUser
+) -> Response:
     """Aperçu d'un MODÈLE avec des données d'exemple — page Paramètres →
     Modèles de documents (retour Phil 2026-07-17 : « ils sont où les
     modèles ? »). La vraie génération se fait depuis un bail (préremplie)."""
@@ -156,30 +252,34 @@ async def apercu_tal_pdf(form_type: str, user: CurrentUser) -> Response:
             bail_date_fin=demo_debut + _td(days=364),
             bail_loyer_mensuel=1250.0,
             bail_chauffage_inclus=True,
-            depot_garantie=625.0,
+            modif_mode="nouveau_loyer",
             nouveau_loyer=1300.0,
             nouvelle_date_debut=demo_debut + _td(days=365),
             nouvelle_date_fin=demo_debut + _td(days=729),
             montant_du=1250.0,
             mois_concerne=demo_debut,
-            motif_fin_bail="reprise du logement (exemple)",
+            depart_date=demo_debut + _td(days=364),
             reprise_date=demo_debut + _td(days=365),
             reprise_beneficiaire="Philippe Meuser (exemple)",
             reprise_lien="moi-même",
             travaux_description="Réfection complète de la salle de bain (exemple)",
             travaux_date_debut=demo_debut + _td(days=30),
-            travaux_duree="environ 2 semaines",
+            travaux_duree_valeur="2",
+            travaux_duree_unite="semaines",
             travaux_evacuation=True,
-            travaux_evacuation_duree="5 jours",
+            travaux_evacuation_du=demo_debut + _td(days=30),
+            travaux_evacuation_au=demo_debut + _td(days=35),
             travaux_indemnite=500.0,
             acces_date=demo_debut + _td(days=7),
             acces_plage="entre 9 h et 12 h",
             acces_motif="vérification de l'état du logement (exemple)",
-            cession_type="cession",
-            cession_candidat="Marie Gagnon (exemple)",
-            cession_accepte=True,
+            cession_decision="accepte",
+            cession_date=demo_debut + _td(days=60),
         )
-        pdf = generate_tal_pdf(form_type, ctx)
+        ov = await _template_override(db, form_type, with_blob=True)
+        pdf = generate_tal_pdf(
+            form_type, ctx, template_bytes=ov.pdf_blob if ov else None
+        )
     return Response(
         content=pdf,
         media_type="application/pdf",
@@ -216,8 +316,20 @@ async def _build_ctx_from_bail(
             if ent is not None:
                 locateur_nom = ent.name
 
+    # Fin de renouvellement par défaut : même durée que le bail courant.
+    nouvelle_fin = params.nouvelle_date_fin
+    if (
+        nouvelle_fin is None
+        and bail.date_fin is not None
+        and bail.date_debut is not None
+    ):
+        nouvelle_fin = bail.date_fin + (bail.date_fin - bail.date_debut) + timedelta(days=1)
+
     return TalContext(
         locateur_nom=locateur_nom,
+        # Adresse du bureau (mandataire Horizon) — même adresse pour
+        # toutes les compagnies de Phil.
+        locateur_adresse="158 rue Maurice, Saint-Rémi (Québec) J0L 2L0",
         locataire_nom=locataire.full_name if locataire else None,
         locataire_email=locataire.email if locataire else None,
         logement_adresse=immeuble.address if immeuble else None,
@@ -235,28 +347,34 @@ async def _build_ctx_from_bail(
             if bail.depot_garantie is not None
             else None
         ),
+        modif_mode=params.modif_mode,
         nouveau_loyer=params.nouveau_loyer,
+        hausse_montant=params.hausse_montant,
+        hausse_pct=params.hausse_pct,
         nouvelle_date_debut=params.nouvelle_date_debut
         or (bail.date_fin + timedelta(days=1) if bail.date_fin else None),
-        nouvelle_date_fin=params.nouvelle_date_fin,
+        nouvelle_date_fin=nouvelle_fin,
         motif_modification=params.motif,
         montant_du=params.montant_du,
         mois_concerne=params.mois_concerne,
-        delai_paiement_jours=params.delai_paiement_jours or 10,
+        depart_date=params.depart_date or bail.date_fin,
         reprise_date=params.reprise_date,
         reprise_beneficiaire=params.reprise_beneficiaire,
         reprise_lien=params.reprise_lien,
         travaux_description=params.travaux_description,
         travaux_date_debut=params.travaux_date_debut,
-        travaux_duree=params.travaux_duree,
+        travaux_duree_valeur=params.travaux_duree_valeur,
+        travaux_duree_unite=params.travaux_duree_unite,
         travaux_evacuation=params.travaux_evacuation,
-        travaux_evacuation_duree=params.travaux_evacuation_duree,
+        travaux_evacuation_du=params.travaux_evacuation_du,
+        travaux_evacuation_au=params.travaux_evacuation_au,
         travaux_indemnite=params.travaux_indemnite,
+        travaux_conditions=params.travaux_conditions,
         acces_date=params.acces_date,
         acces_plage=params.acces_plage,
         acces_motif=params.acces_motif,
-        cession_type=params.cession_type,
-        cession_candidat=params.cession_candidat,
+        cession_decision=params.cession_decision,
+        cession_date=params.cession_date,
         cession_accepte=params.cession_accepte,
         cession_motif_refus=params.cession_motif_refus,
     )
@@ -278,7 +396,10 @@ async def generate_bail_tal_pdf(
         raise HTTPException(status_code=404, detail="Bail introuvable.")
 
     ctx = await _build_ctx_from_bail(db, bail, payload)
-    pdf_bytes = generate_tal_pdf(form_type, ctx)
+    ov = await _template_override(db, form_type, with_blob=True)
+    pdf_bytes = generate_tal_pdf(
+        form_type, ctx, template_bytes=ov.pdf_blob if ov else None
+    )
 
     # CONSERVE le document (retour Phil 2026-07-17 : « ces documents-là,
     # ils sont où ? ») — visible/modifiable/envoyable depuis la fiche.
