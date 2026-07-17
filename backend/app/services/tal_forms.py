@@ -89,6 +89,30 @@ class TalContext:
     # Motif fin de bail
     motif_fin_bail: Optional[str] = None
 
+    # Reprise du logement (avis_reprise — art. 1957-1963 CcQ)
+    reprise_date: Optional[date] = None
+    reprise_beneficiaire: Optional[str] = None
+    reprise_lien: Optional[str] = None  # ex. « moi-même », « mon père »
+
+    # Travaux majeurs (avis_travaux_majeurs — art. 1922-1923 CcQ)
+    travaux_description: Optional[str] = None
+    travaux_date_debut: Optional[date] = None
+    travaux_duree: Optional[str] = None  # ex. « environ 2 semaines »
+    travaux_evacuation: bool = False
+    travaux_evacuation_duree: Optional[str] = None
+    travaux_indemnite: Optional[float] = None  # offerte si évacuation
+
+    # Accès au logement (avis_acces — art. 1931-1933 CcQ)
+    acces_date: Optional[date] = None
+    acces_plage: Optional[str] = None  # ex. « entre 9 h et 12 h »
+    acces_motif: Optional[str] = None
+
+    # Réponse à une demande de cession / sous-location (art. 1870-1871)
+    cession_type: str = "cession"  # 'cession' | 'sous_location'
+    cession_candidat: Optional[str] = None
+    cession_accepte: bool = True
+    cession_motif_refus: Optional[str] = None
+
     # Date du document (default = aujourd'hui à la génération)
     date_emission: Optional[date] = None
 
@@ -541,12 +565,325 @@ def _build_sommaire_bail(ctx: TalContext, styles: dict) -> list:
     return flow
 
 
+def _build_avis_reprise(ctx: TalContext, styles: dict) -> list:
+    flow: list = []
+    flow.extend(_header_block(ctx, styles))
+    flow.append(Paragraph("AVIS DE REPRISE DU LOGEMENT", styles["title"]))
+    flow.extend(_destinataire(ctx, styles))
+
+    flow.append(
+        Paragraph(
+            (
+                f"Conformément aux articles 1957 et suivants du <i>Code "
+                f"civil du Québec</i>, je vous avise de mon intention de "
+                f"reprendre le logement situé au "
+                f"<b>{_fmt_adresse_complete(ctx)}</b>, que vous occupez en "
+                f"vertu d'un bail se terminant le "
+                f"<b>{_fmt_date(ctx.bail_date_fin)}</b>."
+            ),
+            styles["body"],
+        )
+    )
+
+    rows = [
+        ["Date prévue de la reprise", _fmt_date(ctx.reprise_date)],
+        ["Bénéficiaire de la reprise", _fmt_or(ctx.reprise_beneficiaire)],
+        [
+            "Lien avec le locateur",
+            _fmt_or(ctx.reprise_lien),
+        ],
+    ]
+    t = Table(rows, colWidths=[7 * cm, 10 * cm])
+    t.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f7f7f7")),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
+                ("FONTSIZE", (0, 0), (-1, -1), 10),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    flow.append(t)
+    flow.append(Spacer(1, 0.4 * cm))
+
+    flow.append(
+        Paragraph(
+            (
+                "<b>Délai de réponse :</b> Conformément à l'article 1962 du "
+                "<i>Code civil du Québec</i>, vous disposez d'<b>un (1) "
+                "mois</b> à compter de la réception du présent avis pour "
+                "m'aviser par écrit de votre intention de vous conformer à "
+                "l'avis ou de refuser de quitter le logement. <b>À défaut de "
+                "réponse dans ce délai, vous êtes réputé avoir refusé</b> de "
+                "quitter le logement, auquel cas je pourrai m'adresser au "
+                "Tribunal administratif du logement dans le mois suivant "
+                "votre refus pour obtenir l'autorisation de reprendre le "
+                "logement."
+            ),
+            styles["body"],
+        )
+    )
+    flow.append(
+        Paragraph(
+            (
+                "Le présent avis est donné au moins six (6) mois avant "
+                "l'expiration du bail, conformément à l'article 1960 du "
+                "<i>Code civil du Québec</i>."
+            ),
+            styles["small"],
+        )
+    )
+
+    flow.extend(_signature_block(styles))
+    return flow
+
+
+def _build_avis_travaux_majeurs(ctx: TalContext, styles: dict) -> list:
+    flow: list = []
+    flow.extend(_header_block(ctx, styles))
+    flow.append(
+        Paragraph(
+            "AVIS DE TRAVAUX — AMÉLIORATIONS OU RÉPARATIONS MAJEURES",
+            styles["title"],
+        )
+    )
+    flow.extend(_destinataire(ctx, styles))
+
+    flow.append(
+        Paragraph(
+            (
+                f"Conformément aux articles 1922 et 1923 du <i>Code civil "
+                f"du Québec</i>, je vous avise que des travaux "
+                f"d'amélioration ou de réparation majeure, non urgents, "
+                f"seront effectués dans le logement situé au "
+                f"<b>{_fmt_adresse_complete(ctx)}</b>."
+            ),
+            styles["body"],
+        )
+    )
+
+    rows = [
+        ["Nature des travaux", _fmt_or(ctx.travaux_description)],
+        ["Date de début", _fmt_date(ctx.travaux_date_debut)],
+        ["Durée estimée", _fmt_or(ctx.travaux_duree)],
+        [
+            "Évacuation requise",
+            "Oui" if ctx.travaux_evacuation else "Non",
+        ],
+    ]
+    if ctx.travaux_evacuation:
+        rows.append(
+            ["Durée de l'évacuation", _fmt_or(ctx.travaux_evacuation_duree)]
+        )
+        rows.append(
+            ["Indemnité offerte", _fmt_money(ctx.travaux_indemnite)]
+        )
+    t = Table(rows, colWidths=[7 * cm, 10 * cm])
+    t.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f7f7f7")),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
+                ("FONTSIZE", (0, 0), (-1, -1), 10),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    flow.append(t)
+    flow.append(Spacer(1, 0.4 * cm))
+
+    if ctx.travaux_evacuation:
+        flow.append(
+            Paragraph(
+                (
+                    "<b>Délai de réponse :</b> Comme les travaux exigent votre "
+                    "évacuation temporaire, vous disposez de <b>dix (10) "
+                    "jours</b> à compter de la réception du présent avis pour "
+                    "m'aviser de votre intention de vous y conformer ou non. "
+                    "À défaut de réponse, vous êtes réputé avoir refusé de "
+                    "quitter le logement et je pourrai demander au Tribunal "
+                    "administratif du logement de statuer sur l'opportunité "
+                    "de l'évacuation."
+                ),
+                styles["body"],
+            )
+        )
+    else:
+        flow.append(
+            Paragraph(
+                (
+                    "Ces travaux ne nécessitent pas votre évacuation. Vous "
+                    "conservez néanmoins le droit de demander au Tribunal "
+                    "administratif du logement de se prononcer sur le "
+                    "caractère abusif d'une condition des travaux."
+                ),
+                styles["body"],
+            )
+        )
+
+    flow.append(
+        Paragraph(
+            (
+                "Le présent avis est donné au moins dix (10) jours avant le "
+                "début des travaux (trois mois si une évacuation de plus "
+                "d'une semaine est requise), conformément à l'article 1923 "
+                "du <i>Code civil du Québec</i>."
+            ),
+            styles["small"],
+        )
+    )
+
+    flow.extend(_signature_block(styles))
+    return flow
+
+
+def _build_avis_acces(ctx: TalContext, styles: dict) -> list:
+    flow: list = []
+    flow.extend(_header_block(ctx, styles))
+    flow.append(Paragraph("AVIS D'ACCÈS AU LOGEMENT", styles["title"]))
+    flow.extend(_destinataire(ctx, styles))
+
+    flow.append(
+        Paragraph(
+            (
+                f"Conformément aux articles 1931 et suivants du <i>Code "
+                f"civil du Québec</i>, je vous avise de mon intention "
+                f"d'accéder au logement situé au "
+                f"<b>{_fmt_adresse_complete(ctx)}</b> :"
+            ),
+            styles["body"],
+        )
+    )
+
+    rows = [
+        ["Date", _fmt_date(ctx.acces_date)],
+        ["Plage horaire", _fmt_or(ctx.acces_plage)],
+        ["Motif", _fmt_or(ctx.acces_motif)],
+    ]
+    t = Table(rows, colWidths=[7 * cm, 10 * cm])
+    t.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f7f7f7")),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
+                ("FONTSIZE", (0, 0), (-1, -1), 10),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    flow.append(t)
+    flow.append(Spacer(1, 0.4 * cm))
+
+    flow.append(
+        Paragraph(
+            (
+                "Le présent avis vous est transmis au moins vingt-quatre "
+                "(24) heures à l'avance. La visite aura lieu entre 9 h et "
+                "21 h (ou entre 7 h et 19 h s'il s'agit de travaux), "
+                "conformément aux articles 1932 et 1933 du <i>Code civil "
+                "du Québec</i>. Si le moment proposé vous convient mal, "
+                "communiquez avec moi pour convenir d'un autre moment."
+            ),
+            styles["body"],
+        )
+    )
+
+    flow.extend(_signature_block(styles))
+    return flow
+
+
+def _build_reponse_cession(ctx: TalContext, styles: dict) -> list:
+    est_cession = (ctx.cession_type or "cession") != "sous_location"
+    objet = "cession de bail" if est_cession else "sous-location"
+
+    flow: list = []
+    flow.extend(_header_block(ctx, styles))
+    flow.append(
+        Paragraph(
+            f"RÉPONSE À VOTRE AVIS DE {objet.upper()}",
+            styles["title"],
+        )
+    )
+    flow.extend(_destinataire(ctx, styles))
+
+    flow.append(
+        Paragraph(
+            (
+                f"J'ai bien reçu votre avis m'informant de votre intention "
+                f"de procéder à une {objet} du logement situé au "
+                f"<b>{_fmt_adresse_complete(ctx)}</b> en faveur de "
+                f"<b>{_fmt_or(ctx.cession_candidat)}</b>."
+            ),
+            styles["body"],
+        )
+    )
+
+    if ctx.cession_accepte:
+        flow.append(
+            Paragraph(
+                (
+                    f"<b>Je consens à cette {objet}</b>, conformément à "
+                    f"l'article 1870 du <i>Code civil du Québec</i>. Seuls "
+                    f"les frais raisonnables résultant de la {objet} "
+                    f"pourront vous être réclamés, le cas échéant "
+                    f"(art. 1872)."
+                ),
+                styles["body"],
+            )
+        )
+    else:
+        motif = ctx.cession_motif_refus or "[motif sérieux à compléter]"
+        flow.append(
+            Paragraph(
+                (
+                    f"<b>Je refuse de consentir à cette {objet}</b> pour le "
+                    f"motif sérieux suivant, conformément à l'article 1871 "
+                    f"du <i>Code civil du Québec</i> :<br/><br/>{motif}"
+                ),
+                styles["body"],
+            )
+        )
+
+    flow.append(
+        Paragraph(
+            (
+                "La présente réponse vous est transmise dans les quinze "
+                "(15) jours de la réception de votre avis, conformément à "
+                "l'article 1871 du <i>Code civil du Québec</i>."
+            ),
+            styles["small"],
+        )
+    )
+
+    flow.extend(_signature_block(styles))
+    return flow
+
+
 _BUILDERS = {
     "avis_modification": _build_avis_modification,
     "avis_fin_bail": _build_avis_fin_bail,
     "rappel_paiement": _build_rappel_paiement,
     "mise_en_demeure": _build_mise_en_demeure,
     "sommaire_bail": _build_sommaire_bail,
+    "avis_reprise": _build_avis_reprise,
+    "avis_travaux_majeurs": _build_avis_travaux_majeurs,
+    "avis_acces": _build_avis_acces,
+    "reponse_cession": _build_reponse_cession,
 }
 
 

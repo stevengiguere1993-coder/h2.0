@@ -81,6 +81,26 @@ _TAL_LABELS = {
         "Sommaire du bail",
         "Document interne récapitulant les conditions du bail courant.",
     ),
+    "avis_reprise": (
+        "Avis de reprise du logement",
+        "Reprise pour s'y loger ou y loger un proche — art. 1957-1963 C.c.Q. "
+        "(6 mois avant la fin du bail, réponse du locataire en 1 mois).",
+    ),
+    "avis_travaux_majeurs": (
+        "Avis de travaux majeurs",
+        "Améliorations/réparations majeures non urgentes — art. 1922-1923 "
+        "C.c.Q. (10 jours d'avis, 3 mois si évacuation > 1 semaine).",
+    ),
+    "avis_acces": (
+        "Avis d'accès au logement",
+        "Visite ou travaux mineurs avec préavis de 24 h — art. 1931-1933 "
+        "C.c.Q.",
+    ),
+    "reponse_cession": (
+        "Réponse à une cession / sous-location",
+        "Consentement ou refus motivé dans les 15 jours — art. 1870-1871 "
+        "C.c.Q.",
+    ),
 }
 
 
@@ -141,6 +161,22 @@ async def _build_ctx_from_bail(
         montant_du=params.montant_du,
         mois_concerne=params.mois_concerne,
         delai_paiement_jours=params.delai_paiement_jours or 10,
+        reprise_date=params.reprise_date,
+        reprise_beneficiaire=params.reprise_beneficiaire,
+        reprise_lien=params.reprise_lien,
+        travaux_description=params.travaux_description,
+        travaux_date_debut=params.travaux_date_debut,
+        travaux_duree=params.travaux_duree,
+        travaux_evacuation=params.travaux_evacuation,
+        travaux_evacuation_duree=params.travaux_evacuation_duree,
+        travaux_indemnite=params.travaux_indemnite,
+        acces_date=params.acces_date,
+        acces_plage=params.acces_plage,
+        acces_motif=params.acces_motif,
+        cession_type=params.cession_type,
+        cession_candidat=params.cession_candidat,
+        cession_accepte=params.cession_accepte,
+        cession_motif_refus=params.cession_motif_refus,
     )
 
 
