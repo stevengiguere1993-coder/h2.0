@@ -4003,7 +4003,8 @@ async def update_evaluation(
     db: DBSession,
     user: CurrentUser,
 ) -> EvaluationRead:
-    """Marque/démarque l'évaluation de référence pour le calcul d'équité.
+    """Modifie une évaluation (valeur, type, date, source, notes) et/ou
+    la marque comme référence pour le calcul d'équité.
 
     Passer ``is_reference=True`` remet automatiquement à False les
     autres évaluations du même immeuble (une seule référence)."""

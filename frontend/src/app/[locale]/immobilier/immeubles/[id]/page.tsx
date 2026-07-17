@@ -827,7 +827,22 @@ export default function ImmeubleDetailPage({
                   ) : null}
                 </span>
               }
-              sub={`${fmtCurrency(financials.revenu_brut_annuel)} / an — unités louées`}
+              sub={
+                <span className="flex flex-wrap items-baseline gap-x-2">
+                  {fmtCurrency(financials.revenu_brut_annuel)} / an
+                  {financials.revenu_brut_mensuel_toutes_unites != null ? (
+                    <span
+                      className="text-[11px] text-white/40"
+                      title="Potentiel annuel toutes unités"
+                    >
+                      {fmtCurrency(
+                        financials.revenu_brut_mensuel_toutes_unites * 12
+                      )}{" "}
+                      toutes unités
+                    </span>
+                  ) : null}
+                </span>
+              }
               icon={DollarSign}
               tone="emerald"
             />
@@ -1473,7 +1488,7 @@ function Kpi({
 }: {
   label: string;
   value: React.ReactNode;
-  sub?: string;
+  sub?: React.ReactNode;
   icon: React.ComponentType<{ className?: string }>;
   tone: "sky" | "emerald" | "amber" | "rose";
 }) {
@@ -3492,19 +3507,23 @@ const EVAL_KIND_BADGE: Record<string, string> = {
 
 function EvaluationForm({
   busy,
+  initial,
   onCancel,
   onSubmit
 }: {
   busy: boolean;
+  // Évaluation à MODIFIER — absente = création.
+  initial?: Evaluation | null;
   onCancel: () => void;
   onSubmit: (payload: Record<string, unknown>) => void;
 }) {
   const [f, setF] = useState({
-    kind: "marchande",
-    valeur: "",
-    date_evaluation: new Date().toISOString().slice(0, 10),
-    source: "",
-    notes: ""
+    kind: initial?.kind ?? "marchande",
+    valeur: initial != null ? String(initial.valeur) : "",
+    date_evaluation:
+      initial?.date_evaluation ?? new Date().toISOString().slice(0, 10),
+    source: initial?.source ?? "",
+    notes: initial?.notes ?? ""
   });
 
   const set = (k: keyof typeof f) => (v: string) =>
@@ -3534,7 +3553,9 @@ function EvaluationForm({
   return (
     <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
       <p className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
-        Nouvelle évaluation
+        {initial
+          ? `Modifier l'évaluation du ${initial.date_evaluation}`
+          : "Nouvelle évaluation"}
       </p>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className={labelCls}>
@@ -3634,6 +3655,7 @@ function EvaluationsTab({
   onMutated: () => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const [editingEval, setEditingEval] = useState<Evaluation | null>(null);
   const [busy, setBusy] = useState(false);
   const [refBusyId, setRefBusyId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -3694,6 +3716,30 @@ function EvaluationsTab({
       onMutated();
     } catch (e) {
       setErr(`Ajout échoué : ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveEdit(evalId: number, payload: Record<string, unknown>) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/evaluations/${evalId}`,
+        { method: "PATCH", body: JSON.stringify(payload) }
+      );
+      if (!res.ok)
+        throw new Error((await res.text()).slice(0, 200) || `HTTP ${res.status}`);
+      const updated = (await res.json()) as Evaluation;
+      setList((prev) =>
+        sortEvals((prev || []).map((x) => (x.id === updated.id ? updated : x)))
+      );
+      setEditingEval(null);
+      // L'équité/valorisation du haut suit la nouvelle valeur.
+      onMutated();
+    } catch (e) {
+      setErr(`Modification échouée : ${(e as Error).message}`);
     } finally {
       setBusy(false);
     }
@@ -3771,7 +3817,7 @@ function EvaluationsTab({
         <p className="text-xs text-white/50">
           {list.length} évaluation{list.length > 1 ? "s" : ""}
         </p>
-        {!adding ? (
+        {!adding && !editingEval ? (
           <button
             type="button"
             onClick={() => setAdding(true)}
@@ -3788,11 +3834,19 @@ function EvaluationsTab({
         </p>
       ) : null}
 
-      {adding ? (
+      {adding || editingEval ? (
         <EvaluationForm
+          // key : réinitialise le formulaire quand on change de cible.
+          key={editingEval?.id ?? "new"}
           busy={busy}
-          onCancel={() => setAdding(false)}
-          onSubmit={(p) => void create(p)}
+          initial={editingEval}
+          onCancel={() => {
+            setAdding(false);
+            setEditingEval(null);
+          }}
+          onSubmit={(p) =>
+            void (editingEval ? saveEdit(editingEval.id, p) : create(p))
+          }
         />
       ) : null}
 
@@ -3863,14 +3917,27 @@ function EvaluationsTab({
                     )}
                   </td>
                   <td className="px-4 py-2 text-right">
-                    <button
-                      type="button"
-                      onClick={() => void remove(e)}
-                      className="btn-outline-rose btn-xs"
-                      title="Supprimer l'évaluation"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
+                    <span className="inline-flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAdding(false);
+                          setEditingEval(e);
+                        }}
+                        className="btn-secondary btn-xs"
+                        title="Modifier l'évaluation"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void remove(e)}
+                        className="btn-outline-rose btn-xs"
+                        title="Supprimer l'évaluation"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </span>
                   </td>
                 </tr>
               ))}
