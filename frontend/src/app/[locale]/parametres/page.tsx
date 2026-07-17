@@ -204,6 +204,13 @@ const SECTIONS: Section[] = [
         href: "/app/parametres/contrat-gestion",
         icon: FileSignature,
         minRole: "admin"
+      },
+      {
+        title: "Modèles de documents (locatif)",
+        desc: "Trousse bail, avis TAL, DPA… — aperçu de chaque modèle et où les générer.",
+        href: "/immobilier/modeles-documents",
+        icon: FileSignature,
+        minRole: "employee"
       }
     ]
   },
