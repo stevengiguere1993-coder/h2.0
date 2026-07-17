@@ -50,6 +50,8 @@ type PrevMois = {
   maintenance: number;
   cashflow_net: number;
   cashflow_cumule: number;
+  nb_baux_echeant?: number;
+  loyers_echeant?: number;
 };
 type Previsionnel = {
   rows: PrevMois[];
@@ -74,6 +76,10 @@ type Depense = {
   libelle: string;
   montant: number;
   frequence: string;
+  // montant = % des loyers mensuels (ex. gestion 5 %) au lieu d'un $.
+  is_pourcentage?: boolean;
+  // TPS+TVQ Québec appliquées (×1.14975) dans les calculs.
+  taxable?: boolean;
   date_depense: string | null;
   notes: string | null;
 };
@@ -338,6 +344,12 @@ export default function FinancesPage() {
                     <th className="px-3 py-2.5 text-right">Dépenses</th>
                     <th className="px-3 py-2.5 text-right">Hypothèque</th>
                     <th className="px-3 py-2.5 text-right">Maintenance</th>
+                    <th
+                      className="px-3 py-2.5 text-right"
+                      title="Baux actifs dont la fin tombe dans le mois — revenus à risque si non renouvelés"
+                    >
+                      Baux qui échoient
+                    </th>
                     <th className="px-3 py-2.5 text-right">Cashflow</th>
                     <th className="px-3 py-2.5 text-right">Cumulé</th>
                   </tr>
@@ -359,6 +371,19 @@ export default function FinancesPage() {
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-white/50">
                         {m.maintenance > 0 ? fmtMoney(m.maintenance) : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {(m.nb_baux_echeant ?? 0) > 0 ? (
+                          <span
+                            className="text-amber-300"
+                            title={`${m.nb_baux_echeant} bail(s) — ${fmtMoney(m.loyers_echeant ?? 0)}/mois à renouveler`}
+                          >
+                            {m.nb_baux_echeant} ·{" "}
+                            {fmtMoney(m.loyers_echeant ?? 0)}
+                          </span>
+                        ) : (
+                          <span className="text-white/30">—</span>
+                        )}
                       </td>
                       <td
                         className={`px-3 py-2 text-right font-semibold tabular-nums ${
@@ -583,6 +608,8 @@ function DepensesPanel({
   const [fMontant, setFMontant] = useState("");
   const [fFreq, setFFreq] = useState("annuel");
   const [fDate, setFDate] = useState("");
+  const [fPct, setFPct] = useState(false);
+  const [fTaxable, setFTaxable] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -613,6 +640,8 @@ function DepensesPanel({
             libelle: fLib.trim(),
             montant: Number(fMontant),
             frequence: fFreq,
+            is_pourcentage: fPct,
+            taxable: fTaxable,
             date_depense: fFreq === "ponctuel" && fDate ? fDate : null
           })
         }
@@ -623,6 +652,8 @@ function DepensesPanel({
       }
       setFLib("");
       setFMontant("");
+      setFPct(false);
+      setFTaxable(false);
       setAdding(false);
       flash("Dépense ajoutée");
       await load();
@@ -684,14 +715,32 @@ function DepensesPanel({
             />
           </label>
           <label className="text-[11px] text-white/60">
-            Montant
+            {fPct ? "% des loyers" : "Montant"}
             <input
               value={fMontant}
               onChange={(e) => setFMontant(e.target.value)}
               inputMode="decimal"
-              placeholder="0.00"
+              placeholder={fPct ? "ex. 5" : "0.00"}
               className="mt-0.5 block w-28 rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white"
             />
+          </label>
+          <label className="flex cursor-pointer items-center gap-1.5 pb-1.5 text-[11px] text-white/70">
+            <input
+              type="checkbox"
+              checked={fPct}
+              onChange={(e) => setFPct(e.target.checked)}
+              className="h-3.5 w-3.5 accent-accent-500"
+            />
+            % des loyers
+          </label>
+          <label className="flex cursor-pointer items-center gap-1.5 pb-1.5 text-[11px] text-white/70">
+            <input
+              type="checkbox"
+              checked={fTaxable}
+              onChange={(e) => setFTaxable(e.target.checked)}
+              className="h-3.5 w-3.5 accent-accent-500"
+            />
+            Taxable (+tx)
           </label>
           <label className="text-[11px] text-white/60">
             Fréquence
@@ -761,10 +810,20 @@ function DepensesPanel({
                       ? "annuelle"
                       : d.date_depense || "ponctuelle"}
                 </span>
+                {d.taxable ? (
+                  <span
+                    className="badge badge-sky ml-1.5"
+                    title="TPS+TVQ appliquées (×1.14975)"
+                  >
+                    +tx
+                  </span>
+                ) : null}
               </span>
               <span className="flex flex-shrink-0 items-center gap-2">
                 <span className="font-semibold tabular-nums text-white">
-                  {fmtMoney(d.montant)}
+                  {d.is_pourcentage
+                    ? `${d.montant} % des loyers`
+                    : fmtMoney(d.montant)}
                 </span>
                 <button
                   type="button"
