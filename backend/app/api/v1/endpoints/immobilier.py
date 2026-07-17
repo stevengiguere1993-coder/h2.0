@@ -3644,36 +3644,71 @@ async def finances_pnl(
                 )
             )
         ).scalars().all()
+        # ⚠️ le statut est stocké en minuscules ("active") — l'ancien
+        # filtre "ACTIVE" ne matchait rien → dette toujours à 0 $.
         hypos = (
             await db.execute(
                 select(Hypotheque).where(
                     Hypotheque.immeuble_id.in_(imm_ids),
-                    Hypotheque.status == "ACTIVE",
+                    Hypotheque.status == HypothequeStatus.ACTIVE.value,
                 )
             )
         ).scalars().all()
 
-        for imm in immeubles:
-            loyers = sum(
-                float(b.loyer_mensuel or 0) * 12
-                for b in baux
-                if bail_to_imm.get(b.id) == imm.id
+        # Loyers mensuels LOUÉS par immeuble : bail actif, sinon loyer
+        # demandé des logements occupés (gestion externe — les baux
+        # vivent chez le gestionnaire). Même définition que la fiche.
+        loyer_bail_par_logement: dict[int, float] = {}
+        for b in baux:
+            loyer_bail_par_logement[b.logement_id] = (
+                loyer_bail_par_logement.get(b.logement_id, 0.0)
+                + float(b.loyer_mensuel or 0)
             )
+        loyers_mensuels_par_imm: dict[int, float] = {}
+        for lg in logements:
+            if lg.id in loyer_bail_par_logement:
+                m = loyer_bail_par_logement[lg.id]
+            elif (
+                lg.status == LogementStatus.OCCUPE.value
+                and lg.loyer_demande is not None
+            ):
+                m = float(lg.loyer_demande)
+            else:
+                continue
+            loyers_mensuels_par_imm[lg.immeuble_id] = (
+                loyers_mensuels_par_imm.get(lg.immeuble_id, 0.0) + m
+            )
+
+        for imm in immeubles:
+            loyers_mensuels = loyers_mensuels_par_imm.get(imm.id, 0.0)
+            loyers = loyers_mensuels * 12
             recus = sum(
                 float(p.montant or 0)
                 for p in paiements
                 if bail_to_imm.get(p.bail_id) == imm.id
             )
+            # Dépenses EFFECTIVES : % des loyers converti en $, puis
+            # fréquence (mensuel ×12 / annuel ×1 / ponctuel dans
+            # l'année), puis taxes (×1.14975 si taxable) — mêmes règles
+            # que l'onglet Cashflow de la fiche.
             dep = 0.0
             for d in depenses:
                 if d.immeuble_id != imm.id:
                     continue
+                base = float(d.montant or 0)
+                if d.is_pourcentage:
+                    base = loyers_mensuels * base / 100.0
                 if d.frequence == "mensuel":
-                    dep += float(d.montant or 0) * 12
+                    val = base * 12
                 elif d.frequence == "annuel":
-                    dep += float(d.montant or 0)
+                    val = base
                 elif d.date_depense and y_start <= d.date_depense <= y_end:
-                    dep += float(d.montant or 0)
+                    val = base
+                else:
+                    continue
+                if d.taxable:
+                    val *= 1.14975
+                dep += val
             dette = sum(
                 float(h.paiement_mensuel or 0) * 12
                 for h in hypos
@@ -3725,6 +3760,10 @@ class PrevisionnelMois(BaseModel):
     maintenance: float
     cashflow_net: float
     cashflow_cumule: float
+    # Baux actifs dont la date de fin tombe dans ce mois (revenus à
+    # risque si non renouvelés) — la projection suppose le renouvellement.
+    nb_baux_echeant: int = 0
+    loyers_echeant: float = 0.0
 
 
 class PrevisionnelOut(BaseModel):
@@ -3780,7 +3819,40 @@ async def finances_previsionnel(
                 )
             )
         ).scalars().all()
-    revenus_mensuels = sum(float(b.loyer_mensuel or 0) for b in baux)
+
+    # Revenus mensuels LOUÉS par immeuble : bail actif, sinon loyer
+    # demandé des logements occupés (gestion externe).
+    loyer_bail_par_logement: dict[int, float] = {}
+    for b in baux:
+        loyer_bail_par_logement[b.logement_id] = (
+            loyer_bail_par_logement.get(b.logement_id, 0.0)
+            + float(b.loyer_mensuel or 0)
+        )
+    loyers_par_imm: dict[int, float] = {}
+    for lg in logements:
+        if lg.id in loyer_bail_par_logement:
+            m = loyer_bail_par_logement[lg.id]
+        elif (
+            lg.status == LogementStatus.OCCUPE.value
+            and lg.loyer_demande is not None
+        ):
+            m = float(lg.loyer_demande)
+        else:
+            continue
+        loyers_par_imm[lg.immeuble_id] = (
+            loyers_par_imm.get(lg.immeuble_id, 0.0) + m
+        )
+    revenus_mensuels = sum(loyers_par_imm.values())
+
+    # Échéances de baux par mois — donne du relief à la projection (la
+    # ligne « X baux échoient » signale où les revenus sont à risque).
+    echeances_by_month: dict[str, tuple[int, float]] = {}
+    for b in baux:
+        if not b.date_fin:
+            continue
+        key = b.date_fin.strftime("%Y-%m")
+        n, s = echeances_by_month.get(key, (0, 0.0))
+        echeances_by_month[key] = (n + 1, s + float(b.loyer_mensuel or 0))
 
     depenses = (
         await db.execute(
@@ -3792,7 +3864,13 @@ async def finances_previsionnel(
     dep_mensuelles = 0.0
     pon_by_month: dict = {}
     for d in depenses:
+        # % des loyers → $ (loyers de L'IMMEUBLE de la dépense), puis
+        # taxes — mêmes règles que le Cashflow de la fiche.
         m = float(d.montant or 0)
+        if d.is_pourcentage:
+            m = loyers_par_imm.get(d.immeuble_id, 0.0) * m / 100.0
+        if d.taxable:
+            m *= 1.14975
         if d.frequence == "mensuel":
             dep_mensuelles += m
         elif d.frequence == "annuel":
@@ -3845,6 +3923,7 @@ async def finances_previsionnel(
         cf = revenus_mensuels - dep_courantes - hyp_mensuelle - maint
         cumule += cf
         total_maint += maint
+        nb_ech, loyers_ech = echeances_by_month.get(key, (0, 0.0))
         rows.append(
             PrevisionnelMois(
                 mois=key,
@@ -3854,6 +3933,8 @@ async def finances_previsionnel(
                 maintenance=round(maint, 2),
                 cashflow_net=round(cf, 2),
                 cashflow_cumule=round(cumule, 2),
+                nb_baux_echeant=nb_ech,
+                loyers_echeant=round(loyers_ech, 2),
             )
         )
         if cur.month == 12:

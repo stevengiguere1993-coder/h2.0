@@ -329,7 +329,7 @@ export default function ImmobilierDashboard() {
             <EmptyState />
           ) : (
             <ul className="grid gap-3 lg:grid-cols-2">
-              {list.slice(0, 6).map((imm) => (
+              {list.map((imm) => (
                 <ImmeubleRow key={imm.id} imm={imm} />
               ))}
             </ul>
