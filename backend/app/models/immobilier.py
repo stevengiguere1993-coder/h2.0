@@ -879,3 +879,69 @@ class RelanceLoyer(Base, TimestampUpdateMixin):
     sent_by_email: Mapped[Optional[str]] = mapped_column(
         String(256), nullable=True
     )
+
+
+class ImmDocument(Base, TimestampUpdateMixin):
+    """Document locatif GÉNÉRÉ et CONSERVÉ (avis TAL, trousse bail, DPA…).
+
+    Chaque génération depuis « Générer ▾ » (ou l'envoi DPA) enregistre le
+    PDF + ses paramètres : l'utilisateur peut le revoir, le modifier
+    (régénération = nouvelle ligne) et l'envoyer pour SIGNATURE via un
+    lien public tokenisé — retour Phil 2026-07-17 (« ces documents-là,
+    ils sont où ? »). Nouvelle table → ensure_immobilier_aux_tables.
+    """
+
+    __tablename__ = "imm_documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    bail_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_baux.id", ondelete="CASCADE"),
+        nullable=True, index=True,
+    )
+    locataire_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_locataires.id", ondelete="CASCADE"),
+        nullable=True, index=True,
+    )
+    immeuble_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )
+
+    type: Mapped[str] = mapped_column(String(48), nullable=False)
+    titre: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Paramètres de génération (JSON) — permet « Modifier » = rouvrir le
+    # formulaire prérempli puis régénérer une nouvelle version.
+    params_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # PDF généré. deferred : jamais chargé dans les listes.
+    pdf_blob = deferred(mapped_column(LargeBinary, nullable=True))
+    created_by_email: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True
+    )
+
+    # Signature en ligne (lien public /document/{token})
+    signature_token: Mapped[Optional[str]] = mapped_column(
+        String(64), unique=True, nullable=True, index=True
+    )
+    envoye_le: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    envoye_a: Mapped[Optional[str]] = mapped_column(
+        String(320), nullable=True
+    )
+    ouvert_le: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    signed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    signed_by_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    signature_ip: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    signature_image = deferred(
+        mapped_column(LargeBinary, nullable=True)
+    )
+    signature_image_content_type: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )

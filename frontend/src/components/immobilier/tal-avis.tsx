@@ -8,10 +8,45 @@
  * (backend services/tal_forms.py).
  */
 
-import { useState } from "react";
-import { FileDown, Loader2, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import {
+  CheckCircle2,
+  Eye,
+  FileDown,
+  FileSignature,
+  Loader2,
+  Mail,
+  Pencil,
+  Trash2,
+  X
+} from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+
+export type BailDocument = {
+  id: number;
+  bail_id: number | null;
+  locataire_id: number | null;
+  type: string;
+  titre: string;
+  params: Record<string, unknown>;
+  created_at: string | null;
+  envoye_le: string | null;
+  envoye_a: string | null;
+  ouvert_le: string | null;
+  signed_at: string | null;
+  signed_by_name: string | null;
+};
+
+// Les composants d'une même ligne (Générer ▾ / Envoyer pour signature)
+// se resynchronisent via cet événement quand un document est créé.
+const DOCS_EVENT = "kratos:documents-changed";
+
+function notifyDocumentsChanged(bailId: number): void {
+  window.dispatchEvent(
+    new CustomEvent(DOCS_EVENT, { detail: { bailId } })
+  );
+}
 
 const TAL_FORMS: { code: string; label: string; avecParams?: boolean }[] = [
   { code: "trousse_bail", label: "Trousse bail (données pour le TAL)" },
@@ -45,6 +80,9 @@ async function downloadTalPdf(
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+  // Le backend a aussi CONSERVÉ le document — préviens le bouton
+  // « Envoyer pour signature » de la même ligne.
+  notifyDocumentsChanged(bailId);
 }
 
 export function TalFormDropdown({ bailId }: { bailId: number }) {
@@ -112,16 +150,33 @@ export function TalFormDropdown({ bailId }: { bailId: number }) {
 function TalAvisModal({
   bailId,
   code,
-  onClose
+  initialParams,
+  onClose,
+  onGenerated
 }: {
   bailId: number;
   code: string;
+  // Paramètres d'un document existant (« Modifier ») — régénère une
+  // NOUVELLE version avec les champs préremplis.
+  initialParams?: Record<string, unknown>;
   onClose: () => void;
+  onGenerated?: () => void;
 }) {
-  const [f, setF] = useState<Record<string, string>>({
-    cession_type: "cession",
-    cession_accepte: "oui",
-    travaux_evacuation: "non"
+  const [f, setF] = useState<Record<string, string>>(() => {
+    const base: Record<string, string> = {
+      cession_type: "cession",
+      cession_accepte: "oui",
+      travaux_evacuation: "non"
+    };
+    for (const [k, v] of Object.entries(initialParams || {})) {
+      if (v == null) continue;
+      if (typeof v === "boolean") {
+        base[k] = v ? "oui" : "non";
+      } else {
+        base[k] = String(v);
+      }
+    }
+    return base;
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -186,6 +241,7 @@ function TalAvisModal({
     }
     try {
       await downloadTalPdf(bailId, code, body);
+      onGenerated?.();
       onClose();
     } catch (e) {
       setErr(`Génération échouée : ${(e as Error).message}`);
@@ -467,6 +523,338 @@ function TalAvisModal({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Bouton « Envoyer pour signature » PILOTÉ PAR DOCUMENT (retour Phil
+ * 2026-07-17) : grisé tant qu'aucun document n'a été généré pour le
+ * bail ; sinon ouvre la bibliothèque des documents (voir / modifier /
+ * envoyer / supprimer, avec états envoyé·ouvert·signé). */
+export function BailSignature({ bailId }: { bailId: number }) {
+  const [docs, setDocs] = useState<BailDocument[] | null>(null);
+  const [open, setOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/documents`
+      );
+      if (r.ok) setDocs((await r.json()) as BailDocument[]);
+    } catch {
+      /* silencieux */
+    }
+  }, [bailId]);
+
+  useEffect(() => {
+    void load();
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { bailId?: number };
+      if (detail?.bailId === bailId) void load();
+    };
+    window.addEventListener(DOCS_EVENT, handler);
+    return () => window.removeEventListener(DOCS_EVENT, handler);
+  }, [bailId, load]);
+
+  const n = docs?.length ?? 0;
+  const signe = (docs || []).some((d) => d.signed_at);
+  const envoye = !signe && (docs || []).some((d) => d.envoye_le);
+
+  return (
+    <>
+      <button
+        type="button"
+        disabled={n === 0}
+        onClick={() => setOpen(true)}
+        title={
+          n === 0
+            ? "Génère d'abord un document (Générer ▾) — le bouton s'activera"
+            : `${n} document${n > 1 ? "s" : ""} — ouvrir la bibliothèque`
+        }
+        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+          signe
+            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+            : envoye
+              ? "border-sky-400/40 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20"
+              : "border-accent-500/40 bg-accent-500/10 text-accent-500 hover:bg-accent-500/20"
+        }`}
+      >
+        {signe ? (
+          <>
+            <CheckCircle2 className="h-3.5 w-3.5" /> Signé
+          </>
+        ) : envoye ? (
+          <>
+            <Mail className="h-3.5 w-3.5" /> Envoyé — suivre
+          </>
+        ) : (
+          <>
+            <FileSignature className="h-3.5 w-3.5" /> Envoyer pour signature
+          </>
+        )}
+      </button>
+      {open ? (
+        <DocumentsModal
+          bailId={bailId}
+          docs={docs || []}
+          onClose={() => setOpen(false)}
+          onChanged={() => void load()}
+        />
+      ) : null}
+    </>
+  );
+}
+
+const TYPES_AVEC_PARAMS = new Set(
+  TAL_FORMS.filter((t) => t.avecParams).map((t) => t.code)
+);
+
+function fmtDateTime(iso: string | null): string {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString("fr-CA", {
+      dateStyle: "short",
+      timeStyle: "short"
+    });
+  } catch {
+    return iso;
+  }
+}
+
+/** Bibliothèque des documents d'un bail : voir, modifier (régénérer),
+ * envoyer pour signature, supprimer — avec les états de suivi. */
+function DocumentsModal({
+  bailId,
+  docs,
+  onClose,
+  onChanged
+}: {
+  bailId: number;
+  docs: BailDocument[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [editDoc, setEditDoc] = useState<BailDocument | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+
+  async function voir(d: BailDocument) {
+    setBusyId(d.id);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/documents/${d.id}/pdf`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      setErr(`Ouverture échouée : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function envoyer(d: BailDocument) {
+    if (
+      !window.confirm(
+        `Envoyer « ${d.titre} » au locataire pour signature en ligne ?`
+      )
+    )
+      return;
+    setBusyId(d.id);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/documents/${d.id}/envoyer-signature`,
+        { method: "POST", body: JSON.stringify({}) }
+      );
+      if (!r.ok)
+        throw new Error(
+          (await r.text()).slice(0, 200) || `HTTP ${r.status}`
+        );
+      const res = (await r.json()) as { envoye_a: string };
+      setFlash(`Envoyé à ${res.envoye_a} — suivi d'ouverture actif.`);
+      onChanged();
+    } catch (e) {
+      setErr(`Envoi échoué : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function supprimer(d: BailDocument) {
+    if (!window.confirm(`Supprimer « ${d.titre} » ?`)) return;
+    setBusyId(d.id);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/documents/${d.id}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok && r.status !== 204)
+        throw new Error(
+          (await r.text()).slice(0, 200) || `HTTP ${r.status}`
+        );
+      onChanged();
+    } catch (e) {
+      setErr(`Suppression échouée : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+      <div className="my-8 w-full max-w-2xl rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
+            Documents du bail
+          </h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="space-y-3 p-5">
+          <p className="text-xs text-white/50">
+            Chaque génération est conservée ici. « Modifier » rouvre le
+            formulaire prérempli et crée une nouvelle version ; « Envoyer »
+            transmet le document au locataire pour signature en ligne avec
+            preuve d&apos;ouverture.
+          </p>
+
+          {flash ? (
+            <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+              {flash}
+            </p>
+          ) : null}
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              {err}
+            </p>
+          ) : null}
+
+          {docs.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-brand-700 px-4 py-3 text-xs text-white/40">
+              Aucun document — utilise « Générer ▾ » pour en créer un.
+            </p>
+          ) : (
+            <ul className="divide-y divide-brand-800 rounded-xl border border-brand-800">
+              {docs.map((d) => (
+                <li
+                  key={d.id}
+                  className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5"
+                >
+                  <span className="min-w-0">
+                    <span className="text-sm font-medium text-white">
+                      {d.titre}
+                    </span>
+                    <span className="ml-2 text-[10px] text-white/40">
+                      {fmtDateTime(d.created_at)}
+                    </span>
+                    <span className="mt-0.5 block text-[11px]">
+                      {d.signed_at ? (
+                        <span className="text-emerald-300">
+                          Signé par {d.signed_by_name}{" "}
+                          {fmtDateTime(d.signed_at)}
+                        </span>
+                      ) : d.ouvert_le ? (
+                        <span className="text-sky-300">
+                          Ouvert {fmtDateTime(d.ouvert_le)} — pas encore
+                          signé
+                        </span>
+                      ) : d.envoye_le ? (
+                        <span className="text-white/50">
+                          Envoyé à {d.envoye_a} {fmtDateTime(d.envoye_le)}
+                        </span>
+                      ) : (
+                        <span className="text-white/40">
+                          Brouillon — pas encore envoyé
+                        </span>
+                      )}
+                    </span>
+                  </span>
+                  <span className="flex flex-shrink-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => void voir(d)}
+                      disabled={busyId === d.id}
+                      className="btn-secondary btn-xs"
+                      title="Voir le PDF"
+                    >
+                      <Eye className="h-3 w-3" />
+                    </button>
+                    {TYPES_AVEC_PARAMS.has(d.type) && !d.signed_at ? (
+                      <button
+                        type="button"
+                        onClick={() => setEditDoc(d)}
+                        disabled={busyId === d.id}
+                        className="btn-secondary btn-xs"
+                        title="Modifier (rouvre le formulaire prérempli — nouvelle version)"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    ) : null}
+                    {!d.signed_at ? (
+                      <button
+                        type="button"
+                        onClick={() => void envoyer(d)}
+                        disabled={busyId === d.id}
+                        className="btn-accent btn-xs"
+                        title={
+                          d.envoye_le
+                            ? "Renvoyer pour signature"
+                            : "Envoyer pour signature"
+                        }
+                      >
+                        {busyId === d.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Mail className="h-3 w-3" />
+                        )}
+                        {d.envoye_le ? "Renvoyer" : "Envoyer"}
+                      </button>
+                    ) : null}
+                    {!d.signed_at ? (
+                      <button
+                        type="button"
+                        onClick={() => void supprimer(d)}
+                        disabled={busyId === d.id}
+                        className="btn-outline-rose btn-xs"
+                        title="Supprimer"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    ) : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="flex items-center justify-end border-t border-brand-800 pt-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="btn-secondary btn-sm"
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
+      </div>
+      {editDoc ? (
+        <TalAvisModal
+          bailId={bailId}
+          code={editDoc.type}
+          initialParams={editDoc.params}
+          onClose={() => setEditDoc(null)}
+          onGenerated={onChanged}
+        />
+      ) : null}
     </div>
   );
 }

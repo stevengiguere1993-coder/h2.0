@@ -20,7 +20,10 @@ import { useSearchParams } from "next/navigation";
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { TalFormDropdown } from "@/components/immobilier/tal-avis";
+import {
+  BailSignature,
+  TalFormDropdown
+} from "@/components/immobilier/tal-avis";
 import { ImmobilierTopbar } from "../../layout";
 import {
   fmtPieces,
@@ -703,6 +706,7 @@ export default function LogementDetailPage({
                         </a>
                       ) : null}
                       <TalFormDropdown bailId={bailActif.id} />
+                      <BailSignature bailId={bailActif.id} />
                     </div>
                   </div>
                 ) : (
