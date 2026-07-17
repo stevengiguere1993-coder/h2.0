@@ -474,6 +474,16 @@ def make_crud_router(
             if model in (Achat, Facture)
             else None
         )
+        # Capture pre-update is_billable de l'Achat : (dé)cocher « à
+        # refacturer » dans Kratos doit (dé)cocher la case FACTURABLE de la
+        # transaction QB liée — via une mise à jour CIBLÉE du drapeau (les
+        # achats importés de QB sont exclus du re-push complet par la garde
+        # anti-doublon, donc le flip passerait à la trappe sans ça).
+        prev_is_billable = (
+            bool(getattr(obj, "is_billable", False))
+            if model is Achat
+            else None
+        )
         # Capture pre-update project_id du Punch — si on rattache un
         # punch existant à un projet (ou on le change de projet), on
         # bumpera aussi ce projet.
@@ -553,6 +563,33 @@ def make_crud_router(
                 from app.api.v1.endpoints.achat_qbo import autopush_achat
 
                 asyncio.create_task(autopush_achat(int(obj.id)))
+            # (Dé)cocher « à refacturer » dans Kratos ⇒ (dé)cocher la case
+            # FACTURABLE de la transaction QB liée — mise à jour CIBLÉE du
+            # drapeau (fonctionne aussi pour les achats importés de QB que
+            # la garde safe_for_repush exclut du re-push complet). Billable
+            # effectif seulement si pas déjà refacturé (invoiced_at NULL) ;
+            # décoché ⇒ NotBillable ⇒ l'« imputation de dépense
+            # facturable » en attente disparaît côté QB.
+            new_billable = bool(getattr(obj, "is_billable", False))
+            if (
+                prev_is_billable is not None
+                and new_billable != prev_is_billable
+                and (
+                    getattr(obj, "qbo_bill_id", None)
+                    or getattr(obj, "qbo_purchase_id", None)
+                )
+            ):
+                import asyncio as _asyncio_flip
+
+                from app.services.achat_qbo import flip_qbo_billable_now
+
+                _effective = (
+                    new_billable
+                    and getattr(obj, "invoiced_at", None) is None
+                )
+                _asyncio_flip.create_task(
+                    flip_qbo_billable_now(int(obj.id), _effective)
+                )
         if model is Punch:
             new_project_id = getattr(obj, "project_id", None)
             if new_project_id is not None and new_project_id != prev_project_id:

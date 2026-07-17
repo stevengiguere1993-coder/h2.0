@@ -377,17 +377,21 @@ async def import_into_facture(
         for ac, item in new_items:
             ac.invoiced_at = now
             ac.facture_item_id = item.id
-        # Dépense QB liée → re-push en fond pour passer sa ligne
-        # « NotBillable » : l'« imputation de dépense facturable » en
-        # attente disparaît côté QB (la refacturation, majoration incluse,
-        # est déjà sur CETTE facture — sinon double comptage à l'Invoice).
+        # Dépense QB liée → flip CIBLÉ de la case FACTURABLE en fond
+        # (NotBillable) : l'« imputation de dépense facturable » en attente
+        # disparaît côté QB (la refacturation, majoration incluse, est déjà
+        # sur CETTE facture — sinon double comptage à l'Invoice). Ciblé
+        # plutôt que re-push complet : fonctionne aussi pour les achats
+        # IMPORTÉS de QB (qbo_purchase_id seul) sans risque de doublon.
         import asyncio as _asyncio
 
-        from app.api.v1.endpoints.achat_qbo import autopush_achat
+        from app.services.achat_qbo import flip_qbo_billable_now
 
         for ac, _item in new_items:
             if ac.qbo_bill_id or ac.qbo_purchase_id:
-                _asyncio.create_task(autopush_achat(int(ac.id)))
+                _asyncio.create_task(
+                    flip_qbo_billable_now(int(ac.id), False)
+                )
 
     await db.flush()
     # Regroupe les lignes importées par type (service → extra → frais

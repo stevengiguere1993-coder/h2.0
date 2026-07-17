@@ -1221,6 +1221,86 @@ async def sync_achat_to_qbo(
     }
 
 
+async def set_qbo_billable_status(
+    db: AsyncSession, achat_id: int, billable: bool
+) -> Dict[str, Any]:
+    """Met à jour UNIQUEMENT le BillableStatus des lignes de la transaction
+    QB liée à l'achat (Purchase OU Bill), sans re-push complet.
+
+    Pourquoi ciblé : un achat IMPORTÉ de QB ne porte que `qbo_purchase_id`
+    — le re-push complet (sync_achat_to_qbo) le recréerait en Bill doublon
+    (d'où la garde safe_for_repush qui le SAUTE… et le décochage « à
+    refacturer » n'atteignait alors jamais QB). Ici on relit la transaction
+    telle quelle et on ne touche que le drapeau → l'« imputation de dépense
+    facturable » en attente apparaît (Billable) ou disparaît (NotBillable)
+    côté QB, sans jamais créer d'objet. Best-effort ; ne lève pas."""
+    qbo = get_qbo()
+    await qbo._load_refresh_from_db()
+    if not qbo.ready:
+        return {"skipped": "qbo_not_configured"}
+    achat = await _load_achat(db, achat_id)
+    if achat is None:
+        return {"skipped": "achat_introuvable"}
+    qbo_id = str(achat.qbo_purchase_id or achat.qbo_bill_id or "")
+    if not qbo_id:
+        return {"skipped": "aucun_lien_qb"}
+    status_str = "Billable" if billable else "NotBillable"
+
+    async def _patch(obj: Dict[str, Any]) -> bool:
+        changed = False
+        for line in obj.get("Line", []) or []:
+            for key in (
+                "AccountBasedExpenseLineDetail",
+                "ItemBasedExpenseLineDetail",
+            ):
+                d = line.get(key)
+                if isinstance(d, dict) and d.get("CustomerRef"):
+                    if d.get("BillableStatus") != status_str:
+                        d["BillableStatus"] = status_str
+                        changed = True
+        return changed
+
+    try:
+        try:
+            obj = await qbo.get_purchase(qbo_id)
+            kind = "purchase"
+        except QuickBooksError:
+            obj = await qbo.get_bill(qbo_id)
+            obj = obj.get("Bill") or obj
+            kind = "bill"
+        if not await _patch(obj):
+            return {"ok": True, "unchanged": True}
+        if kind == "purchase":
+            await qbo.update_purchase(obj)
+        else:
+            await qbo.update_bill(obj)
+        log.info(
+            "Achat %s : BillableStatus QB → %s (%s %s)",
+            achat_id, status_str, kind, qbo_id,
+        )
+        return {"ok": True, "qbo_id": qbo_id, "status": status_str}
+    except QuickBooksError as exc:
+        log.error(
+            "Achat %s : BillableStatus QB → %s ÉCHOUÉ : %s",
+            achat_id, status_str, exc,
+        )
+        return {"error": str(exc)[:200]}
+
+
+async def flip_qbo_billable_now(achat_id: int, billable: bool) -> None:
+    """Wrapper d'arrière-plan (session fraîche) pour set_qbo_billable_status
+    — déclenché au (dé)cochage « à refacturer » dans Kratos et à la
+    refacturation (import sur facture)."""
+    try:
+        from app.db.session import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            await set_qbo_billable_status(db, achat_id, billable)
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("flip_qbo_billable_now %s: %s", achat_id, exc)
+
+
 async def push_bill_payment_to_qbo(
     db: AsyncSession, achat_id: int
 ) -> Dict[str, Any]:

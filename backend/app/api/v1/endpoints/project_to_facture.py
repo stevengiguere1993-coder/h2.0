@@ -525,16 +525,19 @@ async def convert_project_to_facture(
         for ac, item in new_items:
             ac.invoiced_at = now
             ac.facture_item_id = item.id
-        # Dépense QB liée → re-push en fond : ligne « NotBillable » côté QB
-        # (l'imputation de dépense facturable en attente disparaît — la
-        # refacturation majorée est déjà sur la facture Kratos).
+        # Dépense QB liée → flip CIBLÉ de la case FACTURABLE (NotBillable)
+        # en fond : l'imputation de dépense facturable en attente disparaît
+        # (la refacturation majorée est déjà sur la facture Kratos). Ciblé
+        # = fonctionne aussi pour les achats importés de QB, sans doublon.
         import asyncio as _asyncio
 
-        from app.api.v1.endpoints.achat_qbo import autopush_achat
+        from app.services.achat_qbo import flip_qbo_billable_now
 
         for ac, _item in new_items:
             if ac.qbo_bill_id or ac.qbo_purchase_id:
-                _asyncio.create_task(autopush_achat(int(ac.id)))
+                _asyncio.create_task(
+                    flip_qbo_billable_now(int(ac.id), False)
+                )
 
     await db.flush()
     # Recompute totaux facture depuis les items qu'on vient de créer
