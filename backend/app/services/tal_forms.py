@@ -75,6 +75,9 @@ class TalContext:
     bail_electricite_inclus: bool = False
     bail_internet_inclus: bool = False
 
+    # Dépôt de garantie (trousse_bail)
+    depot_garantie: Optional[float] = None
+
     # Modifications proposées (avis_modification + sommaire_bail)
     nouveau_loyer: Optional[float] = None
     nouvelle_date_debut: Optional[date] = None
@@ -874,7 +877,118 @@ def _build_reponse_cession(ctx: TalContext, styles: dict) -> list:
     return flow
 
 
+def _build_trousse_bail(ctx: TalContext, styles: dict) -> list:
+    """Fiche de données à REPORTER dans le bail électronique officiel du
+    TAL (tal.gouv.qc.ca/fr/bail-electronique, 2,99 $ + tx) — le formulaire
+    de bail est obligatoire et protégé, on ne le reproduit pas ; on
+    prépare tout pour le remplir en 2 minutes."""
+    flow: list = []
+    flow.extend(_header_block(ctx, styles))
+    flow.append(Paragraph("TROUSSE BAIL — DONNÉES POUR LE BAIL TAL", styles["title"]))
+
+    flow.append(
+        Paragraph(
+            (
+                "Toutes les informations ci-dessous sont prêtes à être "
+                "reportées dans le <b>bail électronique officiel</b> du "
+                "Tribunal administratif du logement "
+                "(tal.gouv.qc.ca → Bail électronique, 2,99 $ + tx). Le "
+                "formulaire de bail est obligatoire et protégé par droit "
+                "d'auteur — cette trousse ne le remplace pas."
+            ),
+            styles["small"],
+        )
+    )
+    flow.append(Spacer(1, 0.3 * cm))
+
+    inclusions: list[str] = []
+    if ctx.bail_chauffage_inclus:
+        inclusions.append("chauffage")
+    if ctx.bail_eau_chaude_inclus:
+        inclusions.append("eau chaude")
+    if ctx.bail_electricite_inclus:
+        inclusions.append("électricité")
+    if ctx.bail_internet_inclus:
+        inclusions.append("Internet")
+    inclusions_str = ", ".join(inclusions) if inclusions else "Aucune"
+
+    def _section(titre: str, rows: list[list[str]]) -> None:
+        flow.append(Paragraph(titre, styles["h2"]))
+        t = Table(rows, colWidths=[6 * cm, 11 * cm])
+        t.setStyle(
+            TableStyle(
+                [
+                    ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                    ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f7f7f7")),
+                    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
+                    ("FONTSIZE", (0, 0), (-1, -1), 10),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ]
+            )
+        )
+        flow.append(t)
+
+    _section(
+        "A. Le locateur",
+        [
+            ["Nom", _fmt_or(ctx.locateur_nom)],
+            ["Adresse", _fmt_or(ctx.locateur_adresse)],
+            ["Téléphone", _fmt_or(ctx.locateur_telephone)],
+            ["Courriel", _fmt_or(ctx.locateur_courriel)],
+        ],
+    )
+    _section(
+        "B. Le locataire",
+        [
+            ["Nom", _fmt_or(ctx.locataire_nom)],
+            ["Courriel (signature électronique)", _fmt_or(ctx.locataire_email)],
+        ],
+    )
+    _section(
+        "C. Le logement loué",
+        [
+            ["Adresse", _fmt_adresse_complete(ctx)],
+        ],
+    )
+    _section(
+        "D. Durée du bail",
+        [
+            ["Début", _fmt_date(ctx.bail_date_debut)],
+            ["Fin", _fmt_date(ctx.bail_date_fin)],
+        ],
+    )
+    _section(
+        "E. Loyer",
+        [
+            ["Loyer mensuel", _fmt_money(ctx.bail_loyer_mensuel)],
+            ["Services inclus", inclusions_str],
+            [
+                "Dépôt de garantie (le cas échéant)",
+                _fmt_money(ctx.depot_garantie)
+                if ctx.depot_garantie is not None
+                else "Aucun",
+            ],
+        ],
+    )
+    flow.append(Spacer(1, 0.4 * cm))
+    flow.append(
+        Paragraph(
+            (
+                "Document interne généré par h2.0 — vérifier chaque valeur "
+                "avant de conclure le bail officiel."
+            ),
+            styles["small"],
+        )
+    )
+    return flow
+
+
 _BUILDERS = {
+    "trousse_bail": _build_trousse_bail,
     "avis_modification": _build_avis_modification,
     "avis_fin_bail": _build_avis_fin_bail,
     "rappel_paiement": _build_rappel_paiement,

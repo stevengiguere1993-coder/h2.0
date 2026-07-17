@@ -61,6 +61,11 @@ def _require_volet(user: CurrentUser) -> None:
 
 
 _TAL_LABELS = {
+    "trousse_bail": (
+        "Trousse bail (données pour le TAL)",
+        "Toutes les données du bail prêtes à reporter dans le bail "
+        "électronique officiel du TAL (tal.gouv.qc.ca, 2,99 $).",
+    ),
     "avis_modification": (
         "Avis de modification du bail",
         "Avis officiel au locataire — hausse de loyer ou autre modification.",
@@ -153,6 +158,11 @@ async def _build_ctx_from_bail(
         bail_eau_chaude_inclus=bool(bail.eau_chaude_inclus),
         bail_electricite_inclus=bool(bail.electricite_inclus),
         bail_internet_inclus=bool(bail.internet_inclus),
+        depot_garantie=(
+            float(bail.depot_garantie)
+            if bail.depot_garantie is not None
+            else None
+        ),
         nouveau_loyer=params.nouveau_loyer,
         nouvelle_date_debut=params.nouvelle_date_debut
         or (bail.date_fin + timedelta(days=1) if bail.date_fin else None),
