@@ -323,6 +323,13 @@ class EvaluationCreate(EvaluationBase):
 
 
 class EvaluationUpdate(BaseModel):
+    # Tous les champs éditables (retour Phil 2026-07-16 : « permets-moi
+    # de modifier une évaluation ») — exclude_unset côté endpoint.
+    kind: Optional[str] = Field(default=None, max_length=16)
+    valeur: Optional[float] = Field(default=None, ge=0)
+    date_evaluation: Optional[date] = None
+    source: Optional[str] = Field(default=None, max_length=128)
+    notes: Optional[str] = None
     is_reference: Optional[bool] = None
 
 
