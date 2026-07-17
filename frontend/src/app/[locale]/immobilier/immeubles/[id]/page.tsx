@@ -912,6 +912,7 @@ export default function ImmeubleDetailPage({
               baux={baux}
               logements={logements}
               hypotheques={hypotheques}
+              evaluations={evaluations}
             />
           ) : null}
           {tab === "logements" ? (
@@ -1542,18 +1543,72 @@ function Section({
   );
 }
 
-type AlertesConfig = {
-  bail_fin_enabled: boolean;
-  bail_fin_jours: number;
-  terme_hypo_enabled: boolean;
-  terme_hypo_mois: number;
+type AlerteRegle = {
+  type: string;
+  enabled: boolean;
+  seuil: number | null;
 };
 
+type AlertesConfig = { regles: AlerteRegle[] };
+
+// Catalogue des alertes disponibles — miroir du backend. `unite` porte
+// le libellé du seuil (null = alerte on/off sans seuil).
+const ALERTES_CATALOGUE: {
+  type: string;
+  label: string;
+  unite: "jours" | "mois" | null;
+  defaut: number | null;
+  min: number;
+  max: number;
+}[] = [
+  {
+    type: "bail_fin",
+    label: "Baux qui échoient bientôt",
+    unite: "jours",
+    defaut: 90,
+    min: 1,
+    max: 730
+  },
+  {
+    type: "terme_hypo",
+    label: "Fins de terme hypothécaire",
+    unite: "mois",
+    defaut: 6,
+    min: 1,
+    max: 36
+  },
+  {
+    type: "logement_vacant",
+    label: "Logements vacants",
+    unite: null,
+    defaut: null,
+    min: 0,
+    max: 0
+  },
+  {
+    type: "bail_propose",
+    label: "Baux en attente de signature",
+    unite: null,
+    defaut: null,
+    min: 0,
+    max: 0
+  },
+  {
+    type: "evaluation_agee",
+    label: "Évaluation à mettre à jour",
+    unite: "mois",
+    defaut: 24,
+    min: 6,
+    max: 120
+  }
+];
+
 const ALERTES_DEFAUTS: AlertesConfig = {
-  bail_fin_enabled: true,
-  bail_fin_jours: 90,
-  terme_hypo_enabled: true,
-  terme_hypo_mois: 6
+  regles: ALERTES_CATALOGUE.map((c) => ({
+    type: c.type,
+    enabled: c.type === "bail_fin" || c.type === "terme_hypo",
+    seuil: c.defaut
+  }))
 };
 
 function OverviewTab({
@@ -1562,7 +1617,8 @@ function OverviewTab({
   logementsCount,
   baux,
   logements,
-  hypotheques
+  hypotheques,
+  evaluations
 }: {
   immeuble: Immeuble;
   financials: Financials | null;
@@ -1570,12 +1626,13 @@ function OverviewTab({
   baux: Bail[] | null;
   logements: Logement[] | null;
   hypotheques: Hypotheque[] | null;
+  evaluations: Evaluation[] | null;
 }) {
   const logMap = new Map((logements || []).map((l) => [l.id, l.numero]));
   const gestionExterne = !!immeuble.gestion_externe;
 
-  // Seuils configurables des alertes (globaux au pôle) — engrenage de
-  // la section « À surveiller » (retour Phil 2026-07-14).
+  // Alertes configurables (globales au pôle) — engrenage de la section
+  // « À surveiller » : catalogue, ajout/retrait, seuils (v2).
   const [alertesCfg, setAlertesCfg] =
     useState<AlertesConfig>(ALERTES_DEFAUTS);
   const [showAlertesCfg, setShowAlertesCfg] = useState(false);
@@ -1584,8 +1641,9 @@ function OverviewTab({
     let cancelled = false;
     authedFetch("/api/v1/immobilier/alertes-config")
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (!cancelled && d) setAlertesCfg({ ...ALERTES_DEFAUTS, ...d });
+      .then((d: AlertesConfig | null) => {
+        if (!cancelled && d && Array.isArray(d.regles) && d.regles.length)
+          setAlertesCfg(d);
       })
       .catch(() => {
         /* défauts conservés */
@@ -1595,30 +1653,71 @@ function OverviewTab({
     };
   }, []);
 
-  // Baux actifs qui échoient d'ici N jours (configurable). En gestion
-  // externe, les baux sont suivis par la compagnie — pas d'alerte ici.
+  const regle = (t: string): AlerteRegle | undefined =>
+    alertesCfg.regles.find((r) => r.type === t && r.enabled);
+
+  // Baux actifs qui échoient d'ici N jours. En gestion externe, les
+  // baux sont suivis par la compagnie — pas d'alerte ici.
+  const regleBail = regle("bail_fin");
+  const seuilBailJours = regleBail?.seuil ?? 90;
   const bauxBientot = (
-    gestionExterne || !alertesCfg.bail_fin_enabled ? [] : baux || []
+    gestionExterne || !regleBail ? [] : baux || []
   ).filter((b) => {
     if (b.status !== "actif" || !b.date_fin) return false;
     const jours =
       (new Date(`${b.date_fin}T00:00:00`).getTime() - Date.now()) /
       (1000 * 60 * 60 * 24);
-    return jours >= 0 && jours < alertesCfg.bail_fin_jours;
+    return jours >= 0 && jours < seuilBailJours;
   });
 
   // Hypothèques actives dont le terme finit dans moins de N mois.
-  const termesBientot = (
-    alertesCfg.terme_hypo_enabled ? hypotheques || [] : []
-  ).filter((h) => {
+  const regleHypo = regle("terme_hypo");
+  const seuilHypoMois = regleHypo?.seuil ?? 6;
+  const termesBientot = (regleHypo ? hypotheques || [] : []).filter((h) => {
     if (h.status !== "active" || !h.date_fin_terme) return false;
     const mois =
       (new Date(`${h.date_fin_terme}T00:00:00`).getTime() - Date.now()) /
       (1000 * 60 * 60 * 24 * 30.44);
-    return mois < alertesCfg.terme_hypo_mois;
+    return mois < seuilHypoMois;
   });
 
-  const hasAlerts = bauxBientot.length > 0 || termesBientot.length > 0;
+  // Logements vacants (statut manuel — pertinent même en gestion externe).
+  const logementsVacants = regle("logement_vacant")
+    ? (logements || []).filter((l) => l.status === "vacant")
+    : [];
+
+  // Baux proposés (envoyés mais pas encore signés/actifs).
+  const bauxProposes = regle("bail_propose")
+    ? (baux || []).filter((b) => b.status === "propose")
+    : [];
+
+  // Aucune évaluation depuis N mois (ou aucune du tout).
+  const regleEval = regle("evaluation_agee");
+  let evalAgeeMsg: string | null = null;
+  if (regleEval && evaluations !== null) {
+    const seuilMois = regleEval.seuil ?? 24;
+    const derniere = [...(evaluations || [])].sort((a, b) =>
+      b.date_evaluation.localeCompare(a.date_evaluation)
+    )[0];
+    if (!derniere) {
+      evalAgeeMsg = "Aucune évaluation enregistrée pour cet immeuble.";
+    } else {
+      const ageMois =
+        (Date.now() -
+          new Date(`${derniere.date_evaluation}T00:00:00`).getTime()) /
+        (1000 * 60 * 60 * 24 * 30.44);
+      if (ageMois > seuilMois)
+        evalAgeeMsg = `Dernière évaluation le ${derniere.date_evaluation} — plus de ${seuilMois} mois.`;
+    }
+  }
+
+  const hasAlerts =
+    bauxBientot.length > 0 ||
+    termesBientot.length > 0 ||
+    logementsVacants.length > 0 ||
+    bauxProposes.length > 0 ||
+    evalAgeeMsg != null;
+  const toutDesactive = alertesCfg.regles.every((r) => !r.enabled);
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
@@ -1725,9 +1824,8 @@ function OverviewTab({
           {!hasAlerts ? (
             <p className="text-xs text-white/40">
               Rien à signaler
-              {!alertesCfg.bail_fin_enabled &&
-              !alertesCfg.terme_hypo_enabled
-                ? " — toutes les alertes sont désactivées (engrenage pour les réactiver)."
+              {toutDesactive
+                ? " — toutes les alertes sont désactivées (engrenage pour en ajouter)."
                 : "."}
             </p>
           ) : (
@@ -1738,7 +1836,7 @@ function OverviewTab({
                     <AlertTriangle className="h-4 w-4 flex-shrink-0" />
                     {bauxBientot.length}{" "}
                     {bauxBientot.length > 1 ? "baux échoient" : "bail échoit"}{" "}
-                    d&apos;ici {alertesCfg.bail_fin_jours} jours
+                    d&apos;ici {regleBail?.seuil ?? 90} jours
                   </p>
                   {/* text-amber-200 SANS alpha : la variante /80 échappe au
                       remap du thème clair → texte illisible (retour Phil). */}
@@ -1763,7 +1861,7 @@ function OverviewTab({
                   <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
                     <AlertTriangle className="h-4 w-4 flex-shrink-0" />
                     Fin de terme hypothécaire dans moins de{" "}
-                    {alertesCfg.terme_hypo_mois} mois
+                    {regleHypo?.seuil ?? 6} mois
                   </p>
                   {/* text-amber-200 SANS alpha : la variante /80 échappe au
                       remap du thème clair → texte illisible (retour Phil). */}
@@ -1782,6 +1880,68 @@ function OverviewTab({
                       </li>
                     ))}
                   </ul>
+                </div>
+              ) : null}
+              {logementsVacants.length > 0 ? (
+                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+                  <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                    {logementsVacants.length} logement
+                    {logementsVacants.length > 1 ? "s" : ""} vacant
+                    {logementsVacants.length > 1 ? "s" : ""}
+                  </p>
+                  <ul className="mt-2 space-y-1 text-xs text-amber-200 opacity-90">
+                    {logementsVacants.map((l) => (
+                      <li
+                        key={l.id}
+                        className="flex items-center justify-between gap-3"
+                      >
+                        <span>Logement {l.numero}</span>
+                        <span className="font-mono">
+                          {l.loyer_demande != null
+                            ? fmtCurrency(l.loyer_demande)
+                            : "—"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {bauxProposes.length > 0 ? (
+                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+                  <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                    {bauxProposes.length} bail
+                    {bauxProposes.length > 1 ? "x" : ""} en attente de
+                    signature
+                  </p>
+                  <ul className="mt-2 space-y-1 text-xs text-amber-200 opacity-90">
+                    {bauxProposes.map((b) => (
+                      <li
+                        key={b.id}
+                        className="flex items-center justify-between gap-3"
+                      >
+                        <span>
+                          Logement{" "}
+                          {logMap.get(b.logement_id) || `#${b.logement_id}`}
+                        </span>
+                        <span className="font-mono">
+                          début {b.date_debut}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {evalAgeeMsg ? (
+                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+                  <p className="flex items-center gap-2 text-sm font-semibold text-amber-200">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                    Évaluation à mettre à jour
+                  </p>
+                  <p className="mt-2 text-xs text-amber-200 opacity-90">
+                    {evalAgeeMsg}
+                  </p>
                 </div>
               ) : null}
             </div>
@@ -1812,32 +1972,65 @@ function AlertesCfgModal({
   onClose: () => void;
   onSaved: (cfg: AlertesConfig) => void;
 }) {
-  const [bailOn, setBailOn] = useState(initial.bail_fin_enabled);
-  const [bailJours, setBailJours] = useState(String(initial.bail_fin_jours));
-  const [hypoOn, setHypoOn] = useState(initial.terme_hypo_enabled);
-  const [hypoMois, setHypoMois] = useState(String(initial.terme_hypo_mois));
+  // Seuils en texte, indexés par type — les règles actives s'affichent
+  // en lignes (seuil modifiable + retrait), les inactives vivent dans
+  // « + Ajouter une alerte ».
+  const [regles, setRegles] = useState<AlerteRegle[]>(() =>
+    ALERTES_CATALOGUE.map(
+      (c) =>
+        initial.regles.find((r) => r.type === c.type) ?? {
+          type: c.type,
+          enabled: false,
+          seuil: c.defaut
+        }
+    )
+  );
+  const [seuils, setSeuils] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      ALERTES_CATALOGUE.map((c) => {
+        const r = initial.regles.find((x) => x.type === c.type);
+        return [c.type, String(r?.seuil ?? c.defaut ?? "")];
+      })
+    )
+  );
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const jours = Number(bailJours);
-  const mois = Number(hypoMois);
-  const valid =
-    Number.isInteger(jours) &&
-    jours >= 1 &&
-    jours <= 730 &&
-    Number.isInteger(mois) &&
-    mois >= 1 &&
-    mois <= 36;
+  const catalogue = (t: string) =>
+    ALERTES_CATALOGUE.find((c) => c.type === t);
+  const actives = regles.filter((r) => r.enabled);
+  const inactives = regles.filter((r) => !r.enabled);
+
+  function seuilValide(r: AlerteRegle): boolean {
+    const c = catalogue(r.type);
+    if (!c || c.unite == null) return true;
+    const n = Number(seuils[r.type]);
+    return Number.isInteger(n) && n >= c.min && n <= c.max;
+  }
+  const valid = actives.every(seuilValide);
+
+  function setEnabled(type: string, enabled: boolean) {
+    setRegles((prev) =>
+      prev.map((r) => (r.type === type ? { ...r, enabled } : r))
+    );
+  }
 
   async function save() {
     if (!valid) return;
     setSaving(true);
     setErr(null);
     const cfg: AlertesConfig = {
-      bail_fin_enabled: bailOn,
-      bail_fin_jours: jours,
-      terme_hypo_enabled: hypoOn,
-      terme_hypo_mois: mois
+      regles: regles.map((r) => {
+        const c = catalogue(r.type);
+        return {
+          type: r.type,
+          enabled: r.enabled,
+          seuil:
+            c && c.unite != null
+              ? Number(seuils[r.type]) || c.defaut
+              : null
+        };
+      })
     };
     try {
       const res = await authedFetch("/api/v1/immobilier/alertes-config", {
@@ -1848,7 +2041,8 @@ function AlertesCfgModal({
         throw new Error(
           (await res.text()).slice(0, 200) || `HTTP ${res.status}`
         );
-      onSaved(cfg);
+      // On garde la version normalisée par le serveur (clamp des seuils).
+      onSaved((await res.json()) as AlertesConfig);
     } catch (e) {
       setErr(`Enregistrement échoué : ${(e as Error).message}`);
     } finally {
@@ -1878,51 +2072,74 @@ function AlertesCfgModal({
             tous les immeubles.
           </p>
 
-          <div className={rowCls}>
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-white">
-              <input
-                type="checkbox"
-                checked={bailOn}
-                onChange={(e) => setBailOn(e.target.checked)}
-                className="h-4 w-4 accent-accent-500"
-              />
-              Baux qui échoient bientôt
-            </label>
-            <span className="flex items-center gap-2 text-xs text-white/60">
-              d&apos;ici
-              <input
-                inputMode="numeric"
-                value={bailJours}
-                onChange={(e) => setBailJours(e.target.value)}
-                disabled={!bailOn}
-                className={`${numCls} disabled:opacity-40`}
-              />
-              jours
-            </span>
-          </div>
+          {actives.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-brand-700 px-4 py-3 text-xs text-white/40">
+              Aucune alerte active — ajoutes-en une ci-dessous.
+            </p>
+          ) : (
+            actives.map((r) => {
+              const c = catalogue(r.type);
+              if (!c) return null;
+              return (
+                <div key={r.type} className={rowCls}>
+                  <span className="text-sm text-white">{c.label}</span>
+                  <span className="flex items-center gap-2 text-xs text-white/60">
+                    {c.unite != null ? (
+                      <>
+                        d&apos;ici
+                        <input
+                          inputMode="numeric"
+                          value={seuils[r.type] ?? ""}
+                          onChange={(e) =>
+                            setSeuils((prev) => ({
+                              ...prev,
+                              [r.type]: e.target.value
+                            }))
+                          }
+                          className={`${numCls} ${
+                            seuilValide(r) ? "" : "border-rose-500/60"
+                          }`}
+                        />
+                        {c.unite}
+                      </>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => setEnabled(r.type, false)}
+                      className="btn-ghost btn-xs"
+                      title="Retirer cette alerte"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </span>
+                </div>
+              );
+            })
+          )}
 
-          <div className={rowCls}>
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-white">
-              <input
-                type="checkbox"
-                checked={hypoOn}
-                onChange={(e) => setHypoOn(e.target.checked)}
-                className="h-4 w-4 accent-accent-500"
-              />
-              Fins de terme hypothécaire
-            </label>
-            <span className="flex items-center gap-2 text-xs text-white/60">
-              d&apos;ici
-              <input
-                inputMode="numeric"
-                value={hypoMois}
-                onChange={(e) => setHypoMois(e.target.value)}
-                disabled={!hypoOn}
-                className={`${numCls} disabled:opacity-40`}
-              />
-              mois
-            </span>
-          </div>
+          {inactives.length > 0 ? (
+            <div className="rounded-xl border border-dashed border-brand-700 px-4 py-3">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-white/40">
+                <Plus className="mr-1 inline h-3 w-3" /> Ajouter une alerte
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {inactives.map((r) => {
+                  const c = catalogue(r.type);
+                  if (!c) return null;
+                  return (
+                    <button
+                      key={r.type}
+                      type="button"
+                      onClick={() => setEnabled(r.type, true)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 px-2.5 py-1.5 text-xs font-semibold text-white/70 transition hover:border-accent-500 hover:text-white"
+                    >
+                      <Plus className="h-3 w-3" /> {c.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
 
           {err ? (
             <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
