@@ -207,7 +207,7 @@ async def run_qbo_nets() -> Dict[str, Any]:
         from app.integrations.quickbooks import get_qbo as _get_qbo2
         from app.models.achat import Achat as _Achat2
         from app.services.achat_qbo import (
-            sync_achat_to_qbo as _sync_achat2,
+            set_qbo_billable_status as _set_billable2,
         )
 
         _KEY2 = "achat_notbillable_refactures_v1"
@@ -246,10 +246,15 @@ async def run_qbo_nets() -> Dict[str, Any]:
                 ok2 = ko2 = 0
                 for aid in aids2:
                     try:
+                        # Flip CIBLÉ du drapeau (pas de re-push complet :
+                        # zéro risque de doublon pour un achat importé).
                         async with AsyncSessionLocal() as s:
-                            await _sync_achat2(s, aid)
+                            res2 = await _set_billable2(s, aid, False)
                             await s.commit()
-                        ok2 += 1
+                        if res2.get("error"):
+                            ko2 += 1
+                        else:
+                            ok2 += 1
                     except Exception as exc:  # noqa: BLE001
                         ko2 += 1
                         log.error(
