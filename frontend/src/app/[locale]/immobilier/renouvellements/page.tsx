@@ -19,7 +19,9 @@ type RenouvellementOverview = {
   bail_id: number;
   immeuble_id: number;
   immeuble_name: string;
+  logement_id?: number | null;
   logement_numero: string;
+  locataire_id?: number | null;
   locataire_nom: string;
   locataire_email: string | null;
   bail_date_fin: string;
@@ -277,18 +279,43 @@ export default function RenouvellementsPage() {
                       <Link
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         href={`/immobilier/immeubles/${r.immeuble_id}` as any}
-                        className="block"
+                        className="block font-bold text-white hover:text-accent-500"
+                        title="Ouvrir la fiche de l'immeuble"
                       >
-                        <div className="font-bold text-white">
-                          {r.immeuble_name}
-                        </div>
-                        <div className="text-[11px] font-mono text-white/50">
-                          {r.logement_numero}
-                        </div>
+                        {r.immeuble_name}
                       </Link>
+                      {r.logement_id != null ? (
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={
+                            `/immobilier/logements/${r.logement_id}` as any
+                          }
+                          className="text-[11px] font-mono text-accent-500 hover:underline"
+                          title="Ouvrir la fiche du logement"
+                        >
+                          {r.logement_numero}
+                        </Link>
+                      ) : (
+                        <span className="text-[11px] font-mono text-white/50">
+                          {r.logement_numero}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5">
-                      <div className="text-white">{r.locataire_nom}</div>
+                      {r.locataire_id != null ? (
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={
+                            `/immobilier/locataires/${r.locataire_id}` as any
+                          }
+                          className="text-accent-500 hover:underline"
+                          title="Ouvrir la fiche du locataire"
+                        >
+                          {r.locataire_nom}
+                        </Link>
+                      ) : (
+                        <div className="text-white">{r.locataire_nom}</div>
+                      )}
                       <div className="text-[10px] text-white/40">
                         {r.locataire_email || "(pas d'email)"}
                       </div>

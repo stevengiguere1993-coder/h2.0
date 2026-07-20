@@ -915,7 +915,6 @@ export function BailSignature({ bailId }: { bailId: number }) {
       </button>
       {open ? (
         <DocumentsModal
-          bailId={bailId}
           docs={docs || []}
           onClose={() => setOpen(false)}
           onChanged={() => void load()}
@@ -941,18 +940,17 @@ function fmtDateTime(iso: string | null): string {
   }
 }
 
-/** Bibliothèque des documents d'un bail : voir, modifier (régénérer),
- * envoyer pour signature, supprimer — avec les états de suivi. */
-function DocumentsModal({
-  bailId,
+/** Liste de documents RÉUTILISABLE (modale du bail + sections Documents
+ * des fiches locataire/logement) : voir, modifier (nouvelle version),
+ * envoyer (signature en ligne ou courriel PDF joint), supprimer. */
+export function DocsList({
   docs,
-  onClose,
-  onChanged
+  onChanged,
+  emptyText
 }: {
-  bailId: number;
   docs: BailDocument[];
-  onClose: () => void;
   onChanged: () => void;
+  emptyText?: string;
 }) {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -1037,26 +1035,8 @@ function DocumentsModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
-      <div className="my-8 w-full max-w-2xl rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
-            Documents du bail
-          </h2>
-          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="space-y-3 p-5">
-          <p className="text-xs text-white/50">
-            Chaque génération est conservée ici. « Modifier » rouvre le
-            formulaire prérempli et crée une nouvelle version ; « Envoyer »
-            transmet le document au locataire — signature en ligne avec
-            preuve d&apos;ouverture, ou simple courriel avec PDF joint pour
-            les avis sans signature (retard, accès).
-          </p>
-
-          {flash ? (
+    <div className="space-y-3">
+      {flash ? (
             <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
               {flash}
             </p>
@@ -1069,7 +1049,8 @@ function DocumentsModal({
 
           {docs.length === 0 ? (
             <p className="rounded-xl border border-dashed border-brand-700 px-4 py-3 text-xs text-white/40">
-              Aucun document — utilise « Générer ▾ » pour en créer un.
+              {emptyText ||
+                "Aucun document — utilise « Générer ▾ » pour en créer un."}
             </p>
           ) : (
             <ul className="divide-y divide-brand-800 rounded-xl border border-brand-800">
@@ -1170,6 +1151,50 @@ function DocumentsModal({
             </ul>
           )}
 
+      {editDoc && editDoc.bail_id != null ? (
+        <TalAvisModal
+          bailId={editDoc.bail_id}
+          code={editDoc.type}
+          initialParams={editDoc.params}
+          onClose={() => setEditDoc(null)}
+          onGenerated={onChanged}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** Bibliothèque des documents d'un bail (modale ouverte par le bouton
+ * « Envoyer pour signature »). */
+function DocumentsModal({
+  docs,
+  onClose,
+  onChanged
+}: {
+  docs: BailDocument[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+      <div className="my-8 w-full max-w-2xl rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
+            Documents du bail
+          </h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="space-y-3 p-5">
+          <p className="text-xs text-white/50">
+            Chaque génération est conservée ici. « Modifier » rouvre le
+            formulaire prérempli et crée une nouvelle version ; « Envoyer »
+            transmet le document au locataire — signature en ligne avec
+            preuve d&apos;ouverture, ou simple courriel avec PDF joint pour
+            les avis sans signature (retard, accès).
+          </p>
+          <DocsList docs={docs} onChanged={onChanged} />
           <div className="flex items-center justify-end border-t border-brand-800 pt-3">
             <button
               type="button"
@@ -1181,15 +1206,90 @@ function DocumentsModal({
           </div>
         </div>
       </div>
-      {editDoc ? (
-        <TalAvisModal
-          bailId={bailId}
-          code={editDoc.type}
-          initialParams={editDoc.params}
-          onClose={() => setEditDoc(null)}
-          onGenerated={onChanged}
-        />
-      ) : null}
     </div>
+  );
+}
+
+/** Section « Documents » des fiches LOCATAIRE et LOGEMENT (retour Phil
+ * 2026-07-20) : TOUT ce qui a été généré/envoyé (avis TAL, DPA, lettres…)
+ * au même endroit, avec la génération par bail HORS tableau (le menu
+ * « Générer ▾ » n'est plus coupé par un conteneur défilant). */
+export function DocumentsSection({
+  locataireId,
+  logementId,
+  bails
+}: {
+  locataireId?: number;
+  logementId?: number;
+  /** Baux depuis lesquels générer un document (libellé affiché si >1). */
+  bails: { id: number; label: string }[];
+}) {
+  const [docs, setDocs] = useState<BailDocument[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const url =
+      locataireId != null
+        ? `/api/v1/immobilier/locataires/${locataireId}/documents`
+        : `/api/v1/immobilier/logements/${logementId}/documents`;
+    try {
+      const r = await authedFetch(url);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setDocs((await r.json()) as BailDocument[]);
+    } catch (e) {
+      setErr(`Documents : ${(e as Error).message}`);
+    }
+  }, [locataireId, logementId]);
+
+  useEffect(() => {
+    void load();
+    // Toute génération (même page ou ailleurs) rafraîchit la section.
+    const handler = () => void load();
+    window.addEventListener(DOCS_EVENT, handler);
+    return () => window.removeEventListener(DOCS_EVENT, handler);
+  }, [load]);
+
+  return (
+    <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Documents
+        </h2>
+        <span className="text-[11px] text-white/40">
+          {docs ? `${docs.length} document${docs.length > 1 ? "s" : ""}` : ""}
+        </span>
+        <span className="ml-auto flex flex-wrap items-center gap-2">
+          {bails.map((b) => (
+            <span key={b.id} className="inline-flex items-center gap-1.5">
+              {bails.length > 1 ? (
+                <span className="text-[11px] text-white/50">{b.label}</span>
+              ) : null}
+              <TalFormDropdown bailId={b.id} />
+            </span>
+          ))}
+          {bails.length === 0 ? (
+            <span className="text-[11px] text-white/40">
+              Aucun bail — crée un bail pour générer des avis.
+            </span>
+          ) : null}
+        </span>
+      </div>
+      {err ? (
+        <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {err}
+        </p>
+      ) : null}
+      {docs === null ? (
+        <p className="flex items-center gap-2 text-xs text-white/50">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+        </p>
+      ) : (
+        <DocsList
+          docs={docs}
+          onChanged={() => void load()}
+          emptyText="Aucun document généré — utilise « Générer ▾ » ci-dessus (avis TAL, lettres) ou la section DPA."
+        />
+      )}
+    </section>
   );
 }

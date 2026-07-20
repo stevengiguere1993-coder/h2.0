@@ -22,6 +22,7 @@ import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import {
   BailSignature,
+  DocumentsSection,
   TalFormDropdown
 } from "@/components/immobilier/tal-avis";
 import { ImmobilierTopbar } from "../../layout";
@@ -790,6 +791,16 @@ export default function LogementDetailPage({
                 </div>
               )}
             </section>
+
+            {/* Documents — tout ce qui a été généré pour les baux de ce
+                logement (avis TAL, lettres…), retour Phil 2026-07-20. */}
+            <DocumentsSection
+              logementId={logementId}
+              bails={(bailActif ? [bailActif] : []).map((b) => ({
+                id: b.id,
+                label: b.locataire?.full_name || "Bail actif"
+              }))}
+            />
 
             {/* (d) Fluctuation du loyer */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">

@@ -29,6 +29,7 @@ import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import {
   BailSignature,
+  DocumentsSection,
   TalFormDropdown
 } from "@/components/immobilier/tal-avis";
 import { ImmobilierTopbar } from "../../layout";
@@ -524,6 +525,48 @@ export default function LocataireDetailPage({
     }
   }
 
+  // Suppression du locataire — bloquée par ses baux (RESTRICT) sauf
+  // confirmation explicite (force=true supprime baux + paiements +
+  // documents en cascade). Retour Phil 2026-07-20.
+  const [deleting, setDeleting] = useState(false);
+
+  async function supprimerLocataire() {
+    if (!loc) return;
+    if (!window.confirm(`Supprimer le locataire « ${loc.full_name} » ?`))
+      return;
+    setDeleting(true);
+    setError(null);
+    try {
+      let r = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataireId}`,
+        { method: "DELETE" }
+      );
+      if (r.status === 409) {
+        const detail = (await r.text()).slice(0, 300);
+        if (
+          !window.confirm(
+            `${detail.replace(/["{}]|detail:/g, "")}\n\nSupprimer QUAND MÊME le locataire ET tous ses baux, paiements et documents ? Action irréversible.`
+          )
+        ) {
+          setDeleting(false);
+          return;
+        }
+        r = await authedFetch(
+          `/api/v1/immobilier/locataires/${locataireId}?force=true`,
+          { method: "DELETE" }
+        );
+      }
+      if (!r.ok && r.status !== 204) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${r.status}`);
+      }
+      router.push("/immobilier/locataires" as never);
+    } catch (e) {
+      setError(`Suppression : ${(e as Error).message}`);
+      setDeleting(false);
+    }
+  }
+
   async function deleteCommunication(commId: number) {
     if (!window.confirm("Supprimer cette entrée du journal ?")) return;
     setCommErr(null);
@@ -636,6 +679,19 @@ export default function LocataireDetailPage({
                     <Download className="h-4 w-4" />
                   )}
                   État de compte
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void supprimerLocataire()}
+                  disabled={deleting}
+                  className="btn-outline-rose btn-sm disabled:opacity-50"
+                  title="Supprimer ce locataire"
+                >
+                  {deleting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
                 </button>
               </div>
             </header>
@@ -1096,6 +1152,19 @@ export default function LocataireDetailPage({
                 ) : null}
               </div>
             </section>
+
+            {/* Documents — TOUT ce qui a été généré/envoyé pour ce
+                locataire (avis TAL, DPA, lettres…), génération incluse
+                hors tableau (retour Phil 2026-07-20). */}
+            <DocumentsSection
+              locataireId={locataireId}
+              bails={(dossier?.baux || []).map((b) => ({
+                id: b.id,
+                label: `${b.immeuble_name}${
+                  b.logement_numero ? ` · ${b.logement_numero}` : ""
+                }`
+              }))}
+            />
 
             {/* Avis & renouvellements */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">

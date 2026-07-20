@@ -203,6 +203,16 @@ class LocataireRead(LocataireBase):
     updated_at: datetime
 
 
+class LocataireListItem(LocataireRead):
+    """Ligne de la page Locataires : + immeuble/logement du bail ACTIF
+    le plus récent (colonnes cliquables — retour Phil 2026-07-20)."""
+
+    immeuble_id: Optional[int] = None
+    immeuble_name: Optional[str] = None
+    logement_id: Optional[int] = None
+    logement_numero: Optional[str] = None
+
+
 # ─── Bail ───────────────────────────────────────────────────────────────
 
 

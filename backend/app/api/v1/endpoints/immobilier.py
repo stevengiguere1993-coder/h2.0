@@ -95,6 +95,7 @@ from app.schemas.immobilier import (
     LocataireCommunicationRead,
     LocataireCreate,
     LocataireDossier,
+    LocataireListItem,
     LocataireRead,
     LocataireUpdate,
     DossierBail,
@@ -1888,16 +1889,66 @@ async def logement_dossier(
 # ── Locataires ─────────────────────────────────────────────────────────
 
 
-@router.get("/locataires", response_model=List[LocataireRead])
+@router.get("/locataires", response_model=List[LocataireListItem])
 async def list_locataires(
     db: DBSession, user: CurrentUser, search: Optional[str] = None
-) -> List[LocataireRead]:
+) -> List[LocataireListItem]:
     _require_volet(user)
     q = select(Locataire).order_by(Locataire.full_name.asc())
     if search:
         q = q.where(Locataire.full_name.ilike(f"%{search}%"))
     rows = (await db.execute(q)).scalars().all()
-    return [LocataireRead.model_validate(r) for r in rows]
+
+    # Immeuble/logement du bail ACTIF le plus récent de chaque locataire
+    # (colonnes cliquables de la page Locataires).
+    habite: dict[int, tuple[Logement, Immeuble]] = {}
+    if rows:
+        baux_actifs = (
+            await db.execute(
+                select(Bail)
+                .where(
+                    Bail.locataire_id.in_([r.id for r in rows]),
+                    Bail.status == BailStatus.ACTIF.value,
+                )
+                .order_by(Bail.date_debut.asc())
+            )
+        ).scalars().all()
+        log_ids = {b.logement_id for b in baux_actifs}
+        logs = {}
+        imms = {}
+        if log_ids:
+            for lg in (
+                await db.execute(
+                    select(Logement).where(Logement.id.in_(list(log_ids)))
+                )
+            ).scalars().all():
+                logs[lg.id] = lg
+            imm_ids = {lg.immeuble_id for lg in logs.values()}
+            for im in (
+                await db.execute(
+                    select(Immeuble).where(Immeuble.id.in_(list(imm_ids)))
+                )
+            ).scalars().all():
+                imms[im.id] = im
+        # Tri ascendant → le plus récent écrase les précédents.
+        for b in baux_actifs:
+            lg = logs.get(b.logement_id)
+            im = imms.get(lg.immeuble_id) if lg else None
+            if lg and im:
+                habite[b.locataire_id] = (lg, im)
+
+    out: List[LocataireListItem] = []
+    for r in rows:
+        item = LocataireListItem.model_validate(r)
+        pair = habite.get(r.id)
+        if pair:
+            lg, im = pair
+            item.logement_id = lg.id
+            item.logement_numero = lg.numero
+            item.immeuble_id = im.id
+            item.immeuble_name = im.name
+        out.append(item)
+    return out
 
 
 @router.post(
@@ -1963,11 +2014,31 @@ async def delete_locataire(
     locataire_id: int,
     db: DBSession,
     user: Annotated[User, Depends(require_capability("locataire.delete"))],
+    force: bool = False,
 ) -> None:
+    """Supprime un locataire. Ses baux (FK RESTRICT) bloquent la
+    suppression → 409 avec le compte ; ``force=true`` supprime AUSSI ses
+    baux (et en cascade leurs paiements, renouvellements, relances,
+    documents) — retour Phil 2026-07-20 (« je ne peux pas deleter »)."""
     _require_volet(user)
     obj = await db.get(Locataire, locataire_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Locataire introuvable.")
+    baux = (
+        await db.execute(
+            select(Bail).where(Bail.locataire_id == locataire_id)
+        )
+    ).scalars().all()
+    if baux and not force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Ce locataire a {len(baux)} bail(aux) — supprimer aussi "
+                "ses baux, paiements et documents ? (force=true)"
+            ),
+        )
+    for b in baux:
+        await db.delete(b)
     await db.delete(obj)
     await db.commit()
 
@@ -2586,6 +2657,7 @@ class DepotRow(BaseModel):
     bail_id: int
     immeuble_id: int
     immeuble_name: str
+    logement_id: Optional[int] = None
     logement_numero: Optional[str] = None
     locataire_id: Optional[int] = None
     locataire_name: Optional[str] = None
@@ -2694,6 +2766,7 @@ async def depots_overview(
             bail_id=b.id,
             immeuble_id=im.id,
             immeuble_name=im.name,
+            logement_id=(lg.id if lg else None),
             logement_numero=(lg.numero if lg else None),
             locataire_id=loc.id if loc else None,
             locataire_name=loc.full_name if loc else None,
@@ -2901,6 +2974,7 @@ class LoyerOverviewRow(BaseModel):
     bail_id: int
     immeuble_id: int
     immeuble_name: str
+    logement_id: Optional[int] = None
     logement_numero: Optional[str] = None
     locataire_id: Optional[int] = None
     locataire_name: Optional[str] = None
@@ -3052,6 +3126,9 @@ async def loyers_overview(
                 bail_id=b.id,
                 immeuble_id=imm.id,
                 immeuble_name=imm.name,
+                logement_id=(
+                    logement.id if logement is not None else None
+                ),
                 logement_numero=(
                     logement.numero if logement is not None else None
                 ),

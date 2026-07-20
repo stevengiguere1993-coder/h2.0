@@ -22,6 +22,11 @@ type Locataire = {
   paiement_score?: number | null;
   employeur?: string | null;
   revenu_annuel?: number | null;
+  // Bail actif → colonnes Immeuble / Appart cliquables (retour Phil).
+  immeuble_id?: number | null;
+  immeuble_name?: string | null;
+  logement_id?: number | null;
+  logement_numero?: string | null;
 };
 
 type ImmeubleLite = {
@@ -245,6 +250,8 @@ export default function LocatairesPage() {
               <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
                 <tr>
                   <th className="px-4 py-2.5">Nom</th>
+                  <th className="px-4 py-2.5">Immeuble</th>
+                  <th className="px-4 py-2.5">Appart</th>
                   <th className="px-4 py-2.5">Contact</th>
                   <th className="px-4 py-2.5">Employeur</th>
                   <th className="px-4 py-2.5 text-right">Revenu/an</th>
@@ -267,6 +274,32 @@ export default function LocatairesPage() {
                           {l.full_name}
                         </span>
                       </Link>
+                    </td>
+                    <td className="px-4 py-3 text-xs">
+                      {l.immeuble_id ? (
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={`/immobilier/immeubles/${l.immeuble_id}` as any}
+                          className="font-medium text-accent-500 hover:underline"
+                        >
+                          {l.immeuble_name || `Immeuble #${l.immeuble_id}`}
+                        </Link>
+                      ) : (
+                        <span className="text-white/40">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-xs">
+                      {l.logement_id ? (
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={`/immobilier/logements/${l.logement_id}` as any}
+                          className="font-mono font-medium text-accent-500 hover:underline"
+                        >
+                          {l.logement_numero || `#${l.logement_id}`}
+                        </Link>
+                      ) : (
+                        <span className="text-white/40">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-xs text-white/60">
                       <div>{l.email || "—"}</div>
@@ -333,12 +366,17 @@ function CreateLocataireModal({
   onClose: () => void;
   onSaved: (createdId: number) => void;
 }) {
+  // Formulaire COMPLET dès la création (retour Phil 2026-07-20 : « je
+  // veux pouvoir avoir toutes les infos dès la création »).
   const [form, setForm] = useState({
     full_name: "",
     email: "",
     phone: "",
     employeur: "",
-    revenu_annuel: ""
+    revenu_annuel: "",
+    date_naissance: "",
+    nas_last4: "",
+    notes: ""
   });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -356,6 +394,9 @@ function CreateLocataireModal({
       if (form.employeur.trim()) body.employeur = form.employeur.trim();
       if (form.revenu_annuel)
         body.revenu_annuel = Number(form.revenu_annuel);
+      if (form.date_naissance) body.date_naissance = form.date_naissance;
+      if (form.nas_last4.trim()) body.nas_last4 = form.nas_last4.trim();
+      if (form.notes.trim()) body.notes = form.notes.trim();
       const res = await authedFetch("/api/v1/immobilier/locataires", {
         method: "POST",
         body: JSON.stringify(body)
@@ -441,6 +482,38 @@ function CreateLocataireModal({
                 step={1000}
               />
             </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Date de naissance</label>
+              <input
+                type="date"
+                value={form.date_naissance}
+                onChange={(e) => set("date_naissance", e.target.value)}
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="label">NAS (4 derniers chiffres)</label>
+              <input
+                maxLength={4}
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={form.nas_last4}
+                onChange={(e) => set("nas_last4", e.target.value)}
+                className="input font-mono"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="label">Notes</label>
+            <textarea
+              rows={3}
+              value={form.notes}
+              onChange={(e) => set("notes", e.target.value)}
+              placeholder="ex. références, particularités, animaux…"
+              className="input"
+            />
           </div>
 
           {err ? (

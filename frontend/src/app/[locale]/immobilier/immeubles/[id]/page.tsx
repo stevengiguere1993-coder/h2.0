@@ -2357,8 +2357,17 @@ function BauxTab({
                       : ""
                   }
                 >
-                  <td className="px-4 py-2 font-mono text-xs text-white">
-                    {logMap.get(b.logement_id) || `#${b.logement_id}`}
+                  <td className="px-4 py-2 font-mono text-xs">
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={
+                        `/immobilier/logements/${b.logement_id}?from=immeuble` as any
+                      }
+                      className="font-medium text-accent-500 hover:underline"
+                      title="Ouvrir la fiche du logement"
+                    >
+                      {logMap.get(b.logement_id) || `#${b.logement_id}`}
+                    </Link>
                   </td>
                   <td className="px-4 py-2 text-xs">
                     <Link
@@ -2414,6 +2423,7 @@ function BauxTab({
 type LoyerRow = {
   bail_id: number;
   immeuble_id: number;
+  logement_id: number | null;
   logement_numero: string | null;
   locataire_id: number | null;
   locataire_name: string | null;
@@ -2655,8 +2665,23 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                       </span>
                     )}
                   </td>
-                  <td className="py-2 pr-3 font-mono text-xs text-white/70">
-                    {r.logement_numero || "—"}
+                  <td className="py-2 pr-3 font-mono text-xs">
+                    {r.logement_id != null ? (
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={
+                          `/immobilier/logements/${r.logement_id}?from=immeuble` as any
+                        }
+                        className="font-medium text-accent-500 hover:underline"
+                        title="Ouvrir la fiche du logement"
+                      >
+                        {r.logement_numero || `#${r.logement_id}`}
+                      </Link>
+                    ) : (
+                      <span className="text-white/70">
+                        {r.logement_numero || "—"}
+                      </span>
+                    )}
                   </td>
                   <td className="py-2 pr-3 text-right font-mono text-xs text-white/80">
                     {fmtCurrency(r.loyer_mensuel)}
