@@ -76,6 +76,7 @@ from app.api.v1.endpoints import (
     achat_receipt,
     bon_items,
     bon_send,
+    bons_refs,
     facture_import,
     facture_items,
     facture_qbo,
@@ -363,6 +364,10 @@ api_router.include_router(agenda_unified.router)
 api_router.include_router(agenda_router)
 api_router.include_router(bon_items.router, dependencies=DEP_CONSTRUCTION_IMMO)
 api_router.include_router(bon_send.router, dependencies=DEP_CONSTRUCTION_IMMO)
+# /bons/refs/* AVANT bons_router : ses chemins littéraux doivent matcher
+# avant les routes génériques /bons/{id}. Listes immeubles/logements du
+# formulaire de bon, sans exiger le volet immobilier.
+api_router.include_router(bons_refs.router, dependencies=DEP_CONSTRUCTION_IMMO)
 api_router.include_router(bons_router, dependencies=DEP_CONSTRUCTION_IMMO)
 api_router.include_router(construction_bon_defaults.router, dependencies=DEP_CONSTRUCTION)
 # punch_ops FIRST so its literal paths (/me, /debug, /weekly, ...)

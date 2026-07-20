@@ -92,8 +92,12 @@ export default function NewBonPage() {
     setLoadingImm(true);
     (async () => {
       try {
+        // Endpoint des BONS (volet construction OU immobilier) — et non
+        // /immobilier/immeubles, qui exige le volet immobilier : un
+        // gestionnaire Construction voyait « Aucun immeuble » (403
+        // silencieux). Retour Phil 2026-07-20.
         const res = await authedFetch(
-          `/api/v1/immobilier/immeubles?entreprise_id=${entrepriseId}`
+          `/api/v1/bons/refs/immeubles?entreprise_id=${entrepriseId}`
         );
         if (!cancelled && res.ok)
           setImmeubles((await res.json()) as Immeuble[]);
@@ -118,7 +122,7 @@ export default function NewBonPage() {
     (async () => {
       try {
         const res = await authedFetch(
-          `/api/v1/immobilier/immeubles/${immeubleId}/logements`
+          `/api/v1/bons/refs/immeubles/${immeubleId}/logements`
         );
         if (!cancelled && res.ok)
           setLogements((await res.json()) as Logement[]);
