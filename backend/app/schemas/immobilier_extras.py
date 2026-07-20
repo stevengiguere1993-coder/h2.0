@@ -124,7 +124,9 @@ class RenouvellementOverview(BaseModel):
     bail_id: int
     immeuble_id: int
     immeuble_name: str
+    logement_id: Optional[int] = None
     logement_numero: str
+    locataire_id: Optional[int] = None
     locataire_nom: str
     locataire_email: Optional[str] = None
     bail_date_fin: date

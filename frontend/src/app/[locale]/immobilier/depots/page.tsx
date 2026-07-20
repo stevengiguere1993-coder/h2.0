@@ -27,6 +27,7 @@ type DepotRow = {
   bail_id: number;
   immeuble_id: number;
   immeuble_name: string;
+  logement_id?: number | null;
   logement_numero: string | null;
   locataire_id: number | null;
   locataire_name: string | null;
@@ -304,7 +305,24 @@ export default function DepotsPage() {
                         {r.immeuble_name}
                       </Link>
                       {r.logement_numero ? (
-                        <span className="text-white/40"> · {r.logement_numero}</span>
+                        r.logement_id != null ? (
+                          <Link
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            href={
+                              `/immobilier/logements/${r.logement_id}` as any
+                            }
+                            className="text-accent-500/80 hover:text-accent-500 hover:underline"
+                            title="Ouvrir la fiche du logement"
+                          >
+                            {" "}
+                            · {r.logement_numero}
+                          </Link>
+                        ) : (
+                          <span className="text-white/40">
+                            {" "}
+                            · {r.logement_numero}
+                          </span>
+                        )
                       ) : null}
                     </td>
                     <td className="px-3 py-2.5 text-xs text-white/60">

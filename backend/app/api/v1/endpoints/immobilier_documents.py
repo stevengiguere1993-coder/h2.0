@@ -142,6 +142,38 @@ async def list_bail_documents(
 
 
 @router.get(
+    "/logements/{logement_id}/documents",
+    response_model=List[DocumentRead],
+)
+async def list_logement_documents(
+    logement_id: int, db: DBSession, user: CurrentUser
+) -> List[DocumentRead]:
+    """Documents des baux (passés et actifs) d'un logement — section
+    Documents de la fiche logement (retour Phil 2026-07-20)."""
+    _require_volet(user)
+    from app.models.immobilier import Bail as _Bail
+
+    bail_ids = [
+        r[0]
+        for r in (
+            await db.execute(
+                select(_Bail.id).where(_Bail.logement_id == logement_id)
+            )
+        ).all()
+    ]
+    if not bail_ids:
+        return []
+    rows = (
+        await db.execute(
+            select(ImmDocument)
+            .where(ImmDocument.bail_id.in_(bail_ids))
+            .order_by(ImmDocument.created_at.desc(), ImmDocument.id.desc())
+        )
+    ).scalars().all()
+    return [_doc_read(d) for d in rows]
+
+
+@router.get(
     "/locataires/{locataire_id}/documents",
     response_model=List[DocumentRead],
 )
