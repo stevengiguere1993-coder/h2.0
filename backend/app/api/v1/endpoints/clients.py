@@ -25,14 +25,17 @@ router = APIRouter(prefix="/clients", tags=["clients"])
     "",
     response_model=ClientRead,
     status_code=status.HTTP_201_CREATED,
-    summary="Create a client (admin only)",
+    summary="Créer un client (gestionnaire+)",
 )
 async def create_client(
     data: ClientCreate,
     db: DBSession,
-    current_admin: CurrentAdmin,
+    current_user: RequireManager,
 ) -> ClientRead:
-    """Create a new client. Requires admin privileges."""
+    """Crée un client. Gestionnaire+ — la page Clients leur est ouverte
+    (registre : construction.clients = manager), or créer exigeait admin
+    (retour Phil 2026-07-20 : Olivier bloqué par « Admin privileges
+    required »)."""
     service = ClientService(db)
     client = await service.create(data)
     # Synchro QBO auto (inerte tant que l'interrupteur est OFF).
@@ -85,15 +88,15 @@ async def get_client(
 @router.put(
     "/{client_id}",
     response_model=ClientRead,
-    summary="Update a client (admin only)",
+    summary="Modifier un client (gestionnaire+)",
 )
 async def update_client(
     client_id: int,
     data: ClientUpdate,
     db: DBSession,
-    current_admin: CurrentAdmin,
+    current_user: RequireManager,
 ) -> ClientRead:
-    """Update a client. Requires admin privileges."""
+    """Modifie un client. Gestionnaire+ (même logique que la création)."""
     service = ClientService(db)
     client = await service.update(client_id, data)
     if client is None:
@@ -107,14 +110,15 @@ async def update_client(
 @router.delete(
     "/{client_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a client (admin only)",
+    summary="Supprimer un client (admin)",
 )
 async def delete_client(
     client_id: int,
     db: DBSession,
     current_admin: CurrentAdmin,
 ) -> None:
-    """Delete a client and its projects. Requires admin privileges."""
+    """Supprime un client ET ses projets — reste réservé aux admins
+    (action destructive en cascade)."""
     service = ClientService(db)
     deleted = await service.delete(client_id)
     if not deleted:
