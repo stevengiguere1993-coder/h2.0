@@ -316,6 +316,14 @@ async def ensure_critical_columns() -> None:
         ),
         ("imm_locataires", "dpa_envoye_le", "DATE"),
         ("imm_locataires", "dpa_signe_le", "DATE"),
+        # Retours Steven 2026-07-20 : confirmation annuelle d'assurance
+        # locataire + logement loué en chambres.
+        ("imm_locataires", "assurance_confirmee_le", "DATE"),
+        (
+            "imm_logements",
+            "location_en_chambres",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        ),
         # Contrat de gestion 2026-07 : accusé de lecture du MANDATAIRE,
         # distinct de celui du Mandant (opened_at/open_count) — sinon
         # l'ouverture du lien mandataire est attribuée au mandant.

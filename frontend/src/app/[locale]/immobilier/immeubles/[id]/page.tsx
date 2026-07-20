@@ -268,15 +268,6 @@ export default function ImmeubleDetailPage({
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoVer, setPhotoVer] = useState(0);
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const [showBon, setShowBon] = useState(false);
-  const [bonForm, setBonForm] = useState({ titre: "", description: "", logement: "" });
-  const [bonBusy, setBonBusy] = useState(false);
-  const [bonResult, setBonResult] = useState<{
-    bon_id: number;
-    reference: string;
-    client_name: string | null;
-    client_created: boolean;
-  } | null>(null);
   const [showEdit, setShowEdit] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
   const [editForm, setEditForm] = useState({
@@ -516,39 +507,6 @@ export default function ImmeubleDetailPage({
       setActionErr(`Photo : ${(e as Error).message}`);
     } finally {
       setPhotoBusy(false);
-    }
-  }
-
-  async function createBon() {
-    if (!bonForm.titre.trim()) return;
-    setBonBusy(true);
-    setActionErr(null);
-    try {
-      const res = await authedFetch(
-        `/api/v1/immobilier/immeubles/${immeubleId}/bon-travail`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            titre: bonForm.titre.trim(),
-            description: bonForm.description.trim() || null,
-            logement: bonForm.logement.trim() || null
-          })
-        }
-      );
-      if (!res.ok)
-        throw new Error((await res.text()).slice(0, 200) || `HTTP ${res.status}`);
-      setBonResult(
-        (await res.json()) as {
-          bon_id: number;
-          reference: string;
-          client_name: string | null;
-          client_created: boolean;
-        }
-      );
-    } catch (e) {
-      setActionErr(`Bon de travail : ${(e as Error).message}`);
-    } finally {
-      setBonBusy(false);
     }
   }
 
@@ -994,18 +952,19 @@ export default function ImmeubleDetailPage({
           ) : null}
           {tab === "maintenance" ? (
             <>
-              {/* Bouton déplacé du menu « Actions » (retour Phil) : le bon
-                  de travail est une action de maintenance. */}
+              {/* Même formulaire que la page Bons de travail (retour Steven
+                  2026-07-20) : deep-link avec l'immeuble présélectionné. */}
               <div className="mb-3 flex justify-end">
                 <button
                   type="button"
-                  onClick={() => {
-                    setBonResult(null);
-                    setBonForm({ titre: "", description: "", logement: "" });
-                    setShowBon(true);
-                  }}
+                  onClick={() =>
+                    router.push(
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      `/immobilier/bons-travail?new=1&immeuble=${immeubleId}` as any
+                    )
+                  }
                   className="btn-outline-accent btn-sm"
-                  title="Créer un bon de travail (réparation) dans le volet Construction"
+                  title="Créer un bon de travail (réparation) — formulaire complet de la page Bons de travail"
                 >
                   <Wrench className="h-3.5 w-3.5" /> + Bon de travail
                 </button>
@@ -1069,108 +1028,6 @@ export default function ImmeubleDetailPage({
                 Supprimer définitivement
               </button>
             </div>
-          </div>
-        </div>
-      ) : null}
-
-      {showBon ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-amber-500/30 bg-brand-950 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
-              <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-amber-300">
-                <Wrench className="h-4 w-4" /> Bon de travail
-              </h2>
-              <button
-                type="button"
-                onClick={() => setShowBon(false)}
-                className="btn-ghost btn-xs"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            {bonResult ? (
-              <div className="space-y-3 p-5 text-sm text-white/80">
-                <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-emerald-200">
-                  <p className="font-semibold">
-                    Bon {bonResult.reference} créé ✅
-                  </p>
-                  <p className="mt-1 text-xs">
-                    Envoyé dans le volet Construction (brouillon).
-                    {bonResult.client_name
-                      ? bonResult.client_created
-                        ? ` Client « ${bonResult.client_name} » créé.`
-                        : ` Client « ${bonResult.client_name} » réutilisé.`
-                      : " Aucune compagnie propriétaire — pense à choisir un client dans le bon."}
-                  </p>
-                </div>
-                <Link
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  href={`/app/bons/${bonResult.bon_id}` as any}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-500/15 px-4 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/25"
-                >
-                  Ouvrir dans Construction →
-                </Link>
-              </div>
-            ) : (
-              <>
-                <div className="space-y-3 p-5">
-                  <p className="text-xs text-white/60">
-                    Crée un bon de travail (réparation) dans le volet
-                    Construction. La compagnie propriétaire devient client si
-                    elle ne l&apos;est pas déjà. Un responsable construction
-                    reprend ensuite (estimé, envoi, signature).
-                  </p>
-                  <input
-                    value={bonForm.titre}
-                    onChange={(e) =>
-                      setBonForm((f) => ({ ...f, titre: e.target.value }))
-                    }
-                    placeholder="Titre (ex. Réparation toiture)"
-                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-amber-300"
-                  />
-                  <input
-                    value={bonForm.logement}
-                    onChange={(e) =>
-                      setBonForm((f) => ({ ...f, logement: e.target.value }))
-                    }
-                    placeholder="Logement concerné (optionnel)"
-                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-amber-300"
-                  />
-                  <textarea
-                    value={bonForm.description}
-                    onChange={(e) =>
-                      setBonForm((f) => ({ ...f, description: e.target.value }))
-                    }
-                    rows={4}
-                    placeholder="Description des travaux…"
-                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-amber-300"
-                  />
-                </div>
-                <div className="flex items-center justify-end gap-2 border-t border-brand-800 px-5 py-3">
-                  <button
-                    type="button"
-                    onClick={() => setShowBon(false)}
-                    className="btn-secondary btn-sm"
-                  >
-                    Annuler
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void createBon()}
-                    disabled={bonBusy || !bonForm.titre.trim()}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-500/15 px-4 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/25 disabled:opacity-50"
-                  >
-                    {bonBusy ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Wrench className="h-3.5 w-3.5" />
-                    )}
-                    Créer le bon
-                  </button>
-                </div>
-              </>
-            )}
           </div>
         </div>
       ) : null}

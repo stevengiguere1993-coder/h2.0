@@ -242,6 +242,15 @@ html[data-portal-theme="light"] .text-white\/60 { color: rgb(15 23 42 / 0.65) !i
 html[data-portal-theme="light"] .text-white\/50 { color: rgb(15 23 42 / 0.55) !important; }
 html[data-portal-theme="light"] .text-white\/40 { color: rgb(15 23 42 / 0.45) !important; }
 html[data-portal-theme="light"] .text-white\/30 { color: rgb(15 23 42 / 0.35) !important; }
+/* Variantes intermédiaires — oubliées à l'origine, elles restaient BLANCHES
+   sur fond blanc (ex. stepper de statut de la fiche location en /55 et /35,
+   retour Steven 2026-07-20). */
+html[data-portal-theme="light"] .text-white\/75 { color: rgb(15 23 42 / 0.8) !important; }
+html[data-portal-theme="light"] .text-white\/55 { color: rgb(15 23 42 / 0.6) !important; }
+html[data-portal-theme="light"] .text-white\/45 { color: rgb(15 23 42 / 0.5) !important; }
+html[data-portal-theme="light"] .text-white\/35 { color: rgb(15 23 42 / 0.4) !important; }
+html[data-portal-theme="light"] .text-white\/25 { color: rgb(15 23 42 / 0.3) !important; }
+html[data-portal-theme="light"] .text-white\/20 { color: rgb(15 23 42 / 0.25) !important; }
 
 /* Brand text classes (text-brand-100/200/300 utilisés sur les paragraphes) */
 html[data-portal-theme="light"] .text-brand-50,
@@ -251,6 +260,10 @@ html[data-portal-theme="light"] .text-brand-300 { color: #64748b !important; }
 
 /* Hover sur le texte */
 html[data-portal-theme="light"] .hover\:text-white:hover { color: #0f172a !important; }
+html[data-portal-theme="light"] .hover\:text-white\/90:hover { color: rgb(15 23 42 / 0.95) !important; }
+html[data-portal-theme="light"] .hover\:text-white\/80:hover { color: rgb(15 23 42 / 0.85) !important; }
+html[data-portal-theme="light"] .hover\:text-white\/70:hover { color: rgb(15 23 42 / 0.78) !important; }
+html[data-portal-theme="light"] .hover\:text-white\/60:hover { color: rgb(15 23 42 / 0.65) !important; }
 
 /* Borders — claires sur fond blanc */
 html[data-portal-theme="light"] .border-brand-700 { border-color: #cbd5e1 !important; }

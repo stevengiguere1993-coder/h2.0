@@ -156,6 +156,7 @@ export default function LogementDetailPage({
     nb_chambres: "",
     nb_sdb: "",
     superficie_pi2: "",
+    location_en_chambres: false,
     etage: "",
     type: "residentiel",
     status: "vacant",
@@ -194,6 +195,7 @@ export default function LogementDetailPage({
       nb_sdb: l.nb_sdb != null ? String(l.nb_sdb) : "",
       superficie_pi2:
         l.superficie_pi2 != null ? String(l.superficie_pi2) : "",
+      location_en_chambres: !!l.location_en_chambres,
       etage: l.etage != null ? String(l.etage) : "",
       type: l.type || "residentiel",
       status: l.status || "vacant",
@@ -218,6 +220,7 @@ export default function LogementDetailPage({
             nb_chambres: num(form.nb_chambres),
             nb_sdb: num(form.nb_sdb),
             superficie_pi2: num(form.superficie_pi2),
+            location_en_chambres: form.location_en_chambres,
             etage: num(form.etage),
             type: form.type,
             status: form.status,
@@ -531,6 +534,22 @@ export default function LogementDetailPage({
                         className={inputCls}
                       />
                     </EditField>
+                    <EditField label="Loué en chambre">
+                      <label className="flex h-9 cursor-pointer items-center gap-2 text-sm text-white/80">
+                        <input
+                          type="checkbox"
+                          checked={form.location_en_chambres}
+                          onChange={(e) =>
+                            setForm((f) => ({
+                              ...f,
+                              location_en_chambres: e.target.checked
+                            }))
+                          }
+                          className="h-4 w-4 accent-accent-500"
+                        />
+                        Logement loué à la chambre
+                      </label>
+                    </EditField>
                     <EditField label="Étage">
                       <input
                         inputMode="numeric"
@@ -608,6 +627,10 @@ export default function LogementDetailPage({
                           ? `${lg.superficie_pi2} pi²`
                           : "—"
                       }
+                    />
+                    <Row
+                      label="Loué en chambre"
+                      value={lg.location_en_chambres ? "Oui" : "Non"}
                     />
                     <Row
                       label="Étage"

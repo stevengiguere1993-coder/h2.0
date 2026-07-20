@@ -773,6 +773,9 @@ async def renouvellements_overview(
                     if b.id in last_doc_by_bail
                     else None
                 ),
+                assurance_confirmee_le=(
+                    locataire.assurance_confirmee_le if locataire else None
+                ),
             )
         )
     return out
