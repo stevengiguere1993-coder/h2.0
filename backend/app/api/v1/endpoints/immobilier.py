@@ -68,6 +68,7 @@ from app.models.immobilier import (
     Locataire,
     LocataireCommunication,
     MaintenanceOrdre,
+    FraisLocatif,
     PaiementLoyer,
     RelanceLoyer,
 )
@@ -2970,6 +2971,12 @@ async def delete_paiement(
 # en retard, marquer payé en 1 clic depuis la page Baux & paiements).
 
 
+class FraisRow(BaseModel):
+    id: int
+    montant: float
+    libelle: str
+
+
 class LoyerOverviewRow(BaseModel):
     bail_id: int
     immeuble_id: int
@@ -2981,10 +2988,18 @@ class LoyerOverviewRow(BaseModel):
     locataire_phone: Optional[str] = None
     loyer_mensuel: float
     paiement_id: Optional[int] = None
+    #: SOMME des paiements du mois (plusieurs paiements partiels possibles
+    #: — retour Steven 2026-07-20).
     montant_paye: Optional[float] = None
     paye_le: Optional[date] = None
-    # "paye" | "retard" | "attente" (mois courant, pas encore au seuil)
+    # "paye" | "partiel" | "retard" | "attente"
     etat: str
+    #: Frais ponctuels du MOIS affiché (retard, etc.) — supprimables.
+    frais_mois: List[FraisRow] = []
+    #: SOLDE CUMULATIF dû sur le bail (loyers échus + tous les frais −
+    #: tous les paiements), borné à 0. Ex.: juin + juillet impayés → le
+    #: solde d'août affiche les 3 mois.
+    solde_total: float = 0.0
     nb_relances: int = 0
     derniere_relance_le: Optional[date] = None
 
@@ -2997,6 +3012,8 @@ class LoyerOverview(BaseModel):
     nb_payes: int
     nb_retards: int
     nb_attente: int
+    #: Somme des soldes dus (tuile KPI).
+    total_solde_du: float = 0.0
 
 
 @router.get("/loyers/overview", response_model=LoyerOverview)
@@ -3082,7 +3099,9 @@ async def loyers_overview(
         ).scalars().all():
             locataires[loc.id] = loc
 
-    paiements_mois = {}
+    # Paiements du mois : PLUSIEURS lignes possibles par bail (paiements
+    # partiels — retour Steven 2026-07-20) → on garde la liste et on somme.
+    paiements_mois: dict[int, list] = {}
     bail_ids = [b.id for b in baux]
     if bail_ids:
         for p in (
@@ -3093,13 +3112,64 @@ async def loyers_overview(
                 )
             )
         ).scalars().all():
-            paiements_mois[p.bail_id] = p
+            paiements_mois.setdefault(p.bail_id, []).append(p)
+
+    # Frais ponctuels du mois (retard…) + agrégats VIE DU BAIL pour le
+    # solde cumulatif : total payé et total des frais depuis le début.
+    frais_mois_by_bail: dict[int, list] = {}
+    paye_total_by_bail: dict[int, float] = {}
+    frais_total_by_bail: dict[int, float] = {}
+    if bail_ids:
+        for f in (
+            await db.execute(
+                select(FraisLocatif).where(
+                    FraisLocatif.bail_id.in_(bail_ids),
+                    FraisLocatif.mois_couvert == month_start,
+                )
+            )
+        ).scalars().all():
+            frais_mois_by_bail.setdefault(f.bail_id, []).append(f)
+        for bid, total in (
+            await db.execute(
+                select(
+                    PaiementLoyer.bail_id, func.sum(PaiementLoyer.montant)
+                )
+                .where(PaiementLoyer.bail_id.in_(bail_ids))
+                .group_by(PaiementLoyer.bail_id)
+            )
+        ).all():
+            paye_total_by_bail[bid] = float(total or 0)
+        for bid, total in (
+            await db.execute(
+                select(
+                    FraisLocatif.bail_id, func.sum(FraisLocatif.montant)
+                )
+                .where(
+                    FraisLocatif.bail_id.in_(bail_ids),
+                    FraisLocatif.mois_couvert <= month_start,
+                )
+                .group_by(FraisLocatif.bail_id)
+            )
+        ).all():
+            frais_total_by_bail[bid] = float(total or 0)
+
+    def _mois_echus(b: Bail) -> int:
+        """Nombre de 1ers de mois couverts par le bail jusqu'au mois
+        affiché inclus (borné à aujourd'hui) — pour le solde cumulatif."""
+        debut = b.date_debut.replace(day=1)
+        fin = min(month_start, today.replace(day=1))
+        if b.date_fin:
+            fin = min(fin, b.date_fin.replace(day=1))
+        if fin < debut:
+            return 0
+        return (fin.year - debut.year) * 12 + (fin.month - debut.month) + 1
 
     # Seuil de retard : après le 5 du mois couvert (ou mois passé).
     overdue_threshold = month_start.replace(day=5)
     rows: List[LoyerOverviewRow] = []
     total_attendu = 0.0
     total_recu = 0.0
+    total_solde_du = 0.0
     nb_payes = nb_retards = nb_attente = 0
 
     for b in baux:
@@ -3108,19 +3178,37 @@ async def loyers_overview(
         if imm is None:
             continue
         loc = locataires.get(b.locataire_id)
-        p = paiements_mois.get(b.id)
+        ps = paiements_mois.get(b.id) or []
         loyer = float(b.loyer_mensuel or 0)
+        paye_mois = round(sum(float(p.montant or 0) for p in ps), 2)
+        dernier = max(ps, key=lambda p: (p.paye_le or month_start, p.id)) if ps else None
         total_attendu += loyer
-        if p is not None:
+        total_recu += paye_mois
+        if ps and paye_mois >= loyer - 0.005:
             etat = "paye"
             nb_payes += 1
-            total_recu += float(p.montant or 0)
+        elif ps:
+            # Payé en partie seulement — compté comme retard dans les KPI
+            # (il manque de l'argent), mais badge distinct dans l'UI.
+            etat = "partiel"
+            nb_retards += 1
         elif today > overdue_threshold:
             etat = "retard"
             nb_retards += 1
         else:
             etat = "attente"
             nb_attente += 1
+
+        # Solde cumulatif du bail : loyers échus + frais − payé, borné à 0.
+        solde = round(
+            _mois_echus(b) * loyer
+            + frais_total_by_bail.get(b.id, 0.0)
+            - paye_total_by_bail.get(b.id, 0.0),
+            2,
+        )
+        solde = max(0.0, solde)
+        total_solde_du += solde
+
         rows.append(
             LoyerOverviewRow(
                 bail_id=b.id,
@@ -3136,10 +3224,19 @@ async def loyers_overview(
                 locataire_name=loc.full_name if loc else None,
                 locataire_phone=loc.phone if loc else None,
                 loyer_mensuel=loyer,
-                paiement_id=p.id if p else None,
-                montant_paye=float(p.montant) if p else None,
-                paye_le=p.paye_le if p else None,
+                paiement_id=dernier.id if dernier else None,
+                montant_paye=paye_mois if ps else None,
+                paye_le=dernier.paye_le if dernier else None,
                 etat=etat,
+                frais_mois=[
+                    FraisRow(
+                        id=f.id,
+                        montant=float(f.montant or 0),
+                        libelle=f.libelle or "Frais",
+                    )
+                    for f in (frais_mois_by_bail.get(b.id) or [])
+                ],
+                solde_total=solde,
             )
         )
 
@@ -3181,7 +3278,63 @@ async def loyers_overview(
         nb_payes=nb_payes,
         nb_retards=nb_retards,
         nb_attente=nb_attente,
+        total_solde_du=round(total_solde_du, 2),
     )
+
+
+# ── Frais locatifs ponctuels (retard, etc.) ───────────────────────────
+
+
+class FraisCreate(BaseModel):
+    mois_couvert: date
+    montant: float = Field(..., gt=0)
+    libelle: str = Field(default="Frais de retard", max_length=128)
+
+
+@router.post(
+    "/baux/{bail_id}/frais",
+    response_model=FraisRow,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_frais(
+    bail_id: int,
+    payload: FraisCreate,
+    db: DBSession,
+    user: CurrentUser,
+) -> FraisRow:
+    """Ajoute un frais ponctuel au bail (ex. 20 $ si payé après le 15) —
+    s'ajoute au solde dû (retour Steven 2026-07-20)."""
+    _require_volet(user)
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        raise HTTPException(status_code=404, detail="Bail introuvable.")
+    obj = FraisLocatif(
+        bail_id=bail_id,
+        mois_couvert=payload.mois_couvert.replace(day=1),
+        montant=payload.montant,
+        libelle=payload.libelle.strip() or "Frais de retard",
+        created_by_email=getattr(user, "email", None),
+        created_at=_now(),
+    )
+    db.add(obj)
+    await db.commit()
+    await db.refresh(obj)
+    return FraisRow(
+        id=obj.id, montant=float(obj.montant), libelle=obj.libelle
+    )
+
+
+@router.delete(
+    "/frais/{frais_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_frais(
+    frais_id: int, db: DBSession, user: CurrentUser
+) -> None:
+    _require_volet(user)
+    obj = await db.get(FraisLocatif, frais_id)
+    if obj is not None:
+        await db.delete(obj)
+        await db.commit()
 
 
 class RelanceLoyerRequest(BaseModel):

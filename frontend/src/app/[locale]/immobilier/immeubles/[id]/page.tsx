@@ -2430,7 +2430,8 @@ type LoyerRow = {
   loyer_mensuel: number;
   montant_paye: number | null;
   paye_le: string | null;
-  etat: string; // "paye" | "retard" | "attente"
+  etat: string; // "paye" | "partiel" | "retard" | "attente"
+  solde_total?: number;
 };
 
 function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
@@ -2464,7 +2465,7 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
     void load();
   }, [load]);
 
-  async function marquerPaye(row: LoyerRow) {
+  async function enregistrerPaiement(row: LoyerRow, montant: number) {
     setPayingId(row.bail_id);
     setErr(null);
     try {
@@ -2477,7 +2478,7 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
         body: JSON.stringify({
           bail_id: row.bail_id,
           mois_couvert: `${mois}-01`,
-          montant: row.loyer_mensuel,
+          montant,
           paye_le: payeLe
         })
       });
@@ -2487,10 +2488,35 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
       }
       await load();
     } catch (e) {
-      setErr(`Marquer payé a échoué : ${(e as Error).message}`);
+      setErr(`Paiement échoué : ${(e as Error).message}`);
     } finally {
       setPayingId(null);
     }
+  }
+
+  // 1 clic = le restant du mois (loyer − déjà reçu si paiement partiel).
+  async function marquerPaye(row: LoyerRow) {
+    const restant =
+      Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
+    await enregistrerPaiement(
+      row, restant > 0 ? restant : row.loyer_mensuel
+    );
+  }
+
+  async function marquerPartiel(row: LoyerRow) {
+    const restant =
+      Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
+    const saisie = window.prompt(
+      `Montant reçu pour ${mois} ?\n(Restant du mois : ${fmtCurrency(restant)})`,
+      ""
+    );
+    if (saisie == null) return;
+    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(montant) || montant <= 0) {
+      setErr("Montant invalide.");
+      return;
+    }
+    await enregistrerPaiement(row, Math.round(montant * 100) / 100);
   }
 
   // Rappel de paiement MANUEL : courriel au locataire via Microsoft
@@ -2537,10 +2563,16 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
     0
   );
   const totalRecu = (rows || []).reduce(
-    (s, r) => s + (r.etat === "paye" ? r.montant_paye || 0 : 0),
+    (s, r) => s + (r.montant_paye || 0),
     0
   );
-  const nbRetards = (rows || []).filter((r) => r.etat === "retard").length;
+  const nbRetards = (rows || []).filter(
+    (r) => r.etat === "retard" || r.etat === "partiel"
+  ).length;
+  const totalSolde = (rows || []).reduce(
+    (s, r) => s + (r.solde_total ?? 0),
+    0
+  );
 
   return (
     <Section title={`Paiements — ${moisLisible}`}>
@@ -2556,6 +2588,14 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
           {nbRetards > 0 ? (
             <span className="badge badge-rose">
               {nbRetards} retard{nbRetards > 1 ? "s" : ""}
+            </span>
+          ) : null}
+          {totalSolde > 0 ? (
+            <span
+              className="badge badge-rose"
+              title="Loyers échus + frais, moins tout ce qui a été reçu (cumul du bail)"
+            >
+              Solde dû {fmtCurrency(totalSolde)}
             </span>
           ) : null}
         </div>
@@ -2637,11 +2677,19 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
               {rows.map((r) => (
                 <tr
                   key={r.bail_id}
-                  className={r.etat === "retard" ? "bg-rose-500/5" : ""}
+                  className={
+                    r.etat === "retard"
+                      ? "bg-rose-500/5"
+                      : r.etat === "partiel"
+                        ? "bg-amber-500/5"
+                        : ""
+                  }
                 >
                   <td className="py-2 pr-3">
                     {r.etat === "paye" ? (
                       <span className="badge badge-emerald">Payé</span>
+                    ) : r.etat === "partiel" ? (
+                      <span className="badge badge-amber">Partiel</span>
                     ) : r.etat === "retard" ? (
                       <span className="badge badge-rose">Retard</span>
                     ) : (
@@ -2685,6 +2733,19 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                   </td>
                   <td className="py-2 pr-3 text-right font-mono text-xs text-white/80">
                     {fmtCurrency(r.loyer_mensuel)}
+                    {r.etat === "partiel" ? (
+                      <div className="text-[10px] text-amber-300">
+                        reçu {fmtCurrency(r.montant_paye ?? 0)}
+                      </div>
+                    ) : null}
+                    {(r.solde_total ?? 0) > 0 ? (
+                      <div
+                        className="text-[10px] font-semibold text-rose-300"
+                        title="Cumul dû sur le bail (loyers échus + frais − reçus)"
+                      >
+                        solde {fmtCurrency(r.solde_total ?? 0)}
+                      </div>
+                    ) : null}
                   </td>
                   <td className="py-2 pr-3 text-right text-xs text-white/60">
                     {r.paye_le || "—"}
@@ -2718,6 +2779,15 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                             <Check className="h-3 w-3" />
                           )}
                           Marquer payé
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void marquerPartiel(r)}
+                          disabled={payingId === r.bail_id}
+                          title="Enregistrer un paiement partiel (montant saisi)"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+                        >
+                          Partiel
                         </button>
                       </span>
                     ) : null}

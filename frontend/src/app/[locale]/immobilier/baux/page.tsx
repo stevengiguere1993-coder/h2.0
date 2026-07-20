@@ -44,7 +44,10 @@ type Row = {
   paiement_id: number | null;
   montant_paye: number | null;
   paye_le: string | null;
-  etat: string; // "retard" | "attente" | "paye"
+  etat: string; // "retard" | "attente" | "paye" | "partiel"
+  // Frais ponctuels du mois (retard…) + solde cumulatif dû sur le bail.
+  frais_mois?: { id: number; montant: number; libelle: string }[];
+  solde_total?: number;
   nb_relances: number;
   derniere_relance_le: string | null;
 };
@@ -57,6 +60,7 @@ type Overview = {
   nb_payes: number;
   nb_retards: number;
   nb_attente: number;
+  total_solde_du?: number;
 };
 
 type Echeance = {
@@ -122,7 +126,7 @@ export default function BauxPage() {
   const [echeances, setEcheances] = useState<EcheanceData | null>(null);
   const [search, setSearch] = useState("");
   const [etatFilter, setEtatFilter] = useState<
-    "all" | "paye" | "retard" | "attente"
+    "all" | "paye" | "partiel" | "retard" | "attente"
   >("all");
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
 
@@ -173,7 +177,7 @@ export default function BauxPage() {
     window.setTimeout(() => setToast(null), 2500);
   }
 
-  async function marquerPaye(row: Row) {
+  async function enregistrerPaiement(row: Row, montant: number) {
     setPayingId(row.bail_id);
     try {
       const today = new Date();
@@ -185,7 +189,7 @@ export default function BauxPage() {
         body: JSON.stringify({
           bail_id: row.bail_id,
           mois_couvert: `${mois}-01`,
-          montant: row.loyer_mensuel,
+          montant,
           paye_le: payeLe
         })
       });
@@ -194,15 +198,95 @@ export default function BauxPage() {
         throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
       }
       flash(
-        `Loyer marqué payé — ${row.locataire_name || "locataire"} (${fmtMoney(
-          row.loyer_mensuel
+        `Paiement enregistré — ${row.locataire_name || "locataire"} (${fmtMoney(
+          montant
         )})`
       );
       await load();
     } catch (e) {
-      setError(`Marquer payé a échoué : ${(e as Error).message}`);
+      setError(`Paiement échoué : ${(e as Error).message}`);
     } finally {
       setPayingId(null);
+    }
+  }
+
+  // Payé AU COMPLET en 1 clic : le restant du mois (loyer − déjà payé)
+  // — le cas le plus fréquent, gardé tel quel (retour Steven 2026-07-20).
+  async function marquerPaye(row: Row) {
+    const restant =
+      Math.round(
+        (row.loyer_mensuel - (row.montant_paye ?? 0)) * 100
+      ) / 100;
+    await enregistrerPaiement(
+      row, restant > 0 ? restant : row.loyer_mensuel
+    );
+  }
+
+  // Paiement PARTIEL : montant saisi (ex. 500 $ sur un loyer de 800 $).
+  async function marquerPartiel(row: Row) {
+    const restant =
+      Math.round(
+        (row.loyer_mensuel - (row.montant_paye ?? 0)) * 100
+      ) / 100;
+    const saisie = window.prompt(
+      `Montant reçu de ${row.locataire_name || "ce locataire"} pour ${mois} ?\n(Restant du mois : ${fmtMoney(restant)})`,
+      ""
+    );
+    if (saisie == null) return;
+    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(montant) || montant <= 0) {
+      setError("Montant invalide.");
+      return;
+    }
+    await enregistrerPaiement(row, Math.round(montant * 100) / 100);
+  }
+
+  // Frais ponctuel qui S'AJOUTE au solde (ex. 20 $ payé après le 15).
+  async function ajouterFrais(row: Row) {
+    const saisie = window.prompt(
+      `Frais à facturer à ${row.locataire_name || "ce locataire"} (mois ${mois}) ?\nMontant en $ :`,
+      "20"
+    );
+    if (saisie == null) return;
+    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(montant) || montant <= 0) {
+      setError("Montant invalide.");
+      return;
+    }
+    const libelle =
+      window.prompt("Libellé du frais :", "Frais de retard") ||
+      "Frais de retard";
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${row.bail_id}/frais`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            mois_couvert: `${mois}-01`,
+            montant,
+            libelle
+          })
+        }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      flash(`Frais ajouté au solde : ${libelle} (${fmtMoney(montant)})`);
+      await load();
+    } catch (e) {
+      setError(`Ajout du frais échoué : ${(e as Error).message}`);
+    }
+  }
+
+  async function supprimerFrais(fraisId: number) {
+    if (!window.confirm("Retirer ce frais du solde ?")) return;
+    try {
+      const r = await authedFetch(`/api/v1/immobilier/frais/${fraisId}`, {
+        method: "DELETE"
+      });
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      await load();
+    } catch (e) {
+      setError(`Suppression du frais échouée : ${(e as Error).message}`);
     }
   }
 
@@ -251,16 +335,22 @@ export default function BauxPage() {
         total_recu: data.total_recu,
         nb_retards: data.nb_retards,
         nb_attente: data.nb_attente,
-        nb_baux: data.rows.length
+        nb_baux: data.rows.length,
+        total_solde_du:
+          data.total_solde_du ??
+          data.rows.reduce((s, r) => s + (r.solde_total ?? 0), 0)
       };
     }
     const rows = data.rows.filter((r) => r.immeuble_id === immeubleFilter);
     return {
       total_attendu: rows.reduce((s, r) => s + r.loyer_mensuel, 0),
       total_recu: rows.reduce((s, r) => s + (r.montant_paye ?? 0), 0),
-      nb_retards: rows.filter((r) => r.etat === "retard").length,
+      nb_retards: rows.filter(
+        (r) => r.etat === "retard" || r.etat === "partiel"
+      ).length,
       nb_attente: rows.filter((r) => r.etat === "attente").length,
-      nb_baux: rows.length
+      nb_baux: rows.length,
+      total_solde_du: rows.reduce((s, r) => s + (r.solde_total ?? 0), 0)
     };
   }, [data, immeubleFilter]);
 
@@ -344,7 +434,7 @@ export default function BauxPage() {
 
         {/* Tuiles de synthèse — suivent le filtre immeuble */}
         {kpi ? (
-          <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
             <StatTile
               label="Attendu"
               value={fmtMoney(kpi.total_attendu)}
@@ -370,6 +460,12 @@ export default function BauxPage() {
               label="En attente"
               value={String(kpi.nb_attente)}
               sub="avant le 5 du mois"
+            />
+            <StatTile
+              label="Solde dû"
+              value={fmtMoney(kpi.total_solde_du)}
+              sub="loyers échus + frais − reçus"
+              tone={kpi.total_solde_du > 0 ? "rose" : undefined}
             />
           </div>
         ) : null}
@@ -422,6 +518,11 @@ export default function BauxPage() {
             onClick={() => setEtatFilter("retard")}
           />
           <FilterPill
+            label="Partiels"
+            active={etatFilter === "partiel"}
+            onClick={() => setEtatFilter("partiel")}
+          />
+          <FilterPill
             label="En attente"
             active={etatFilter === "attente"}
             onClick={() => setEtatFilter("attente")}
@@ -460,6 +561,7 @@ export default function BauxPage() {
                     <th className="px-3 py-2.5">Locataire</th>
                     <th className="px-3 py-2.5">Immeuble · log.</th>
                     <th className="px-3 py-2.5 text-right">Loyer</th>
+                    <th className="px-3 py-2.5 text-right">Solde dû</th>
                     <th className="px-3 py-2.5 text-right">Payé le</th>
                     <th className="px-3 py-2.5"></th>
                   </tr>
@@ -469,13 +571,21 @@ export default function BauxPage() {
                     <tr
                       key={r.bail_id}
                       className={`transition hover:bg-brand-800/40 ${
-                        r.etat === "retard" ? "bg-rose-500/5" : ""
+                        r.etat === "retard"
+                          ? "bg-rose-500/5"
+                          : r.etat === "partiel"
+                            ? "bg-amber-500/5"
+                            : ""
                       }`}
                     >
                       <td className="px-3 py-2.5">
                         {r.etat === "paye" ? (
                           <span className="badge badge-emerald">
                             <CheckCircle2 className="h-3 w-3" /> Payé
+                          </span>
+                        ) : r.etat === "partiel" ? (
+                          <span className="badge badge-amber">
+                            <AlertTriangle className="h-3 w-3" /> Partiel
                           </span>
                         ) : r.etat === "retard" ? (
                           <span className="badge badge-rose">
@@ -532,10 +642,44 @@ export default function BauxPage() {
                       </td>
                       <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-white">
                         {fmtMoney(r.loyer_mensuel)}
+                        {r.etat === "partiel" ? (
+                          <div className="text-[10px] font-normal text-amber-300">
+                            reçu {fmtMoney(r.montant_paye ?? 0)}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">
+                        {(r.solde_total ?? 0) > 0 ? (
+                          <span className="font-semibold text-rose-300">
+                            {fmtMoney(r.solde_total ?? 0)}
+                          </span>
+                        ) : (
+                          <span className="text-white/30">—</span>
+                        )}
+                        {(r.frais_mois ?? []).map((f) => (
+                          <div
+                            key={f.id}
+                            className="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-amber-300"
+                          >
+                            <span title={f.libelle}>
+                              + {fmtMoney(f.montant)} {f.libelle}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => void supprimerFrais(f.id)}
+                              title="Retirer ce frais"
+                              className="text-white/40 transition hover:text-rose-300"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-white/60">
                         {r.paye_le || "—"}
-                        {r.montant_paye != null &&
+                        {r.etat !== "partiel" &&
+                        r.montant_paye != null &&
+                        r.montant_paye > 0 &&
                         Math.round(r.montant_paye) !==
                           Math.round(r.loyer_mensuel) ? (
                           <span className="ml-1 text-[10px] text-amber-300">
@@ -559,6 +703,23 @@ export default function BauxPage() {
                                   <Check className="h-3 w-3" />
                                 )}
                                 Marquer payé
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void marquerPartiel(r)}
+                                disabled={payingId === r.bail_id}
+                                title="Enregistrer un paiement partiel (montant saisi)"
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+                              >
+                                Partiel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void ajouterFrais(r)}
+                                title="Ajouter un frais ponctuel au solde (ex. frais de retard 20 $)"
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10"
+                              >
+                                + Frais
                               </button>
                               <button
                                 type="button"
@@ -597,9 +758,12 @@ export default function BauxPage() {
         </div>
 
         <p className="mt-3 text-[11px] text-white/40">
-          « Retard » = aucun paiement enregistré après le 5 du mois. Le
-          montant est présumé égal au loyer du bail — modifie le paiement
-          dans la fiche immeuble si le montant réel diffère.
+          « Retard » = aucun paiement après le 5 du mois · « Partiel » = un
+          montant a été reçu mais le mois n&apos;est pas couvert. « Marquer
+          payé » enregistre le restant du mois en 1 clic ; « Partiel » saisit
+          un montant précis ; « + Frais » ajoute un frais ponctuel (ex. 20 $
+          de retard) au solde. Le « Solde dû » cumule tous les loyers échus et
+          frais du bail, moins tout ce qui a été reçu.
         </p>
       </div>
 
