@@ -23,6 +23,7 @@ from app.models.immobilier import (
     Hypotheque,
     HypothequeStatus,
     ImmDocTemplate,
+    ImmDocument,
     Immeuble,
     ImmeubleOwnership,
     Logement,
@@ -588,6 +589,23 @@ async def renouvellements_overview(
             ):
                 last_ren_by_bail[r.bail_id] = r
 
+    # Dernier DOCUMENT d'avis (TAL-806) par bail → suivi envoyé/ouvert/
+    # signé directement sur la page Renouvellements (retour Phil
+    # 2026-07-20, point 11). Tri ascendant → le plus récent écrase.
+    last_doc_by_bail: dict = {}
+    if bail_ids:
+        for d in (
+            await db.execute(
+                select(ImmDocument)
+                .where(
+                    ImmDocument.bail_id.in_(bail_ids),
+                    ImmDocument.type == "avis_modification",
+                )
+                .order_by(ImmDocument.created_at.asc(), ImmDocument.id.asc())
+            )
+        ).scalars().all():
+            last_doc_by_bail[d.bail_id] = d
+
     out: List[RenouvellementOverview] = []
     for b in bails:
         logement = log_by_id.get(b.logement_id)
@@ -628,6 +646,21 @@ async def renouvellements_overview(
                     else None
                 ),
                 renouvellement_status=last_ren.status if last_ren else None,
+                avis_doc_envoye_le=(
+                    last_doc_by_bail[b.id].envoye_le
+                    if b.id in last_doc_by_bail
+                    else None
+                ),
+                avis_doc_ouvert_le=(
+                    last_doc_by_bail[b.id].ouvert_le
+                    if b.id in last_doc_by_bail
+                    else None
+                ),
+                avis_doc_signed_at=(
+                    last_doc_by_bail[b.id].signed_at
+                    if b.id in last_doc_by_bail
+                    else None
+                ),
             )
         )
     return out

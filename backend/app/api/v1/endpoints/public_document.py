@@ -17,6 +17,7 @@ from sqlalchemy.orm import undefer
 
 from app.api.deps import DBSession
 from app.models.immobilier import Bail, ImmDocument, Locataire
+from app.services.tal_forms import SIGNATURE_NON_REQUISE
 
 router = APIRouter(prefix="/public/documents", tags=["public-documents"])
 
@@ -28,6 +29,10 @@ class PublicDocument(BaseModel):
     envoye_le: Optional[datetime]
     signed_at: Optional[datetime]
     signed_by_name: Optional[str]
+    #: False = document en CONSULTATION seule (avis de retard, accès…) —
+    #: la page publique masque le bloc signature ; l'ouverture reste
+    #: horodatée (suivi d'ouverture universel, retour Phil 2026-07-20).
+    signature_requise: bool = True
     company_name: str = "Horizon Services Immobiliers"
     company_email: str = "info@immohorizon.com"
 
@@ -88,6 +93,7 @@ async def _to_public(db: AsyncSession, doc: ImmDocument) -> PublicDocument:
         envoye_le=doc.envoye_le,
         signed_at=doc.signed_at,
         signed_by_name=doc.signed_by_name,
+        signature_requise=doc.type not in SIGNATURE_NON_REQUISE,
     )
 
 
@@ -131,6 +137,11 @@ async def public_sign(
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail="Ce document est déjà signé.",
+        )
+    if doc.type in SIGNATURE_NON_REQUISE:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Ce document ne requiert pas de signature.",
         )
     doc.signed_at = datetime.now(timezone.utc)
     doc.signed_by_name = data.name.strip()[:255]

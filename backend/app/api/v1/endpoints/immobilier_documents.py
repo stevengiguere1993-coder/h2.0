@@ -399,7 +399,9 @@ class EnvoyerCourrielResult(BaseModel):
     envoye_le: datetime
 
 
-def _mail_html_piece_jointe(titre: str, locataire_name: str, doc_type: str) -> str:
+def _mail_html_piece_jointe(
+    titre: str, locataire_name: str, doc_type: str, url: Optional[str]
+) -> str:
     first = (locataire_name or "").strip().split(" ")[0] or "Bonjour"
     ligne_extra = ""
     if doc_type == "rappel_paiement":
@@ -407,12 +409,25 @@ def _mail_html_piece_jointe(titre: str, locataire_name: str, doc_type: str) -> s
             "<p><strong>Le paiement de votre loyer est exigé "
             "immédiatement.</strong></p>"
         )
+    bloc_lien = (
+        f"""
+  <p style="margin:20px 0 6px 0">
+    <a href="{url}" style="display:inline-block;background:#d89b3c;color:#111;
+       padding:12px 20px;border-radius:8px;font-weight:bold;
+       text-decoration:none">Consulter le document en ligne</a>
+  </p>
+  <p style="margin:0 0 16px 0;font-size:12px;color:#555">Ou copiez ce lien : {url}</p>
+"""
+        if url
+        else ""
+    )
     return f"""\
 <div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:640px">
   <p>Bonjour {first},</p>
   <p>Veuillez trouver ci-joint le document suivant :
      <strong>{titre}</strong>.</p>
   {ligne_extra}
+  {bloc_lien}
   <p style="margin:24px 0 0 0;color:#555;font-size:12px">
     Horizon Services Immobiliers<br>info@immohorizon.com
   </p>
@@ -446,6 +461,14 @@ async def envoyer_courriel(
 
     locataire, dest = await _resolve_destinataire(db, d, payload.email)
 
+    # Lien de consultation tokenisé (page publique SANS bloc signature
+    # pour ces types) → l'ouverture est horodatée comme pour une
+    # signature : suivi d'ouverture universel (retour Phil 2026-07-20).
+    if not d.signature_token:
+        d.signature_token = secrets.token_urlsafe(32)
+        await db.flush()
+    url = f"{public_base()}/sign-document/{d.signature_token}"
+
     mailer = get_mailer()
     try:
         await mailer.send(
@@ -455,6 +478,7 @@ async def envoyer_courriel(
                 d.titre,
                 locataire.full_name if locataire else "",
                 d.type,
+                url,
             ),
             reply_to=mailer.sender,
             attachments=[
