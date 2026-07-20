@@ -13,6 +13,9 @@ type PublicDocument = {
   envoye_le: string | null;
   signed_at: string | null;
   signed_by_name: string | null;
+  // false = consultation seule (avis de retard, accès…) — pas de bloc
+  // signature ; l'ouverture est quand même horodatée côté serveur.
+  signature_requise?: boolean;
   company_name: string;
   company_email: string;
 };
@@ -102,6 +105,7 @@ export default function SignDocumentPage() {
   if (!data) return null;
 
   const isSigned = !!data.signed_at;
+  const signatureRequise = data.signature_requise !== false;
   const pdfUrl = `/api/v1/public/documents/${token}/pdf`;
 
   return (
@@ -161,7 +165,24 @@ export default function SignDocumentPage() {
           />
         </section>
 
-        {!isSigned ? (
+        {!signatureRequise ? (
+          <section className="mt-6 rounded-xl border border-sky-400/40 bg-sky-500/10 p-5">
+            <p className="text-sm text-sky-200">
+              Ce document vous est transmis pour information — aucune
+              signature n&apos;est requise. Pour toute question,
+              contactez-nous à{" "}
+              <a
+                className="underline hover:text-white"
+                href={`mailto:${data.company_email}`}
+              >
+                {data.company_email}
+              </a>
+              .
+            </p>
+          </section>
+        ) : null}
+
+        {!isSigned && signatureRequise ? (
           <section className="mt-6 rounded-xl border border-accent-500/40 bg-accent-500/10 p-6">
             <h2 className="text-base font-semibold text-white">
               Signer le document

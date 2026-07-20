@@ -23,6 +23,7 @@ Stratégie :
 from __future__ import annotations
 
 import logging
+import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
@@ -97,6 +98,9 @@ async def _build_tal_context_for_bail(
 
     return TalContext(
         locateur_nom=locateur_nom,
+        # Adresse du bureau (mandataire Horizon) — même adresse pour
+        # toutes les compagnies de Phil.
+        locateur_adresse="158 rue Maurice, Saint-Rémi (Québec) J0L 2L0",
         locataire_nom=locataire.full_name if locataire else None,
         locataire_email=locataire.email if locataire else None,
         logement_adresse=immeuble.address if immeuble else None,
@@ -173,7 +177,9 @@ async def send_renouvellement_for_bail(
     db.add(obj)
     await db.flush()
 
-    # Génère le PDF + envoie email si possible
+    # Génère le PDF officiel TAL-806 + document CONSERVÉ (suivi
+    # envoyé/ouvert/signé sur la page Renouvellements — retour Phil
+    # 2026-07-20, point 11) + envoi courriel avec lien de consultation.
     sent = False
     ctx = await _build_tal_context_for_bail(
         db, bail, nouveau_loyer, obj.nouvelle_date_debut, nouvelle_date_fin
@@ -181,15 +187,73 @@ async def send_renouvellement_for_bail(
     if motif:
         ctx.motif_modification = motif
 
+    # PDF modèle remplacé par l'utilisateur, s'il y en a un.
+    template_bytes = None
+    try:
+        from sqlalchemy.orm import undefer
+
+        from app.models.immobilier import ImmDocTemplate
+
+        ov = (
+            await db.execute(
+                select(ImmDocTemplate)
+                .options(undefer(ImmDocTemplate.pdf_blob))
+                .where(ImmDocTemplate.type == "avis_modification")
+            )
+        ).scalar_one_or_none()
+        if ov is not None:
+            template_bytes = ov.pdf_blob
+    except Exception:  # noqa: BLE001
+        log.exception("Lecture du modèle avis_modification échouée")
+
+    pdf_bytes = generate_tal_pdf("avis_modification", ctx, template_bytes)
+
+    doc = None
+    try:
+        from app.api.v1.endpoints.immobilier_documents import save_document
+
+        logement = await db.get(Logement, bail.logement_id)
+        doc = await save_document(
+            db,
+            bail_id=bail.id,
+            locataire_id=bail.locataire_id,
+            immeuble_id=logement.immeuble_id if logement else None,
+            doc_type="avis_modification",
+            titre="Avis d'augmentation / modification du bail",
+            params={
+                "modif_mode": "nouveau_loyer" if nouveau_loyer else None,
+                "nouveau_loyer": nouveau_loyer,
+                "nouvelle_date_debut": str(obj.nouvelle_date_debut or ""),
+                "nouvelle_date_fin": str(nouvelle_date_fin or ""),
+                "motif": motif,
+            },
+            pdf=pdf_bytes,
+            created_by_email=None,
+        )
+        if not doc.signature_token:
+            doc.signature_token = secrets.token_urlsafe(32)
+        await db.flush()
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "Sauvegarde du document de renouvellement échouée (bail %s)",
+            bail.id,
+        )
+
     if ctx.locataire_email:
         mailer = GraphMailer()
         if mailer.ready:
             try:
-                pdf_bytes = generate_tal_pdf("avis_modification", ctx)
+                from app.services.public_links import public_base
+
+                url = (
+                    f"{public_base()}/sign-document/{doc.signature_token}"
+                    if doc is not None and doc.signature_token
+                    else None
+                )
                 subject = (
                     f"Avis de modification du bail — {ctx.logement_adresse or ''}"
                 ).strip(" —")
-                body_html = _render_email_body(ctx)
+                body_html = _render_email_body(ctx, url)
                 # « Envoi certifié » : BCC à l'expéditeur pour archive +
                 # demande d'accusé de lecture (read receipt) Outlook.
                 bcc = [mailer.sender] if bcc_to_sender and mailer.sender else None
@@ -208,6 +272,9 @@ async def send_renouvellement_for_bail(
                     ],
                 )
                 sent = True
+                if doc is not None:
+                    doc.envoye_le = datetime.now(timezone.utc)
+                    doc.envoye_a = ctx.locataire_email[:320]
             except Exception:  # noqa: BLE001
                 log.exception(
                     "Échec envoi email renouvellement bail %s", bail.id
@@ -216,13 +283,26 @@ async def send_renouvellement_for_bail(
     return obj, sent
 
 
-def _render_email_body(ctx: TalContext) -> str:
+def _render_email_body(ctx: TalContext, url: Optional[str] = None) -> str:
     nom = ctx.locataire_nom or "Madame, Monsieur,"
     adresse = ctx.logement_adresse or "votre logement"
+    bloc_lien = (
+        f"""
+    <p style="margin:20px 0 6px 0">
+      <a href="{url}" style="display:inline-block;background:#d89b3c;color:#111;
+         padding:12px 20px;border-radius:8px;font-weight:bold;
+         text-decoration:none">Consulter et signer l'avis en ligne</a>
+    </p>
+    <p style="margin:0 0 16px 0;font-size:12px;color:#555">Ou copiez ce lien : {url}</p>
+    """
+        if url
+        else ""
+    )
     return f"""
     <p>Bonjour {nom},</p>
     <p>Vous trouverez ci-joint l'avis officiel de modification de votre bail
     pour le logement situé au <b>{adresse}</b>.</p>
+    {bloc_lien}
     <p>Vous disposez d'un délai d'un (1) mois à compter de la réception du
     présent avis pour répondre. À défaut de réponse, vous serez réputé avoir
     accepté les modifications proposées.</p>

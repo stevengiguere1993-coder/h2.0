@@ -31,7 +31,23 @@ type RenouvellementOverview = {
   avis_envoye_le?: string | null;
   nouveau_loyer?: number | null;
   renouvellement_status?: string | null;
+  // Suivi du document d'avis (TAL-806) : envoyé → ouvert → signé.
+  avis_doc_envoye_le?: string | null;
+  avis_doc_ouvert_le?: string | null;
+  avis_doc_signed_at?: string | null;
 };
+
+function fmtDateTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString("fr-CA", {
+      dateStyle: "short",
+      timeStyle: "short"
+    });
+  } catch {
+    return iso;
+  }
+}
 
 const FENETRE_LABELS: Record<RenouvellementOverview["fenetre"], string> = {
   imminente: "Imminente (<3 mois)",
@@ -343,6 +359,22 @@ export default function RenouvellementsPage() {
                           {r.nouveau_loyer != null
                             ? ` · ${fmtCurrency(r.nouveau_loyer)}`
                             : ""}
+                        </div>
+                      ) : null}
+                      {/* Suivi du document d'avis (TAL-806) :
+                          envoyé → ouvert → signé. */}
+                      {r.avis_doc_signed_at ? (
+                        <div className="mt-0.5 text-[10px] font-semibold text-emerald-300">
+                          Signé le {fmtDateTime(r.avis_doc_signed_at)}
+                        </div>
+                      ) : r.avis_doc_ouvert_le ? (
+                        <div className="mt-0.5 text-[10px] text-sky-300">
+                          Ouvert le {fmtDateTime(r.avis_doc_ouvert_le)} —
+                          pas encore signé
+                        </div>
+                      ) : r.avis_doc_envoye_le ? (
+                        <div className="mt-0.5 text-[10px] text-white/40">
+                          Courriel non ouvert
                         </div>
                       ) : null}
                     </td>
