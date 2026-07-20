@@ -1,14 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
   ClipboardList,
+  Eye,
+  FileText,
   KeyRound,
   Loader2,
   Mail,
-  Search
+  Search,
+  Upload
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
@@ -75,6 +78,9 @@ function fmtCurrency(n: number | null | undefined): string {
 
 export default function RenouvellementsPage() {
   const [list, setList] = useState<RenouvellementOverview[] | null>(null);
+  const [tab, setTab] = useState<"renouvellements" | "releves31">(
+    "renouvellements"
+  );
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "todo" | "envoye">("todo");
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
@@ -202,15 +208,45 @@ export default function RenouvellementsPage() {
             <ClipboardList className="h-5 w-5" />
           </span>
           <div>
-            <h1 className="text-2xl font-bold text-white">Renouvellements de bail</h1>
+            <h1 className="text-2xl font-bold text-white">
+              Renouvellements &amp; Relevés 31
+            </h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
-              Baux qui se terminent dans les 12 prochains mois. Rien ne part
-              tout seul : chaque avis de modification (PDF + courriel)
-              s&apos;envoie à la main, bail par bail, après vérification.
+              {tab === "renouvellements"
+                ? "Baux qui se terminent dans les 12 prochains mois. Rien ne part tout seul : chaque avis de modification (PDF + courriel) s'envoie à la main, bail par bail, après vérification."
+                : "Relevés 31 (Revenu Québec) : un par logement occupé au 31 décembre, copie à remettre au locataire avant le dernier jour de février."}
             </p>
           </div>
         </header>
 
+        {/* Onglets Renouvellements | Relevés 31 (retour Phil 2026-07-20). */}
+        <div className="mt-4 flex items-center gap-2">
+          {(
+            [
+              ["renouvellements", "Renouvellements"],
+              ["releves31", "Relevés 31"]
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setTab(key)}
+              className={`rounded-full px-4 py-1.5 text-sm font-semibold transition ${
+                tab === key
+                  ? "bg-accent-500 text-brand-950"
+                  : "border border-white/10 bg-brand-950 text-white/60 hover:text-white"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {tab === "releves31" ? <Releves31Tab /> : null}
+
+        {/* Contenu Renouvellements — masqué (pas démonté) sur l'autre
+            onglet pour garder l'état des filtres. */}
+        <div className={tab === "releves31" ? "hidden" : ""}>
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <div className="relative max-w-md flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
@@ -410,6 +446,7 @@ export default function RenouvellementsPage() {
             </table>
           </div>
         )}
+        </div>
       </div>
 
       {prepFor ? (
@@ -775,5 +812,418 @@ function FilterPill({
     >
       {label}
     </button>
+  );
+}
+
+// ── Onglet Relevés 31 (Revenu Québec) ────────────────────────────────
+// Un relevé par logement occupé au 31 décembre ; copie à remettre au
+// locataire avant le dernier jour de février. Kratos prépare les données
+// (à saisir dans le service en ligne de Revenu Québec), suit le statut,
+// conserve la copie PDF et l'envoie au locataire (suivi d'ouverture).
+
+type Releve31Row = {
+  annee: number;
+  logement_id: number;
+  logement_numero: string | null;
+  immeuble_id: number | null;
+  immeuble_name: string | null;
+  immeuble_adresse: string | null;
+  bail_id: number | null;
+  locataire_id: number | null;
+  locataire_nom: string | null;
+  locataire_email: string | null;
+  loyer_31_dec: number | null;
+  statut: "a_produire" | "produit" | "remis";
+  numero_releve: string | null;
+  notes: string | null;
+  document_id: number | null;
+};
+
+type Releve31Overview = {
+  annee: number;
+  echeance: string;
+  rows: Releve31Row[];
+  nb_a_produire: number;
+  nb_produits: number;
+  nb_remis: number;
+};
+
+const R31_STATUT: Record<string, { label: string; badge: string }> = {
+  a_produire: { label: "À produire", badge: "badge-amber" },
+  produit: { label: "Produit", badge: "badge-blue" },
+  remis: { label: "Remis au locataire", badge: "badge-emerald" }
+};
+
+function Releves31Tab() {
+  const [data, setData] = useState<Releve31Overview | null>(null);
+  const [annee, setAnnee] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [numDraft, setNumDraft] = useState<Record<number, string>>({});
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const uploadFor = useRef<Releve31Row | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const url =
+        annee != null
+          ? `/api/v1/immobilier/releves31?annee=${annee}`
+          : "/api/v1/immobilier/releves31";
+      const r = await authedFetch(url);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as Releve31Overview;
+      setData(d);
+      if (annee == null) setAnnee(d.annee);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }, [annee]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function patchReleve(
+    row: Releve31Row,
+    body: Record<string, unknown>,
+    okMsg?: string
+  ): Promise<boolean> {
+    setBusyId(row.logement_id);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/releves31/${row.annee}/${row.logement_id}`,
+        { method: "PATCH", body: JSON.stringify(body) }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      if (okMsg) setFlash(okMsg);
+      await load();
+      return true;
+    } catch (e) {
+      setErr((e as Error).message);
+      return false;
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function televerser(file: File) {
+    const row = uploadFor.current;
+    if (!row) return;
+    setBusyId(row.logement_id);
+    setErr(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await authedFetch(
+        `/api/v1/immobilier/releves31/${row.annee}/${row.logement_id}/pdf`,
+        { method: "POST", body: fd }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      setFlash("Copie du relevé téléversée — tu peux l'envoyer au locataire.");
+      await load();
+    } catch (e) {
+      setErr(`Téléversement : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function envoyer(row: Releve31Row) {
+    if (!row.document_id) return;
+    if (
+      !window.confirm(
+        `Envoyer le Relevé 31 ${row.annee} à ${row.locataire_nom || "ce locataire"} par courriel (PDF joint + lien de consultation) ?`
+      )
+    )
+      return;
+    setBusyId(row.logement_id);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/documents/${row.document_id}/envoyer-courriel`,
+        { method: "POST", body: JSON.stringify({}) }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      const res = (await r.json()) as { envoye_a: string };
+      await patchReleve(row, { statut: "remis" });
+      setFlash(`Relevé envoyé à ${res.envoye_a} — suivi d'ouverture actif.`);
+    } catch (e) {
+      setErr(`Envoi : ${(e as Error).message}`);
+      setBusyId(null);
+    }
+  }
+
+  async function voirPdf(row: Releve31Row) {
+    if (!row.document_id) return;
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/documents/${row.document_id}/pdf`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      setErr(`PDF : ${(e as Error).message}`);
+    }
+  }
+
+  const anneesChoix = (() => {
+    const now = new Date().getFullYear();
+    return [now, now - 1, now - 2];
+  })();
+
+  return (
+    <div className="mt-4 space-y-4">
+      <input
+        ref={fileRef}
+        type="file"
+        accept="application/pdf"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void televerser(f);
+        }}
+      />
+
+      <div className="rounded-2xl border border-sky-400/30 bg-sky-500/10 p-4 text-xs text-sky-200">
+        <p className="font-semibold text-white">Comment ça marche</p>
+        <p className="mt-1">
+          1. Produis chaque relevé dans le service en ligne{" "}
+          <a
+            href="https://www.revenuquebec.ca/fr/services-en-ligne/services-en-ligne/produire-des-releves-31/"
+            target="_blank"
+            rel="noreferrer"
+            className="underline hover:text-white"
+          >
+            « Produire des relevés 31 » de Revenu Québec
+          </a>{" "}
+          avec les données du tableau (adresse, locataire). 2. Colle ici le
+          numéro du relevé émis. 3. Téléverse la copie PDF du locataire.
+          4. Envoie-la par courriel — l&apos;ouverture est suivie.
+          {data ? (
+            <>
+              {" "}
+              <b className="text-white">Échéance : {data.echeance}</b>{" "}
+              (dernier jour de février).
+            </>
+          ) : null}
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-xs font-semibold uppercase tracking-wider text-white/50">
+          Année fiscale
+          <select
+            value={annee ?? ""}
+            onChange={(e) => {
+              setData(null);
+              setAnnee(Number(e.target.value));
+            }}
+            className="input ml-2 w-auto text-sm"
+          >
+            {anneesChoix.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+        </label>
+        {data ? (
+          <span className="text-xs text-white/50">
+            {data.rows.length} logement{data.rows.length > 1 ? "s" : ""} occupé
+            {data.rows.length > 1 ? "s" : ""} au 31 déc. {data.annee} ·{" "}
+            <span className="text-amber-300">
+              {data.nb_a_produire} à produire
+            </span>{" "}
+            ·{" "}
+            <span className="text-sky-300">
+              {data.nb_produits} produit{data.nb_produits > 1 ? "s" : ""}
+            </span>{" "}
+            · <span className="text-emerald-300">{data.nb_remis} remis</span>
+          </span>
+        ) : null}
+      </div>
+
+      {flash ? (
+        <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          {flash}
+        </p>
+      ) : null}
+      {err ? (
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+          {err}
+        </p>
+      ) : null}
+
+      {data === null ? (
+        <p className="flex items-center gap-2 text-xs text-white/50">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+        </p>
+      ) : data.rows.length === 0 ? (
+        <p className="rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
+          Aucun logement occupé au 31 décembre {data.annee} (gestion externe
+          exclue).
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-2xl border border-brand-800 bg-brand-900">
+          <table className="w-full min-w-[860px] text-left text-sm">
+            <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
+              <tr>
+                <th className="px-4 py-2.5">Immeuble · logt</th>
+                <th className="px-4 py-2.5">Locataire</th>
+                <th className="px-4 py-2.5 text-right">Loyer au 31 déc</th>
+                <th className="px-4 py-2.5">Statut</th>
+                <th className="px-4 py-2.5">No de relevé (RQ)</th>
+                <th className="px-4 py-2.5 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-brand-800">
+              {data.rows.map((r) => {
+                const st = R31_STATUT[r.statut] || R31_STATUT.a_produire;
+                const busy = busyId === r.logement_id;
+                return (
+                  <tr key={r.logement_id} className="hover:bg-brand-950/50">
+                    <td className="px-4 py-2.5">
+                      {r.immeuble_id != null ? (
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={`/immobilier/immeubles/${r.immeuble_id}` as any}
+                          className="block font-bold text-white hover:text-accent-500"
+                        >
+                          {r.immeuble_name}
+                        </Link>
+                      ) : (
+                        <span className="font-bold text-white">
+                          {r.immeuble_name || "—"}
+                        </span>
+                      )}
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={`/immobilier/logements/${r.logement_id}` as any}
+                        className="text-[11px] font-mono text-accent-500 hover:underline"
+                      >
+                        {r.logement_numero || `#${r.logement_id}`}
+                      </Link>
+                      <div className="text-[10px] text-white/40">
+                        {r.immeuble_adresse || ""}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {r.locataire_id != null ? (
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={`/immobilier/locataires/${r.locataire_id}` as any}
+                          className="text-accent-500 hover:underline"
+                        >
+                          {r.locataire_nom || "—"}
+                        </Link>
+                      ) : (
+                        <span className="text-white">
+                          {r.locataire_nom || "—"}
+                        </span>
+                      )}
+                      <div className="text-[10px] text-white/40">
+                        {r.locataire_email || "(pas d'email)"}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono text-xs text-white/80">
+                      {fmtCurrency(r.loyer_31_dec)}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span className={`badge ${st.badge}`}>{st.label}</span>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <input
+                        value={numDraft[r.logement_id] ?? r.numero_releve ?? ""}
+                        onChange={(e) =>
+                          setNumDraft((d) => ({
+                            ...d,
+                            [r.logement_id]: e.target.value
+                          }))
+                        }
+                        onBlur={() => {
+                          const v = (numDraft[r.logement_id] ?? "").trim();
+                          if (v && v !== (r.numero_releve || ""))
+                            void patchReleve(
+                              r,
+                              { numero_releve: v },
+                              "Numéro de relevé enregistré."
+                            );
+                        }}
+                        placeholder="ex. R310001234"
+                        className="w-36 rounded-md border border-brand-800 bg-brand-950 px-2 py-1 font-mono text-xs text-white outline-none focus:border-accent-500"
+                      />
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <span className="inline-flex items-center gap-1.5">
+                        {r.document_id ? (
+                          <button
+                            type="button"
+                            onClick={() => void voirPdf(r)}
+                            className="btn-secondary btn-xs"
+                            title="Voir la copie PDF du relevé"
+                          >
+                            <Eye className="h-3 w-3" />
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            uploadFor.current = r;
+                            fileRef.current?.click();
+                          }}
+                          className="btn-secondary btn-xs"
+                          title="Téléverser la copie PDF du relevé (émise par Revenu Québec)"
+                        >
+                          {busy ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Upload className="h-3 w-3" />
+                          )}
+                          PDF
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy || !r.document_id || !r.locataire_email}
+                          onClick={() => void envoyer(r)}
+                          className="btn-accent btn-xs disabled:opacity-40"
+                          title={
+                            !r.document_id
+                              ? "Téléverse d'abord la copie PDF du relevé"
+                              : !r.locataire_email
+                                ? "Ajoute d'abord le courriel du locataire"
+                                : "Envoyer la copie au locataire (PDF joint + lien de consultation suivi)"
+                          }
+                        >
+                          <Mail className="h-3 w-3" />
+                          {r.statut === "remis" ? "Renvoyer" : "Envoyer"}
+                        </button>
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <p className="text-[11px] text-white/40">
+        <FileText className="mr-1 inline h-3 w-3" />
+        Les copies téléversées se retrouvent aussi dans la section Documents
+        de la fiche du locataire et du logement.
+      </p>
+    </div>
   );
 }

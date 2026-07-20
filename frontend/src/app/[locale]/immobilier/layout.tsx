@@ -57,7 +57,7 @@ const NAV: NavItem[] = [
   { href: "/immobilier/locataires", label: "Locataires", icon: Users },
   { href: "/immobilier/baux", label: "Baux & paiements", icon: ClipboardList },
   { href: "/immobilier/locations", label: "Locations", icon: KeyRound },
-  { href: "/immobilier/renouvellements", label: "Renouvellements", icon: ClipboardList },
+  { href: "/immobilier/renouvellements", label: "Renouvellements & Relevés 31", icon: ClipboardList },
   { href: "/immobilier/depots", label: "Dépôts de garantie", icon: ShieldCheck },
   { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer }
   // Paramètres → via le footer unifié (SidebarFooter).

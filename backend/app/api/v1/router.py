@@ -60,6 +60,7 @@ from app.api.v1.endpoints import (
     immobilier_extras,
     immobilier_import_excel,
     immobilier_locations,
+    immobilier_releves31,
     investissements,
     dashboard,
     help,
@@ -459,6 +460,10 @@ api_router.include_router(
 # Documents locatifs conservés (avis TAL, trousse, DPA) + envoi signature.
 api_router.include_router(
     immobilier_documents.router, dependencies=DEP_IMMOBILIER
+)
+# Relevés 31 (Revenu Québec) — suivi annuel par logement.
+api_router.include_router(
+    immobilier_releves31.router, dependencies=DEP_IMMOBILIER
 )
 # Images immobilier : PAS de dépendance routeur — auth par ?t=<jwt> dans
 # l'endpoint lui-même (les <img> ne portent pas de header Authorization).
