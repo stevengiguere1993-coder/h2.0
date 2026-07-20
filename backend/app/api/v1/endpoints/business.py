@@ -513,6 +513,17 @@ def make_crud_router(
             for f in punch_changed_fields:
                 punch_before[f] = getattr(obj, f, None)
         obj = await crud.update(obj, data)
+        # (Dé)cocher « à refacturer » à la main POSE LE VERROU : les
+        # automatismes (correct_billable_for_contract_projects, appelé à
+        # chaque ouverture de la liste) ne recocheront plus cette
+        # dépense — retour Phil 2026-07-20.
+        if model is Achat:
+            try:
+                if "is_billable" in data.model_dump(exclude_unset=True):
+                    obj.billable_manual = True
+                    await db.flush()
+            except Exception:  # noqa: BLE001
+                pass
         if model is Punch and punch_changed_fields:
             from app.services.audit import log_action as _log_punch_audit
 

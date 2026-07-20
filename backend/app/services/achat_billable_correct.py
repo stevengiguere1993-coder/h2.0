@@ -19,8 +19,9 @@ arrivent avec is_billable=False alors qu'elles sont sur un projet à
 contrat. Ce service est un AUTOMATISME purement DB (aucun appel QB) qui
 remet is_billable=True pour ces dépenses tant qu'elles ne sont pas encore
 refacturées. Il NE touche JAMAIS une dépense déjà refacturée
-(invoiced_at posé) ni une dépense d'un projet forfaitaire / sans
-soumission.
+(invoiced_at posé), une dépense d'un projet forfaitaire / sans
+soumission, ni une dépense dont l'utilisateur a tranché le drapeau
+lui-même (``billable_manual``).
 """
 
 from __future__ import annotations
@@ -58,6 +59,10 @@ async def correct_billable_for_contract_projects(db: AsyncSession) -> int:
             Achat.project_id.in_(billable_project_ids),
             Achat.is_billable.is_(False),
             Achat.invoiced_at.is_(None),
+            # ⚠️ Ne JAMAIS re-cocher une dépense décochée à la main :
+            # l'automatisme écrasait le choix de l'utilisateur à chaque
+            # ouverture de la liste (retour Phil 2026-07-20).
+            Achat.billable_manual.is_(False),
         )
         .values(is_billable=True)
     )

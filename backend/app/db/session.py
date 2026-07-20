@@ -1186,6 +1186,13 @@ async def init_db() -> None:
                 "is_billable",
                 "BOOLEAN NOT NULL DEFAULT TRUE",
             ),
+            # Verrou « l'utilisateur a tranché » : les automatismes de
+            # correction du drapeau `is_billable` ignorent ces lignes.
+            (
+                "achats",
+                "billable_manual",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
             ("achats", "markup_percent", "NUMERIC(6, 2)"),
             ("achats", "invoiced_at", "TIMESTAMP WITH TIME ZONE"),
             ("achats", "facture_item_id", "INTEGER"),

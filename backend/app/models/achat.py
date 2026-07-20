@@ -220,6 +220,14 @@ class Achat(Base, TimestampUpdateMixin):
     is_billable: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
+    # L'utilisateur a tranché LUI-MÊME le drapeau ci-dessus depuis l'UI
+    # (coché ou décoché à la main) → les automatismes ne le corrigent
+    # plus. Sans ce verrou, décocher une dépense d'un projet à contrat
+    # était systématiquement annulé par correct_billable_for_contract_
+    # projects (retour Phil 2026-07-20 : « laisse-la décochée »).
+    billable_manual: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     # Pourcentage de majoration appliqué au moment d'inscrire l'achat sur
     # une facture client. NULL = pas encore défini (l'admin saisira au
     # moment de l'import, ou utilise le défaut du projet plus tard).
