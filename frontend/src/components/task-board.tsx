@@ -205,9 +205,10 @@ export function TaskBoard({
   function setCriterion(key: CriterionKey, s: CriterionState) {
     setCriteria((prev) => {
       const next = { ...prev, [key]: s };
-      if (s.kind === "sort") {
+      if (s.kind === "sort" || s.kind === "sort_asc") {
         for (const k of Object.keys(next) as CriterionKey[]) {
-          if (k !== key && next[k].kind === "sort") {
+          const kind = next[k].kind;
+          if (k !== key && (kind === "sort" || kind === "sort_asc")) {
             next[k] = { kind: "all" };
           }
         }
@@ -267,7 +268,7 @@ export function TaskBoard({
   }, [tasks, criteria, users, immeubles, extraColumn, search]);
 
   const sortActive = (Object.values(criteria) as CriterionState[]).some(
-    (c) => c.kind === "sort"
+    (c) => c.kind === "sort" || c.kind === "sort_asc"
   );
 
   const statusOptions = useMemo(
@@ -427,7 +428,8 @@ export function TaskBoard({
           state={criteria.created}
           onChange={(s) => setCriterion("created", s)}
           values={[]}
-          sortLabel="Plus récent en haut"
+          sortLabel="Plus récente en haut"
+          sortAscLabel="La plus vieille en haut"
         />
       </div>
       )}
@@ -515,6 +517,9 @@ type CriterionKey =
 type CriterionState =
   | { kind: "all" }
   | { kind: "sort" }
+  // Tri inversé (ex. Création : « la plus vieille en haut ») — offert
+  // seulement par les pickers qui passent `sortAscLabel`.
+  | { kind: "sort_asc" }
   | { kind: "filter"; value: string };
 
 const DEFAULT_FILTERS: Record<CriterionKey, CriterionState> = {
@@ -547,7 +552,8 @@ function CriterionPicker({
   state,
   onChange,
   values,
-  sortLabel
+  sortLabel,
+  sortAscLabel
 }: {
   label: string;
   state: CriterionState;
@@ -556,6 +562,9 @@ function CriterionPicker({
   values: Array<{ value: string; label: string }>;
   /** Libellé de l'option de tri (défaut « Trier »). */
   sortLabel?: string;
+  /** Si fourni, ajoute l'option de tri INVERSÉ (ex. « La plus vieille
+   *  en haut »). */
+  sortAscLabel?: string;
 }) {
   // Encode l'état sur une seule clé string pour le <select>.
   const current =
@@ -563,7 +572,9 @@ function CriterionPicker({
       ? "__all"
       : state.kind === "sort"
         ? "__sort"
-        : `v:${state.value}`;
+        : state.kind === "sort_asc"
+          ? "__sort_asc"
+          : `v:${state.value}`;
   return (
     <label className="inline-flex items-center gap-1.5 text-xs text-white/60">
       <span>{label}&nbsp;:</span>
@@ -573,12 +584,16 @@ function CriterionPicker({
           const v = e.target.value;
           if (v === "__all") onChange({ kind: "all" });
           else if (v === "__sort") onChange({ kind: "sort" });
+          else if (v === "__sort_asc") onChange({ kind: "sort_asc" });
           else onChange({ kind: "filter", value: v.slice(2) });
         }}
         className="rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
       >
         <option value="__all">Tous</option>
         <option value="__sort">{sortLabel || "Trier"}</option>
+        {sortAscLabel ? (
+          <option value="__sort_asc">{sortAscLabel}</option>
+        ) : null}
         {values.length > 0 ? (
           <option disabled value="__sep">
             ──────────
@@ -676,9 +691,11 @@ function sortTasks(
   extraColumn?: ExtraColumnConfig
 ): TaskBoardItem[] {
   const sortKey = (Object.keys(filters) as CriterionKey[]).find(
-    (k) => filters[k].kind === "sort"
+    (k) =>
+      filters[k].kind === "sort" || filters[k].kind === "sort_asc"
   );
   if (!sortKey) return tasks;
+  const ascending = filters[sortKey].kind === "sort_asc";
 
   const userName = new Map(
     users.map(
@@ -730,7 +747,11 @@ function sortTasks(
       return (found?.label || id).toLowerCase();
     }
     if (sortKey === "created") {
-      // Plus récent EN HAUT : clé négative → ordre croissant = desc réel.
+      if (ascending) {
+        // La plus VIEILLE en haut ; sans date de création → en bas.
+        return t.created_at ? Date.parse(t.created_at) : Infinity;
+      }
+      // Plus récente EN HAUT : clé négative → ordre croissant = desc réel.
       return -(t.created_at ? Date.parse(t.created_at) : 0);
     }
     return 0;
@@ -964,10 +985,12 @@ function KanbanView({
       {TASK_STATUS_OPTIONS.map((col) => {
         const list = byStatus[col.value] || [];
         const isHover = hoverCol === col.value;
-        // Colonne « Terminé » : on affiche les plus récentes d'abord et on
-        // plie les anciennes au-delà de RECENT_DONE.
+        // Colonne « Terminé » : par défaut (ordre positionnel) on
+        // inverse pour montrer les dernières cochées d'abord. ⚠️ PAS
+        // quand un tri utilisateur est actif (`sorted`) — l'inversion
+        // écrasait « Plus récente en haut » (bug Phil 2026-07-20).
         const isDone = col.value === "done";
-        const ordered = isDone ? [...list].reverse() : list;
+        const ordered = isDone && !sorted ? [...list].reverse() : list;
         const foldable = isDone && ordered.length > RECENT_DONE;
         const visible =
           foldable && !doneShowAll
