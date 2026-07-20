@@ -6,8 +6,10 @@ import {
   FileSignature,
   Info,
   Loader2,
+  Pencil,
   RotateCcw,
-  Upload
+  Upload,
+  X
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -27,6 +29,8 @@ type TalForm = {
   description: string;
   officiel?: boolean;
   signature_requise?: boolean;
+  // Lettre maison dont le texte est éditable (gabarit).
+  texte_modifiable?: boolean;
   custom_filename?: string | null;
   custom_uploaded_at?: string | null;
 };
@@ -37,6 +41,7 @@ export default function ModelesDocumentsPage() {
   const [flash, setFlash] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [uploading, setUploading] = useState<string | null>(null);
+  const [editerCode, setEditerCode] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const uploadCode = useRef<string | null>(null);
 
@@ -280,12 +285,228 @@ export default function ModelesDocumentsPage() {
                       Original
                     </button>
                   ) : null}
+                  {f.texte_modifiable ? (
+                    <button
+                      type="button"
+                      onClick={() => setEditerCode(f.code)}
+                      className="btn-ghost btn-sm"
+                      title="Modifier le texte de cette lettre (gabarit)"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Modifier le texte
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ))}
           </div>
         )}
       </div>
+      {editerCode ? (
+        <GabaritModal
+          code={editerCode}
+          titre={
+            (forms || []).find((f) => f.code === editerCode)?.label ||
+            editerCode
+          }
+          onClose={() => setEditerCode(null)}
+          onSaved={(message) => {
+            setEditerCode(null);
+            setFlash(message);
+          }}
+        />
+      ) : null}
     </>
+  );
+}
+
+// ── Éditeur de gabarit des lettres maison (retard, accès) ────────────
+// Le texte (titre + paragraphes, un paragraphe par bloc séparé d'une
+// ligne vide) est enregistré dans automation_settings et utilisé pour
+// toutes les prochaines générations. Variables {x} remplacées par les
+// données du bail ; **gras** supporté.
+
+type Gabarit = {
+  code: string;
+  titre: string;
+  paragraphes: string[];
+  variables: string[];
+  personnalise: boolean;
+};
+
+function GabaritModal({
+  code,
+  titre,
+  onClose,
+  onSaved
+}: {
+  code: string;
+  titre: string;
+  onClose: () => void;
+  onSaved: (message: string) => void;
+}) {
+  const [gabarit, setGabarit] = useState<Gabarit | null>(null);
+  const [titreDraft, setTitreDraft] = useState("");
+  const [texte, setTexte] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/immobilier/tal/gabarits/${code}`
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const g = (await r.json()) as Gabarit;
+        if (cancelled) return;
+        setGabarit(g);
+        setTitreDraft(g.titre);
+        setTexte(g.paragraphes.join("\n\n"));
+      } catch (e) {
+        if (!cancelled) setErr((e as Error).message);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [code]);
+
+  async function save(reset: boolean) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const paragraphes = reset
+        ? []
+        : texte
+            .split(/\n\s*\n/)
+            .map((p) => p.trim())
+            .filter(Boolean);
+      const r = await authedFetch(
+        `/api/v1/immobilier/tal/gabarits/${code}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            titre: reset ? null : titreDraft.trim() || null,
+            paragraphes
+          })
+        }
+      );
+      if (!r.ok)
+        throw new Error(
+          (await r.text()).slice(0, 200) || `HTTP ${r.status}`
+        );
+      onSaved(
+        reset
+          ? "Texte d'origine restauré."
+          : "Gabarit enregistré — utilisé pour toutes les prochaines générations."
+      );
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+      <div className="my-8 w-full max-w-2xl rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
+            Modifier le texte — {titre}
+          </h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="space-y-3 p-5">
+          {gabarit === null && !err ? (
+            <p className="flex items-center gap-2 text-xs text-white/50">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+            </p>
+          ) : null}
+          {gabarit ? (
+            <>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                Titre de la lettre
+                <input
+                  value={titreDraft}
+                  onChange={(e) => setTitreDraft(e.target.value)}
+                  className="input mt-1 w-full"
+                />
+              </label>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                Texte (un paragraphe par bloc, ligne vide entre les blocs)
+                <textarea
+                  value={texte}
+                  onChange={(e) => setTexte(e.target.value)}
+                  rows={14}
+                  className="input mt-1 w-full font-mono text-xs leading-5"
+                />
+              </label>
+              <p className="text-[11px] text-white/50">
+                Variables remplacées automatiquement :{" "}
+                {gabarit.variables.map((v) => (
+                  <code
+                    key={v}
+                    className="mr-1 rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-accent-500"
+                  >
+                    {"{" + v + "}"}
+                  </code>
+                ))}
+                — <b>**gras**</b> pour mettre en gras. Utilise « Aperçu
+                (exemple) » sur la carte pour vérifier le rendu après
+                l&apos;enregistrement.
+              </p>
+              {gabarit.personnalise ? (
+                <p className="text-[11px] text-amber-300">
+                  Un texte personnalisé est actif (différent de
+                  l&apos;original).
+                </p>
+              ) : null}
+            </>
+          ) : null}
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {err}
+            </p>
+          ) : null}
+          <div className="flex items-center justify-between border-t border-brand-800 pt-3">
+            <button
+              type="button"
+              onClick={() => void save(true)}
+              disabled={busy || !gabarit}
+              className="btn-ghost btn-sm text-white/60"
+              title="Revenir au texte d'origine"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Texte d&apos;origine
+            </button>
+            <span className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                className="btn-secondary btn-sm"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={() => void save(false)}
+                disabled={busy || !gabarit || !texte.trim()}
+                className="btn-accent btn-sm disabled:opacity-50"
+              >
+                {busy ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : null}
+                Enregistrer
+              </button>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
