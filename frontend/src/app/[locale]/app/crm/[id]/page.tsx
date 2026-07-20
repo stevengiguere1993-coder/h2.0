@@ -1462,6 +1462,9 @@ type Appointment = {
   assignee_id: number | null;
   event_type: string;
   confirmation_sent_at?: string | null;
+  /** Rempli si l'invitation calendrier de l'employé assigné n'a pas pu
+   *  partir (aucun courriel joignable). */
+  assignee_invite_warning?: string | null;
 };
 
 type Employe = { id: number; full_name: string };
@@ -1594,9 +1597,19 @@ function AppointmentScheduler({
       }
       const created = (await res.json()) as Appointment;
       setPast((xs) => [created, ...xs]);
-      setSuccess(
-        "RDV créé. Un courriel de confirmation a été envoyé au prospect."
-      );
+      // L'invitation calendrier de l'employé assigné peut ne PAS partir
+      // (aucun courriel sur sa fiche ni sur son compte) : on le dit au
+      // lieu d'échouer en silence — retour Phil 2026-07-20.
+      if (created.assignee_invite_warning) {
+        setSuccess(null);
+        setError(`RDV créé, mais ${created.assignee_invite_warning}`);
+      } else {
+        setSuccess(
+          assigneeId
+            ? "RDV créé. Confirmation envoyée au prospect et invitation calendrier à l'employé assigné."
+            : "RDV créé. Un courriel de confirmation a été envoyé au prospect."
+        );
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
