@@ -38,7 +38,75 @@ type RenouvellementOverview = {
   avis_doc_envoye_le?: string | null;
   avis_doc_ouvert_le?: string | null;
   avis_doc_signed_at?: string | null;
+  assurance_confirmee_le?: string | null;
 };
+
+/** Coche « assurance confirmée » (1×/année) — cliquable, état local
+ *  optimiste pour éviter de recharger toute la liste. */
+function AssuranceChip({
+  locataireId,
+  confirmeeLe
+}: {
+  locataireId: number | null | undefined;
+  confirmeeLe: string | null | undefined;
+}) {
+  const [date, setDate] = useState<string | null>(confirmeeLe ?? null);
+  const [busy, setBusy] = useState(false);
+  if (locataireId == null) return null;
+  const valide =
+    date != null &&
+    Date.now() - new Date(`${date}T00:00:00`).getTime() <
+      365 * 24 * 3600 * 1000;
+
+  async function confirmer() {
+    if (
+      !window.confirm(
+        "Confirmer que la preuve d'assurance du locataire a été vérifiée aujourd'hui ?"
+      )
+    )
+      return;
+    setBusy(true);
+    try {
+      const t = new Date();
+      const iso = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}-${String(t.getDate()).padStart(2, "0")}`;
+      const r = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataireId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ assurance_confirmee_le: iso })
+        }
+      );
+      if (r.ok) setDate(iso);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => void confirmer()}
+      title={
+        valide
+          ? `Assurance confirmée le ${date} — cliquer pour reconfirmer aujourd'hui`
+          : date
+            ? `Dernière confirmation le ${date} (plus de 12 mois) — cliquer pour confirmer aujourd'hui`
+            : "Assurance jamais confirmée — cliquer pour confirmer aujourd'hui"
+      }
+      className={`mt-1 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold transition disabled:opacity-50 ${
+        valide
+          ? "bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
+          : "bg-amber-500/15 text-amber-300 hover:bg-amber-500/25"
+      }`}
+    >
+      {valide ? "✓ Assurance OK" : "Assurance à confirmer"}
+    </button>
+  );
+}
 
 function fmtDateTime(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -371,6 +439,10 @@ export default function RenouvellementsPage() {
                       <div className="text-[10px] text-white/40">
                         {r.locataire_email || "(pas d'email)"}
                       </div>
+                      <AssuranceChip
+                        locataireId={r.locataire_id}
+                        confirmeeLe={r.assurance_confirmee_le}
+                      />
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-xs text-white/80">
                       {fmtCurrency(r.bail_loyer_mensuel)}
@@ -832,6 +904,7 @@ type Releve31Row = {
   locataire_id: number | null;
   locataire_nom: string | null;
   locataire_email: string | null;
+  assurance_confirmee_le: string | null;
   loyer_31_dec: number | null;
   statut: "a_produire" | "produit" | "remis";
   numero_releve: string | null;
@@ -1135,6 +1208,10 @@ function Releves31Tab() {
                       <div className="text-[10px] text-white/40">
                         {r.locataire_email || "(pas d'email)"}
                       </div>
+                      <AssuranceChip
+                        locataireId={r.locataire_id}
+                        confirmeeLe={r.assurance_confirmee_le}
+                      />
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-xs text-white/80">
                       {fmtCurrency(r.loyer_31_dec)}

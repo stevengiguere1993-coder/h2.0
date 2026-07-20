@@ -239,6 +239,11 @@ class Logement(Base, TimestampUpdateMixin):
     superficie_pi2: Mapped[Optional[float]] = mapped_column(
         Numeric(8, 1), nullable=True
     )
+    # Logement loué EN CHAMBRES (colocation par chambre) — retour Steven
+    # 2026-07-20. Colonne additive → ensure_critical_columns.
+    location_en_chambres: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     etage: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     type: Mapped[str] = mapped_column(
@@ -305,6 +310,13 @@ class Locataire(Base, TimestampUpdateMixin):
     )
     dpa_envoye_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     dpa_signe_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    # Preuve d'assurance locataire confirmée — à revalider chaque année
+    # (retour Steven 2026-07-20). Date de la dernière confirmation ;
+    # > 12 mois = à reconfirmer. Colonne additive → ensure_critical_columns.
+    assurance_confirmee_le: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
 
 
 class LocataireCommunication(Base, TimestampUpdateMixin):

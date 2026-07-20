@@ -60,6 +60,8 @@ class Releve31Row(BaseModel):
     locataire_id: Optional[int] = None
     locataire_nom: Optional[str] = None
     locataire_email: Optional[str] = None
+    # Assurance locataire : dernière confirmation (> 12 mois = à refaire).
+    assurance_confirmee_le: Optional[date] = None
     loyer_31_dec: Optional[float] = None
     # Suivi
     statut: str = "a_produire"
@@ -209,6 +211,9 @@ async def releves31_overview(
                 locataire_id=lo.id if lo else None,
                 locataire_nom=lo.full_name if lo else None,
                 locataire_email=lo.email if lo else None,
+                assurance_confirmee_le=(
+                    lo.assurance_confirmee_le if lo else None
+                ),
                 loyer_31_dec=float(b.loyer_mensuel or 0),
                 statut=suivi.statut if suivi else "a_produire",
                 numero_releve=suivi.numero_releve if suivi else None,

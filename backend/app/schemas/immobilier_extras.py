@@ -143,6 +143,8 @@ class RenouvellementOverview(BaseModel):
     avis_doc_envoye_le: Optional[datetime] = None
     avis_doc_ouvert_le: Optional[datetime] = None
     avis_doc_signed_at: Optional[datetime] = None
+    # Assurance locataire : dernière confirmation (> 12 mois = à refaire).
+    assurance_confirmee_le: Optional[date] = None
 
 
 # ─── Vue immobilier par entreprise ─────────────────────────────────────

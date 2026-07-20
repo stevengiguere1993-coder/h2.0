@@ -31,6 +31,7 @@ export type LogementFicheData = {
   nb_chambres?: number | null;
   nb_sdb?: number | null;
   superficie_pi2?: number | null;
+  location_en_chambres?: boolean;
   etage?: number | null;
   type: string;
   status: string;
@@ -124,6 +125,9 @@ export function LogementFiche({
       logement?.loyer_demande != null ? String(logement.loyer_demande) : "",
     notes: logement?.notes ?? ""
   });
+  const [enChambres, setEnChambres] = useState(
+    !!logement?.location_en_chambres
+  );
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -179,6 +183,7 @@ export function LogementFiche({
         nb_chambres: numOrNull(form.nb_chambres),
         nb_sdb: numOrNull(form.nb_sdb),
         superficie_pi2: numOrNull(form.superficie_pi2),
+        location_en_chambres: enChambres,
         etage: numOrNull(form.etage),
         loyer_demande: numOrNull(form.loyer_demande),
         notes: form.notes.trim() ? form.notes : null
@@ -380,6 +385,15 @@ export function LogementFiche({
                 onChange={(e) => set("superficie_pi2", e.target.value)}
                 className="input font-mono"
               />
+              <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-xs text-white/70">
+                <input
+                  type="checkbox"
+                  checked={enChambres}
+                  onChange={(e) => setEnChambres(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-accent-500"
+                />
+                Loué en chambre
+              </label>
             </div>
             <div>
               <label className="label">Étage</label>

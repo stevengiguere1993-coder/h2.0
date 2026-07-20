@@ -129,6 +129,7 @@ class LogementBase(BaseModel):
     nb_chambres: Optional[int] = Field(default=None, ge=0)
     nb_sdb: Optional[float] = Field(default=None, ge=0)
     superficie_pi2: Optional[float] = Field(default=None, ge=0)
+    location_en_chambres: bool = False
     etage: Optional[int] = None
     type: str = Field(default="residentiel", max_length=32)
     status: str = Field(default="vacant", max_length=16)
@@ -146,6 +147,7 @@ class LogementUpdate(BaseModel):
     nb_chambres: Optional[int] = Field(default=None, ge=0)
     nb_sdb: Optional[float] = Field(default=None, ge=0)
     superficie_pi2: Optional[float] = Field(default=None, ge=0)
+    location_en_chambres: Optional[bool] = None
     etage: Optional[int] = None
     type: Optional[str] = Field(default=None, max_length=32)
     status: Optional[str] = Field(default=None, max_length=16)
@@ -171,6 +173,8 @@ class LocataireBase(BaseModel):
     date_naissance: Optional[date] = None
     employeur: Optional[str] = Field(default=None, max_length=255)
     revenu_annuel: Optional[float] = Field(default=None, ge=0)
+    # Dernière confirmation de la preuve d'assurance (à refaire chaque année).
+    assurance_confirmee_le: Optional[date] = None
     notes: Optional[str] = None
 
 
@@ -186,6 +190,7 @@ class LocataireUpdate(BaseModel):
     date_naissance: Optional[date] = None
     employeur: Optional[str] = Field(default=None, max_length=255)
     revenu_annuel: Optional[float] = Field(default=None, ge=0)
+    assurance_confirmee_le: Optional[date] = None
     notes: Optional[str] = None
     # Suivi DPA (Règle H1) : 'aucun' | 'envoye' | 'actif' | 'refuse'.
     dpa_statut: Optional[str] = Field(default=None, max_length=16)

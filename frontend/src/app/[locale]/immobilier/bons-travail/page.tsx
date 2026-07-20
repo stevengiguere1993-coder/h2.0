@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   Hammer,
@@ -105,6 +106,10 @@ function money(n: number | null | undefined): string {
 
 export default function BonsTravailPage() {
   const { currentEntrepriseId } = useImmobilierLayout();
+  // Deep-link depuis la fiche immeuble : ?new=1&immeuble=<id> ouvre le
+  // MÊME formulaire de création avec l'immeuble présélectionné (Steven).
+  const searchParams = useSearchParams();
+  const deepLinkApplied = useRef(false);
   const [immeubles, setImmeubles] = useState<ImmeubleListItem[] | null>(null);
   const [immeubleId, setImmeubleId] = useState<number | "">("");
   const [logements, setLogements] = useState<Logement[]>([]);
@@ -165,8 +170,25 @@ export default function BonsTravailPage() {
           : "/api/v1/immobilier/immeubles";
       try {
         const r = await authedFetch(url);
-        if (r.ok && !cancelled)
-          setImmeubles((await r.json()) as ImmeubleListItem[]);
+        if (r.ok && !cancelled) {
+          const list = (await r.json()) as ImmeubleListItem[];
+          setImmeubles(list);
+          // Deep-link (une seule fois) : présélectionner l'immeuble et
+          // ouvrir le formulaire si demandé par la fiche immeuble.
+          if (!deepLinkApplied.current) {
+            deepLinkApplied.current = true;
+            const immParam = Number(searchParams.get("immeuble"));
+            if (
+              Number.isFinite(immParam) &&
+              list.some((i) => i.id === immParam)
+            ) {
+              setImmeubleId(immParam);
+              setFormOpen(true);
+            } else if (searchParams.get("new")) {
+              setFormOpen(true);
+            }
+          }
+        }
       } catch {
         /* ignore */
       }
@@ -174,6 +196,7 @@ export default function BonsTravailPage() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentEntrepriseId]);
 
   // Logements de l'immeuble sélectionné.

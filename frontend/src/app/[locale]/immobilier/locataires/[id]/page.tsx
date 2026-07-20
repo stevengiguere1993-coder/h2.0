@@ -49,6 +49,8 @@ type Locataire = {
   dpa_statut?: string;
   dpa_envoye_le?: string | null;
   dpa_signe_le?: string | null;
+  // Assurance locataire : dernière confirmation (à refaire chaque année).
+  assurance_confirmee_le?: string | null;
 };
 
 type DossierBail = {
@@ -248,6 +250,35 @@ export default function LocataireDetailPage({
       }
       const res = (await r.json()) as { destinataire: string };
       setDpaMsg(`Documentation DPA envoyée à ${res.destinataire}.`);
+      await loadDossier();
+    } catch (e) {
+      setDpaMsg((e as Error).message);
+    } finally {
+      setDpaBusy(false);
+    }
+  }
+
+  // Assurance locataire — confirmation annuelle (retour Steven 2026-07-20).
+  async function assuranceConfirmer(clear = false) {
+    setDpaBusy(true);
+    try {
+      const today = new Date();
+      const iso = `${today.getFullYear()}-${String(
+        today.getMonth() + 1
+      ).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      const r = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataireId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            assurance_confirmee_le: clear ? null : iso
+          })
+        }
+      );
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
       await loadDossier();
     } catch (e) {
       setDpaMsg((e as Error).message);
@@ -1148,6 +1179,62 @@ export default function LocataireDetailPage({
                     className="text-xs text-white/40 hover:text-white/70"
                   >
                     Réinitialiser
+                  </button>
+                ) : null}
+              </div>
+            </section>
+
+            {/* Assurance locataire — à confirmer chaque année (Steven). */}
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  Assurance locataire
+                </h2>
+                {(() => {
+                  const d = loc.assurance_confirmee_le;
+                  if (!d)
+                    return (
+                      <span className="badge badge-neutral">
+                        Jamais confirmée
+                      </span>
+                    );
+                  const valide =
+                    Date.now() - new Date(`${d}T00:00:00`).getTime() <
+                    365 * 24 * 3600 * 1000;
+                  return valide ? (
+                    <span className="badge badge-emerald">
+                      Confirmée le {d}
+                    </span>
+                  ) : (
+                    <span className="badge badge-amber">
+                      À reconfirmer — dernière fois le {d}
+                    </span>
+                  );
+                })()}
+              </div>
+              <p className="mb-3 text-xs text-white/50">
+                Le locataire doit détenir une assurance responsabilité
+                (habitation). Confirme-la une fois par année — au
+                renouvellement du bail, c&apos;est le bon moment.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={dpaBusy}
+                  onClick={() => void assuranceConfirmer()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                  title="La preuve d'assurance a été vérifiée aujourd'hui"
+                >
+                  <Check className="h-3.5 w-3.5" /> Confirmer aujourd&apos;hui
+                </button>
+                {loc.assurance_confirmee_le ? (
+                  <button
+                    type="button"
+                    disabled={dpaBusy}
+                    onClick={() => void assuranceConfirmer(true)}
+                    className="text-xs text-white/40 hover:text-rose-300"
+                  >
+                    Retirer la confirmation
                   </button>
                 ) : null}
               </div>
