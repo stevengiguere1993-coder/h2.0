@@ -276,121 +276,112 @@ def _signature_block(ctx: TalContext, styles: dict) -> list:
     ]
 
 
-# --- Builders par type de formulaire --------------------------------------
+# --- Lettres maison à GABARIT ÉDITABLE -------------------------------------
+# Le texte des 2 lettres (retard, accès) est modifiable depuis Paramètres →
+# Modèles de documents (retour Phil 2026-07-20, point 1). L'override vit dans
+# automation_settings (clé ``immo.gabarit.<type>``) : {"titre": str,
+# "paragraphes": [str, ...]}. Placeholders {variable} remplacés par les
+# valeurs du bail ; **gras** → <b>gras</b>.
 
-
-def _build_rappel_paiement(ctx: TalContext, styles: dict) -> list:
-    # Exigence Phil 2026-07-17 : « il doit payer IMMÉDIATEMENT » — pas de
-    # délai de grâce, pas de signature.
-    flow: list = []
-    flow.extend(_header_block(ctx, styles))
-    flow.append(
-        Paragraph("AVIS DE RETARD — LOYER IMPAYÉ", styles["title"])
-    )
-    flow.extend(_destinataire(ctx, styles))
-
-    flow.append(
-        Paragraph(
-            (
-                f"Selon nos registres, le loyer du mois de "
-                f"<b>{_fmt_mois(ctx.mois_concerne)}</b> pour le logement situé "
-                f"au <b>{_fmt_adresse_complete(ctx)}</b>, d'un montant de "
-                f"<b>{_fmt_money(ctx.montant_du)}</b>, n'a toujours pas été acquitté."
-            ),
-            styles["body"],
-        )
-    )
-    flow.append(
-        Paragraph(
-            (
-                "Le loyer est payable le premier jour du mois. <b>Vous devez "
-                "acquitter ce montant IMMÉDIATEMENT.</b>"
-            ),
-            styles["body"],
-        )
-    )
-    flow.append(
-        Paragraph(
-            (
-                "À défaut de paiement, nous nous réservons tous les recours "
-                "prévus par la loi, y compris une demande au Tribunal "
-                "administratif du logement en recouvrement du loyer et, si "
-                "le retard dépasse trois semaines, en résiliation du bail "
-                "(art. 1971 du <i>Code civil du Québec</i>)."
-            ),
-            styles["body"],
-        )
-    )
-    flow.extend(_signature_block(ctx, styles))
-    return flow
-
-
-def _build_avis_acces(ctx: TalContext, styles: dict) -> list:
-    flow: list = []
-    flow.extend(_header_block(ctx, styles))
-    flow.append(Paragraph("AVIS D'ACCÈS AU LOGEMENT", styles["title"]))
-    flow.extend(_destinataire(ctx, styles))
-
-    flow.append(
-        Paragraph(
-            (
-                f"Conformément aux articles 1931 et suivants du <i>Code "
-                f"civil du Québec</i>, je vous avise de mon intention "
-                f"d'accéder au logement situé au "
-                f"<b>{_fmt_adresse_complete(ctx)}</b> :"
-            ),
-            styles["body"],
-        )
-    )
-
-    rows = [
-        ["Date", _fmt_date(ctx.acces_date)],
-        ["Plage horaire", _fmt_or(ctx.acces_plage)],
-        ["Motif", _fmt_or(ctx.acces_motif)],
-    ]
-    t = Table(rows, colWidths=[7 * cm, 10 * cm])
-    t.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f7f7f7")),
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ]
-        )
-    )
-    flow.append(t)
-    flow.append(Spacer(1, 0.4 * cm))
-
-    flow.append(
-        Paragraph(
-            (
-                "Le présent avis vous est transmis au moins vingt-quatre "
-                "(24) heures à l'avance. La visite aura lieu entre 9 h et "
-                "21 h (ou entre 7 h et 19 h s'il s'agit de travaux), "
-                "conformément aux articles 1932 et 1933 du <i>Code civil "
-                "du Québec</i>. Si le moment proposé vous convient mal, "
-                "communiquez avec moi pour convenir d'un autre moment."
-            ),
-            styles["body"],
-        )
-    )
-
-    flow.extend(_signature_block(ctx, styles))
-    return flow
-
-
-#: Lettres maison (reportlab). Les 5 formulaires officiels sont servis
-#: par tal_officiel.fill_official_pdf.
-_BUILDERS = {
-    "rappel_paiement": _build_rappel_paiement,
-    "avis_acces": _build_avis_acces,
+GABARITS_DEFAUT: dict[str, dict] = {
+    "rappel_paiement": {
+        # Exigence Phil 2026-07-17 : paiement IMMÉDIAT, pas de délai.
+        "titre": "AVIS DE RETARD — LOYER IMPAYÉ",
+        "paragraphes": [
+            "Selon nos registres, le loyer du mois de **{mois}** pour le "
+            "logement situé au **{adresse}**, d'un montant de "
+            "**{montant}**, n'a toujours pas été acquitté.",
+            "Le loyer est payable le premier jour du mois. **Vous devez "
+            "acquitter ce montant IMMÉDIATEMENT.**",
+            "À défaut de paiement, nous nous réservons tous les recours "
+            "prévus par la loi, y compris une demande au Tribunal "
+            "administratif du logement en recouvrement du loyer et, si le "
+            "retard dépasse trois semaines, en résiliation du bail "
+            "(art. 1971 du Code civil du Québec).",
+        ],
+    },
+    "avis_acces": {
+        "titre": "AVIS D'ACCÈS AU LOGEMENT",
+        "paragraphes": [
+            "Conformément aux articles 1931 et suivants du Code civil du "
+            "Québec, je vous avise de mon intention d'accéder au logement "
+            "situé au **{adresse}** le **{date}**, {plage}.",
+            "Motif : {motif}.",
+            "Le présent avis vous est transmis au moins vingt-quatre (24) "
+            "heures à l'avance. La visite aura lieu entre 9 h et 21 h (ou "
+            "entre 7 h et 19 h s'il s'agit de travaux), conformément aux "
+            "articles 1932 et 1933 du Code civil du Québec. Si le moment "
+            "proposé vous convient mal, communiquez avec moi pour convenir "
+            "d'un autre moment.",
+        ],
+    },
 }
+
+#: Variables disponibles par lettre (affichées dans l'éditeur).
+GABARIT_VARIABLES: dict[str, list[str]] = {
+    "rappel_paiement": ["mois", "montant", "adresse", "locataire", "locateur"],
+    "avis_acces": ["date", "plage", "motif", "adresse", "locataire", "locateur"],
+}
+
+
+def _lettre_variables(form_type: str, ctx: TalContext) -> dict[str, str]:
+    communes = {
+        "adresse": _fmt_adresse_complete(ctx),
+        "locataire": _fmt_or(ctx.locataire_nom),
+        "locateur": _fmt_or(ctx.locateur_nom),
+    }
+    if form_type == "rappel_paiement":
+        return {
+            **communes,
+            "mois": _fmt_mois(ctx.mois_concerne),
+            "montant": _fmt_money(ctx.montant_du),
+        }
+    if form_type == "avis_acces":
+        return {
+            **communes,
+            "date": _fmt_date(ctx.acces_date),
+            "plage": ctx.acces_plage or "durant la journée",
+            "motif": _fmt_or(ctx.acces_motif),
+        }
+    return communes
+
+
+def _rendre_paragraphe(texte: str, variables: dict[str, str]) -> str:
+    for k, v in variables.items():
+        texte = texte.replace("{" + k + "}", v)
+    # **gras** → balise reportlab ; échappement minimal des chevrons.
+    texte = texte.replace("<", "&lt;").replace(">", "&gt;")
+    import re as _re
+
+    return _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", texte)
+
+
+def _build_lettre(
+    form_type: str,
+    ctx: TalContext,
+    styles: dict,
+    gabarit: Optional[dict] = None,
+) -> list:
+    defaut = GABARITS_DEFAUT[form_type]
+    titre = (gabarit or {}).get("titre") or defaut["titre"]
+    paragraphes = (gabarit or {}).get("paragraphes") or defaut["paragraphes"]
+    variables = _lettre_variables(form_type, ctx)
+
+    flow: list = []
+    flow.extend(_header_block(ctx, styles))
+    flow.append(Paragraph(str(titre), styles["title"]))
+    flow.extend(_destinataire(ctx, styles))
+    for p in paragraphes:
+        texte = _rendre_paragraphe(str(p), variables)
+        if texte.strip():
+            flow.append(Paragraph(texte, styles["body"]))
+    flow.extend(_signature_block(ctx, styles))
+    return flow
+
+
+#: Lettres maison (reportlab, gabarit éditable via _build_lettre). Les 5
+#: formulaires officiels sont servis par tal_officiel.fill_official_pdf.
+_LETTRES = tuple(GABARITS_DEFAUT.keys())
 
 #: Types dont l'envoi se fait par simple courriel avec PDF joint — AUCUNE
 #: signature en ligne (exigence Phil 2026-07-17, points 4 et 7).
@@ -402,25 +393,29 @@ SIGNATURE_NON_REQUISE = {"rappel_paiement", "avis_acces", "releve31"}
 def available_form_types() -> list[str]:
     from app.services.tal_officiel import OFFICIAL_FORMS
 
-    return [*OFFICIAL_FORMS.keys(), *_BUILDERS.keys()]
+    return [*OFFICIAL_FORMS.keys(), *_LETTRES]
 
 
 def generate_tal_pdf(
     form_type: str,
     ctx: TalContext,
     template_bytes: Optional[bytes] = None,
+    gabarit: Optional[dict] = None,
 ) -> bytes:
     """Génère le PDF demandé — formulaire OFFICIEL rempli pour les 5
     types TAL, lettre reportlab sinon. Lève KeyError si inconnu.
 
     ``template_bytes`` : PDF modèle de remplacement (imm_doc_templates)
-    pour les formulaires officiels ; ignoré pour les lettres."""
+    pour les formulaires officiels ; ignoré pour les lettres.
+    ``gabarit`` : override {titre, paragraphes} pour les lettres
+    (automation_settings ``immo.gabarit.<type>``) ; ignoré sinon."""
     from app.services.tal_officiel import fill_official_pdf, is_official
 
     if is_official(form_type):
         return fill_official_pdf(form_type, ctx, template_bytes)
 
-    builder = _BUILDERS[form_type]
+    if form_type not in GABARITS_DEFAUT:
+        raise KeyError(form_type)
     styles = _build_styles()
 
     buf = io.BytesIO()
@@ -434,6 +429,6 @@ def generate_tal_pdf(
         title=form_type.replace("_", " ").upper(),
         author="h2.0 — Horizon Services Immobiliers",
     )
-    flow = builder(ctx, styles)
+    flow = _build_lettre(form_type, ctx, styles, gabarit)
     doc.build(flow)
     return buf.getvalue()

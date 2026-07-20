@@ -9,6 +9,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import undefer
 
@@ -39,8 +40,14 @@ from app.schemas.immobilier_extras import (
     TalFormRequest,
     TalFormType,
 )
+from app.services.automation_state import (
+    get_automation_config,
+    set_automation_config,
+)
 from app.services.bail_renouvellement import send_renouvellement_for_bail
 from app.services.tal_forms import (
+    GABARIT_VARIABLES,
+    GABARITS_DEFAUT,
     SIGNATURE_NON_REQUISE,
     TalContext,
     available_form_types,
@@ -137,11 +144,110 @@ async def list_tal_forms(db: DBSession, user: CurrentUser) -> List[TalFormType]:
                 description=desc,
                 officiel=is_official(code),
                 signature_requise=code not in SIGNATURE_NON_REQUISE,
+                texte_modifiable=code in GABARITS_DEFAUT,
                 custom_filename=ov.filename if ov else None,
                 custom_uploaded_at=ov.updated_at if ov else None,
             )
         )
     return out
+
+
+# ── Gabarits éditables des lettres maison (retard, accès) ─────────────
+# Le texte vit dans automation_settings (clé immo.gabarit.<type>) —
+# retour Phil 2026-07-20 : « ceux qui ne sont pas du TAL, il faut
+# pouvoir les modifier ».
+
+
+class GabaritRead(BaseModel):
+    code: str
+    titre: str
+    paragraphes: List[str]
+    variables: List[str]
+    #: True si un texte personnalisé est enregistré (≠ défaut).
+    personnalise: bool = False
+
+
+class GabaritUpdate(BaseModel):
+    titre: Optional[str] = Field(default=None, max_length=120)
+    #: None ou liste vide = revenir au texte d'origine.
+    paragraphes: Optional[List[str]] = None
+
+
+def _gabarit_key(form_type: str) -> str:
+    return f"immo.gabarit.{form_type}"
+
+
+@router.get("/tal/gabarits/{form_type}", response_model=GabaritRead)
+async def get_tal_gabarit(
+    form_type: str, user: CurrentUser
+) -> GabaritRead:
+    _require_volet(user)
+    defaut = GABARITS_DEFAUT.get(form_type)
+    if defaut is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Cette lettre n'a pas de gabarit modifiable.",
+        )
+    cfg = await get_automation_config(_gabarit_key(form_type))
+    paragraphes = cfg.get("paragraphes") if isinstance(cfg, dict) else None
+    personnalise = bool(paragraphes)
+    return GabaritRead(
+        code=form_type,
+        titre=(cfg.get("titre") if personnalise else None)
+        or defaut["titre"],
+        paragraphes=list(paragraphes or defaut["paragraphes"]),
+        variables=GABARIT_VARIABLES.get(form_type, []),
+        personnalise=personnalise,
+    )
+
+
+@router.put("/tal/gabarits/{form_type}", response_model=GabaritRead)
+async def put_tal_gabarit(
+    form_type: str,
+    payload: GabaritUpdate,
+    db: DBSession,
+    user: CurrentUser,
+) -> GabaritRead:
+    _require_volet(user)
+    defaut = GABARITS_DEFAUT.get(form_type)
+    if defaut is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Cette lettre n'a pas de gabarit modifiable.",
+        )
+    paragraphes = [
+        p.strip() for p in (payload.paragraphes or []) if p and p.strip()
+    ]
+    if paragraphes and sum(len(p) for p in paragraphes) > 20_000:
+        raise HTTPException(status_code=422, detail="Gabarit trop long.")
+    config: dict = {}
+    if paragraphes:
+        config = {"paragraphes": paragraphes}
+        if (payload.titre or "").strip():
+            config["titre"] = payload.titre.strip()
+    # Liste vide/None = réinitialisation au texte d'origine.
+    await set_automation_config(
+        db, _gabarit_key(form_type), config,
+        user_id=getattr(user, "id", None),
+    )
+    await db.commit()
+    return GabaritRead(
+        code=form_type,
+        titre=config.get("titre") or defaut["titre"],
+        paragraphes=paragraphes or list(defaut["paragraphes"]),
+        variables=GABARIT_VARIABLES.get(form_type, []),
+        personnalise=bool(paragraphes),
+    )
+
+
+async def _gabarit_override(form_type: str) -> Optional[dict]:
+    """Override de texte pour une lettre, ou None (fail-safe)."""
+    if form_type not in GABARITS_DEFAUT:
+        return None
+    cfg = await get_automation_config(_gabarit_key(form_type))
+    if isinstance(cfg, dict) and cfg.get("paragraphes"):
+        return cfg
+    return None
 
 
 @router.post("/tal/modeles/{form_type}/pdf", response_model=TalFormType)
@@ -279,7 +385,10 @@ async def apercu_tal_pdf(
         )
         ov = await _template_override(db, form_type, with_blob=True)
         pdf = generate_tal_pdf(
-            form_type, ctx, template_bytes=ov.pdf_blob if ov else None
+            form_type,
+            ctx,
+            template_bytes=ov.pdf_blob if ov else None,
+            gabarit=await _gabarit_override(form_type),
         )
     return Response(
         content=pdf,
@@ -399,7 +508,10 @@ async def generate_bail_tal_pdf(
     ctx = await _build_ctx_from_bail(db, bail, payload)
     ov = await _template_override(db, form_type, with_blob=True)
     pdf_bytes = generate_tal_pdf(
-        form_type, ctx, template_bytes=ov.pdf_blob if ov else None
+        form_type,
+        ctx,
+        template_bytes=ov.pdf_blob if ov else None,
+        gabarit=await _gabarit_override(form_type),
     )
 
     # CONSERVE le document (retour Phil 2026-07-17 : « ces documents-là,

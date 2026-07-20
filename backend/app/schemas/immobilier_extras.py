@@ -20,6 +20,8 @@ class TalFormType(BaseModel):
     officiel: bool = False
     #: False = envoi par simple courriel avec PDF joint, sans signature.
     signature_requise: bool = True
+    #: True = lettre maison dont le TEXTE est éditable (gabarit).
+    texte_modifiable: bool = False
     #: PDF modèle remplacé par l'utilisateur (imm_doc_templates).
     custom_filename: Optional[str] = None
     custom_uploaded_at: Optional[datetime] = None
