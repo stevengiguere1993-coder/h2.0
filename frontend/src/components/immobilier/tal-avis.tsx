@@ -105,9 +105,11 @@ const TAL_FORMS: {
 
 // Types envoyés par simple courriel (PDF joint) — aucun flux de
 // signature en ligne.
-export const SANS_SIGNATURE = new Set(
-  TAL_FORMS.filter((t) => t.sansSignature).map((t) => t.code)
-);
+export const SANS_SIGNATURE = new Set([
+  ...TAL_FORMS.filter((t) => t.sansSignature).map((t) => t.code),
+  // Document personnalisé dont le modèle décoche « signature requise ».
+  "personnalise_info"
+]);
 
 const MOI_MEME = new Set(["moi-même", "moi-meme", "moi même", "moi meme"]);
 
@@ -135,15 +137,67 @@ async function downloadTalPdf(
   notifyDocumentsChanged(bailId);
 }
 
+// Modèles PERSONNALISÉS (règlement d'immeuble, contrat de chambreur…)
+// créés dans Paramètres → Modèles de documents. Cache module (60 s) —
+// le menu apparaît sur chaque ligne de bail, inutile de re-fetcher.
+type PersoModele = {
+  id: number;
+  nom: string;
+  titre: string | null;
+  signature_requise: boolean;
+  has_pdf: boolean;
+};
+let persoCache: { at: number; list: PersoModele[] } | null = null;
+async function fetchPersoModeles(): Promise<PersoModele[]> {
+  if (persoCache && Date.now() - persoCache.at < 60_000)
+    return persoCache.list;
+  try {
+    const r = await authedFetch("/api/v1/immobilier/docs-perso/modeles");
+    if (r.ok) {
+      persoCache = {
+        at: Date.now(),
+        list: (await r.json()) as PersoModele[]
+      };
+    }
+  } catch {
+    /* silencieux — le menu TAL reste utilisable */
+  }
+  return persoCache?.list ?? [];
+}
+
 export function TalFormDropdown({ bailId }: { bailId: number }) {
   const [open, setOpen] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [paramsCode, setParamsCode] = useState<string | null>(null);
+  const [perso, setPerso] = useState<PersoModele[] | null>(null);
+
+  useEffect(() => {
+    if (!open || perso !== null) return;
+    void fetchPersoModeles().then(setPerso);
+  }, [open, perso]);
 
   async function download(code: string) {
     setDownloading(code);
     try {
       await downloadTalPdf(bailId, code, {});
+      setOpen(false);
+    } catch (e) {
+      alert((e as Error).message);
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  async function genererPerso(m: PersoModele) {
+    setDownloading(`perso-${m.id}`);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/docs-perso/${m.id}`,
+        { method: "POST" }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      notifyDocumentsChanged(bailId);
       setOpen(false);
     } catch (e) {
       alert((e as Error).message);
@@ -182,6 +236,32 @@ export function TalFormDropdown({ bailId }: { bailId: number }) {
               {downloading === f.code ? "Génération…" : f.label}
             </button>
           ))}
+          {perso && perso.length > 0 ? (
+            <>
+              <div className="mx-3 my-1 border-t border-brand-800" />
+              <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                Mes documents
+              </div>
+              {perso.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => void genererPerso(m)}
+                  disabled={downloading === `perso-${m.id}`}
+                  title={
+                    m.signature_requise
+                      ? "Généré puis envoyable pour signature en ligne"
+                      : "Généré puis envoyable par courriel (suivi d'ouverture)"
+                  }
+                  className="block w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-brand-900 hover:text-white disabled:opacity-50"
+                >
+                  {downloading === `perso-${m.id}`
+                    ? "Génération…"
+                    : m.titre || m.nom}
+                </button>
+              ))}
+            </>
+          ) : null}
         </div>
       ) : null}
       {paramsCode ? (

@@ -463,6 +463,7 @@ async def ensure_immobilier_aux_tables() -> None:
         from app.db.base import Base
         from app.models.immobilier import (  # noqa: F401
             FraisLocatif,
+            ImmDocPersoModele,
             ImmDocTemplate,
             ImmDocument,
             LocataireCommunication,
@@ -485,6 +486,7 @@ async def ensure_immobilier_aux_tables() -> None:
                         LocationVisite.__table__,
                         ImmDocument.__table__,
                         ImmDocTemplate.__table__,
+                        ImmDocPersoModele.__table__,
                         Releve31.__table__,
                         FraisLocatif.__table__,
                     ],

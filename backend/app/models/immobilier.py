@@ -1036,6 +1036,39 @@ class Releve31(Base, TimestampUpdateMixin):
     )
 
 
+class ImmDocPersoModele(Base, TimestampUpdateMixin):
+    """MODÈLE de document personnalisé (retour Steven 2026-07-20, pt 5).
+
+    Règlement d'immeuble, contrat de chambreur… créés depuis Paramètres →
+    Modèles de documents. Deux formes :
+    - texte (``corps`` = paragraphes séparés par une ligne vide, avec
+      {variables} remplies depuis le bail, **gras** supporté) ;
+    - ou PDF téléversé (``pdf_blob``), utilisé tel quel.
+    Généré depuis un bail → ImmDocument type ``personnalise`` (signature
+    en ligne) ou ``personnalise_info`` (courriel simple + suivi
+    d'ouverture). Nouvelle table → ensure_immobilier_aux_tables.
+    """
+
+    __tablename__ = "imm_doc_perso_modeles"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    nom: Mapped[str] = mapped_column(
+        String(120), nullable=False, unique=True, index=True
+    )
+    titre: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    corps: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    signature_requise: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    pdf_filename: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    pdf_blob = deferred(mapped_column(LargeBinary, nullable=True))
+    created_by_email: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True
+    )
+
+
 class ImmDocTemplate(Base, TimestampUpdateMixin):
     """PDF MODÈLE remplaçant un formulaire officiel embarqué.
 
