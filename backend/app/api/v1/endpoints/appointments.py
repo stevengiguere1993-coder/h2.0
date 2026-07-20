@@ -21,6 +21,7 @@ from app.models.employe import Employe
 from app.models.follow_up import FollowUp
 from app.core.config import settings
 from app.services.appointment_mail import (
+    resolve_employe_email,
     send_appointment_assignee_invite,
     send_appointment_confirmation,
     send_appointment_owner_invite,
@@ -51,6 +52,10 @@ class AppointmentRead(BaseModel):
     assignee_id: Optional[int]
     event_type: str
     confirmation_sent_at: Optional[datetime] = None
+    #: Rempli quand l'invitation calendrier de l'employé assigné N'A PAS
+    #: pu partir (aucun courriel joignable) — affiché dans l'UI au lieu
+    #: d'un échec silencieux (retour Phil 2026-07-20).
+    assignee_invite_warning: Optional[str] = None
 
 
 @router.post(
@@ -171,7 +176,31 @@ async def schedule_appointment(
 
     # If an employee was assigned, send them an .ics calendar invite so
     # the RDV lands in their personal calendar.
+    assignee_warning: Optional[str] = None
     if data.assignee_id is not None:
+        # Vérif SYNCHRONE du courriel joignable (fiche employé, sinon
+        # compte Kratos du même nom) : sans ça l'invitation échouait en
+        # SILENCE et personne ne savait que l'employé n'avait rien reçu
+        # (retour Phil 2026-07-20).
+        emp_now = (
+            await db.execute(
+                select(Employe).where(Employe.id == data.assignee_id)
+            )
+        ).scalar_one_or_none()
+        dest_now = (
+            await resolve_employe_email(db, emp_now)
+            if emp_now is not None
+            else None
+        )
+        if emp_now is None:
+            assignee_warning = "Employé assigné introuvable."
+        elif not dest_now:
+            assignee_warning = (
+                f"{emp_now.full_name} n'a aucun courriel (ni sur sa fiche "
+                "Employé, ni sur son compte) — l'invitation calendrier n'a "
+                "pas pu être envoyée. Ajoute son courriel dans Employés."
+            )
+
         async def _invite_assignee(assignee_id: int, event_id: int) -> None:
             from app.db.session import AsyncSessionLocal
 
@@ -195,7 +224,10 @@ async def schedule_appointment(
                 ).scalar_one_or_none() if ev and ev.contact_request_id else None
                 if emp is None or ev is None:
                     return
-                await send_appointment_assignee_invite(emp, ev, pr)
+                dest = await resolve_employe_email(fresh_db, emp)
+                await send_appointment_assignee_invite(
+                    emp, ev, pr, email_override=dest
+                )
 
         bg.add_task(_invite_assignee, data.assignee_id, event.id)
 
@@ -235,7 +267,9 @@ async def schedule_appointment(
 
         bg.add_task(_invite_owner, event.id, data.assignee_id)
 
-    return AppointmentRead.model_validate(event)
+    out = AppointmentRead.model_validate(event)
+    out.assignee_invite_warning = assignee_warning
+    return out
 
 
 class AppointmentUpdate(BaseModel):
@@ -292,10 +326,28 @@ async def update_appointment(
     # calendrier .ics + courriel (comme à la création), pour que le RDV
     # atterrisse dans SON agenda. On ne renvoie rien si l'assigné n'a
     # pas changé.
+    patch_warning: Optional[str] = None
     if (
         event.assignee_id is not None
         and event.assignee_id != old_assignee_id
     ):
+        emp_now = (
+            await db.execute(
+                select(Employe).where(Employe.id == event.assignee_id)
+            )
+        ).scalar_one_or_none()
+        dest_now = (
+            await resolve_employe_email(db, emp_now)
+            if emp_now is not None
+            else None
+        )
+        if emp_now is not None and not dest_now:
+            patch_warning = (
+                f"{emp_now.full_name} n'a aucun courriel (ni sur sa fiche "
+                "Employé, ni sur son compte) — l'invitation calendrier n'a "
+                "pas pu être envoyée. Ajoute son courriel dans Employés."
+            )
+
         async def _invite_new_assignee(assignee_id: int, ev_id: int) -> None:
             from app.db.session import AsyncSessionLocal
 
@@ -323,11 +375,16 @@ async def update_appointment(
                 )
                 if emp is None or ev is None:
                     return
-                await send_appointment_assignee_invite(emp, ev, pr)
+                dest = await resolve_employe_email(fresh_db, emp)
+                await send_appointment_assignee_invite(
+                    emp, ev, pr, email_override=dest
+                )
 
         bg.add_task(_invite_new_assignee, event.assignee_id, event.id)
 
-    return AppointmentRead.model_validate(event)
+    out = AppointmentRead.model_validate(event)
+    out.assignee_invite_warning = patch_warning
+    return out
 
 
 @router.delete("/{event_id}", status_code=status.HTTP_204_NO_CONTENT)

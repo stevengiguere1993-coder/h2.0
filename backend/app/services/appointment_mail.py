@@ -133,10 +133,54 @@ async def send_appointment_confirmation(
         return False
 
 
+async def resolve_employe_email(db, employe: Employe) -> Optional[str]:
+    """Courriel joignable d'un employé : celui de sa fiche, sinon celui
+    de son COMPTE Kratos (même nom complet).
+
+    Beaucoup de fiches Employé sont créées sans courriel (nom + taux
+    seulement) alors que la personne a un compte avec son courriel :
+    l'invitation calendrier partait alors dans le vide, sans erreur
+    (retour Phil 2026-07-20 : « l'employé qui a un RV ne reçoit pas le
+    courriel »).
+    """
+    direct = (employe.email or "").strip()
+    if direct:
+        return direct
+    try:
+        from sqlalchemy import func as _func, select as _select
+
+        from app.models.user import User
+
+        cible = " ".join((employe.full_name or "").split()).lower()
+        if not cible:
+            return None
+        rows = (
+            await db.execute(
+                _select(User).where(
+                    _func.lower(
+                        _func.concat(
+                            _func.coalesce(User.first_name, ""),
+                            " ",
+                            _func.coalesce(User.last_name, ""),
+                        )
+                    )
+                    == cible
+                )
+            )
+        ).scalars().all()
+        for u in rows:
+            if (u.email or "").strip():
+                return u.email.strip()
+    except Exception:  # noqa: BLE001 — le repli ne doit jamais casser
+        log.exception("resolve_employe_email a échoué (employé %s)", employe.id)
+    return None
+
+
 async def send_appointment_assignee_invite(
     assignee: Employe,
     event: AgendaEvent,
     prospect: Optional[ContactRequest] = None,
+    email_override: Optional[str] = None,
 ) -> bool:
     """Send the assigned employee a calendar invite (.ics attached).
 
@@ -150,7 +194,22 @@ async def send_appointment_assignee_invite(
     partenaire externe (Gmail/Apple proposent « Ajouter au calendrier »).
     """
     mailer = get_mailer()
-    if not mailer.ready or not assignee.email:
+    dest = (email_override or assignee.email or "").strip()
+    if not dest:
+        log.warning(
+            "RDV %s : aucun courriel pour l'employé %s (%s) — invitation "
+            "non envoyée.",
+            event.id,
+            assignee.id,
+            assignee.full_name,
+        )
+        return False
+    if not mailer.ready:
+        log.warning(
+            "RDV %s : mailer non configuré — invitation à %s non envoyée.",
+            event.id,
+            dest,
+        )
         return False
     prospect_block = ""
     if prospect is not None:
@@ -185,10 +244,10 @@ async def send_appointment_assignee_invite(
 """
     try:
         ics_bytes = render_event_ics(
-            event, attendee_email=assignee.email, method="PUBLISH"
+            event, attendee_email=dest, method="PUBLISH"
         )
         await mailer.send(
-            to=[assignee.email],
+            to=[dest],
             subject=f"Assignation — {event.title}",
             html_body=html,
             attachments=[
