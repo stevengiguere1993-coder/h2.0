@@ -383,11 +383,74 @@ def _build_lettre(
 #: formulaires officiels sont servis par tal_officiel.fill_official_pdf.
 _LETTRES = tuple(GABARITS_DEFAUT.keys())
 
+
+# --- Documents PERSONNALISÉS (règlement d'immeuble, contrat de chambreur…) --
+# Retour Steven 2026-07-20 (point 5) : modèles maison créés depuis
+# Paramètres → Modèles de documents, générés depuis un bail avec les mêmes
+# {variables} que les lettres, envoyables pour signature.
+
+#: Variables disponibles dans les documents personnalisés.
+PERSO_VARIABLES: list[str] = [
+    "locataire", "locateur", "adresse", "ville", "logement",
+    "loyer", "bail_debut", "bail_fin", "date",
+]
+
+
+def _perso_variables(ctx: TalContext) -> dict[str, str]:
+    return {
+        "locataire": _fmt_or(ctx.locataire_nom),
+        "locateur": _fmt_or(ctx.locateur_nom),
+        "adresse": _fmt_adresse_complete(ctx),
+        "ville": _fmt_or(ctx.logement_ville),
+        "logement": _fmt_or(ctx.logement_numero),
+        "loyer": _fmt_money(ctx.bail_loyer_mensuel),
+        "bail_debut": _fmt_date(ctx.bail_date_debut),
+        "bail_fin": _fmt_date(ctx.bail_date_fin),
+        "date": _fmt_date(ctx.date_emission or date.today()),
+    }
+
+
+def generate_perso_pdf(
+    titre: str, paragraphes: list[str], ctx: TalContext
+) -> bytes:
+    """Document personnalisé : même mise en page que les lettres maison
+    (en-tête locateur/date, destinataire, corps justifié, clôture)."""
+    styles = _build_styles()
+    variables = _perso_variables(ctx)
+    flow: list = []
+    flow.extend(_header_block(ctx, styles))
+    flow.append(Paragraph(str(titre), styles["title"]))
+    flow.extend(_destinataire(ctx, styles))
+    for p in paragraphes:
+        texte = _rendre_paragraphe(str(p), variables)
+        if texte.strip():
+            flow.append(Paragraph(texte, styles["body"]))
+    flow.extend(_signature_block(ctx, styles))
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=letter,
+        leftMargin=2 * cm,
+        rightMargin=2 * cm,
+        topMargin=1.8 * cm,
+        bottomMargin=1.8 * cm,
+        title=str(titre),
+        author="h2.0 — Horizon Services Immobiliers",
+    )
+    doc.build(flow)
+    return buf.getvalue()
+
 #: Types dont l'envoi se fait par simple courriel avec PDF joint — AUCUNE
 #: signature en ligne (exigence Phil 2026-07-17, points 4 et 7).
 #: « releve31 » : copie du Relevé 31 téléversée puis remise au locataire
 #: (consultation seule, ouverture horodatée).
-SIGNATURE_NON_REQUISE = {"rappel_paiement", "avis_acces", "releve31"}
+#: « personnalise_info » : document personnalisé SANS signature (le modèle
+#: décoche « signature requise ») — courriel avec PDF joint + suivi
+#: d'ouverture seulement. « personnalise » (avec signature) n'y est pas.
+SIGNATURE_NON_REQUISE = {
+    "rappel_paiement", "avis_acces", "releve31", "personnalise_info",
+}
 
 
 def available_form_types() -> list[str]:
