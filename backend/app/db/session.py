@@ -461,6 +461,7 @@ async def ensure_immobilier_aux_tables() -> None:
             LocationDossier,
             LocationVisite,
             RelanceLoyer,
+            Releve31,
         )
 
         async with engine.begin() as conn:
@@ -475,6 +476,7 @@ async def ensure_immobilier_aux_tables() -> None:
                         LocationVisite.__table__,
                         ImmDocument.__table__,
                         ImmDocTemplate.__table__,
+                        Releve31.__table__,
                     ],
                 )
             )

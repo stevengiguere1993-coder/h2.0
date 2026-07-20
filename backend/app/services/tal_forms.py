@@ -394,7 +394,9 @@ _BUILDERS = {
 
 #: Types dont l'envoi se fait par simple courriel avec PDF joint — AUCUNE
 #: signature en ligne (exigence Phil 2026-07-17, points 4 et 7).
-SIGNATURE_NON_REQUISE = {"rappel_paiement", "avis_acces"}
+#: « releve31 » : copie du Relevé 31 téléversée puis remise au locataire
+#: (consultation seule, ouverture horodatée).
+SIGNATURE_NON_REQUISE = {"rappel_paiement", "avis_acces", "releve31"}
 
 
 def available_form_types() -> list[str]:

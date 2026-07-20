@@ -29,6 +29,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, deferred, mapped_column
 
@@ -944,6 +945,53 @@ class ImmDocument(Base, TimestampUpdateMixin):
     )
     signature_image_content_type: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
+    )
+
+
+class Releve31(Base, TimestampUpdateMixin):
+    """Suivi des RELEVÉS 31 (Revenu Québec) par logement et par année.
+
+    Obligation annuelle : produire un RL-31 pour chaque logement OCCUPÉ
+    au 31 décembre et en remettre copie au(x) locataire(s) avant le
+    dernier jour de février. Kratos ne produit PAS le relevé officiel
+    (service en ligne Revenu Québec) — il prépare les données, suit le
+    statut, conserve la copie PDF téléversée (imm_documents) et l'envoie
+    au locataire. Nouvelle table → ensure_immobilier_aux_tables.
+    """
+
+    __tablename__ = "imm_releves31"
+    __table_args__ = (
+        UniqueConstraint("annee", "logement_id", name="uq_releve31_annee_logement"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    annee: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    logement_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_logements.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    immeuble_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )
+    bail_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_baux.id", ondelete="SET NULL"), nullable=True
+    )
+    locataire_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_locataires.id", ondelete="SET NULL"), nullable=True
+    )
+    # 'a_produire' | 'produit' | 'remis'
+    statut: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="a_produire",
+        server_default="a_produire",
+    )
+    # Numéro du relevé émis par Revenu Québec (collé par l'utilisateur).
+    numero_releve: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Copie PDF du relevé (téléversée) — vit dans imm_documents.
+    document_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_documents.id", ondelete="SET NULL"), nullable=True
     )
 
 
