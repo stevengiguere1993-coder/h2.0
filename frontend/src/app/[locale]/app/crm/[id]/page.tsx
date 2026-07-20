@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   useParams,
   useRouter as useNextRouter,
@@ -10,6 +10,7 @@ import {
   ArrowLeft,
   Briefcase,
   Calendar,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -164,6 +165,8 @@ export default function ProspectDetailPage() {
   });
   const [notes, setNotes] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
+  // Horodatage du dernier enregistrement auto des notes (indicateur UI).
+  const [notesSavedAt, setNotesSavedAt] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [refreshingFb, setRefreshingFb] = useState(false);
   const [users, setUsers] = useState<
@@ -311,23 +314,57 @@ export default function ProspectDetailPage() {
     }
   }
 
-  async function saveNotes() {
+  const saveNotes = useCallback(
+    async (value: string) => {
+      setSavingNotes(true);
+      try {
+        const res = await authedFetch(`/api/v1/contact/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ internal_notes: value })
+        });
+        if (!res.ok) throw new Error();
+        const updated = (await res.json()) as Prospect;
+        setP(updated);
+        setNotesSavedAt(Date.now());
+      } catch {
+        setError("Sauvegarde des notes échouée.");
+      } finally {
+        setSavingNotes(false);
+      }
+    },
+    [id]
+  );
+
+  // Sauvegarde AUTOMATIQUE des notes internes (retour Phil 2026-07-20 :
+  // « sans appuyer sur sauvegarder ») : 1,2 s après la dernière frappe.
+  // On ne déclenche que si le texte diffère de ce qui est en base, et on
+  // sauve aussi immédiatement quand on quitte la page/l'onglet pour ne
+  // rien perdre d'une frappe en cours.
+  const notesRef = useRef(notes);
+  notesRef.current = notes;
+  const serverNotes = p?.internal_notes || "";
+
+  useEffect(() => {
     if (!p) return;
-    setSavingNotes(true);
-    try {
-      const res = await authedFetch(`/api/v1/contact/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ internal_notes: notes })
-      });
-      if (!res.ok) throw new Error();
-      const updated = (await res.json()) as Prospect;
-      setP(updated);
-    } catch {
-      setError("Sauvegarde des notes échouée.");
-    } finally {
-      setSavingNotes(false);
+    if (notes === serverNotes) return;
+    const t = window.setTimeout(() => {
+      void saveNotes(notes);
+    }, 1200);
+    return () => window.clearTimeout(t);
+  }, [notes, serverNotes, p, saveNotes]);
+
+  useEffect(() => {
+    function flush() {
+      if (notesRef.current !== (p?.internal_notes || "")) {
+        // sendBeacon-like : requête « best effort » au départ de la page.
+        void saveNotes(notesRef.current);
+      }
     }
-  }
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [p, saveNotes]);
 
   async function deleteProspect() {
     if (!p) return;
@@ -606,25 +643,35 @@ export default function ProspectDetailPage() {
                     <textarea
                       value={notes}
                       onChange={(e) => setNotes(e.target.value)}
+                      onBlur={() => {
+                        // Quitter le champ sauve tout de suite (pas
+                        // d'attente du debounce).
+                        if (notes !== (p.internal_notes || ""))
+                          void saveNotes(notes);
+                      }}
                       rows={5}
                       placeholder="Notes privées sur ce prospect (non visibles par le client)…"
                       className="input mt-3"
                     />
-                    <button
-                      type="button"
-                      onClick={saveNotes}
-                      disabled={savingNotes || notes === (p.internal_notes || "")}
-                      className="btn-accent mt-3 text-sm"
-                    >
+                    {/* Enregistrement AUTOMATIQUE — plus de bouton
+                        (retour Phil 2026-07-20). */}
+                    <p className="mt-2 flex items-center gap-1.5 text-xs text-white/40">
                       {savingNotes ? (
                         <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Sauvegarde…
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Enregistrement…
+                        </>
+                      ) : notes !== (p.internal_notes || "") ? (
+                        "Modifications non enregistrées…"
+                      ) : notesSavedAt ? (
+                        <>
+                          <Check className="h-3 w-3 text-emerald-400" />
+                          Enregistré automatiquement
                         </>
                       ) : (
-                        "Sauvegarder les notes"
+                        "Enregistrement automatique"
                       )}
-                    </button>
+                    </p>
                   </div>
                 </div>
               ) : null}
