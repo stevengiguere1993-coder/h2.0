@@ -30,6 +30,7 @@ async def notify(
     title: str,
     body: Optional[str] = None,
     href: Optional[str] = None,
+    push: bool = True,
 ) -> Notification:
     n = Notification(
         user_id=user_id,
@@ -40,7 +41,44 @@ async def notify(
     )
     db.add(n)
     await db.flush()
+    if push:
+        await _push_best_effort(
+            db, [user_id], kind=kind, title=title, body=body, href=href
+        )
     return n
+
+
+async def _push_best_effort(
+    db: AsyncSession,
+    user_ids: list[int],
+    *,
+    kind: str,
+    title: str,
+    body: Optional[str] = None,
+    href: Optional[str] = None,
+) -> None:
+    """Double la notification « cloche » d'une notification PUSH.
+
+    Sans ça, une notification n'existait que dans l'app : un gestionnaire
+    qui n'a pas Kratos ouvert ne savait jamais qu'un client attendait une
+    réponse (retour Phil 2026-07-20 : « Olivier ne reçoit pas de
+    notification pour répondre au client »). Best-effort : si VAPID n'est
+    pas configuré ou qu'aucun appareil n'est abonné, c'est un no-op
+    silencieux — la cloche reste la source de vérité.
+    """
+    try:
+        from app.integrations.webpush import push_to_users
+
+        await push_to_users(
+            db,
+            user_ids=user_ids,
+            title=title,
+            body=body,
+            href=href,
+            tag=kind,
+        )
+    except Exception:  # noqa: BLE001 — jamais bloquant
+        log.exception("push_to_users a échoué (kind=%s)", kind)
 
 
 async def notify_role(
@@ -68,8 +106,11 @@ async def notify_role(
         await db.execute(select(User).where(User.is_active.is_(True)))
     ).scalars().all()
     count = 0
+    cibles: list[int] = []
     for u in users:
         if rank_map.get(u.role, 0) >= min_rank:
+            # push=False ici : un SEUL envoi push groupé après la boucle
+            # (une requête au lieu d'une par destinataire).
             await notify(
                 db,
                 user_id=u.id,
@@ -77,6 +118,12 @@ async def notify_role(
                 title=title,
                 body=body,
                 href=href,
+                push=False,
             )
+            cibles.append(u.id)
             count += 1
+    if cibles:
+        await _push_best_effort(
+            db, cibles, kind=kind, title=title, body=body, href=href
+        )
     return count
