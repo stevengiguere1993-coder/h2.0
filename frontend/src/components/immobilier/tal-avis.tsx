@@ -21,6 +21,7 @@ import {
   X
 } from "lucide-react";
 
+import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 
 export type BailDocument = {
@@ -1267,13 +1268,40 @@ export function DocumentsSection({
               <TalFormDropdown bailId={b.id} />
             </span>
           ))}
-          {bails.length === 0 ? (
-            <span className="text-[11px] text-white/40">
-              Aucun bail — crée un bail pour générer des avis.
-            </span>
-          ) : null}
         </span>
       </div>
+      {bails.length === 0 ? (
+        <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+          {locataireId != null ? (
+            <>
+              <b className="text-white">
+                Ce locataire n&apos;a aucun bail
+              </b>{" "}
+              — les avis TAL se préremplissent depuis un bail, donc rien à
+              générer ici pour l&apos;instant. Crée son bail depuis la
+              fiche de l&apos;immeuble (onglet Baux &amp; locataires) et
+              le menu « Générer ▾ » apparaîtra. Si ce locataire est un
+              doublon (son bail vit sur une autre fiche), la page{" "}
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={"/immobilier/locataires" as any}
+                className="underline hover:text-white"
+              >
+                Locataires
+              </Link>{" "}
+              montre qui habite où — supprime le doublon avec la
+              poubelle. Le DPA, lui, se génère depuis la section Dépôt
+              préautorisé ci-dessus.
+            </>
+          ) : (
+            <>
+              <b className="text-white">Aucun bail actif</b> — logement
+              libre : les avis se génèrent depuis un bail. L&apos;historique
+              des documents des anciens baux reste visible ci-dessous.
+            </>
+          )}
+        </div>
+      ) : null}
       {err ? (
         <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
           {err}
