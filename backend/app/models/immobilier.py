@@ -630,6 +630,35 @@ class PaiementLoyer(Base):
     )
 
 
+class FraisLocatif(Base):
+    """Frais ponctuel facturé au locataire d'un bail (retour Steven
+    2026-07-20) : ex. 20 $ de frais de gestion si le loyer est payé
+    après le 15. S'AJOUTE au solde dû du bail (vue Baux & paiements) ;
+    réglé implicitement quand les paiements couvrent loyers + frais.
+    Nouvelle table → ensure_immobilier_aux_tables."""
+
+    __tablename__ = "imm_frais_locatifs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    bail_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_baux.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    # 1er du mois auquel le frais se rattache (affichage dans la vue).
+    mois_couvert: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    montant: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    libelle: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="Frais de retard",
+        server_default="Frais de retard",
+    )
+    created_by_email: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 # ─── HYPOTHÈQUE ─────────────────────────────────────────────────────────
 
 
