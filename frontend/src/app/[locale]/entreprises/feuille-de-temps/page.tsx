@@ -44,6 +44,7 @@ type Ligne = {
   taux_perso?: number | null;
   jours: number[];
   jours_nr: number[];
+  nr_autorise?: boolean;
   total: number;
   total_refact: number;
   total_non_refact: number;
@@ -84,6 +85,7 @@ type Company = {
   position: number;
   taux_refacturation?: number | null;
   refacturable?: boolean;
+  heures_nr_autorisees?: boolean;
   is_active: boolean;
 };
 type TeamRow = {
@@ -507,6 +509,19 @@ export default function FeuilleDeTempsPage() {
   const canEdit = detail?.can_edit ?? false;
   const statusMeta = STATUS_META[detail?.status || "brouillon"] || STATUS_META.brouillon;
 
+  // Changer d'onglet SAUVEGARDE d'abord la grille — sinon Équipe et
+  // Dashboard affichent des chiffres en retard (retour Phil 2026-07-22).
+  const switchView = useCallback(
+    async (v: "feuille" | "equipe" | "dashboard") => {
+      if (dirty && detail?.can_edit) {
+        const ok = await save();
+        if (!ok) return;
+      }
+      setView(v);
+    },
+    [dirty, detail, save]
+  );
+
   // — Topbar : actions —
   const topbarActions = (
     <div className="flex flex-wrap items-center gap-2">
@@ -594,13 +609,13 @@ export default function FeuilleDeTempsPage() {
             {/* Onglets (gestionnaire) */}
             {isManager && (
               <div className="flex items-center gap-1 rounded-xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-1">
-                <TabBtn active={view === "feuille"} onClick={() => setView("feuille")} icon={Clock}>
+                <TabBtn active={view === "feuille"} onClick={() => void switchView("feuille")} icon={Clock}>
                   Feuille
                 </TabBtn>
-                <TabBtn active={view === "equipe"} onClick={() => setView("equipe")} icon={Users}>
+                <TabBtn active={view === "equipe"} onClick={() => void switchView("equipe")} icon={Users}>
                   Équipe
                 </TabBtn>
-                <TabBtn active={view === "dashboard"} onClick={() => setView("dashboard")} icon={Wallet}>
+                <TabBtn active={view === "dashboard"} onClick={() => void switchView("dashboard")} icon={Wallet}>
                   Dashboard
                 </TabBtn>
               </div>
@@ -1140,16 +1155,26 @@ function Grille({
                 {[false, true].map((nr) => {
                   const arr =
                     (nr ? cellsNr : cells)[l.company_id] || [];
+                  // Bloc NR permis seulement sur les compagnies qui
+                  // l'autorisent (case dans le modal Compagnies).
+                  const bloque = nr && !l.nr_autorise;
                   return Array.from({ length: DAYS }).map((_, i) => (
                     <td
                       key={`${nr}-${i}`}
+                      title={
+                        bloque
+                          ? "Heures non refacturables non permises sur cette compagnie (activable via le bouton Compagnies)"
+                          : undefined
+                      }
                       className={`border-[var(--qg-border)]/40 px-0.5 py-1 ${
                         isWeekend(i) ? weekendBg : ""
                       } ${nr ? "bg-rose-500/[0.03]" : ""} ${
+                        bloque ? "cursor-not-allowed opacity-25" : ""
+                      } ${
                         i === 6 ? "border-r border-[var(--qg-border)]" : ""
                       } ${i === 13 && !nr ? "border-r-2 border-[var(--qg-border)]" : ""}`}
                     >
-                      {canEdit ? (
+                      {canEdit && !bloque ? (
                         <input
                           inputMode="decimal"
                           value={arr[i] || ""}
@@ -1472,6 +1497,14 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
                     inactive
                   </span>
                 )}
+                {c.heures_nr_autorisees && (
+                  <span
+                    className="badge badge-neutral"
+                    title="La saisie d'heures non refacturables est permise sur cette compagnie"
+                  >
+                    heures NR
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-3">
                 <button className="btn-ghost btn-xs" onClick={() => setEditing(c)}>
@@ -1502,6 +1535,7 @@ function CompanyEditor({
 }) {
   const [label, setLabel] = useState(company?.label || "");
   const [active, setActive] = useState(company?.is_active ?? true);
+  const [nrOk, setNrOk] = useState(company?.heures_nr_autorisees === true);
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--qg-accent)]/40 bg-[var(--qg-bg)]/40 p-3">
@@ -1518,12 +1552,25 @@ function CompanyEditor({
           Active
         </label>
       )}
+      <label
+        className="flex cursor-pointer items-center gap-1.5 text-sm"
+        title="Permettre la saisie d'heures NON refacturables (bloc rosé de la grille) sur cette compagnie"
+      >
+        <input
+          type="checkbox"
+          checked={nrOk}
+          onChange={(e) => setNrOk(e.target.checked)}
+          className="h-4 w-4 accent-[var(--qg-accent)]"
+        />
+        Heures non refact.
+      </label>
       <button
         className={BTN_PRIMARY}
         disabled={!label.trim()}
         onClick={() =>
           onSave({
             label: label.trim(),
+            heures_nr_autorisees: nrOk,
             ...(company ? { is_active: active } : {})
           })
         }

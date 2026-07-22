@@ -62,6 +62,13 @@ class TimesheetCompany(Base, TimestampUpdateMixin):
     taux_refacturation: Mapped[Optional[float]] = mapped_column(
         Float, nullable=True
     )
+    # Autorise la saisie d'heures NON refacturables (bloc rosé de la
+    # grille) sur cette compagnie — seule MGV Développement au départ
+    # (retour Phil 2026-07-22). Géré via le modal Compagnies. Colonne
+    # créée + backfillée one-shot dans ensure_timesheet_tables.
+    heures_nr_autorisees: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1"
     )

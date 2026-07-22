@@ -562,6 +562,21 @@ async def ensure_timesheet_tables() -> None:
                       ALTER TABLE timesheet_entries
                         ADD COLUMN IF NOT EXISTS refacturable
                         BOOLEAN NOT NULL DEFAULT TRUE;
+                      -- Heures NR permises par compagnie : création +
+                      -- backfill ONE-SHOT (MGV Développement seulement),
+                      -- pour ne pas écraser les réglages ultérieurs.
+                      IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'timesheet_companies'
+                          AND column_name = 'heures_nr_autorisees'
+                      ) THEN
+                        ALTER TABLE timesheet_companies
+                          ADD COLUMN heures_nr_autorisees
+                          BOOLEAN NOT NULL DEFAULT FALSE;
+                        UPDATE timesheet_companies
+                          SET heures_nr_autorisees = TRUE
+                          WHERE label ILIKE 'MGV D_veloppement';
+                      END IF;
                       IF NOT EXISTS (
                         SELECT 1 FROM pg_constraint
                         WHERE conname = 'uq_timesheet_entry_cell_v2'
