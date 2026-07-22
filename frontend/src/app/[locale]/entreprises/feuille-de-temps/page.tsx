@@ -27,7 +27,8 @@ import {
   Trash2,
   X,
   DollarSign,
-  CalendarDays
+  CalendarDays,
+  Wallet
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -39,6 +40,9 @@ type Ligne = {
   company_id: number;
   label: string;
   taux_refacturation: number;
+  taux_source?: string;
+  taux_perso?: number | null;
+  refacturable_perso?: boolean | null;
   refacturable?: boolean;
   jours: number[];
   total: number;
@@ -91,6 +95,44 @@ type TeamRow = {
   montant_paie: number;
   total_refacturation: number;
   taux_horaire: number;
+};
+type DashCompanyRow = {
+  company_id: number;
+  label: string;
+  heures: number;
+  due: number;
+  regle: number;
+  solde: number;
+};
+type DashEmployee = {
+  user_id: number;
+  name: string;
+  total_heures: number;
+  paie_due: number;
+  paie_reglee: number;
+  paie_solde: number;
+  refac_due: number;
+  refac_reglee: number;
+  refac_solde: number;
+  companies: DashCompanyRow[];
+};
+type Reglement = {
+  id: number;
+  kind: string;
+  user_id: number;
+  employee_name: string;
+  company_id?: number | null;
+  company_label?: string | null;
+  montant: number;
+  date_reglement: string;
+  note?: string | null;
+  created_by?: string | null;
+};
+type DashboardData = {
+  employees: DashEmployee[];
+  total_paie_solde: number;
+  total_refac_solde: number;
+  reglements: Reglement[];
 };
 
 const DAYS = 14;
@@ -182,9 +224,10 @@ export default function FeuilleDeTempsPage() {
   const [periodStart, setPeriodStart] = useState<string | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
-  const [view, setView] = useState<"feuille" | "equipe" | "compagnies">(
-    "feuille"
-  );
+  const [view, setView] = useState<
+    "feuille" | "equipe" | "compagnies" | "dashboard"
+  >("feuille");
+  const [showAllRates, setShowAllRates] = useState(false);
   // Gestionnaire+ : atterrir sur la vue ÉQUIPE (sa propre feuille est
   // souvent vide) ; employé : directement sur SA feuille (retour Phil
   // 2026-07-22). Appliqué une seule fois au chargement du profil.
@@ -473,17 +516,21 @@ export default function FeuilleDeTempsPage() {
         greeting={
           view === "equipe"
             ? "Feuilles de temps — Équipe"
-            : selectedUserId != null
-              ? `Feuille de : ${detail?.employee_name ?? "…"}`
-              : "Ma feuille de temps"
+            : view === "dashboard"
+              ? "Feuilles de temps — Dashboard"
+              : selectedUserId != null
+                ? `Feuille de : ${detail?.employee_name ?? "…"}`
+                : "Ma feuille de temps"
         }
         subtitle={
-          detail && view !== "equipe"
-            ? `${detail.employee_name} · ${formatPeriod(
-                detail.period_start,
-                detail.period_end
-              )}`
-            : "Heures par compagnie · période de paie bi-hebdomadaire"
+          view === "dashboard"
+            ? "Soldes cumulés paie & refacturation · règlements"
+            : detail && view !== "equipe"
+              ? `${detail.employee_name} · ${formatPeriod(
+                  detail.period_start,
+                  detail.period_end
+                )}`
+              : "Heures par compagnie · période de paie bi-hebdomadaire"
         }
         rightSlot={view === "feuille" ? topbarActions : undefined}
       />
@@ -500,6 +547,9 @@ export default function FeuilleDeTempsPage() {
                 </TabBtn>
                 <TabBtn active={view === "equipe"} onClick={() => setView("equipe")} icon={Users}>
                   Équipe
+                </TabBtn>
+                <TabBtn active={view === "dashboard"} onClick={() => setView("dashboard")} icon={Wallet}>
+                  Dashboard
                 </TabBtn>
                 <TabBtn active={view === "compagnies"} onClick={() => setView("compagnies")} icon={Building2}>
                   Compagnies
@@ -524,7 +574,7 @@ export default function FeuilleDeTempsPage() {
           </div>
 
           {/* Navigation période */}
-          {view !== "compagnies" && (
+          {view !== "compagnies" && view !== "dashboard" && (
             <div className="flex items-center gap-2">
               <button className={BTN_GHOST} onClick={() => changePeriod(-1)} aria-label="Période précédente">
                 <ChevronLeft className="h-4 w-4" />
@@ -554,6 +604,8 @@ export default function FeuilleDeTempsPage() {
           </div>
         ) : view === "equipe" ? (
           <TeamView periodStart={periodStart} onOpen={(uid) => { setView("feuille"); changeEmployee(uid); }} />
+        ) : view === "dashboard" ? (
+          <DashboardView onOpen={(uid) => { setView("feuille"); changeEmployee(uid); }} />
         ) : view === "compagnies" ? (
           <CompaniesManager />
         ) : detail ? (
@@ -636,47 +688,41 @@ export default function FeuilleDeTempsPage() {
                 </div>
                 <div className="space-y-1.5">
                   {detail.lignes
-                    .filter((l) => (computed.perCompany[l.company_id] || 0) > 0)
+                    .filter(
+                      (l) =>
+                        showAllRates ||
+                        (computed.perCompany[l.company_id] || 0) > 0
+                    )
                     .map((l) => (
-                      <div
+                      <LigneRate
                         key={l.company_id}
-                        className="flex items-center justify-between border-b border-[var(--qg-border)]/50 pb-1.5 text-sm last:border-0"
-                      >
-                        <span className="truncate pr-3">{l.label}</span>
-                        <span className="shrink-0 text-[var(--qg-text-faint)]">
-                          {l.refacturable === false ? (
-                            <span className="badge badge-neutral mr-2">
-                              Non refacturable
-                            </span>
-                          ) : null}
-                          {(computed.perCompany[l.company_id] || 0).toLocaleString("fr-CA")} h ×{" "}
-                          <span
-                            title={
-                              l.taux_refacturation !== detail.taux_refacturation
-                                ? "Taux propre à cette compagnie (prioritaire sur le défaut de la feuille) — modifiable dans l'onglet Compagnies"
-                                : "Taux de refacturation par défaut de la feuille"
-                            }
-                          >
-                            {money(l.taux_refacturation)}
-                            {l.taux_refacturation !== detail.taux_refacturation
-                              ? "*"
-                              : ""}
-                          </span>{" "}
-                          ={" "}
-                          <span className="font-medium text-[var(--qg-text)]">
-                            {money(computed.refacByCompany[l.company_id] || 0)}
-                          </span>
-                        </span>
-                      </div>
+                        l={l}
+                        heures={computed.perCompany[l.company_id] || 0}
+                        montant={computed.refacByCompany[l.company_id] || 0}
+                        userId={detail.user_id}
+                        canManage={isManager}
+                        onSaved={() => loadSheet()}
+                      />
                     ))}
-                  {detail.lignes.every(
-                    (l) => (computed.perCompany[l.company_id] || 0) === 0
-                  ) && (
-                    <div className="py-3 text-sm text-[var(--qg-text-faint)]">
-                      Aucune heure saisie pour cette période.
-                    </div>
-                  )}
+                  {!showAllRates &&
+                    detail.lignes.every(
+                      (l) => (computed.perCompany[l.company_id] || 0) === 0
+                    ) && (
+                      <div className="py-3 text-sm text-[var(--qg-text-faint)]">
+                        Aucune heure saisie pour cette période.
+                      </div>
+                    )}
                 </div>
+                {isManager && (
+                  <button
+                    className="mt-3 text-xs font-medium text-[var(--qg-accent)] hover:underline"
+                    onClick={() => setShowAllRates((v) => !v)}
+                  >
+                    {showAllRates
+                      ? "Masquer les compagnies sans heures"
+                      : `Configurer les taux de ${detail.employee_name} (toutes les compagnies)`}
+                  </button>
+                )}
               </div>
             </div>
           </>
@@ -755,6 +801,154 @@ function RateField({
           {money(value)}/h
         </button>
       )}
+    </div>
+  );
+}
+
+function LigneRate({
+  l,
+  heures,
+  montant,
+  userId,
+  canManage,
+  onSaved
+}: {
+  l: Ligne;
+  heures: number;
+  montant: number;
+  userId: number;
+  canManage: boolean;
+  onSaved: () => Promise<void> | void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [raw, setRaw] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Remplace l'override (employé, compagnie) : les champs non touchés
+  // gardent leur valeur actuelle ; les deux à null = retour à l'héritage.
+  const postRate = async (patch: {
+    taux?: number | null;
+    refacturable?: boolean | null;
+  }) => {
+    setBusy(true);
+    try {
+      await authedFetch("/api/v1/timesheets/user-rates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: userId,
+          company_id: l.company_id,
+          taux_refacturation:
+            patch.taux !== undefined ? patch.taux : l.taux_perso ?? null,
+          refacturable:
+            patch.refacturable !== undefined
+              ? patch.refacturable
+              : l.refacturable_perso ?? null
+        })
+      });
+      await onSaved();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-2 border-b border-[var(--qg-border)]/50 pb-1.5 text-sm last:border-0">
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="truncate">{l.label}</span>
+        {l.refacturable === false && (
+          <span className="badge badge-neutral shrink-0">Non refacturable</span>
+        )}
+      </span>
+      <span className="flex shrink-0 items-center gap-1.5 text-[var(--qg-text-faint)]">
+        {heures.toLocaleString("fr-CA")} h ×
+        {canManage && editing ? (
+          <input
+            autoFocus
+            inputMode="decimal"
+            value={raw}
+            onChange={(e) => setRaw(e.target.value)}
+            onBlur={() => {
+              setEditing(false);
+              if (raw.trim() === "") return;
+              void postRate({ taux: num(raw) });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") {
+                setRaw("");
+                setEditing(false);
+              }
+            }}
+            className="w-16 rounded border border-[var(--qg-border)] bg-transparent px-1 py-0.5 text-right text-sm outline-none focus:border-[var(--qg-accent)]"
+          />
+        ) : (
+          <button
+            disabled={!canManage || busy || l.refacturable === false}
+            onClick={() => {
+              setRaw(String(l.taux_refacturation || ""));
+              setEditing(true);
+            }}
+            title={
+              canManage
+                ? "Modifier le taux de refacturation pour CET employé sur cette compagnie"
+                : undefined
+            }
+            className={
+              canManage && l.refacturable !== false
+                ? "cursor-pointer font-medium hover:text-[var(--qg-accent)]"
+                : ""
+            }
+          >
+            {money(l.taux_refacturation)}
+          </button>
+        )}
+        {l.taux_source === "employe" ? (
+          <span
+            className="badge badge-emerald"
+            title="Taux propre à cet employé pour cette compagnie"
+          >
+            perso
+          </span>
+        ) : l.taux_source === "compagnie" ? (
+          <span title="Taux par défaut de la compagnie (onglet Compagnies) — clique sur le taux pour poser un taux propre à cet employé">
+            *
+          </span>
+        ) : null}{" "}
+        ={" "}
+        <span className="font-medium text-[var(--qg-text)]">
+          {money(montant)}
+        </span>
+        {canManage && (
+          <>
+            <label
+              className="ml-2 flex cursor-pointer items-center gap-1 text-xs"
+              title="Décoché : les heures de cette compagnie ne sont pas refacturées pour cet employé (mais payées quand même)"
+            >
+              <input
+                type="checkbox"
+                checked={l.refacturable !== false}
+                disabled={busy}
+                onChange={(e) =>
+                  void postRate({ refacturable: e.target.checked })
+                }
+                className="h-3.5 w-3.5 accent-[var(--qg-accent)]"
+              />
+              refact.
+            </label>
+            {(l.taux_perso != null || l.refacturable_perso != null) && (
+              <button
+                title="Revenir au taux hérité (compagnie / défaut de la feuille)"
+                disabled={busy}
+                onClick={() => void postRate({ taux: null, refacturable: null })}
+                className="text-[var(--qg-text-faint)] hover:text-[var(--qg-accent)]"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </>
+        )}
+      </span>
     </div>
   );
 }
@@ -937,6 +1131,9 @@ function TeamView({
 }) {
   const [rows, setRows] = useState<TeamRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [soldes, setSoldes] = useState<
+    Record<number, { paie: number; refac: number }>
+  >({});
   useEffect(() => {
     void (async () => {
       setLoading(true);
@@ -950,6 +1147,23 @@ function TeamView({
       }
     })();
   }, [periodStart]);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch("/api/v1/timesheets/dashboard");
+        if (r.ok) {
+          const d: DashboardData = await r.json();
+          const m: Record<number, { paie: number; refac: number }> = {};
+          for (const e of d.employees) {
+            m[e.user_id] = { paie: e.paie_solde, refac: e.refac_solde };
+          }
+          setSoldes(m);
+        }
+      } catch {
+        /* noop */
+      }
+    })();
+  }, []);
 
   const totals = rows.reduce(
     (a, r) => ({
@@ -978,6 +1192,18 @@ function TeamView({
             <th className="px-3 py-2 text-right">Heures</th>
             <th className="px-3 py-2 text-right">À verser</th>
             <th className="px-3 py-2 text-right">Refacturation</th>
+            <th
+              className="px-3 py-2 text-right"
+              title="Cumul de TOUTES les périodes moins les paiements enregistrés — détail dans l'onglet Dashboard"
+            >
+              Solde paie
+            </th>
+            <th
+              className="px-3 py-2 text-right"
+              title="Cumul de TOUTES les périodes moins les refacturations enregistrées — détail dans l'onglet Dashboard"
+            >
+              Solde refact.
+            </th>
             <th className="px-3 py-2" />
           </tr>
         </thead>
@@ -1001,6 +1227,12 @@ function TeamView({
                 <td className="px-3 py-2.5 text-right tabular-nums">
                   {r.total_refacturation ? money(r.total_refacturation) : "—"}
                 </td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-[var(--qg-text-muted)]">
+                  {soldes[r.user_id]?.paie ? money(soldes[r.user_id].paie) : "—"}
+                </td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-[var(--qg-text-muted)]">
+                  {soldes[r.user_id]?.refac ? money(soldes[r.user_id].refac) : "—"}
+                </td>
                 <td className="px-3 py-2.5 text-right">
                   <button className={BTN_GHOST} onClick={() => onOpen(r.user_id)}>
                     Ouvrir
@@ -1011,7 +1243,7 @@ function TeamView({
           })}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={6} className="px-3 py-8 text-center text-[var(--qg-text-faint)]">
+              <td colSpan={8} className="px-3 py-8 text-center text-[var(--qg-text-faint)]">
                 Aucun employé actif.
               </td>
             </tr>
@@ -1028,6 +1260,16 @@ function TeamView({
               </td>
               <td className="px-3 py-2.5 text-right tabular-nums">{money(totals.paie)}</td>
               <td className="px-3 py-2.5 text-right tabular-nums">{money(totals.refac)}</td>
+              <td className="px-3 py-2.5 text-right tabular-nums text-[var(--qg-text-muted)]">
+                {money(
+                  Object.values(soldes).reduce((a, s) => a + s.paie, 0)
+                )}
+              </td>
+              <td className="px-3 py-2.5 text-right tabular-nums text-[var(--qg-text-muted)]">
+                {money(
+                  Object.values(soldes).reduce((a, s) => a + s.refac, 0)
+                )}
+              </td>
               <td />
             </tr>
           </tfoot>
@@ -1229,6 +1471,442 @@ function CompanyEditor({
       <button className={BTN_GHOST} onClick={onCancel}>
         <X className="h-4 w-4" />
       </button>
+    </div>
+  );
+}
+
+// ── Dashboard soldes paie & refacturation ──────────────────────────────
+
+function todayISO(): string {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [modal, setModal] = useState<{
+    kind: "paie" | "refacturation";
+    emp: DashEmployee;
+    companyId?: number;
+  } | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await authedFetch("/api/v1/timesheets/dashboard");
+      if (r.ok) setData(await r.json());
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const removeReglement = async (id: number) => {
+    await authedFetch(`/api/v1/timesheets/reglements/${id}`, {
+      method: "DELETE"
+    });
+    await load();
+  };
+
+  if (loading || !data) {
+    return (
+      <div className="flex items-center justify-center py-16 text-[var(--qg-text-muted)]">
+        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Chargement…
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Tuiles totaux */}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className={CARD}>
+          <div className="flex items-center gap-2 text-sm font-medium text-[var(--qg-text-muted)]">
+            <DollarSign className="h-4 w-4" /> Solde de paie à verser
+          </div>
+          <div className="mt-2 text-3xl font-semibold tracking-tight">
+            {money(data.total_paie_solde)}
+          </div>
+          <div className="mt-1 text-sm text-[var(--qg-text-faint)]">
+            Toutes les feuilles, moins les paiements enregistrés
+          </div>
+        </div>
+        <div className={CARD}>
+          <div className="flex items-center gap-2 text-sm font-medium text-[var(--qg-text-muted)]">
+            <Wallet className="h-4 w-4" /> Solde à refacturer
+          </div>
+          <div className="mt-2 text-3xl font-semibold tracking-tight">
+            {money(data.total_refac_solde)}
+          </div>
+          <div className="mt-1 text-sm text-[var(--qg-text-faint)]">
+            Par compagnie, moins les refacturations enregistrées
+          </div>
+        </div>
+      </div>
+
+      {data.employees.length === 0 && (
+        <div className={`${CARD} py-10 text-center text-sm text-[var(--qg-text-faint)]`}>
+          Aucune heure saisie pour l&apos;instant — les soldes apparaîtront ici.
+        </div>
+      )}
+
+      {/* Une carte par employé */}
+      {data.employees.map((emp) => (
+        <div key={emp.user_id} className={CARD}>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-base font-semibold">{emp.name}</div>
+              <div className="text-sm text-[var(--qg-text-faint)]">
+                {emp.total_heures.toLocaleString("fr-CA")} h cumulées
+              </div>
+            </div>
+            <button className={BTN_GHOST} onClick={() => onOpen(emp.user_id)}>
+              Ouvrir la feuille
+            </button>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            {/* Paie */}
+            <div className="rounded-xl border border-[var(--qg-border)] bg-[var(--qg-bg)]/40 p-4">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-medium text-[var(--qg-text-muted)]">
+                  Paie
+                </span>
+                <button
+                  className={BTN_PRIMARY}
+                  onClick={() => setModal({ kind: "paie", emp })}
+                >
+                  <Plus className="h-4 w-4" /> Paiement
+                </button>
+              </div>
+              <dl className="space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <dt className="text-[var(--qg-text-faint)]">Dû (cumul)</dt>
+                  <dd className="tabular-nums">{money(emp.paie_due)}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-[var(--qg-text-faint)]">Payé</dt>
+                  <dd className="tabular-nums">{money(emp.paie_reglee)}</dd>
+                </div>
+                <div className="flex justify-between border-t border-[var(--qg-border)]/60 pt-1 font-semibold">
+                  <dt>Solde</dt>
+                  <dd
+                    className={`tabular-nums ${emp.paie_solde > 0 ? "text-amber-400" : ""}`}
+                  >
+                    {money(emp.paie_solde)}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+
+            {/* Refacturation par compagnie */}
+            <div className="rounded-xl border border-[var(--qg-border)] bg-[var(--qg-bg)]/40 p-4 lg:col-span-2">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-medium text-[var(--qg-text-muted)]">
+                  Refacturation par compagnie
+                </span>
+                <span className="text-sm font-semibold">
+                  Solde :{" "}
+                  <span
+                    className={emp.refac_solde > 0 ? "text-amber-400" : ""}
+                  >
+                    {money(emp.refac_solde)}
+                  </span>
+                </span>
+              </div>
+              {emp.companies.length === 0 ? (
+                <div className="py-3 text-sm text-[var(--qg-text-faint)]">
+                  Rien à refacturer.
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs uppercase tracking-wide text-[var(--qg-text-faint)]">
+                      <th className="py-1 pr-2">Compagnie</th>
+                      <th className="py-1 pr-2 text-right">Heures</th>
+                      <th className="py-1 pr-2 text-right">Dû</th>
+                      <th className="py-1 pr-2 text-right">Refacturé</th>
+                      <th className="py-1 pr-2 text-right">Solde</th>
+                      <th className="py-1" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {emp.companies.map((c) => (
+                      <tr
+                        key={c.company_id}
+                        className="border-t border-[var(--qg-border)]/40"
+                      >
+                        <td className="py-1.5 pr-2">{c.label}</td>
+                        <td className="py-1.5 pr-2 text-right tabular-nums">
+                          {c.heures.toLocaleString("fr-CA")}
+                        </td>
+                        <td className="py-1.5 pr-2 text-right tabular-nums">
+                          {money(c.due)}
+                        </td>
+                        <td className="py-1.5 pr-2 text-right tabular-nums">
+                          {money(c.regle)}
+                        </td>
+                        <td
+                          className={`py-1.5 pr-2 text-right font-medium tabular-nums ${
+                            c.solde > 0 ? "text-amber-400" : ""
+                          }`}
+                        >
+                          {money(c.solde)}
+                        </td>
+                        <td className="py-1.5 text-right">
+                          <button
+                            className="btn-ghost btn-xs"
+                            title="Enregistrer une refacturation pour cette compagnie"
+                            onClick={() =>
+                              setModal({
+                                kind: "refacturation",
+                                emp,
+                                companyId: c.company_id
+                              })
+                            }
+                          >
+                            <DollarSign className="h-4 w-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+
+      {/* Historique des règlements */}
+      {data.reglements.length > 0 && (
+        <div className={CARD}>
+          <div className="mb-3 text-base font-semibold">
+            Règlements enregistrés
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[var(--qg-border)] text-left text-xs uppercase tracking-wide text-[var(--qg-text-muted)]">
+                <th className="px-2 py-2">Date</th>
+                <th className="px-2 py-2">Type</th>
+                <th className="px-2 py-2">Employé</th>
+                <th className="px-2 py-2">Compagnie</th>
+                <th className="px-2 py-2 text-right">Montant</th>
+                <th className="px-2 py-2">Note</th>
+                <th className="px-2 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {data.reglements.map((r) => (
+                <tr key={r.id} className="border-b border-[var(--qg-border)]/40">
+                  <td className="px-2 py-2 tabular-nums">{r.date_reglement}</td>
+                  <td className="px-2 py-2">
+                    <span
+                      className={`badge ${
+                        r.kind === "paie" ? "badge-emerald" : "badge-amber"
+                      }`}
+                    >
+                      {r.kind === "paie" ? "Paie" : "Refacturation"}
+                    </span>
+                  </td>
+                  <td className="px-2 py-2">{r.employee_name}</td>
+                  <td className="px-2 py-2">{r.company_label || "—"}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">
+                    {money(r.montant)}
+                  </td>
+                  <td className="max-w-[200px] truncate px-2 py-2 text-[var(--qg-text-faint)]">
+                    {r.note || ""}
+                  </td>
+                  <td className="px-2 py-2 text-right">
+                    <button
+                      className="btn-outline-rose btn-xs"
+                      title="Supprimer ce règlement (le solde remonte d'autant)"
+                      onClick={() => void removeReglement(r.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {modal && (
+        <ReglementModal
+          kind={modal.kind}
+          emp={modal.emp}
+          companyId={modal.companyId}
+          onClose={() => setModal(null)}
+          onDone={async () => {
+            setModal(null);
+            await load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ReglementModal({
+  kind,
+  emp,
+  companyId,
+  onClose,
+  onDone
+}: {
+  kind: "paie" | "refacturation";
+  emp: DashEmployee;
+  companyId?: number;
+  onClose: () => void;
+  onDone: () => Promise<void>;
+}) {
+  const isPaie = kind === "paie";
+  const [cid, setCid] = useState<number | null>(
+    companyId ?? emp.companies[0]?.company_id ?? null
+  );
+  const soldeFor = (companyIdSel: number | null): number =>
+    isPaie
+      ? emp.paie_solde
+      : emp.companies.find((c) => c.company_id === companyIdSel)?.solde ?? 0;
+  const [montant, setMontant] = useState(() => {
+    const s = soldeFor(companyId ?? emp.companies[0]?.company_id ?? null);
+    return s > 0 ? String(s) : "";
+  });
+  const [dateStr, setDateStr] = useState(todayISO());
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch("/api/v1/timesheets/reglements", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind,
+          user_id: emp.user_id,
+          company_id: isPaie ? null : cid,
+          montant: num(montant),
+          date_reglement: dateStr,
+          note: note.trim() || null
+        })
+      });
+      if (!r.ok) throw new Error((await r.text()) || `Erreur ${r.status}`);
+      await onDone();
+    } catch (e: any) {
+      setErr(e?.message || "Enregistrement impossible");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const solde = soldeFor(cid);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className={`${CARD} w-full max-w-md space-y-3`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="text-base font-semibold">
+          {isPaie
+            ? `Enregistrer un paiement de paie — ${emp.name}`
+            : `Enregistrer une refacturation — ${emp.name}`}
+        </div>
+
+        {!isPaie && (
+          <label className="block text-sm">
+            <span className="mb-1 block text-[var(--qg-text-faint)]">
+              Compagnie refacturée
+            </span>
+            <select
+              value={cid ?? ""}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setCid(v);
+                const s = soldeFor(v);
+                setMontant(s > 0 ? String(s) : "");
+              }}
+              className="w-full rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
+            >
+              {emp.companies.map((c) => (
+                <option key={c.company_id} value={c.company_id}>
+                  {c.label} — solde {money(c.solde)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        <label className="block text-sm">
+          <span className="mb-1 block text-[var(--qg-text-faint)]">
+            Montant (solde : {money(solde)})
+          </span>
+          <input
+            inputMode="decimal"
+            value={montant}
+            onChange={(e) => setMontant(e.target.value)}
+            className="w-full rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
+          />
+        </label>
+
+        <label className="block text-sm">
+          <span className="mb-1 block text-[var(--qg-text-faint)]">Date</span>
+          <input
+            type="date"
+            value={dateStr}
+            onChange={(e) => setDateStr(e.target.value)}
+            className="w-full rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
+          />
+        </label>
+
+        <label className="block text-sm">
+          <span className="mb-1 block text-[var(--qg-text-faint)]">
+            Note (optionnel)
+          </span>
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Ex. virement Interac, facture #123…"
+            className="w-full rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
+          />
+        </label>
+
+        {err && (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+            {err}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button className={BTN_GHOST} onClick={onClose} disabled={busy}>
+            Annuler
+          </button>
+          <button
+            className={BTN_PRIMARY}
+            onClick={() => void save()}
+            disabled={busy || num(montant) <= 0 || (!isPaie && !cid)}
+          >
+            {busy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            Enregistrer
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
