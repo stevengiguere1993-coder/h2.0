@@ -42,10 +42,11 @@ type Ligne = {
   taux_refacturation: number;
   taux_source?: string;
   taux_perso?: number | null;
-  refacturable_perso?: boolean | null;
-  refacturable?: boolean;
   jours: number[];
+  jours_nr: number[];
   total: number;
+  total_refact: number;
+  total_non_refact: number;
   refacturation: number;
   note: string;
 };
@@ -70,6 +71,7 @@ type Detail = {
   is_manager: boolean;
   lignes: Ligne[];
   totaux_jour: number[];
+  totaux_jour_nr: number[];
   total_heures: number;
   montant_paie: number;
   total_refacturation: number;
@@ -224,10 +226,11 @@ export default function FeuilleDeTempsPage() {
   const [periodStart, setPeriodStart] = useState<string | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
-  const [view, setView] = useState<
-    "feuille" | "equipe" | "compagnies" | "dashboard"
-  >("feuille");
+  const [view, setView] = useState<"feuille" | "equipe" | "dashboard">(
+    "feuille"
+  );
   const [showAllRates, setShowAllRates] = useState(false);
+  const [manageCompanies, setManageCompanies] = useState(false);
   // Gestionnaire+ : atterrir sur la vue ÉQUIPE (sa propre feuille est
   // souvent vide) ; employé : directement sur SA feuille (retour Phil
   // 2026-07-22). Appliqué une seule fois au chargement du profil.
@@ -241,7 +244,9 @@ export default function FeuilleDeTempsPage() {
   }, [detail?.is_manager]);
 
   // Grille éditable (raw strings pour permettre la saisie de décimales).
+  // Deux blocs : heures refacturables et heures NON refacturables.
   const [cells, setCells] = useState<Record<number, string[]>>({});
+  const [cellsNr, setCellsNr] = useState<Record<number, string[]>>({});
   const [notes, setNotes] = useState<Record<number, string>>({});
   const [dirty, setDirty] = useState(false);
 
@@ -267,14 +272,19 @@ export default function FeuilleDeTempsPage() {
         const d: Detail = await r.json();
         setDetail(d);
         setPeriodStart(d.period_start);
-        // Hydrater la grille.
+        // Hydrater la grille (blocs refacturable + non refacturable).
         const c: Record<number, string[]> = {};
+        const cn: Record<number, string[]> = {};
         const n: Record<number, string> = {};
         for (const l of d.lignes) {
           c[l.company_id] = l.jours.map((h) => (h ? String(h) : ""));
+          cn[l.company_id] = (l.jours_nr || []).map((h) =>
+            h ? String(h) : ""
+          );
           n[l.company_id] = l.note || "";
         }
         setCells(c);
+        setCellsNr(cn);
         setNotes(n);
         setDirty(false);
       } catch (e: any) {
@@ -305,11 +315,16 @@ export default function FeuilleDeTempsPage() {
   }, [detail?.is_manager]);
 
   // — Totaux calculés en direct depuis la grille —
+  // Paie = toutes les heures ; refacturation = heures refacturables ×
+  // taux effectif de la ligne (perso → défaut de la feuille).
   const computed = useMemo(() => {
     if (!detail) {
       return {
         perCompany: {} as Record<number, number>,
+        perCompanyR: {} as Record<number, number>,
+        perCompanyN: {} as Record<number, number>,
         perDay: new Array(DAYS).fill(0) as number[],
+        perDayNr: new Array(DAYS).fill(0) as number[],
         totalHeures: 0,
         montantPaie: 0,
         refacByCompany: {} as Record<number, number>,
@@ -317,35 +332,47 @@ export default function FeuilleDeTempsPage() {
       };
     }
     const perCompany: Record<number, number> = {};
+    const perCompanyR: Record<number, number> = {};
+    const perCompanyN: Record<number, number> = {};
     const refacByCompany: Record<number, number> = {};
     const perDay = new Array(DAYS).fill(0) as number[];
+    const perDayNr = new Array(DAYS).fill(0) as number[];
     let totalHeures = 0;
     let totalRefac = 0;
     for (const l of detail.lignes) {
-      const arr = cells[l.company_id] || [];
-      let tot = 0;
+      const arrR = cells[l.company_id] || [];
+      const arrN = cellsNr[l.company_id] || [];
+      let totR = 0;
+      let totN = 0;
       for (let i = 0; i < DAYS; i++) {
-        const h = num(arr[i] || "");
-        tot += h;
-        perDay[i] += h;
+        const hr = num(arrR[i] || "");
+        const hn = num(arrN[i] || "");
+        totR += hr;
+        totN += hn;
+        perDay[i] += hr;
+        perDayNr[i] += hn;
       }
-      perCompany[l.company_id] = tot;
-      const refac =
-        l.refacturable === false ? 0 : tot * (l.taux_refacturation || 0);
+      perCompanyR[l.company_id] = totR;
+      perCompanyN[l.company_id] = totN;
+      perCompany[l.company_id] = totR + totN;
+      const refac = totR * (l.taux_refacturation || 0);
       refacByCompany[l.company_id] = refac;
-      totalHeures += tot;
+      totalHeures += totR + totN;
       totalRefac += refac;
     }
     return {
       perCompany,
+      perCompanyR,
+      perCompanyN,
       perDay,
+      perDayNr,
       totalHeures: Math.round(totalHeures * 100) / 100,
       montantPaie:
         Math.round(totalHeures * (detail.taux_horaire || 0) * 100) / 100,
       refacByCompany,
       totalRefac: Math.round(totalRefac * 100) / 100
     };
-  }, [cells, detail]);
+  }, [cells, cellsNr, detail]);
 
   // — Sauvegarde de la grille —
   const save = useCallback(async (): Promise<boolean> => {
@@ -353,13 +380,32 @@ export default function FeuilleDeTempsPage() {
     setSaving(true);
     setError(null);
     try {
-      const entries: { company_id: number; day_index: number; hours: number }[] =
-        [];
+      const entries: {
+        company_id: number;
+        day_index: number;
+        hours: number;
+        refacturable: boolean;
+      }[] = [];
       for (const l of detail.lignes) {
-        const arr = cells[l.company_id] || [];
+        const arrR = cells[l.company_id] || [];
+        const arrN = cellsNr[l.company_id] || [];
         for (let i = 0; i < DAYS; i++) {
-          const h = num(arr[i] || "");
-          if (h > 0) entries.push({ company_id: l.company_id, day_index: i, hours: h });
+          const hr = num(arrR[i] || "");
+          const hn = num(arrN[i] || "");
+          if (hr > 0)
+            entries.push({
+              company_id: l.company_id,
+              day_index: i,
+              hours: hr,
+              refacturable: true
+            });
+          if (hn > 0)
+            entries.push({
+              company_id: l.company_id,
+              day_index: i,
+              hours: hn,
+              refacturable: false
+            });
         }
       }
       const notesPayload: Record<string, string> = {};
@@ -385,7 +431,7 @@ export default function FeuilleDeTempsPage() {
     } finally {
       setSaving(false);
     }
-  }, [detail, cells, notes]);
+  }, [detail, cells, cellsNr, notes]);
 
   // — Navigation période / employé (sauvegarde d'abord si modifié) —
   const navigate = useCallback(
@@ -437,9 +483,15 @@ export default function FeuilleDeTempsPage() {
     [detail, dirty, save]
   );
 
-  const setCell = (companyId: number, dayIdx: number, value: string) => {
+  const setCell = (
+    companyId: number,
+    dayIdx: number,
+    value: string,
+    nr: boolean
+  ) => {
     if (!/^[0-9]*[.,]?[0-9]*$/.test(value)) return;
-    setCells((prev) => {
+    const setter = nr ? setCellsNr : setCells;
+    setter((prev) => {
       const arr = (prev[companyId] || new Array(DAYS).fill("")).slice();
       arr[dayIdx] = value;
       return { ...prev, [companyId]: arr };
@@ -551,9 +603,6 @@ export default function FeuilleDeTempsPage() {
                 <TabBtn active={view === "dashboard"} onClick={() => setView("dashboard")} icon={Wallet}>
                   Dashboard
                 </TabBtn>
-                <TabBtn active={view === "compagnies"} onClick={() => setView("compagnies")} icon={Building2}>
-                  Compagnies
-                </TabBtn>
               </div>
             )}
 
@@ -571,10 +620,22 @@ export default function FeuilleDeTempsPage() {
                 ))}
               </select>
             )}
+
+            {/* Gestion de la liste des compagnies (noms seulement — les
+                taux se règlent sur la feuille de chaque employé) */}
+            {isManager && (
+              <button
+                className={BTN_GHOST}
+                onClick={() => setManageCompanies(true)}
+                title="Ajouter, renommer ou retirer des compagnies de la liste"
+              >
+                <Building2 className="h-4 w-4" /> Compagnies
+              </button>
+            )}
           </div>
 
           {/* Navigation période */}
-          {view !== "compagnies" && view !== "dashboard" && (
+          {view !== "dashboard" && (
             <div className="flex items-center gap-2">
               <button className={BTN_GHOST} onClick={() => changePeriod(-1)} aria-label="Période précédente">
                 <ChevronLeft className="h-4 w-4" />
@@ -606,8 +667,6 @@ export default function FeuilleDeTempsPage() {
           <TeamView periodStart={periodStart} onOpen={(uid) => { setView("feuille"); changeEmployee(uid); }} />
         ) : view === "dashboard" ? (
           <DashboardView onOpen={(uid) => { setView("feuille"); changeEmployee(uid); }} />
-        ) : view === "compagnies" ? (
-          <CompaniesManager />
         ) : detail ? (
           <>
             {/* Bandeau statut + taux */}
@@ -629,7 +688,7 @@ export default function FeuilleDeTempsPage() {
                 }}
               />
               <RateField
-                label="Taux refacturation (défaut)"
+                label="Taux refacturation (toutes compagnies)"
                 value={detail.taux_refacturation}
                 editable={isManager}
                 onCommit={async (v) => {
@@ -652,11 +711,12 @@ export default function FeuilleDeTempsPage() {
             <Grille
               detail={detail}
               cells={cells}
+              cellsNr={cellsNr}
               notes={notes}
               perCompany={computed.perCompany}
               perDay={computed.perDay}
+              perDayNr={computed.perDayNr}
               totalHeures={computed.totalHeures}
-              refacByCompany={computed.refacByCompany}
               canEdit={canEdit}
               onCell={setCell}
               onNote={setNote}
@@ -697,7 +757,8 @@ export default function FeuilleDeTempsPage() {
                       <LigneRate
                         key={l.company_id}
                         l={l}
-                        heures={computed.perCompany[l.company_id] || 0}
+                        heures={computed.perCompanyR[l.company_id] || 0}
+                        nrHeures={computed.perCompanyN[l.company_id] || 0}
                         montant={computed.refacByCompany[l.company_id] || 0}
                         userId={detail.user_id}
                         canManage={isManager}
@@ -727,6 +788,28 @@ export default function FeuilleDeTempsPage() {
             </div>
           </>
         ) : null}
+
+        {manageCompanies && (
+          <div
+            className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 pt-16"
+            onClick={() => {
+              setManageCompanies(false);
+              void loadSheet();
+            }}
+          >
+            <div
+              className="w-full max-w-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <CompaniesManager
+                onClose={() => {
+                  setManageCompanies(false);
+                  void loadSheet();
+                }}
+              />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -808,6 +891,7 @@ function RateField({
 function LigneRate({
   l,
   heures,
+  nrHeures,
   montant,
   userId,
   canManage,
@@ -815,6 +899,7 @@ function LigneRate({
 }: {
   l: Ligne;
   heures: number;
+  nrHeures: number;
   montant: number;
   userId: number;
   canManage: boolean;
@@ -824,12 +909,9 @@ function LigneRate({
   const [raw, setRaw] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Remplace l'override (employé, compagnie) : les champs non touchés
-  // gardent leur valeur actuelle ; les deux à null = retour à l'héritage.
-  const postRate = async (patch: {
-    taux?: number | null;
-    refacturable?: boolean | null;
-  }) => {
+  // Pose (taux number) ou retire (taux null) le taux propre à ce couple
+  // (employé, compagnie) ; null = retour au taux de la feuille.
+  const postRate = async (taux: number | null) => {
     setBusy(true);
     try {
       await authedFetch("/api/v1/timesheets/user-rates", {
@@ -838,12 +920,8 @@ function LigneRate({
         body: JSON.stringify({
           user_id: userId,
           company_id: l.company_id,
-          taux_refacturation:
-            patch.taux !== undefined ? patch.taux : l.taux_perso ?? null,
-          refacturable:
-            patch.refacturable !== undefined
-              ? patch.refacturable
-              : l.refacturable_perso ?? null
+          taux_refacturation: taux,
+          refacturable: null
         })
       });
       await onSaved();
@@ -856,8 +934,13 @@ function LigneRate({
     <div className="flex items-center justify-between gap-2 border-b border-[var(--qg-border)]/50 pb-1.5 text-sm last:border-0">
       <span className="flex min-w-0 items-center gap-2">
         <span className="truncate">{l.label}</span>
-        {l.refacturable === false && (
-          <span className="badge badge-neutral shrink-0">Non refacturable</span>
+        {nrHeures > 0 && (
+          <span
+            className="shrink-0 text-xs text-[var(--qg-text-faint)]"
+            title="Heures non refacturables (payées mais non facturées)"
+          >
+            + {nrHeures.toLocaleString("fr-CA")} h non refact.
+          </span>
         )}
       </span>
       <span className="flex shrink-0 items-center gap-1.5 text-[var(--qg-text-faint)]">
@@ -871,7 +954,7 @@ function LigneRate({
             onBlur={() => {
               setEditing(false);
               if (raw.trim() === "") return;
-              void postRate({ taux: num(raw) });
+              void postRate(num(raw));
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
@@ -884,18 +967,18 @@ function LigneRate({
           />
         ) : (
           <button
-            disabled={!canManage || busy || l.refacturable === false}
+            disabled={!canManage || busy}
             onClick={() => {
               setRaw(String(l.taux_refacturation || ""));
               setEditing(true);
             }}
             title={
               canManage
-                ? "Modifier le taux de refacturation pour CET employé sur cette compagnie"
+                ? "Modifier le taux de refacturation pour CET employé sur cette compagnie (par défaut : le taux de la feuille)"
                 : undefined
             }
             className={
-              canManage && l.refacturable !== false
+              canManage
                 ? "cursor-pointer font-medium hover:text-[var(--qg-accent)]"
                 : ""
             }
@@ -903,50 +986,27 @@ function LigneRate({
             {money(l.taux_refacturation)}
           </button>
         )}
-        {l.taux_source === "employe" ? (
+        {l.taux_source === "employe" && (
           <span
             className="badge badge-emerald"
-            title="Taux propre à cet employé pour cette compagnie"
+            title="Taux ajusté manuellement pour cet employé sur cette compagnie"
           >
             perso
           </span>
-        ) : l.taux_source === "compagnie" ? (
-          <span title="Taux par défaut de la compagnie (onglet Compagnies) — clique sur le taux pour poser un taux propre à cet employé">
-            *
-          </span>
-        ) : null}{" "}
+        )}{" "}
         ={" "}
         <span className="font-medium text-[var(--qg-text)]">
           {money(montant)}
         </span>
-        {canManage && (
-          <>
-            <label
-              className="ml-2 flex cursor-pointer items-center gap-1 text-xs"
-              title="Décoché : les heures de cette compagnie ne sont pas refacturées pour cet employé (mais payées quand même)"
-            >
-              <input
-                type="checkbox"
-                checked={l.refacturable !== false}
-                disabled={busy}
-                onChange={(e) =>
-                  void postRate({ refacturable: e.target.checked })
-                }
-                className="h-3.5 w-3.5 accent-[var(--qg-accent)]"
-              />
-              refact.
-            </label>
-            {(l.taux_perso != null || l.refacturable_perso != null) && (
-              <button
-                title="Revenir au taux hérité (compagnie / défaut de la feuille)"
-                disabled={busy}
-                onClick={() => void postRate({ taux: null, refacturable: null })}
-                className="text-[var(--qg-text-faint)] hover:text-[var(--qg-accent)]"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </>
+        {canManage && l.taux_perso != null && (
+          <button
+            title="Revenir au taux de la feuille (toutes compagnies)"
+            disabled={busy}
+            onClick={() => void postRate(null)}
+            className="text-[var(--qg-text-faint)] hover:text-[var(--qg-accent)]"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+          </button>
         )}
       </span>
     </div>
@@ -956,24 +1016,31 @@ function LigneRate({
 function Grille({
   detail,
   cells,
+  cellsNr,
   notes,
   perCompany,
   perDay,
+  perDayNr,
   totalHeures,
-  refacByCompany,
   canEdit,
   onCell,
   onNote
 }: {
   detail: Detail;
   cells: Record<number, string[]>;
+  cellsNr: Record<number, string[]>;
   notes: Record<number, string>;
   perCompany: Record<number, number>;
   perDay: number[];
+  perDayNr: number[];
   totalHeures: number;
-  refacByCompany: Record<number, number>;
   canEdit: boolean;
-  onCell: (companyId: number, dayIdx: number, value: string) => void;
+  onCell: (
+    companyId: number,
+    dayIdx: number,
+    value: string,
+    nr: boolean
+  ) => void;
   onNote: (companyId: number, value: string) => void;
 }) {
   const dates = detail.jours_dates.map(parseISO);
@@ -1007,13 +1074,25 @@ function Grille({
               colSpan={7}
               className="border-b border-r border-[var(--qg-border)] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-[var(--qg-text-muted)]"
             >
-              Semaine 1
+              Semaine 1 · Refacturable
             </th>
             <th
               colSpan={7}
-              className="border-b border-r border-[var(--qg-border)] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-[var(--qg-text-muted)]"
+              className="border-b border-r-2 border-[var(--qg-border)] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-[var(--qg-text-muted)]"
             >
-              Semaine 2
+              Semaine 2 · Refacturable
+            </th>
+            <th
+              colSpan={7}
+              className="border-b border-r border-[var(--qg-border)] bg-rose-500/[0.04] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-rose-400/80"
+            >
+              Semaine 1 · Non refacturable
+            </th>
+            <th
+              colSpan={7}
+              className="border-b border-r border-[var(--qg-border)] bg-rose-500/[0.04] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-rose-400/80"
+            >
+              Semaine 2 · Non refacturable
             </th>
             <th
               rowSpan={2}
@@ -1028,53 +1107,64 @@ function Grille({
               Notes
             </th>
           </tr>
-          {/* Ligne jours */}
+          {/* Ligne jours (dates répétées pour le bloc non refacturable) */}
           <tr className="bg-[var(--qg-bg)]/60">
-            {Array.from({ length: DAYS }).map((_, i) => {
-              const h = dayHeader(i);
-              return (
-                <th
-                  key={i}
-                  className={`border-b border-[var(--qg-border)] px-1 py-1.5 text-center text-xs font-medium ${
-                    isWeekend(i) ? weekendBg + " text-[var(--qg-text-faint)]" : "text-[var(--qg-text-muted)]"
-                  } ${i === 6 ? "border-r border-[var(--qg-border)]" : ""}`}
-                >
-                  <div>{h.wd}</div>
-                  <div className="text-[var(--qg-text-faint)]">{h.day}</div>
-                </th>
-              );
-            })}
+            {[false, true].map((nr) =>
+              Array.from({ length: DAYS }).map((_, i) => {
+                const h = dayHeader(i);
+                return (
+                  <th
+                    key={`${nr}-${i}`}
+                    className={`border-b border-[var(--qg-border)] px-1 py-1.5 text-center text-xs font-medium ${
+                      isWeekend(i) ? weekendBg + " text-[var(--qg-text-faint)]" : "text-[var(--qg-text-muted)]"
+                    } ${nr ? "bg-rose-500/[0.03]" : ""} ${
+                      i === 6 ? "border-r border-[var(--qg-border)]" : ""
+                    } ${i === 13 && !nr ? "border-r-2 border-[var(--qg-border)]" : ""}`}
+                  >
+                    <div>{h.wd}</div>
+                    <div className="text-[var(--qg-text-faint)]">{h.day}</div>
+                  </th>
+                );
+              })
+            )}
           </tr>
         </thead>
         <tbody>
           {detail.lignes.map((l) => {
-            const arr = cells[l.company_id] || [];
             const tot = perCompany[l.company_id] || 0;
             return (
               <tr key={l.company_id} className="group border-b border-[var(--qg-border)]/60">
                 <td className="sticky left-0 z-10 min-w-[200px] border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-4 py-1.5 font-medium group-hover:bg-[var(--qg-bg)]/30">
                   {l.label}
                 </td>
-                {Array.from({ length: DAYS }).map((_, i) => (
-                  <td
-                    key={i}
-                    className={`border-[var(--qg-border)]/40 px-0.5 py-1 ${
-                      isWeekend(i) ? weekendBg : ""
-                    } ${i === 6 ? "border-r border-[var(--qg-border)]" : ""}`}
-                  >
-                    {canEdit ? (
-                      <input
-                        inputMode="decimal"
-                        value={arr[i] || ""}
-                        onChange={(e) => onCell(l.company_id, i, e.target.value)}
-                        className={`${cellBase} rounded border border-transparent bg-transparent px-1 py-1 hover:border-[var(--qg-border)] focus:border-[var(--qg-accent)] focus:bg-[var(--qg-bg)]/40`}
-                        placeholder="·"
-                      />
-                    ) : (
-                      <div className={`${cellBase} py-1`}>{arr[i] || ""}</div>
-                    )}
-                  </td>
-                ))}
+                {[false, true].map((nr) => {
+                  const arr =
+                    (nr ? cellsNr : cells)[l.company_id] || [];
+                  return Array.from({ length: DAYS }).map((_, i) => (
+                    <td
+                      key={`${nr}-${i}`}
+                      className={`border-[var(--qg-border)]/40 px-0.5 py-1 ${
+                        isWeekend(i) ? weekendBg : ""
+                      } ${nr ? "bg-rose-500/[0.03]" : ""} ${
+                        i === 6 ? "border-r border-[var(--qg-border)]" : ""
+                      } ${i === 13 && !nr ? "border-r-2 border-[var(--qg-border)]" : ""}`}
+                    >
+                      {canEdit ? (
+                        <input
+                          inputMode="decimal"
+                          value={arr[i] || ""}
+                          onChange={(e) =>
+                            onCell(l.company_id, i, e.target.value, nr)
+                          }
+                          className={`${cellBase} rounded border border-transparent bg-transparent px-1 py-1 hover:border-[var(--qg-border)] focus:border-[var(--qg-accent)] focus:bg-[var(--qg-bg)]/40`}
+                          placeholder="·"
+                        />
+                      ) : (
+                        <div className={`${cellBase} py-1`}>{arr[i] || ""}</div>
+                      )}
+                    </td>
+                  ));
+                })}
                 <td className="border-l border-[var(--qg-border)] bg-amber-500/5 px-3 py-1.5 text-center font-semibold tabular-nums">
                   {tot ? tot.toLocaleString("fr-CA") : ""}
                 </td>
@@ -1101,16 +1191,20 @@ function Grille({
             <td className="sticky left-0 z-10 border-r border-t-2 border-[var(--qg-border)] bg-[var(--qg-bg)]/90 px-4 py-2">
               Total / jour
             </td>
-            {perDay.map((d, i) => (
-              <td
-                key={i}
-                className={`border-t-2 border-[var(--qg-border)] px-1 py-2 text-center tabular-nums ${
-                  isWeekend(i) ? weekendBg : ""
-                } ${i === 6 ? "border-r border-[var(--qg-border)]" : ""}`}
-              >
-                {d ? d.toLocaleString("fr-CA") : ""}
-              </td>
-            ))}
+            {[false, true].map((nr) =>
+              (nr ? perDayNr : perDay).map((d, i) => (
+                <td
+                  key={`${nr}-${i}`}
+                  className={`border-t-2 border-[var(--qg-border)] px-1 py-2 text-center tabular-nums ${
+                    isWeekend(i) ? weekendBg : ""
+                  } ${nr ? "bg-rose-500/[0.03]" : ""} ${
+                    i === 6 ? "border-r border-[var(--qg-border)]" : ""
+                  } ${i === 13 && !nr ? "border-r-2 border-[var(--qg-border)]" : ""}`}
+                >
+                  {d ? d.toLocaleString("fr-CA") : ""}
+                </td>
+              ))
+            )}
             <td className="border-l border-t-2 border-[var(--qg-border)] bg-amber-500/10 px-3 py-2 text-center tabular-nums">
               {totalHeures ? totalHeures.toLocaleString("fr-CA") : "0"}
             </td>
@@ -1279,7 +1373,7 @@ function TeamView({
   );
 }
 
-function CompaniesManager() {
+function CompaniesManager({ onClose }: { onClose: () => void }) {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Company | null>(null);
@@ -1336,13 +1430,18 @@ function CompaniesManager() {
         <div>
           <div className="text-base font-semibold">Compagnies</div>
           <div className="text-sm text-[var(--qg-text-faint)]">
-            Liste partagée par tous les employés. Le taux fixe la refacturation
-            par défaut de chaque compagnie.
+            Liste partagée par tous les employés. Les taux se règlent sur la
+            feuille de chaque employé.
           </div>
         </div>
-        <button className={BTN_PRIMARY} onClick={() => setAdding(true)}>
-          <Plus className="h-4 w-4" /> Ajouter
-        </button>
+        <div className="flex items-center gap-2">
+          <button className={BTN_PRIMARY} onClick={() => setAdding(true)}>
+            <Plus className="h-4 w-4" /> Ajouter
+          </button>
+          <button className={BTN_GHOST} onClick={onClose} aria-label="Fermer">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {adding && (
@@ -1375,13 +1474,6 @@ function CompaniesManager() {
                 )}
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-sm tabular-nums text-[var(--qg-text-muted)]">
-                  {c.refacturable === false
-                    ? "non refacturable"
-                    : c.taux_refacturation != null
-                      ? `${money(c.taux_refacturation)}/h`
-                      : "défaut"}
-                </span>
                 <button className="btn-ghost btn-xs" onClick={() => setEditing(c)}>
                   <Pencil className="h-4 w-4" />
                 </button>
@@ -1409,13 +1501,7 @@ function CompanyEditor({
   onSave: (c: Partial<Company>) => void;
 }) {
   const [label, setLabel] = useState(company?.label || "");
-  const [taux, setTaux] = useState(
-    company?.taux_refacturation != null ? String(company.taux_refacturation) : ""
-  );
   const [active, setActive] = useState(company?.is_active ?? true);
-  const [refacturable, setRefacturable] = useState(
-    company?.refacturable !== false
-  );
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--qg-accent)]/40 bg-[var(--qg-bg)]/40 p-3">
@@ -1426,42 +1512,18 @@ function CompanyEditor({
         placeholder="Nom de la compagnie"
         className="flex-1 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
       />
-      <div className="flex items-center gap-1.5 text-sm">
-        <span className="text-[var(--qg-text-faint)]">Taux refac.</span>
-        <input
-          inputMode="decimal"
-          value={taux}
-          onChange={(e) => setTaux(e.target.value)}
-          placeholder="33"
-          className="w-20 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-2 text-right text-sm outline-none focus:border-[var(--qg-accent)]"
-        />
-      </div>
       {company && (
         <label className="flex items-center gap-1.5 text-sm">
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
           Active
         </label>
       )}
-      <label
-        className="flex cursor-pointer items-center gap-1.5 text-sm"
-        title="Décoché : les heures comptent pour la paie mais ne sont pas refacturées (travail interne)"
-      >
-        <input
-          type="checkbox"
-          checked={refacturable}
-          onChange={(e) => setRefacturable(e.target.checked)}
-          className="h-4 w-4 accent-[var(--qg-accent)]"
-        />
-        Refacturable
-      </label>
       <button
         className={BTN_PRIMARY}
         disabled={!label.trim()}
         onClick={() =>
           onSave({
             label: label.trim(),
-            taux_refacturation: taux.trim() ? num(taux) : null,
-            refacturable,
             ...(company ? { is_active: active } : {})
           })
         }
