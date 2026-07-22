@@ -210,24 +210,30 @@ export default function BauxPage() {
     }
   }
 
-  // Payé AU COMPLET en 1 clic : le restant du mois (loyer − déjà payé)
-  // — le cas le plus fréquent, gardé tel quel (retour Steven 2026-07-20).
+  // DÛ du mois = loyer + frais ponctuels du mois (650 + 20 = 670 —
+  // retour Phil 2026-07-22 : « Marquer payé » doit couvrir les frais).
+  function duMois(row: Row): number {
+    return (
+      Math.round(
+        (row.loyer_mensuel +
+          (row.frais_mois ?? []).reduce((s, f) => s + f.montant, 0)) *
+          100
+      ) / 100
+    );
+  }
+
+  // Payé AU COMPLET en 1 clic : le restant du mois (loyer + frais −
+  // déjà payé) — le cas le plus fréquent (retour Steven 2026-07-20).
   async function marquerPaye(row: Row) {
     const restant =
-      Math.round(
-        (row.loyer_mensuel - (row.montant_paye ?? 0)) * 100
-      ) / 100;
-    await enregistrerPaiement(
-      row, restant > 0 ? restant : row.loyer_mensuel
-    );
+      Math.round((duMois(row) - (row.montant_paye ?? 0)) * 100) / 100;
+    await enregistrerPaiement(row, restant > 0 ? restant : duMois(row));
   }
 
   // Paiement PARTIEL : montant saisi (ex. 500 $ sur un loyer de 800 $).
   async function marquerPartiel(row: Row) {
     const restant =
-      Math.round(
-        (row.loyer_mensuel - (row.montant_paye ?? 0)) * 100
-      ) / 100;
+      Math.round((duMois(row) - (row.montant_paye ?? 0)) * 100) / 100;
     const saisie = window.prompt(
       `Montant reçu de ${row.locataire_name || "ce locataire"} pour ${mois} ?\n(Restant du mois : ${fmtMoney(restant)})`,
       ""

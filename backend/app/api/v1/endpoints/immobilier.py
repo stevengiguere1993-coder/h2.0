@@ -3221,11 +3221,22 @@ async def loyers_overview(
         loc = locataires.get(b.locataire_id)
         ps = paiements_mois.get(b.id) or []
         loyer = float(b.loyer_mensuel or 0)
+        # DÛ du mois = loyer + frais ponctuels du mois (retour Phil
+        # 2026-07-22 : « Marquer payé » doit couvrir 650 + 20 = 670, et
+        # le mois n'est « payé » que si les frais sont couverts aussi).
+        frais_mois_total = round(
+            sum(
+                float(f.montant or 0)
+                for f in (frais_mois_by_bail.get(b.id) or [])
+            ),
+            2,
+        )
+        du_mois = round(loyer + frais_mois_total, 2)
         paye_mois = round(sum(float(p.montant or 0) for p in ps), 2)
         dernier = max(ps, key=lambda p: (p.paye_le or month_start, p.id)) if ps else None
-        total_attendu += loyer
+        total_attendu += du_mois
         total_recu += paye_mois
-        if ps and paye_mois >= loyer - 0.005:
+        if ps and paye_mois >= du_mois - 0.005:
             etat = "paye"
             nb_payes += 1
         elif ps:
