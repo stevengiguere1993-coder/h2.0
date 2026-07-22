@@ -907,6 +907,86 @@ export default function LocataireDetailPage({
               </section>
             ) : null}
 
+            {/* Loyers du mois — marquer payé / partiel / frais depuis la
+                fiche (retour Steven 2026-07-22). */}
+            <LoyersMoisSection
+              locataireId={locataireId}
+              onMutated={() => void loadDossier()}
+            />
+
+            {/* Historique de paiements */}
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  Historique de paiements
+                </h2>
+                {dossier && dossier.nb_paiements > 0 ? (
+                  <span className="text-xs text-white/50">
+                    {dossier.nb_paiements} paiement
+                    {dossier.nb_paiements > 1 ? "s" : ""} ·{" "}
+                    <span className="font-semibold text-white">
+                      {money(dossier.total_paye)}
+                    </span>{" "}
+                    encaissés
+                  </span>
+                ) : null}
+              </div>
+              {!dossier || dossier.paiements.length === 0 ? (
+                <p className="text-sm text-white/50">
+                  Aucun paiement enregistré pour ce locataire.
+                </p>
+              ) : (
+                <div className="max-h-96 overflow-y-auto">
+                  <table className="w-full min-w-[520px] text-left text-sm">
+                    <thead className="sticky top-0 bg-brand-900 text-[10px] uppercase tracking-wider text-white/45">
+                      <tr>
+                        <th className="py-2 pr-3">Mois couvert</th>
+                        <th className="py-2 pr-3 text-right">Montant</th>
+                        <th className="py-2 pr-3">Payé le</th>
+                        <th className="py-2 pr-3">Méthode</th>
+                        <th className="py-2 text-right">État</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-brand-800/70">
+                      {dossier.paiements.map((p) => (
+                        <tr key={p.id}>
+                          <td className="py-2.5 pr-3 capitalize text-white/80">
+                            {moisLabel(p.mois_couvert)}
+                          </td>
+                          <td className="py-2.5 pr-3 text-right text-white/80">
+                            {money(p.montant)}
+                          </td>
+                          <td className="py-2.5 pr-3 text-xs text-white/60">
+                            {p.paye_le ?? "—"}
+                          </td>
+                          <td className="py-2.5 pr-3 text-xs capitalize text-white/60">
+                            {p.methode ?? "—"}
+                          </td>
+                          <td className="py-2.5 text-right">
+                            {p.paye_le ? (
+                              <span
+                                className={`badge ${
+                                  p.en_retard
+                                    ? "badge-amber"
+                                    : "badge-emerald"
+                                }`}
+                              >
+                                {p.en_retard ? "Payé en retard" : "Payé"}
+                              </span>
+                            ) : (
+                              <span className="badge badge-rose">
+                                Impayé
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
             {/* Baux */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
@@ -1083,196 +1163,6 @@ export default function LocataireDetailPage({
               )}
             </section>
 
-            {/* Dépôt préautorisé (DPA) */}
-            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Dépôt préautorisé (DPA)
-                </h2>
-                {loc.dpa_statut === "actif" ? (
-                  <span className="badge badge-emerald">
-                    Actif{loc.dpa_signe_le ? ` · signé le ${loc.dpa_signe_le}` : ""}
-                  </span>
-                ) : loc.dpa_statut === "envoye" ? (
-                  <span className="badge badge-sky">
-                    Documentation envoyée
-                    {loc.dpa_envoye_le ? ` le ${loc.dpa_envoye_le}` : ""}
-                  </span>
-                ) : loc.dpa_statut === "refuse" ? (
-                  <span className="badge badge-rose">Refusé</span>
-                ) : (
-                  <span className="badge badge-neutral">Non proposé</span>
-                )}
-              </div>
-              <p className="mb-3 text-xs text-white/50">
-                Prélèvement automatique du loyer (Règle H1 de Paiements
-                Canada, perception Desjardins). Le locataire doit signer
-                l&apos;accord et fournir un spécimen de chèque AVANT tout
-                prélèvement — il peut annuler en tout temps (préavis 30
-                jours). Conserve l&apos;accord signé.
-              </p>
-              {dpaMsg ? (
-                <p className="mb-3 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
-                  {dpaMsg}
-                </p>
-              ) : null}
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void dpaPdf()}
-                  className="btn-secondary btn-sm"
-                  title="Télécharger le formulaire d'accord DPA prérempli (loyer du bail actif)"
-                >
-                  <Download className="h-3.5 w-3.5" /> Formulaire (PDF)
-                </button>
-                <button
-                  type="button"
-                  disabled={dpaBusy || !(loc.email || "").trim()}
-                  onClick={() => void dpaEnvoyer()}
-                  title={
-                    (loc.email || "").trim()
-                      ? "Envoyer la documentation DPA par courriel au locataire (manuel)"
-                      : "Ajoute d'abord le courriel du locataire"
-                  }
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1.5 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
-                >
-                  {dpaBusy ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Mail className="h-3.5 w-3.5" />
-                  )}
-                  Envoyer la documentation
-                </button>
-                {loc.dpa_statut !== "actif" ? (
-                  <button
-                    type="button"
-                    disabled={dpaBusy}
-                    onClick={() => void dpaStatut("actif")}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                    title="L'accord signé (avec spécimen) a été reçu — le DPA est en vigueur"
-                  >
-                    <Check className="h-3.5 w-3.5" /> Accord signé reçu
-                  </button>
-                ) : null}
-                {loc.dpa_statut !== "refuse" && loc.dpa_statut !== "actif" ? (
-                  <button
-                    type="button"
-                    disabled={dpaBusy}
-                    onClick={() => void dpaStatut("refuse")}
-                    className="text-xs text-white/40 hover:text-rose-300"
-                  >
-                    Marquer refusé
-                  </button>
-                ) : null}
-                {loc.dpa_statut !== "aucun" ? (
-                  <button
-                    type="button"
-                    disabled={dpaBusy}
-                    onClick={() => void dpaStatut("aucun")}
-                    className="text-xs text-white/40 hover:text-white/70"
-                  >
-                    Réinitialiser
-                  </button>
-                ) : null}
-              </div>
-            </section>
-
-            {/* Assurance locataire — à confirmer chaque année (Steven). */}
-            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Assurance locataire
-                </h2>
-                {(() => {
-                  const d = loc.assurance_confirmee_le;
-                  if (!d)
-                    return (
-                      <span className="badge badge-neutral">
-                        Jamais confirmée
-                      </span>
-                    );
-                  const valide =
-                    Date.now() - new Date(`${d}T00:00:00`).getTime() <
-                    365 * 24 * 3600 * 1000;
-                  return valide ? (
-                    <span className="badge badge-emerald">
-                      Confirmée le {d}
-                    </span>
-                  ) : (
-                    <span className="badge badge-amber">
-                      À reconfirmer — dernière fois le {d}
-                    </span>
-                  );
-                })()}
-              </div>
-              <p className="mb-3 text-xs text-white/50">
-                Le locataire doit détenir une assurance responsabilité
-                (habitation). Confirme-la une fois par année — au
-                renouvellement du bail, c&apos;est le bon moment.
-              </p>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  disabled={dpaBusy}
-                  onClick={() => void assuranceConfirmer()}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                  title="La preuve d'assurance a été vérifiée aujourd'hui"
-                >
-                  <Check className="h-3.5 w-3.5" /> Confirmer aujourd&apos;hui
-                </button>
-                {loc.assurance_confirmee_le ? (
-                  <button
-                    type="button"
-                    disabled={dpaBusy}
-                    onClick={() => void assuranceConfirmer(true)}
-                    className="text-xs text-white/40 hover:text-rose-300"
-                  >
-                    Retirer la confirmation
-                  </button>
-                ) : null}
-              </div>
-              {/* Historique : confirmations et demandes journalisées. */}
-              {(() => {
-                const hist = (dossier?.communications || []).filter((c) =>
-                  c.contenu.toLowerCase().includes("assurance")
-                );
-                if (hist.length === 0) return null;
-                return (
-                  <div className="mt-3 border-t border-brand-800 pt-2">
-                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
-                      Historique
-                    </p>
-                    <ul className="space-y-0.5">
-                      {hist.slice(0, 8).map((c) => (
-                        <li
-                          key={c.id}
-                          className="text-[11px] text-white/60"
-                        >
-                          <span className="text-white/40">
-                            {(c.created_at || "").slice(0, 10)}
-                          </span>{" "}
-                          — {c.contenu}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                );
-              })()}
-            </section>
-
-            {/* Documents — TOUT ce qui a été généré/envoyé pour ce
-                locataire (avis TAL, DPA, lettres…), génération incluse
-                hors tableau (retour Phil 2026-07-20). */}
-            <DocumentsSection
-              locataireId={locataireId}
-              bails={(dossier?.baux || []).map((b) => ({
-                id: b.id,
-                label: `${b.immeuble_name}${
-                  b.logement_numero ? ` · ${b.logement_numero}` : ""
-                }`
-              }))}
-            />
-
             {/* Avis & renouvellements */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
@@ -1351,85 +1241,18 @@ export default function LocataireDetailPage({
               )}
             </section>
 
-            {/* Loyers du mois — marquer payé / partiel / frais depuis la
-                fiche (retour Steven 2026-07-22). */}
-            <LoyersMoisSection
+            {/* Documents — TOUT ce qui a été généré/envoyé pour ce
+                locataire (avis TAL, DPA, lettres…), génération incluse
+                hors tableau (retour Phil 2026-07-20). */}
+            <DocumentsSection
               locataireId={locataireId}
-              onMutated={() => void loadDossier()}
+              bails={(dossier?.baux || []).map((b) => ({
+                id: b.id,
+                label: `${b.immeuble_name}${
+                  b.logement_numero ? ` · ${b.logement_numero}` : ""
+                }`
+              }))}
             />
-
-            {/* Historique de paiements */}
-            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Historique de paiements
-                </h2>
-                {dossier && dossier.nb_paiements > 0 ? (
-                  <span className="text-xs text-white/50">
-                    {dossier.nb_paiements} paiement
-                    {dossier.nb_paiements > 1 ? "s" : ""} ·{" "}
-                    <span className="font-semibold text-white">
-                      {money(dossier.total_paye)}
-                    </span>{" "}
-                    encaissés
-                  </span>
-                ) : null}
-              </div>
-              {!dossier || dossier.paiements.length === 0 ? (
-                <p className="text-sm text-white/50">
-                  Aucun paiement enregistré pour ce locataire.
-                </p>
-              ) : (
-                <div className="max-h-96 overflow-y-auto">
-                  <table className="w-full min-w-[520px] text-left text-sm">
-                    <thead className="sticky top-0 bg-brand-900 text-[10px] uppercase tracking-wider text-white/45">
-                      <tr>
-                        <th className="py-2 pr-3">Mois couvert</th>
-                        <th className="py-2 pr-3 text-right">Montant</th>
-                        <th className="py-2 pr-3">Payé le</th>
-                        <th className="py-2 pr-3">Méthode</th>
-                        <th className="py-2 text-right">État</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-brand-800/70">
-                      {dossier.paiements.map((p) => (
-                        <tr key={p.id}>
-                          <td className="py-2.5 pr-3 capitalize text-white/80">
-                            {moisLabel(p.mois_couvert)}
-                          </td>
-                          <td className="py-2.5 pr-3 text-right text-white/80">
-                            {money(p.montant)}
-                          </td>
-                          <td className="py-2.5 pr-3 text-xs text-white/60">
-                            {p.paye_le ?? "—"}
-                          </td>
-                          <td className="py-2.5 pr-3 text-xs capitalize text-white/60">
-                            {p.methode ?? "—"}
-                          </td>
-                          <td className="py-2.5 text-right">
-                            {p.paye_le ? (
-                              <span
-                                className={`badge ${
-                                  p.en_retard
-                                    ? "badge-amber"
-                                    : "badge-emerald"
-                                }`}
-                              >
-                                {p.en_retard ? "Payé en retard" : "Payé"}
-                              </span>
-                            ) : (
-                              <span className="badge badge-rose">
-                                Impayé
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
 
             {/* Communications — journal manuel */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
@@ -1558,6 +1381,184 @@ export default function LocataireDetailPage({
                 </button>
               </div>
             </section>
+
+            {/* Assurance locataire — à confirmer chaque année (Steven). */}
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  Assurance locataire
+                </h2>
+                {(() => {
+                  const d = loc.assurance_confirmee_le;
+                  if (!d)
+                    return (
+                      <span className="badge badge-neutral">
+                        Jamais confirmée
+                      </span>
+                    );
+                  const valide =
+                    Date.now() - new Date(`${d}T00:00:00`).getTime() <
+                    365 * 24 * 3600 * 1000;
+                  return valide ? (
+                    <span className="badge badge-emerald">
+                      Confirmée le {d}
+                    </span>
+                  ) : (
+                    <span className="badge badge-amber">
+                      À reconfirmer — dernière fois le {d}
+                    </span>
+                  );
+                })()}
+              </div>
+              <p className="mb-3 text-xs text-white/50">
+                Le locataire doit détenir une assurance responsabilité
+                (habitation). Confirme-la une fois par année — au
+                renouvellement du bail, c&apos;est le bon moment.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={dpaBusy}
+                  onClick={() => void assuranceConfirmer()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                  title="La preuve d'assurance a été vérifiée aujourd'hui"
+                >
+                  <Check className="h-3.5 w-3.5" /> Confirmer aujourd&apos;hui
+                </button>
+                {loc.assurance_confirmee_le ? (
+                  <button
+                    type="button"
+                    disabled={dpaBusy}
+                    onClick={() => void assuranceConfirmer(true)}
+                    className="text-xs text-white/40 hover:text-rose-300"
+                  >
+                    Retirer la confirmation
+                  </button>
+                ) : null}
+              </div>
+              {/* Historique : confirmations et demandes journalisées. */}
+              {(() => {
+                const hist = (dossier?.communications || []).filter((c) =>
+                  c.contenu.toLowerCase().includes("assurance")
+                );
+                if (hist.length === 0) return null;
+                return (
+                  <div className="mt-3 border-t border-brand-800 pt-2">
+                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                      Historique
+                    </p>
+                    <ul className="space-y-0.5">
+                      {hist.slice(0, 8).map((c) => (
+                        <li
+                          key={c.id}
+                          className="text-[11px] text-white/60"
+                        >
+                          <span className="text-white/40">
+                            {(c.created_at || "").slice(0, 10)}
+                          </span>{" "}
+                          — {c.contenu}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
+            </section>
+
+            {/* Dépôt préautorisé (DPA) */}
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  Dépôt préautorisé (DPA)
+                </h2>
+                {loc.dpa_statut === "actif" ? (
+                  <span className="badge badge-emerald">
+                    Actif{loc.dpa_signe_le ? ` · signé le ${loc.dpa_signe_le}` : ""}
+                  </span>
+                ) : loc.dpa_statut === "envoye" ? (
+                  <span className="badge badge-sky">
+                    Documentation envoyée
+                    {loc.dpa_envoye_le ? ` le ${loc.dpa_envoye_le}` : ""}
+                  </span>
+                ) : loc.dpa_statut === "refuse" ? (
+                  <span className="badge badge-rose">Refusé</span>
+                ) : (
+                  <span className="badge badge-neutral">Non proposé</span>
+                )}
+              </div>
+              <p className="mb-3 text-xs text-white/50">
+                Prélèvement automatique du loyer (Règle H1 de Paiements
+                Canada, perception Desjardins). Le locataire doit signer
+                l&apos;accord et fournir un spécimen de chèque AVANT tout
+                prélèvement — il peut annuler en tout temps (préavis 30
+                jours). Conserve l&apos;accord signé.
+              </p>
+              {dpaMsg ? (
+                <p className="mb-3 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
+                  {dpaMsg}
+                </p>
+              ) : null}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void dpaPdf()}
+                  className="btn-secondary btn-sm"
+                  title="Télécharger le formulaire d'accord DPA prérempli (loyer du bail actif)"
+                >
+                  <Download className="h-3.5 w-3.5" /> Formulaire (PDF)
+                </button>
+                <button
+                  type="button"
+                  disabled={dpaBusy || !(loc.email || "").trim()}
+                  onClick={() => void dpaEnvoyer()}
+                  title={
+                    (loc.email || "").trim()
+                      ? "Envoyer la documentation DPA par courriel au locataire (manuel)"
+                      : "Ajoute d'abord le courriel du locataire"
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1.5 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+                >
+                  {dpaBusy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Mail className="h-3.5 w-3.5" />
+                  )}
+                  Envoyer la documentation
+                </button>
+                {loc.dpa_statut !== "actif" ? (
+                  <button
+                    type="button"
+                    disabled={dpaBusy}
+                    onClick={() => void dpaStatut("actif")}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                    title="L'accord signé (avec spécimen) a été reçu — le DPA est en vigueur"
+                  >
+                    <Check className="h-3.5 w-3.5" /> Accord signé reçu
+                  </button>
+                ) : null}
+                {loc.dpa_statut !== "refuse" && loc.dpa_statut !== "actif" ? (
+                  <button
+                    type="button"
+                    disabled={dpaBusy}
+                    onClick={() => void dpaStatut("refuse")}
+                    className="text-xs text-white/40 hover:text-rose-300"
+                  >
+                    Marquer refusé
+                  </button>
+                ) : null}
+                {loc.dpa_statut !== "aucun" ? (
+                  <button
+                    type="button"
+                    disabled={dpaBusy}
+                    onClick={() => void dpaStatut("aucun")}
+                    className="text-xs text-white/40 hover:text-white/70"
+                  >
+                    Réinitialiser
+                  </button>
+                ) : null}
+              </div>
+            </section>
+
           </div>
         )}
       </div>
@@ -1684,15 +1685,26 @@ function LoyersMoisSection({
     }
   }
 
+  // Dû du mois = loyer + frais ponctuels du mois (retour Phil 2026-07-22).
+  function duMois(row: LoyerMoisRow): number {
+    return (
+      Math.round(
+        (row.loyer_mensuel +
+          (row.frais_mois ?? []).reduce((s, f) => s + f.montant, 0)) *
+          100
+      ) / 100
+    );
+  }
+
   async function marquerPaye(row: LoyerMoisRow) {
     const restant =
-      Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
-    await paiement(row, restant > 0 ? restant : row.loyer_mensuel);
+      Math.round((duMois(row) - (row.montant_paye ?? 0)) * 100) / 100;
+    await paiement(row, restant > 0 ? restant : duMois(row));
   }
 
   async function marquerPartiel(row: LoyerMoisRow) {
     const restant =
-      Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
+      Math.round((duMois(row) - (row.montant_paye ?? 0)) * 100) / 100;
     const saisie = window.prompt(
       `Montant reçu pour ${mois} ?\n(Restant du mois : ${money(restant)})`,
       ""

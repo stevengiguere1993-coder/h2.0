@@ -2374,18 +2374,27 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
     }
   }
 
-  // 1 clic = le restant du mois (loyer − déjà reçu si paiement partiel).
+  // Dû du mois = loyer + frais ponctuels du mois (retour Phil 2026-07-22).
+  function duMois(row: LoyerRow): number {
+    return (
+      Math.round(
+        (row.loyer_mensuel +
+          (row.frais_mois ?? []).reduce((s, f) => s + f.montant, 0)) *
+          100
+      ) / 100
+    );
+  }
+
+  // 1 clic = le restant du mois (loyer + frais − déjà reçu).
   async function marquerPaye(row: LoyerRow) {
     const restant =
-      Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
-    await enregistrerPaiement(
-      row, restant > 0 ? restant : row.loyer_mensuel
-    );
+      Math.round((duMois(row) - (row.montant_paye ?? 0)) * 100) / 100;
+    await enregistrerPaiement(row, restant > 0 ? restant : duMois(row));
   }
 
   async function marquerPartiel(row: LoyerRow) {
     const restant =
-      Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
+      Math.round((duMois(row) - (row.montant_paye ?? 0)) * 100) / 100;
     const saisie = window.prompt(
       `Montant reçu pour ${mois} ?\n(Restant du mois : ${fmtCurrency(restant)})`,
       ""
