@@ -90,6 +90,7 @@ async def _ensure_seed(db) -> None:
                 label=label,
                 position=i,
                 taux_refacturation=taux,
+                heures_nr_autorisees=(label == "MGV Développement"),
                 is_active=True,
             )
         )
@@ -135,6 +136,7 @@ class CompanyOut(BaseModel):
     taux_refacturation: Optional[float] = None
     is_active: bool
     refacturable: bool = True
+    heures_nr_autorisees: bool = False
 
 
 class CompanyCreate(BaseModel):
@@ -142,6 +144,7 @@ class CompanyCreate(BaseModel):
     taux_refacturation: Optional[float] = None
     position: Optional[int] = None
     refacturable: bool = True
+    heures_nr_autorisees: bool = False
 
 
 class CompanyUpdate(BaseModel):
@@ -150,6 +153,7 @@ class CompanyUpdate(BaseModel):
     is_active: Optional[bool] = None
     position: Optional[int] = None
     refacturable: Optional[bool] = None
+    heures_nr_autorisees: Optional[bool] = None
 
 
 class ReorderIn(BaseModel):
@@ -188,6 +192,8 @@ class LigneOut(BaseModel):
     jours: List[float]
     #: Heures NON refacturables (bloc 2 de la grille), par jour.
     jours_nr: List[float]
+    #: La compagnie accepte-t-elle des heures non refacturables ?
+    nr_autorise: bool = False
     total: float
     total_refact: float
     total_non_refact: float
@@ -331,6 +337,7 @@ async def list_companies(
             taux_refacturation=c.taux_refacturation,
             is_active=c.is_active,
             refacturable=bool(getattr(c, "refacturable", True)),
+        heures_nr_autorisees=bool(getattr(c, "heures_nr_autorisees", False)),
         )
         for c in rows
     ]
@@ -355,6 +362,7 @@ async def create_company(
         taux_refacturation=payload.taux_refacturation,
         is_active=True,
         refacturable=payload.refacturable,
+        heures_nr_autorisees=payload.heures_nr_autorisees,
     )
     db.add(c)
     await db.flush()
@@ -366,6 +374,7 @@ async def create_company(
         taux_refacturation=c.taux_refacturation,
         is_active=c.is_active,
         refacturable=bool(getattr(c, "refacturable", True)),
+        heures_nr_autorisees=bool(getattr(c, "heures_nr_autorisees", False)),
     )
 
 
@@ -391,6 +400,8 @@ async def update_company(
         c.position = payload.position
     if payload.refacturable is not None:
         c.refacturable = payload.refacturable
+    if payload.heures_nr_autorisees is not None:
+        c.heures_nr_autorisees = payload.heures_nr_autorisees
     await db.commit()
     return CompanyOut(
         id=c.id,
@@ -399,6 +410,7 @@ async def update_company(
         taux_refacturation=c.taux_refacturation,
         is_active=c.is_active,
         refacturable=bool(getattr(c, "refacturable", True)),
+        heures_nr_autorisees=bool(getattr(c, "heures_nr_autorisees", False)),
     )
 
 
@@ -544,6 +556,7 @@ async def _build_detail(
                 taux_perso=(ov.taux_refacturation if ov else None),
                 jours=jr,
                 jours_nr=jn,
+                nr_autorise=bool(getattr(c, "heures_nr_autorisees", False)),
                 total=round(tot_r + tot_n, 2),
                 total_refact=tot_r,
                 total_non_refact=tot_n,
@@ -1137,9 +1150,20 @@ async def replace_entries(
             TimesheetEntry.timesheet_id == ts.id
         )
     )
+    # Heures NON refacturables permises seulement sur les compagnies qui
+    # l'autorisent (MGV Développement par défaut) — on ignore le reste.
+    nr_ok = {
+        c.id
+        for c in (
+            await db.execute(select(TimesheetCompany))
+        ).scalars().all()
+        if bool(getattr(c, "heures_nr_autorisees", False))
+    }
     seen = set()
     for e in payload.entries:
         if e.hours <= 0:
+            continue
+        if not e.refacturable and e.company_id not in nr_ok:
             continue
         key = (e.company_id, e.day_index, bool(e.refacturable))
         if key in seen:
