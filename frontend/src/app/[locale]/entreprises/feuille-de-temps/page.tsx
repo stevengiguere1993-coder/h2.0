@@ -10,7 +10,7 @@
  * de tout le monde et gèrent la liste des compagnies.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -183,6 +183,17 @@ export default function FeuilleDeTempsPage() {
   const [view, setView] = useState<"feuille" | "equipe" | "compagnies">(
     "feuille"
   );
+  // Gestionnaire+ : atterrir sur la vue ÉQUIPE (sa propre feuille est
+  // souvent vide) ; employé : directement sur SA feuille (retour Phil
+  // 2026-07-22). Appliqué une seule fois au chargement du profil.
+  const vueInitialeAppliquee = useRef(false);
+  useEffect(() => {
+    if (detail && !vueInitialeAppliquee.current) {
+      vueInitialeAppliquee.current = true;
+      if (detail.is_manager) setView("equipe");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.is_manager]);
 
   // Grille éditable (raw strings pour permettre la saisie de décimales).
   const [cells, setCells] = useState<Record<number, string[]>>({});
@@ -456,9 +467,15 @@ export default function FeuilleDeTempsPage() {
   return (
     <div className="min-h-screen">
       <QGTopbar
-        greeting="Feuille de temps"
+        greeting={
+          view === "equipe"
+            ? "Feuilles de temps — Équipe"
+            : selectedUserId != null
+              ? `Feuille de : ${detail?.employee_name ?? "…"}`
+              : "Ma feuille de temps"
+        }
         subtitle={
-          detail
+          detail && view !== "equipe"
             ? `${detail.employee_name} · ${formatPeriod(
                 detail.period_start,
                 detail.period_end
