@@ -2838,15 +2838,19 @@ async def twilio_voicemail_transcript(request: Request, db: DBSession) -> Respon
             )
         ).scalar_one_or_none()
 
-        user_ids: list[int] = []
-        if pn and pn.owner_user_id:
-            user_ids = [pn.owner_user_id]
-        else:
-            # Fallback : tous les owners (la table est petite).
-            owners = (
-                await db.execute(select(User.id).where(User.role == "owner"))
+        # Staff manager et plus + owner du numéro (retour Phil
+        # 2026-07-22 : le staff doit voir la cloche, pas juste les owners).
+        user_ids = set(
+            (
+                await db.execute(
+                    select(User.id).where(
+                        User.role.in_(("owner", "admin", "manager"))
+                    )
+                )
             ).scalars().all()
-            user_ids = list(owners)
+        )
+        if pn and pn.owner_user_id:
+            user_ids.add(pn.owner_user_id)
 
         body = summary or (text[:200] + "…" if len(text) > 200 else text)
         for uid in user_ids:
@@ -4297,21 +4301,33 @@ async def _twilio_incoming_sms_impl(request: Request, db: DBSession) -> Response
     db.add(sms)
     await db.flush()
 
-    # Notif cloche aux owners (ou à l'owner du numéro si défini).
+    # Notif cloche au STAFF (manager et plus — retour Phil 2026-07-22 :
+    # « Olivier ne reçoit pas la notif dans l'icône en haut ») +
+    # l'owner du numéro s'il est défini.
     try:
         from app.models.notification import Notification
         from app.models.user import User
 
-        if pn.owner_user_id:
-            user_ids = [pn.owner_user_id]
-        else:
-            user_ids = list(
-                (
-                    await db.execute(
-                        select(User.id).where(User.role == "owner")
+        user_ids = set(
+            (
+                await db.execute(
+                    select(User.id).where(
+                        User.role.in_(("owner", "admin", "manager"))
                     )
-                ).scalars().all()
-            )
+                )
+            ).scalars().all()
+        )
+        if pn.owner_user_id:
+            user_ids.add(pn.owner_user_id)
+        # Client/lead CONSTRUCTION identifié → la notif ouvre SA fiche
+        # (fil de communications du pôle), pas le volet téléphonie
+        # (retour Phil 2026-07-22, point 4).
+        if entity_type == "client" and entity_id:
+            href = f"/app/clients/{entity_id}"
+        elif entity_type == "contact_request" and entity_id:
+            href = f"/app/crm/{entity_id}"
+        else:
+            href = f"/telephonie?sms={sms.id}"
         preview = (body or "")[:140]
         for uid in user_ids:
             db.add(
@@ -4320,7 +4336,7 @@ async def _twilio_incoming_sms_impl(request: Request, db: DBSession) -> Response
                     kind="sms_received",
                     title=f"SMS de {identified.name or from_e164}",
                     body=preview or "(MMS sans texte)",
-                    href=f"/telephonie?sms={sms.id}",
+                    href=href,
                 )
             )
     except Exception as exc:  # noqa: BLE001
@@ -4516,6 +4532,9 @@ class CommunicationEvent(BaseModel):
 
 _VALID_ENTITY_TYPES = {"client", "locataire", "prospection_lead", "contact_request"}
 
+#: Throttle du rattrapage de résumé d'appel (id appel → dernier essai).
+_SUMMARY_RETRY_AT: dict[int, float] = {}
+
 
 @router.get(
     "/communications/{entity_type}/{entity_id}",
@@ -4546,6 +4565,27 @@ async def list_communications_for_entity(
             .limit(limit)
         )
     ).scalars().all()
+
+    # AUTO-RATTRAPAGE des résumés d'appels (retour Phil 2026-07-22 : « le
+    # résumé a tenu 1-2 appels puis plus rien ») : le webhook lance la
+    # tâche UNE fois — si Groq/Claude échoue à ce moment-là, l'appel reste
+    # sans résumé pour toujours. Ici, consulter le fil relance la tâche
+    # pour les appels enregistrés sans résumé (throttle 30 min/appel).
+    try:
+        import time as _time
+
+        from app.services.call_recording_summary import (
+            summarize_call_in_background,
+        )
+
+        now_ts = _time.time()
+        for c in calls:
+            if c.recording_url and not c.recording_summary:
+                if now_ts - _SUMMARY_RETRY_AT.get(c.id, 0.0) > 1800:
+                    _SUMMARY_RETRY_AT[c.id] = now_ts
+                    asyncio.create_task(summarize_call_in_background(c.id))
+    except Exception:  # noqa: BLE001 — le fil reste consultable
+        pass
 
     sms_rows = (
         await db.execute(
