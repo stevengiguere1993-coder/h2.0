@@ -214,8 +214,34 @@ function Row({
         minute: "2-digit"
       })
     : "—";
+  // Note ÉDITABLE sur le suivi (retour Phil 2026-07-22 : « client va
+  // rappeler à sa demande ») — état local optimiste après PATCH.
+  const [note, setNote] = useState<string | null>(f.notes ?? null);
+  async function editerNote(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const saisie = window.prompt("Note sur ce suivi :", note || "");
+    if (saisie == null) return;
+    try {
+      const r = await authedFetch(`/api/v1/follow-ups/${f.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ notes: saisie.trim() || null })
+      });
+      if (r.ok) setNote(saisie.trim() || null);
+    } catch {
+      /* silencieux */
+    }
+  }
   return (
-    <li>
+    <li className="relative">
+      <button
+        type="button"
+        onClick={(e) => void editerNote(e)}
+        title="Ajouter/modifier une note sur ce suivi"
+        className="absolute bottom-2 right-2 z-10 rounded px-1.5 py-0.5 text-[10px] font-semibold text-white/40 transition hover:bg-brand-800 hover:text-accent-500"
+      >
+        {note ? "Modifier la note" : "+ Note"}
+      </button>
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={href as any}
@@ -230,9 +256,9 @@ function Row({
           <p className="text-[11px] text-white/60">
             {f.next_action_label || "Rappel"} · {when}
           </p>
-          {f.notes ? (
+          {note ? (
             <p className="mt-1 line-clamp-2 text-[11px] italic text-white/50">
-              {f.notes}
+              {note}
             </p>
           ) : null}
         </div>

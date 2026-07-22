@@ -42,6 +42,10 @@ class ContactRequestStatus(str, Enum):
     QUOTED = "quoted"
     WON = "won"
     LOST = "lost"
+    # NON QUALIFIÉ (retour Phil 2026-07-22) : travaux qu'on ne fait pas,
+    # horizon 3+ mois… Distinct de « Refusée » (lost) pour ne pas biaiser
+    # le taux de conversion.
+    NON_QUALIFIE = "non_qualifie"
     SPAM = "spam"
 
 

@@ -74,6 +74,9 @@ const DEFAULT_COLUMNS: Column[] = [
   { id: "qualified", label: "Soumission en préparation", dot: "bg-fuchsia-400" },
   { id: "quoted", label: "Soumission envoyée", dot: "bg-blue-400" },
   { id: "won", label: "Acceptée", dot: "bg-green-500" },
+  // Non qualifié ≠ Refusée (retour Phil 2026-07-22) : travaux qu'on ne
+  // fait pas, horizon 3+ mois… — n'entre pas dans le taux de conversion.
+  { id: "non_qualifie", label: "Non qualifié", dot: "bg-slate-400" },
   { id: "lost", label: "Refusée", dot: "bg-rose-500" }
 ];
 
@@ -140,7 +143,7 @@ const COLLAPSED_COLS_KEY = "hsi_crm_collapsed_columns_v1";
 // Colonnes repliées par défaut au premier chargement : Acceptée et
 // Refusée prennent de la place pour des leads "terminés" qu'on
 // consulte rarement.
-const DEFAULT_COLLAPSED = ["won", "lost"];
+const DEFAULT_COLLAPSED = ["won", "non_qualifie", "lost"];
 
 function loadCollapsedColumns(): Set<string> {
   if (typeof window === "undefined") return new Set(DEFAULT_COLLAPSED);

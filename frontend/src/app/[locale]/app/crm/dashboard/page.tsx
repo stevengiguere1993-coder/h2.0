@@ -62,6 +62,7 @@ const STATUS_LABEL: Record<string, string> = {
   qualified: "Soumission en préparation",
   quoted: "Soumis",
   won: "Gagné",
+  non_qualifie: "Non qualifié",
   lost: "Perdu",
   spam: "Spam"
 };
