@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   KeyRound,
@@ -10,7 +10,9 @@ import {
   UserPlus,
   UserX,
   Users,
-  X
+  X,
+  Pencil,
+  Image as ImageIcon
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
@@ -29,6 +31,7 @@ type User = {
   volets: string[];
   must_change_password: boolean;
   created_at: string;
+  full_name?: string | null;
 };
 
 const VOLET_OPTIONS: { key: string; label: string }[] = [
@@ -284,6 +287,46 @@ export function UsersManager({
     }
   }
 
+  // Nom affiché + photo d'un membre du staff, posés par un ADMIN
+  // (retour Phil 2026-07-22).
+  async function renommer(u: User) {
+    const nom = window.prompt(
+      `Nom affiché pour ${u.email} :`,
+      u.full_name || ""
+    );
+    if (nom == null || !nom.trim()) return;
+    setBusyUser(u.id);
+    try {
+      const res = await authedFetch(`/api/v1/users/${u.id}/profil`, {
+        method: "PATCH",
+        body: JSON.stringify({ full_name: nom.trim() })
+      });
+      if (res.ok) await loadUsers();
+    } finally {
+      setBusyUser(null);
+    }
+  }
+
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const photoForUser = useRef<number | null>(null);
+  async function uploadPhoto(file: File) {
+    const uid = photoForUser.current;
+    if (uid == null) return;
+    setBusyUser(uid);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await authedFetch(`/api/v1/users/${uid}/avatar`, {
+        method: "POST",
+        body: fd
+      });
+      if (res.ok) await loadUsers();
+    } finally {
+      setBusyUser(null);
+      if (photoInputRef.current) photoInputRef.current.value = "";
+    }
+  }
+
   async function toggleActive(u: User) {
     if (u.id === me?.id) {
       alert("Tu ne peux pas te désactiver toi-même.");
@@ -515,6 +558,42 @@ export function UsersManager({
                           ) : null}
                         </div>
                         <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              renommer(u);
+                            }}
+                            disabled={busyUser === u.id}
+                            title="Modifier le nom affiché"
+                            className="rounded-md p-1.5 text-white/40 hover:bg-white/5 hover:text-accent-500 disabled:opacity-30"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              photoForUser.current = u.id;
+                              photoInputRef.current?.click();
+                            }}
+                            disabled={busyUser === u.id}
+                            title="Téléverser une photo de profil"
+                            className="rounded-md p-1.5 text-white/40 hover:bg-white/5 hover:text-accent-500 disabled:opacity-30"
+                          >
+                            <ImageIcon className="h-4 w-4" />
+                          </button>
+                          <input
+                            ref={photoInputRef}
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            className="hidden"
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) void uploadPhoto(f);
+                            }}
+                          />
                           <button
                             type="button"
                             onClick={(e) => {
