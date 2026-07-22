@@ -2916,17 +2916,94 @@ async def list_paiements(
 async def create_paiement(
     payload: PaiementLoyerCreate, db: DBSession, user: CurrentUser
 ) -> PaiementLoyerRead:
+    """Enregistre un paiement de loyer. TROP-PAYÉ (retour Phil
+    2026-07-22) : si le montant dépasse le restant dû du mois (loyer +
+    frais − déjà reçu), le SURPLUS est réparti automatiquement sur les
+    mois SUIVANTS (une ligne par mois) — un locataire qui paie 3 mois
+    d'un coup voit les 3 mois marqués payés."""
     _require_volet(user)
     bail = await db.get(Bail, payload.bail_id)
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
 
-    obj = PaiementLoyer(**payload.model_dump())
-    obj.created_at = _now()
-    # Marquer en retard si payé > 5 jours après le 1er du mois couvert
-    if obj.paye_le and (obj.paye_le - obj.mois_couvert).days > 5:
-        obj.en_retard = True
-    db.add(obj)
+    async def _du_restant(mois: date) -> float:
+        """Loyer + frais du mois − paiements déjà enregistrés."""
+        loyer = float(bail.loyer_mensuel or 0)
+        frais = float(
+            (
+                await db.execute(
+                    select(func.coalesce(func.sum(FraisLocatif.montant), 0))
+                    .where(
+                        FraisLocatif.bail_id == bail.id,
+                        FraisLocatif.mois_couvert == mois,
+                    )
+                )
+            ).scalar() or 0
+        )
+        deja = float(
+            (
+                await db.execute(
+                    select(func.coalesce(func.sum(PaiementLoyer.montant), 0))
+                    .where(
+                        PaiementLoyer.bail_id == bail.id,
+                        PaiementLoyer.mois_couvert == mois,
+                    )
+                )
+            ).scalar() or 0
+        )
+        return round(loyer + frais - deja, 2)
+
+    def _mois_suivant(m: date) -> date:
+        return date(m.year + (1 if m.month == 12 else 0),
+                    1 if m.month == 12 else m.month + 1, 1)
+
+    montant_total = round(float(payload.montant or 0), 2)
+    mois = payload.mois_couvert.replace(day=1)
+    loyer_ref = float(bail.loyer_mensuel or 0)
+    obj: Optional[PaiementLoyer] = None
+    derniere: Optional[PaiementLoyer] = None
+    # Répartition : chaque itération couvre au plus le restant du mois
+    # courant, le surplus glisse au mois suivant (borné à 36 mois — un
+    # montant aberrant ne crée pas des années de paiements).
+    for _ in range(36):
+        if montant_total <= 0.005:
+            break
+        restant = await _du_restant(mois)
+        if restant <= 0:
+            if loyer_ref <= 0:
+                # Pas de loyer de référence : tout mettre sur ce mois.
+                restant = montant_total
+            else:
+                mois = _mois_suivant(mois)
+                continue
+        tranche = min(montant_total, restant)
+        row = PaiementLoyer(
+            bail_id=bail.id,
+            mois_couvert=mois,
+            montant=tranche,
+            paye_le=payload.paye_le,
+            methode=payload.methode,
+            reference=payload.reference,
+            notes=payload.notes if obj is None else None,
+        )
+        row.created_at = _now()
+        # Marquer en retard si payé > 5 jours après le 1er du mois couvert
+        if row.paye_le and (row.paye_le - mois).days > 5:
+            row.en_retard = True
+        db.add(row)
+        if obj is None:
+            obj = row
+        derniere = row
+        montant_total = round(montant_total - tranche, 2)
+        mois = _mois_suivant(mois)
+    # Reliquat après la borne : collé au dernier mois créé plutôt que
+    # silencieusement perdu.
+    if montant_total > 0.005 and derniere is not None:
+        derniere.montant = round(
+            float(derniere.montant or 0) + montant_total, 2
+        )
+    if obj is None:
+        raise HTTPException(status_code=400, detail="Montant invalide.")
 
     # Mettre à jour le score du locataire (basique : % paiements à temps)
     paiements = (
