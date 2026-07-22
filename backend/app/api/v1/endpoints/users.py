@@ -17,7 +17,7 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, UploadFile, HTTPException, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import delete, func, insert, select
 
@@ -311,6 +311,69 @@ async def create_user(
         welcome_email_error=welcome_email_error,
     )
     return out
+
+
+class ProfilUpdate(BaseModel):
+    full_name: str = Field(..., min_length=1, max_length=255)
+
+
+@router.patch("/{user_id}/profil", response_model=UserRead)
+async def update_user_profil(
+    user_id: int,
+    data: ProfilUpdate,
+    db: DBSession,
+    admin: RequireAdminRole,
+) -> UserRead:
+    """NOM AFFICHÉ d'un membre du staff, éditable par un admin (retour
+    Phil 2026-07-22). Upsert du miroir Employe (source du full_name)."""
+    u = await db.get(User, user_id)
+    if u is None:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
+    _guard_rank(u, admin)
+    nom = data.full_name.strip()
+    emp = (
+        await db.execute(
+            select(Employe).where(
+                func.lower(Employe.email) == (u.email or "").lower()
+            )
+        )
+    ).scalars().first()
+    if emp is None:
+        db.add(Employe(email=u.email, full_name=nom))
+    else:
+        emp.full_name = nom
+    await db.commit()
+    return _user_read(u, nom)
+
+
+@router.post("/{user_id}/avatar", response_model=UserRead)
+async def upload_user_avatar(
+    user_id: int,
+    db: DBSession,
+    admin: RequireAdminRole,
+    file: UploadFile = File(...),
+) -> UserRead:
+    """PHOTO de profil d'un membre du staff, posée par un admin (retour
+    Phil 2026-07-22) — mêmes limites que /me/avatar."""
+    from app.api.v1.endpoints.auth import ALLOWED_AVATAR_TYPES, MAX_AVATAR_BYTES
+
+    u = await db.get(User, user_id)
+    if u is None:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
+    _guard_rank(u, admin)
+    if file.content_type not in ALLOWED_AVATAR_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail="Format non supporté — JPEG, PNG ou WEBP uniquement.",
+        )
+    data = await file.read()
+    if len(data) > MAX_AVATAR_BYTES:
+        raise HTTPException(status_code=413, detail="Image trop grosse.")
+    u.avatar_image = data
+    u.avatar_content_type = file.content_type
+    await db.commit()
+    names = await _user_full_names(db, [u])
+    return _user_read(u, names.get(u.id))
 
 
 @router.patch("/{user_id}/role", response_model=UserRead)
