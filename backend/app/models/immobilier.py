@@ -178,6 +178,12 @@ class Immeuble(Base, TimestampUpdateMixin):
     gestionnaire_externe_contact: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
+    # Gestion externe MAIS maintenance faite par NOS hommes (retour Phil
+    # 2026-07-22) : l'onglet Maintenance (bons de travail) reste actif
+    # sur la fiche. Colonne additive → ensure_critical_columns.
+    maintenance_interne: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     # Scope du catalogue (immeubles créés depuis le picker de tâche).
     # Au plus l'un des deux est rempli. Tous deux NULL = immeuble

@@ -73,6 +73,7 @@ type Immeuble = {
   cover_photo_url?: string | null;
   has_cover_photo?: boolean;
   gestion_externe?: boolean;
+  maintenance_interne?: boolean;
   gestionnaire_externe_nom?: string | null;
   gestionnaire_externe_contact?: string | null;
 };
@@ -195,14 +196,16 @@ const TABS = [
   // Paiements = suivi des loyers du mois, Baux & locataires = contrats.
   { id: "paiements", label: "Paiements", icon: Receipt },
   // Version GESTION EXTERNE (retour Phil 2026-07-22) : suivi par
-  // logement (sans locataire) + factures ponctuelles de la compagnie.
+  // logement (sans locataire).
   { id: "paiements-ext", label: "Paiements", icon: Receipt },
-  { id: "factures-ext", label: "Factures ponctuelles", icon: Wrench },
   { id: "baux", label: "Baux & locataires", icon: ClipboardList },
   { id: "locations", label: "Locations", icon: KeyRound },
   { id: "hypotheques", label: "Hypothèques", icon: Banknote },
   { id: "evaluations", label: "Évaluations", icon: TrendingUp },
   { id: "cashflow", label: "Cashflow", icon: Wallet },
+  // Factures ponctuelles APRÈS Cashflow, puis Maintenance (si la case
+  // « maintenance à l'interne » est cochée) — retour Phil 2026-07-22.
+  { id: "factures-ext", label: "Factures ponctuelles", icon: Wrench },
   { id: "maintenance", label: "Maintenance", icon: Wrench },
   { id: "contrat-gestion", label: "Contrat de gestion", icon: FileSignature }
 ] as const;
@@ -292,7 +295,8 @@ export default function ImmeubleDetailPage({
     urgence_phone: "",
     gestion_externe: false,
     gestionnaire_externe_nom: "",
-    gestionnaire_externe_contact: ""
+    gestionnaire_externe_contact: "",
+    maintenance_interne: false
   });
   const [financials, setFinancials] = useState<Financials | null>(null);
   const [logements, setLogements] = useState<Logement[] | null>(null);
@@ -382,26 +386,30 @@ export default function ImmeubleDetailPage({
   const ownerId = ownerships[0]?.entreprise_id ?? null;
 
   const gestionExterne = !!immeuble?.gestion_externe;
+  // Gestion externe MAIS maintenance par nos hommes → l'onglet
+  // Maintenance reste actif (retour Phil 2026-07-22).
+  const maintenanceInterne = !!immeuble?.maintenance_interne;
   const visibleTabs = useMemo(
     () =>
       gestionExterne
-        ? TABS.filter((t) => !TABS_MASQUES_GESTION_EXTERNE.includes(t.id))
+        ? TABS.filter(
+            (t) =>
+              !TABS_MASQUES_GESTION_EXTERNE.includes(t.id) ||
+              (t.id === "maintenance" && maintenanceInterne)
+          )
         : TABS.filter(
             (t) => !TABS_GESTION_EXTERNE_SEULEMENT.includes(t.id)
           ),
-    [gestionExterne]
+    [gestionExterne, maintenanceInterne]
   );
 
   // Si l'onglet actif devient masqué (gestion externe ou non), on
   // retombe sur la vue d'ensemble.
   useEffect(() => {
-    if (
-      (gestionExterne && TABS_MASQUES_GESTION_EXTERNE.includes(tab)) ||
-      (!gestionExterne && TABS_GESTION_EXTERNE_SEULEMENT.includes(tab))
-    ) {
+    if (!visibleTabs.some((t) => t.id === tab)) {
       switchTab("overview");
     }
-  }, [gestionExterne, tab, switchTab]);
+  }, [visibleTabs, tab, switchTab]);
 
   // Recharge les KPIs financiers (hypothèques, cash flow) après une mutation.
   const refreshFinancials = useCallback(async () => {
@@ -543,7 +551,9 @@ export default function ImmeubleDetailPage({
       urgence_phone: immeuble.urgence_phone || "",
       gestion_externe: !!immeuble.gestion_externe,
       gestionnaire_externe_nom: immeuble.gestionnaire_externe_nom || "",
-      gestionnaire_externe_contact: immeuble.gestionnaire_externe_contact || ""
+      gestionnaire_externe_contact:
+        immeuble.gestionnaire_externe_contact || "",
+      maintenance_interne: !!immeuble.maintenance_interne
     });
     setShowEdit(true);
   }
@@ -578,7 +588,10 @@ export default function ImmeubleDetailPage({
           : null,
         gestionnaire_externe_contact: editForm.gestion_externe
           ? editForm.gestionnaire_externe_contact.trim() || null
-          : null
+          : null,
+        maintenance_interne: editForm.gestion_externe
+          ? editForm.maintenance_interne
+          : false
       };
       const res = await authedFetch(
         `/api/v1/immobilier/immeubles/${immeubleId}`,
@@ -1216,34 +1229,57 @@ export default function ImmeubleDetailPage({
                   gérés par la compagnie de gestion — masqués dans Kratos.
                 </p>
                 {editForm.gestion_externe ? (
-                  <div className="mt-3 grid grid-cols-2 gap-3">
-                    <EditField label="Compagnie de gestion">
+                  <>
+                    <div className="mt-3 grid grid-cols-2 gap-3">
+                      <EditField label="Compagnie de gestion">
+                        <input
+                          value={editForm.gestionnaire_externe_nom}
+                          onChange={(e) =>
+                            setEditForm((f) => ({
+                              ...f,
+                              gestionnaire_externe_nom: e.target.value
+                            }))
+                          }
+                          placeholder="ex. Gestion ABC inc."
+                          className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                        />
+                      </EditField>
+                      <EditField label="Contact">
+                        <input
+                          value={editForm.gestionnaire_externe_contact}
+                          onChange={(e) =>
+                            setEditForm((f) => ({
+                              ...f,
+                              gestionnaire_externe_contact: e.target.value
+                            }))
+                          }
+                          placeholder="ex. 514 555-0123 / courriel"
+                          className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                        />
+                      </EditField>
+                    </div>
+                    <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-white">
                       <input
-                        value={editForm.gestionnaire_externe_nom}
+                        type="checkbox"
+                        checked={editForm.maintenance_interne}
                         onChange={(e) =>
                           setEditForm((f) => ({
                             ...f,
-                            gestionnaire_externe_nom: e.target.value
+                            maintenance_interne: e.target.checked
                           }))
                         }
-                        placeholder="ex. Gestion ABC inc."
-                        className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                        className="h-4 w-4 accent-sky-400"
                       />
-                    </EditField>
-                    <EditField label="Contact">
-                      <input
-                        value={editForm.gestionnaire_externe_contact}
-                        onChange={(e) =>
-                          setEditForm((f) => ({
-                            ...f,
-                            gestionnaire_externe_contact: e.target.value
-                          }))
-                        }
-                        placeholder="ex. 514 555-0123 / courriel"
-                        className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
-                      />
-                    </EditField>
-                  </div>
+                      <span className="font-semibold">
+                        Maintenance faite à l&apos;interne (nos hommes)
+                      </span>
+                    </label>
+                    <p className="mt-1 text-[11px] text-sky-200/70">
+                      La compagnie gère les loyers, mais NOS bons de
+                      travail s&apos;occupent des réparations — l&apos;onglet
+                      Maintenance reste actif sur la fiche.
+                    </p>
+                  </>
                 ) : null}
               </div>
             </div>

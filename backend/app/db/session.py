@@ -283,6 +283,12 @@ async def ensure_critical_columns() -> None:
         ("imm_immeubles", "gestion_externe", "BOOLEAN NOT NULL DEFAULT FALSE"),
         ("imm_immeubles", "gestionnaire_externe_nom", "VARCHAR(255)"),
         ("imm_immeubles", "gestionnaire_externe_contact", "VARCHAR(255)"),
+        # Gestion externe mais maintenance par NOS hommes (2026-07-22).
+        (
+            "imm_immeubles",
+            "maintenance_interne",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        ),
         # Finances immobilier 2026-07 : composition des intérêts d'une
         # hypothèque ('semi'|'mensuelle'), évaluation de référence pour
         # l'équité, dépenses en % des loyers + taxables (TPS/TVQ).

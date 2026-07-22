@@ -40,6 +40,9 @@ class ImmeubleBase(BaseModel):
     gestionnaire_externe_contact: Optional[str] = Field(
         default=None, max_length=255
     )
+    # Gestion externe mais maintenance faite par nos hommes → l'onglet
+    # Maintenance (bons de travail) reste actif sur la fiche.
+    maintenance_interne: bool = False
 
 
 class ImmeubleCreate(ImmeubleBase):
@@ -72,6 +75,7 @@ class ImmeubleUpdate(BaseModel):
     gestionnaire_externe_contact: Optional[str] = Field(
         default=None, max_length=255
     )
+    maintenance_interne: Optional[bool] = None
 
 
 class ImmeubleRead(ImmeubleBase):
