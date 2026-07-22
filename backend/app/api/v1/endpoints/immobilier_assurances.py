@@ -222,17 +222,60 @@ class AssuranceDemandeResult(BaseModel):
     envoye_a: str
 
 
-def _mail_demande_html(nom: str) -> str:
+async def _adresse_locataire(db, locataire_id: int) -> str:
+    """Adresse du logement du bail actif (pour la variable {adresse})."""
+    bail = (
+        await db.execute(
+            select(Bail).where(
+                Bail.locataire_id == locataire_id,
+                Bail.status == BailStatus.ACTIF.value,
+            )
+        )
+    ).scalars().first()
+    if bail is None or bail.logement_id is None:
+        return ""
+    lg = await db.get(Logement, bail.logement_id)
+    im = await db.get(Immeuble, lg.immeuble_id) if lg else None
+    parts = [p for p in [im.address if im else None, lg.numero if lg else None] if p]
+    return ", ".join(parts)
+
+
+async def _demande_gabarit() -> dict:
+    """Texte du courriel — GABARIT ÉDITABLE comme les autres lettres
+    (Paramètres → Modèles de documents, clé immo.gabarit.demande_assurance).
+    Titre = objet du courriel ; fail-safe = texte par défaut."""
+    from app.services.automation_state import get_automation_config
+    from app.services.tal_forms import GABARITS_DEFAUT
+
+    defaut = GABARITS_DEFAUT["demande_assurance"]
+    try:
+        cfg = await get_automation_config("immo.gabarit.demande_assurance")
+    except Exception:  # noqa: BLE001 — fail-safe
+        cfg = None
+    if isinstance(cfg, dict) and cfg.get("paragraphes"):
+        return {
+            "titre": cfg.get("titre") or defaut["titre"],
+            "paragraphes": list(cfg["paragraphes"]),
+        }
+    return defaut
+
+
+def _mail_demande_html(
+    nom: str, titre: str, paragraphes: list[str], variables: dict[str, str]
+) -> str:
+    from app.services.tal_forms import _rendre_paragraphe
+
     first = (nom or "").strip().split(" ")[0] or "Bonjour"
+    corps = "".join(
+        f'<p>{_rendre_paragraphe(str(p), variables)}</p>'
+        for p in paragraphes
+        if str(p).strip()
+    )
     return f"""
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#111">
-  <h2 style="margin:0 0 16px 0">Preuve d'assurance habitation</h2>
+  <h2 style="margin:0 0 16px 0">{titre}</h2>
   <p>Bonjour {first},</p>
-  <p>Dans le cadre du suivi annuel de votre dossier, merci de nous faire
-  parvenir une <strong>preuve de votre assurance habitation</strong>
-  (responsabilité civile) en vigueur — une copie ou une photo de votre
-  attestation d'assurance suffit.</p>
-  <p>Vous pouvez simplement répondre à ce courriel avec le document.</p>
+  {corps}
   <p style="margin:24px 0 0 0;color:#555;font-size:12px">
     Horizon Services Immobiliers<br>info@immohorizon.com
   </p>
@@ -258,12 +301,23 @@ async def demander_preuve_assurance(
             status_code=400,
             detail="Ce locataire n'a pas de courriel — ajoute-le d'abord.",
         )
+    gabarit = await _demande_gabarit()
+    variables = {
+        "locataire": lo.full_name,
+        "locateur": "Horizon Services Immobiliers",
+        "adresse": await _adresse_locataire(db, lo.id),
+    }
     mailer = get_mailer()
     try:
         await mailer.send(
             to=[dest],
-            subject="Preuve d'assurance habitation — Horizon Services Immobiliers",
-            html_body=_mail_demande_html(lo.full_name),
+            subject=f"{gabarit['titre']} — Horizon Services Immobiliers",
+            html_body=_mail_demande_html(
+                lo.full_name,
+                gabarit["titre"],
+                gabarit["paragraphes"],
+                variables,
+            ),
             reply_to=mailer.sender,
         )
     except Exception as exc:  # noqa: BLE001 — réseau/Graph

@@ -300,6 +300,20 @@ GABARITS_DEFAUT: dict[str, dict] = {
             "(art. 1971 du Code civil du Québec).",
         ],
     },
+    # COURRIEL (pas une lettre PDF envoyée au bail) : texte de la demande
+    # annuelle de preuve d'assurance, éditable comme les autres gabarits
+    # (retour Phil 2026-07-22). Le titre = objet du courriel.
+    "demande_assurance": {
+        "titre": "Preuve d'assurance habitation",
+        "paragraphes": [
+            "Dans le cadre du suivi annuel de votre dossier, merci de "
+            "nous faire parvenir une **preuve de votre assurance "
+            "habitation** (responsabilité civile) en vigueur — une copie "
+            "ou une photo de votre attestation d'assurance suffit.",
+            "Vous pouvez simplement répondre à ce courriel avec le "
+            "document.",
+        ],
+    },
     "avis_acces": {
         "titre": "AVIS D'ACCÈS AU LOGEMENT",
         "paragraphes": [
@@ -321,6 +335,7 @@ GABARITS_DEFAUT: dict[str, dict] = {
 GABARIT_VARIABLES: dict[str, list[str]] = {
     "rappel_paiement": ["mois", "montant", "adresse", "locataire", "locateur"],
     "avis_acces": ["date", "plage", "motif", "adresse", "locataire", "locateur"],
+    "demande_assurance": ["adresse", "locataire", "locateur"],
 }
 
 
@@ -450,6 +465,7 @@ def generate_perso_pdf(
 #: d'ouverture seulement. « personnalise » (avec signature) n'y est pas.
 SIGNATURE_NON_REQUISE = {
     "rappel_paiement", "avis_acces", "releve31", "personnalise_info",
+    "demande_assurance",
 }
 
 
