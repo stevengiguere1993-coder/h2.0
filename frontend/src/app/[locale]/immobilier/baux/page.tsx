@@ -290,6 +290,31 @@ export default function BauxPage() {
     }
   }
 
+  // Erreur de saisie : annule TOUS les paiements du mois pour ce bail —
+  // le mois redevient impayé, on ressaisit le bon montant.
+  async function corrigerPaiement(row: Row) {
+    if (
+      !window.confirm(
+        `Annuler le paiement de ${row.locataire_name || "ce locataire"} pour ${mois} (${fmtMoney(row.montant_paye ?? 0)} reçu) ?\nLe mois redeviendra impayé — tu pourras ressaisir le bon montant.`
+      )
+    )
+      return;
+    setPayingId(row.bail_id);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${row.bail_id}/paiements-mois?mois=${mois}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      flash("Paiement annulé — ressaisis le bon montant.");
+      await load();
+    } catch (e) {
+      setError(`Annulation échouée : ${(e as Error).message}`);
+    } finally {
+      setPayingId(null);
+    }
+  }
+
   async function relancer(row: Row) {
     setRelancingId(row.bail_id);
     try {
@@ -359,22 +384,38 @@ export default function BauxPage() {
     return Math.round((kpi.total_recu / kpi.total_attendu) * 100);
   }, [kpi]);
 
-  // Filtres client-side sur les rows du mois chargé.
+  // Filtres client-side sur les rows du mois chargé + tri par état :
+  // retards en haut, partiels ensuite, payés en bas (retour Steven).
   const filteredRows = useMemo(() => {
     if (!data) return [];
     const q = search.trim().toLowerCase();
-    return data.rows.filter((r) => {
-      if (immeubleFilter !== "all" && r.immeuble_id !== immeubleFilter)
-        return false;
-      if (etatFilter !== "all" && r.etat !== etatFilter) return false;
-      if (q) {
-        const hay = `${r.locataire_name || ""} ${r.immeuble_name} ${
-          r.logement_numero || ""
-        }`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
+    const ordre: Record<string, number> = {
+      retard: 0,
+      partiel: 1,
+      attente: 2,
+      paye: 3
+    };
+    return data.rows
+      .filter((r) => {
+        if (immeubleFilter !== "all" && r.immeuble_id !== immeubleFilter)
+          return false;
+        if (etatFilter !== "all" && r.etat !== etatFilter) return false;
+        if (q) {
+          const hay = `${r.locataire_name || ""} ${r.immeuble_name} ${
+            r.logement_numero || ""
+          }`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      })
+      .sort(
+        (a, b) =>
+          (ordre[a.etat] ?? 9) - (ordre[b.etat] ?? 9) ||
+          a.immeuble_name.localeCompare(b.immeuble_name, "fr") ||
+          (a.logement_numero || "").localeCompare(
+            b.logement_numero || "", "fr"
+          )
+      );
   }, [data, search, etatFilter, immeubleFilter]);
 
   return (
@@ -598,9 +639,22 @@ export default function BauxPage() {
                         )}
                       </td>
                       <td className="px-3 py-2.5">
-                        <span className="font-medium text-white">
-                          {r.locataire_name || "—"}
-                        </span>
+                        {r.locataire_id != null ? (
+                          <Link
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            href={
+                              `/immobilier/locataires/${r.locataire_id}` as any
+                            }
+                            className="font-medium text-accent-500 hover:underline"
+                            title="Ouvrir la fiche du locataire"
+                          >
+                            {r.locataire_name || `Locataire #${r.locataire_id}`}
+                          </Link>
+                        ) : (
+                          <span className="font-medium text-white">
+                            {r.locataire_name || "—"}
+                          </span>
+                        )}
                         {r.locataire_phone ? (
                           <a
                             href={`tel:${r.locataire_phone}`}
@@ -737,6 +791,17 @@ export default function BauxPage() {
                               </button>
                               <TalFormDropdown bailId={r.bail_id} />
                               <BailSignature bailId={r.bail_id} />
+                              {(r.montant_paye ?? 0) > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => void corrigerPaiement(r)}
+                                  disabled={payingId === r.bail_id}
+                                  title="Erreur de saisie ? Annule les paiements du mois pour ressaisir"
+                                  className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                                >
+                                  Corriger
+                                </button>
+                              ) : null}
                             </div>
                             {r.nb_relances > 0 ? (
                               <span className="text-[10px] text-white/40">
@@ -747,7 +812,17 @@ export default function BauxPage() {
                               </span>
                             ) : null}
                           </div>
-                        ) : null}
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void corrigerPaiement(r)}
+                            disabled={payingId === r.bail_id}
+                            title="Erreur de saisie ? Annule les paiements du mois pour ressaisir"
+                            className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                          >
+                            Corriger
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}

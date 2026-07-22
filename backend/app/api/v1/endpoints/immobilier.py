@@ -2965,10 +2965,46 @@ async def delete_paiement(
     await db.commit()
 
 
+@router.delete(
+    "/baux/{bail_id}/paiements-mois",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def annuler_paiements_mois(
+    bail_id: int, mois: str, db: DBSession, user: CurrentUser
+) -> None:
+    """Annule TOUS les paiements d'un mois pour un bail (correction d'une
+    erreur de saisie — retour Steven 2026-07-22). Le mois redevient
+    impayé ; on ressaisit ensuite le bon montant."""
+    _require_volet(user)
+    try:
+        month_start = datetime.strptime(mois + "-01", "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="Format mois attendu : YYYY-MM."
+        )
+    rows = (
+        await db.execute(
+            select(PaiementLoyer).where(
+                PaiementLoyer.bail_id == bail_id,
+                PaiementLoyer.mois_couvert == month_start,
+            )
+        )
+    ).scalars().all()
+    for r in rows:
+        await db.delete(r)
+    await db.commit()
+
+
 # ── Vue transversale « Loyers & retards » ─────────────────────────────
 # Tous les baux actifs du portefeuille croisés avec les paiements d'un
 # mois donné — LA vue quotidienne du gestionnaire (qui a payé, qui est
 # en retard, marquer payé en 1 clic depuis la page Baux & paiements).
+
+#: Point de départ du SOLDE CUMULATIF (demande Phil 2026-07-22 : « mets
+#: le solde de tous les locataires à 0 à partir du 1er juillet 2026 »).
+#: L'historique d'avant cette date (loyers échus, paiements, frais) est
+#: IGNORÉ dans le calcul du solde — les baux existants repartent à zéro.
+SOLDE_DEPUIS = date(2026, 7, 1)
 
 
 class FraisRow(BaseModel):
@@ -3134,7 +3170,10 @@ async def loyers_overview(
                 select(
                     PaiementLoyer.bail_id, func.sum(PaiementLoyer.montant)
                 )
-                .where(PaiementLoyer.bail_id.in_(bail_ids))
+                .where(
+                    PaiementLoyer.bail_id.in_(bail_ids),
+                    PaiementLoyer.mois_couvert >= SOLDE_DEPUIS,
+                )
                 .group_by(PaiementLoyer.bail_id)
             )
         ).all():
@@ -3146,6 +3185,7 @@ async def loyers_overview(
                 )
                 .where(
                     FraisLocatif.bail_id.in_(bail_ids),
+                    FraisLocatif.mois_couvert >= SOLDE_DEPUIS,
                     FraisLocatif.mois_couvert <= month_start,
                 )
                 .group_by(FraisLocatif.bail_id)
@@ -3155,8 +3195,9 @@ async def loyers_overview(
 
     def _mois_echus(b: Bail) -> int:
         """Nombre de 1ers de mois couverts par le bail jusqu'au mois
-        affiché inclus (borné à aujourd'hui) — pour le solde cumulatif."""
-        debut = b.date_debut.replace(day=1)
+        affiché inclus (borné à aujourd'hui) — pour le solde cumulatif.
+        Ne remonte jamais avant SOLDE_DEPUIS (remise à zéro 2026-07-01)."""
+        debut = max(b.date_debut.replace(day=1), SOLDE_DEPUIS)
         fin = min(month_start, today.replace(day=1))
         if b.date_fin:
             fin = min(fin, b.date_fin.replace(day=1))

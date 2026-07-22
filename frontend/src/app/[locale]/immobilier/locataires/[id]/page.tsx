@@ -1331,6 +1331,13 @@ export default function LocataireDetailPage({
               )}
             </section>
 
+            {/* Loyers du mois — marquer payé / partiel / frais depuis la
+                fiche (retour Steven 2026-07-22). */}
+            <LoyersMoisSection
+              locataireId={locataireId}
+              onMutated={() => void loadDossier()}
+            />
+
             {/* Historique de paiements */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <div className="mb-3 flex items-center justify-between">
@@ -1566,5 +1573,363 @@ function Row({ label, value }: { label: string; value: string }) {
       <dt className="text-white/50">{label}</dt>
       <dd className="text-right font-medium text-white">{value}</dd>
     </div>
+  );
+}
+
+
+// ── Loyers du mois — paiements depuis la fiche locataire ──────────────
+// Mêmes actions que la page Baux & paiements (retour Steven 2026-07-22) :
+// marquer payé (restant), partiel, frais ponctuel, corriger une erreur.
+// Réutilise /loyers/overview filtré client-side sur le locataire.
+
+type LoyerMoisRow = {
+  bail_id: number;
+  immeuble_id: number;
+  immeuble_name: string;
+  logement_id?: number | null;
+  logement_numero: string | null;
+  locataire_id: number | null;
+  loyer_mensuel: number;
+  montant_paye: number | null;
+  paye_le: string | null;
+  etat: string;
+  frais_mois?: { id: number; montant: number; libelle: string }[];
+  solde_total?: number;
+};
+
+function LoyersMoisSection({
+  locataireId,
+  onMutated
+}: {
+  locataireId: number;
+  onMutated: () => void;
+}) {
+  const [mois, setMois] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [rows, setRows] = useState<LoyerMoisRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/loyers/overview?mois=${mois}`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as { rows: LoyerMoisRow[] };
+      setRows(d.rows.filter((row) => row.locataire_id === locataireId));
+    } catch (e) {
+      setErr((e as Error).message);
+      setRows([]);
+    }
+  }, [mois, locataireId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function apres() {
+    await load();
+    onMutated();
+  }
+
+  async function paiement(row: LoyerMoisRow, montant: number) {
+    setBusyId(row.bail_id);
+    setErr(null);
+    try {
+      const t = new Date();
+      const payeLe = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}-${String(t.getDate()).padStart(2, "0")}`;
+      const r = await authedFetch("/api/v1/immobilier/paiements", {
+        method: "POST",
+        body: JSON.stringify({
+          bail_id: row.bail_id,
+          mois_couvert: `${mois}-01`,
+          montant,
+          paye_le: payeLe
+        })
+      });
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      await apres();
+    } catch (e) {
+      setErr(`Paiement échoué : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function marquerPaye(row: LoyerMoisRow) {
+    const restant =
+      Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
+    await paiement(row, restant > 0 ? restant : row.loyer_mensuel);
+  }
+
+  async function marquerPartiel(row: LoyerMoisRow) {
+    const restant =
+      Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
+    const saisie = window.prompt(
+      `Montant reçu pour ${mois} ?\n(Restant du mois : ${money(restant)})`,
+      ""
+    );
+    if (saisie == null) return;
+    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(montant) || montant <= 0) {
+      setErr("Montant invalide.");
+      return;
+    }
+    await paiement(row, Math.round(montant * 100) / 100);
+  }
+
+  async function ajouterFrais(row: LoyerMoisRow) {
+    const saisie = window.prompt(
+      `Frais à facturer (mois ${mois}) ?\nMontant en $ :`,
+      "20"
+    );
+    if (saisie == null) return;
+    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(montant) || montant <= 0) {
+      setErr("Montant invalide.");
+      return;
+    }
+    const libelle =
+      window.prompt("Libellé du frais :", "Frais de retard") ||
+      "Frais de retard";
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${row.bail_id}/frais`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            mois_couvert: `${mois}-01`,
+            montant,
+            libelle
+          })
+        }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      await apres();
+    } catch (e) {
+      setErr(`Ajout du frais échoué : ${(e as Error).message}`);
+    }
+  }
+
+  async function supprimerFrais(fraisId: number) {
+    if (!window.confirm("Retirer ce frais du solde ?")) return;
+    try {
+      const r = await authedFetch(`/api/v1/immobilier/frais/${fraisId}`, {
+        method: "DELETE"
+      });
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      await apres();
+    } catch (e) {
+      setErr(`Suppression du frais échouée : ${(e as Error).message}`);
+    }
+  }
+
+  async function corriger(row: LoyerMoisRow) {
+    if (
+      !window.confirm(
+        `Annuler le paiement de ${mois} (${money(row.montant_paye ?? 0)} reçu) ?\nLe mois redeviendra impayé — tu pourras ressaisir le bon montant.`
+      )
+    )
+      return;
+    setBusyId(row.bail_id);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${row.bail_id}/paiements-mois?mois=${mois}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      await apres();
+    } catch (e) {
+      setErr(`Annulation échouée : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const moisLisible = (() => {
+    const [y, m] = mois.split("-").map(Number);
+    return new Date(y, (m || 1) - 1, 1).toLocaleDateString("fr-CA", {
+      month: "long",
+      year: "numeric"
+    });
+  })();
+
+  return (
+    <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Loyer du mois
+        </h2>
+        <div className="inline-flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-950 px-1 py-0.5">
+          <button
+            type="button"
+            onClick={() =>
+              setMois((m) => {
+                const [y, mm] = m.split("-").map(Number);
+                const d = new Date(y, (mm || 1) - 2, 1);
+                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+              })
+            }
+            className="btn-ghost btn-xs"
+            aria-label="Mois précédent"
+          >
+            ‹
+          </button>
+          <span className="min-w-[110px] text-center text-xs font-semibold capitalize text-white">
+            {moisLisible}
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              setMois((m) => {
+                const [y, mm] = m.split("-").map(Number);
+                const d = new Date(y, mm || 1, 1);
+                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+              })
+            }
+            className="btn-ghost btn-xs"
+            aria-label="Mois suivant"
+          >
+            ›
+          </button>
+        </div>
+      </div>
+      {err ? (
+        <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {err}
+        </p>
+      ) : null}
+      {rows === null ? (
+        <p className="flex items-center gap-2 text-xs text-white/50">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+        </p>
+      ) : rows.length === 0 ? (
+        <p className="text-xs text-white/50">
+          Aucun bail actif pour ce locataire ce mois-ci.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {rows.map((r) => (
+            <div
+              key={r.bail_id}
+              className={`rounded-xl border border-brand-800 p-3 ${
+                r.etat === "retard"
+                  ? "bg-rose-500/5"
+                  : r.etat === "partiel"
+                    ? "bg-amber-500/5"
+                    : "bg-brand-950/40"
+              }`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                {r.etat === "paye" ? (
+                  <span className="badge badge-emerald">Payé</span>
+                ) : r.etat === "partiel" ? (
+                  <span className="badge badge-amber">Partiel</span>
+                ) : r.etat === "retard" ? (
+                  <span className="badge badge-rose">Retard</span>
+                ) : (
+                  <span className="badge badge-neutral">Attente</span>
+                )}
+                <span className="text-xs text-white/70">
+                  {r.immeuble_name}
+                  {r.logement_numero ? ` · ${r.logement_numero}` : ""}
+                </span>
+                <span className="ml-auto text-sm font-semibold tabular-nums text-white">
+                  {money(r.loyer_mensuel)}
+                </span>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
+                {(r.montant_paye ?? 0) > 0 ? (
+                  <span className="text-emerald-300">
+                    reçu {money(r.montant_paye ?? 0)}
+                    {r.paye_le ? ` le ${r.paye_le}` : ""}
+                  </span>
+                ) : null}
+                {(r.solde_total ?? 0) > 0 ? (
+                  <span
+                    className="font-semibold text-rose-300"
+                    title="Cumul dû sur le bail (loyers échus + frais − reçus)"
+                  >
+                    solde dû {money(r.solde_total ?? 0)}
+                  </span>
+                ) : null}
+                {(r.frais_mois ?? []).map((f) => (
+                  <span
+                    key={f.id}
+                    className="inline-flex items-center gap-1 text-amber-300"
+                  >
+                    + {money(f.montant)} {f.libelle}
+                    <button
+                      type="button"
+                      onClick={() => void supprimerFrais(f.id)}
+                      title="Retirer ce frais"
+                      className="text-white/40 transition hover:text-rose-300"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {r.etat !== "paye" ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void marquerPaye(r)}
+                      disabled={busyId === r.bail_id}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                    >
+                      {busyId === r.bail_id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Check className="h-3 w-3" />
+                      )}
+                      Marquer payé
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void marquerPartiel(r)}
+                      disabled={busyId === r.bail_id}
+                      title="Enregistrer un paiement partiel (montant saisi)"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+                    >
+                      Partiel
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => void ajouterFrais(r)}
+                  title="Ajouter un frais ponctuel au solde (ex. frais de retard 20 $)"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10"
+                >
+                  + Frais
+                </button>
+                {(r.montant_paye ?? 0) > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => void corriger(r)}
+                    disabled={busyId === r.bail_id}
+                    title="Erreur de saisie ? Annule les paiements du mois pour ressaisir"
+                    className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                  >
+                    Corriger
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

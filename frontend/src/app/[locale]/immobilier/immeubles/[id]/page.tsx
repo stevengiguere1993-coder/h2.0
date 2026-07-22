@@ -2288,7 +2288,17 @@ type LoyerRow = {
   montant_paye: number | null;
   paye_le: string | null;
   etat: string; // "paye" | "partiel" | "retard" | "attente"
+  frais_mois?: { id: number; montant: number; libelle: string }[];
   solde_total?: number;
+};
+
+// Tri de la liste des paiements : retards en haut, partiels ensuite,
+// payés en bas (retour Steven 2026-07-22).
+const ETAT_ORDRE: Record<string, number> = {
+  retard: 0,
+  partiel: 1,
+  attente: 2,
+  paye: 3
 };
 
 function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
@@ -2311,7 +2321,17 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = (await r.json()) as { rows: LoyerRow[] };
       // L'API ne filtre pas par immeuble → filtrage client-side.
-      setRows(d.rows.filter((row) => row.immeuble_id === immeubleId));
+      setRows(
+        d.rows
+          .filter((row) => row.immeuble_id === immeubleId)
+          .sort(
+            (a, b) =>
+              (ETAT_ORDRE[a.etat] ?? 9) - (ETAT_ORDRE[b.etat] ?? 9) ||
+              (a.logement_numero || "").localeCompare(
+                b.logement_numero || "", "fr"
+              )
+          )
+      );
     } catch (e) {
       setErr((e as Error).message);
       setRows([]);
@@ -2374,6 +2394,77 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
       return;
     }
     await enregistrerPaiement(row, Math.round(montant * 100) / 100);
+  }
+
+  // Frais ponctuel qui s'ajoute au solde (ex. 20 $ payé après le 15).
+  async function ajouterFrais(row: LoyerRow) {
+    const saisie = window.prompt(
+      `Frais à facturer (mois ${mois}) ?\nMontant en $ :`,
+      "20"
+    );
+    if (saisie == null) return;
+    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(montant) || montant <= 0) {
+      setErr("Montant invalide.");
+      return;
+    }
+    const libelle =
+      window.prompt("Libellé du frais :", "Frais de retard") ||
+      "Frais de retard";
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${row.bail_id}/frais`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            mois_couvert: `${mois}-01`,
+            montant,
+            libelle
+          })
+        }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      await load();
+    } catch (e) {
+      setErr(`Ajout du frais échoué : ${(e as Error).message}`);
+    }
+  }
+
+  async function supprimerFrais(fraisId: number) {
+    if (!window.confirm("Retirer ce frais du solde ?")) return;
+    try {
+      const r = await authedFetch(`/api/v1/immobilier/frais/${fraisId}`, {
+        method: "DELETE"
+      });
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      await load();
+    } catch (e) {
+      setErr(`Suppression du frais échouée : ${(e as Error).message}`);
+    }
+  }
+
+  // Erreur de saisie : annule tous les paiements du mois pour ce bail.
+  async function corrigerPaiement(row: LoyerRow) {
+    if (
+      !window.confirm(
+        `Annuler le paiement de ${row.locataire_name || "ce locataire"} pour ${mois} (${fmtCurrency(row.montant_paye ?? 0)} reçu) ?\nLe mois redeviendra impayé — tu pourras ressaisir le bon montant.`
+      )
+    )
+      return;
+    setPayingId(row.bail_id);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${row.bail_id}/paiements-mois?mois=${mois}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      await load();
+    } catch (e) {
+      setErr(`Annulation échouée : ${(e as Error).message}`);
+    } finally {
+      setPayingId(null);
+    }
   }
 
   // Rappel de paiement MANUEL : courriel au locataire via Microsoft
@@ -2603,6 +2694,24 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                         solde {fmtCurrency(r.solde_total ?? 0)}
                       </div>
                     ) : null}
+                    {(r.frais_mois ?? []).map((f) => (
+                      <div
+                        key={f.id}
+                        className="flex items-center justify-end gap-1 text-[10px] text-amber-300"
+                      >
+                        <span title={f.libelle}>
+                          + {fmtCurrency(f.montant)} {f.libelle}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void supprimerFrais(f.id)}
+                          title="Retirer ce frais"
+                          className="text-white/40 transition hover:text-rose-300"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
                   </td>
                   <td className="py-2 pr-3 text-right text-xs text-white/60">
                     {r.paye_le || "—"}
@@ -2646,8 +2755,37 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                         >
                           Partiel
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => void ajouterFrais(r)}
+                          title="Ajouter un frais ponctuel au solde (ex. frais de retard 20 $)"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10"
+                        >
+                          + Frais
+                        </button>
+                        {(r.montant_paye ?? 0) > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => void corrigerPaiement(r)}
+                            disabled={payingId === r.bail_id}
+                            title="Erreur de saisie ? Annule les paiements du mois pour ressaisir"
+                            className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                          >
+                            Corriger
+                          </button>
+                        ) : null}
                       </span>
-                    ) : null}
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void corrigerPaiement(r)}
+                        disabled={payingId === r.bail_id}
+                        title="Erreur de saisie ? Annule les paiements du mois pour ressaisir"
+                        className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                      >
+                        Corriger
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
