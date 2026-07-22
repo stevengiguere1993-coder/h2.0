@@ -39,6 +39,7 @@ type Ligne = {
   company_id: number;
   label: string;
   taux_refacturation: number;
+  refacturable?: boolean;
   jours: number[];
   total: number;
   refacturation: number;
@@ -76,6 +77,7 @@ type Company = {
   label: string;
   position: number;
   taux_refacturation?: number | null;
+  refacturable?: boolean;
   is_active: boolean;
 };
 type TeamRow = {
@@ -285,7 +287,8 @@ export default function FeuilleDeTempsPage() {
         perDay[i] += h;
       }
       perCompany[l.company_id] = tot;
-      const refac = tot * (l.taux_refacturation || 0);
+      const refac =
+        l.refacturable === false ? 0 : tot * (l.taux_refacturation || 0);
       refacByCompany[l.company_id] = refac;
       totalHeures += tot;
       totalRefac += refac;
@@ -641,8 +644,25 @@ export default function FeuilleDeTempsPage() {
                       >
                         <span className="truncate pr-3">{l.label}</span>
                         <span className="shrink-0 text-[var(--qg-text-faint)]">
+                          {l.refacturable === false ? (
+                            <span className="badge badge-neutral mr-2">
+                              Non refacturable
+                            </span>
+                          ) : null}
                           {(computed.perCompany[l.company_id] || 0).toLocaleString("fr-CA")} h ×{" "}
-                          {money(l.taux_refacturation)} ={" "}
+                          <span
+                            title={
+                              l.taux_refacturation !== detail.taux_refacturation
+                                ? "Taux propre à cette compagnie (prioritaire sur le défaut de la feuille) — modifiable dans l'onglet Compagnies"
+                                : "Taux de refacturation par défaut de la feuille"
+                            }
+                          >
+                            {money(l.taux_refacturation)}
+                            {l.taux_refacturation !== detail.taux_refacturation
+                              ? "*"
+                              : ""}
+                          </span>{" "}
+                          ={" "}
                           <span className="font-medium text-[var(--qg-text)]">
                             {money(computed.refacByCompany[l.company_id] || 0)}
                           </span>
@@ -1114,7 +1134,11 @@ function CompaniesManager() {
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-sm tabular-nums text-[var(--qg-text-muted)]">
-                  {c.taux_refacturation != null ? `${money(c.taux_refacturation)}/h` : "défaut"}
+                  {c.refacturable === false
+                    ? "non refacturable"
+                    : c.taux_refacturation != null
+                      ? `${money(c.taux_refacturation)}/h`
+                      : "défaut"}
                 </span>
                 <button className="btn-ghost btn-xs" onClick={() => setEditing(c)}>
                   <Pencil className="h-4 w-4" />
@@ -1147,6 +1171,9 @@ function CompanyEditor({
     company?.taux_refacturation != null ? String(company.taux_refacturation) : ""
   );
   const [active, setActive] = useState(company?.is_active ?? true);
+  const [refacturable, setRefacturable] = useState(
+    company?.refacturable !== false
+  );
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--qg-accent)]/40 bg-[var(--qg-bg)]/40 p-3">
@@ -1173,6 +1200,18 @@ function CompanyEditor({
           Active
         </label>
       )}
+      <label
+        className="flex cursor-pointer items-center gap-1.5 text-sm"
+        title="Décoché : les heures comptent pour la paie mais ne sont pas refacturées (travail interne)"
+      >
+        <input
+          type="checkbox"
+          checked={refacturable}
+          onChange={(e) => setRefacturable(e.target.checked)}
+          className="h-4 w-4 accent-[var(--qg-accent)]"
+        />
+        Refacturable
+      </label>
       <button
         className={BTN_PRIMARY}
         disabled={!label.trim()}
@@ -1180,6 +1219,7 @@ function CompanyEditor({
           onSave({
             label: label.trim(),
             taux_refacturation: taux.trim() ? num(taux) : null,
+            refacturable,
             ...(company ? { is_active: active } : {})
           })
         }

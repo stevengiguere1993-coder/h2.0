@@ -331,6 +331,12 @@ async def update_user_profil(
         raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
     _guard_rank(u, admin)
     nom = data.full_name.strip()
+    # Le nom AFFICHÉ partout (feuille de temps, assignations…) vient de
+    # User.first_name/last_name — on le pousse aussi, sinon le pseudo du
+    # courriel reste visible (retour Phil 2026-07-22).
+    morceaux = nom.split(" ", 1)
+    u.first_name = morceaux[0]
+    u.last_name = morceaux[1] if len(morceaux) > 1 else None
     emp = (
         await db.execute(
             select(Employe).where(

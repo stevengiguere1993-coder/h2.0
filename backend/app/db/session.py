@@ -325,6 +325,12 @@ async def ensure_critical_columns() -> None:
         # Retours Steven 2026-07-20 : confirmation annuelle d'assurance
         # locataire + logement loué en chambres.
         ("imm_locataires", "assurance_confirmee_le", "DATE"),
+        # Feuille de temps : compagnie non refacturable (2026-07-22).
+        (
+            "timesheet_companies",
+            "refacturable",
+            "BOOLEAN NOT NULL DEFAULT TRUE",
+        ),
         (
             "imm_logements",
             "location_en_chambres",

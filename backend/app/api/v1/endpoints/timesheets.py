@@ -109,12 +109,14 @@ class CompanyOut(BaseModel):
     position: int
     taux_refacturation: Optional[float] = None
     is_active: bool
+    refacturable: bool = True
 
 
 class CompanyCreate(BaseModel):
     label: str = Field(min_length=1, max_length=160)
     taux_refacturation: Optional[float] = None
     position: Optional[int] = None
+    refacturable: bool = True
 
 
 class CompanyUpdate(BaseModel):
@@ -122,6 +124,7 @@ class CompanyUpdate(BaseModel):
     taux_refacturation: Optional[float] = None
     is_active: Optional[bool] = None
     position: Optional[int] = None
+    refacturable: Optional[bool] = None
 
 
 class ReorderIn(BaseModel):
@@ -152,6 +155,7 @@ class LigneOut(BaseModel):
     company_id: int
     label: str
     taux_refacturation: float
+    refacturable: bool = True
     jours: List[float]
     total: float
     refacturation: float
@@ -227,6 +231,7 @@ async def list_companies(
             position=c.position,
             taux_refacturation=c.taux_refacturation,
             is_active=c.is_active,
+            refacturable=bool(getattr(c, "refacturable", True)),
         )
         for c in rows
     ]
@@ -250,6 +255,7 @@ async def create_company(
         position=pos,
         taux_refacturation=payload.taux_refacturation,
         is_active=True,
+        refacturable=payload.refacturable,
     )
     db.add(c)
     await db.flush()
@@ -260,6 +266,7 @@ async def create_company(
         position=c.position,
         taux_refacturation=c.taux_refacturation,
         is_active=c.is_active,
+        refacturable=bool(getattr(c, "refacturable", True)),
     )
 
 
@@ -283,6 +290,8 @@ async def update_company(
         c.is_active = payload.is_active
     if payload.position is not None:
         c.position = payload.position
+    if payload.refacturable is not None:
+        c.refacturable = payload.refacturable
     await db.commit()
     return CompanyOut(
         id=c.id,
@@ -290,6 +299,7 @@ async def update_company(
         position=c.position,
         taux_refacturation=c.taux_refacturation,
         is_active=c.is_active,
+        refacturable=bool(getattr(c, "refacturable", True)),
     )
 
 
@@ -410,7 +420,8 @@ async def _build_detail(
     for c in companies:
         jours = grid[c.id]
         tot = round(sum(jours), 2)
-        rate = _effective_rate(c, ts)
+        refacturable = bool(getattr(c, "refacturable", True))
+        rate = _effective_rate(c, ts) if refacturable else 0.0
         refac = round(tot * rate, 2)
         for i in range(TIMESHEET_DAYS):
             totaux_jour[i] += jours[i]
@@ -421,6 +432,7 @@ async def _build_detail(
                 company_id=c.id,
                 label=c.label,
                 taux_refacturation=rate,
+                refacturable=refacturable,
                 jours=jours,
                 total=tot,
                 refacturation=refac,

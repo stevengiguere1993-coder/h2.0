@@ -53,6 +53,12 @@ class TimesheetCompany(Base, TimestampUpdateMixin):
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # Taux de refacturation propre à la compagnie ($/h). Si NULL, on retombe
     # sur le taux de refacturation par défaut de la feuille.
+    # Compagnie NON REFACTURABLE (retour Phil 2026-07-22) : les heures
+    # comptent pour la paie mais refacturation = 0 (travail interne).
+    # Colonne additive -> ensure_critical_columns.
+    refacturable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     taux_refacturation: Mapped[Optional[float]] = mapped_column(
         Float, nullable=True
     )
