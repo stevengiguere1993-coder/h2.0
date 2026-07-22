@@ -5014,6 +5014,7 @@ type PaiementExtRow = {
   logement_status: string;
   loyer_attendu: number | null;
   paye: boolean;
+  etat: "paye" | "partiel" | "a_confirmer" | "aucun";
   montant: number | null;
   paye_le: string | null;
 };
@@ -5053,21 +5054,7 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
     void load();
   }, [load]);
 
-  async function marquerPaye(row: PaiementExtRow) {
-    let montant = row.loyer_attendu;
-    if (montant == null) {
-      const saisie = window.prompt(
-        `Montant reçu pour le logement ${row.logement_numero} (${mois}) ?`,
-        ""
-      );
-      if (saisie == null) return;
-      const n = Number(saisie.replace(/\s/g, "").replace(",", "."));
-      if (!Number.isFinite(n) || n <= 0) {
-        setErr("Montant invalide.");
-        return;
-      }
-      montant = Math.round(n * 100) / 100;
-    }
+  async function enregistrer(row: PaiementExtRow, montant: number) {
     setBusyId(row.logement_id);
     try {
       const r = await authedFetch("/api/v1/immobilier/paiements-externes", {
@@ -5082,10 +5069,58 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
         throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
       await load();
     } catch (e) {
-      setErr(`Marquer payé a échoué : ${(e as Error).message}`);
+      setErr(`Paiement échoué : ${(e as Error).message}`);
     } finally {
       setBusyId(null);
     }
+  }
+
+  // 1 clic = le restant du mois (attendu − cumul déjà reçu).
+  async function marquerPaye(row: PaiementExtRow) {
+    let montant: number;
+    if (row.loyer_attendu != null) {
+      montant =
+        Math.round(
+          (row.loyer_attendu - (row.montant ?? 0)) * 100
+        ) / 100;
+      if (montant <= 0) montant = row.loyer_attendu;
+    } else {
+      const saisie = window.prompt(
+        `Montant reçu pour le logement ${row.logement_numero} (${mois}) ?`,
+        ""
+      );
+      if (saisie == null) return;
+      const n = Number(saisie.replace(/\s/g, "").replace(",", "."));
+      if (!Number.isFinite(n) || n <= 0) {
+        setErr("Montant invalide.");
+        return;
+      }
+      montant = Math.round(n * 100) / 100;
+    }
+    await enregistrer(row, montant);
+  }
+
+  // Paiement PARTIEL : montant saisi, AJOUTÉ au cumul du mois.
+  async function marquerPartiel(row: PaiementExtRow) {
+    const restant =
+      row.loyer_attendu != null
+        ? Math.round(
+            (row.loyer_attendu - (row.montant ?? 0)) * 100
+          ) / 100
+        : null;
+    const saisie = window.prompt(
+      `Montant reçu pour le logement ${row.logement_numero} (${mois}) ?${
+        restant != null ? `\n(Restant du mois : ${fmtCurrency(restant)})` : ""
+      }`,
+      ""
+    );
+    if (saisie == null) return;
+    const n = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(n) || n <= 0) {
+      setErr("Montant invalide.");
+      return;
+    }
+    await enregistrer(row, Math.round(n * 100) / 100);
   }
 
   async function corriger(row: PaiementExtRow) {
@@ -5202,15 +5237,19 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
                 <tr
                   key={r.logement_id}
                   className={
-                    !r.paye && r.loyer_attendu != null
+                    r.etat === "a_confirmer"
                       ? "bg-rose-500/5"
-                      : ""
+                      : r.etat === "partiel"
+                        ? "bg-amber-500/5"
+                        : ""
                   }
                 >
                   <td className="py-2 pr-3">
-                    {r.paye ? (
+                    {r.etat === "paye" ? (
                       <span className="badge badge-emerald">Payé</span>
-                    ) : r.loyer_attendu != null ? (
+                    ) : r.etat === "partiel" ? (
+                      <span className="badge badge-amber">Partiel</span>
+                    ) : r.etat === "a_confirmer" ? (
                       <span className="badge badge-rose">À confirmer</span>
                     ) : (
                       <span className="badge badge-neutral">
@@ -5232,37 +5271,56 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
                     </Link>
                   </td>
                   <td className="py-2 pr-3 text-right font-mono text-xs text-white/80">
-                    {fmtCurrency(r.montant ?? r.loyer_attendu)}
+                    {fmtCurrency(r.loyer_attendu ?? r.montant)}
+                    {r.etat === "partiel" ? (
+                      <div className="text-[10px] text-amber-300">
+                        reçu {fmtCurrency(r.montant ?? 0)}
+                      </div>
+                    ) : null}
                   </td>
                   <td className="py-2 pr-3 text-right text-xs text-white/60">
                     {r.paye_le || "—"}
                   </td>
                   <td className="py-2 text-right">
-                    {r.paye ? (
-                      <button
-                        type="button"
-                        onClick={() => void corriger(r)}
-                        disabled={busyId === r.logement_id}
-                        title="Erreur de saisie ? Annule le paiement du mois"
-                        className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
-                      >
-                        Corriger
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => void marquerPaye(r)}
-                        disabled={busyId === r.logement_id}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                      >
-                        {busyId === r.logement_id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <Check className="h-3 w-3" />
-                        )}
-                        Marquer payé
-                      </button>
-                    )}
+                    <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                      {r.etat !== "paye" ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void marquerPaye(r)}
+                            disabled={busyId === r.logement_id}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                          >
+                            {busyId === r.logement_id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Check className="h-3 w-3" />
+                            )}
+                            Marquer payé
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void marquerPartiel(r)}
+                            disabled={busyId === r.logement_id}
+                            title="Enregistrer un paiement partiel (montant saisi, ajouté au cumul)"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+                          >
+                            Partiel
+                          </button>
+                        </>
+                      ) : null}
+                      {(r.montant ?? 0) > 0 || r.etat === "paye" ? (
+                        <button
+                          type="button"
+                          onClick={() => void corriger(r)}
+                          disabled={busyId === r.logement_id}
+                          title="Erreur de saisie ? Annule les paiements du mois"
+                          className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                        >
+                          Corriger
+                        </button>
+                      ) : null}
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -5315,6 +5373,10 @@ function FacturesExternesSection({
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  // null = création ; id = modification d'une facture existante.
+  const [editingId, setEditingId] = useState<number | null>(null);
+  // "all" | "commun" | id de logement (filtre client-side).
+  const [filtreLog, setFiltreLog] = useState<string>("all");
   const [form, setForm] = useState({
     date_facture: "",
     montant: "",
@@ -5340,7 +5402,7 @@ function FacturesExternesSection({
     void load();
   }, [load]);
 
-  async function ajouter() {
+  async function enregistrerFacture() {
     const montant = Number(
       form.montant.replace(/\s/g, "").replace(",", ".")
     );
@@ -5351,18 +5413,18 @@ function FacturesExternesSection({
     setBusy(true);
     setErr(null);
     try {
+      const body = JSON.stringify({
+        date_facture: form.date_facture,
+        montant: Math.round(montant * 100) / 100,
+        fournisseur: form.fournisseur.trim() || null,
+        description: form.description.trim() || null,
+        logement_id: form.logement_id ? Number(form.logement_id) : null
+      });
       const r = await authedFetch(
-        `/api/v1/immobilier/immeubles/${immeubleId}/factures-externes`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            date_facture: form.date_facture,
-            montant: Math.round(montant * 100) / 100,
-            fournisseur: form.fournisseur.trim() || null,
-            description: form.description.trim() || null,
-            logement_id: form.logement_id ? Number(form.logement_id) : null
-          })
-        }
+        editingId != null
+          ? `/api/v1/immobilier/factures-externes/${editingId}`
+          : `/api/v1/immobilier/immeubles/${immeubleId}/factures-externes`,
+        { method: editingId != null ? "PUT" : "POST", body }
       );
       if (!r.ok)
         throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
@@ -5373,13 +5435,28 @@ function FacturesExternesSection({
         description: "",
         logement_id: ""
       });
+      setEditingId(null);
       setShowForm(false);
       await load();
     } catch (e) {
-      setErr(`Ajout échoué : ${(e as Error).message}`);
+      setErr(
+        `${editingId != null ? "Modification" : "Ajout"} échoué${editingId != null ? "e" : ""} : ${(e as Error).message}`
+      );
     } finally {
       setBusy(false);
     }
+  }
+
+  function modifier(f: FactureExtRow) {
+    setForm({
+      date_facture: f.date_facture,
+      montant: String(f.montant),
+      fournisseur: f.fournisseur || "",
+      description: f.description || "",
+      logement_id: f.logement_id != null ? String(f.logement_id) : ""
+    });
+    setEditingId(f.id);
+    setShowForm(true);
   }
 
   async function supprimer(f: FactureExtRow) {
@@ -5443,9 +5520,35 @@ function FacturesExternesSection({
               ›
             </button>
           </div>
+          <select
+            value={filtreLog}
+            onChange={(e) => setFiltreLog(e.target.value)}
+            className="input w-auto max-w-[180px] text-sm"
+            aria-label="Filtrer par logement"
+          >
+            <option value="all">Tous les logements</option>
+            <option value="commun">Immeuble (commun)</option>
+            {logements.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.numero}
+              </option>
+            ))}
+          </select>
           <button
             type="button"
-            onClick={() => setShowForm((v) => !v)}
+            onClick={() => {
+              if (!showForm) {
+                setEditingId(null);
+                setForm({
+                  date_facture: "",
+                  montant: "",
+                  fournisseur: "",
+                  description: "",
+                  logement_id: ""
+                });
+              }
+              setShowForm((v) => !v);
+            }}
             className="btn-accent btn-sm"
           >
             + Facture
@@ -5542,23 +5645,31 @@ function FacturesExternesSection({
             />
           </div>
           <div className="mt-3 flex items-center justify-end gap-2">
+            {editingId != null ? (
+              <span className="mr-auto text-[11px] text-amber-300">
+                Modification de la facture #{editingId}
+              </span>
+            ) : null}
             <button
               type="button"
-              onClick={() => setShowForm(false)}
+              onClick={() => {
+                setShowForm(false);
+                setEditingId(null);
+              }}
               className="btn-secondary btn-sm"
             >
               Annuler
             </button>
             <button
               type="button"
-              onClick={() => void ajouter()}
+              onClick={() => void enregistrerFacture()}
               disabled={busy}
               className="btn-accent btn-sm"
             >
               {busy ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : null}
-              Ajouter
+              {editingId != null ? "Enregistrer" : "Ajouter"}
             </button>
           </div>
         </div>
@@ -5571,8 +5682,24 @@ function FacturesExternesSection({
           Aucune facture en {annee} — clique « + Facture » quand la
           compagnie de gestion en envoie une.
         </p>
-      ) : (
+      ) : (() => {
+        const visibles = data.rows.filter((f) => {
+          if (filtreLog === "all") return true;
+          if (filtreLog === "commun") return f.logement_id == null;
+          return f.logement_id === Number(filtreLog);
+        });
+        const sousTotal = visibles.reduce((s, f) => s + f.montant, 0);
+        return (
         <div className="overflow-x-auto">
+          {filtreLog !== "all" ? (
+            <p className="mb-2 text-xs text-white/60">
+              {visibles.length} facture{visibles.length > 1 ? "s" : ""}{" "}
+              filtrée{visibles.length > 1 ? "s" : ""} ·{" "}
+              <strong className="text-white">
+                {fmtCurrency(sousTotal)}
+              </strong>
+            </p>
+          ) : null}
           <table className="w-full min-w-[560px] text-left text-sm">
             <thead className="text-[10px] uppercase tracking-wider text-white/45">
               <tr>
@@ -5584,7 +5711,7 @@ function FacturesExternesSection({
               </tr>
             </thead>
             <tbody className="divide-y divide-brand-800/70">
-              {data.rows.map((f) => (
+              {visibles.map((f) => (
                 <tr key={f.id}>
                   <td className="py-2 pr-3 font-mono text-xs text-white/70">
                     {f.date_facture}
@@ -5613,21 +5740,32 @@ function FacturesExternesSection({
                     {fmtCurrency(f.montant)}
                   </td>
                   <td className="py-2 text-right">
-                    <button
-                      type="button"
-                      onClick={() => void supprimer(f)}
-                      title="Supprimer cette facture"
-                      className="text-[11px] text-white/40 transition hover:text-rose-300"
-                    >
-                      Supprimer
-                    </button>
+                    <span className="inline-flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => modifier(f)}
+                        title="Modifier cette facture"
+                        className="text-[11px] text-accent-500 transition hover:underline"
+                      >
+                        Modifier
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void supprimer(f)}
+                        title="Supprimer cette facture"
+                        className="text-[11px] text-white/40 transition hover:text-rose-300"
+                      >
+                        Supprimer
+                      </button>
+                    </span>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      )}
+        );
+      })()}
     </Section>
   );
 }

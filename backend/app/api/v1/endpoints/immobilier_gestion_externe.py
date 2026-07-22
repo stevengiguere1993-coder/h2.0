@@ -67,6 +67,10 @@ class PaiementExterneRow(BaseModel):
     logement_status: str
     loyer_attendu: Optional[float] = None
     paye: bool = False
+    # "paye" | "partiel" | "a_confirmer" | "aucun" (rien attendu — vacant…)
+    etat: str = "aucun"
+    #: CUMUL des montants reçus pour le mois (paiements partiels
+    #: possibles — retour Phil 2026-07-22).
     montant: Optional[float] = None
     paye_le: Optional[date] = None
 
@@ -142,31 +146,43 @@ async def paiements_externes_overview(
     for lg in sorted(logements, key=lambda x: x.numero or ""):
         attendu = loyer_par_logement.get(lg.id)
         p = paiements.get(lg.id)
+        recu = (
+            float(p.montant)
+            if p is not None and p.montant is not None
+            else ((attendu or 0.0) if p is not None else 0.0)
+        )
         if attendu:
             total_attendu += attendu
-        if p is not None:
-            recu = float(p.montant) if p.montant is not None else (attendu or 0)
-            total_recu += recu
+        total_recu += recu
+        # État : cumul reçu vs attendu (partiels possibles).
+        if p is not None and (attendu is None or recu >= attendu - 0.005):
+            etat = "paye"
             nb_payes += 1
-        elif attendu:
+        elif p is not None:
+            etat = "partiel"
             nb_impayes += 1
+        elif attendu:
+            etat = "a_confirmer"
+            nb_impayes += 1
+        else:
+            etat = "aucun"
         rows.append(
             PaiementExterneRow(
                 logement_id=lg.id,
                 logement_numero=lg.numero,
                 logement_status=lg.status,
                 loyer_attendu=attendu,
-                paye=p is not None,
-                montant=(
-                    float(p.montant)
-                    if p is not None and p.montant is not None
-                    else None
-                ),
+                paye=etat == "paye",
+                etat=etat,
+                montant=round(recu, 2) if p is not None else None,
                 paye_le=p.paye_le if p is not None else None,
             )
         )
-    # Impayés en premier (même logique que la vue interne).
-    rows.sort(key=lambda r: (r.paye, r.logement_numero or ""))
+    # Impayés en premier, partiels ensuite, payés en bas.
+    ordre = {"a_confirmer": 0, "partiel": 1, "paye": 2, "aucun": 3}
+    rows.sort(
+        key=lambda r: (ordre.get(r.etat, 9), r.logement_numero or "")
+    )
     return PaiementExterneOverview(
         mois=month_start.strftime("%Y-%m"),
         rows=rows,
@@ -191,6 +207,9 @@ class PaiementExterneCreate(BaseModel):
 async def marquer_paiement_externe(
     payload: PaiementExterneCreate, db: DBSession, user: CurrentUser
 ) -> PaiementExterneRow:
+    """Enregistre un montant reçu — s'AJOUTE au cumul du mois (paiements
+    partiels possibles). Sans montant : le mois est réputé payé au
+    complet (loyer attendu)."""
     _require_volet(user)
     month_start = _parse_mois(payload.mois)
     lg = await db.get(Logement, payload.logement_id)
@@ -213,7 +232,12 @@ async def marquer_paiement_externe(
             created_at=datetime.now(timezone.utc),
         )
         db.add(existing)
-    existing.montant = payload.montant
+    if payload.montant is not None:
+        existing.montant = round(
+            float(existing.montant or 0) + payload.montant, 2
+        )
+    else:
+        existing.montant = None  # payé au complet (= loyer attendu)
     existing.paye_le = today
     await db.commit()
     return PaiementExterneRow(
@@ -222,7 +246,12 @@ async def marquer_paiement_externe(
         logement_status=lg.status,
         loyer_attendu=None,
         paye=True,
-        montant=payload.montant,
+        etat="paye",
+        montant=(
+            float(existing.montant)
+            if existing.montant is not None
+            else None
+        ),
         paye_le=today,
     )
 
