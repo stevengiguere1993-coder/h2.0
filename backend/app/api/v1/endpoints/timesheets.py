@@ -97,25 +97,19 @@ async def _ensure_seed(db) -> None:
 
 
 def _line_rate(
-    company: TimesheetCompany,
-    ts: Timesheet,
-    ov: Optional[TimesheetUserRate],
-) -> tuple[float, bool, str]:
-    """Taux effectif d'une ligne : (taux, refacturable, source).
+    ts: Timesheet, ov: Optional[TimesheetUserRate]
+) -> tuple[float, str]:
+    """Taux effectif d'une ligne : (taux, source).
 
-    Héritage : override (employé, compagnie) → taux de la compagnie →
-    taux de refacturation par défaut de la feuille. ``source`` vaut
-    "employe" | "compagnie" | "defaut" (affiché dans l'UI).
+    Le taux de refacturation de la feuille s'applique à TOUTES les
+    compagnies ; un override (employé, compagnie) posé à la main sur la
+    feuille le remplace ligne par ligne (retour Phil 2026-07-22 — les
+    taux au niveau compagnie n'existent plus). ``source`` vaut
+    "employe" | "defaut".
     """
-    if ov is not None and ov.refacturable is not None:
-        refacturable = bool(ov.refacturable)
-    else:
-        refacturable = bool(getattr(company, "refacturable", True))
     if ov is not None and ov.taux_refacturation is not None:
-        return float(ov.taux_refacturation), refacturable, "employe"
-    if company.taux_refacturation is not None:
-        return float(company.taux_refacturation), refacturable, "compagnie"
-    return float(ts.taux_refacturation or 0.0), refacturable, "defaut"
+        return float(ov.taux_refacturation), "employe"
+    return float(ts.taux_refacturation or 0.0), "defaut"
 
 
 async def _load_user_rates(
@@ -186,14 +180,17 @@ class LigneOut(BaseModel):
     company_id: int
     label: str
     taux_refacturation: float
-    #: D'où vient le taux effectif : "employe" | "compagnie" | "defaut".
+    #: D'où vient le taux effectif : "employe" | "defaut".
     taux_source: str = "defaut"
     #: Override brut (employé, compagnie) — pour l'éditeur de taux.
     taux_perso: Optional[float] = None
-    refacturable_perso: Optional[bool] = None
-    refacturable: bool = True
+    #: Heures refacturables (bloc 1 de la grille), par jour.
     jours: List[float]
+    #: Heures NON refacturables (bloc 2 de la grille), par jour.
+    jours_nr: List[float]
     total: float
+    total_refact: float
+    total_non_refact: float
     refacturation: float
     note: str = ""
 
@@ -218,6 +215,7 @@ class TimesheetDetail(BaseModel):
     is_manager: bool
     lignes: List[LigneOut]
     totaux_jour: List[float]
+    totaux_jour_nr: List[float]
     total_heures: float
     montant_paie: float
     total_refacturation: float
@@ -227,6 +225,7 @@ class EntryIn(BaseModel):
     company_id: int
     day_index: int = Field(ge=0, le=TIMESHEET_DAYS - 1)
     hours: float = Field(ge=0)
+    refacturable: bool = True
 
 
 class EntriesReplace(BaseModel):
@@ -499,12 +498,16 @@ async def _build_detail(
             )
         )
     ).scalars().all()
-    grid: Dict[int, List[float]] = {
+    grid_r: Dict[int, List[float]] = {
+        c.id: [0.0] * TIMESHEET_DAYS for c in companies
+    }
+    grid_n: Dict[int, List[float]] = {
         c.id: [0.0] * TIMESHEET_DAYS for c in companies
     }
     for e in entries:
-        if e.company_id in grid and 0 <= e.day_index < TIMESHEET_DAYS:
-            grid[e.company_id][e.day_index] = float(e.hours or 0.0)
+        tgt = grid_r if getattr(e, "refacturable", True) else grid_n
+        if e.company_id in tgt and 0 <= e.day_index < TIMESHEET_DAYS:
+            tgt[e.company_id][e.day_index] = float(e.hours or 0.0)
 
     notes: Dict[str, str] = {}
     if ts.notes_json:
@@ -516,19 +519,21 @@ async def _build_detail(
     overrides = await _load_user_rates(db, ts.user_id)
     lignes: List[LigneOut] = []
     totaux_jour = [0.0] * TIMESHEET_DAYS
+    totaux_jour_nr = [0.0] * TIMESHEET_DAYS
     total_heures = 0.0
     total_refac = 0.0
     for c in companies:
-        jours = grid[c.id]
-        tot = round(sum(jours), 2)
+        jr = grid_r[c.id]
+        jn = grid_n[c.id]
+        tot_r = round(sum(jr), 2)
+        tot_n = round(sum(jn), 2)
         ov = overrides.get(c.id)
-        rate, refacturable, source = _line_rate(c, ts, ov)
-        if not refacturable:
-            rate = 0.0
-        refac = round(tot * rate, 2)
+        rate, source = _line_rate(ts, ov)
+        refac = round(tot_r * rate, 2)
         for i in range(TIMESHEET_DAYS):
-            totaux_jour[i] += jours[i]
-        total_heures += tot
+            totaux_jour[i] += jr[i]
+            totaux_jour_nr[i] += jn[i]
+        total_heures += tot_r + tot_n
         total_refac += refac
         lignes.append(
             LigneOut(
@@ -537,15 +542,17 @@ async def _build_detail(
                 taux_refacturation=rate,
                 taux_source=source,
                 taux_perso=(ov.taux_refacturation if ov else None),
-                refacturable_perso=(ov.refacturable if ov else None),
-                refacturable=refacturable,
-                jours=jours,
-                total=tot,
+                jours=jr,
+                jours_nr=jn,
+                total=round(tot_r + tot_n, 2),
+                total_refact=tot_r,
+                total_non_refact=tot_n,
                 refacturation=refac,
                 note=notes.get(str(c.id), ""),
             )
         )
     totaux_jour = [round(x, 2) for x in totaux_jour]
+    totaux_jour_nr = [round(x, 2) for x in totaux_jour_nr]
     total_heures = round(total_heures, 2)
     total_refac = round(total_refac, 2)
     montant_paie = round(total_heures * float(ts.taux_horaire or 0.0), 2)
@@ -591,6 +598,7 @@ async def _build_detail(
         is_manager=manager,
         lignes=lignes,
         totaux_jour=totaux_jour,
+        totaux_jour_nr=totaux_jour_nr,
         total_heures=total_heures,
         montant_paie=montant_paie,
         total_refacturation=total_refac,
@@ -862,21 +870,25 @@ async def timesheet_dashboard(
             select(
                 TimesheetEntry.timesheet_id,
                 TimesheetEntry.company_id,
+                TimesheetEntry.refacturable,
                 func.sum(TimesheetEntry.hours),
             ).group_by(
-                TimesheetEntry.timesheet_id, TimesheetEntry.company_id
+                TimesheetEntry.timesheet_id,
+                TimesheetEntry.company_id,
+                TimesheetEntry.refacturable,
             )
         )
     ).all()
 
+    # Paie = TOUTES les heures × taux horaire de la feuille ; refacturation
+    # = heures refacturables seulement × taux effectif (perso → défaut).
     hours_by_user: Dict[int, float] = {}
     paie_due: Dict[int, float] = {}
     comp_hours: Dict[tuple, float] = {}
     comp_due: Dict[tuple, float] = {}
-    for ts_id, cid, h in sums:
+    for ts_id, cid, refc, h in sums:
         ts = sheets_by_id.get(ts_id)
-        c = companies.get(cid)
-        if not ts or not c or not h:
+        if not ts or cid not in companies or not h:
             continue
         h = float(h)
         uid = ts.user_id
@@ -884,13 +896,11 @@ async def timesheet_dashboard(
         paie_due[uid] = (
             paie_due.get(uid, 0.0) + h * float(ts.taux_horaire or 0.0)
         )
-        rate, refacturable, _src = _line_rate(
-            c, ts, overrides.get((uid, cid))
-        )
-        due = h * rate if refacturable else 0.0
-        key = (uid, cid)
-        comp_hours[key] = comp_hours.get(key, 0.0) + h
-        comp_due[key] = comp_due.get(key, 0.0) + due
+        if refc:
+            rate, _src = _line_rate(ts, overrides.get((uid, cid)))
+            key = (uid, cid)
+            comp_hours[key] = comp_hours.get(key, 0.0) + h
+            comp_due[key] = comp_due.get(key, 0.0) + h * rate
 
     regs = (
         await db.execute(
@@ -1131,7 +1141,7 @@ async def replace_entries(
     for e in payload.entries:
         if e.hours <= 0:
             continue
-        key = (e.company_id, e.day_index)
+        key = (e.company_id, e.day_index, bool(e.refacturable))
         if key in seen:
             continue
         seen.add(key)
@@ -1140,6 +1150,7 @@ async def replace_entries(
                 timesheet_id=ts.id,
                 company_id=e.company_id,
                 day_index=e.day_index,
+                refacturable=bool(e.refacturable),
                 hours=float(e.hours),
             )
         )

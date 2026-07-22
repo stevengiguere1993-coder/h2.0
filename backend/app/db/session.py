@@ -331,6 +331,14 @@ async def ensure_critical_columns() -> None:
             "refacturable",
             "BOOLEAN NOT NULL DEFAULT TRUE",
         ),
+        # Feuille de temps : la grille a un bloc d'heures NON refacturables
+        # par semaine (2026-07-22) — le swap de contrainte unique se fait
+        # dans ensure_timesheet_tables.
+        (
+            "timesheet_entries",
+            "refacturable",
+            "BOOLEAN NOT NULL DEFAULT TRUE",
+        ),
         (
             "imm_logements",
             "location_en_chambres",
@@ -538,6 +546,36 @@ async def ensure_timesheet_tables() -> None:
         async with engine.begin() as conn:
             await conn.run_sync(
                 lambda c: Base.metadata.create_all(c, tables=tables)
+            )
+        # La cellule est maintenant (feuille, compagnie, jour, refacturable) :
+        # sur une base existante il faut ajouter la colonne PUIS remplacer
+        # l'ancienne contrainte unique à 3 colonnes (sinon violation dès
+        # qu'une même case a des heures refact + non refact).
+        from sqlalchemy import text
+
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    DO $$
+                    BEGIN
+                      ALTER TABLE timesheet_entries
+                        ADD COLUMN IF NOT EXISTS refacturable
+                        BOOLEAN NOT NULL DEFAULT TRUE;
+                      IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'uq_timesheet_entry_cell_v2'
+                      ) THEN
+                        ALTER TABLE timesheet_entries
+                          DROP CONSTRAINT IF EXISTS uq_timesheet_entry_cell;
+                        ALTER TABLE timesheet_entries
+                          ADD CONSTRAINT uq_timesheet_entry_cell_v2
+                          UNIQUE (timesheet_id, company_id, day_index,
+                                  refacturable);
+                      END IF;
+                    END $$;
+                    """
+                )
             )
     except Exception as exc:  # noqa: BLE001
         log.warning("ensure_timesheet_tables failed: %s", exc)

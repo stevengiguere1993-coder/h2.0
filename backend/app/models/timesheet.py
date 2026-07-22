@@ -190,7 +190,8 @@ class TimesheetEntry(Base, TimestampUpdateMixin):
             "timesheet_id",
             "company_id",
             "day_index",
-            name="uq_timesheet_entry_cell",
+            "refacturable",
+            name="uq_timesheet_entry_cell_v2",
         ),
     )
 
@@ -206,4 +207,12 @@ class TimesheetEntry(Base, TimestampUpdateMixin):
         index=True,
     )
     day_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    # La grille a DEUX blocs par semaine (retour Phil 2026-07-22) : heures
+    # refacturables et heures NON refacturables. Les deux comptent pour la
+    # paie ; seules les refacturables entrent dans la refacturation.
+    # Colonne additive -> ensure_critical_columns + swap de contrainte
+    # unique dans ensure_timesheet_tables.
+    refacturable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     hours: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
