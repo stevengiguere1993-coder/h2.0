@@ -62,6 +62,7 @@ from app.api.v1.endpoints import (
     immobilier_locations,
     immobilier_assurances,
     immobilier_docs_perso,
+    immobilier_gestion_externe,
     immobilier_releves31,
     investissements,
     dashboard,
@@ -479,6 +480,10 @@ api_router.include_router(
 # Assurances locataires — suivi annuel (page Suivis annuels).
 api_router.include_router(
     immobilier_assurances.router, dependencies=DEP_IMMOBILIER
+)
+# Gestion externe : paiements par logement + factures ponctuelles.
+api_router.include_router(
+    immobilier_gestion_externe.router, dependencies=DEP_IMMOBILIER
 )
 # Images immobilier : PAS de dépendance routeur — auth par ?t=<jwt> dans
 # l'endpoint lui-même (les <img> ne portent pas de header Authorization).
