@@ -1036,6 +1036,70 @@ class Releve31(Base, TimestampUpdateMixin):
     )
 
 
+class PaiementExterne(Base):
+    """Suivi des loyers d'un immeuble en GESTION EXTERNE (retour Phil
+    2026-07-22, pt 10) : la compagnie de gestion perçoit les loyers et
+    envoie son rapport — on coche ici, PAR LOGEMENT (pas de locataire
+    connu), payé ou non pour le mois. 1 ligne = payé ; absence = impayé.
+    Nouvelle table → ensure_immobilier_aux_tables.
+    """
+
+    __tablename__ = "imm_paiements_externes"
+    __table_args__ = (
+        UniqueConstraint(
+            "logement_id", "mois_couvert", name="uq_paiement_externe_mois"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    logement_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_logements.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    mois_couvert: Mapped[date] = mapped_column(Date, nullable=False)
+    montant: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+    paye_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    created_by_email: Mapped[Optional[str]] = mapped_column(
+        String(320), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class FactureExterne(Base, TimestampUpdateMixin):
+    """FACTURE PONCTUELLE d'un immeuble en gestion externe (retour Phil
+    2026-07-22, pt 11) : ex. la compagnie de gestion refacture 350 $ de
+    plomberie pour l'app. 3. PAS un bon de travail, PAS une dépense
+    récurrente (déneigement…) — un coût unique rattaché (optionnellement)
+    à un logement, pour suivre combien chaque appartement coûte à
+    l'année. Nouvelle table → ensure_immobilier_aux_tables.
+    """
+
+    __tablename__ = "imm_factures_externes"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    immeuble_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_immeubles.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    logement_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_logements.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
+    date_facture: Mapped[date] = mapped_column(Date, nullable=False)
+    montant: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    fournisseur: Mapped[Optional[str]] = mapped_column(
+        String(160), nullable=True
+    )
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by_email: Mapped[Optional[str]] = mapped_column(
+        String(320), nullable=True
+    )
+
+
 class ImmDocPersoModele(Base, TimestampUpdateMixin):
     """MODÈLE de document personnalisé (retour Steven 2026-07-20, pt 5).
 

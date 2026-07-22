@@ -194,6 +194,10 @@ const TABS = [
   // « Baux & paiements » séparé en deux (retour Phil 2026-07-10) :
   // Paiements = suivi des loyers du mois, Baux & locataires = contrats.
   { id: "paiements", label: "Paiements", icon: Receipt },
+  // Version GESTION EXTERNE (retour Phil 2026-07-22) : suivi par
+  // logement (sans locataire) + factures ponctuelles de la compagnie.
+  { id: "paiements-ext", label: "Paiements", icon: Receipt },
+  { id: "factures-ext", label: "Factures ponctuelles", icon: Wrench },
   { id: "baux", label: "Baux & locataires", icon: ClipboardList },
   { id: "locations", label: "Locations", icon: KeyRound },
   { id: "hypotheques", label: "Hypothèques", icon: Banknote },
@@ -204,11 +208,16 @@ const TABS = [
 ] as const;
 
 // Onglets masqués quand l'immeuble est en gestion externe : les baux,
-// paiements, la maintenance et le contrat de gestion sont gérés par la
-// compagnie de gestion externe.
+// paiements internes, la maintenance et le contrat de gestion sont gérés
+// par la compagnie de gestion externe.
 const TABS_MASQUES_GESTION_EXTERNE: ReadonlyArray<
   (typeof TABS)[number]["id"]
 > = ["paiements", "baux", "locations", "maintenance", "contrat-gestion"];
+
+// Onglets propres à la gestion externe (masqués en gestion interne).
+const TABS_GESTION_EXTERNE_SEULEMENT: ReadonlyArray<
+  (typeof TABS)[number]["id"]
+> = ["paiements-ext", "factures-ext"];
 
 function fmtCurrency(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -377,14 +386,19 @@ export default function ImmeubleDetailPage({
     () =>
       gestionExterne
         ? TABS.filter((t) => !TABS_MASQUES_GESTION_EXTERNE.includes(t.id))
-        : TABS,
+        : TABS.filter(
+            (t) => !TABS_GESTION_EXTERNE_SEULEMENT.includes(t.id)
+          ),
     [gestionExterne]
   );
 
-  // Si l'onglet actif devient masqué (gestion externe), on retombe sur
-  // la vue d'ensemble.
+  // Si l'onglet actif devient masqué (gestion externe ou non), on
+  // retombe sur la vue d'ensemble.
   useEffect(() => {
-    if (gestionExterne && TABS_MASQUES_GESTION_EXTERNE.includes(tab)) {
+    if (
+      (gestionExterne && TABS_MASQUES_GESTION_EXTERNE.includes(tab)) ||
+      (!gestionExterne && TABS_GESTION_EXTERNE_SEULEMENT.includes(tab))
+    ) {
       switchTab("overview");
     }
   }, [gestionExterne, tab, switchTab]);
@@ -884,6 +898,15 @@ export default function ImmeubleDetailPage({
               list={logements}
               baux={baux}
               setList={setLogements}
+            />
+          ) : null}
+          {tab === "paiements-ext" ? (
+            <PaiementsExternesSection immeubleId={immeubleId} />
+          ) : null}
+          {tab === "factures-ext" ? (
+            <FacturesExternesSection
+              immeubleId={immeubleId}
+              logements={logements || []}
             />
           ) : null}
           {tab === "paiements" ? (
@@ -4976,5 +4999,635 @@ function Empty({ msg }: { msg: string }) {
     <p className="rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
       {msg}
     </p>
+  );
+}
+
+
+// ── GESTION EXTERNE : paiements par logement ──────────────────────────
+// La compagnie de gestion perçoit les loyers ; quand son rapport arrive,
+// on coche ici, PAR LOGEMENT (pas de locataire connu), payé ou non pour
+// le mois (retour Phil 2026-07-22, pt 10).
+
+type PaiementExtRow = {
+  logement_id: number;
+  logement_numero: string;
+  logement_status: string;
+  loyer_attendu: number | null;
+  paye: boolean;
+  montant: number | null;
+  paye_le: string | null;
+};
+
+type PaiementExtOverview = {
+  mois: string;
+  rows: PaiementExtRow[];
+  total_attendu: number;
+  total_recu: number;
+  nb_payes: number;
+  nb_impayes: number;
+};
+
+function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
+  const [mois, setMois] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [data, setData] = useState<PaiementExtOverview | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/immeubles/${immeubleId}/paiements-externes?mois=${mois}`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setData((await r.json()) as PaiementExtOverview);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }, [immeubleId, mois]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function marquerPaye(row: PaiementExtRow) {
+    let montant = row.loyer_attendu;
+    if (montant == null) {
+      const saisie = window.prompt(
+        `Montant reçu pour le logement ${row.logement_numero} (${mois}) ?`,
+        ""
+      );
+      if (saisie == null) return;
+      const n = Number(saisie.replace(/\s/g, "").replace(",", "."));
+      if (!Number.isFinite(n) || n <= 0) {
+        setErr("Montant invalide.");
+        return;
+      }
+      montant = Math.round(n * 100) / 100;
+    }
+    setBusyId(row.logement_id);
+    try {
+      const r = await authedFetch("/api/v1/immobilier/paiements-externes", {
+        method: "POST",
+        body: JSON.stringify({
+          logement_id: row.logement_id,
+          mois,
+          montant
+        })
+      });
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      await load();
+    } catch (e) {
+      setErr(`Marquer payé a échoué : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function corriger(row: PaiementExtRow) {
+    if (
+      !window.confirm(
+        `Annuler le paiement du logement ${row.logement_numero} pour ${mois} ?`
+      )
+    )
+      return;
+    setBusyId(row.logement_id);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/paiements-externes/${row.logement_id}?mois=${mois}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      await load();
+    } catch (e) {
+      setErr(`Annulation échouée : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const moisLisible = (() => {
+    const [y, m] = mois.split("-").map(Number);
+    return new Date(y, (m || 1) - 1, 1).toLocaleDateString("fr-CA", {
+      month: "long",
+      year: "numeric"
+    });
+  })();
+
+  return (
+    <Section title={`Paiements (gestion externe) — ${moisLisible}`}>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-3 text-xs text-white/60">
+          <span>
+            Reçu{" "}
+            <strong className="text-emerald-300">
+              {fmtCurrency(data?.total_recu ?? 0)}
+            </strong>{" "}
+            / {fmtCurrency(data?.total_attendu ?? 0)}
+          </span>
+          {data && data.nb_impayes > 0 ? (
+            <span className="badge badge-rose">
+              {data.nb_impayes} impayé{data.nb_impayes > 1 ? "s" : ""}
+            </span>
+          ) : null}
+        </div>
+        <div className="inline-flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-950 px-1 py-0.5">
+          <button
+            type="button"
+            onClick={() =>
+              setMois((m) => {
+                const [y, mm] = m.split("-").map(Number);
+                const d = new Date(y, (mm || 1) - 2, 1);
+                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+              })
+            }
+            className="btn-ghost btn-xs"
+            aria-label="Mois précédent"
+          >
+            ‹
+          </button>
+          <span className="min-w-[110px] text-center text-xs font-semibold capitalize text-white">
+            {moisLisible}
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              setMois((m) => {
+                const [y, mm] = m.split("-").map(Number);
+                const d = new Date(y, mm || 1, 1);
+                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+              })
+            }
+            className="btn-ghost btn-xs"
+            aria-label="Mois suivant"
+          >
+            ›
+          </button>
+        </div>
+      </div>
+      <p className="mb-3 text-xs text-white/50">
+        Loyers perçus par la compagnie de gestion — coche ce qui est payé
+        quand son rapport arrive. Le suivi est par logement : pas de
+        locataire ni de relance ici.
+      </p>
+      {err ? (
+        <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {err}
+        </p>
+      ) : null}
+      {data === null ? (
+        <Loading />
+      ) : data.rows.length === 0 ? (
+        <p className="text-xs text-white/50">
+          Aucun logement dans cet immeuble.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[480px] text-left text-sm">
+            <thead className="text-[10px] uppercase tracking-wider text-white/45">
+              <tr>
+                <th className="py-2 pr-3">État</th>
+                <th className="py-2 pr-3">Logement</th>
+                <th className="py-2 pr-3 text-right">Loyer</th>
+                <th className="py-2 pr-3 text-right">Payé le</th>
+                <th className="py-2 text-right"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-brand-800/70">
+              {data.rows.map((r) => (
+                <tr
+                  key={r.logement_id}
+                  className={
+                    !r.paye && r.loyer_attendu != null
+                      ? "bg-rose-500/5"
+                      : ""
+                  }
+                >
+                  <td className="py-2 pr-3">
+                    {r.paye ? (
+                      <span className="badge badge-emerald">Payé</span>
+                    ) : r.loyer_attendu != null ? (
+                      <span className="badge badge-rose">À confirmer</span>
+                    ) : (
+                      <span className="badge badge-neutral">
+                        {r.logement_status === "vacant"
+                          ? "Vacant"
+                          : "—"}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-3 font-mono text-xs">
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={
+                        `/immobilier/logements/${r.logement_id}?from=immeuble` as any
+                      }
+                      className="font-medium text-accent-500 hover:underline"
+                    >
+                      {r.logement_numero}
+                    </Link>
+                  </td>
+                  <td className="py-2 pr-3 text-right font-mono text-xs text-white/80">
+                    {fmtCurrency(r.montant ?? r.loyer_attendu)}
+                  </td>
+                  <td className="py-2 pr-3 text-right text-xs text-white/60">
+                    {r.paye_le || "—"}
+                  </td>
+                  <td className="py-2 text-right">
+                    {r.paye ? (
+                      <button
+                        type="button"
+                        onClick={() => void corriger(r)}
+                        disabled={busyId === r.logement_id}
+                        title="Erreur de saisie ? Annule le paiement du mois"
+                        className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                      >
+                        Corriger
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void marquerPaye(r)}
+                        disabled={busyId === r.logement_id}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                      >
+                        {busyId === r.logement_id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Check className="h-3 w-3" />
+                        )}
+                        Marquer payé
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+// ── GESTION EXTERNE : factures ponctuelles ────────────────────────────
+// Ex. la compagnie refacture 350 $ de plomberie pour l'app. 3 — jamais
+// récurrent (pas le déneigement/gazon). Rattachée (optionnellement) à un
+// logement pour suivre combien chaque appartement coûte à l'année
+// (retour Phil 2026-07-22, pt 11).
+
+type FactureExtRow = {
+  id: number;
+  immeuble_id: number;
+  logement_id: number | null;
+  logement_numero: string | null;
+  date_facture: string;
+  montant: number;
+  fournisseur: string | null;
+  description: string | null;
+};
+
+type FacturesExtOverview = {
+  annee: number;
+  rows: FactureExtRow[];
+  total_annee: number;
+  par_logement: {
+    logement_id: number | null;
+    logement_numero: string;
+    total: number;
+    nb: number;
+  }[];
+};
+
+function FacturesExternesSection({
+  immeubleId,
+  logements
+}: {
+  immeubleId: number;
+  logements: Logement[];
+}) {
+  const [annee, setAnnee] = useState<number>(new Date().getFullYear());
+  const [data, setData] = useState<FacturesExtOverview | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({
+    date_facture: "",
+    montant: "",
+    fournisseur: "",
+    description: "",
+    logement_id: ""
+  });
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/immeubles/${immeubleId}/factures-externes?annee=${annee}`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setData((await r.json()) as FacturesExtOverview);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }, [immeubleId, annee]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function ajouter() {
+    const montant = Number(
+      form.montant.replace(/\s/g, "").replace(",", ".")
+    );
+    if (!form.date_facture || !Number.isFinite(montant) || montant <= 0) {
+      setErr("Date et montant requis.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/immeubles/${immeubleId}/factures-externes`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            date_facture: form.date_facture,
+            montant: Math.round(montant * 100) / 100,
+            fournisseur: form.fournisseur.trim() || null,
+            description: form.description.trim() || null,
+            logement_id: form.logement_id ? Number(form.logement_id) : null
+          })
+        }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      setForm({
+        date_facture: "",
+        montant: "",
+        fournisseur: "",
+        description: "",
+        logement_id: ""
+      });
+      setShowForm(false);
+      await load();
+    } catch (e) {
+      setErr(`Ajout échoué : ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function supprimer(f: FactureExtRow) {
+    if (
+      !window.confirm(
+        `Supprimer la facture de ${fmtCurrency(f.montant)} du ${f.date_facture} ?`
+      )
+    )
+      return;
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/factures-externes/${f.id}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      await load();
+    } catch (e) {
+      setErr(`Suppression échouée : ${(e as Error).message}`);
+    }
+  }
+
+  return (
+    <Section title={`Factures ponctuelles — ${annee}`}>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-3 text-xs text-white/60">
+          <span>
+            Total {annee} :{" "}
+            <strong className="text-white">
+              {fmtCurrency(data?.total_annee ?? 0)}
+            </strong>
+          </span>
+          {(data?.par_logement || []).map((p) => (
+            <span
+              key={p.logement_id ?? "commun"}
+              className="badge badge-neutral"
+              title={`${p.nb} facture${p.nb > 1 ? "s" : ""}`}
+            >
+              {p.logement_numero} · {fmtCurrency(p.total)}
+            </span>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-950 px-1 py-0.5">
+            <button
+              type="button"
+              onClick={() => setAnnee((a) => a - 1)}
+              className="btn-ghost btn-xs"
+              aria-label="Année précédente"
+            >
+              ‹
+            </button>
+            <span className="min-w-[60px] text-center text-xs font-semibold text-white">
+              {annee}
+            </span>
+            <button
+              type="button"
+              onClick={() => setAnnee((a) => a + 1)}
+              className="btn-ghost btn-xs"
+              aria-label="Année suivante"
+            >
+              ›
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowForm((v) => !v)}
+            className="btn-accent btn-sm"
+          >
+            + Facture
+          </button>
+        </div>
+      </div>
+      <p className="mb-3 text-xs text-white/50">
+        Coûts UNIQUES refacturés par la compagnie de gestion (ex. 350 $ de
+        plomberie pour un appartement) — pas les dépenses récurrentes
+        (déneigement, gazon…), qui vont dans le Cashflow. Rattache la
+        facture à un logement pour suivre ce que chaque appartement coûte
+        à l&apos;année.
+      </p>
+      {err ? (
+        <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {err}
+        </p>
+      ) : null}
+
+      {showForm ? (
+        <div className="mb-4 rounded-xl border border-brand-800 bg-brand-950/60 p-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                Date *
+              </label>
+              <input
+                type="date"
+                value={form.date_facture}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, date_facture: e.target.value }))
+                }
+                className="input w-full"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                Montant ($) *
+              </label>
+              <input
+                inputMode="decimal"
+                value={form.montant}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, montant: e.target.value }))
+                }
+                placeholder="350"
+                className="input w-full font-mono"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                Logement
+              </label>
+              <select
+                value={form.logement_id}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, logement_id: e.target.value }))
+                }
+                className="input w-full"
+              >
+                <option value="">Immeuble (commun)</option>
+                {logements.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.numero}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                Fournisseur
+              </label>
+              <input
+                value={form.fournisseur}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, fournisseur: e.target.value }))
+                }
+                placeholder="Ex. Plomberie Tremblay"
+                className="input w-full"
+              />
+            </div>
+          </div>
+          <div className="mt-3">
+            <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-white/50">
+              Description
+            </label>
+            <input
+              value={form.description}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, description: e.target.value }))
+              }
+              placeholder="Ex. Réparation fuite sous l'évier"
+              className="input w-full"
+            />
+          </div>
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowForm(false)}
+              className="btn-secondary btn-sm"
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              onClick={() => void ajouter()}
+              disabled={busy}
+              className="btn-accent btn-sm"
+            >
+              {busy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Ajouter
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {data === null ? (
+        <Loading />
+      ) : data.rows.length === 0 ? (
+        <p className="text-xs text-white/50">
+          Aucune facture en {annee} — clique « + Facture » quand la
+          compagnie de gestion en envoie une.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-left text-sm">
+            <thead className="text-[10px] uppercase tracking-wider text-white/45">
+              <tr>
+                <th className="py-2 pr-3">Date</th>
+                <th className="py-2 pr-3">Logement</th>
+                <th className="py-2 pr-3">Fournisseur / description</th>
+                <th className="py-2 pr-3 text-right">Montant</th>
+                <th className="py-2 text-right"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-brand-800/70">
+              {data.rows.map((f) => (
+                <tr key={f.id}>
+                  <td className="py-2 pr-3 font-mono text-xs text-white/70">
+                    {f.date_facture}
+                  </td>
+                  <td className="py-2 pr-3 font-mono text-xs">
+                    {f.logement_id != null ? (
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={
+                          `/immobilier/logements/${f.logement_id}?from=immeuble` as any
+                        }
+                        className="text-accent-500 hover:underline"
+                      >
+                        {f.logement_numero || `#${f.logement_id}`}
+                      </Link>
+                    ) : (
+                      <span className="text-white/50">Commun</span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-3 text-xs text-white/70">
+                    {[f.fournisseur, f.description]
+                      .filter(Boolean)
+                      .join(" — ") || "—"}
+                  </td>
+                  <td className="py-2 pr-3 text-right font-mono text-xs text-white">
+                    {fmtCurrency(f.montant)}
+                  </td>
+                  <td className="py-2 text-right">
+                    <button
+                      type="button"
+                      onClick={() => void supprimer(f)}
+                      title="Supprimer cette facture"
+                      className="text-[11px] text-white/40 transition hover:text-rose-300"
+                    >
+                      Supprimer
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Section>
   );
 }
