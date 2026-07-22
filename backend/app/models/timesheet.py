@@ -112,6 +112,71 @@ class Timesheet(Base, TimestampUpdateMixin):
     notes_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
+class TimesheetUserRate(Base, TimestampUpdateMixin):
+    """Taux de refacturation PROPRE à un couple (employé, compagnie).
+
+    Chaque employé a son taux horaire et son taux de refacturation (sur la
+    feuille), et le taux de refacturation peut en plus varier par compagnie
+    POUR CET EMPLOYÉ (retour Phil 2026-07-22). Héritage d'une ligne :
+    override employé → taux de la compagnie → défaut de la feuille.
+    ``refacturable`` NULL = hérite du réglage de la compagnie.
+    """
+
+    __tablename__ = "timesheet_user_rates"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "company_id", name="uq_timesheet_user_rate"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("timesheet_companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    taux_refacturation: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )
+    refacturable: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True
+    )
+
+
+class TimesheetReglement(Base, TimestampUpdateMixin):
+    """Règlement enregistré contre le cumul d'un employé.
+
+    ``kind`` = "paie" (on a payé l'employé) ou "refacturation" (on a
+    refacturé la compagnie ``company_id`` pour ses heures). Le dashboard
+    calcule solde = dû cumulé (toutes les feuilles) − règlements.
+    """
+
+    __tablename__ = "timesheet_reglements"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    company_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("timesheet_companies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    montant: Mapped[float] = mapped_column(Float, nullable=False)
+    date_reglement: Mapped[date] = mapped_column(Date, nullable=False)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
 class TimesheetEntry(Base, TimestampUpdateMixin):
     """Heures saisies pour (feuille, compagnie, jour).
 

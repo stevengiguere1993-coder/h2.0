@@ -22,6 +22,8 @@ from app.models.timesheet import (
     Timesheet,
     TimesheetCompany,
     TimesheetEntry,
+    TimesheetReglement,
+    TimesheetUserRate,
 )
 from app.models.user import User
 
@@ -94,10 +96,39 @@ async def _ensure_seed(db) -> None:
     await db.flush()
 
 
-def _effective_rate(company: TimesheetCompany, ts: Timesheet) -> float:
+def _line_rate(
+    company: TimesheetCompany,
+    ts: Timesheet,
+    ov: Optional[TimesheetUserRate],
+) -> tuple[float, bool, str]:
+    """Taux effectif d'une ligne : (taux, refacturable, source).
+
+    Héritage : override (employé, compagnie) → taux de la compagnie →
+    taux de refacturation par défaut de la feuille. ``source`` vaut
+    "employe" | "compagnie" | "defaut" (affiché dans l'UI).
+    """
+    if ov is not None and ov.refacturable is not None:
+        refacturable = bool(ov.refacturable)
+    else:
+        refacturable = bool(getattr(company, "refacturable", True))
+    if ov is not None and ov.taux_refacturation is not None:
+        return float(ov.taux_refacturation), refacturable, "employe"
     if company.taux_refacturation is not None:
-        return float(company.taux_refacturation)
-    return float(ts.taux_refacturation or 0.0)
+        return float(company.taux_refacturation), refacturable, "compagnie"
+    return float(ts.taux_refacturation or 0.0), refacturable, "defaut"
+
+
+async def _load_user_rates(
+    db, user_id: int
+) -> Dict[int, TimesheetUserRate]:
+    rows = (
+        await db.execute(
+            select(TimesheetUserRate).where(
+                TimesheetUserRate.user_id == user_id
+            )
+        )
+    ).scalars().all()
+    return {r.company_id: r for r in rows}
 
 
 # ── Schémas ────────────────────────────────────────────────────────────
@@ -155,6 +186,11 @@ class LigneOut(BaseModel):
     company_id: int
     label: str
     taux_refacturation: float
+    #: D'où vient le taux effectif : "employe" | "compagnie" | "defaut".
+    taux_source: str = "defaut"
+    #: Override brut (employé, compagnie) — pour l'éditeur de taux.
+    taux_perso: Optional[float] = None
+    refacturable_perso: Optional[bool] = None
     refacturable: bool = True
     jours: List[float]
     total: float
@@ -207,6 +243,70 @@ class TimesheetPatch(BaseModel):
     taux_horaire: Optional[float] = Field(default=None, ge=0)
     taux_refacturation: Optional[float] = Field(default=None, ge=0)
     notes: Optional[Dict[str, str]] = None
+
+
+class UserRateIn(BaseModel):
+    """Remplace l'override (employé, compagnie). Les deux champs à NULL =
+    suppression de l'override (retour à l'héritage compagnie/feuille)."""
+
+    user_id: int
+    company_id: int
+    taux_refacturation: Optional[float] = Field(default=None, ge=0)
+    refacturable: Optional[bool] = None
+
+
+REGLEMENT_KINDS = ("paie", "refacturation")
+
+
+class ReglementIn(BaseModel):
+    kind: str
+    user_id: int
+    company_id: Optional[int] = None
+    montant: float = Field(gt=0)
+    date_reglement: Optional[date] = None
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class ReglementOut(BaseModel):
+    id: int
+    kind: str
+    user_id: int
+    employee_name: str = ""
+    company_id: Optional[int] = None
+    company_label: Optional[str] = None
+    montant: float
+    date_reglement: str
+    note: Optional[str] = None
+    created_by: Optional[str] = None
+
+
+class DashboardCompanyRow(BaseModel):
+    company_id: int
+    label: str
+    heures: float
+    due: float
+    regle: float
+    solde: float
+
+
+class DashboardEmployee(BaseModel):
+    user_id: int
+    name: str
+    total_heures: float
+    paie_due: float
+    paie_reglee: float
+    paie_solde: float
+    refac_due: float
+    refac_reglee: float
+    refac_solde: float
+    companies: List[DashboardCompanyRow]
+
+
+class DashboardOut(BaseModel):
+    employees: List[DashboardEmployee]
+    total_paie_solde: float
+    total_refac_solde: float
+    reglements: List[ReglementOut]
 
 
 # ── Compagnies (liste partagée) ────────────────────────────────────────
@@ -413,6 +513,7 @@ async def _build_detail(
         except Exception:  # noqa: BLE001
             notes = {}
 
+    overrides = await _load_user_rates(db, ts.user_id)
     lignes: List[LigneOut] = []
     totaux_jour = [0.0] * TIMESHEET_DAYS
     total_heures = 0.0
@@ -420,8 +521,10 @@ async def _build_detail(
     for c in companies:
         jours = grid[c.id]
         tot = round(sum(jours), 2)
-        refacturable = bool(getattr(c, "refacturable", True))
-        rate = _effective_rate(c, ts) if refacturable else 0.0
+        ov = overrides.get(c.id)
+        rate, refacturable, source = _line_rate(c, ts, ov)
+        if not refacturable:
+            rate = 0.0
         refac = round(tot * rate, 2)
         for i in range(TIMESHEET_DAYS):
             totaux_jour[i] += jours[i]
@@ -432,6 +535,9 @@ async def _build_detail(
                 company_id=c.id,
                 label=c.label,
                 taux_refacturation=rate,
+                taux_source=source,
+                taux_perso=(ov.taux_refacturation if ov else None),
+                refacturable_perso=(ov.refacturable if ov else None),
                 refacturable=refacturable,
                 jours=jours,
                 total=tot,
@@ -655,6 +761,295 @@ async def list_timesheets(
             )
         )
     return out
+
+
+# ── Taux par employé × compagnie ───────────────────────────────────────
+
+
+@router.post("/user-rates")
+async def upsert_user_rate(
+    payload: UserRateIn, db: DBSession, user: CurrentUser
+) -> dict:
+    """Pose (ou retire) le taux de refacturation propre à un couple
+    (employé, compagnie). Les deux champs à NULL = suppression."""
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    if not await db.get(User, payload.user_id):
+        raise HTTPException(status_code=404, detail="Employé introuvable")
+    if not await db.get(TimesheetCompany, payload.company_id):
+        raise HTTPException(status_code=404, detail="Compagnie introuvable")
+    ov = (
+        await db.execute(
+            select(TimesheetUserRate).where(
+                TimesheetUserRate.user_id == payload.user_id,
+                TimesheetUserRate.company_id == payload.company_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if payload.taux_refacturation is None and payload.refacturable is None:
+        if ov:
+            await db.delete(ov)
+    elif ov:
+        ov.taux_refacturation = payload.taux_refacturation
+        ov.refacturable = payload.refacturable
+    else:
+        db.add(
+            TimesheetUserRate(
+                user_id=payload.user_id,
+                company_id=payload.company_id,
+                taux_refacturation=payload.taux_refacturation,
+                refacturable=payload.refacturable,
+            )
+        )
+    await db.commit()
+    return {"ok": True}
+
+
+# ── Dashboard soldes (paie + refacturation) ────────────────────────────
+
+
+def _reglement_out(
+    r: TimesheetReglement,
+    users: Dict[int, User],
+    companies: Dict[int, TimesheetCompany],
+) -> ReglementOut:
+    emp = users.get(r.user_id)
+    comp = companies.get(r.company_id) if r.company_id else None
+    creator = users.get(r.created_by_user_id) if r.created_by_user_id else None
+    return ReglementOut(
+        id=r.id,
+        kind=r.kind,
+        user_id=r.user_id,
+        employee_name=(
+            (emp.display_name or emp.email or "") if emp else ""
+        ),
+        company_id=r.company_id,
+        company_label=(comp.label if comp else None),
+        montant=float(r.montant or 0.0),
+        date_reglement=r.date_reglement.isoformat(),
+        note=r.note,
+        created_by=(
+            (creator.display_name or creator.email) if creator else None
+        ),
+    )
+
+
+@router.get("/dashboard", response_model=DashboardOut)
+async def timesheet_dashboard(
+    db: DBSession, user: CurrentUser
+) -> DashboardOut:
+    """Soldes cumulés par employé : paie due (toutes les feuilles, heures ×
+    taux horaire de chaque feuille) et refacturation due par compagnie
+    (heures × taux effectif), moins les règlements enregistrés."""
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    await _ensure_seed(db)
+
+    sheets = (await db.execute(select(Timesheet))).scalars().all()
+    sheets_by_id = {s.id: s for s in sheets}
+    companies = {
+        c.id: c
+        for c in (await db.execute(select(TimesheetCompany))).scalars().all()
+    }
+    overrides = {
+        (o.user_id, o.company_id): o
+        for o in (
+            await db.execute(select(TimesheetUserRate))
+        ).scalars().all()
+    }
+    sums = (
+        await db.execute(
+            select(
+                TimesheetEntry.timesheet_id,
+                TimesheetEntry.company_id,
+                func.sum(TimesheetEntry.hours),
+            ).group_by(
+                TimesheetEntry.timesheet_id, TimesheetEntry.company_id
+            )
+        )
+    ).all()
+
+    hours_by_user: Dict[int, float] = {}
+    paie_due: Dict[int, float] = {}
+    comp_hours: Dict[tuple, float] = {}
+    comp_due: Dict[tuple, float] = {}
+    for ts_id, cid, h in sums:
+        ts = sheets_by_id.get(ts_id)
+        c = companies.get(cid)
+        if not ts or not c or not h:
+            continue
+        h = float(h)
+        uid = ts.user_id
+        hours_by_user[uid] = hours_by_user.get(uid, 0.0) + h
+        paie_due[uid] = (
+            paie_due.get(uid, 0.0) + h * float(ts.taux_horaire or 0.0)
+        )
+        rate, refacturable, _src = _line_rate(
+            c, ts, overrides.get((uid, cid))
+        )
+        due = h * rate if refacturable else 0.0
+        key = (uid, cid)
+        comp_hours[key] = comp_hours.get(key, 0.0) + h
+        comp_due[key] = comp_due.get(key, 0.0) + due
+
+    regs = (
+        await db.execute(
+            select(TimesheetReglement).order_by(
+                TimesheetReglement.date_reglement.desc(),
+                TimesheetReglement.id.desc(),
+            )
+        )
+    ).scalars().all()
+    paie_reglee: Dict[int, float] = {}
+    refac_reglee: Dict[int, float] = {}
+    comp_reglee: Dict[tuple, float] = {}
+    for r in regs:
+        m = float(r.montant or 0.0)
+        if r.kind == "paie":
+            paie_reglee[r.user_id] = paie_reglee.get(r.user_id, 0.0) + m
+        else:
+            refac_reglee[r.user_id] = refac_reglee.get(r.user_id, 0.0) + m
+            if r.company_id:
+                key = (r.user_id, r.company_id)
+                comp_reglee[key] = comp_reglee.get(key, 0.0) + m
+
+    user_ids = (
+        set(hours_by_user)
+        | set(paie_reglee)
+        | set(refac_reglee)
+        | {r.user_id for r in regs}
+    )
+    users: Dict[int, User] = {}
+    if user_ids or regs:
+        wanted = set(user_ids) | {
+            r.created_by_user_id for r in regs if r.created_by_user_id
+        }
+        if wanted:
+            for u in (
+                await db.execute(select(User).where(User.id.in_(wanted)))
+            ).scalars().all():
+                users[u.id] = u
+
+    employees: List[DashboardEmployee] = []
+    for uid in user_ids:
+        emp = users.get(uid)
+        comp_keys = [
+            k for k in (set(comp_hours) | set(comp_reglee)) if k[0] == uid
+        ]
+        comp_keys.sort(
+            key=lambda k: (
+                companies[k[1]].position if k[1] in companies else 999,
+                k[1],
+            )
+        )
+        rows: List[DashboardCompanyRow] = []
+        for k in comp_keys:
+            cid = k[1]
+            due = round(comp_due.get(k, 0.0), 2)
+            regle = round(comp_reglee.get(k, 0.0), 2)
+            if not due and not regle:
+                continue
+            rows.append(
+                DashboardCompanyRow(
+                    company_id=cid,
+                    label=(
+                        companies[cid].label
+                        if cid in companies
+                        else f"Compagnie {cid}"
+                    ),
+                    heures=round(comp_hours.get(k, 0.0), 2),
+                    due=due,
+                    regle=regle,
+                    solde=round(due - regle, 2),
+                )
+            )
+        p_due = round(paie_due.get(uid, 0.0), 2)
+        p_reg = round(paie_reglee.get(uid, 0.0), 2)
+        r_due = round(sum(r.due for r in rows), 2)
+        r_reg = round(refac_reglee.get(uid, 0.0), 2)
+        employees.append(
+            DashboardEmployee(
+                user_id=uid,
+                name=(
+                    (emp.display_name or emp.email)
+                    if emp
+                    else f"Utilisateur {uid}"
+                ),
+                total_heures=round(hours_by_user.get(uid, 0.0), 2),
+                paie_due=p_due,
+                paie_reglee=p_reg,
+                paie_solde=round(p_due - p_reg, 2),
+                refac_due=r_due,
+                refac_reglee=r_reg,
+                refac_solde=round(r_due - r_reg, 2),
+                companies=rows,
+            )
+        )
+    employees.sort(key=lambda e: e.name.lower())
+    return DashboardOut(
+        employees=employees,
+        total_paie_solde=round(sum(e.paie_solde for e in employees), 2),
+        total_refac_solde=round(sum(e.refac_solde for e in employees), 2),
+        reglements=[
+            _reglement_out(r, users, companies) for r in regs[:100]
+        ],
+    )
+
+
+@router.post("/reglements", response_model=ReglementOut)
+async def create_reglement(
+    payload: ReglementIn, db: DBSession, user: CurrentUser
+) -> ReglementOut:
+    """Enregistre un règlement (paie versée ou refacturation encaissée) —
+    le solde du dashboard diminue d'autant."""
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    if payload.kind not in REGLEMENT_KINDS:
+        raise HTTPException(status_code=422, detail="kind invalide")
+    emp = await db.get(User, payload.user_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employé introuvable")
+    comp = None
+    if payload.company_id is not None:
+        comp = await db.get(TimesheetCompany, payload.company_id)
+        if not comp:
+            raise HTTPException(status_code=404, detail="Compagnie introuvable")
+    if payload.kind == "refacturation" and comp is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Une refacturation se règle par compagnie",
+        )
+    r = TimesheetReglement(
+        kind=payload.kind,
+        user_id=payload.user_id,
+        company_id=payload.company_id,
+        montant=float(payload.montant),
+        date_reglement=payload.date_reglement or _today(),
+        note=(payload.note or None),
+        created_by_user_id=user.id,
+    )
+    db.add(r)
+    await db.flush()
+    await db.commit()
+    return _reglement_out(
+        r,
+        {emp.id: emp, user.id: user},
+        ({comp.id: comp} if comp else {}),
+    )
+
+
+@router.delete("/reglements/{reglement_id}")
+async def delete_reglement(
+    reglement_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    r = await db.get(TimesheetReglement, reglement_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Règlement introuvable")
+    await db.delete(r)
+    await db.commit()
+    return {"ok": True}
 
 
 @router.get("/{timesheet_id}", response_model=TimesheetDetail)
