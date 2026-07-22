@@ -112,6 +112,12 @@ _TAL_LABELS = {
         "Visite ou travaux mineurs avec préavis de 24 h (art. 1931-1933 "
         "C.c.Q.) — envoi par courriel, sans signature.",
     ),
+    "demande_assurance": (
+        "Demande de preuve d'assurance (courriel)",
+        "Courriel annuel demandant l'attestation d'assurance habitation "
+        "du locataire — s'envoie depuis Suivis annuels → Assurances. Le "
+        "titre du gabarit = l'objet du courriel.",
+    ),
 }
 
 
