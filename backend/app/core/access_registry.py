@@ -179,8 +179,12 @@ PAGES: list[PageEntry] = [
        "/entreprises/kratos"),
     _p("entreprises.rencontres", "Rencontres", "entreprises", "admin",
        "/entreprises/rencontres"),
+    # Accessible aux EMPLOYÉS : chacun ne voit que SA feuille (le backend
+    # bloque user_id pour les non-gestionnaires) — permet de donner un
+    # compte « feuille de temps seulement » (retour Phil 2026-07-22,
+    # employée Madagascar).
     _p("entreprises.feuille_de_temps", "Feuille de temps", "entreprises",
-       "admin", "/entreprises/feuille-de-temps"),
+       "employee", "/entreprises/feuille-de-temps"),
     _p("entreprises.organigramme", "Organigramme", "entreprises", "admin",
        "/entreprises/organigramme"),
     _p("entreprises.distribution_taches", "Distribution des tâches",
