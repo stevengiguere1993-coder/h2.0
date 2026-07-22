@@ -85,6 +85,7 @@ type Logement = {
   nb_chambres?: number | null;
   nb_sdb?: number | null;
   superficie_pi2?: number | null;
+  location_en_chambres?: boolean;
   etage?: number | null;
   type: string;
   status: string;
@@ -2134,7 +2135,9 @@ function LogementsTab({
               >
                 <td className="px-4 py-2 font-bold text-white">{l.numero}</td>
                 <td className="px-4 py-2 text-xs text-white/70">
-                  {fmtPieces(l.nb_pieces_decimal)}
+                  {l.location_en_chambres
+                    ? "Chambre"
+                    : fmtPieces(l.nb_pieces_decimal)}
                 </td>
                 <td className="px-4 py-2 text-right font-mono text-xs text-white/70">
                   {l.superficie_pi2 ? `${l.superficie_pi2} pi²` : "—"}

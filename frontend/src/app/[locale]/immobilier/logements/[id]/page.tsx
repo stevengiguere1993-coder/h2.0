@@ -608,7 +608,11 @@ export default function LogementDetailPage({
                     <Row label="Type" value={lg.type} />
                     <Row
                       label="Pièces"
-                      value={fmtPieces(lg.nb_pieces_decimal)}
+                      value={
+                        lg.location_en_chambres
+                          ? "Chambre"
+                          : fmtPieces(lg.nb_pieces_decimal)
+                      }
                     />
                     <Row
                       label="Chambres"
@@ -627,10 +631,6 @@ export default function LogementDetailPage({
                           ? `${lg.superficie_pi2} pi²`
                           : "—"
                       }
-                    />
-                    <Row
-                      label="Loué en chambre"
-                      value={lg.location_en_chambres ? "Oui" : "Non"}
                     />
                     <Row
                       label="Étage"

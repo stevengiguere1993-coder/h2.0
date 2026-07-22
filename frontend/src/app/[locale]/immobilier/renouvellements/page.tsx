@@ -41,70 +41,292 @@ type RenouvellementOverview = {
   assurance_confirmee_le?: string | null;
 };
 
-/** Coche « assurance confirmée » (1×/année) — cliquable, état local
- *  optimiste pour éviter de recharger toute la liste. */
-function AssuranceChip({
-  locataireId,
-  confirmeeLe
-}: {
-  locataireId: number | null | undefined;
-  confirmeeLe: string | null | undefined;
-}) {
-  const [date, setDate] = useState<string | null>(confirmeeLe ?? null);
-  const [busy, setBusy] = useState(false);
-  if (locataireId == null) return null;
-  const valide =
-    date != null &&
-    Date.now() - new Date(`${date}T00:00:00`).getTime() <
-      365 * 24 * 3600 * 1000;
+// ── Onglet Assurances — suivi annuel de la preuve d'assurance ─────────
+// (retour Steven/Phil 2026-07-22 : liste de tous les logements/locataires,
+// demande de preuve par courriel + confirmation ICI, plus dans les lignes
+// des autres onglets.)
 
-  async function confirmer() {
+type AssuranceRow = {
+  locataire_id: number;
+  locataire_nom: string;
+  locataire_email: string | null;
+  bail_id: number;
+  immeuble_id: number | null;
+  immeuble_name: string | null;
+  logement_id: number | null;
+  logement_numero: string | null;
+  assurance_confirmee_le: string | null;
+  statut: "ok" | "a_reconfirmer" | "jamais";
+};
+
+type AssuranceOverview = {
+  rows: AssuranceRow[];
+  nb_ok: number;
+  nb_a_reconfirmer: number;
+  nb_jamais: number;
+};
+
+const ASSU_BADGE: Record<AssuranceRow["statut"], [string, string]> = {
+  ok: ["badge-emerald", "Confirmée"],
+  a_reconfirmer: ["badge-amber", "À reconfirmer"],
+  jamais: ["badge-rose", "Jamais confirmée"]
+};
+
+function AssurancesTab() {
+  const [data, setData] = useState<AssuranceOverview | null>(null);
+  const [q, setQ] = useState("");
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const r = await authedFetch("/api/v1/immobilier/assurances/overview");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setData((await r.json()) as AssuranceOverview);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function confirmer(row: AssuranceRow) {
     if (
       !window.confirm(
-        "Confirmer que la preuve d'assurance du locataire a été vérifiée aujourd'hui ?"
+        `Confirmer que la preuve d'assurance de ${row.locataire_nom} a été vérifiée aujourd'hui ?`
       )
     )
       return;
-    setBusy(true);
+    setBusyId(row.locataire_id);
+    setMsg(null);
     try {
-      const t = new Date();
-      const iso = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(
-        2,
-        "0"
-      )}-${String(t.getDate()).padStart(2, "0")}`;
       const r = await authedFetch(
-        `/api/v1/immobilier/locataires/${locataireId}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ assurance_confirmee_le: iso })
-        }
+        `/api/v1/immobilier/locataires/${row.locataire_id}/assurance/confirmer`,
+        { method: "POST" }
       );
-      if (r.ok) setDate(iso);
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      setMsg(`Assurance de ${row.locataire_nom} confirmée.`);
+      await load();
+    } catch (e) {
+      setErr(`Confirmation échouée : ${(e as Error).message}`);
     } finally {
-      setBusy(false);
+      setBusyId(null);
     }
   }
 
+  async function demander(row: AssuranceRow) {
+    if (
+      !window.confirm(
+        `Envoyer un courriel à ${row.locataire_nom} (${row.locataire_email}) pour demander sa preuve d'assurance habitation ?`
+      )
+    )
+      return;
+    setBusyId(row.locataire_id);
+    setMsg(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/locataires/${row.locataire_id}/assurance/demande`,
+        { method: "POST" }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      setMsg(`Demande de preuve envoyée à ${row.locataire_email}.`);
+    } catch (e) {
+      setErr(`Envoi échoué : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const rows = (data?.rows || []).filter((r) => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return true;
+    return `${r.locataire_nom} ${r.immeuble_name || ""} ${
+      r.logement_numero || ""
+    }`
+      .toLowerCase()
+      .includes(needle);
+  });
+
   return (
-    <button
-      type="button"
-      disabled={busy}
-      onClick={() => void confirmer()}
-      title={
-        valide
-          ? `Assurance confirmée le ${date} — cliquer pour reconfirmer aujourd'hui`
-          : date
-            ? `Dernière confirmation le ${date} (plus de 12 mois) — cliquer pour confirmer aujourd'hui`
-            : "Assurance jamais confirmée — cliquer pour confirmer aujourd'hui"
-      }
-      className={`mt-1 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold transition disabled:opacity-50 ${
-        valide
-          ? "bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
-          : "bg-amber-500/15 text-amber-300 hover:bg-amber-500/25"
-      }`}
-    >
-      {valide ? "✓ Assurance OK" : "Assurance à confirmer"}
-    </button>
+    <div className="mt-4">
+      {data ? (
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+            <p className="text-[11px] uppercase tracking-wider text-white/50">
+              Confirmées (&lt; 12 mois)
+            </p>
+            <p className="mt-1 text-2xl font-bold text-emerald-300">
+              {data.nb_ok}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+            <p className="text-[11px] uppercase tracking-wider text-white/50">
+              À reconfirmer
+            </p>
+            <p className="mt-1 text-2xl font-bold text-amber-300">
+              {data.nb_a_reconfirmer}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+            <p className="text-[11px] uppercase tracking-wider text-white/50">
+              Jamais confirmées
+            </p>
+            <p className="mt-1 text-2xl font-bold text-rose-300">
+              {data.nb_jamais}
+            </p>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <div className="relative max-w-md flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Recherche locataire / immeuble / logement…"
+            className="input w-full pl-9"
+          />
+        </div>
+        {data ? (
+          <span className="text-xs text-white/50">
+            {rows.length} / {data.rows.length}
+          </span>
+        ) : null}
+      </div>
+
+      {msg ? (
+        <p className="mt-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          <CheckCircle2 className="mr-1.5 inline h-3.5 w-3.5" />
+          {msg}
+        </p>
+      ) : null}
+      {err ? (
+        <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+          {err}
+        </p>
+      ) : null}
+
+      {data === null ? (
+        <p className="mt-6 text-xs text-white/50">
+          <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Chargement…
+        </p>
+      ) : rows.length === 0 ? (
+        <p className="mt-6 rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
+          Aucun locataire avec bail actif.
+        </p>
+      ) : (
+        <div className="mt-4 overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
+              <tr>
+                <th className="px-4 py-2.5">Logement</th>
+                <th className="px-4 py-2.5">Locataire</th>
+                <th className="px-4 py-2.5">Assurance</th>
+                <th className="px-4 py-2.5 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-brand-800">
+              {rows.map((r) => {
+                const [badge, label] = ASSU_BADGE[r.statut];
+                return (
+                  <tr
+                    key={`${r.bail_id}-${r.locataire_id}`}
+                    className="hover:bg-brand-950/50"
+                  >
+                    <td className="px-4 py-2.5">
+                      {r.immeuble_id != null ? (
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={`/immobilier/immeubles/${r.immeuble_id}` as any}
+                          className="block font-bold text-white hover:text-accent-500"
+                        >
+                          {r.immeuble_name}
+                        </Link>
+                      ) : (
+                        <span className="font-bold text-white">
+                          {r.immeuble_name || "—"}
+                        </span>
+                      )}
+                      {r.logement_id != null ? (
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={`/immobilier/logements/${r.logement_id}` as any}
+                          className="text-[11px] font-mono text-accent-500 hover:underline"
+                        >
+                          {r.logement_numero || `#${r.logement_id}`}
+                        </Link>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={`/immobilier/locataires/${r.locataire_id}` as any}
+                        className="text-accent-500 hover:underline"
+                      >
+                        {r.locataire_nom}
+                      </Link>
+                      <div className="text-[10px] text-white/40">
+                        {r.locataire_email || "(pas d'email)"}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span className={`badge ${badge}`}>{label}</span>
+                      {r.assurance_confirmee_le ? (
+                        <div className="mt-0.5 text-[10px] text-white/40">
+                          dernière : {r.assurance_confirmee_le}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => void demander(r)}
+                          disabled={
+                            busyId === r.locataire_id ||
+                            !(r.locataire_email || "").trim()
+                          }
+                          title={
+                            (r.locataire_email || "").trim()
+                              ? "Courriel demandant la preuve d'assurance (manuel, journalisé)"
+                              : "Ajoute d'abord le courriel du locataire"
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
+                        >
+                          {busyId === r.locataire_id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Mail className="h-3 w-3" />
+                          )}
+                          Demander la preuve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void confirmer(r)}
+                          disabled={busyId === r.locataire_id}
+                          title="La preuve a été vérifiée aujourd'hui (journalisé dans la fiche)"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                        >
+                          <CheckCircle2 className="h-3 w-3" /> Confirmer
+                        </button>
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -146,9 +368,9 @@ function fmtCurrency(n: number | null | undefined): string {
 
 export default function RenouvellementsPage() {
   const [list, setList] = useState<RenouvellementOverview[] | null>(null);
-  const [tab, setTab] = useState<"renouvellements" | "releves31">(
-    "renouvellements"
-  );
+  const [tab, setTab] = useState<
+    "renouvellements" | "releves31" | "assurances"
+  >("renouvellements");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "todo" | "envoye">("todo");
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
@@ -266,7 +488,7 @@ export default function RenouvellementsPage() {
       <ImmobilierTopbar
         breadcrumbs={[
           { label: "Gestion immobilière", href: "/immobilier" },
-          { label: "Renouvellements" }
+          { label: "Suivis annuels" }
         ]}
       />
 
@@ -276,23 +498,24 @@ export default function RenouvellementsPage() {
             <ClipboardList className="h-5 w-5" />
           </span>
           <div>
-            <h1 className="text-2xl font-bold text-white">
-              Renouvellements &amp; Relevés 31
-            </h1>
+            <h1 className="text-2xl font-bold text-white">Suivis annuels</h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
               {tab === "renouvellements"
                 ? "Baux qui se terminent dans les 12 prochains mois. Rien ne part tout seul : chaque avis de modification (PDF + courriel) s'envoie à la main, bail par bail, après vérification."
-                : "Relevés 31 (Revenu Québec) : un par logement occupé au 31 décembre, copie à remettre au locataire avant le dernier jour de février."}
+                : tab === "releves31"
+                  ? "Relevés 31 (Revenu Québec) : un par logement occupé au 31 décembre, copie à remettre au locataire avant le dernier jour de février."
+                  : "Preuve d'assurance habitation de chaque locataire, à revalider une fois par année : demande la preuve par courriel puis confirme-la ici."}
             </p>
           </div>
         </header>
 
-        {/* Onglets Renouvellements | Relevés 31 (retour Phil 2026-07-20). */}
+        {/* Onglets Renouvellements | Relevés 31 | Assurances. */}
         <div className="mt-4 flex items-center gap-2">
           {(
             [
               ["renouvellements", "Renouvellements"],
-              ["releves31", "Relevés 31"]
+              ["releves31", "Relevés 31"],
+              ["assurances", "Assurances"]
             ] as const
           ).map(([key, label]) => (
             <button
@@ -311,10 +534,11 @@ export default function RenouvellementsPage() {
         </div>
 
         {tab === "releves31" ? <Releves31Tab /> : null}
+        {tab === "assurances" ? <AssurancesTab /> : null}
 
-        {/* Contenu Renouvellements — masqué (pas démonté) sur l'autre
-            onglet pour garder l'état des filtres. */}
-        <div className={tab === "releves31" ? "hidden" : ""}>
+        {/* Contenu Renouvellements — masqué (pas démonté) sur les autres
+            onglets pour garder l'état des filtres. */}
+        <div className={tab !== "renouvellements" ? "hidden" : ""}>
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <div className="relative max-w-md flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
@@ -439,10 +663,6 @@ export default function RenouvellementsPage() {
                       <div className="text-[10px] text-white/40">
                         {r.locataire_email || "(pas d'email)"}
                       </div>
-                      <AssuranceChip
-                        locataireId={r.locataire_id}
-                        confirmeeLe={r.assurance_confirmee_le}
-                      />
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-xs text-white/80">
                       {fmtCurrency(r.bail_loyer_mensuel)}
@@ -1208,10 +1428,6 @@ function Releves31Tab() {
                       <div className="text-[10px] text-white/40">
                         {r.locataire_email || "(pas d'email)"}
                       </div>
-                      <AssuranceChip
-                        locataireId={r.locataire_id}
-                        confirmeeLe={r.assurance_confirmee_le}
-                      />
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-xs text-white/80">
                       {fmtCurrency(r.loyer_31_dec)}

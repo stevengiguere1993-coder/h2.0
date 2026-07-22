@@ -345,7 +345,11 @@ export function LogementFiche({
                 className="input font-mono"
                 placeholder="3.5"
               />
-              {form.nb_pieces_decimal.trim() !== "" ? (
+              {enChambres ? (
+                <p className="mt-1 text-[11px] text-white/50">
+                  Affiché : Chambre (loué en chambre)
+                </p>
+              ) : form.nb_pieces_decimal.trim() !== "" ? (
                 <p className="mt-1 text-[11px] text-white/50">
                   Affiché : {fmtPieces(numOrNull(form.nb_pieces_decimal))}
                 </p>

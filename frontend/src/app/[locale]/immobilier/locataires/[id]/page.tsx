@@ -259,21 +259,14 @@ export default function LocataireDetailPage({
   }
 
   // Assurance locataire — confirmation annuelle (retour Steven 2026-07-20).
+  // Passe par les endpoints dédiés pour que chaque confirmation/demande
+  // soit JOURNALISÉE (historique visible plus bas — retour 2026-07-22).
   async function assuranceConfirmer(clear = false) {
     setDpaBusy(true);
     try {
-      const today = new Date();
-      const iso = `${today.getFullYear()}-${String(
-        today.getMonth() + 1
-      ).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
       const r = await authedFetch(
-        `/api/v1/immobilier/locataires/${locataireId}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            assurance_confirmee_le: clear ? null : iso
-          })
-        }
+        `/api/v1/immobilier/locataires/${locataireId}/assurance/confirmer`,
+        { method: clear ? "DELETE" : "POST" }
       );
       if (!r.ok) {
         const t = await r.text();
@@ -1238,6 +1231,33 @@ export default function LocataireDetailPage({
                   </button>
                 ) : null}
               </div>
+              {/* Historique : confirmations et demandes journalisées. */}
+              {(() => {
+                const hist = (dossier?.communications || []).filter((c) =>
+                  c.contenu.toLowerCase().includes("assurance")
+                );
+                if (hist.length === 0) return null;
+                return (
+                  <div className="mt-3 border-t border-brand-800 pt-2">
+                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                      Historique
+                    </p>
+                    <ul className="space-y-0.5">
+                      {hist.slice(0, 8).map((c) => (
+                        <li
+                          key={c.id}
+                          className="text-[11px] text-white/60"
+                        >
+                          <span className="text-white/40">
+                            {(c.created_at || "").slice(0, 10)}
+                          </span>{" "}
+                          — {c.contenu}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
             </section>
 
             {/* Documents — TOUT ce qui a été généré/envoyé pour ce
