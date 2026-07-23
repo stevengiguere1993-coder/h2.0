@@ -41,10 +41,12 @@ type Transaction = {
   label: string;
   revenus: number;
   montant: number;
-  type: "mois" | "complement" | "en_cours" | "relocation";
+  type: "mois" | "complement" | "en_cours" | "relocation" | "manuel";
   facturable: boolean;
   facturable_des?: string | null;
   dossier_id?: number | null;
+  //: Identifiant local d'un frais manuel (brouillon côté client).
+  uid?: number;
 };
 
 type Row = {
@@ -94,6 +96,8 @@ type PanierLigne = {
   mois?: string;
   dossier_id?: number;
   libelle?: string;
+  //: uid du brouillon de frais manuel (retiré de la liste une fois facturé).
+  manuelUid?: number;
   label: string;
   revenus: number;
   complement: boolean;
@@ -149,11 +153,16 @@ export default function FacturationImmoPage() {
   const [panier, setPanier] = useState<PanierLigne[]>([]);
   const [creating, setCreating] = useState(false);
 
-  // Frais manuel (mini-formulaire dans le panier).
+  // Frais manuels (bouton à droite des filtres) : des BROUILLONS locaux
+  // qui apparaissent comme transactions dans la carte du client — même
+  // principe qu'un frais de gestion (« Ajouter » → panier).
   const [manuelOpen, setManuelOpen] = useState(false);
   const [manuelImmeuble, setManuelImmeuble] = useState("");
   const [manuelLibelle, setManuelLibelle] = useState("");
   const [manuelMontant, setManuelMontant] = useState("");
+  const [fraisManuels, setFraisManuels] = useState<
+    { uid: number; immeuble_id: number; libelle: string; montant: number }[]
+  >([]);
   const manuelSeq = useRef(0);
 
   const load = useCallback(async () => {
@@ -221,19 +230,31 @@ export default function FacturationImmoPage() {
     const uid =
       tx.type === "relocation"
         ? `r-${tx.dossier_id}`
-        : `g-${row.immeuble_id}-${tx.mois}`;
+        : tx.type === "manuel"
+          ? `m-${tx.uid}`
+          : `g-${row.immeuble_id}-${tx.mois}`;
     if (panier.some((l) => l.uid === uid)) return;
     if (!validerClient(row)) return;
     setPanier((prev) => [
       ...prev,
       {
         uid,
-        kind: tx.type === "relocation" ? "relocation" : "gestion",
+        kind:
+          tx.type === "relocation"
+            ? "relocation"
+            : tx.type === "manuel"
+              ? "manuel"
+              : "gestion",
         immeuble_id: row.immeuble_id,
         immeuble_name: row.name,
-        mois: tx.type === "relocation" ? undefined : tx.mois,
+        mois:
+          tx.type === "relocation" || tx.type === "manuel"
+            ? undefined
+            : tx.mois,
         dossier_id:
           tx.type === "relocation" ? tx.dossier_id || undefined : undefined,
+        libelle: tx.type === "manuel" ? tx.label : undefined,
+        manuelUid: tx.type === "manuel" ? tx.uid : undefined,
         label: tx.label,
         revenus: tx.revenus,
         complement: tx.type === "complement",
@@ -242,6 +263,8 @@ export default function FacturationImmoPage() {
     ]);
   };
 
+  /** Crée un BROUILLON de frais manuel — il apparaît dans la carte du
+   *  client, prêt à être ajouté à la facture comme les autres. */
   const ajouterFraisManuel = () => {
     const row = (data?.rows || []).find(
       (r) => String(r.immeuble_id) === manuelImmeuble
@@ -260,20 +283,15 @@ export default function FacturationImmoPage() {
       setMsg({ ok: false, text: "Le montant du frais doit être supérieur à 0 $." });
       return;
     }
-    if (!validerClient(row)) return;
+    setMsg(null);
     manuelSeq.current += 1;
-    setPanier((prev) => [
+    setFraisManuels((prev) => [
       ...prev,
       {
-        uid: `m-${manuelSeq.current}`,
-        kind: "manuel",
+        uid: manuelSeq.current,
         immeuble_id: row.immeuble_id,
-        immeuble_name: row.name,
         libelle,
-        label: libelle,
-        revenus: 0,
-        complement: false,
-        montant: String(montant)
+        montant
       }
     ]);
     setManuelLibelle("");
@@ -281,10 +299,31 @@ export default function FacturationImmoPage() {
     setManuelOpen(false);
   };
 
+  const supprimerFraisManuel = (uid: number) => {
+    setFraisManuels((prev) => prev.filter((f) => f.uid !== uid));
+    retirerDuPanier(`m-${uid}`);
+  };
+
+  const manuelsDe = (row: Row): Transaction[] =>
+    fraisManuels
+      .filter((f) => f.immeuble_id === row.immeuble_id)
+      .map((f) => ({
+        mois: "",
+        label: f.libelle,
+        revenus: 0,
+        montant: f.montant,
+        type: "manuel" as const,
+        facturable: true,
+        uid: f.uid
+      }));
+
   const toutAjouter = (rows: Row[]) => {
     for (const row of rows) {
       for (const tx of row.a_facturer || []) {
         if (tx.facturable) ajouterAuPanier(row, tx);
+      }
+      for (const tx of manuelsDe(row)) {
+        ajouterAuPanier(row, tx);
       }
     }
   };
@@ -349,6 +388,15 @@ export default function FacturationImmoPage() {
         ok: true,
         text: `Facture QuickBooks ${d.doc_number ? `#${d.doc_number}` : ""} créée pour ${panierClient.name} : ${d.nb_lignes} ligne${d.nb_lignes > 1 ? "s" : ""}, ${money(d.total)} + taxes.`
       });
+      // Les brouillons de frais manuels facturés disparaissent des cartes.
+      const factures = panier
+        .filter((l) => l.kind === "manuel" && l.manuelUid != null)
+        .map((l) => l.manuelUid as number);
+      if (factures.length) {
+        setFraisManuels((prev) =>
+          prev.filter((f) => !factures.includes(f.uid))
+        );
+      }
       viderPanier();
       await load();
     } catch (e: any) {
@@ -410,22 +458,22 @@ export default function FacturationImmoPage() {
   );
   const filtresActifs = Boolean(filtreClient || filtreImmeuble);
 
-  const totalSolde = actifs.reduce((a, r) => a + (r.solde || 0), 0);
+  const totalSolde =
+    actifs.reduce((a, r) => a + (r.solde || 0), 0) +
+    fraisManuels.reduce((a, f) => a + f.montant, 0);
   const totalEnCours = actifs.reduce((a, r) => a + (r.a_venir || 0), 0);
 
   const dansPanier = (row: Row, tx: Transaction) =>
     panier.some((l) =>
       tx.type === "relocation"
         ? l.uid === `r-${tx.dossier_id}`
-        : l.uid === `g-${row.immeuble_id}-${tx.mois}`
+        : tx.type === "manuel"
+          ? l.uid === `m-${tx.uid}`
+          : l.uid === `g-${row.immeuble_id}-${tx.mois}`
     );
 
-  // Immeubles proposés pour un frais manuel (client du panier d'abord).
-  const immeublesManuels = actifs.filter(
-    (r) =>
-      r.qbo_customer_id &&
-      (!panierClient || r.qbo_customer_id === panierClient.id)
-  );
+  // Immeubles proposés pour un frais manuel (client QuickBooks requis).
+  const immeublesManuels = actifs.filter((r) => r.qbo_customer_id);
 
   return (
     <>
@@ -505,81 +553,20 @@ export default function FacturationImmoPage() {
                 </span>
               )}
             </h2>
-            <div className="flex items-center gap-2">
+            {panier.length > 0 && (
               <button
                 className="btn-secondary btn-xs"
-                onClick={() => setManuelOpen((v) => !v)}
-                title="Ajouter un frais libre à la facture (ex. déplacement, gestion d'un dossier spécial)"
+                onClick={viderPanier}
               >
-                <Plus className="h-3.5 w-3.5" /> Frais manuel
+                <X className="h-3.5 w-3.5" /> Vider
               </button>
-              {panier.length > 0 && (
-                <button
-                  className="btn-secondary btn-xs"
-                  onClick={viderPanier}
-                >
-                  <X className="h-3.5 w-3.5" /> Vider
-                </button>
-              )}
-            </div>
+            )}
           </div>
-
-          {manuelOpen && (
-            <div className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-brand-800 bg-brand-950/60 px-4 py-3">
-              <div>
-                <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-white/45">
-                  Immeuble
-                </label>
-                <select
-                  value={manuelImmeuble}
-                  onChange={(e) => setManuelImmeuble(e.target.value)}
-                  className="rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-sm text-white outline-none transition focus:border-accent-500"
-                >
-                  <option value="">— choisir —</option>
-                  {immeublesManuels.map((r) => (
-                    <option key={r.immeuble_id} value={String(r.immeuble_id)}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="min-w-[200px] flex-1">
-                <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-white/45">
-                  Description du frais
-                </label>
-                <input
-                  value={manuelLibelle}
-                  onChange={(e) => setManuelLibelle(e.target.value)}
-                  placeholder="Ex. Déplacement d'urgence, gestion de dossier…"
-                  className="w-full rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-accent-500"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-white/45">
-                  Montant
-                </label>
-                <input
-                  inputMode="decimal"
-                  value={manuelMontant}
-                  onChange={(e) => setManuelMontant(e.target.value)}
-                  placeholder="0.00"
-                  className="w-24 rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-right text-sm tabular-nums text-white outline-none transition placeholder:text-white/30 focus:border-accent-500"
-                />
-              </div>
-              <button
-                className="btn-accent btn-xs"
-                onClick={ajouterFraisManuel}
-              >
-                <Plus className="h-3.5 w-3.5" /> Ajouter
-              </button>
-            </div>
-          )}
 
           {panier.length === 0 ? (
             <div className="rounded-xl border border-dashed border-brand-800 px-5 py-8 text-center text-sm text-white/45">
               Aucune ligne pour l&apos;instant — clique «&nbsp;Ajouter&nbsp;»
-              sur une transaction d&apos;un client ci-dessous, ou ajoute un
-              frais manuel.
+              sur une transaction d&apos;un client ci-dessous.
             </div>
           ) : (
             <>
@@ -719,7 +706,65 @@ export default function FacturationImmoPage() {
               Réinitialiser
             </button>
           )}
+          <button
+            className="btn-secondary btn-xs ml-auto"
+            onClick={() => setManuelOpen((v) => !v)}
+            title="Ajouter un frais libre — il apparaît dans la carte du client, prêt à être ajouté à la facture"
+          >
+            <Plus className="h-3.5 w-3.5" /> Frais manuel
+          </button>
         </div>
+
+        {manuelOpen && (
+          <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-brand-800 bg-brand-900 px-4 py-3 shadow-card">
+            <div>
+              <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-white/45">
+                Immeuble
+              </label>
+              <select
+                value={manuelImmeuble}
+                onChange={(e) => setManuelImmeuble(e.target.value)}
+                className="rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-sm text-white outline-none transition focus:border-accent-500"
+              >
+                <option value="">— choisir —</option>
+                {immeublesManuels.map((r) => (
+                  <option key={r.immeuble_id} value={String(r.immeuble_id)}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="min-w-[200px] flex-1">
+              <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-white/45">
+                Description du frais
+              </label>
+              <input
+                value={manuelLibelle}
+                onChange={(e) => setManuelLibelle(e.target.value)}
+                placeholder="Ex. Déplacement d'urgence, gestion de dossier…"
+                className="w-full rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-accent-500"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-white/45">
+                Montant
+              </label>
+              <input
+                inputMode="decimal"
+                value={manuelMontant}
+                onChange={(e) => setManuelMontant(e.target.value)}
+                placeholder="0.00"
+                className="w-24 rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-right text-sm tabular-nums text-white outline-none transition placeholder:text-white/30 focus:border-accent-500"
+              />
+            </div>
+            <button
+              className="btn-accent btn-xs"
+              onClick={ajouterFraisManuel}
+            >
+              <Plus className="h-3.5 w-3.5" /> Créer le frais
+            </button>
+          </div>
+        )}
 
         {/* ── 2. CLIENTS ── */}
         {loading && !data ? (
@@ -737,13 +782,15 @@ export default function FacturationImmoPage() {
             ) : (
               <div className="grid gap-4 lg:grid-cols-2">
                 {clientsAffiches.map(([clientId, grp]) => {
-                  const txs = grp.rows.flatMap((row) =>
-                    (row.a_facturer || []).map((tx) => ({ row, tx }))
-                  );
-                  const soldeClient = grp.rows.reduce(
-                    (a, r) => a + (r.solde || 0),
-                    0
-                  );
+                  const txs = grp.rows.flatMap((row) => [
+                    ...(row.a_facturer || []).map((tx) => ({ row, tx })),
+                    ...manuelsDe(row).map((tx) => ({ row, tx }))
+                  ]);
+                  const soldeClient =
+                    grp.rows.reduce((a, r) => a + (r.solde || 0), 0) +
+                    txs
+                      .filter(({ tx }) => tx.type === "manuel")
+                      .reduce((a, { tx }) => a + tx.montant, 0);
                   const enCoursClient = grp.rows.reduce(
                     (a, r) => a + (r.a_venir || 0),
                     0
@@ -823,7 +870,9 @@ export default function FacturationImmoPage() {
                                 key={
                                   tx.type === "relocation"
                                     ? `r-${tx.dossier_id}`
-                                    : `g-${row.immeuble_id}-${tx.mois}`
+                                    : tx.type === "manuel"
+                                      ? `m-${tx.uid}`
+                                      : `g-${row.immeuble_id}-${tx.mois}`
                                 }
                                 className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border border-brand-800 bg-brand-950/60 px-3.5 py-2.5 text-sm transition ${
                                   enCours
@@ -865,6 +914,14 @@ export default function FacturationImmoPage() {
                                       relocation
                                     </span>
                                   )}
+                                  {tx.type === "manuel" && (
+                                    <span
+                                      className="badge badge-neutral shrink-0"
+                                      title="Frais ajouté à la main (bouton « Frais manuel »)"
+                                    >
+                                      manuel
+                                    </span>
+                                  )}
                                 </span>
                                 <span className="flex shrink-0 items-center gap-2.5">
                                   <span className="font-semibold tabular-nums text-white">
@@ -884,16 +941,29 @@ export default function FacturationImmoPage() {
                                       au panier
                                     </span>
                                   ) : (
-                                    <button
-                                      className="btn-secondary btn-xs whitespace-nowrap"
-                                      title="Ajouter cette ligne à la facture en préparation"
-                                      onClick={() =>
-                                        ajouterAuPanier(row, tx)
-                                      }
-                                    >
-                                      <Plus className="h-3.5 w-3.5" />
-                                      Ajouter
-                                    </button>
+                                    <>
+                                      <button
+                                        className="btn-secondary btn-xs whitespace-nowrap"
+                                        title="Ajouter cette ligne à la facture en préparation"
+                                        onClick={() =>
+                                          ajouterAuPanier(row, tx)
+                                        }
+                                      >
+                                        <Plus className="h-3.5 w-3.5" />
+                                        Ajouter
+                                      </button>
+                                      {tx.type === "manuel" && (
+                                        <button
+                                          className="rounded-lg p-1.5 text-white/40 transition hover:bg-rose-500/10 hover:text-rose-400"
+                                          title="Supprimer ce frais manuel"
+                                          onClick={() =>
+                                            supprimerFraisManuel(tx.uid!)
+                                          }
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      )}
+                                    </>
                                   )}
                                 </span>
                               </div>
