@@ -92,15 +92,6 @@ export default function NewAchatPage() {
     return m ? m[1] : "";
   };
 
-  // Pré-remplissage ?project_id=… (depuis une fiche projet).
-  useEffect(() => {
-    if (!prefilledProjectId || projectQuery) return;
-    const p = projects.find(
-      (x) => String(x.id) === String(prefilledProjectId)
-    );
-    if (p) setProjectQuery(projectOption(p));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, prefilledProjectId]);
   const [fournisseurId, setFournisseurId] = useState("");
   // Phase C — facture sous-traitant.
   const [kind, setKind] = useState<"material" | "sub_invoice">("material");
@@ -165,6 +156,17 @@ export default function NewAchatPage() {
   const [invoiceDate, setInvoiceDate] = useState(() => todayIso());
 
   const [projects, setProjects] = useState<Project[]>([]);
+
+  // Pré-remplissage ?project_id=… (depuis une fiche projet).
+  useEffect(() => {
+    if (!prefilledProjectId || projectQuery) return;
+    const p = projects.find(
+      (x) => String(x.id) === String(prefilledProjectId)
+    );
+    if (p) setProjectQuery(projectOption(p));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, prefilledProjectId]);
+
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<POMini[]>([]);
   const [showFournisseurModal, setShowFournisseurModal] = useState(false);
