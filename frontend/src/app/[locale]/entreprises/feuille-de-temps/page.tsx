@@ -87,7 +87,17 @@ type Company = {
   taux_refacturation?: number | null;
   refacturable?: boolean;
   heures_nr_autorisees?: boolean;
+  qbo_customer_id?: string | null;
+  qbo_customer_name?: string | null;
   is_active: boolean;
+};
+type QboOptions = {
+  connected: boolean;
+  error?: string | null;
+  customers: { id: string; name: string }[];
+  tax_codes: { id: string; name: string }[];
+  tax_code_id?: string | null;
+  tax_code_name?: string | null;
 };
 type TeamRow = {
   id: number | null;
@@ -767,8 +777,9 @@ export default function FeuilleDeTempsPage() {
                   {detail.lignes
                     .filter(
                       (l) =>
-                        showAllRates ||
-                        (computed.perCompany[l.company_id] || 0) > 0
+                        !l.nr_autorise &&
+                        (showAllRates ||
+                          (computed.perCompany[l.company_id] || 0) > 0)
                     )
                     .map((l) => (
                       <LigneRate
@@ -1133,7 +1144,9 @@ function Grille({
           </tr>
         </thead>
         <tbody>
-          {detail.lignes.map((l) => {
+          {detail.lignes
+            .filter((l) => !l.nr_autorise)
+            .map((l) => {
             const arr = cells[l.company_id] || [];
             const tot = perCompanyR[l.company_id] || 0;
             return (
@@ -1438,6 +1451,7 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Company | null>(null);
   const [adding, setAdding] = useState(false);
+  const [qboOpts, setQboOpts] = useState<QboOptions | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1451,6 +1465,32 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch("/api/v1/timesheets/qbo-options");
+        if (r.ok) setQboOpts(await r.json());
+      } catch {
+        /* noop */
+      }
+    })();
+  }, []);
+
+  const saveTaxCode = async (id: string) => {
+    const name =
+      qboOpts?.tax_codes.find((t) => t.id === id)?.name || "";
+    await authedFetch("/api/v1/timesheets/qbo-options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tax_code_id: id || null,
+        tax_code_name: name || null
+      })
+    });
+    setQboOpts((p) =>
+      p ? { ...p, tax_code_id: id || null, tax_code_name: name || null } : p
+    );
+  };
 
   const saveCompany = async (c: Partial<Company>, id?: number) => {
     if (id) {
@@ -1504,9 +1544,56 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
+      {/* Facturation QuickBooks : code de taxe (obligatoire pour créer
+          les factures) + association des clients par compagnie via le
+          crayon de chaque ligne. */}
+      <div className="mb-4 rounded-xl border border-[var(--qg-border)] bg-[var(--qg-bg)]/40 p-3">
+        <div className="text-sm font-medium">Facturation QuickBooks</div>
+        {!qboOpts ? (
+          <div className="mt-1 text-xs text-[var(--qg-text-faint)]">
+            Chargement…
+          </div>
+        ) : !qboOpts.connected ? (
+          <div className="mt-1 text-xs text-[var(--qg-text-faint)]">
+            Le QuickBooks de Gestion d&apos;entreprise n&apos;est pas
+            connecté — va dans Paramètres → Comptabilité → « QuickBooks —
+            autres pôles ».
+          </div>
+        ) : (
+          <>
+            <label className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-[var(--qg-text-faint)]">
+                Code de taxe des factures :
+              </span>
+              <select
+                value={qboOpts.tax_code_id || ""}
+                onChange={(e) => void saveTaxCode(e.target.value)}
+                className="rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--qg-accent)]"
+              >
+                <option value="">— choisir (obligatoire) —</option>
+                {qboOpts.tax_codes.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="mt-1 text-xs text-[var(--qg-text-faint)]">
+              Le client QuickBooks de chaque compagnie se choisit avec le
+              crayon de sa ligne (sinon : créé automatiquement avec le
+              même nom).
+            </p>
+            {qboOpts.error && (
+              <p className="mt-1 text-xs text-red-400">{qboOpts.error}</p>
+            )}
+          </>
+        )}
+      </div>
+
       {adding && (
         <CompanyEditor
           company={null}
+          qboOpts={qboOpts}
           onCancel={() => setAdding(false)}
           onSave={(c) => saveCompany(c)}
         />
@@ -1518,6 +1605,7 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
             <CompanyEditor
               key={c.id}
               company={c}
+              qboOpts={qboOpts}
               onCancel={() => setEditing(null)}
               onSave={(patch) => saveCompany(patch, c.id)}
             />
@@ -1535,9 +1623,17 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
                 {c.heures_nr_autorisees && (
                   <span
                     className="badge badge-neutral"
-                    title="La saisie d'heures non refacturables est permise sur cette compagnie"
+                    title="Compagnie interne : toutes ses heures sont non refacturables (payées, jamais facturées)"
                   >
-                    heures NR
+                    interne
+                  </span>
+                )}
+                {c.qbo_customer_name && (
+                  <span
+                    className="text-xs text-[var(--qg-text-faint)]"
+                    title="Client QuickBooks associé pour la facturation"
+                  >
+                    → QBO : {c.qbo_customer_name}
                   </span>
                 )}
               </div>
@@ -1561,16 +1657,19 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
 
 function CompanyEditor({
   company,
+  qboOpts,
   onCancel,
   onSave
 }: {
   company: Company | null;
+  qboOpts: QboOptions | null;
   onCancel: () => void;
   onSave: (c: Partial<Company>) => void;
 }) {
   const [label, setLabel] = useState(company?.label || "");
   const [active, setActive] = useState(company?.is_active ?? true);
   const [nrOk, setNrOk] = useState(company?.heures_nr_autorisees === true);
+  const [qboCust, setQboCust] = useState(company?.qbo_customer_id || "");
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--qg-accent)]/40 bg-[var(--qg-bg)]/40 p-3">
@@ -1581,6 +1680,21 @@ function CompanyEditor({
         placeholder="Nom de la compagnie"
         className="flex-1 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
       />
+      {qboOpts?.connected && (
+        <select
+          value={qboCust}
+          onChange={(e) => setQboCust(e.target.value)}
+          title="Client QuickBooks à facturer pour cette compagnie"
+          className="max-w-[240px] rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
+        >
+          <option value="">Client QBO : auto (même nom)</option>
+          {qboOpts.customers.map((cu) => (
+            <option key={cu.id} value={cu.id}>
+              {cu.name}
+            </option>
+          ))}
+        </select>
+      )}
       {company && (
         <label className="flex items-center gap-1.5 text-sm">
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
@@ -1589,7 +1703,7 @@ function CompanyEditor({
       )}
       <label
         className="flex cursor-pointer items-center gap-1.5 text-sm"
-        title="Permettre la saisie d'heures NON refacturables (bloc rosé de la grille) sur cette compagnie"
+        title="Compagnie interne : toutes ses heures vont dans le bloc non refacturable (payées, jamais facturées)"
       >
         <input
           type="checkbox"
@@ -1597,7 +1711,7 @@ function CompanyEditor({
           onChange={(e) => setNrOk(e.target.checked)}
           className="h-4 w-4 accent-[var(--qg-accent)]"
         />
-        Heures non refact.
+        Non refacturable (interne)
       </label>
       <button
         className={BTN_PRIMARY}
@@ -1606,6 +1720,11 @@ function CompanyEditor({
           onSave({
             label: label.trim(),
             heures_nr_autorisees: nrOk,
+            qbo_customer_id: qboCust,
+            qbo_customer_name: qboCust
+              ? qboOpts?.customers.find((cu) => cu.id === qboCust)?.name ||
+                ""
+              : "",
             ...(company ? { is_active: active } : {})
           })
         }

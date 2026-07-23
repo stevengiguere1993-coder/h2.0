@@ -18,6 +18,7 @@ from sqlalchemy import delete, func, or_, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.integrations.quickbooks import QuickBooksError, get_qbo
+from app.models.automation_setting import AutomationSetting
 from app.models.timesheet import (
     TIMESHEET_DAYS,
     Timesheet,
@@ -138,6 +139,8 @@ class CompanyOut(BaseModel):
     is_active: bool
     refacturable: bool = True
     heures_nr_autorisees: bool = False
+    qbo_customer_id: Optional[str] = None
+    qbo_customer_name: Optional[str] = None
 
 
 class CompanyCreate(BaseModel):
@@ -155,6 +158,9 @@ class CompanyUpdate(BaseModel):
     position: Optional[int] = None
     refacturable: Optional[bool] = None
     heures_nr_autorisees: Optional[bool] = None
+    #: Client QuickBooks associé ("" = revenir à l'auto par nom).
+    qbo_customer_id: Optional[str] = None
+    qbo_customer_name: Optional[str] = None
 
 
 class ReorderIn(BaseModel):
@@ -403,6 +409,9 @@ async def update_company(
         c.refacturable = payload.refacturable
     if payload.heures_nr_autorisees is not None:
         c.heures_nr_autorisees = payload.heures_nr_autorisees
+    if payload.qbo_customer_id is not None:
+        c.qbo_customer_id = payload.qbo_customer_id or None
+        c.qbo_customer_name = payload.qbo_customer_name or None
     await db.commit()
     return CompanyOut(
         id=c.id,
@@ -538,6 +547,12 @@ async def _build_detail(
     for c in companies:
         jr = grid_r[c.id]
         jn = grid_n[c.id]
+        # Compagnie INTERNE : toutes ses heures sont non refacturables —
+        # d'anciennes heures « refacturables » sont basculées dans le
+        # bloc NR (retour Phil 2026-07-22).
+        if bool(getattr(c, "heures_nr_autorisees", False)):
+            jn = [round(jn[i] + jr[i], 2) for i in range(TIMESHEET_DAYS)]
+            jr = [0.0] * TIMESHEET_DAYS
         tot_r = round(sum(jr), 2)
         tot_n = round(sum(jn), 2)
         ov = overrides.get(c.id)
@@ -910,7 +925,9 @@ async def timesheet_dashboard(
         paie_due[uid] = (
             paie_due.get(uid, 0.0) + h * float(ts.taux_horaire or 0.0)
         )
-        if refc:
+        if refc and not bool(
+            getattr(companies[cid], "heures_nr_autorisees", False)
+        ):
             rate, _src = _line_rate(ts, overrides.get((uid, cid)))
             key = (uid, cid)
             comp_hours[key] = comp_hours.get(key, 0.0) + h
@@ -1078,6 +1095,114 @@ async def delete_reglement(
 
 # ── Facturation QuickBooks (connexion Gestion d'entreprise) ────────────
 
+#: Clé AutomationSetting du réglage de facturation feuille de temps
+#: (config_json = {"tax_code_id": "...", "tax_code_name": "..."}).
+TIMESHEET_QBO_SETTING_KEY = "timesheet_qbo"
+
+
+async def _load_ts_qbo_setting(db) -> Dict[str, str]:
+    row = await db.get(AutomationSetting, TIMESHEET_QBO_SETTING_KEY)
+    if not row or not row.config_json:
+        return {}
+    try:
+        return json.loads(row.config_json) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+class QboOptionsOut(BaseModel):
+    connected: bool
+    error: Optional[str] = None
+    customers: List[Dict[str, str]] = []
+    tax_codes: List[Dict[str, str]] = []
+    tax_code_id: Optional[str] = None
+    tax_code_name: Optional[str] = None
+
+
+class QboOptionsIn(BaseModel):
+    tax_code_id: Optional[str] = None
+    tax_code_name: Optional[str] = None
+
+
+@router.get("/qbo-options", response_model=QboOptionsOut)
+async def timesheet_qbo_options(
+    db: DBSession, user: CurrentUser
+) -> QboOptionsOut:
+    """Listes pour configurer la facturation : clients réels + codes de
+    taxe du QuickBooks de Gestion d'entreprise, et le code de taxe
+    choisi (obligatoire pour les compagnies canadiennes)."""
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    setting = await _load_ts_qbo_setting(db)
+    qbo = get_qbo("entreprise")
+    await qbo._load_refresh_from_db()  # noqa: SLF001
+    if not qbo.ready:
+        return QboOptionsOut(
+            connected=False,
+            tax_code_id=setting.get("tax_code_id"),
+            tax_code_name=setting.get("tax_code_name"),
+        )
+    customers: List[Dict[str, str]] = []
+    tax_codes: List[Dict[str, str]] = []
+    error: Optional[str] = None
+    try:
+        rows = await qbo.query(
+            "SELECT Id, DisplayName FROM Customer WHERE Active = true "
+            "ORDERBY DisplayName MAXRESULTS 1000"
+        )
+        customers = [
+            {"id": str(r.get("Id")), "name": str(r.get("DisplayName") or "")}
+            for r in rows
+            if r.get("Id")
+        ]
+        tc_rows = await qbo.query("SELECT * FROM TaxCode MAXRESULTS 100")
+        tax_codes = [
+            {"id": str(r.get("Id")), "name": str(r.get("Name") or "")}
+            for r in tc_rows
+            if r.get("Id") and r.get("Active") is not False
+        ]
+    except QuickBooksError as exc:
+        error = str(exc)
+    return QboOptionsOut(
+        connected=True,
+        error=error,
+        customers=customers,
+        tax_codes=tax_codes,
+        tax_code_id=setting.get("tax_code_id"),
+        tax_code_name=setting.get("tax_code_name"),
+    )
+
+
+@router.post("/qbo-options", response_model=QboOptionsOut)
+async def timesheet_qbo_options_save(
+    payload: QboOptionsIn, db: DBSession, user: CurrentUser
+) -> QboOptionsOut:
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    row = await db.get(AutomationSetting, TIMESHEET_QBO_SETTING_KEY)
+    cfg = {
+        "tax_code_id": (payload.tax_code_id or "").strip() or None,
+        "tax_code_name": (payload.tax_code_name or "").strip() or None,
+    }
+    if row is None:
+        db.add(
+            AutomationSetting(
+                key=TIMESHEET_QBO_SETTING_KEY,
+                enabled=True,
+                config_json=json.dumps(cfg, ensure_ascii=False),
+                updated_by_user_id=user.id,
+            )
+        )
+    else:
+        row.config_json = json.dumps(cfg, ensure_ascii=False)
+        row.updated_by_user_id = user.id
+    await db.commit()
+    return QboOptionsOut(
+        connected=True,
+        tax_code_id=cfg["tax_code_id"],
+        tax_code_name=cfg["tax_code_name"],
+    )
+
 
 class FactureQboIn(BaseModel):
     user_id: int
@@ -1184,16 +1309,38 @@ async def facturer_solde_qbo(
             ),
         )
 
+    # Code de taxe OBLIGATOIRE (les compagnies QBO canadiennes refusent
+    # une facture sans taux de TPS/TVQ — erreur 6000 vue chez Phil).
+    setting = await _load_ts_qbo_setting(db)
+    tax_code_id = (setting.get("tax_code_id") or "").strip()
+    if not tax_code_id:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "QuickBooks exige un code de taxe sur les factures. "
+                "Ouvre le bouton « Compagnies » de la feuille de temps et "
+                "choisis le code de taxe (ex. TPS/TVQ QC) dans la section "
+                "Facturation QuickBooks."
+            ),
+        )
+
     emp_name = emp.display_name or emp.email or f"Employé {emp.id}"
     try:
-        customer = await qbo.ensure_customer(display_name=comp.label)
+        # Client QBO : celui associé à la compagnie dans le modal
+        # Compagnies, sinon retrouvé/créé par nom.
+        if comp.qbo_customer_id:
+            customer_ref = str(comp.qbo_customer_id)
+        else:
+            customer = await qbo.ensure_customer(display_name=comp.label)
+            customer_ref = str(customer["Id"])
         item = await qbo.ensure_item(
             "Heures", description="Heures de main-d'oeuvre refacturées"
         )
         inv = await qbo.create_invoice(
             {
-                "CustomerRef": {"value": str(customer["Id"])},
+                "CustomerRef": {"value": customer_ref},
                 "TxnDate": _today().isoformat(),
+                "GlobalTaxCalculation": "TaxExcluded",
                 "Line": [
                     {
                         "DetailType": "SalesItemLineDetail",
@@ -1206,6 +1353,7 @@ async def facturer_solde_qbo(
                             "ItemRef": {"value": str(item["Id"])},
                             "Qty": qty,
                             "UnitPrice": taux_moyen,
+                            "TaxCodeRef": {"value": tax_code_id},
                         },
                     }
                 ],
@@ -1327,8 +1475,9 @@ async def replace_entries(
             TimesheetEntry.timesheet_id == ts.id
         )
     )
-    # Heures NON refacturables permises seulement sur les compagnies qui
-    # l'autorisent (MGV Développement par défaut) — on ignore le reste.
+    # Compagnies INTERNES (MGV Développement par défaut) : toutes leurs
+    # heures sont non refacturables — on force le flag ; et les heures NR
+    # ne sont permises que sur ces compagnies.
     nr_ok = {
         c.id
         for c in (
@@ -1342,6 +1491,8 @@ async def replace_entries(
             continue
         if not e.refacturable and e.company_id not in nr_ok:
             continue
+        if e.refacturable and e.company_id in nr_ok:
+            e.refacturable = False
         key = (e.company_id, e.day_index, bool(e.refacturable))
         if key in seen:
             continue

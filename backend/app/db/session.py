@@ -339,6 +339,10 @@ async def ensure_critical_columns() -> None:
             "refacturable",
             "BOOLEAN NOT NULL DEFAULT TRUE",
         ),
+        # Feuille de temps : client QuickBooks associé à une compagnie
+        # (facturation de la refacturation, 2026-07-22).
+        ("timesheet_companies", "qbo_customer_id", "VARCHAR(64)"),
+        ("timesheet_companies", "qbo_customer_name", "VARCHAR(255)"),
         (
             "imm_logements",
             "location_en_chambres",
