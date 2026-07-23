@@ -1100,17 +1100,15 @@ class PaiementExterne(Base):
 class FactureGestion(Base):
     """Facture mensuelle de FRAIS DE GESTION d'un immeuble sous contrat
     (page /immobilier/frais-gestion, 2026-07-22) : X % des revenus
-    locatifs du mois couvert, créée dans QuickBooks. 1 ligne max par
-    (immeuble, mois) → sert de checklist « facturé / à faire ».
-    Nouvelle table → ensure_immobilier_aux_tables.
+    locatifs du mois couvert, créée dans QuickBooks. Un mois est
+    « facturé » quand la somme des ``revenus`` de ses lignes couvre les
+    revenus enregistrés ; un loyer payé en retard après la facture crée
+    une ligne COMPLÉMENT (``est_complement``) sur le même mois — d'où
+    plusieurs lignes possibles par (immeuble, mois), l'ancienne
+    contrainte unique est supprimée dans ensure_immobilier_aux_tables.
     """
 
     __tablename__ = "imm_factures_gestion"
-    __table_args__ = (
-        UniqueConstraint(
-            "immeuble_id", "mois_couvert", name="uq_facture_gestion_mois"
-        ),
-    )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     immeuble_id: Mapped[int] = mapped_column(
@@ -1122,6 +1120,11 @@ class FactureGestion(Base):
     revenus: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
     montant: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    #: True = facture des loyers arrivés APRÈS la facturation du mois
+    #: (``revenus`` = seulement le delta). Colonne → ensure_critical_columns.
+    est_complement: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     qbo_invoice_id: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
     )
