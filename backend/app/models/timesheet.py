@@ -62,12 +62,22 @@ class TimesheetCompany(Base, TimestampUpdateMixin):
     taux_refacturation: Mapped[Optional[float]] = mapped_column(
         Float, nullable=True
     )
-    # Autorise la saisie d'heures NON refacturables (bloc rosé de la
-    # grille) sur cette compagnie — seule MGV Développement au départ
-    # (retour Phil 2026-07-22). Géré via le modal Compagnies. Colonne
-    # créée + backfillée one-shot dans ensure_timesheet_tables.
+    # Compagnie INTERNE / non refacturable (retour Phil 2026-07-22) :
+    # ses heures vivent UNIQUEMENT dans le bloc non refacturable de la
+    # grille (payées, jamais facturées). Seule MGV Développement au
+    # départ. Géré via le modal Compagnies. Colonne créée + backfillée
+    # one-shot dans ensure_timesheet_tables.
     heures_nr_autorisees: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
+    )
+    # Facturation QuickBooks (connexion Gestion d'entreprise) : client
+    # QBO associé à cette compagnie — sinon on crée/retrouve par nom.
+    # Colonnes additives -> ensure_critical_columns.
+    qbo_customer_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    qbo_customer_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1"
