@@ -289,6 +289,16 @@ async def ensure_critical_columns() -> None:
             "maintenance_interne",
             "BOOLEAN NOT NULL DEFAULT FALSE",
         ),
+        # Frais de gestion mensuels (page /immobilier/frais-gestion,
+        # 2026-07-22) : contrat actif, %, client QuickBooks du proprio.
+        (
+            "imm_immeubles",
+            "frais_gestion_actif",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        ),
+        ("imm_immeubles", "frais_gestion_pct", "NUMERIC(5,2)"),
+        ("imm_immeubles", "qbo_customer_id", "VARCHAR(64)"),
+        ("imm_immeubles", "qbo_customer_name", "VARCHAR(255)"),
         # Finances immobilier 2026-07 : composition des intérêts d'une
         # hypothèque ('semi'|'mensuelle'), évaluation de référence pour
         # l'équité, dépenses en % des loyers + taxables (TPS/TVQ).
@@ -487,6 +497,7 @@ async def ensure_immobilier_aux_tables() -> None:
         from app.db.base import Base
         from app.models.immobilier import (  # noqa: F401
             FactureExterne,
+            FactureGestion,
             FraisLocatif,
             ImmDocPersoModele,
             ImmDocTemplate,
@@ -517,6 +528,7 @@ async def ensure_immobilier_aux_tables() -> None:
                         FraisLocatif.__table__,
                         PaiementExterne.__table__,
                         FactureExterne.__table__,
+                        FactureGestion.__table__,
                     ],
                 )
             )
