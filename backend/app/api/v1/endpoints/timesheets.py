@@ -1089,6 +1089,44 @@ async def create_reglement(
     )
 
 
+class ReglementUpdate(BaseModel):
+    montant: Optional[float] = Field(default=None, gt=0)
+    date_reglement: Optional[date] = None
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+@router.patch("/reglements/{reglement_id}", response_model=ReglementOut)
+async def update_reglement(
+    reglement_id: int,
+    payload: ReglementUpdate,
+    db: DBSession,
+    user: CurrentUser,
+) -> ReglementOut:
+    """Corrige un règlement (montant / date / note) — le solde du
+    dashboard suit automatiquement."""
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    r = await db.get(TimesheetReglement, reglement_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Règlement introuvable")
+    if payload.montant is not None:
+        r.montant = float(payload.montant)
+    if payload.date_reglement is not None:
+        r.date_reglement = payload.date_reglement
+    if payload.note is not None:
+        r.note = payload.note.strip() or None
+    await db.commit()
+    emp = await db.get(User, r.user_id)
+    comp = (
+        await db.get(TimesheetCompany, r.company_id) if r.company_id else None
+    )
+    return _reglement_out(
+        r,
+        {u.id: u for u in [emp, user] if u},
+        ({comp.id: comp} if comp else {}),
+    )
+
+
 @router.delete("/reglements/{reglement_id}")
 async def delete_reglement(
     reglement_id: int, db: DBSession, user: CurrentUser
