@@ -307,6 +307,17 @@ async def ensure_critical_columns() -> None:
             "est_complement",
             "BOOLEAN NOT NULL DEFAULT FALSE",
         ),
+        # Facturation immo v5 (2026-07-23) : frais de relocation au
+        # contrat (tarif logement/chambre) + lignes relocation/manuel.
+        ("imm_immeubles", "frais_relocation_logement", "NUMERIC(10,2)"),
+        ("imm_immeubles", "frais_relocation_chambre", "NUMERIC(10,2)"),
+        (
+            "imm_factures_gestion",
+            "type_ligne",
+            "VARCHAR(16) NOT NULL DEFAULT 'gestion'",
+        ),
+        ("imm_factures_gestion", "relocation_dossier_id", "INTEGER"),
+        ("imm_factures_gestion", "libelle", "VARCHAR(255)"),
         # Finances immobilier 2026-07 : composition des intérêts d'une
         # hypothèque ('semi'|'mensuelle'), évaluation de référence pour
         # l'équité, dépenses en % des loyers + taxables (TPS/TVQ).

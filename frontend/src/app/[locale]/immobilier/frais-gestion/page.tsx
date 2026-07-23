@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Building2,
   Check,
   ChevronDown,
   Clock,
   FileText,
+  Filter,
   Loader2,
   Plus,
   Receipt,
@@ -20,16 +21,19 @@ import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../layout";
 
 /**
- * Frais de gestion — v4 (retours Phil 2026-07-23) :
- * 1. FACTURE EN PRÉPARATION en haut (toujours visible, même vide).
- * 2. CLIENTS au milieu : solde + transactions à facturer par client.
+ * Facturation (gestion locative) — v5 (retours Phil 2026-07-23) :
+ * 1. FACTURE EN PRÉPARATION en haut (toujours visible, même vide),
+ *    avec frais MANUELS ajoutables (libellé + montant + immeuble).
+ * 2. Filtres client / immeuble.
+ * 3. CLIENTS au milieu : solde + transactions par client.
  *    - « mois » : mois terminé jamais facturé → facturable.
- *    - « complément » : loyers payés APRÈS la facture du mois → le
- *      delta est facturable.
- *    - « en cours » : mois courant visible mais verrouillé jusqu'au
- *      1er du mois suivant.
- * 3. Historique des factures créées.
- * 4. RÉGLAGES en bas (repliable).
+ *    - « complément » : loyers payés APRÈS la facture du mois.
+ *    - « relocation » : frais fixe au contrat quand un dossier de
+ *      relocation aboutit (tarif logement / chambre dans les Réglages).
+ *    - « en cours » : mois courant verrouillé jusqu'au 1er du suivant.
+ * 4. Historique des factures créées.
+ * 5. RÉGLAGES en bas (repliable) : contrat, %, frais de relocation,
+ *    client QuickBooks.
  */
 
 type Transaction = {
@@ -37,9 +41,10 @@ type Transaction = {
   label: string;
   revenus: number;
   montant: number;
-  type: "mois" | "complement" | "en_cours";
+  type: "mois" | "complement" | "en_cours" | "relocation";
   facturable: boolean;
   facturable_des?: string | null;
+  dossier_id?: number | null;
 };
 
 type Row = {
@@ -49,6 +54,8 @@ type Row = {
   frais_gestion_actif: boolean;
   frais_gestion_pct: number;
   frais_gestion_depuis?: string | null;
+  frais_relocation_logement?: number | null;
+  frais_relocation_chambre?: number | null;
   qbo_customer_id?: string | null;
   qbo_customer_name?: string | null;
   solde?: number;
@@ -66,6 +73,7 @@ type Historique = {
   doc_number?: string | null;
   created_at?: string | null;
   complement?: boolean;
+  type_ligne?: string;
 };
 
 type Overview = {
@@ -79,9 +87,13 @@ type QboOptions = {
 };
 
 type PanierLigne = {
+  uid: string;
+  kind: "gestion" | "relocation" | "manuel";
   immeuble_id: number;
   immeuble_name: string;
-  mois: string;
+  mois?: string;
+  dossier_id?: number;
+  libelle?: string;
   label: string;
   revenus: number;
   complement: boolean;
@@ -118,12 +130,16 @@ function le1erDe(iso: string | null | undefined): string {
   return `1ᵉʳ ${MOIS_FR[(m - 1 + 12) % 12]}`;
 }
 
-export default function FraisGestionPage() {
+export default function FacturationImmoPage() {
   const [data, setData] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [qboOpts, setQboOpts] = useState<QboOptions | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [showConfig, setShowConfig] = useState(false);
+
+  // Filtres (client QuickBooks / immeuble).
+  const [filtreClient, setFiltreClient] = useState("");
+  const [filtreImmeuble, setFiltreImmeuble] = useState("");
 
   // Panier : une facture = UN client.
   const [panierClient, setPanierClient] = useState<{
@@ -132,6 +148,13 @@ export default function FraisGestionPage() {
   } | null>(null);
   const [panier, setPanier] = useState<PanierLigne[]>([]);
   const [creating, setCreating] = useState(false);
+
+  // Frais manuel (mini-formulaire dans le panier).
+  const [manuelOpen, setManuelOpen] = useState(false);
+  const [manuelImmeuble, setManuelImmeuble] = useState("");
+  const [manuelLibelle, setManuelLibelle] = useState("");
+  const [manuelMontant, setManuelMontant] = useState("");
+  const manuelSeq = useRef(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -170,8 +193,8 @@ export default function FraisGestionPage() {
     await load();
   };
 
-  const ajouterAuPanier = (row: Row, tx: Transaction) => {
-    if (!tx.facturable) return;
+  /** Garde-fous communs : client QBO choisi + un seul client par panier. */
+  const validerClient = (row: Row): boolean => {
     setMsg(null);
     const clientId = row.qbo_customer_id || "";
     const clientName = row.qbo_customer_name || "";
@@ -180,30 +203,82 @@ export default function FraisGestionPage() {
         ok: false,
         text: `Choisis d'abord le client QuickBooks de « ${row.name} » dans les Réglages (en bas de page).`
       });
-      return;
+      return false;
     }
     if (panierClient && panierClient.id !== clientId) {
       setMsg({
         ok: false,
         text: `Le panier contient déjà la facture de ${panierClient.name} — termine-la (ou vide-la) avant d'en commencer une pour ${clientName}. Une facture = un client.`
       });
-      return;
+      return false;
     }
-    const key = `${row.immeuble_id}-${tx.mois}`;
-    if (panier.some((l) => `${l.immeuble_id}-${l.mois}` === key)) return;
     if (!panierClient) setPanierClient({ id: clientId, name: clientName });
+    return true;
+  };
+
+  const ajouterAuPanier = (row: Row, tx: Transaction) => {
+    if (!tx.facturable) return;
+    const uid =
+      tx.type === "relocation"
+        ? `r-${tx.dossier_id}`
+        : `g-${row.immeuble_id}-${tx.mois}`;
+    if (panier.some((l) => l.uid === uid)) return;
+    if (!validerClient(row)) return;
     setPanier((prev) => [
       ...prev,
       {
+        uid,
+        kind: tx.type === "relocation" ? "relocation" : "gestion",
         immeuble_id: row.immeuble_id,
         immeuble_name: row.name,
-        mois: tx.mois,
+        mois: tx.type === "relocation" ? undefined : tx.mois,
+        dossier_id:
+          tx.type === "relocation" ? tx.dossier_id || undefined : undefined,
         label: tx.label,
         revenus: tx.revenus,
         complement: tx.type === "complement",
         montant: String(tx.montant)
       }
     ]);
+  };
+
+  const ajouterFraisManuel = () => {
+    const row = (data?.rows || []).find(
+      (r) => String(r.immeuble_id) === manuelImmeuble
+    );
+    const libelle = manuelLibelle.trim();
+    const montant = num(manuelMontant);
+    if (!row) {
+      setMsg({ ok: false, text: "Choisis l'immeuble du frais manuel." });
+      return;
+    }
+    if (!libelle) {
+      setMsg({ ok: false, text: "Décris le frais (ex. « Déplacement d'urgence »)." });
+      return;
+    }
+    if (montant <= 0) {
+      setMsg({ ok: false, text: "Le montant du frais doit être supérieur à 0 $." });
+      return;
+    }
+    if (!validerClient(row)) return;
+    manuelSeq.current += 1;
+    setPanier((prev) => [
+      ...prev,
+      {
+        uid: `m-${manuelSeq.current}`,
+        kind: "manuel",
+        immeuble_id: row.immeuble_id,
+        immeuble_name: row.name,
+        libelle,
+        label: libelle,
+        revenus: 0,
+        complement: false,
+        montant: String(montant)
+      }
+    ]);
+    setManuelLibelle("");
+    setManuelMontant("");
+    setManuelOpen(false);
   };
 
   const toutAjouter = (rows: Row[]) => {
@@ -214,11 +289,9 @@ export default function FraisGestionPage() {
     }
   };
 
-  const retirerDuPanier = (key: string) => {
+  const retirerDuPanier = (uid: string) => {
     setPanier((prev) => {
-      const next = prev.filter(
-        (l) => `${l.immeuble_id}-${l.mois}` !== key
-      );
+      const next = prev.filter((l) => l.uid !== uid);
       if (next.length === 0) setPanierClient(null);
       return next;
     });
@@ -227,6 +300,7 @@ export default function FraisGestionPage() {
   const viderPanier = () => {
     setPanier([]);
     setPanierClient(null);
+    setManuelOpen(false);
   };
 
   const totalPanier = panier.reduce((a, l) => a + num(l.montant), 0);
@@ -258,7 +332,10 @@ export default function FraisGestionPage() {
             qbo_customer_id: panierClient.id,
             lignes: panier.map((l) => ({
               immeuble_id: l.immeuble_id,
-              mois: l.mois,
+              mois: l.kind === "gestion" ? l.mois : undefined,
+              dossier_id:
+                l.kind === "relocation" ? l.dossier_id : undefined,
+              libelle: l.kind === "manuel" ? l.libelle : undefined,
               montant: num(l.montant)
             }))
           })
@@ -310,18 +387,52 @@ export default function FraisGestionPage() {
     a[1].name.localeCompare(b[1].name)
   );
 
+  // Filtres appliqués (cartes clients + historique).
+  const clientsAffiches = clients
+    .filter(([id]) => !filtreClient || id === filtreClient)
+    .map(([id, grp]) => {
+      const rows = filtreImmeuble
+        ? grp.rows.filter(
+            (r) => String(r.immeuble_id) === filtreImmeuble
+          )
+        : grp.rows;
+      return [id, { ...grp, rows }] as [string, typeof grp];
+    })
+    .filter(([, grp]) => grp.rows.length > 0);
+  const clientParImmeuble = new Map<number, string>(
+    actifs.map((r) => [r.immeuble_id, r.qbo_customer_id || ""])
+  );
+  const historiqueAffiche = (data?.historique || []).filter(
+    (h) =>
+      (!filtreImmeuble || String(h.immeuble_id) === filtreImmeuble) &&
+      (!filtreClient ||
+        clientParImmeuble.get(h.immeuble_id) === filtreClient)
+  );
+  const filtresActifs = Boolean(filtreClient || filtreImmeuble);
+
   const totalSolde = actifs.reduce((a, r) => a + (r.solde || 0), 0);
   const totalEnCours = actifs.reduce((a, r) => a + (r.a_venir || 0), 0);
 
-  const dansPanier = (immeubleId: number, mois: string) =>
-    panier.some((l) => l.immeuble_id === immeubleId && l.mois === mois);
+  const dansPanier = (row: Row, tx: Transaction) =>
+    panier.some((l) =>
+      tx.type === "relocation"
+        ? l.uid === `r-${tx.dossier_id}`
+        : l.uid === `g-${row.immeuble_id}-${tx.mois}`
+    );
+
+  // Immeubles proposés pour un frais manuel (client du panier d'abord).
+  const immeublesManuels = actifs.filter(
+    (r) =>
+      r.qbo_customer_id &&
+      (!panierClient || r.qbo_customer_id === panierClient.id)
+  );
 
   return (
     <>
       <ImmobilierTopbar
         breadcrumbs={[
           { label: "Gestion immobilière", href: "/immobilier" },
-          { label: "Frais de gestion" }
+          { label: "Facturation" }
         ]}
       />
 
@@ -330,12 +441,12 @@ export default function FraisGestionPage() {
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-white">
-              Frais de gestion
+              Facturation
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
-              Les transactions s&apos;accumulent par client — ajoute-les à
-              la facture, ajuste les montants au besoin, puis crée la
-              facture QuickBooks.
+              Frais de gestion, relocations et frais ponctuels — les
+              transactions s&apos;accumulent par client, ajoute-les à la
+              facture puis crée-la dans QuickBooks.
             </p>
           </div>
           <div className="flex items-center gap-6 rounded-2xl border border-brand-800 bg-brand-900 px-5 py-3 shadow-card">
@@ -394,73 +505,151 @@ export default function FraisGestionPage() {
                 </span>
               )}
             </h2>
-            {panier.length > 0 && (
-              <button className="btn-secondary btn-xs" onClick={viderPanier}>
-                <X className="h-3.5 w-3.5" /> Vider
+            <div className="flex items-center gap-2">
+              <button
+                className="btn-secondary btn-xs"
+                onClick={() => setManuelOpen((v) => !v)}
+                title="Ajouter un frais libre à la facture (ex. déplacement, gestion d'un dossier spécial)"
+              >
+                <Plus className="h-3.5 w-3.5" /> Frais manuel
               </button>
-            )}
+              {panier.length > 0 && (
+                <button
+                  className="btn-secondary btn-xs"
+                  onClick={viderPanier}
+                >
+                  <X className="h-3.5 w-3.5" /> Vider
+                </button>
+              )}
+            </div>
           </div>
+
+          {manuelOpen && (
+            <div className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-brand-800 bg-brand-950/60 px-4 py-3">
+              <div>
+                <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-white/45">
+                  Immeuble
+                </label>
+                <select
+                  value={manuelImmeuble}
+                  onChange={(e) => setManuelImmeuble(e.target.value)}
+                  className="rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-sm text-white outline-none transition focus:border-accent-500"
+                >
+                  <option value="">— choisir —</option>
+                  {immeublesManuels.map((r) => (
+                    <option key={r.immeuble_id} value={String(r.immeuble_id)}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="min-w-[200px] flex-1">
+                <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-white/45">
+                  Description du frais
+                </label>
+                <input
+                  value={manuelLibelle}
+                  onChange={(e) => setManuelLibelle(e.target.value)}
+                  placeholder="Ex. Déplacement d'urgence, gestion de dossier…"
+                  className="w-full rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-accent-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-white/45">
+                  Montant
+                </label>
+                <input
+                  inputMode="decimal"
+                  value={manuelMontant}
+                  onChange={(e) => setManuelMontant(e.target.value)}
+                  placeholder="0.00"
+                  className="w-24 rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-right text-sm tabular-nums text-white outline-none transition placeholder:text-white/30 focus:border-accent-500"
+                />
+              </div>
+              <button
+                className="btn-accent btn-xs"
+                onClick={ajouterFraisManuel}
+              >
+                <Plus className="h-3.5 w-3.5" /> Ajouter
+              </button>
+            </div>
+          )}
 
           {panier.length === 0 ? (
             <div className="rounded-xl border border-dashed border-brand-800 px-5 py-8 text-center text-sm text-white/45">
               Aucune ligne pour l&apos;instant — clique «&nbsp;Ajouter&nbsp;»
-              sur une transaction d&apos;un client ci-dessous pour bâtir la
-              facture.
+              sur une transaction d&apos;un client ci-dessous, ou ajoute un
+              frais manuel.
             </div>
           ) : (
             <>
               <div className="space-y-2">
-                {panier.map((l) => {
-                  const key = `${l.immeuble_id}-${l.mois}`;
-                  return (
-                    <div
-                      key={key}
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-800 bg-brand-950/60 px-4 py-2.5 text-sm"
-                    >
-                      <span className="flex min-w-0 items-center gap-2 truncate">
-                        <span className="truncate font-medium text-white">
-                          {l.immeuble_name}
-                        </span>
-                        <span className="shrink-0 text-white/45">
-                          {l.label} · revenus {money(l.revenus)}
-                        </span>
-                        {l.complement && (
-                          <span
-                            className="badge badge-neutral shrink-0"
-                            title="Loyers payés après la facturation de ce mois — seule la différence est facturée"
-                          >
-                            complément
-                          </span>
-                        )}
+                {panier.map((l) => (
+                  <div
+                    key={l.uid}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-800 bg-brand-950/60 px-4 py-2.5 text-sm"
+                  >
+                    <span className="flex min-w-0 items-center gap-2 truncate">
+                      <span className="truncate font-medium text-white">
+                        {l.immeuble_name}
                       </span>
-                      <span className="flex shrink-0 items-center gap-2">
-                        <input
-                          inputMode="decimal"
-                          value={l.montant}
-                          onChange={(e) =>
-                            setPanier((prev) =>
-                              prev.map((x) =>
-                                `${x.immeuble_id}-${x.mois}` === key
-                                  ? { ...x, montant: e.target.value }
-                                  : x
-                              )
-                            )
-                          }
-                          title="Montant de la ligne — modifiable à la main"
-                          className="w-24 rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-right tabular-nums text-white outline-none transition focus:border-accent-500"
-                        />
-                        <span className="text-white/40">$</span>
-                        <button
-                          className="rounded-lg p-1.5 text-white/40 transition hover:bg-rose-500/10 hover:text-rose-400"
-                          title="Retirer cette ligne"
-                          onClick={() => retirerDuPanier(key)}
+                      <span className="shrink-0 text-white/45">
+                        {l.label}
+                        {l.kind === "gestion" &&
+                          ` · revenus ${money(l.revenus)}`}
+                      </span>
+                      {l.complement && (
+                        <span
+                          className="badge badge-neutral shrink-0"
+                          title="Loyers payés après la facturation de ce mois — seule la différence est facturée"
                         >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </span>
-                    </div>
-                  );
-                })}
+                          complément
+                        </span>
+                      )}
+                      {l.kind === "relocation" && (
+                        <span
+                          className="badge badge-neutral shrink-0"
+                          title="Frais de relocation prévu au contrat de gestion"
+                        >
+                          relocation
+                        </span>
+                      )}
+                      {l.kind === "manuel" && (
+                        <span
+                          className="badge badge-neutral shrink-0"
+                          title="Frais ajouté à la main"
+                        >
+                          manuel
+                        </span>
+                      )}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      <input
+                        inputMode="decimal"
+                        value={l.montant}
+                        onChange={(e) =>
+                          setPanier((prev) =>
+                            prev.map((x) =>
+                              x.uid === l.uid
+                                ? { ...x, montant: e.target.value }
+                                : x
+                            )
+                          )
+                        }
+                        title="Montant de la ligne — modifiable à la main"
+                        className="w-24 rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-right tabular-nums text-white outline-none transition focus:border-accent-500"
+                      />
+                      <span className="text-white/40">$</span>
+                      <button
+                        className="rounded-lg p-1.5 text-white/40 transition hover:bg-rose-500/10 hover:text-rose-400"
+                        title="Retirer cette ligne"
+                        onClick={() => retirerDuPanier(l.uid)}
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </span>
+                  </div>
+                ))}
               </div>
               <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-brand-800 pt-4">
                 <div className="text-sm text-white/60">
@@ -488,6 +677,50 @@ export default function FraisGestionPage() {
           )}
         </section>
 
+        {/* ── FILTRES ── */}
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="flex items-center gap-1.5 text-sm text-white/50">
+            <Filter className="h-4 w-4" /> Filtrer
+          </span>
+          <select
+            value={filtreClient}
+            onChange={(e) => setFiltreClient(e.target.value)}
+            className="rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-sm text-white outline-none transition focus:border-accent-500"
+          >
+            <option value="">Tous les clients</option>
+            {clients
+              .filter(([id]) => id)
+              .map(([id, grp]) => (
+                <option key={id} value={id}>
+                  {grp.name}
+                </option>
+              ))}
+          </select>
+          <select
+            value={filtreImmeuble}
+            onChange={(e) => setFiltreImmeuble(e.target.value)}
+            className="rounded-lg border border-brand-800 bg-brand-950 px-2.5 py-1.5 text-sm text-white outline-none transition focus:border-accent-500"
+          >
+            <option value="">Tous les immeubles</option>
+            {actifs.map((r) => (
+              <option key={r.immeuble_id} value={String(r.immeuble_id)}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+          {filtresActifs && (
+            <button
+              className="text-xs font-medium text-accent-500 hover:underline"
+              onClick={() => {
+                setFiltreClient("");
+                setFiltreImmeuble("");
+              }}
+            >
+              Réinitialiser
+            </button>
+          )}
+        </div>
+
         {/* ── 2. CLIENTS ── */}
         {loading && !data ? (
           <div className="flex items-center justify-center py-16 text-white/50">
@@ -495,15 +728,15 @@ export default function FraisGestionPage() {
           </div>
         ) : (
           <>
-            {clients.length === 0 ? (
+            {clientsAffiches.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-5 py-10 text-center text-sm text-white/45">
-                Aucun client pour l&apos;instant — ouvre les Réglages en
-                bas de page et coche les immeubles sous contrat de
-                gestion.
+                {filtresActifs
+                  ? "Aucun client ne correspond aux filtres."
+                  : "Aucun client pour l'instant — ouvre les Réglages en bas de page et coche les immeubles sous contrat de gestion."}
               </div>
             ) : (
               <div className="grid gap-4 lg:grid-cols-2">
-                {clients.map(([clientId, grp]) => {
+                {clientsAffiches.map(([clientId, grp]) => {
                   const txs = grp.rows.flatMap((row) =>
                     (row.a_facturer || []).map((tx) => ({ row, tx }))
                   );
@@ -516,8 +749,7 @@ export default function FraisGestionPage() {
                     0
                   );
                   const facturables = txs.filter(
-                    ({ row, tx }) =>
-                      tx.facturable && !dansPanier(row.immeuble_id, tx.mois)
+                    ({ row, tx }) => tx.facturable && !dansPanier(row, tx)
                   ).length;
                   return (
                     <div
@@ -584,14 +816,15 @@ export default function FraisGestionPage() {
                       ) : (
                         <div className="mt-4 space-y-2">
                           {txs.map(({ row, tx }) => {
-                            const inCart = dansPanier(
-                              row.immeuble_id,
-                              tx.mois
-                            );
+                            const inCart = dansPanier(row, tx);
                             const enCours = tx.type === "en_cours";
                             return (
                               <div
-                                key={`${row.immeuble_id}-${tx.mois}`}
+                                key={
+                                  tx.type === "relocation"
+                                    ? `r-${tx.dossier_id}`
+                                    : `g-${row.immeuble_id}-${tx.mois}`
+                                }
                                 className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border border-brand-800 bg-brand-950/60 px-3.5 py-2.5 text-sm transition ${
                                   enCours
                                     ? "opacity-70"
@@ -622,6 +855,14 @@ export default function FraisGestionPage() {
                                       title="Loyers payés après la facturation de ce mois — seule la différence reste à facturer"
                                     >
                                       complément
+                                    </span>
+                                  )}
+                                  {tx.type === "relocation" && (
+                                    <span
+                                      className="badge badge-neutral shrink-0"
+                                      title="Frais de relocation prévu au contrat de gestion (tarif logement/chambre dans les Réglages)"
+                                    >
+                                      relocation
                                     </span>
                                   )}
                                 </span>
@@ -683,9 +924,11 @@ export default function FraisGestionPage() {
                 </span>
                 Factures créées
               </h2>
-              {(data?.historique?.length || 0) === 0 ? (
+              {historiqueAffiche.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-brand-800 px-5 py-6 text-center text-sm text-white/45">
-                  Aucune facture créée pour l&apos;instant.
+                  {filtresActifs
+                    ? "Aucune facture ne correspond aux filtres."
+                    : "Aucune facture créée pour l'instant."}
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -693,7 +936,7 @@ export default function FraisGestionPage() {
                     <thead>
                       <tr className="border-b border-brand-800 text-left text-xs uppercase tracking-wide text-white/50">
                         <th className="px-3 py-2">Immeuble</th>
-                        <th className="px-3 py-2">Mois</th>
+                        <th className="px-3 py-2">Ligne</th>
                         <th className="px-3 py-2 text-right">Montant</th>
                         <th className="px-3 py-2">Facture</th>
                         <th className="px-3 py-2">Créée le</th>
@@ -701,7 +944,7 @@ export default function FraisGestionPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {data!.historique!.map((h) => (
+                      {historiqueAffiche.map((h) => (
                         <tr
                           key={h.facture_id}
                           className="border-b border-brand-800/60 last:border-b-0"
@@ -717,6 +960,14 @@ export default function FraisGestionPage() {
                                 title="Loyers payés après la facturation initiale de ce mois"
                               >
                                 complément
+                              </span>
+                            )}
+                            {h.type_ligne === "manuel" && (
+                              <span
+                                className="badge badge-neutral ml-2"
+                                title="Frais ajouté à la main"
+                              >
+                                manuel
                               </span>
                             )}
                           </td>
@@ -787,6 +1038,18 @@ export default function FraisGestionPage() {
                           title="Les mois de revenus AVANT cette date ne comptent pas dans les transactions à facturer"
                         >
                           Facturer depuis
+                        </th>
+                        <th
+                          className="px-3 py-2 text-right"
+                          title="Frais fixe chargé au propriétaire quand un LOGEMENT complet est reloué (vide ou 0 = pas de frais)"
+                        >
+                          Reloc. logement
+                        </th>
+                        <th
+                          className="px-3 py-2 text-right"
+                          title="Frais fixe chargé au propriétaire quand une CHAMBRE est relouée (vide ou 0 = pas de frais)"
+                        >
+                          Reloc. chambre
                         </th>
                         <th className="px-3 py-2">
                           Client QBO (propriétaire)
@@ -868,6 +1131,56 @@ export default function FraisGestionPage() {
                               }}
                               title="Recule cette date pour rattraper des mois passés"
                               className="rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-white outline-none transition focus:border-accent-500 disabled:opacity-40"
+                            />
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            <input
+                              inputMode="decimal"
+                              defaultValue={
+                                row.frais_relocation_logement != null
+                                  ? String(row.frais_relocation_logement)
+                                  : ""
+                              }
+                              placeholder="0"
+                              onBlur={(e) => {
+                                const raw = e.target.value.trim();
+                                const v = raw
+                                  ? parseFloat(raw.replace(",", "."))
+                                  : 0;
+                                if (!isNaN(v) && v >= 0) {
+                                  void patchImmeuble(row.immeuble_id, {
+                                    frais_relocation_logement: v
+                                  });
+                                }
+                              }}
+                              disabled={!row.frais_gestion_actif}
+                              title="Frais fixe au contrat quand un logement complet est reloué"
+                              className="w-20 rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-right text-white outline-none transition placeholder:text-white/30 focus:border-accent-500 disabled:opacity-40"
+                            />
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            <input
+                              inputMode="decimal"
+                              defaultValue={
+                                row.frais_relocation_chambre != null
+                                  ? String(row.frais_relocation_chambre)
+                                  : ""
+                              }
+                              placeholder="0"
+                              onBlur={(e) => {
+                                const raw = e.target.value.trim();
+                                const v = raw
+                                  ? parseFloat(raw.replace(",", "."))
+                                  : 0;
+                                if (!isNaN(v) && v >= 0) {
+                                  void patchImmeuble(row.immeuble_id, {
+                                    frais_relocation_chambre: v
+                                  });
+                                }
+                              }}
+                              disabled={!row.frais_gestion_actif}
+                              title="Frais fixe au contrat quand une chambre est relouée"
+                              className="w-20 rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-right text-white outline-none transition placeholder:text-white/30 focus:border-accent-500 disabled:opacity-40"
                             />
                           </td>
                           <td className="px-3 py-2.5">
