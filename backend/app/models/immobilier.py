@@ -195,6 +195,11 @@ class Immeuble(Base, TimestampUpdateMixin):
     frais_gestion_pct: Mapped[Optional[float]] = mapped_column(
         Numeric(5, 2), nullable=True
     )
+    # 1er du mois à partir duquel on facture (les mois de revenus AVANT
+    # cette date ne comptent pas dans le solde des mois manqués).
+    frais_gestion_depuis: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
     qbo_customer_id: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
     )

@@ -68,6 +68,42 @@ def _mois_precedent(d: date) -> date:
     return prec.replace(day=1)
 
 
+async def _revenus_tous_mois(db) -> Dict[tuple, float]:
+    """Revenus locatifs encaissés par (immeuble, mois) — tous les mois
+    confondus. Sert au solde des mois manqués + au mois affiché."""
+    out: Dict[tuple, float] = {}
+    rows = (
+        await db.execute(
+            select(
+                Logement.immeuble_id,
+                PaiementLoyer.mois_couvert,
+                func.sum(PaiementLoyer.montant),
+            )
+            .join(Bail, Bail.id == PaiementLoyer.bail_id)
+            .join(Logement, Logement.id == Bail.logement_id)
+            .group_by(Logement.immeuble_id, PaiementLoyer.mois_couvert)
+        )
+    ).all()
+    for iid, mo, mt in rows:
+        key = (int(iid), mo)
+        out[key] = out.get(key, 0.0) + float(mt or 0.0)
+    rows2 = (
+        await db.execute(
+            select(
+                Logement.immeuble_id,
+                PaiementExterne.mois_couvert,
+                func.sum(PaiementExterne.montant),
+            )
+            .join(Logement, Logement.id == PaiementExterne.logement_id)
+            .group_by(Logement.immeuble_id, PaiementExterne.mois_couvert)
+        )
+    ).all()
+    for iid, mo, mt in rows2:
+        key = (int(iid), mo)
+        out[key] = out.get(key, 0.0) + float(mt or 0.0)
+    return out
+
+
 async def _revenus_par_immeuble(db, mois: date) -> Dict[int, float]:
     """Revenus locatifs encaissés par immeuble pour ``mois`` (1er du
     mois) : loyers des baux internes + paiements de gestion externe."""
@@ -125,6 +161,12 @@ class ImmeubleRow(BaseModel):
     facture: Optional[FactureOut] = None
     #: Dernier mois déjà facturé (tous mois confondus) — dashboard.
     derniere_facture_mois: Optional[str] = None
+    #: 1er du mois à partir duquel on facture ("YYYY-MM-01").
+    frais_gestion_depuis: Optional[str] = None
+    #: Solde cumulé des MOIS MANQUÉS (revenus jamais facturés, jusqu'au
+    #: mois précédent inclus) + la liste de ces mois.
+    solde: float = 0.0
+    mois_manques: List[Dict[str, str]] = []
 
 
 class OverviewOut(BaseModel):
@@ -138,6 +180,7 @@ class OverviewOut(BaseModel):
 class ImmeublePatch(BaseModel):
     frais_gestion_actif: Optional[bool] = None
     frais_gestion_pct: Optional[float] = Field(default=None, ge=0, le=100)
+    frais_gestion_depuis: Optional[date] = None
     #: "" = retirer l'association.
     qbo_customer_id: Optional[str] = None
     qbo_customer_name: Optional[str] = None
@@ -183,7 +226,7 @@ async def overview(
             .order_by(Immeuble.name)
         )
     ).scalars().all()
-    revenus = await _revenus_par_immeuble(db, m)
+    revenus_tous = await _revenus_tous_mois(db)
     factures = {
         f.immeuble_id: f
         for f in (
@@ -194,6 +237,22 @@ async def overview(
             )
         ).scalars().all()
     }
+    # Tous les couples (immeuble, mois) déjà facturés — pour repérer les
+    # mois MANQUÉS (revenus jamais facturés).
+    factures_tous = {
+        (int(iid), fm)
+        for iid, fm in (
+            await db.execute(
+                select(
+                    FactureGestion.immeuble_id,
+                    FactureGestion.mois_couvert,
+                )
+            )
+        ).all()
+    }
+    dernier_mois_facturable = _mois_precedent(
+        datetime.now(timezone.utc).date()
+    )
     derniers = {
         int(iid): dm
         for iid, dm in (
@@ -211,8 +270,31 @@ async def overview(
     for imm in immeubles:
         actif = bool(getattr(imm, "frais_gestion_actif", False))
         pct = float(getattr(imm, "frais_gestion_pct", None) or DEFAULT_PCT)
-        rev = round(revenus.get(imm.id, 0.0), 2)
+        rev = round(revenus_tous.get((imm.id, m), 0.0), 2)
         f = factures.get(imm.id)
+        # Solde des mois manqués : revenus enregistrés, jamais facturés,
+        # jusqu'au mois précédent inclus, à partir de « facturer depuis ».
+        depuis = getattr(imm, "frais_gestion_depuis", None)
+        solde = 0.0
+        manques: List[Dict[str, str]] = []
+        if actif:
+            for (iid, mo), montant_rev in revenus_tous.items():
+                if iid != imm.id or montant_rev <= 0:
+                    continue
+                if mo > dernier_mois_facturable:
+                    continue
+                if depuis and mo < depuis:
+                    continue
+                if (imm.id, mo) in factures_tous:
+                    continue
+                solde += round(montant_rev * pct / 100.0, 2)
+                manques.append(
+                    {
+                        "mois": mo.isoformat(),
+                        "label": f"{MOIS_FR[mo.month - 1]} {mo.year}",
+                    }
+                )
+            manques.sort(key=lambda x: x["mois"])
         if actif and f:
             nb_f += 1
         elif actif:
@@ -248,6 +330,11 @@ async def overview(
                     if imm.id in derniers
                     else None
                 ),
+                frais_gestion_depuis=(
+                    depuis.isoformat() if depuis else None
+                ),
+                solde=round(solde, 2),
+                mois_manques=manques,
             )
         )
     return OverviewOut(
@@ -275,6 +362,10 @@ async def patch_immeuble(
         imm.frais_gestion_actif = payload.frais_gestion_actif
     if payload.frais_gestion_pct is not None:
         imm.frais_gestion_pct = payload.frais_gestion_pct
+    if payload.frais_gestion_depuis is not None:
+        imm.frais_gestion_depuis = payload.frais_gestion_depuis.replace(
+            day=1
+        )
     if payload.qbo_customer_id is not None:
         imm.qbo_customer_id = payload.qbo_customer_id or None
         imm.qbo_customer_name = payload.qbo_customer_name or None
