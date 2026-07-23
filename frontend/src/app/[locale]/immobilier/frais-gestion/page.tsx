@@ -94,6 +94,11 @@ function moisPrecedentISO(): string {
   return `${p.getFullYear()}-${String(p.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
+function moisCourantISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
 export default function FraisGestionPage() {
   const [data, setData] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -540,12 +545,22 @@ export default function FraisGestionPage() {
                                 key={`${row.immeuble_id}-${tx.mois}`}
                                 className="flex items-center justify-between gap-2 rounded-lg border border-brand-800 bg-brand-950/50 px-3 py-2 text-sm"
                               >
-                                <span className="min-w-0 truncate text-white/80">
-                                  {row.name}
-                                  <span className="text-white/40">
-                                    {" "}
-                                    — {tx.label}
+                                <span className="flex min-w-0 items-center gap-1.5 truncate text-white/80">
+                                  <span className="truncate">
+                                    {row.name}
+                                    <span className="text-white/40">
+                                      {" "}
+                                      — {tx.label}
+                                    </span>
                                   </span>
+                                  {tx.mois === moisCourantISO() && (
+                                    <span
+                                      className="badge badge-amber shrink-0"
+                                      title="Mois en cours : d'autres loyers peuvent encore rentrer — tu peux facturer maintenant ou attendre le début du mois prochain"
+                                    >
+                                      mois en cours
+                                    </span>
+                                  )}
                                 </span>
                                 <span className="flex shrink-0 items-center gap-2">
                                   <span className="tabular-nums text-white">
