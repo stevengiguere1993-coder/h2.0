@@ -1873,6 +1873,7 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
     emp: DashEmployee;
     companyId?: number;
   } | null>(null);
+  const [editReg, setEditReg] = useState<Reglement | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -2186,13 +2187,22 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
                     {r.note || ""}
                   </td>
                   <td className="px-2 py-2 text-right">
-                    <button
-                      className="btn-outline-rose btn-xs"
-                      title="Supprimer ce règlement (le solde remonte d'autant)"
-                      onClick={() => void removeReglement(r.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                    <span className="inline-flex items-center gap-1">
+                      <button
+                        className="btn-ghost btn-xs"
+                        title="Modifier ce règlement (montant, date, note)"
+                        onClick={() => setEditReg(r)}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        className="btn-outline-rose btn-xs"
+                        title="Supprimer ce règlement (le solde remonte d'autant)"
+                        onClick={() => void removeReglement(r.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -2213,6 +2223,130 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
           }}
         />
       )}
+
+      {editReg && (
+        <EditReglementModal
+          reg={editReg}
+          onClose={() => setEditReg(null)}
+          onDone={async () => {
+            setEditReg(null);
+            await load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function EditReglementModal({
+  reg,
+  onClose,
+  onDone
+}: {
+  reg: Reglement;
+  onClose: () => void;
+  onDone: () => Promise<void>;
+}) {
+  const [montant, setMontant] = useState(String(reg.montant));
+  const [dateStr, setDateStr] = useState(reg.date_reglement);
+  const [note, setNote] = useState(reg.note || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/timesheets/reglements/${reg.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            montant: num(montant),
+            date_reglement: dateStr,
+            note: note
+          })
+        }
+      );
+      if (!r.ok) throw new Error((await r.text()) || `Erreur ${r.status}`);
+      await onDone();
+    } catch (e: any) {
+      setErr(e?.message || "Modification impossible");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className={`${CARD} w-full max-w-md space-y-3`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="text-base font-semibold">
+          Modifier le règlement — {reg.employee_name}
+          {reg.company_label ? ` / ${reg.company_label}` : ""}
+        </div>
+
+        <label className="block text-sm">
+          <span className="mb-1 block text-[var(--qg-text-faint)]">
+            Montant
+          </span>
+          <input
+            inputMode="decimal"
+            value={montant}
+            onChange={(e) => setMontant(e.target.value)}
+            className="w-full rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
+          />
+        </label>
+
+        <label className="block text-sm">
+          <span className="mb-1 block text-[var(--qg-text-faint)]">Date</span>
+          <input
+            type="date"
+            value={dateStr}
+            onChange={(e) => setDateStr(e.target.value)}
+            className="w-full rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
+          />
+        </label>
+
+        <label className="block text-sm">
+          <span className="mb-1 block text-[var(--qg-text-faint)]">Note</span>
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            className="w-full rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
+          />
+        </label>
+
+        {err && (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+            {err}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button className={BTN_GHOST} onClick={onClose} disabled={busy}>
+            Annuler
+          </button>
+          <button
+            className={BTN_PRIMARY}
+            onClick={() => void save()}
+            disabled={busy || num(montant) <= 0}
+          >
+            {busy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            Enregistrer
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
