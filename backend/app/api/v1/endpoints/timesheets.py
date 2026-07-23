@@ -149,6 +149,8 @@ class CompanyCreate(BaseModel):
     position: Optional[int] = None
     refacturable: bool = True
     heures_nr_autorisees: bool = False
+    qbo_customer_id: Optional[str] = None
+    qbo_customer_name: Optional[str] = None
 
 
 class CompanyUpdate(BaseModel):
@@ -372,6 +374,8 @@ async def create_company(
         is_active=True,
         refacturable=payload.refacturable,
         heures_nr_autorisees=payload.heures_nr_autorisees,
+        qbo_customer_id=(payload.qbo_customer_id or None),
+        qbo_customer_name=(payload.qbo_customer_name or None),
     )
     db.add(c)
     await db.flush()

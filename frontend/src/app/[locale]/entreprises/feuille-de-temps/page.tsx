@@ -1452,6 +1452,8 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Company | null>(null);
   const [adding, setAdding] = useState(false);
+  const [qboOpts, setQboOpts] = useState<QboOptions | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -1464,6 +1466,16 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch("/api/v1/timesheets/qbo-options");
+        if (r.ok) setQboOpts(await r.json());
+      } catch {
+        /* noop */
+      }
+    })();
+  }, []);
 
   const saveCompany = async (c: Partial<Company>, id?: number) => {
     if (id) {
@@ -1520,6 +1532,7 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
       {adding && (
         <CompanyEditor
           company={null}
+          qboOpts={qboOpts}
           onCancel={() => setAdding(false)}
           onSave={(c) => saveCompany(c)}
         />
@@ -1531,6 +1544,7 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
             <CompanyEditor
               key={c.id}
               company={c}
+              qboOpts={qboOpts}
               onCancel={() => setEditing(null)}
               onSave={(patch) => saveCompany(patch, c.id)}
             />
@@ -1551,6 +1565,15 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
                     title="Compagnie interne : toutes ses heures sont non refacturables (payées, jamais facturées)"
                   >
                     interne
+                  </span>
+                )}
+                {!c.heures_nr_autorisees && (
+                  <span
+                    className="text-xs text-[var(--qg-text-faint)]"
+                    title="Client QuickBooks facturé pour cette compagnie"
+                  >
+                    → QBO :{" "}
+                    {c.qbo_customer_name || "auto (même nom)"}
                   </span>
                 )}
               </div>
@@ -1574,16 +1597,19 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
 
 function CompanyEditor({
   company,
+  qboOpts,
   onCancel,
   onSave
 }: {
   company: Company | null;
+  qboOpts: QboOptions | null;
   onCancel: () => void;
   onSave: (c: Partial<Company>) => void;
 }) {
   const [label, setLabel] = useState(company?.label || "");
   const [active, setActive] = useState(company?.is_active ?? true);
   const [nrOk, setNrOk] = useState(company?.heures_nr_autorisees === true);
+  const [qboCust, setQboCust] = useState(company?.qbo_customer_id || "");
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--qg-accent)]/40 bg-[var(--qg-bg)]/40 p-3">
@@ -1594,6 +1620,24 @@ function CompanyEditor({
         placeholder="Nom de la compagnie"
         className="flex-1 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
       />
+      {qboOpts?.connected && !nrOk && (
+        <label className="flex items-center gap-1.5 text-sm">
+          <span className="text-[var(--qg-text-faint)]">Client QuickBooks :</span>
+          <select
+            value={qboCust}
+            onChange={(e) => setQboCust(e.target.value)}
+            title="Le client QuickBooks qui recevra les factures d'heures de cette compagnie"
+            className="max-w-[220px] rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
+          >
+            <option value="">auto (même nom)</option>
+            {qboOpts.customers.map((cu) => (
+              <option key={cu.id} value={cu.id}>
+                {cu.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {company && (
         <label className="flex items-center gap-1.5 text-sm">
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
@@ -1619,6 +1663,11 @@ function CompanyEditor({
           onSave({
             label: label.trim(),
             heures_nr_autorisees: nrOk,
+            qbo_customer_id: qboCust,
+            qbo_customer_name: qboCust
+              ? qboOpts?.customers.find((cu) => cu.id === qboCust)?.name ||
+                ""
+              : "",
             ...(company ? { is_active: active } : {})
           })
         }
