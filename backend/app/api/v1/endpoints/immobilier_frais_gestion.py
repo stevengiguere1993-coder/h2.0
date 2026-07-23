@@ -264,8 +264,12 @@ async def overview(
             )
         ).all()
     }
-    dernier_mois_facturable = _mois_precedent(
-        datetime.now(timezone.utc).date()
+    # Facturable = jusqu'au mois EN COURS inclus (retour Phil 2026-07-22 :
+    # les loyers de juillet rentrent début juillet — il doit pouvoir les
+    # facturer sans attendre le 1er août). L'UI marque le mois en cours
+    # d'un badge « mois en cours » (revenus encore susceptibles de bouger).
+    dernier_mois_facturable = datetime.now(timezone.utc).date().replace(
+        day=1
     )
     derniers = {
         int(iid): dm
