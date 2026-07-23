@@ -343,6 +343,7 @@ function ClientTabs({
     if (
       hash === "infos" ||
       hash === "projets" ||
+      hash === "communications" ||
       hash === "documents" ||
       hash === "mesures" ||
       hash === "suivi"
