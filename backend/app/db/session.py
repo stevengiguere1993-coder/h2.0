@@ -300,6 +300,13 @@ async def ensure_critical_columns() -> None:
         ("imm_immeubles", "frais_gestion_depuis", "DATE"),
         ("imm_immeubles", "qbo_customer_id", "VARCHAR(64)"),
         ("imm_immeubles", "qbo_customer_name", "VARCHAR(255)"),
+        # Frais de gestion — ligne « complément » (loyers payés en retard
+        # après la facturation du mois, 2026-07-23).
+        (
+            "imm_factures_gestion",
+            "est_complement",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        ),
         # Finances immobilier 2026-07 : composition des intérêts d'une
         # hypothèque ('semi'|'mensuelle'), évaluation de référence pour
         # l'équité, dépenses en % des loyers + taxables (TPS/TVQ).
@@ -495,6 +502,8 @@ async def ensure_immobilier_aux_tables() -> None:
 
     log = logging.getLogger("db.ensure_immobilier_aux_tables")
     try:
+        from sqlalchemy import text
+
         from app.db.base import Base
         from app.models.immobilier import (  # noqa: F401
             FactureExterne,
@@ -531,6 +540,26 @@ async def ensure_immobilier_aux_tables() -> None:
                         FactureExterne.__table__,
                         FactureGestion.__table__,
                     ],
+                )
+            )
+            # Frais de gestion « complément » (2026-07-23) : un loyer payé
+            # en retard après la facturation du mois crée une 2e ligne sur
+            # le même (immeuble, mois) → l'ancienne contrainte unique doit
+            # sauter sur les bases existantes.
+            await conn.execute(
+                text(
+                    """
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'uq_facture_gestion_mois'
+                        ) THEN
+                            ALTER TABLE imm_factures_gestion
+                                DROP CONSTRAINT uq_facture_gestion_mois;
+                        END IF;
+                    END $$;
+                    """
                 )
             )
     except Exception as exc:  # noqa: BLE001

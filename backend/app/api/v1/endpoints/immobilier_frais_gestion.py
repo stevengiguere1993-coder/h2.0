@@ -163,11 +163,14 @@ class ImmeubleRow(BaseModel):
     derniere_facture_mois: Optional[str] = None
     #: 1er du mois à partir duquel on facture ("YYYY-MM-01").
     frais_gestion_depuis: Optional[str] = None
-    #: Solde cumulé des transactions à facturer (revenus jamais
-    #: facturés, jusqu'au mois précédent inclus).
+    #: Solde cumulé des transactions FACTURABLES (mois terminés jamais
+    #: facturés + compléments de loyers payés en retard).
     solde: float = 0.0
-    #: Une transaction = (mois de revenus jamais facturé) avec le
-    #: montant calculé — s'ajoute au panier de facture côté UI.
+    #: Montant du mois EN COURS (visible mais pas encore facturable).
+    a_venir: float = 0.0
+    #: Transactions du client : type "mois" (mois terminé jamais
+    #: facturé), "complement" (loyers arrivés après la facture du mois)
+    #: ou "en_cours" (mois courant, facturable le 1er du mois suivant).
     a_facturer: List[Dict[str, Any]] = []
 
 
@@ -180,6 +183,8 @@ class HistoriqueOut(BaseModel):
     montant: float
     doc_number: Optional[str] = None
     created_at: Optional[str] = None
+    #: True = ligne « complément » (loyers payés après la facture du mois).
+    complement: bool = False
 
 
 class OverviewOut(BaseModel):
@@ -251,26 +256,35 @@ async def overview(
             )
         ).scalars().all()
     }
-    # Tous les couples (immeuble, mois) déjà facturés — pour repérer les
-    # mois MANQUÉS (revenus jamais facturés).
-    factures_tous = {
-        (int(iid), fm)
-        for iid, fm in (
-            await db.execute(
-                select(
-                    FactureGestion.immeuble_id,
-                    FactureGestion.mois_couvert,
-                )
+    # Revenus DÉJÀ FACTURÉS par (immeuble, mois) — sommés, car un mois
+    # peut porter plusieurs lignes (facture + compléments de loyers
+    # payés en retard). Le delta avec les revenus enregistrés donne les
+    # compléments à facturer.
+    factures_sommes: Dict[tuple, float] = {}
+    for iid, fm, frev in (
+        await db.execute(
+            select(
+                FactureGestion.immeuble_id,
+                FactureGestion.mois_couvert,
+                func.sum(FactureGestion.revenus),
+            ).group_by(
+                FactureGestion.immeuble_id, FactureGestion.mois_couvert
             )
-        ).all()
-    }
-    # Facturable = jusqu'au mois EN COURS inclus (retour Phil 2026-07-22 :
-    # les loyers de juillet rentrent début juillet — il doit pouvoir les
-    # facturer sans attendre le 1er août). L'UI marque le mois en cours
-    # d'un badge « mois en cours » (revenus encore susceptibles de bouger).
-    dernier_mois_facturable = datetime.now(timezone.utc).date().replace(
-        day=1
-    )
+        )
+    ).all():
+        factures_sommes[(int(iid), fm)] = float(frev or 0.0)
+    # Retour Phil 2026-07-23 : le mois EN COURS est VISIBLE (badge) mais
+    # ne se facture qu'à partir du 1er du mois suivant — d'autres loyers
+    # peuvent encore rentrer.
+    premier_mois_courant = datetime.now(timezone.utc).date().replace(day=1)
+    if premier_mois_courant.month == 12:
+        prochain_mois = premier_mois_courant.replace(
+            year=premier_mois_courant.year + 1, month=1
+        )
+    else:
+        prochain_mois = premier_mois_courant.replace(
+            month=premier_mois_courant.month + 1
+        )
     derniers = {
         int(iid): dm
         for iid, dm in (
@@ -290,29 +304,52 @@ async def overview(
         pct = float(getattr(imm, "frais_gestion_pct", None) or DEFAULT_PCT)
         rev = round(revenus_tous.get((imm.id, m), 0.0), 2)
         f = factures.get(imm.id)
-        # Solde des mois manqués : revenus enregistrés, jamais facturés,
-        # jusqu'au mois précédent inclus, à partir de « facturer depuis ».
+        # Transactions du client : mois terminés jamais facturés (solde),
+        # compléments (loyers payés APRÈS la facture du mois) et mois en
+        # cours (visible, facturable le 1er du mois suivant).
         depuis = getattr(imm, "frais_gestion_depuis", None)
         solde = 0.0
+        a_venir = 0.0
         manques: List[Dict[str, Any]] = []
         if actif:
             for (iid, mo), montant_rev in revenus_tous.items():
                 if iid != imm.id or montant_rev <= 0:
                     continue
-                if mo > dernier_mois_facturable:
+                if mo > premier_mois_courant:
                     continue
                 if depuis and mo < depuis:
                     continue
-                if (imm.id, mo) in factures_tous:
+                rev_facture = factures_sommes.get((imm.id, mo))
+                if rev_facture is None:
+                    rev_a_facturer = round(montant_rev, 2)
+                    tx_type = "mois"
+                else:
+                    # Mois déjà facturé : seul le delta (loyers arrivés
+                    # depuis) reste facturable, en « complément ».
+                    rev_a_facturer = round(montant_rev - rev_facture, 2)
+                    tx_type = "complement"
+                if rev_a_facturer <= 0.005:
                     continue
-                mnt = round(montant_rev * pct / 100.0, 2)
-                solde += mnt
+                mnt = round(rev_a_facturer * pct / 100.0, 2)
+                if mnt <= 0:
+                    continue
+                en_cours = mo >= premier_mois_courant
+                if en_cours:
+                    tx_type = "en_cours"
+                    a_venir += mnt
+                else:
+                    solde += mnt
                 manques.append(
                     {
                         "mois": mo.isoformat(),
                         "label": f"{MOIS_FR[mo.month - 1]} {mo.year}",
-                        "revenus": round(montant_rev, 2),
+                        "revenus": rev_a_facturer,
                         "montant": mnt,
+                        "type": tx_type,
+                        "facturable": not en_cours,
+                        "facturable_des": (
+                            prochain_mois.isoformat() if en_cours else None
+                        ),
                     }
                 )
             manques.sort(key=lambda x: x["mois"])
@@ -355,6 +392,7 @@ async def overview(
                     depuis.isoformat() if depuis else None
                 ),
                 solde=round(solde, 2),
+                a_venir=round(a_venir, 2),
                 a_facturer=manques,
             )
         )
@@ -372,6 +410,7 @@ async def overview(
             montant=float(f.montant or 0.0),
             doc_number=f.qbo_doc_number,
             created_at=(f.created_at.isoformat() if f.created_at else None),
+            complement=bool(getattr(f, "est_complement", False)),
         )
         for f in (
             await db.execute(
@@ -436,14 +475,24 @@ async def facturer(
             detail="Coche d'abord le contrat de gestion sur cet immeuble.",
         )
     m = payload.mois.replace(day=1)
+    if m >= datetime.now(timezone.utc).date().replace(day=1):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Le mois en cours n'est pas encore facturable — attends "
+                "le 1er du mois suivant."
+            ),
+        )
     existing = (
         await db.execute(
-            select(FactureGestion).where(
+            select(FactureGestion)
+            .where(
                 FactureGestion.immeuble_id == imm.id,
                 FactureGestion.mois_couvert == m,
             )
+            .limit(1)
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
     if existing:
         raise HTTPException(
             status_code=409,
@@ -644,17 +693,20 @@ async def facturer_groupe(
 
     # Validation des lignes + collecte des infos (immeuble, revenus, pct).
     revenus_tous = await _revenus_tous_mois(db)
-    factures_tous = {
-        (int(iid), fm)
-        for iid, fm in (
-            await db.execute(
-                select(
-                    FactureGestion.immeuble_id,
-                    FactureGestion.mois_couvert,
-                )
+    factures_sommes: Dict[tuple, float] = {}
+    for iid, fm, frev in (
+        await db.execute(
+            select(
+                FactureGestion.immeuble_id,
+                FactureGestion.mois_couvert,
+                func.sum(FactureGestion.revenus),
+            ).group_by(
+                FactureGestion.immeuble_id, FactureGestion.mois_couvert
             )
-        ).all()
-    }
+        )
+    ).all():
+        factures_sommes[(int(iid), fm)] = float(frev or 0.0)
+    premier_mois_courant = datetime.now(timezone.utc).date().replace(day=1)
     details: List[Dict[str, Any]] = []
     vus: set = set()
     for ligne in payload.lignes:
@@ -670,21 +722,54 @@ async def facturer_groupe(
                 ),
             )
         m = ligne.mois.replace(day=1)
-        if (imm.id, m) in factures_tous or (imm.id, m) in vus:
+        if m >= premier_mois_courant:
+            if m.month == 12:
+                prochain = m.replace(year=m.year + 1, month=1)
+            else:
+                prochain = m.replace(month=m.month + 1)
             raise HTTPException(
                 status_code=409,
                 detail=(
                     f"« {imm.name} » — {MOIS_FR[m.month - 1]} {m.year} "
-                    "est déjà facturé."
+                    "est le mois en cours : d'autres loyers peuvent "
+                    "encore rentrer. Facturable à partir du 1er "
+                    f"{MOIS_FR[prochain.month - 1]}."
                 ),
             )
+        if (imm.id, m) in vus:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"« {imm.name} » — {MOIS_FR[m.month - 1]} {m.year} "
+                    "apparaît deux fois dans le panier."
+                ),
+            )
+        rev_total = round(revenus_tous.get((imm.id, m), 0.0), 2)
+        rev_facture = factures_sommes.get((imm.id, m))
+        if rev_facture is None:
+            revenus_ligne = rev_total
+            complement = False
+        else:
+            # Mois déjà facturé : seul le delta (loyers payés depuis la
+            # facture) est facturable → ligne « complément ».
+            revenus_ligne = round(rev_total - rev_facture, 2)
+            complement = True
+            if revenus_ligne <= 0.005:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"« {imm.name} » — {MOIS_FR[m.month - 1]} "
+                        f"{m.year} est déjà entièrement facturé."
+                    ),
+                )
         vus.add((imm.id, m))
         details.append(
             {
                 "imm": imm,
                 "mois": m,
                 "montant": round(float(ligne.montant), 2),
-                "revenus": round(revenus_tous.get((imm.id, m), 0.0), 2),
+                "revenus": revenus_ligne,
+                "complement": complement,
                 "pct": float(
                     getattr(imm, "frais_gestion_pct", None) or DEFAULT_PCT
                 ),
@@ -756,10 +841,20 @@ async def facturer_groupe(
                     "DetailType": "SalesItemLineDetail",
                     "Amount": d["montant"],
                     "Description": (
-                        f"Frais de gestion {d['pct']:g} % — revenus "
-                        f"locatifs de {MOIS_FR[d['mois'].month - 1]} "
-                        f"{d['mois'].year} ({d['revenus']:.2f} $) — "
-                        f"{d['imm'].name}"
+                        (
+                            f"Complément — frais de gestion {d['pct']:g} % "
+                            f"— loyers additionnels de "
+                            f"{MOIS_FR[d['mois'].month - 1]} "
+                            f"{d['mois'].year} ({d['revenus']:.2f} $) — "
+                            f"{d['imm'].name}"
+                        )
+                        if d["complement"]
+                        else (
+                            f"Frais de gestion {d['pct']:g} % — revenus "
+                            f"locatifs de {MOIS_FR[d['mois'].month - 1]} "
+                            f"{d['mois'].year} ({d['revenus']:.2f} $) — "
+                            f"{d['imm'].name}"
+                        )
                     ),
                     "SalesItemLineDetail": {
                         "ItemRef": {"value": str(item["Id"])},
@@ -808,6 +903,7 @@ async def facturer_groupe(
                 revenus=d["revenus"],
                 pct=d["pct"],
                 montant=d["montant"],
+                est_complement=d["complement"],
                 qbo_invoice_id=invoice_id,
                 qbo_doc_number=doc_number,
                 created_by_user_id=user.id,
