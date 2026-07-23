@@ -748,6 +748,34 @@ async def sync_achat_to_qbo(
                 class_id = (
                     str(klass.get("Id")) if klass and klass.get("Id") else None
                 )
+    # Reçu SANS projet/BT mais rattaché à un CLIENT : la dépense QB porte
+    # le CustomerRef du client mère — le coût lui est attribué dans QB
+    # (sans classe chantier). Le projet, s'il existe, prime (sous-client).
+    if customer_id is None and getattr(achat, "client_id", None):
+        from app.models.client import Client as _ClientDirect
+
+        _cl = (
+            await db.execute(
+                select(_ClientDirect).where(
+                    _ClientDirect.id == achat.client_id
+                )
+            )
+        ).scalar_one_or_none()
+        if _cl is not None:
+            try:
+                cust = await qbo.ensure_customer(
+                    display_name=_cl.name,
+                    email=_cl.email,
+                    phone=_cl.phone,
+                    billing_address=_cl.address,
+                )
+                customer_id = str(cust.get("Id") or "") or None
+            except QuickBooksError as exc:
+                log.warning(
+                    "QBO: client direct introuvable (achat %s): %s",
+                    achat.id, exc,
+                )
+
     # PO source (optionnel) — sa référence sert de DocNumber fallback
     # quand le # de facture fournisseur n'est pas fourni.
     po_reference: Optional[str] = None

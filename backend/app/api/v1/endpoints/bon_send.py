@@ -75,25 +75,22 @@ async def ensure_bon_project(
     pour porter ses achats / heures / facture. Idempotent : renvoie le
     projet existant si déjà lié, sinon en crée un (titre/client/assigné
     repris du bon)."""
+    import asyncio
+
     from app.models.bon_travail import BonTravail
-    from app.models.project import Project, ProjectStatus
+    from app.services.bon_project import (
+        ensure_bon_project as _ensure_bon_project,
+        push_bon_qbo_job_now,
+    )
 
     bon = await db.get(BonTravail, bon_id)
     if bon is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Bon introuvable.")
-    if bon.project_id:
-        return {"project_id": bon.project_id}
-    proj = Project(
-        name=bon.title or f"Bon {bon.reference}",
-        client_id=bon.client_id,
-        kind="bon_travail",
-        responsible_user_id=getattr(bon, "assignee_user_id", None),
-        status=ProjectStatus.IN_PROGRESS.value,
-    )
-    db.add(proj)
-    await db.flush()
-    bon.project_id = proj.id
-    await db.flush()
+    proj = await _ensure_bon_project(db, bon)
+    # Sous-client QB « BT-xx — titre » sous le client mère, en arrière-plan
+    # (best-effort ; la 1ʳᵉ facture/coût le créerait de toute façon).
+    if proj.client_id:
+        asyncio.create_task(push_bon_qbo_job_now(int(proj.id)))
     return {"project_id": proj.id}
 
 

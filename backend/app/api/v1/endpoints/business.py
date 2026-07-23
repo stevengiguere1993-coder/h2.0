@@ -302,6 +302,10 @@ def make_crud_router(
             # _is_billable et le backfill achat_unbill_non_contract_v2.
             # L'utilisateur peut toujours cocher à la main (is_billable
             # explicite respecté).
+            # is_billable fourni EXPLICITEMENT à la création = choix manuel
+            # → verrouillé contre les automatismes (correcteur horaire…).
+            if getattr(data, "is_billable", None) is not None:
+                obj.billable_manual = True
             if getattr(data, "is_billable", None) is None and obj.project_id:
                 from sqlalchemy import select as _sel_bill
 
@@ -368,6 +372,27 @@ def make_crud_router(
                 db, getattr(obj, "project_id", None)
             )
             await db.flush()
+        # Bon de travail CLIENT : dès la création, on garantit son PROJET
+        # lié (kind="bon_travail", nommé « <ref BT> — <titre> ») et on crée
+        # en arrière-plan le SOUS-CLIENT QB portant le numéro de bon sous le
+        # client mère. La facturation du bon passe ensuite par le flux
+        # projet standard (facture sous le sous-client, coûts rattachés) —
+        # identique aux projets. Les bons INTERNES (entretien de nos
+        # immeubles, pas de client mère) ne sont pas concernés.
+        if (
+            model is BonTravail
+            and getattr(obj, "client_id", None)
+            and getattr(obj, "kind", None) != "interne"
+        ):
+            import asyncio as _asyncio_bon
+
+            from app.services.bon_project import (
+                ensure_bon_project as _ensure_bp,
+                push_bon_qbo_job_now as _push_bp,
+            )
+
+            _bproj = await _ensure_bp(db, obj)
+            _asyncio_bon.create_task(_push_bp(int(_bproj.id)))
         # Bon de travail INTERNE : prévenir les gestionnaires (manager+)
         # qu'un nouveau bon d'entretien a été créé — qu'il provienne du
         # pôle Construction ou du miroir Gestion locative.

@@ -366,16 +366,12 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet factures échoué", exc_info=True)
 
-    # Les filets de CRÉATION en masse restants (dépenses sans miroir QB)
-    # restent conditionnés à l'interrupteur de migration : tant qu'il est
-    # OFF, on ne (re)crée RIEN automatiquement pour ne pas produire de
-    # doublons pendant que tous les ID QBO ne sont pas reliés.
-    if not await is_qbo_auto_sync_enabled():
-        out["skipped_migration_nets"] = "qbo_auto_sync_off"
-        log.info("Filets QBO exécutés : %s", out)
-        return out
-
     # ── Dépenses actives sans lien QB → re-push ──
+    # NON gated : « tous les reçus sont envoyés dans QuickBooks
+    # automatiquement ». Un reçu saisi dans Kratos dont le push immédiat a
+    # échoué est rattrapé ici dans l'heure. Idempotent : anti-doublon par
+    # DocNumber / (fournisseur + total + date) dans sync_achat_to_qbo — un
+    # équivalent QB existant est RELIÉ, jamais recréé.
     try:
         from sqlalchemy import select
 
@@ -417,6 +413,12 @@ async def run_qbo_nets() -> Dict[str, Any]:
         }
     except Exception:  # noqa: BLE001
         log.warning("Filet achats échoué", exc_info=True)
+
+    # (Plus aucun filet gated : tout le miroir Kratos ↔ QB est automatique.
+    # L'interrupteur `qbo_auto_sync` ne conditionne plus que les outils de
+    # migration de masse explicites, hors de ce runner.)
+    if not await is_qbo_auto_sync_enabled():
+        out["qbo_auto_sync"] = "off"
 
     log.info("Filets QBO exécutés : %s", out)
     return out
