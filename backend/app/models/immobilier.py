@@ -185,6 +185,23 @@ class Immeuble(Base, TimestampUpdateMixin):
         Boolean, nullable=False, default=False, server_default="false"
     )
 
+    # Frais de gestion (page /immobilier/frais-gestion, 2026-07-22) :
+    # contrat de gestion actif → on facture chaque mois X % des revenus
+    # locatifs du mois précédent au propriétaire (client QuickBooks
+    # associé). Colonnes additives → ensure_critical_columns.
+    frais_gestion_actif: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    frais_gestion_pct: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
+    qbo_customer_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    qbo_customer_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+
     # Scope du catalogue (immeubles créés depuis le picker de tâche).
     # Au plus l'un des deux est rempli. Tous deux NULL = immeuble
     # « global » (legacy ou créé via le CRUD complet du volet immo).
@@ -1069,6 +1086,45 @@ class PaiementExterne(Base):
     paye_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     created_by_email: Mapped[Optional[str]] = mapped_column(
         String(320), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class FactureGestion(Base):
+    """Facture mensuelle de FRAIS DE GESTION d'un immeuble sous contrat
+    (page /immobilier/frais-gestion, 2026-07-22) : X % des revenus
+    locatifs du mois couvert, créée dans QuickBooks. 1 ligne max par
+    (immeuble, mois) → sert de checklist « facturé / à faire ».
+    Nouvelle table → ensure_immobilier_aux_tables.
+    """
+
+    __tablename__ = "imm_factures_gestion"
+    __table_args__ = (
+        UniqueConstraint(
+            "immeuble_id", "mois_couvert", name="uq_facture_gestion_mois"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    immeuble_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_immeubles.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    #: 1er du mois DONT les revenus sont facturés (ex. 2026-08-01).
+    mois_couvert: Mapped[date] = mapped_column(Date, nullable=False)
+    revenus: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    montant: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    qbo_invoice_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    qbo_doc_number: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
