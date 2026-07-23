@@ -750,8 +750,9 @@ export default function FeuilleDeTempsPage() {
               onNote={setNote}
             />
 
-            {/* Tuiles paie + refacturation */}
-            <div className="grid gap-4 lg:grid-cols-3">
+            {/* Tuiles paie + refacturation (la refacturation = ce que
+                Phil facture aux compagnies → gestionnaires seulement) */}
+            <div className={`grid gap-4 ${isManager ? "lg:grid-cols-3" : ""}`}>
               <div className={`${CARD} lg:col-span-1`}>
                 <div className="flex items-center gap-2 text-sm font-medium text-[var(--qg-text-muted)]">
                   <DollarSign className="h-4 w-4" /> Montant à verser
@@ -765,6 +766,7 @@ export default function FeuilleDeTempsPage() {
                 </div>
               </div>
 
+              {isManager && (
               <div className={`${CARD} lg:col-span-2`}>
                 <div className="mb-3 flex items-center justify-between">
                   <div className="text-sm font-medium text-[var(--qg-text-muted)]">
@@ -803,17 +805,16 @@ export default function FeuilleDeTempsPage() {
                       </div>
                     )}
                 </div>
-                {isManager && (
-                  <button
-                    className="mt-3 text-xs font-medium text-[var(--qg-accent)] hover:underline"
-                    onClick={() => setShowAllRates((v) => !v)}
-                  >
-                    {showAllRates
-                      ? "Masquer les compagnies sans heures"
-                      : `Configurer les taux de ${detail.employee_name} (toutes les compagnies)`}
-                  </button>
-                )}
+                <button
+                  className="mt-3 text-xs font-medium text-[var(--qg-accent)] hover:underline"
+                  onClick={() => setShowAllRates((v) => !v)}
+                >
+                  {showAllRates
+                    ? "Masquer les compagnies sans heures"
+                    : `Configurer les taux de ${detail.employee_name} (toutes les compagnies)`}
+                </button>
               </div>
+              )}
             </div>
           </>
         ) : null}

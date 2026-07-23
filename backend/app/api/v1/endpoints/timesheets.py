@@ -332,9 +332,14 @@ async def list_companies(
     user: CurrentUser,
     include_inactive: bool = Query(default=False),
 ) -> List[CompanyOut]:
+    # Réservé aux gestionnaires : la liste expose les taux par compagnie
+    # et les clients QuickBooks associés. La grille d'un employé, elle,
+    # vient de /resolve (labels seulement).
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
     await _ensure_seed(db)
     q = select(TimesheetCompany)
-    if not (include_inactive and _is_manager(user)):
+    if not include_inactive:
         q = q.where(TimesheetCompany.is_active.is_(True))
     q = q.order_by(TimesheetCompany.position, TimesheetCompany.id)
     rows = (await db.execute(q)).scalars().all()
@@ -549,6 +554,11 @@ async def _build_detail(
             notes = {}
 
     overrides = await _load_user_rates(db, ts.user_id)
+    # CONFIDENTIALITÉ : les taux et montants de REFACTURATION (ce que
+    # Phil facture aux compagnies) ne concernent que les gestionnaires —
+    # un employé qui consulte SA feuille ne les reçoit pas (masqués à 0
+    # côté serveur, panneau caché côté écran). Il voit sa paie.
+    manager_view = _is_manager(user)
     lignes: List[LigneOut] = []
     totaux_jour = [0.0] * TIMESHEET_DAYS
     totaux_jour_nr = [0.0] * TIMESHEET_DAYS
@@ -567,6 +577,8 @@ async def _build_detail(
         tot_n = round(sum(jn), 2)
         ov = overrides.get(c.id)
         rate, source = _line_rate(ts, ov)
+        if not manager_view:
+            rate, source, ov = 0.0, "defaut", None
         refac = round(tot_r * rate, 2)
         for i in range(TIMESHEET_DAYS):
             totaux_jour[i] += jr[i]
@@ -626,7 +638,9 @@ async def _build_detail(
         period_end=ts.period_end.isoformat(),
         jours_dates=jours_dates,
         taux_horaire=float(ts.taux_horaire or 0.0),
-        taux_refacturation=float(ts.taux_refacturation or 0.0),
+        taux_refacturation=(
+            float(ts.taux_refacturation or 0.0) if manager_view else 0.0
+        ),
         status=ts.status,
         submitted_at=(ts.submitted_at.isoformat() if ts.submitted_at else None),
         approved_at=(ts.approved_at.isoformat() if ts.approved_at else None),
