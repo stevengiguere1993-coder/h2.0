@@ -3794,8 +3794,18 @@ async def _twilio_outbound_bridge_impl(request: Request, db: DBSession) -> Respo
         )
         return Response(content=twiml, media_type="application/xml")
 
+    # Enregistrement 2 pistes dès le pont : sans lui, aucun verbatim ni
+    # résumé n'était possible sur les appels sortants click-to-call (la
+    # fiche restait muette même après une vraie conversation). Le
+    # RecordingUrl revient sur /twilio/status qui lance transcription +
+    # résumé IA en arrière-plan.
     twiml = provider.build_forward_response(
-        forward_to_e164=target, caller_id=caller_id
+        forward_to_e164=target,
+        caller_id=caller_id,
+        record=True,
+        recording_status_callback_url=(
+            f"{_secretary_base_url()}/api/v1/voice/twilio/status"
+        ),
     )
     return Response(content=twiml, media_type="application/xml")
 
@@ -4320,12 +4330,14 @@ async def _twilio_incoming_sms_impl(request: Request, db: DBSession) -> Response
         if pn.owner_user_id:
             user_ids.add(pn.owner_user_id)
         # Client/lead CONSTRUCTION identifié → la notif ouvre SA fiche
-        # (fil de communications du pôle), pas le volet téléphonie
-        # (retour Phil 2026-07-22, point 4).
+        # DIRECTEMENT sur la section Communications du pôle (pas le volet
+        # téléphonie, et pas l'onglet par défaut de la fiche) — retours
+        # Phil 2026-07-22 point 4 + 2026-07-23 : « ça devrait m'amener
+        # dans la section communication de la personne ».
         if entity_type == "client" and entity_id:
-            href = f"/app/clients/{entity_id}"
+            href = f"/app/clients/{entity_id}#communications"
         elif entity_type == "contact_request" and entity_id:
-            href = f"/app/crm/{entity_id}"
+            href = f"/app/crm/{entity_id}?tab=communications"
         else:
             href = f"/telephonie?sms={sms.id}"
         preview = (body or "")[:140]
@@ -4535,6 +4547,93 @@ _VALID_ENTITY_TYPES = {"client", "locataire", "prospection_lead", "contact_reque
 #: Throttle du rattrapage de résumé d'appel (id appel → dernier essai).
 _SUMMARY_RETRY_AT: dict[int, float] = {}
 
+#: Throttle du self-heal de statut d'appel (id appel → dernier essai).
+_STATUS_REFRESH_AT: dict[int, float] = {}
+
+#: Statuts finaux Twilio — au-delà, plus rien ne bouge sur l'appel.
+_FINAL_CALL_STATUSES = {"completed", "busy", "no-answer", "failed", "canceled"}
+
+
+async def _refresh_call_status_from_twilio(call_id: int) -> None:
+    """Self-heal : relit le statut RÉEL d'un appel resté non final
+    (« queued »/« ringing » figé parce qu'un webhook de statut s'est
+    perdu ou a été rejeté) directement depuis l'API Twilio, et récupère
+    au passage un enregistrement raté → transcription + résumé. Session
+    fraîche, best-effort : ne casse jamais la consultation du fil."""
+    try:
+        from email.utils import parsedate_to_datetime
+
+        from app.db.session import AsyncSessionLocal
+
+        provider = _twilio_provider()
+        async with AsyncSessionLocal() as db:
+            call = (
+                await db.execute(select(Call).where(Call.id == call_id))
+            ).scalar_one_or_none()
+            if call is None or not (call.provider_sid or "").startswith("CA"):
+                return
+            data = await provider.get_call(call.provider_sid)
+            st = str(data.get("status") or "").strip()
+            if st:
+                call.status = st
+            dur = str(data.get("duration") or "")
+            if dur.isdigit():
+                call.duration_sec = int(dur)
+            for field, key in (("answered_at", "start_time"), ("ended_at", "end_time")):
+                raw = data.get(key)
+                if raw and getattr(call, field, None) is None:
+                    try:
+                        setattr(call, field, parsedate_to_datetime(str(raw)))
+                    except Exception:  # noqa: BLE001
+                        pass
+            # Enregistrement présent chez Twilio mais jamais reçu par le
+            # webhook → on le raccroche pour permettre verbatim + résumé.
+            if not call.recording_url and st in _FINAL_CALL_STATUSES:
+                try:
+                    recs = await provider.list_call_recordings(call.provider_sid)
+                except Exception:  # noqa: BLE001
+                    recs = []
+                if recs:
+                    rec_sid = str(recs[0].get("sid") or "")
+                    if rec_sid:
+                        call.recording_sid = rec_sid
+                        call.recording_url = (
+                            "https://api.twilio.com/2010-04-01/Accounts/"
+                            f"{provider.account_sid}/Recordings/{rec_sid}"
+                        )
+            await db.commit()
+            if call.recording_url and not call.recording_summary:
+                from app.services.call_recording_summary import (
+                    summarize_call_in_background,
+                )
+
+                asyncio.create_task(summarize_call_in_background(call.id))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Self-heal statut appel %s : %s", call_id, exc)
+
+
+def _kick_call_self_heal(calls) -> None:
+    """Programme (throttlé, en fond) le self-heal des appels dont le
+    statut est resté NON FINAL plus de 5 minutes après leur début."""
+    try:
+        import time as _time
+
+        now_ts = _time.time()
+        now_dt = datetime.now(timezone.utc)
+        for c in calls:
+            if (c.status or "") in _FINAL_CALL_STATUSES:
+                continue
+            started = c.started_at
+            if started is not None and started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            if started is not None and (now_dt - started).total_seconds() < 300:
+                continue  # l'appel est peut-être réellement en cours
+            if now_ts - _STATUS_REFRESH_AT.get(c.id, 0.0) > 600:
+                _STATUS_REFRESH_AT[c.id] = now_ts
+                asyncio.create_task(_refresh_call_status_from_twilio(c.id))
+    except Exception:  # noqa: BLE001 — le fil reste consultable
+        pass
+
 
 @router.get(
     "/communications/{entity_type}/{entity_id}",
@@ -4586,6 +4685,12 @@ async def list_communications_for_entity(
                     asyncio.create_task(summarize_call_in_background(c.id))
     except Exception:  # noqa: BLE001 — le fil reste consultable
         pass
+
+    # SELF-HEAL des statuts figés (« queued » alors que l'appel a eu
+    # lieu) : webhook de statut perdu → on relit l'état réel chez Twilio
+    # en arrière-plan (throttlé). Le fil affiche la vérité au refresh
+    # suivant, sans action manuelle.
+    _kick_call_self_heal(calls)
 
     sms_rows = (
         await db.execute(
@@ -4731,7 +4836,9 @@ async def list_communications_feed(
         if direction in ("inbound", "outbound"):
             stmt = stmt.where(Call.direction == direction)
         stmt = stmt.order_by(Call.started_at.desc()).limit(over)
-        for c in (await db.execute(stmt)).scalars().all():
+        _feed_calls = (await db.execute(stmt)).scalars().all()
+        _kick_call_self_heal(_feed_calls)
+        for c in _feed_calls:
             items.append(
                 CommunicationFeedItem(
                     kind="call",

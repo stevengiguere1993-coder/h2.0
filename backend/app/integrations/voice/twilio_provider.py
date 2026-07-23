@@ -176,6 +176,28 @@ class TwilioVoiceProvider(VoiceProvider):
             data = resp.json()
         return str(data.get("sid") or "")
 
+    async def get_call(self, call_sid: str) -> dict:
+        """Relit l'état réel d'un appel depuis l'API REST (statut,
+        durée, horodatages). Self-heal quand un webhook de statut
+        s'est perdu et que la ligne Kratos reste « queued »."""
+        url = f"{TWILIO_API_BASE}/Accounts/{self.account_sid}/Calls/{call_sid}.json"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.get(url, auth=self._auth())
+            resp.raise_for_status()
+            return resp.json()
+
+    async def list_call_recordings(self, call_sid: str) -> list:
+        """Enregistrements attachés à un appel (webhook d'enregistrement
+        raté → on peut quand même retrouver l'audio pour le transcrire)."""
+        url = (
+            f"{TWILIO_API_BASE}/Accounts/{self.account_sid}"
+            f"/Calls/{call_sid}/Recordings.json"
+        )
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.get(url, auth=self._auth())
+            resp.raise_for_status()
+            return list(resp.json().get("recordings") or [])
+
     async def update_call_twiml(self, call_sid: str, twiml_url: str) -> None:
         """Redirige un appel EN COURS vers un nouveau TwiML (interrompt
         le verbe courant — p.ex. sort un appelant de la file d'attente
@@ -248,6 +270,8 @@ class TwilioVoiceProvider(VoiceProvider):
         caller_id: Optional[str] = None,
         timeout_sec: int = 20,
         action_url: Optional[str] = None,
+        record: bool = False,
+        recording_status_callback_url: Optional[str] = None,
     ) -> str:
         # `answerOnBridge` : l'appelant entend la sonnerie (pas un "answer"
         # prématuré) jusqu'au vrai pont. Combiné à un `timeout` court, ça
@@ -260,6 +284,15 @@ class TwilioVoiceProvider(VoiceProvider):
             attrs += f' callerId="{xml_escape(caller_id, {chr(34): "&quot;"})}"'
         if action_url:
             attrs += f' action="{xml_escape(action_url)}" method="POST"'
+        if record:
+            # 2 pistes, à partir du décrochage du pont : l'audio alimente
+            # la transcription + le résumé IA de l'appel (fiche CRM).
+            attrs += ' record="record-from-answer-dual"'
+            if recording_status_callback_url:
+                attrs += (
+                    f' recordingStatusCallback="{xml_escape(recording_status_callback_url)}"'
+                    ' recordingStatusCallbackMethod="POST"'
+                )
         return (
             '<?xml version="1.0" encoding="UTF-8"?>'
             "<Response>"

@@ -414,6 +414,61 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet achats échoué", exc_info=True)
 
+    # ── Bons de travail CLIENT en cours → projet lié + sous-client QB ──
+    # Le hook de création couvre les NOUVEAUX bons ; ce filet rattrape les
+    # bons créés AVANT la fonctionnalité (ou dont le push en fond a échoué) :
+    # projet porteur garanti puis sous-client QB « BT-xx — titre » sous le
+    # client mère. SEULS les bons TOUJOURS EN COURS sont importés (demande
+    # explicite) : les brouillons, annulés et déjà facturés sont exclus.
+    # Idempotent : dès que le projet a son qbo_job_id, le bon sort du
+    # filtre (aucun appel QB répété).
+    try:
+        from sqlalchemy import or_ as _or_bt, select as _sel_bt
+
+        from app.models.bon_travail import BonTravail as _Bon
+        from app.models.project import Project as _ProjBT
+        from app.services.bon_project import (
+            ensure_bon_project as _ensure_bt,
+            push_bon_qbo_job_now as _push_bt,
+        )
+
+        async with AsyncSessionLocal() as db:
+            bons = (
+                (
+                    await db.execute(
+                        _sel_bt(_Bon)
+                        .outerjoin(_ProjBT, _ProjBT.id == _Bon.project_id)
+                        .where(
+                            _Bon.client_id.is_not(None),
+                            _Bon.kind != "interne",
+                            _Bon.status.notin_(
+                                ("draft", "cancelled", "facture")
+                            ),
+                            _or_bt(
+                                _Bon.project_id.is_(None),
+                                _ProjBT.qbo_job_id.is_(None),
+                            ),
+                        )
+                        .limit(200)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            bon_project_ids = []
+            for _bon in bons:
+                _proj = await _ensure_bt(db, _bon)
+                bon_project_ids.append(int(_proj.id))
+            await db.commit()
+        for _pid in bon_project_ids:
+            # push_bon_qbo_job_now est best-effort (n'élève jamais) et
+            # vérifie lui-même que QBO est configuré.
+            await _push_bt(_pid)
+        if bon_project_ids:
+            out["bons_qb"] = {"candidates": len(bon_project_ids)}
+    except Exception:  # noqa: BLE001
+        log.warning("Filet bons de travail → QB échoué", exc_info=True)
+
     # (Plus aucun filet gated : tout le miroir Kratos ↔ QB est automatique.
     # L'interrupteur `qbo_auto_sync` ne conditionne plus que les outils de
     # migration de masse explicites, hors de ce runner.)
