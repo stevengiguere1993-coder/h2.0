@@ -48,6 +48,9 @@ type Row = {
   montant_estime: number;
   facture?: FactureInfo | null;
   derniere_facture_mois?: string | null;
+  frais_gestion_depuis?: string | null;
+  solde?: number;
+  mois_manques?: { mois: string; label: string }[];
 };
 
 type Overview = {
@@ -68,6 +71,12 @@ function money(n: number | null | undefined): string {
     style: "currency",
     currency: "CAD"
   }).format(n || 0);
+}
+
+function moisPrecedentISO(): string {
+  const d = new Date();
+  const p = new Date(d.getFullYear(), d.getMonth() - 1, 1);
+  return `${p.getFullYear()}-${String(p.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
 function addMonths(iso: string, n: number): string {
@@ -263,6 +272,12 @@ export default function FraisGestionPage() {
                     <th className="px-3 py-2">Immeuble</th>
                     <th className="px-3 py-2 text-center">Contrat</th>
                     <th className="px-3 py-2 text-right">%</th>
+                    <th
+                      className="px-3 py-2"
+                      title="Les mois de revenus AVANT cette date ne comptent pas dans le solde à facturer"
+                    >
+                      Facturer depuis
+                    </th>
                     <th className="px-3 py-2">Client QBO (propriétaire)</th>
                   </tr>
                 </thead>
@@ -288,11 +303,21 @@ export default function FraisGestionPage() {
                         <input
                           type="checkbox"
                           checked={row.frais_gestion_actif}
-                          onChange={(e) =>
-                            void patchImmeuble(row.immeuble_id, {
+                          onChange={(e) => {
+                            const patch: Record<string, unknown> = {
                               frais_gestion_actif: e.target.checked
-                            })
-                          }
+                            };
+                            // Activer un contrat sans date → on part du
+                            // mois précédent (pas de faux arriéré).
+                            if (
+                              e.target.checked &&
+                              !row.frais_gestion_depuis
+                            ) {
+                              patch.frais_gestion_depuis =
+                                moisPrecedentISO();
+                            }
+                            void patchImmeuble(row.immeuble_id, patch);
+                          }}
                           title="Contrat de gestion actif — on facture des frais mensuels sur cet immeuble"
                           className="h-4 w-4 accent-accent-500"
                         />
@@ -313,6 +338,23 @@ export default function FraisGestionPage() {
                           }}
                           disabled={!row.frais_gestion_actif}
                           className="w-16 rounded border border-brand-800 bg-brand-950 px-2 py-1 text-right text-white outline-none focus:border-accent-500 disabled:opacity-40"
+                        />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <input
+                          type="month"
+                          value={(row.frais_gestion_depuis || "").slice(0, 7)}
+                          disabled={!row.frais_gestion_actif}
+                          onChange={(e) => {
+                            if (e.target.value) {
+                              void patchImmeuble(row.immeuble_id, {
+                                frais_gestion_depuis:
+                                  e.target.value + "-01"
+                              });
+                            }
+                          }}
+                          title="Recule cette date pour rattraper des mois passés dans le solde"
+                          className="rounded border border-brand-800 bg-brand-950 px-2 py-1 text-white outline-none focus:border-accent-500 disabled:opacity-40"
                         />
                       </td>
                       <td className="px-3 py-2.5">
@@ -406,7 +448,33 @@ export default function FraisGestionPage() {
                           {row.derniere_facture_mois || "jamais"}
                         </dd>
                       </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-white/40">Solde à facturer</dt>
+                        <dd
+                          className={
+                            (row.solde || 0) > 0
+                              ? "font-semibold text-amber-300"
+                              : "text-white/80"
+                          }
+                        >
+                          {money(row.solde || 0)}
+                        </dd>
+                      </div>
                     </dl>
+                    {(row.mois_manques?.length || 0) > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {row.mois_manques!.map((mm) => (
+                          <button
+                            key={mm.mois}
+                            className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-300 transition hover:bg-amber-500/20"
+                            title="Mois avec revenus jamais facturé — clique pour aller le facturer"
+                            onClick={() => void load(mm.mois)}
+                          >
+                            {mm.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
