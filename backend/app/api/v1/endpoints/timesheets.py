@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, or_, select
 
 from app.api.deps import CurrentUser, DBSession
+from app.integrations.quickbooks import QuickBooksError, get_qbo
 from app.models.timesheet import (
     TIMESHEET_DAYS,
     Timesheet,
@@ -1073,6 +1074,182 @@ async def delete_reglement(
     await db.delete(r)
     await db.commit()
     return {"ok": True}
+
+
+# ── Facturation QuickBooks (connexion Gestion d'entreprise) ────────────
+
+
+class FactureQboIn(BaseModel):
+    user_id: int
+    company_id: int
+
+
+class FactureQboOut(BaseModel):
+    ok: bool
+    invoice_id: Optional[str] = None
+    doc_number: Optional[str] = None
+    montant: float = 0.0
+    heures: float = 0.0
+    taux: float = 0.0
+
+
+@router.post("/facturer-qbo", response_model=FactureQboOut)
+async def facturer_solde_qbo(
+    payload: FactureQboIn, db: DBSession, user: CurrentUser
+) -> FactureQboOut:
+    """Crée une facture dans le QuickBooks de GESTION D'ENTREPRISE pour le
+    solde de refacturation (employé, compagnie) : client QBO = le nom de
+    la compagnie, ligne = heures × taux. Puis enregistre automatiquement
+    le règlement « refacturation » → le solde du dashboard tombe à 0."""
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+    emp = await db.get(User, payload.user_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employé introuvable")
+    comp = await db.get(TimesheetCompany, payload.company_id)
+    if not comp:
+        raise HTTPException(status_code=404, detail="Compagnie introuvable")
+
+    # Dû cumulé (heures refacturables × taux effectif par feuille) − déjà
+    # refacturé = solde à facturer. Même calcul que le dashboard.
+    sheets = (
+        await db.execute(
+            select(Timesheet).where(Timesheet.user_id == payload.user_id)
+        )
+    ).scalars().all()
+    ov = (
+        await db.execute(
+            select(TimesheetUserRate).where(
+                TimesheetUserRate.user_id == payload.user_id,
+                TimesheetUserRate.company_id == payload.company_id,
+            )
+        )
+    ).scalar_one_or_none()
+    heures = 0.0
+    due = 0.0
+    if sheets:
+        by_id = {s.id: s for s in sheets}
+        sums = (
+            await db.execute(
+                select(
+                    TimesheetEntry.timesheet_id,
+                    func.sum(TimesheetEntry.hours),
+                )
+                .where(
+                    TimesheetEntry.timesheet_id.in_(by_id.keys()),
+                    TimesheetEntry.company_id == payload.company_id,
+                    TimesheetEntry.refacturable.is_(True),
+                )
+                .group_by(TimesheetEntry.timesheet_id)
+            )
+        ).all()
+        for ts_id, h in sums:
+            ts = by_id.get(ts_id)
+            if not ts or not h:
+                continue
+            rate, _src = _line_rate(ts, ov)
+            heures += float(h)
+            due += float(h) * rate
+    regle = 0.0
+    for r in (
+        await db.execute(
+            select(TimesheetReglement).where(
+                TimesheetReglement.user_id == payload.user_id,
+                TimesheetReglement.company_id == payload.company_id,
+                TimesheetReglement.kind == "refacturation",
+            )
+        )
+    ).scalars().all():
+        regle += float(r.montant or 0.0)
+    solde = round(due - regle, 2)
+    if solde <= 0 or heures <= 0:
+        raise HTTPException(
+            status_code=409, detail="Rien à facturer — le solde est à zéro."
+        )
+    taux_moyen = round(due / heures, 2)
+    # Quantité facturée = heures non encore refacturées (solde ÷ taux
+    # moyen) ; sans règlement partiel = exactement les heures cumulées.
+    qty = round(solde / taux_moyen, 2) if taux_moyen else 0.0
+    montant = round(qty * taux_moyen, 2)
+
+    qbo = get_qbo("entreprise")
+    await qbo._load_refresh_from_db()  # noqa: SLF001 — charge realm/token
+    if not qbo.ready:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Le QuickBooks de Gestion d'entreprise n'est pas connecté. "
+                "Va dans Paramètres → Comptabilité → « QuickBooks — autres "
+                "pôles » et connecte la carte Gestion d'entreprise."
+            ),
+        )
+
+    emp_name = emp.display_name or emp.email or f"Employé {emp.id}"
+    try:
+        customer = await qbo.ensure_customer(display_name=comp.label)
+        item = await qbo.ensure_item(
+            "Heures", description="Heures de main-d'oeuvre refacturées"
+        )
+        inv = await qbo.create_invoice(
+            {
+                "CustomerRef": {"value": str(customer["Id"])},
+                "TxnDate": _today().isoformat(),
+                "Line": [
+                    {
+                        "DetailType": "SalesItemLineDetail",
+                        "Amount": montant,
+                        "Description": (
+                            f"Heures de {emp_name} — "
+                            f"{qty:g} h × {taux_moyen:.2f} $/h"
+                        ),
+                        "SalesItemLineDetail": {
+                            "ItemRef": {"value": str(item["Id"])},
+                            "Qty": qty,
+                            "UnitPrice": taux_moyen,
+                        },
+                    }
+                ],
+                "PrivateNote": (
+                    "Créé par Kratos — refacturation feuille de temps "
+                    f"({emp_name})"
+                ),
+            }
+        )
+    except QuickBooksError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"QuickBooks a refusé la facture : {exc}"
+        )
+    invoice = inv.get("Invoice") or inv
+    invoice_id = str(invoice.get("Id") or "")
+    doc_number = str(invoice.get("DocNumber") or "") or None
+
+    db.add(
+        TimesheetReglement(
+            kind="refacturation",
+            user_id=payload.user_id,
+            company_id=payload.company_id,
+            montant=montant,
+            date_reglement=_today(),
+            note=(
+                f"Facture QuickBooks #{doc_number or invoice_id} — "
+                f"{qty:g} h × {taux_moyen:.2f} $/h ({emp_name})"
+            ),
+            created_by_user_id=user.id,
+        )
+    )
+    await db.commit()
+    log.info(
+        "Facture QBO %s créée pour %s / %s (%.2f $)",
+        doc_number or invoice_id, emp_name, comp.label, montant,
+    )
+    return FactureQboOut(
+        ok=True,
+        invoice_id=invoice_id or None,
+        doc_number=doc_number,
+        montant=montant,
+        heures=qty,
+        taux=taux_moyen,
+    )
 
 
 @router.get("/{timesheet_id}", response_model=TimesheetDetail)

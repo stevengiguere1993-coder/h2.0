@@ -28,7 +28,8 @@ import {
   X,
   DollarSign,
   CalendarDays,
-  Wallet
+  Wallet,
+  FileText
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -1655,6 +1656,53 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
     await load();
   };
 
+  // — Facturation QuickBooks (connexion Gestion d'entreprise) —
+  const [billBusy, setBillBusy] = useState<string | null>(null);
+  const [billMsg, setBillMsg] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
+
+  const facturerQbo = async (emp: DashEmployee, c: DashCompanyRow) => {
+    if (
+      !window.confirm(
+        `Créer une facture QuickBooks à « ${c.label} » pour les heures de ${emp.name} (≈ ${money(c.solde)}) ?\n\nLa facture sera créée dans le QuickBooks de Gestion d'entreprise et le solde sera automatiquement marqué refacturé.`
+      )
+    )
+      return;
+    const key = `${emp.user_id}-${c.company_id}`;
+    setBillBusy(key);
+    setBillMsg(null);
+    try {
+      const r = await authedFetch("/api/v1/timesheets/facturer-qbo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: emp.user_id,
+          company_id: c.company_id
+        })
+      });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) {
+        throw new Error(
+          (d && (d.detail || d.message)) || `Erreur ${r.status}`
+        );
+      }
+      setBillMsg({
+        ok: true,
+        text: `Facture QuickBooks ${d.doc_number ? `#${d.doc_number}` : ""} créée pour ${c.label} : ${(d.heures as number).toLocaleString("fr-CA")} h × ${money(d.taux)} = ${money(d.montant)}. Solde mis à jour.`
+      });
+      await load();
+    } catch (e: any) {
+      setBillMsg({
+        ok: false,
+        text: e?.message || "Facturation impossible"
+      });
+    } finally {
+      setBillBusy(null);
+    }
+  };
+
   if (loading || !data) {
     return (
       <div className="flex items-center justify-center py-16 text-[var(--qg-text-muted)]">
@@ -1665,6 +1713,18 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
 
   return (
     <div className="space-y-5">
+      {billMsg && (
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            billMsg.ok
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+              : "border-red-500/30 bg-red-500/10 text-red-300"
+          }`}
+        >
+          {billMsg.text}
+        </div>
+      )}
+
       {/* Tuiles totaux */}
       <div className="grid gap-4 sm:grid-cols-2">
         <div className={CARD}>
@@ -1801,19 +1861,38 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
                           {money(c.solde)}
                         </td>
                         <td className="py-1.5 text-right">
-                          <button
-                            className="btn-ghost btn-xs"
-                            title="Enregistrer une refacturation pour cette compagnie"
-                            onClick={() =>
-                              setModal({
-                                kind: "refacturation",
-                                emp,
-                                companyId: c.company_id
-                              })
-                            }
-                          >
-                            <DollarSign className="h-4 w-4" />
-                          </button>
+                          <span className="inline-flex items-center gap-1">
+                            {c.solde > 0 && (
+                              <button
+                                className="btn-ghost btn-xs"
+                                title="Créer la facture dans QuickBooks (Gestion d'entreprise) — le solde sera marqué refacturé automatiquement"
+                                disabled={
+                                  billBusy === `${emp.user_id}-${c.company_id}`
+                                }
+                                onClick={() => void facturerQbo(emp, c)}
+                              >
+                                {billBusy ===
+                                `${emp.user_id}-${c.company_id}` ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <FileText className="h-4 w-4" />
+                                )}
+                              </button>
+                            )}
+                            <button
+                              className="btn-ghost btn-xs"
+                              title="Enregistrer manuellement une refacturation (déjà facturée ailleurs)"
+                              onClick={() =>
+                                setModal({
+                                  kind: "refacturation",
+                                  emp,
+                                  companyId: c.company_id
+                                })
+                              }
+                            >
+                              <DollarSign className="h-4 w-4" />
+                            </button>
+                          </span>
                         </td>
                       </tr>
                     ))}
