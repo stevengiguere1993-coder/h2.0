@@ -1679,8 +1679,45 @@ async def submit_timesheet(
         raise HTTPException(status_code=404, detail="Feuille introuvable")
     if not (_is_manager(user) or ts.user_id == user.id):
         raise HTTPException(status_code=403, detail="Accès refusé")
+    deja_soumise = ts.status in ("soumis", "approuve")
     ts.status = "soumis"
     ts.submitted_at = datetime.now(timezone.utc)
+
+    # Cloche des gestionnaires : « feuille soumise, à approuver » (retour
+    # Phil 2026-07-22). Pas de doublon si on re-soumet la même feuille.
+    if not deja_soumise:
+        try:
+            from app.services.notifications import notify
+
+            emp = await db.get(User, ts.user_id)
+            emp_name = (
+                (emp.display_name or emp.email) if emp else "Un employé"
+            )
+            managers = (
+                await db.execute(
+                    select(User).where(
+                        User.is_active.is_(True),
+                        User.role.in_(("owner", "admin", "manager")),
+                        User.id != user.id,
+                    )
+                )
+            ).scalars().all()
+            for m in managers:
+                await notify(
+                    db,
+                    user_id=m.id,
+                    kind="timesheet_soumise",
+                    title=f"Feuille de temps soumise — {emp_name}",
+                    body=(
+                        f"Période du {ts.period_start.isoformat()} au "
+                        f"{ts.period_end.isoformat()} — à approuver dans "
+                        "l'onglet Paies."
+                    ),
+                    href="/entreprises/feuille-de-temps",
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("notif feuille soumise échouée: %s", exc)
+
     await db.commit()
     return await _build_detail(db, ts, user)
 
