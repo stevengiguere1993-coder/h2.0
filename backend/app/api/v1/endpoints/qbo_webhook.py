@@ -31,6 +31,8 @@ from app.db.session import AsyncSessionLocal
 from app.integrations.quickbooks import get_qbo
 from app.models.achat import Achat
 from app.models.qbo_account_map import QboAccountMap
+from app.models.qbo_connection import QboConnection
+from app.models.qbo_token import QboToken
 
 log = logging.getLogger("qbo.webhook")
 router = APIRouter(prefix="/qbo", tags=["qbo-webhook"])
@@ -125,11 +127,39 @@ async def qbo_webhook(request: Request) -> Response:
 
     # Collecte des (entity_name, entity_id) de type dépense qui ont changé,
     # en ignorant les autres compagnies et les suppressions.
+    #
+    # Multi-compagnies (2026-07-22) : ce traitement (achats/coûts) vaut
+    # UNIQUEMENT pour la compagnie Construction. On résout son realm
+    # (env, sinon la ligne qbo_tokens) et on ignore explicitement les
+    # realms des connexions entreprise/immobilier — leur synchro live
+    # viendra en Phase 2. Sans ce filtre, les événements d'une 2e
+    # compagnie seraient appliqués aux achats Construction.
     realm = str(settings.qbo_realm_id or "")
+    other_realms: set = set()
+    try:
+        async with AsyncSessionLocal() as db0:
+            if not realm:
+                tok_row = (
+                    await db0.execute(
+                        select(QboToken).where(QboToken.id == 1)
+                    )
+                ).scalar_one_or_none()
+                if tok_row and tok_row.realm_id:
+                    realm = str(tok_row.realm_id)
+            for conn_row in (
+                await db0.execute(select(QboConnection))
+            ).scalars().all():
+                if conn_row.realm_id and str(conn_row.realm_id) != realm:
+                    other_realms.add(str(conn_row.realm_id))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("webhook QBO: résolution des realms échouée: %s", exc)
     changed: List[Tuple[str, str]] = []
     pull_needed = False
     for note in payload.get("eventNotifications") or []:
-        if realm and str(note.get("realmId") or "") != realm:
+        rid = str(note.get("realmId") or "")
+        if rid and rid in other_realms:
+            continue
+        if realm and rid != realm:
             continue
         entities = (note.get("dataChangeEvent") or {}).get("entities") or []
         for ent in entities:

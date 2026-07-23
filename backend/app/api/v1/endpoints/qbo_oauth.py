@@ -35,7 +35,12 @@ from sqlalchemy import delete, select
 
 from app.api.deps import CurrentAdmin, CurrentUser, DBSession
 from app.core.config import settings
+from app.models.qbo_connection import QBO_CONNECTION_SCOPES, QboConnection
 from app.models.qbo_token import QboToken
+
+#: Scopes de connexion valides : "construction" (legacy qbo_tokens) +
+#: les scopes multi-compagnies (qbo_connections).
+_ALL_SCOPES = ("construction",) + QBO_CONNECTION_SCOPES
 
 
 log = logging.getLogger(__name__)
@@ -71,15 +76,20 @@ _STATE_TTL_SECONDS = 300  # 5 minutes
 # State signing — prevents CSRF + binds callback to this deploy's secret
 # ---------------------------------------------------------------------------
 
-def _sign_state(nonce: str, ts: int) -> str:
-    raw = f"{ts}.{nonce}".encode()
+def _sign_state(nonce: str, ts: int, scope: str = "construction") -> str:
+    # Le scope voyage DANS le state signé : le callback Intuit ne porte
+    # rien d'autre qui permette de savoir à quel pôle appartient la
+    # compagnie qu'on vient d'autoriser.
+    raw = f"{ts}.{nonce}.{scope}".encode()
     sig = hmac.new(
         settings.jwt_secret.encode(), raw, hashlib.sha256
     ).digest()
     return base64.urlsafe_b64encode(raw + b"|" + sig).decode().rstrip("=")
 
 
-def _verify_state(token: str) -> bool:
+def _verify_state(token: str) -> Optional[str]:
+    """Vérifie signature + TTL ; retourne le scope (None = invalide).
+    Les states legacy sans scope valent "construction"."""
     try:
         padded = token + "=" * (-len(token) % 4)
         decoded = base64.urlsafe_b64decode(padded.encode())
@@ -88,12 +98,15 @@ def _verify_state(token: str) -> bool:
             settings.jwt_secret.encode(), raw, hashlib.sha256
         ).digest()
         if not hmac.compare_digest(sig, expected):
-            return False
-        ts_str, _nonce = raw.decode().split(".", 1)
-        ts = int(ts_str)
-        return (time.time() - ts) <= _STATE_TTL_SECONDS
+            return None
+        parts = raw.decode().split(".")
+        ts = int(parts[0])
+        if (time.time() - ts) > _STATE_TTL_SECONDS:
+            return None
+        scope = parts[2] if len(parts) >= 3 else "construction"
+        return scope if scope in _ALL_SCOPES else None
     except Exception:
-        return False
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -127,10 +140,17 @@ class StatusResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.get("/connect", response_model=ConnectResponse)
-async def qbo_connect(_: CurrentAdmin) -> ConnectResponse:
+async def qbo_connect(
+    _: CurrentAdmin,
+    scope: str = Query(default="construction"),
+) -> ConnectResponse:
     """Build the Intuit consent URL. The frontend redirects the browser
     to this URL; after the user approves, Intuit redirects back to the
-    /callback endpoint with `code` + `realmId`."""
+    /callback endpoint with `code` + `realmId`. La MÊME app Intuit sert
+    toutes les compagnies — `scope` choisit le pôle Kratos auquel la
+    compagnie autorisée sera rattachée."""
+    if scope not in _ALL_SCOPES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "scope invalide")
     if not settings.quickbooks_client_id or not settings.quickbooks_client_secret:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -138,7 +158,7 @@ async def qbo_connect(_: CurrentAdmin) -> ConnectResponse:
             "(QUICKBOOKS_CLIENT_ID / QUICKBOOKS_CLIENT_SECRET manquants).",
         )
     nonce = secrets.token_urlsafe(16)
-    state = _sign_state(nonce, int(time.time()))
+    state = _sign_state(nonce, int(time.time()), scope)
     params = {
         "client_id": settings.quickbooks_client_id,
         "response_type": "code",
@@ -181,7 +201,8 @@ async def qbo_callback(
         return _redirect(f"error:{error}")
     if not code or not realmId or not state:
         return _redirect("error:missing_params")
-    if not _verify_state(state):
+    scope = _verify_state(state)
+    if scope is None:
         return _redirect("error:invalid_state")
 
     # Exchange authorization code for tokens
@@ -241,54 +262,102 @@ async def qbo_callback(
     except Exception as exc:
         log.warning("Could not fetch QBO CompanyInfo: %s", exc)
 
-    # Upsert the single qbo_tokens row
-    row = (
-        await db.execute(select(QboToken).where(QboToken.id == 1))
-    ).scalar_one_or_none()
     now = datetime.now(timezone.utc)
-    if row is None:
-        row = QboToken(
-            id=1,
-            refresh_token=refresh_token,
-            realm_id=str(realmId),
-            environment=settings.quickbooks_env,
-            company_name=company_name,
-            connected_at=now,
-        )
-        db.add(row)
-    else:
-        row.refresh_token = refresh_token
-        row.realm_id = str(realmId)
-        row.environment = settings.quickbooks_env
-        row.company_name = company_name
-        row.connected_at = now
-    await db.commit()
-
-    # Reset the in-process QBO client so the next call reads fresh
-    # values from the DB / env.
-    try:
-        from app.integrations import quickbooks as qbo_mod
-
-        if qbo_mod._qbo is not None:
-            qbo_mod._qbo.tokens.refresh_token = refresh_token
-            qbo_mod._qbo.tokens.access_token = access_token
-            qbo_mod._qbo.tokens.access_expires_at = (
-                time.time() + int(tok.get("expires_in", 3600))
+    if scope == "construction":
+        # Chemin HISTORIQUE (compagnie Horizon) — inchangé : upsert de la
+        # ligne unique qbo_tokens id=1.
+        row = (
+            await db.execute(select(QboToken).where(QboToken.id == 1))
+        ).scalar_one_or_none()
+        if row is None:
+            row = QboToken(
+                id=1,
+                refresh_token=refresh_token,
+                realm_id=str(realmId),
+                environment=settings.quickbooks_env,
+                company_name=company_name,
+                connected_at=now,
             )
-            qbo_mod._qbo.realm_id = str(realmId)
-            qbo_mod._qbo._db_loaded = True
-    except Exception as exc:
-        log.warning("Could not prime in-process QBO client: %s", exc)
+            db.add(row)
+        else:
+            row.refresh_token = refresh_token
+            row.realm_id = str(realmId)
+            row.environment = settings.quickbooks_env
+            row.company_name = company_name
+            row.connected_at = now
+        await db.commit()
+
+        # Reset the in-process QBO client so the next call reads fresh
+        # values from the DB / env.
+        try:
+            from app.integrations import quickbooks as qbo_mod
+
+            if qbo_mod._qbo is not None:
+                qbo_mod._qbo.tokens.refresh_token = refresh_token
+                qbo_mod._qbo.tokens.access_token = access_token
+                qbo_mod._qbo.tokens.access_expires_at = (
+                    time.time() + int(tok.get("expires_in", 3600))
+                )
+                qbo_mod._qbo.realm_id = str(realmId)
+                qbo_mod._qbo._db_loaded = True
+        except Exception as exc:
+            log.warning("Could not prime in-process QBO client: %s", exc)
+    else:
+        # Connexions multi-compagnies (entreprise / immobilier) : upsert
+        # par scope dans qbo_connections.
+        conn_row = (
+            await db.execute(
+                select(QboConnection).where(QboConnection.scope == scope)
+            )
+        ).scalar_one_or_none()
+        if conn_row is None:
+            db.add(
+                QboConnection(
+                    scope=scope,
+                    refresh_token=refresh_token,
+                    realm_id=str(realmId),
+                    environment=settings.quickbooks_env,
+                    company_name=company_name,
+                    connected_at=now,
+                )
+            )
+        else:
+            conn_row.refresh_token = refresh_token
+            conn_row.realm_id = str(realmId)
+            conn_row.environment = settings.quickbooks_env
+            conn_row.company_name = company_name
+            conn_row.connected_at = now
+        await db.commit()
+
+        try:
+            from app.integrations import quickbooks as qbo_mod
+
+            qbo_mod.reset_qbo(scope)
+        except Exception as exc:
+            log.warning("Could not reset scoped QBO client: %s", exc)
 
     return _redirect("connected")
 
 
 @router.get("/status", response_model=StatusResponse)
-async def qbo_status(db: DBSession, _: CurrentUser) -> StatusResponse:
-    row = (
-        await db.execute(select(QboToken).where(QboToken.id == 1))
-    ).scalar_one_or_none()
+async def qbo_status(
+    db: DBSession,
+    _: CurrentUser,
+    scope: str = Query(default="construction"),
+) -> StatusResponse:
+    if scope not in _ALL_SCOPES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "scope invalide")
     active_env = (settings.quickbooks_env or "sandbox").lower()
+    if scope == "construction":
+        row = (
+            await db.execute(select(QboToken).where(QboToken.id == 1))
+        ).scalar_one_or_none()
+    else:
+        row = (
+            await db.execute(
+                select(QboConnection).where(QboConnection.scope == scope)
+            )
+        ).scalar_one_or_none()
     if row is None or not row.refresh_token:
         return StatusResponse(
             connected=False, active_environment=active_env
@@ -306,17 +375,28 @@ async def qbo_status(db: DBSession, _: CurrentUser) -> StatusResponse:
 
 
 @router.post("/disconnect", status_code=status.HTTP_204_NO_CONTENT)
-async def qbo_disconnect(db: DBSession, _: CurrentAdmin) -> None:
+async def qbo_disconnect(
+    db: DBSession,
+    _: CurrentAdmin,
+    scope: str = Query(default="construction"),
+) -> None:
     """Forget the saved tokens locally. Does NOT revoke at Intuit — if
     you want to fully revoke, do it from the QBO company settings
     (Apps → Disconnect). Keeping local-only keeps the call idempotent
     and avoids blocking on Intuit's revoke endpoint."""
-    await db.execute(delete(QboToken).where(QboToken.id == 1))
+    if scope not in _ALL_SCOPES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "scope invalide")
+    if scope == "construction":
+        await db.execute(delete(QboToken).where(QboToken.id == 1))
+    else:
+        await db.execute(
+            delete(QboConnection).where(QboConnection.scope == scope)
+        )
     await db.commit()
 
     try:
         from app.integrations import quickbooks as qbo_mod
 
-        qbo_mod._qbo = None
+        qbo_mod.reset_qbo(scope)
     except Exception:
         pass

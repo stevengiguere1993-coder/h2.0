@@ -520,6 +520,27 @@ async def ensure_immobilier_aux_tables() -> None:
         log.warning("ensure_immobilier_aux_tables failed: %s", exc)
 
 
+async def ensure_qbo_connections_table() -> None:
+    """Crée la table ``qbo_connections`` (QuickBooks multi-compagnies,
+    scopes entreprise/immobilier) dans sa propre transaction. La table
+    historique ``qbo_tokens`` (Construction) n'est pas touchée."""
+    import logging
+
+    log = logging.getLogger("db.ensure_qbo_connections_table")
+    try:
+        from app.db.base import Base
+        from app.models.qbo_connection import QboConnection  # noqa: F401
+
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(
+                    c, tables=[QboConnection.__table__]
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_qbo_connections_table failed: %s", exc)
+
+
 async def ensure_timesheet_tables() -> None:
     """Crée les tables Feuille de temps (Gestion d'entreprise) dans leur
     propre transaction, pour survivre à un abort d'``init_db``."""
