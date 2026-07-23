@@ -1346,33 +1346,72 @@ async def facturer_solde_qbo(
         item = await qbo.ensure_item(
             "Heures", description="Heures de main-d'oeuvre refacturées"
         )
-        inv = await qbo.create_invoice(
-            {
-                "CustomerRef": {"value": customer_ref},
-                "TxnDate": _today().isoformat(),
-                "GlobalTaxCalculation": "TaxExcluded",
-                "Line": [
-                    {
-                        "DetailType": "SalesItemLineDetail",
-                        "Amount": montant,
-                        "Description": (
-                            f"Heures de {emp_name} — "
-                            f"{qty:g} h × {taux_moyen:.2f} $/h"
-                        ),
-                        "SalesItemLineDetail": {
-                            "ItemRef": {"value": str(item["Id"])},
-                            "Qty": qty,
-                            "UnitPrice": taux_moyen,
-                            "TaxCodeRef": {"value": tax_code_id},
-                        },
-                    }
-                ],
-                "PrivateNote": (
-                    "Créé par Kratos — refacturation feuille de temps "
-                    f"({emp_name})"
-                ),
-            }
-        )
+
+        # Numéro de facture : quand QBO a « numéros d'opération
+        # personnalisés » activé, l'API laisse le DocNumber VIDE si on
+        # n'en fournit pas (vu chez Phil). On calcule donc le prochain
+        # numéro nous-mêmes (max numérique des factures récentes + 1).
+        next_num: Optional[str] = None
+        try:
+            rows = await qbo.query(
+                "SELECT DocNumber FROM Invoice "
+                "ORDERBY MetaData.CreateTime DESC MAXRESULTS 100"
+            )
+            nums = [
+                int(str(r.get("DocNumber")))
+                for r in rows
+                if str(r.get("DocNumber") or "").isdigit()
+            ]
+            next_num = str(max(nums) + 1) if nums else "1000"
+        except QuickBooksError:
+            next_num = None  # QBO choisira (ou laissera vide)
+
+        base_payload = {
+            "CustomerRef": {"value": customer_ref},
+            "TxnDate": _today().isoformat(),
+            "GlobalTaxCalculation": "TaxExcluded",
+            "Line": [
+                {
+                    "DetailType": "SalesItemLineDetail",
+                    "Amount": montant,
+                    "Description": (
+                        f"Heures de {emp_name} — "
+                        f"{qty:g} h × {taux_moyen:.2f} $/h"
+                    ),
+                    "SalesItemLineDetail": {
+                        "ItemRef": {"value": str(item["Id"])},
+                        "Qty": qty,
+                        "UnitPrice": taux_moyen,
+                        "TaxCodeRef": {"value": tax_code_id},
+                    },
+                }
+            ],
+            "PrivateNote": (
+                "Créé par Kratos — refacturation feuille de temps "
+                f"({emp_name})"
+            ),
+        }
+        # Collision de numéro (erreur 6140 « en double ») → on incrémente
+        # et on réessaie (max 3 fois).
+        tries = 0
+        while True:
+            body = dict(base_payload)
+            if next_num:
+                body["DocNumber"] = next_num
+            try:
+                inv = await qbo.create_invoice(body)
+                break
+            except QuickBooksError as exc:
+                msg = str(exc)
+                if (
+                    next_num
+                    and tries < 3
+                    and ("6140" in msg or "uplicate" in msg or "double" in msg)
+                ):
+                    tries += 1
+                    next_num = str(int(next_num) + 1)
+                    continue
+                raise
     except QuickBooksError as exc:
         raise HTTPException(
             status_code=502, detail=f"QuickBooks a refusé la facture : {exc}"
