@@ -31,6 +31,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
+from app.models.qbo_connection import QboConnection
 from app.models.qbo_token import QboToken
 
 log = logging.getLogger(__name__)
@@ -57,12 +58,24 @@ class QuickBooksError(Exception):
 
 
 class QuickBooksClient:
-    def __init__(self) -> None:
+    def __init__(self, scope: str = "construction") -> None:
+        # "construction" = connexion historique (table qbo_tokens id=1 +
+        # fallbacks env) — comportement inchangé. Les autres scopes
+        # ("entreprise", "immobilier") lisent/écrivent leur ligne dans
+        # qbo_connections et n'ont AUCUN fallback env (les env vars
+        # appartiennent à la compagnie Construction).
+        self.scope = scope
         self.client_id = settings.quickbooks_client_id
         self.client_secret = settings.quickbooks_client_secret
-        self.realm_id = settings.qbo_realm_id
+        if scope == "construction":
+            self.realm_id = settings.qbo_realm_id
+            self.tokens = QBOTokens(
+                refresh_token=settings.qbo_refresh_token
+            )
+        else:
+            self.realm_id = None
+            self.tokens = QBOTokens()
         self.env = (settings.quickbooks_env or "sandbox").lower()
-        self.tokens = QBOTokens(refresh_token=settings.qbo_refresh_token)
         self.base_url = _PROD_API if self.env == "production" else _SANDBOX_API
         # Guard so we only read the DB-persisted refresh token once per
         # process lifetime. If DB has a newer token than the env, use it.
@@ -83,9 +96,20 @@ class QuickBooksClient:
             return
         try:
             async with AsyncSessionLocal() as db:
-                row = (
-                    await db.execute(select(QboToken).where(QboToken.id == 1))
-                ).scalar_one_or_none()
+                if self.scope == "construction":
+                    row = (
+                        await db.execute(
+                            select(QboToken).where(QboToken.id == 1)
+                        )
+                    ).scalar_one_or_none()
+                else:
+                    row = (
+                        await db.execute(
+                            select(QboConnection).where(
+                                QboConnection.scope == self.scope
+                            )
+                        )
+                    ).scalar_one_or_none()
                 if row:
                     if row.refresh_token:
                         self.tokens.refresh_token = row.refresh_token
@@ -167,22 +191,38 @@ class QuickBooksClient:
             # survives backend restarts without any external service.
             try:
                 async with AsyncSessionLocal() as db:
-                    row = (
-                        await db.execute(select(QboToken).where(QboToken.id == 1))
-                    ).scalar_one_or_none()
-                    if row is None:
-                        db.add(QboToken(id=1, refresh_token=new_refresh))
+                    if self.scope == "construction":
+                        row = (
+                            await db.execute(
+                                select(QboToken).where(QboToken.id == 1)
+                            )
+                        ).scalar_one_or_none()
+                        if row is None:
+                            db.add(QboToken(id=1, refresh_token=new_refresh))
+                        else:
+                            row.refresh_token = new_refresh
                     else:
-                        row.refresh_token = new_refresh
+                        conn_row = (
+                            await db.execute(
+                                select(QboConnection).where(
+                                    QboConnection.scope == self.scope
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if conn_row is not None:
+                            conn_row.refresh_token = new_refresh
                     await db.commit()
             except Exception as exc:
                 log.warning("Could not save rotated QBO refresh token to DB: %s", exc)
 
             # Secondary (optional): mirror it into the Render env var
             # so a fresh boot still has a valid value before the DB
-            # read is wired in (e.g. during local dev).
+            # read is wired in (e.g. during local dev). Construction
+            # seulement — la var env appartient à cette connexion.
             render_api_key = os.getenv("RENDER_API_KEY")
             web_service_id = os.getenv("RENDER_WEB_SERVICE_ID")
+            if self.scope != "construction":
+                render_api_key = None
             if render_api_key and web_service_id:
                 try:
                     async with httpx.AsyncClient(timeout=15.0) as http:
@@ -1341,13 +1381,32 @@ class QuickBooksClient:
 
 
 _qbo: Optional[QuickBooksClient] = None
+#: Clients des scopes NON-construction ("entreprise", "immobilier").
+_qbo_by_scope: Dict[str, QuickBooksClient] = {}
 
 
-def get_qbo() -> QuickBooksClient:
+def get_qbo(scope: str = "construction") -> QuickBooksClient:
+    """Client QBO du scope demandé. Sans argument = Construction
+    (comportement historique — tous les call sites existants)."""
     global _qbo
-    if _qbo is None:
-        _qbo = QuickBooksClient()
-    return _qbo
+    if scope == "construction":
+        if _qbo is None:
+            _qbo = QuickBooksClient()
+        return _qbo
+    cli = _qbo_by_scope.get(scope)
+    if cli is None:
+        cli = QuickBooksClient(scope=scope)
+        _qbo_by_scope[scope] = cli
+    return cli
+
+
+def reset_qbo(scope: str) -> None:
+    """Oublie le client en mémoire d'un scope (après connect/disconnect)."""
+    global _qbo
+    if scope == "construction":
+        _qbo = None
+    else:
+        _qbo_by_scope.pop(scope, None)
 
 
 # Avoid an unused-import warning in tight environments:

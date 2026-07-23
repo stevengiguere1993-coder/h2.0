@@ -654,6 +654,176 @@ function QboAccountMapSection() {
 // Page
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// QuickBooks multi-compagnies — connexions des AUTRES pôles
+// ---------------------------------------------------------------------------
+
+const OTHER_QBO_SCOPES: { scope: string; label: string; hint: string }[] = [
+  {
+    scope: "entreprise",
+    label: "Gestion d'entreprise",
+    hint: "Compagnie QuickBooks du pôle Gestion d'entreprise."
+  },
+  {
+    scope: "immobilier",
+    label: "Gestion locative",
+    hint: "Compagnie QuickBooks du pôle Gestion immobilière (locatif)."
+  }
+];
+
+function QboScopeCard({
+  scope,
+  label,
+  hint
+}: {
+  scope: string;
+  label: string;
+  hint: string;
+}) {
+  const [status, setStatus] = useState<QboStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await authedFetch(`/api/v1/qbo/status?scope=${scope}`);
+      if (res.ok) setStatus((await res.json()) as QboStatus);
+    } catch {
+      // silencieux
+    } finally {
+      setLoading(false);
+    }
+  }, [scope]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function connect() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(`/api/v1/qbo/connect?scope=${scope}`);
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const data = (await res.json()) as { auth_url: string };
+      window.location.href = data.auth_url;
+    } catch (e) {
+      setErr(`Impossible de lancer la connexion : ${(e as Error).message}`);
+      setBusy(false);
+    }
+  }
+
+  async function disconnect() {
+    if (
+      !window.confirm(
+        `Déconnecter le QuickBooks de « ${label} » ? (La connexion Construction n'est pas touchée.)`
+      )
+    )
+      return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/qbo/disconnect?scope=${scope}`,
+        { method: "POST" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error();
+      await load();
+    } catch {
+      setErr("Déconnexion échouée.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const connected = !!status?.connected;
+
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-950/40 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-white">
+            {label}
+            {loading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" />
+            ) : connected ? (
+              <span className="badge badge-emerald">Connecté</span>
+            ) : (
+              <span className="badge badge-amber">À connecter</span>
+            )}
+          </p>
+          <p className="mt-0.5 text-[11px] text-white/50">{hint}</p>
+          {connected ? (
+            <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-emerald-300">
+              <CheckCircle2 className="h-3 w-3" />
+              {status?.company_name || status?.realm_id}
+              {status?.environment ? ` · ${status.environment}` : ""}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={connect}
+            disabled={busy}
+            className="btn-secondary text-xs"
+          >
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            {connected ? "Reconnecter" : "Connecter"}
+          </button>
+          {connected ? (
+            <button
+              type="button"
+              onClick={disconnect}
+              disabled={busy}
+              className="btn-outline-rose btn-sm disabled:opacity-50"
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              Déconnecter
+            </button>
+          ) : null}
+        </div>
+      </div>
+      {err ? (
+        <p className="mt-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {err}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function QboMultiSection() {
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <header className="flex items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500 font-bold">
+          QB
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-bold text-white">
+            QuickBooks — autres pôles
+          </h2>
+          <p className="mt-0.5 text-xs text-white/60">
+            Connecte une compagnie QuickBooks distincte pour chaque pôle.
+            La même app Intuit sert toutes les compagnies : clique
+            « Connecter » puis choisis la bonne compagnie dans la fenêtre
+            Intuit. Les synchronisations de ces pôles arrivent en phase 2 —
+            pour l&apos;instant on établit les connexions.
+          </p>
+        </div>
+      </header>
+      <div className="mt-4 space-y-3">
+        {OTHER_QBO_SCOPES.map((s) => (
+          <QboScopeCard key={s.scope} {...s} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function ComptabilitePage() {
   const { onOpenSidebar } = useAppLayout();
   const { user } = useCurrentUser();
@@ -690,6 +860,7 @@ export default function ComptabilitePage() {
         {isAdmin ? (
           <>
             <QuickBooksSection />
+            <QboMultiSection />
             <QboAccountMapSection />
           </>
         ) : (

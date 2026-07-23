@@ -23,6 +23,7 @@ from app.db.session import (
     ensure_raci_tables,
     ensure_relance_tables,
     ensure_role_permissions_tables,
+    ensure_qbo_connections_table,
     ensure_timesheet_tables,
     init_db,
 )
@@ -76,6 +77,14 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning(
             "ensure_timesheet_tables failed during startup: %s", exc
+        )
+
+    # Table Connexions QuickBooks multi-compagnies — transaction isolée.
+    try:
+        await ensure_qbo_connections_table()
+    except Exception as exc:
+        logger.warning(
+            "ensure_qbo_connections_table failed during startup: %s", exc
         )
 
     # Table Corrections/améliorations de projet (Flux A) — transaction
