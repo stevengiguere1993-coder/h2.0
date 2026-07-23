@@ -123,6 +123,8 @@ class ImmeubleRow(BaseModel):
     revenus: float
     montant_estime: float
     facture: Optional[FactureOut] = None
+    #: Dernier mois déjà facturé (tous mois confondus) — dashboard.
+    derniere_facture_mois: Optional[str] = None
 
 
 class OverviewOut(BaseModel):
@@ -192,6 +194,17 @@ async def overview(
             )
         ).scalars().all()
     }
+    derniers = {
+        int(iid): dm
+        for iid, dm in (
+            await db.execute(
+                select(
+                    FactureGestion.immeuble_id,
+                    func.max(FactureGestion.mois_couvert),
+                ).group_by(FactureGestion.immeuble_id)
+            )
+        ).all()
+    }
     rows: List[ImmeubleRow] = []
     nb_f = 0
     nb_a = 0
@@ -227,6 +240,12 @@ async def overview(
                         ),
                     )
                     if f
+                    else None
+                ),
+                derniere_facture_mois=(
+                    f"{MOIS_FR[derniers[imm.id].month - 1]} "
+                    f"{derniers[imm.id].year}"
+                    if imm.id in derniers
                     else None
                 ),
             )
