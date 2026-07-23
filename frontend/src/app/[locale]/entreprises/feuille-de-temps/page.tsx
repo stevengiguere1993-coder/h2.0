@@ -728,7 +728,8 @@ export default function FeuilleDeTempsPage() {
               cells={cells}
               cellsNr={cellsNr}
               notes={notes}
-              perCompany={computed.perCompany}
+              perCompanyR={computed.perCompanyR}
+              perCompanyN={computed.perCompanyN}
               perDay={computed.perDay}
               perDayNr={computed.perDayNr}
               totalHeures={computed.totalHeures}
@@ -1033,7 +1034,8 @@ function Grille({
   cells,
   cellsNr,
   notes,
-  perCompany,
+  perCompanyR,
+  perCompanyN,
   perDay,
   perDayNr,
   totalHeures,
@@ -1045,7 +1047,8 @@ function Grille({
   cells: Record<number, string[]>;
   cellsNr: Record<number, string[]>;
   notes: Record<number, string>;
-  perCompany: Record<number, number>;
+  perCompanyR: Record<number, number>;
+  perCompanyN: Record<number, number>;
   perDay: number[];
   perDayNr: number[];
   totalHeures: number;
@@ -1089,25 +1092,13 @@ function Grille({
               colSpan={7}
               className="border-b border-r border-[var(--qg-border)] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-[var(--qg-text-muted)]"
             >
-              Semaine 1 · Refacturable
+              Semaine 1
             </th>
             <th
               colSpan={7}
-              className="border-b border-r-2 border-[var(--qg-border)] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-[var(--qg-text-muted)]"
+              className="border-b border-r border-[var(--qg-border)] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-[var(--qg-text-muted)]"
             >
-              Semaine 2 · Refacturable
-            </th>
-            <th
-              colSpan={7}
-              className="border-b border-r border-[var(--qg-border)] bg-rose-500/[0.04] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-rose-400/80"
-            >
-              Semaine 1 · Non refacturable
-            </th>
-            <th
-              colSpan={7}
-              className="border-b border-r border-[var(--qg-border)] bg-rose-500/[0.04] px-2 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-rose-400/80"
-            >
-              Semaine 2 · Non refacturable
+              Semaine 2
             </th>
             <th
               rowSpan={2}
@@ -1122,74 +1113,55 @@ function Grille({
               Notes
             </th>
           </tr>
-          {/* Ligne jours (dates répétées pour le bloc non refacturable) */}
+          {/* Ligne jours */}
           <tr className="bg-[var(--qg-bg)]/60">
-            {[false, true].map((nr) =>
-              Array.from({ length: DAYS }).map((_, i) => {
-                const h = dayHeader(i);
-                return (
-                  <th
-                    key={`${nr}-${i}`}
-                    className={`border-b border-[var(--qg-border)] px-1 py-1.5 text-center text-xs font-medium ${
-                      isWeekend(i) ? weekendBg + " text-[var(--qg-text-faint)]" : "text-[var(--qg-text-muted)]"
-                    } ${nr ? "bg-rose-500/[0.03]" : ""} ${
-                      i === 6 ? "border-r border-[var(--qg-border)]" : ""
-                    } ${i === 13 && !nr ? "border-r-2 border-[var(--qg-border)]" : ""}`}
-                  >
-                    <div>{h.wd}</div>
-                    <div className="text-[var(--qg-text-faint)]">{h.day}</div>
-                  </th>
-                );
-              })
-            )}
+            {Array.from({ length: DAYS }).map((_, i) => {
+              const h = dayHeader(i);
+              return (
+                <th
+                  key={i}
+                  className={`border-b border-[var(--qg-border)] px-1 py-1.5 text-center text-xs font-medium ${
+                    isWeekend(i) ? weekendBg + " text-[var(--qg-text-faint)]" : "text-[var(--qg-text-muted)]"
+                  } ${i === 6 ? "border-r border-[var(--qg-border)]" : ""}`}
+                >
+                  <div>{h.wd}</div>
+                  <div className="text-[var(--qg-text-faint)]">{h.day}</div>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
           {detail.lignes.map((l) => {
-            const tot = perCompany[l.company_id] || 0;
+            const arr = cells[l.company_id] || [];
+            const tot = perCompanyR[l.company_id] || 0;
             return (
               <tr key={l.company_id} className="group border-b border-[var(--qg-border)]/60">
                 <td className="sticky left-0 z-10 min-w-[200px] border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-4 py-1.5 font-medium group-hover:bg-[var(--qg-bg)]/30">
                   {l.label}
                 </td>
-                {[false, true].map((nr) => {
-                  const arr =
-                    (nr ? cellsNr : cells)[l.company_id] || [];
-                  // Bloc NR permis seulement sur les compagnies qui
-                  // l'autorisent (case dans le modal Compagnies).
-                  const bloque = nr && !l.nr_autorise;
-                  return Array.from({ length: DAYS }).map((_, i) => (
-                    <td
-                      key={`${nr}-${i}`}
-                      title={
-                        bloque
-                          ? "Heures non refacturables non permises sur cette compagnie (activable via le bouton Compagnies)"
-                          : undefined
-                      }
-                      className={`border-[var(--qg-border)]/40 px-0.5 py-1 ${
-                        isWeekend(i) ? weekendBg : ""
-                      } ${nr ? "bg-rose-500/[0.03]" : ""} ${
-                        bloque ? "cursor-not-allowed opacity-25" : ""
-                      } ${
-                        i === 6 ? "border-r border-[var(--qg-border)]" : ""
-                      } ${i === 13 && !nr ? "border-r-2 border-[var(--qg-border)]" : ""}`}
-                    >
-                      {canEdit && !bloque ? (
-                        <input
-                          inputMode="decimal"
-                          value={arr[i] || ""}
-                          onChange={(e) =>
-                            onCell(l.company_id, i, e.target.value, nr)
-                          }
-                          className={`${cellBase} rounded border border-transparent bg-transparent px-1 py-1 hover:border-[var(--qg-border)] focus:border-[var(--qg-accent)] focus:bg-[var(--qg-bg)]/40`}
-                          placeholder="·"
-                        />
-                      ) : (
-                        <div className={`${cellBase} py-1`}>{arr[i] || ""}</div>
-                      )}
-                    </td>
-                  ));
-                })}
+                {Array.from({ length: DAYS }).map((_, i) => (
+                  <td
+                    key={i}
+                    className={`border-[var(--qg-border)]/40 px-0.5 py-1 ${
+                      isWeekend(i) ? weekendBg : ""
+                    } ${i === 6 ? "border-r border-[var(--qg-border)]" : ""}`}
+                  >
+                    {canEdit ? (
+                      <input
+                        inputMode="decimal"
+                        value={arr[i] || ""}
+                        onChange={(e) =>
+                          onCell(l.company_id, i, e.target.value, false)
+                        }
+                        className={`${cellBase} rounded border border-transparent bg-transparent px-1 py-1 hover:border-[var(--qg-border)] focus:border-[var(--qg-accent)] focus:bg-[var(--qg-bg)]/40`}
+                        placeholder="·"
+                      />
+                    ) : (
+                      <div className={`${cellBase} py-1`}>{arr[i] || ""}</div>
+                    )}
+                  </td>
+                ))}
                 <td className="border-l border-[var(--qg-border)] bg-amber-500/5 px-3 py-1.5 text-center font-semibold tabular-nums">
                   {tot ? tot.toLocaleString("fr-CA") : ""}
                 </td>
@@ -1210,26 +1182,88 @@ function Grille({
               </tr>
             );
           })}
+
+          {/* Section HEURES NON REFACTURABLES — empilée sous la grille
+              (pas de scroll horizontal), seulement les compagnies qui
+              l'autorisent (case dans le modal Compagnies). */}
+          {detail.lignes.some((l) => l.nr_autorise) && (
+            <>
+              <tr>
+                <td
+                  colSpan={DAYS + 3}
+                  className="border-b border-t-2 border-[var(--qg-border)] bg-rose-500/[0.06] px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-rose-400/90"
+                >
+                  Heures non refacturables — payées, non facturées
+                </td>
+              </tr>
+              {detail.lignes
+                .filter((l) => l.nr_autorise)
+                .map((l) => {
+                  const arr = cellsNr[l.company_id] || [];
+                  const tot = perCompanyN[l.company_id] || 0;
+                  return (
+                    <tr
+                      key={`nr-${l.company_id}`}
+                      className="group border-b border-[var(--qg-border)]/60 bg-rose-500/[0.03]"
+                    >
+                      <td className="sticky left-0 z-10 min-w-[200px] border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-4 py-1.5 font-medium group-hover:bg-[var(--qg-bg)]/30">
+                        {l.label}{" "}
+                        <span className="text-xs font-normal text-rose-400/80">
+                          · non refact.
+                        </span>
+                      </td>
+                      {Array.from({ length: DAYS }).map((_, i) => (
+                        <td
+                          key={i}
+                          className={`border-[var(--qg-border)]/40 px-0.5 py-1 ${
+                            isWeekend(i) ? weekendBg : ""
+                          } ${i === 6 ? "border-r border-[var(--qg-border)]" : ""}`}
+                        >
+                          {canEdit ? (
+                            <input
+                              inputMode="decimal"
+                              value={arr[i] || ""}
+                              onChange={(e) =>
+                                onCell(l.company_id, i, e.target.value, true)
+                              }
+                              className={`${cellBase} rounded border border-transparent bg-transparent px-1 py-1 hover:border-[var(--qg-border)] focus:border-[var(--qg-accent)] focus:bg-[var(--qg-bg)]/40`}
+                              placeholder="·"
+                            />
+                          ) : (
+                            <div className={`${cellBase} py-1`}>
+                              {arr[i] || ""}
+                            </div>
+                          )}
+                        </td>
+                      ))}
+                      <td className="border-l border-[var(--qg-border)] bg-amber-500/5 px-3 py-1.5 text-center font-semibold tabular-nums">
+                        {tot ? tot.toLocaleString("fr-CA") : ""}
+                      </td>
+                      <td className="px-2 py-1" />
+                    </tr>
+                  );
+                })}
+            </>
+          )}
         </tbody>
         <tfoot>
           <tr className="bg-[var(--qg-bg)]/70 font-semibold">
             <td className="sticky left-0 z-10 border-r border-t-2 border-[var(--qg-border)] bg-[var(--qg-bg)]/90 px-4 py-2">
               Total / jour
             </td>
-            {[false, true].map((nr) =>
-              (nr ? perDayNr : perDay).map((d, i) => (
+            {perDay.map((d, i) => {
+              const tot = Math.round((d + (perDayNr[i] || 0)) * 100) / 100;
+              return (
                 <td
-                  key={`${nr}-${i}`}
+                  key={i}
                   className={`border-t-2 border-[var(--qg-border)] px-1 py-2 text-center tabular-nums ${
                     isWeekend(i) ? weekendBg : ""
-                  } ${nr ? "bg-rose-500/[0.03]" : ""} ${
-                    i === 6 ? "border-r border-[var(--qg-border)]" : ""
-                  } ${i === 13 && !nr ? "border-r-2 border-[var(--qg-border)]" : ""}`}
+                  } ${i === 6 ? "border-r border-[var(--qg-border)]" : ""}`}
                 >
-                  {d ? d.toLocaleString("fr-CA") : ""}
+                  {tot ? tot.toLocaleString("fr-CA") : ""}
                 </td>
-              ))
-            )}
+              );
+            })}
             <td className="border-l border-t-2 border-[var(--qg-border)] bg-amber-500/10 px-3 py-2 text-center tabular-nums">
               {totalHeures ? totalHeures.toLocaleString("fr-CA") : "0"}
             </td>
