@@ -345,6 +345,8 @@ async def list_companies(
             is_active=c.is_active,
             refacturable=bool(getattr(c, "refacturable", True)),
         heures_nr_autorisees=bool(getattr(c, "heures_nr_autorisees", False)),
+        qbo_customer_id=getattr(c, "qbo_customer_id", None),
+        qbo_customer_name=getattr(c, "qbo_customer_name", None),
         )
         for c in rows
     ]
@@ -382,6 +384,8 @@ async def create_company(
         is_active=c.is_active,
         refacturable=bool(getattr(c, "refacturable", True)),
         heures_nr_autorisees=bool(getattr(c, "heures_nr_autorisees", False)),
+        qbo_customer_id=getattr(c, "qbo_customer_id", None),
+        qbo_customer_name=getattr(c, "qbo_customer_name", None),
     )
 
 
@@ -421,6 +425,8 @@ async def update_company(
         is_active=c.is_active,
         refacturable=bool(getattr(c, "refacturable", True)),
         heures_nr_autorisees=bool(getattr(c, "heures_nr_autorisees", False)),
+        qbo_customer_id=getattr(c, "qbo_customer_id", None),
+        qbo_customer_name=getattr(c, "qbo_customer_name", None),
     )
 
 
