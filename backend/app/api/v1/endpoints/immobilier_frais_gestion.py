@@ -163,10 +163,23 @@ class ImmeubleRow(BaseModel):
     derniere_facture_mois: Optional[str] = None
     #: 1er du mois à partir duquel on facture ("YYYY-MM-01").
     frais_gestion_depuis: Optional[str] = None
-    #: Solde cumulé des MOIS MANQUÉS (revenus jamais facturés, jusqu'au
-    #: mois précédent inclus) + la liste de ces mois.
+    #: Solde cumulé des transactions à facturer (revenus jamais
+    #: facturés, jusqu'au mois précédent inclus).
     solde: float = 0.0
-    mois_manques: List[Dict[str, str]] = []
+    #: Une transaction = (mois de revenus jamais facturé) avec le
+    #: montant calculé — s'ajoute au panier de facture côté UI.
+    a_facturer: List[Dict[str, Any]] = []
+
+
+class HistoriqueOut(BaseModel):
+    facture_id: int
+    immeuble_id: int
+    immeuble_name: str
+    mois: str
+    label: str
+    montant: float
+    doc_number: Optional[str] = None
+    created_at: Optional[str] = None
 
 
 class OverviewOut(BaseModel):
@@ -175,6 +188,7 @@ class OverviewOut(BaseModel):
     rows: List[ImmeubleRow]
     nb_factures: int
     nb_a_facturer: int
+    historique: List[HistoriqueOut] = []
 
 
 class ImmeublePatch(BaseModel):
@@ -276,7 +290,7 @@ async def overview(
         # jusqu'au mois précédent inclus, à partir de « facturer depuis ».
         depuis = getattr(imm, "frais_gestion_depuis", None)
         solde = 0.0
-        manques: List[Dict[str, str]] = []
+        manques: List[Dict[str, Any]] = []
         if actif:
             for (iid, mo), montant_rev in revenus_tous.items():
                 if iid != imm.id or montant_rev <= 0:
@@ -287,11 +301,14 @@ async def overview(
                     continue
                 if (imm.id, mo) in factures_tous:
                     continue
-                solde += round(montant_rev * pct / 100.0, 2)
+                mnt = round(montant_rev * pct / 100.0, 2)
+                solde += mnt
                 manques.append(
                     {
                         "mois": mo.isoformat(),
                         "label": f"{MOIS_FR[mo.month - 1]} {mo.year}",
+                        "revenus": round(montant_rev, 2),
+                        "montant": mnt,
                     }
                 )
             manques.sort(key=lambda x: x["mois"])
@@ -334,15 +351,40 @@ async def overview(
                     depuis.isoformat() if depuis else None
                 ),
                 solde=round(solde, 2),
-                mois_manques=manques,
+                a_facturer=manques,
             )
         )
+    # Historique des dernières factures créées (checklist « fait »).
+    noms = {imm.id: imm.name for imm in immeubles}
+    historique = [
+        HistoriqueOut(
+            facture_id=f.id,
+            immeuble_id=f.immeuble_id,
+            immeuble_name=noms.get(f.immeuble_id, f"Immeuble {f.immeuble_id}"),
+            mois=f.mois_couvert.isoformat(),
+            label=(
+                f"{MOIS_FR[f.mois_couvert.month - 1]} {f.mois_couvert.year}"
+            ),
+            montant=float(f.montant or 0.0),
+            doc_number=f.qbo_doc_number,
+            created_at=(f.created_at.isoformat() if f.created_at else None),
+        )
+        for f in (
+            await db.execute(
+                select(FactureGestion)
+                .order_by(FactureGestion.created_at.desc())
+                .limit(30)
+            )
+        ).scalars().all()
+    ]
+
     return OverviewOut(
         mois=m.isoformat(),
         mois_label=f"{MOIS_FR[m.month - 1]} {m.year}",
         rows=rows,
         nb_factures=nb_f,
         nb_a_facturer=nb_a,
+        historique=historique,
     )
 
 
@@ -562,6 +604,223 @@ async def facturer(
         revenus=revenus,
         pct=pct,
         montant=montant,
+    )
+
+
+class LigneGroupeIn(BaseModel):
+    immeuble_id: int
+    mois: date
+    #: Montant FINAL de la ligne — modifiable à la main dans le panier.
+    montant: float = Field(gt=0)
+
+
+class FacturerGroupeIn(BaseModel):
+    qbo_customer_id: str = Field(min_length=1)
+    lignes: List[LigneGroupeIn] = Field(min_length=1)
+
+
+class FacturerGroupeOut(BaseModel):
+    ok: bool
+    invoice_id: Optional[str] = None
+    doc_number: Optional[str] = None
+    total: float = 0.0
+    nb_lignes: int = 0
+
+
+@router.post("/facturer-groupe", response_model=FacturerGroupeOut)
+async def facturer_groupe(
+    payload: FacturerGroupeIn, db: DBSession, user: CurrentUser
+) -> FacturerGroupeOut:
+    """Crée UNE facture QuickBooks pour un client avec PLUSIEURS lignes
+    de frais de gestion (le « panier » de la page) — montants finaux
+    fournis par l'UI (modifiables à la main). Coche chaque
+    (immeuble, mois) dans la checklist."""
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
+
+    # Validation des lignes + collecte des infos (immeuble, revenus, pct).
+    revenus_tous = await _revenus_tous_mois(db)
+    factures_tous = {
+        (int(iid), fm)
+        for iid, fm in (
+            await db.execute(
+                select(
+                    FactureGestion.immeuble_id,
+                    FactureGestion.mois_couvert,
+                )
+            )
+        ).all()
+    }
+    details: List[Dict[str, Any]] = []
+    vus: set = set()
+    for ligne in payload.lignes:
+        imm = await db.get(Immeuble, ligne.immeuble_id)
+        if not imm:
+            raise HTTPException(status_code=404, detail="Immeuble introuvable")
+        if str(imm.qbo_customer_id or "") != payload.qbo_customer_id:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"« {imm.name} » n'est pas associé à ce client "
+                    "QuickBooks — une facture = un seul client."
+                ),
+            )
+        m = ligne.mois.replace(day=1)
+        if (imm.id, m) in factures_tous or (imm.id, m) in vus:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"« {imm.name} » — {MOIS_FR[m.month - 1]} {m.year} "
+                    "est déjà facturé."
+                ),
+            )
+        vus.add((imm.id, m))
+        details.append(
+            {
+                "imm": imm,
+                "mois": m,
+                "montant": round(float(ligne.montant), 2),
+                "revenus": round(revenus_tous.get((imm.id, m), 0.0), 2),
+                "pct": float(
+                    getattr(imm, "frais_gestion_pct", None) or DEFAULT_PCT
+                ),
+            }
+        )
+
+    # Code de taxe partagé (même QuickBooks que la feuille de temps).
+    tax_code_id = ""
+    setting = await db.get(AutomationSetting, "timesheet_qbo")
+    if setting and setting.config_json:
+        try:
+            tax_code_id = (
+                (json.loads(setting.config_json) or {}).get("tax_code_id")
+                or ""
+            ).strip()
+        except Exception:  # noqa: BLE001
+            tax_code_id = ""
+    if not tax_code_id:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "QuickBooks exige un code de taxe : choisis-le dans "
+                "Gestion d'entreprise → Feuille de temps → Facturation → "
+                "Réglages QuickBooks (même QuickBooks)."
+            ),
+        )
+
+    qbo = get_qbo("immobilier")
+    await qbo._load_refresh_from_db()  # noqa: SLF001
+    if not qbo.ready:
+        qbo = get_qbo("entreprise")
+        await qbo._load_refresh_from_db()  # noqa: SLF001
+    if not qbo.ready:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Aucun QuickBooks connecté pour le locatif — va dans "
+                "Paramètres → Comptabilité → « QuickBooks — autres "
+                "pôles »."
+            ),
+        )
+
+    total = round(sum(d["montant"] for d in details), 2)
+    try:
+        item = await qbo.ensure_item(
+            "Frais de gestion",
+            description="Frais de gestion immobilière mensuels",
+        )
+        next_num: Optional[str] = None
+        try:
+            nums_rows = await qbo.query(
+                "SELECT DocNumber FROM Invoice "
+                "ORDERBY MetaData.CreateTime DESC MAXRESULTS 100"
+            )
+            nums = [
+                int(str(r.get("DocNumber")))
+                for r in nums_rows
+                if str(r.get("DocNumber") or "").isdigit()
+            ]
+            next_num = str(max(nums) + 1) if nums else "1000"
+        except QuickBooksError:
+            next_num = None
+        base_payload: Dict[str, Any] = {
+            "CustomerRef": {"value": payload.qbo_customer_id},
+            "TxnDate": datetime.now(timezone.utc).date().isoformat(),
+            "GlobalTaxCalculation": "TaxExcluded",
+            "Line": [
+                {
+                    "DetailType": "SalesItemLineDetail",
+                    "Amount": d["montant"],
+                    "Description": (
+                        f"Frais de gestion {d['pct']:g} % — revenus "
+                        f"locatifs de {MOIS_FR[d['mois'].month - 1]} "
+                        f"{d['mois'].year} ({d['revenus']:.2f} $) — "
+                        f"{d['imm'].name}"
+                    ),
+                    "SalesItemLineDetail": {
+                        "ItemRef": {"value": str(item["Id"])},
+                        "Qty": 1,
+                        "UnitPrice": d["montant"],
+                        "TaxCodeRef": {"value": tax_code_id},
+                    },
+                }
+                for d in details
+            ],
+            "PrivateNote": "Créé par Kratos — frais de gestion mensuels",
+        }
+        tries = 0
+        while True:
+            body = dict(base_payload)
+            if next_num:
+                body["DocNumber"] = next_num
+            try:
+                inv = await qbo.create_invoice(body)
+                break
+            except QuickBooksError as exc:
+                msg = str(exc)
+                if (
+                    next_num
+                    and tries < 3
+                    and ("6140" in msg or "uplicate" in msg or "double" in msg)
+                ):
+                    tries += 1
+                    next_num = str(int(next_num) + 1)
+                    continue
+                raise
+    except QuickBooksError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"QuickBooks a refusé la facture : {exc}"
+        )
+    invoice = inv.get("Invoice") or inv
+    invoice_id = str(invoice.get("Id") or "") or None
+    doc_number = str(invoice.get("DocNumber") or "") or None
+
+    now = datetime.now(timezone.utc)
+    for d in details:
+        db.add(
+            FactureGestion(
+                immeuble_id=d["imm"].id,
+                mois_couvert=d["mois"],
+                revenus=d["revenus"],
+                pct=d["pct"],
+                montant=d["montant"],
+                qbo_invoice_id=invoice_id,
+                qbo_doc_number=doc_number,
+                created_by_user_id=user.id,
+                created_at=now,
+            )
+        )
+    await db.commit()
+    log.info(
+        "Facture gestion groupée QBO %s — %d lignes (%.2f $)",
+        doc_number or invoice_id, len(details), total,
+    )
+    return FacturerGroupeOut(
+        ok=True,
+        invoice_id=invoice_id,
+        doc_number=doc_number,
+        total=total,
+        nb_lignes=len(details),
     )
 
 
