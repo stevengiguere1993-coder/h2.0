@@ -102,6 +102,15 @@ class Achat(Base, TimestampUpdateMixin):
         nullable=True,
         index=True,
     )
+    # Client direct — pour un reçu SANS projet ni bon de travail : la
+    # dépense QB est rattachée au client mère (CustomerRef) pour que le
+    # coût lui soit attribué quand même. Ignoré si project_id est posé
+    # (le projet prime : sous-client + classe).
+    client_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("clients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # Nature de l'achat — détermine la logique de refacturation au
     # client : 'material' (matériel/marchandise, refacturé au coûtant +
     # markup), 'sub_invoice' (facture de sous-traitant, refacturée

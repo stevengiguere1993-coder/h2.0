@@ -67,11 +67,18 @@ async def resolve_project_customer_id(
         seg = fqn.split(":")[-1] if fqn else (row.get("DisplayName") or "")
         return seg.strip().lower()
 
+    # Projet de BON DE TRAVAIL (kind="bon_travail") : le NOM porte le
+    # numéro de bon (« BT-26-001 — … ») et doit primer sur l'adresse pour
+    # nommer/retrouver le sous-client QB — demande : le sous-client du
+    # client mère porte le n° de BT. Projets réguliers : adresse d'abord
+    # (comportement historique).
+    _prefer_name = (getattr(project, "kind", "") or "") == "bon_travail"
+    _name_t = (project.name or "").strip().lower()
+    _addr_t = (getattr(project, "address", None) or "").strip().lower()
     targets = [
         t
         for t in (
-            (getattr(project, "address", None) or "").strip().lower(),
-            (project.name or "").strip().lower(),
+            (_name_t, _addr_t) if _prefer_name else (_addr_t, _name_t)
         )
         if t
     ]
@@ -102,11 +109,18 @@ async def resolve_project_customer_id(
         return await _adopt(usable[0])
 
     # 3) Aucun sous-client → on CRÉE le projet QB (même logique que la
-    # synchro en masse : nom = adresse du chantier, sinon nom du projet).
-    project_name = (
-        (getattr(project, "address", None) or "").strip()
-        or (project.name or "").strip()
-    )
+    # synchro en masse : nom = adresse du chantier, sinon nom du projet ;
+    # bon de travail → NOM d'abord, il porte le n° de BT).
+    if _prefer_name:
+        project_name = (
+            (project.name or "").strip()
+            or (getattr(project, "address", None) or "").strip()
+        )
+    else:
+        project_name = (
+            (getattr(project, "address", None) or "").strip()
+            or (project.name or "").strip()
+        )
     if project_name:
         try:
             start = (

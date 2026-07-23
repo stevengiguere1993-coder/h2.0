@@ -276,6 +276,9 @@ async def ensure_critical_columns() -> None:
         # Dernière erreur de synchro QBO d'une facture — affichée sur la
         # fiche pour rendre les échecs de push visibles sans les logs.
         ("factures", "qbo_sync_error", "VARCHAR(500)"),
+        # Reçu sans projet/BT rattaché directement à un CLIENT (CustomerRef
+        # QB = client mère).
+        ("achats", "client_id", "INTEGER"),
         # Gestion externe d'un immeuble (compagnie tierce) : sans ces
         # colonnes, tout SELECT sur imm_immeubles plante → 500 sur tout
         # le volet immobilier. Table préexistante → create_all ne les

@@ -515,6 +515,8 @@ class AchatCreate(BaseModel):
     purchase_order_id: Optional[int] = None
     fournisseur_id: Optional[int] = None
     project_id: Optional[int] = None
+    # Reçu sans projet/BT : rattachement direct au CLIENT (CustomerRef QB).
+    client_id: Optional[int] = None
     description: Optional[str] = None
     amount: Optional[float] = None
     amount_taxes: Optional[float] = None
@@ -546,6 +548,7 @@ class AchatUpdate(BaseModel):
     notes: Optional[str] = None
     fournisseur_id: Optional[int] = None
     project_id: Optional[int] = None
+    client_id: Optional[int] = None
     payment_method: Optional[str] = Field(default=None, max_length=32)
     supplier_invoice_number: Optional[str] = Field(default=None, max_length=64)
     invoice_date: Optional[date] = None
@@ -562,6 +565,7 @@ class AchatRead(_Base):
     purchase_order_id: Optional[int]
     fournisseur_id: Optional[int]
     project_id: Optional[int]
+    client_id: Optional[int] = None
     description: Optional[str]
     amount: Optional[float]
     amount_taxes: Optional[float] = None

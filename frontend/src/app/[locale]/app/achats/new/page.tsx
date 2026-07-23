@@ -23,6 +23,14 @@ type Project = {
   billing_kind?: string;
 };
 type Fournisseur = { id: number; name: string };
+type BonMini = {
+  id: number;
+  reference: string;
+  title: string;
+  status: string;
+  kind?: string | null;
+};
+type ClientMini = { id: number; name: string };
 type POMini = {
   id: number;
   reference: string;
@@ -59,6 +67,31 @@ export default function NewAchatPage() {
 
   const [purchaseOrderId, setPurchaseOrderId] = useState("");
   const [projectId, setProjectId] = useState(prefilledProjectId || "");
+  // Rattachement du reçu : un PROJET, un BON DE TRAVAIL (son projet lié
+  // est garanti à la sélection) ou un CLIENT direct (reçu hors projet).
+  const [targetType, setTargetType] = useState<"projet" | "bon" | "client">(
+    "projet"
+  );
+  const [bonId, setBonId] = useState("");
+  const [clientIdSel, setClientIdSel] = useState("");
+  const [bons, setBons] = useState<BonMini[]>([]);
+  const [clients, setClients] = useState<ClientMini[]>([]);
+  // Saisies avec autocomplétion (datalist) : « taper pour proposer ».
+  const [projectQuery, setProjectQuery] = useState("");
+  const [bonQuery, setBonQuery] = useState("");
+  const [clientQuery, setClientQuery] = useState("");
+
+  // Étiquettes uniques « libellé (#id) » : l'id en suffixe garantit une
+  // résolution exacte du choix tapé/sélectionné dans la datalist.
+  const projectOption = (p: Project) => `${projectLabel(p)} (#${p.id})`;
+  const bonOption = (b: BonMini) =>
+    `${b.reference} — ${b.title} (#${b.id})`;
+  const clientOption = (c: ClientMini) => `${c.name} (#${c.id})`;
+  const idFromOption = (v: string): string => {
+    const m = v.match(/\(#(\d+)\)\s*$/);
+    return m ? m[1] : "";
+  };
+
   const [fournisseurId, setFournisseurId] = useState("");
   // Phase C — facture sous-traitant.
   const [kind, setKind] = useState<"material" | "sub_invoice">("material");
@@ -123,6 +156,17 @@ export default function NewAchatPage() {
   const [invoiceDate, setInvoiceDate] = useState(() => todayIso());
 
   const [projects, setProjects] = useState<Project[]>([]);
+
+  // Pré-remplissage ?project_id=… (depuis une fiche projet).
+  useEffect(() => {
+    if (!prefilledProjectId || projectQuery) return;
+    const p = projects.find(
+      (x) => String(x.id) === String(prefilledProjectId)
+    );
+    if (p) setProjectQuery(projectOption(p));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, prefilledProjectId]);
+
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<POMini[]>([]);
   const [showFournisseurModal, setShowFournisseurModal] = useState(false);
@@ -143,6 +187,11 @@ export default function NewAchatPage() {
     if (p?.billing_kind) setIsBillable(p.billing_kind === "contrat");
   }, [projectId, projects]);
 
+  // Bon de travail = T&M refacturé au client → refacturable par défaut.
+  useEffect(() => {
+    if (targetType === "bon") setIsBillable(true);
+  }, [targetType]);
+
   // Majoration par défaut : 10 % dès que l'achat est refacturable (si le
   // champ est vide), vidée si non refacturable. La saisie manuelle est
   // préservée.
@@ -156,14 +205,26 @@ export default function NewAchatPage() {
     let cancelled = false;
     async function load() {
       try {
-        const [pRes, frRes, poRes, stRes] = await Promise.all([
+        const [pRes, frRes, poRes, stRes, bRes, cRes] = await Promise.all([
           authedFetch("/api/v1/projects?limit=500"),
           authedFetch("/api/v1/fournisseurs?limit=500"),
           authedFetch("/api/v1/purchase-orders?limit=500"),
-          authedFetch("/api/v1/sous-traitants?limit=500")
+          authedFetch("/api/v1/sous-traitants?limit=500"),
+          authedFetch("/api/v1/bons?limit=500"),
+          authedFetch("/api/v1/clients?limit=500")
         ]);
         if (!cancelled) {
           if (pRes.ok) setProjects((await pRes.json()) as Project[]);
+          if (bRes.ok) {
+            const bs = (await bRes.json()) as BonMini[];
+            // Bons actifs seulement (pas annulés / déjà facturés).
+            setBons(
+              bs.filter(
+                (b) => b.status !== "cancelled" && b.status !== "facture"
+              )
+            );
+          }
+          if (cRes.ok) setClients((await cRes.json()) as ClientMini[]);
           if (frRes.ok)
             setFournisseurs((await frRes.json()) as Fournisseur[]);
           if (stRes.ok)
@@ -203,7 +264,23 @@ export default function NewAchatPage() {
       };
       if (purchaseOrderId)
         payload.purchase_order_id = Number(purchaseOrderId);
-      if (projectId) payload.project_id = Number(projectId);
+      if (targetType === "bon" && bonId) {
+        // Le bon porte ses coûts via son PROJET lié (garanti ici) : le
+        // reçu suit alors toute la machinerie projet (sous-client QB
+        // « BT-xx », classe, refacturation).
+        const bp = await authedFetch(
+          `/api/v1/bons/${Number(bonId)}/ensure-project`,
+          { method: "POST" }
+        );
+        if (!bp.ok) throw new Error("Projet du bon introuvable.");
+        const bpj = (await bp.json()) as { project_id: number };
+        payload.project_id = bpj.project_id;
+      } else if (targetType === "client" && clientIdSel) {
+        // Reçu hors projet/BT → rattaché au CLIENT (CustomerRef QB).
+        payload.client_id = Number(clientIdSel);
+      } else if (targetType === "projet" && projectId) {
+        payload.project_id = Number(projectId);
+      }
       if (fournisseurId) payload.fournisseur_id = Number(fournisseurId);
       payload.kind = kind;
       if (kind === "sub_invoice" && sousTraitantId) {
@@ -311,8 +388,14 @@ export default function NewAchatPage() {
                   if (po) {
                     if (po.fournisseur_id)
                       setFournisseurId(String(po.fournisseur_id));
-                    if (po.project_id)
+                    if (po.project_id) {
                       setProjectId(String(po.project_id));
+                      setTargetType("projet");
+                      const pp = projects.find(
+                        (x) => x.id === po.project_id
+                      );
+                      if (pp) setProjectQuery(projectOption(pp));
+                    }
                     if (po.payment_method)
                       setPaymentMethod(po.payment_method);
                     if (po.description && !description)
@@ -343,22 +426,87 @@ export default function NewAchatPage() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label htmlFor="project" className="label">
-                Projet
-              </label>
-              <select
-                id="project"
-                value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
-                className="input"
-              >
-                <option value="">— Aucun (frais généraux) —</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={String(p.id)}>
-                    {projectLabel(p)}
-                  </option>
+              <span className="label">Rattacher à</span>
+              <div className="mb-2 inline-flex rounded-md border border-brand-800 bg-brand-950 p-0.5 text-[11px]">
+                {(
+                  [
+                    ["projet", "Projet"],
+                    ["bon", "Bon de travail"],
+                    ["client", "Client"]
+                  ] as const
+                ).map(([val, lab]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setTargetType(val)}
+                    className={`rounded px-2.5 py-1 font-semibold transition ${
+                      targetType === val
+                        ? "bg-accent-500 text-brand-950"
+                        : "text-white/70 hover:bg-white/5"
+                    }`}
+                  >
+                    {lab}
+                  </button>
                 ))}
-              </select>
+              </div>
+              {targetType === "projet" ? (
+                <>
+                  <input
+                    id="project"
+                    className="input"
+                    list="dl-projets"
+                    placeholder="Tape pour chercher un projet… (vide = frais généraux)"
+                    value={projectQuery}
+                    onChange={(e) => {
+                      setProjectQuery(e.target.value);
+                      setProjectId(idFromOption(e.target.value));
+                    }}
+                  />
+                  <datalist id="dl-projets">
+                    {projects.map((p) => (
+                      <option key={p.id} value={projectOption(p)} />
+                    ))}
+                  </datalist>
+                </>
+              ) : targetType === "bon" ? (
+                <>
+                  <input
+                    id="bon"
+                    className="input"
+                    list="dl-bons"
+                    placeholder="Tape pour chercher un bon de travail…"
+                    value={bonQuery}
+                    onChange={(e) => {
+                      setBonQuery(e.target.value);
+                      setBonId(idFromOption(e.target.value));
+                    }}
+                  />
+                  <datalist id="dl-bons">
+                    {bons.map((b) => (
+                      <option key={b.id} value={bonOption(b)} />
+                    ))}
+                  </datalist>
+                </>
+              ) : (
+                <>
+                  <input
+                    id="client-direct"
+                    className="input"
+                    list="dl-clients"
+                    placeholder="Tape pour chercher un client…"
+                    value={clientQuery}
+                    onChange={(e) => {
+                      setClientQuery(e.target.value);
+                      setClientIdSel(idFromOption(e.target.value));
+                    }}
+                  />
+                  <datalist id="dl-clients">
+                    {clients.map((c) => (
+                      <option key={c.id} value={clientOption(c)} />
+                    ))}
+                  </datalist>
+                </>
+              )}
             </div>
             <div>
               <label htmlFor="fournisseur" className="label">
