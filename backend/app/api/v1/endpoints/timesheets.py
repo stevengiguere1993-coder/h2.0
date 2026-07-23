@@ -316,11 +316,24 @@ class DashboardEmployee(BaseModel):
     companies: List[DashboardCompanyRow]
 
 
+class AApprouverOut(BaseModel):
+    timesheet_id: int
+    user_id: int
+    employee_name: str
+    period_start: str
+    period_end: str
+    total_heures: float
+    montant_paie: float
+    submitted_at: Optional[str] = None
+
+
 class DashboardOut(BaseModel):
     employees: List[DashboardEmployee]
     total_paie_solde: float
     total_refac_solde: float
     reglements: List[ReglementOut]
+    #: Feuilles SOUMISES en attente d'approbation (onglet Paies).
+    a_approuver: List[AApprouverOut] = []
 
 
 # ── Compagnies (liste partagée) ────────────────────────────────────────
@@ -621,7 +634,9 @@ async def _build_detail(
 
     is_self = ts.user_id == user.id
     manager = _is_manager(user)
-    can_edit = manager or (is_self and ts.status != "approuve")
+    # Une feuille SOUMISE est figée pour l'employé (retour Phil
+    # 2026-07-22) — seul un gestionnaire peut la modifier/rouvrir.
+    can_edit = manager or (is_self and ts.status == "brouillon")
     can_approve = manager
 
     jours_dates = [
@@ -899,14 +914,22 @@ def _reglement_out(
 async def timesheet_dashboard(
     db: DBSession, user: CurrentUser
 ) -> DashboardOut:
-    """Soldes cumulés par employé : paie due (toutes les feuilles, heures ×
-    taux horaire de chaque feuille) et refacturation due par compagnie
-    (heures × taux effectif), moins les règlements enregistrés."""
+    """Soldes cumulés par employé : paie due et refacturation due par
+    compagnie, moins les règlements enregistrés.
+
+    ⚠️ Seules les feuilles APPROUVÉES comptent dans les dûs/soldes
+    (retour Phil 2026-07-22) : rien n'apparaît tant que la feuille n'a
+    pas été soumise PUIS approuvée. Les feuilles soumises en attente
+    sont listées dans ``a_approuver``."""
     if not _is_manager(user):
         raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
     await _ensure_seed(db)
 
-    sheets = (await db.execute(select(Timesheet))).scalars().all()
+    sheets = (
+        await db.execute(
+            select(Timesheet).where(Timesheet.status == "approuve")
+        )
+    ).scalars().all()
     sheets_by_id = {s.id: s for s in sheets}
     companies = {
         c.id: c
@@ -1051,6 +1074,33 @@ async def timesheet_dashboard(
             )
         )
     employees.sort(key=lambda e: e.name.lower())
+
+    # Feuilles soumises en attente d'approbation (cliquables dans Paies).
+    a_approuver: List[AApprouverOut] = []
+    soumises = (
+        await db.execute(
+            select(Timesheet)
+            .where(Timesheet.status == "soumis")
+            .order_by(Timesheet.period_start)
+        )
+    ).scalars().all()
+    for s in soumises:
+        d = await _build_detail(db, s, user)
+        a_approuver.append(
+            AApprouverOut(
+                timesheet_id=s.id,
+                user_id=s.user_id,
+                employee_name=d.employee_name,
+                period_start=s.period_start.isoformat(),
+                period_end=s.period_end.isoformat(),
+                total_heures=d.total_heures,
+                montant_paie=d.montant_paie,
+                submitted_at=(
+                    s.submitted_at.isoformat() if s.submitted_at else None
+                ),
+            )
+        )
+
     return DashboardOut(
         employees=employees,
         total_paie_solde=round(sum(e.paie_solde for e in employees), 2),
@@ -1058,6 +1108,7 @@ async def timesheet_dashboard(
         reglements=[
             _reglement_out(r, users, companies) for r in regs[:100]
         ],
+        a_approuver=a_approuver,
     )
 
 
@@ -1301,7 +1352,10 @@ async def facturer_solde_qbo(
     # refacturé = solde à facturer. Même calcul que le dashboard.
     sheets = (
         await db.execute(
-            select(Timesheet).where(Timesheet.user_id == payload.user_id)
+            select(Timesheet).where(
+                Timesheet.user_id == payload.user_id,
+                Timesheet.status == "approuve",
+            )
         )
     ).scalars().all()
     ov = (
@@ -1522,10 +1576,13 @@ def _assert_editable(ts: Timesheet, user: User) -> None:
         return
     if ts.user_id != user.id:
         raise HTTPException(status_code=403, detail="Accès refusé")
-    if ts.status == "approuve":
+    if ts.status != "brouillon":
         raise HTTPException(
             status_code=409,
-            detail="Feuille approuvée — demande à un gestionnaire de la rouvrir.",
+            detail=(
+                "Feuille soumise ou approuvée — demande à un gestionnaire "
+                "de la rouvrir pour la modifier."
+            ),
         )
 
 
@@ -1609,11 +1666,6 @@ async def replace_entries(
         )
     if payload.notes is not None:
         ts.notes_json = json.dumps(payload.notes, ensure_ascii=False)
-    # Toute édition d'une feuille soumise la repasse en brouillon
-    # (l'employé re-soumet ensuite).
-    if ts.status == "soumis" and not _is_manager(user):
-        ts.status = "brouillon"
-        ts.submitted_at = None
     await db.commit()
     return await _build_detail(db, ts, user)
 
@@ -1658,11 +1710,10 @@ async def reopen_timesheet(
     ts = await db.get(Timesheet, timesheet_id)
     if not ts:
         raise HTTPException(status_code=404, detail="Feuille introuvable")
-    # Un gestionnaire peut tout rouvrir ; l'employé peut rouvrir sa feuille
-    # tant qu'elle n'est pas approuvée.
+    # Rouvrir = GESTIONNAIRE seulement : une feuille soumise est figée
+    # pour l'employé (retour Phil 2026-07-22).
     if not _is_manager(user):
-        if ts.user_id != user.id or ts.status == "approuve":
-            raise HTTPException(status_code=403, detail="Accès refusé")
+        raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
     ts.status = "brouillon"
     ts.submitted_at = None
     ts.approved_at = None

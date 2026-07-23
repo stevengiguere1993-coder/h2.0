@@ -144,11 +144,22 @@ type Reglement = {
   note?: string | null;
   created_by?: string | null;
 };
+type AApprouver = {
+  timesheet_id: number;
+  user_id: number;
+  employee_name: string;
+  period_start: string;
+  period_end: string;
+  total_heures: number;
+  montant_paie: number;
+  submitted_at?: string | null;
+};
 type DashboardData = {
   employees: DashEmployee[];
   total_paie_solde: number;
   total_refac_solde: number;
   reglements: Reglement[];
+  a_approuver?: AApprouver[];
 };
 
 const DAYS = 14;
@@ -240,9 +251,9 @@ export default function FeuilleDeTempsPage() {
   const [periodStart, setPeriodStart] = useState<string | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
-  const [view, setView] = useState<"feuille" | "equipe" | "dashboard">(
-    "feuille"
-  );
+  const [view, setView] = useState<
+    "feuille" | "equipe" | "paies" | "dashboard"
+  >("feuille");
   const [showAllRates, setShowAllRates] = useState(false);
   const [manageCompanies, setManageCompanies] = useState(false);
   // Gestionnaire+ : atterrir sur la vue ÉQUIPE (sa propre feuille est
@@ -524,7 +535,7 @@ export default function FeuilleDeTempsPage() {
   // Changer d'onglet SAUVEGARDE d'abord la grille — sinon Équipe et
   // Dashboard affichent des chiffres en retard (retour Phil 2026-07-22).
   const switchView = useCallback(
-    async (v: "feuille" | "equipe" | "dashboard") => {
+    async (v: "feuille" | "equipe" | "paies" | "dashboard") => {
       if (dirty && detail?.can_edit) {
         const ok = await save();
         if (!ok) return;
@@ -532,6 +543,16 @@ export default function FeuilleDeTempsPage() {
       setView(v);
     },
     [dirty, detail, save]
+  );
+
+  // Ouvrir une feuille précise (employé + période) depuis l'onglet Paies.
+  const openSheet = useCallback(
+    (uid: number, period: string) => {
+      setSelectedUserId(uid);
+      setView("feuille");
+      void navigate(period, uid);
+    },
+    [navigate]
   );
 
   // — Topbar : actions —
@@ -556,10 +577,18 @@ export default function FeuilleDeTempsPage() {
           Enregistrer
         </button>
       )}
-      {detail?.is_self && detail?.status !== "approuve" && (
+      {detail?.is_self && detail?.status === "brouillon" && (
         <button
           className={BTN_PRIMARY}
-          onClick={() => void doAction("submit")}
+          onClick={() => {
+            if (
+              !window.confirm(
+                "Soumettre ta feuille de temps ?\n\nAprès la soumission, tu ne pourras plus la modifier — seul un gestionnaire pourra la rouvrir."
+              )
+            )
+              return;
+            void doAction("submit");
+          }}
           disabled={saving}
         >
           <Send className="h-4 w-4" />
@@ -595,21 +624,25 @@ export default function FeuilleDeTempsPage() {
         greeting={
           view === "equipe"
             ? "Feuilles de temps — Équipe"
-            : view === "dashboard"
-              ? "Feuilles de temps — Facturation"
-              : selectedUserId != null
-                ? `Feuille de : ${detail?.employee_name ?? "…"}`
-                : "Ma feuille de temps"
+            : view === "paies"
+              ? "Feuilles de temps — Paies"
+              : view === "dashboard"
+                ? "Feuilles de temps — Facturation"
+                : selectedUserId != null
+                  ? `Feuille de : ${detail?.employee_name ?? "…"}`
+                  : "Ma feuille de temps"
         }
         subtitle={
-          view === "dashboard"
-            ? "Factures QuickBooks · soldes paie & refacturation"
-            : detail && view !== "equipe"
-              ? `${detail.employee_name} · ${formatPeriod(
-                  detail.period_start,
-                  detail.period_end
-                )}`
-              : "Heures par compagnie · période de paie bi-hebdomadaire"
+          view === "paies"
+            ? "Feuilles à approuver · soldes de paie"
+            : view === "dashboard"
+              ? "Factures QuickBooks · soldes à refacturer"
+              : detail && view !== "equipe"
+                ? `${detail.employee_name} · ${formatPeriod(
+                    detail.period_start,
+                    detail.period_end
+                  )}`
+                : "Heures par compagnie · période de paie bi-hebdomadaire"
         }
         rightSlot={view === "feuille" ? topbarActions : undefined}
       />
@@ -626,6 +659,9 @@ export default function FeuilleDeTempsPage() {
                 </TabBtn>
                 <TabBtn active={view === "equipe"} onClick={() => void switchView("equipe")} icon={Users}>
                   Équipe
+                </TabBtn>
+                <TabBtn active={view === "paies"} onClick={() => void switchView("paies")} icon={DollarSign}>
+                  Paies
                 </TabBtn>
                 <TabBtn active={view === "dashboard"} onClick={() => void switchView("dashboard")} icon={Wallet}>
                   Facturation
@@ -662,7 +698,7 @@ export default function FeuilleDeTempsPage() {
           </div>
 
           {/* Navigation période */}
-          {view !== "dashboard" && (
+          {view !== "dashboard" && view !== "paies" && (
             <div className="flex items-center gap-2">
               <button className={BTN_GHOST} onClick={() => changePeriod(-1)} aria-label="Période précédente">
                 <ChevronLeft className="h-4 w-4" />
@@ -692,6 +728,8 @@ export default function FeuilleDeTempsPage() {
           </div>
         ) : view === "equipe" ? (
           <TeamView periodStart={periodStart} onOpen={(uid) => { setView("feuille"); changeEmployee(uid); }} />
+        ) : view === "paies" ? (
+          <PaiesView onOpenSheet={openSheet} />
         ) : view === "dashboard" ? (
           <DashboardView onOpen={(uid) => { setView("feuille"); changeEmployee(uid); }} />
         ) : detail ? (
@@ -1866,6 +1904,248 @@ function QboFacturationConfig() {
   );
 }
 
+function PaiesView({
+  onOpenSheet
+}: {
+  onOpenSheet: (uid: number, period: string) => void;
+}) {
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [modal, setModal] = useState<DashEmployee | null>(null);
+  const [editReg, setEditReg] = useState<Reglement | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await authedFetch("/api/v1/timesheets/dashboard");
+      if (r.ok) setData(await r.json());
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const removeReglement = async (id: number) => {
+    await authedFetch(`/api/v1/timesheets/reglements/${id}`, {
+      method: "DELETE"
+    });
+    await load();
+  };
+
+  if (loading || !data) {
+    return (
+      <div className="flex items-center justify-center py-16 text-[var(--qg-text-muted)]">
+        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Chargement…
+      </div>
+    );
+  }
+
+  const aApprouver = data.a_approuver || [];
+  const regsPaie = data.reglements.filter((r) => r.kind === "paie");
+  const employesPaie = data.employees.filter(
+    (e) => e.paie_due > 0 || e.paie_reglee > 0
+  );
+
+  return (
+    <div className="space-y-5">
+      {/* Feuilles soumises en attente d'approbation */}
+      <div className={CARD}>
+        <div className="mb-1 text-base font-semibold">
+          Feuilles à approuver
+        </div>
+        <p className="mb-3 text-xs text-[var(--qg-text-faint)]">
+          Une feuille compte dans les soldes (paie ET refacturation)
+          seulement une fois soumise par l&apos;employé PUIS approuvée
+          ici. Clique « Ouvrir », vérifie la grille, puis « Approuver »
+          en haut à droite.
+        </p>
+        {aApprouver.length === 0 ? (
+          <div className="py-3 text-sm text-[var(--qg-text-faint)]">
+            Aucune feuille en attente d&apos;approbation.
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[var(--qg-border)] text-left text-xs uppercase tracking-wide text-[var(--qg-text-muted)]">
+                <th className="px-3 py-2">Employé</th>
+                <th className="px-3 py-2">Période</th>
+                <th className="px-3 py-2 text-right">Heures</th>
+                <th className="px-3 py-2 text-right">Montant paie</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {aApprouver.map((s) => (
+                <tr
+                  key={s.timesheet_id}
+                  className="border-b border-[var(--qg-border)]/50"
+                >
+                  <td className="px-3 py-2.5 font-medium">
+                    {s.employee_name}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    {formatPeriod(s.period_start, s.period_end)}
+                  </td>
+                  <td className="px-3 py-2.5 text-right tabular-nums">
+                    {s.total_heures.toLocaleString("fr-CA")}
+                  </td>
+                  <td className="px-3 py-2.5 text-right tabular-nums">
+                    {money(s.montant_paie)}
+                  </td>
+                  <td className="px-3 py-2.5 text-right">
+                    <button
+                      className={BTN_PRIMARY}
+                      onClick={() =>
+                        onOpenSheet(s.user_id, s.period_start)
+                      }
+                    >
+                      Ouvrir
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Solde de paie global */}
+      <div className={CARD}>
+        <div className="flex items-center gap-2 text-sm font-medium text-[var(--qg-text-muted)]">
+          <DollarSign className="h-4 w-4" /> Solde de paie à verser
+        </div>
+        <div className="mt-2 text-3xl font-semibold tracking-tight">
+          {money(data.total_paie_solde)}
+        </div>
+        <div className="mt-1 text-sm text-[var(--qg-text-faint)]">
+          Feuilles approuvées seulement, moins les paiements enregistrés
+        </div>
+      </div>
+
+      {/* Paie par employé */}
+      {employesPaie.map((emp) => (
+        <div key={emp.user_id} className={CARD}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-base font-semibold">{emp.name}</div>
+              <div className="text-sm text-[var(--qg-text-faint)]">
+                {emp.total_heures.toLocaleString("fr-CA")} h approuvées
+              </div>
+            </div>
+            <dl className="flex items-center gap-6 text-sm">
+              <div className="text-right">
+                <dt className="text-[var(--qg-text-faint)]">Dû</dt>
+                <dd className="tabular-nums">{money(emp.paie_due)}</dd>
+              </div>
+              <div className="text-right">
+                <dt className="text-[var(--qg-text-faint)]">Payé</dt>
+                <dd className="tabular-nums">{money(emp.paie_reglee)}</dd>
+              </div>
+              <div className="text-right">
+                <dt className="font-medium">Solde</dt>
+                <dd
+                  className={`font-semibold tabular-nums ${
+                    emp.paie_solde > 0 ? "text-amber-400" : ""
+                  }`}
+                >
+                  {money(emp.paie_solde)}
+                </dd>
+              </div>
+            </dl>
+            <button
+              className={BTN_PRIMARY}
+              title="Enregistrer un versement de paie — le solde diminue"
+              onClick={() => setModal(emp)}
+            >
+              <Plus className="h-4 w-4" /> Marquer payé
+            </button>
+          </div>
+        </div>
+      ))}
+      {employesPaie.length === 0 && (
+        <div className={`${CARD} py-8 text-center text-sm text-[var(--qg-text-faint)]`}>
+          Aucune paie due — approuve des feuilles pour voir les soldes ici.
+        </div>
+      )}
+
+      {/* Historique des paiements de paie */}
+      {regsPaie.length > 0 && (
+        <div className={CARD}>
+          <div className="mb-3 text-base font-semibold">
+            Paiements enregistrés
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[var(--qg-border)] text-left text-xs uppercase tracking-wide text-[var(--qg-text-muted)]">
+                <th className="px-2 py-2">Date</th>
+                <th className="px-2 py-2">Employé</th>
+                <th className="px-2 py-2 text-right">Montant</th>
+                <th className="px-2 py-2">Note</th>
+                <th className="px-2 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {regsPaie.map((r) => (
+                <tr key={r.id} className="border-b border-[var(--qg-border)]/40">
+                  <td className="px-2 py-2 tabular-nums">{r.date_reglement}</td>
+                  <td className="px-2 py-2">{r.employee_name}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">
+                    {money(r.montant)}
+                  </td>
+                  <td className="max-w-[240px] truncate px-2 py-2 text-[var(--qg-text-faint)]">
+                    {r.note || ""}
+                  </td>
+                  <td className="px-2 py-2 text-right">
+                    <span className="inline-flex items-center gap-1">
+                      <button
+                        className="btn-ghost btn-xs"
+                        title="Modifier ce paiement"
+                        onClick={() => setEditReg(r)}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        className="btn-outline-rose btn-xs"
+                        title="Supprimer ce paiement (le solde remonte)"
+                        onClick={() => void removeReglement(r.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {modal && (
+        <ReglementModal
+          kind="paie"
+          emp={modal}
+          onClose={() => setModal(null)}
+          onDone={async () => {
+            setModal(null);
+            await load();
+          }}
+        />
+      )}
+      {editReg && (
+        <EditReglementModal
+          reg={editReg}
+          onClose={() => setEditReg(null)}
+          onDone={async () => {
+            setEditReg(null);
+            await load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1967,40 +2247,33 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
       {/* Réglages de facturation (taxes + clients QBO) */}
       <QboFacturationConfig />
 
-      {/* Tuiles totaux */}
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className={CARD}>
-          <div className="flex items-center gap-2 text-sm font-medium text-[var(--qg-text-muted)]">
-            <DollarSign className="h-4 w-4" /> Solde de paie à verser
-          </div>
-          <div className="mt-2 text-3xl font-semibold tracking-tight">
-            {money(data.total_paie_solde)}
-          </div>
-          <div className="mt-1 text-sm text-[var(--qg-text-faint)]">
-            Toutes les feuilles, moins les paiements enregistrés
-          </div>
+      {/* Tuile solde à refacturer */}
+      <div className={CARD}>
+        <div className="flex items-center gap-2 text-sm font-medium text-[var(--qg-text-muted)]">
+          <Wallet className="h-4 w-4" /> Solde à refacturer
         </div>
-        <div className={CARD}>
-          <div className="flex items-center gap-2 text-sm font-medium text-[var(--qg-text-muted)]">
-            <Wallet className="h-4 w-4" /> Solde à refacturer
-          </div>
-          <div className="mt-2 text-3xl font-semibold tracking-tight">
-            {money(data.total_refac_solde)}
-          </div>
-          <div className="mt-1 text-sm text-[var(--qg-text-faint)]">
-            Par compagnie, moins les refacturations enregistrées
-          </div>
+        <div className="mt-2 text-3xl font-semibold tracking-tight">
+          {money(data.total_refac_solde)}
+        </div>
+        <div className="mt-1 text-sm text-[var(--qg-text-faint)]">
+          Feuilles approuvées seulement, moins les refacturations
+          enregistrées
         </div>
       </div>
 
-      {data.employees.length === 0 && (
+      {data.employees.filter(
+        (e) => e.companies.length > 0 || e.refac_reglee > 0
+      ).length === 0 && (
         <div className={`${CARD} py-10 text-center text-sm text-[var(--qg-text-faint)]`}>
-          Aucune heure saisie pour l&apos;instant — les soldes apparaîtront ici.
+          Rien à refacturer — approuve des feuilles (onglet Paies) pour
+          voir les soldes apparaître ici.
         </div>
       )}
 
       {/* Une carte par employé */}
-      {data.employees.map((emp) => (
+      {data.employees
+        .filter((e) => e.companies.length > 0 || e.refac_reglee > 0)
+        .map((emp) => (
         <div key={emp.user_id} className={CARD}>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -2014,40 +2287,7 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
             </button>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-3">
-            {/* Paie */}
-            <div className="rounded-xl border border-[var(--qg-border)] bg-[var(--qg-bg)]/40 p-4">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-sm font-medium text-[var(--qg-text-muted)]">
-                  Paie
-                </span>
-                <button
-                  className={BTN_PRIMARY}
-                  onClick={() => setModal({ kind: "paie", emp })}
-                >
-                  <Plus className="h-4 w-4" /> Paiement
-                </button>
-              </div>
-              <dl className="space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <dt className="text-[var(--qg-text-faint)]">Dû (cumul)</dt>
-                  <dd className="tabular-nums">{money(emp.paie_due)}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-[var(--qg-text-faint)]">Payé</dt>
-                  <dd className="tabular-nums">{money(emp.paie_reglee)}</dd>
-                </div>
-                <div className="flex justify-between border-t border-[var(--qg-border)]/60 pt-1 font-semibold">
-                  <dt>Solde</dt>
-                  <dd
-                    className={`tabular-nums ${emp.paie_solde > 0 ? "text-amber-400" : ""}`}
-                  >
-                    {money(emp.paie_solde)}
-                  </dd>
-                </div>
-              </dl>
-            </div>
-
+          <div className="grid gap-4">
             {/* Refacturation par compagnie */}
             <div className="rounded-xl border border-[var(--qg-border)] bg-[var(--qg-bg)]/40 p-4 lg:col-span-2">
               <div className="mb-2 flex items-center justify-between">
@@ -2148,17 +2388,17 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
         </div>
       ))}
 
-      {/* Historique des règlements */}
-      {data.reglements.length > 0 && (
+      {/* Historique des refacturations */}
+      {data.reglements.filter((r) => r.kind === "refacturation").length >
+        0 && (
         <div className={CARD}>
           <div className="mb-3 text-base font-semibold">
-            Règlements enregistrés
+            Refacturations enregistrées
           </div>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--qg-border)] text-left text-xs uppercase tracking-wide text-[var(--qg-text-muted)]">
                 <th className="px-2 py-2">Date</th>
-                <th className="px-2 py-2">Type</th>
                 <th className="px-2 py-2">Employé</th>
                 <th className="px-2 py-2">Compagnie</th>
                 <th className="px-2 py-2 text-right">Montant</th>
@@ -2167,18 +2407,11 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
               </tr>
             </thead>
             <tbody>
-              {data.reglements.map((r) => (
+              {data.reglements
+                .filter((r) => r.kind === "refacturation")
+                .map((r) => (
                 <tr key={r.id} className="border-b border-[var(--qg-border)]/40">
                   <td className="px-2 py-2 tabular-nums">{r.date_reglement}</td>
-                  <td className="px-2 py-2">
-                    <span
-                      className={`badge ${
-                        r.kind === "paie" ? "badge-emerald" : "badge-amber"
-                      }`}
-                    >
-                      {r.kind === "paie" ? "Paie" : "Refacturation"}
-                    </span>
-                  </td>
                   <td className="px-2 py-2">{r.employee_name}</td>
                   <td className="px-2 py-2">{r.company_label || "—"}</td>
                   <td className="px-2 py-2 text-right tabular-nums">
