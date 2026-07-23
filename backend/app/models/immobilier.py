@@ -206,6 +206,16 @@ class Immeuble(Base, TimestampUpdateMixin):
     qbo_customer_name: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
+    # Frais de RELOCATION prévus au contrat de gestion (2026-07-23) :
+    # montant chargé au proprio quand un dossier de relocation aboutit
+    # (« reloué »). Deux tarifs : logement complet vs chambre
+    # (Logement.location_en_chambres). NULL/0 = pas de frais.
+    frais_relocation_logement: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+    frais_relocation_chambre: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
 
     # Scope du catalogue (immeubles créés depuis le picker de tâche).
     # Au plus l'un des deux est rempli. Tous deux NULL = immeuble
@@ -1125,6 +1135,21 @@ class FactureGestion(Base):
     est_complement: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    #: 'gestion' (X % des revenus du mois), 'relocation' (frais fixe au
+    #: contrat quand un dossier de relocation aboutit) ou 'manuel'
+    #: (frais libre ajouté au panier). Colonnes → ensure_critical_columns.
+    type_ligne: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="gestion",
+        server_default="gestion",
+    )
+    #: Dossier de relocation facturé (type 'relocation') — sert à marquer
+    #: le dossier comme facturé.
+    relocation_dossier_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    #: Description de la ligne (relocation : unité reloué ; manuel :
+    #: texte saisi par le gestionnaire).
+    libelle: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     qbo_invoice_id: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
     )

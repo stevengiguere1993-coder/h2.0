@@ -60,7 +60,7 @@ const NAV: NavItem[] = [
   { href: "/immobilier/renouvellements", label: "Suivis annuels", icon: ClipboardList },
   { href: "/immobilier/depots", label: "Dépôts de garantie", icon: ShieldCheck },
   { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer },
-  { href: "/immobilier/frais-gestion", label: "Frais de gestion", icon: CircleDollarSign }
+  { href: "/immobilier/frais-gestion", label: "Facturation", icon: CircleDollarSign }
   // Paramètres → via le footer unifié (SidebarFooter).
 ];
 

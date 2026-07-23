@@ -30,6 +30,7 @@ from app.models.immobilier import (
     Bail,
     FactureGestion,
     Immeuble,
+    LocationDossier,
     Logement,
     PaiementExterne,
     PaiementLoyer,
@@ -154,6 +155,9 @@ class ImmeubleRow(BaseModel):
     address: Optional[str] = None
     frais_gestion_actif: bool
     frais_gestion_pct: float
+    #: Frais de relocation au contrat (logement complet / chambre).
+    frais_relocation_logement: Optional[float] = None
+    frais_relocation_chambre: Optional[float] = None
     qbo_customer_id: Optional[str] = None
     qbo_customer_name: Optional[str] = None
     revenus: float
@@ -185,6 +189,8 @@ class HistoriqueOut(BaseModel):
     created_at: Optional[str] = None
     #: True = ligne « complément » (loyers payés après la facture du mois).
     complement: bool = False
+    #: 'gestion' | 'relocation' | 'manuel'.
+    type_ligne: str = "gestion"
 
 
 class OverviewOut(BaseModel):
@@ -200,6 +206,8 @@ class ImmeublePatch(BaseModel):
     frais_gestion_actif: Optional[bool] = None
     frais_gestion_pct: Optional[float] = Field(default=None, ge=0, le=100)
     frais_gestion_depuis: Optional[date] = None
+    frais_relocation_logement: Optional[float] = Field(default=None, ge=0)
+    frais_relocation_chambre: Optional[float] = Field(default=None, ge=0)
     #: "" = retirer l'association.
     qbo_customer_id: Optional[str] = None
     qbo_customer_name: Optional[str] = None
@@ -259,7 +267,9 @@ async def overview(
     # Revenus DÉJÀ FACTURÉS par (immeuble, mois) — sommés, car un mois
     # peut porter plusieurs lignes (facture + compléments de loyers
     # payés en retard). Le delta avec les revenus enregistrés donne les
-    # compléments à facturer.
+    # compléments à facturer. Lignes 'gestion' seulement : les frais de
+    # relocation/manuels (revenus 0) ne doivent pas marquer un mois
+    # comme « déjà facturé ».
     factures_sommes: Dict[tuple, float] = {}
     for iid, fm, frev in (
         await db.execute(
@@ -267,12 +277,38 @@ async def overview(
                 FactureGestion.immeuble_id,
                 FactureGestion.mois_couvert,
                 func.sum(FactureGestion.revenus),
-            ).group_by(
+            )
+            .where(FactureGestion.type_ligne == "gestion")
+            .group_by(
                 FactureGestion.immeuble_id, FactureGestion.mois_couvert
             )
         )
     ).all():
         factures_sommes[(int(iid), fm)] = float(frev or 0.0)
+    # Relocations abouties (« reloué ») par immeuble — un frais fixe au
+    # contrat (tarif logement complet vs chambre) est facturable dès que
+    # le dossier aboutit, s'il n'a pas déjà été facturé.
+    reloc_par_immeuble: Dict[int, list] = {}
+    for dossier, logement in (
+        await db.execute(
+            select(LocationDossier, Logement)
+            .join(Logement, Logement.id == LocationDossier.logement_id)
+            .where(LocationDossier.statut == "reloue")
+        )
+    ).all():
+        reloc_par_immeuble.setdefault(int(logement.immeuble_id), []).append(
+            (dossier, logement)
+        )
+    dossiers_factures = {
+        int(did)
+        for (did,) in (
+            await db.execute(
+                select(FactureGestion.relocation_dossier_id).where(
+                    FactureGestion.relocation_dossier_id.is_not(None)
+                )
+            )
+        ).all()
+    }
     # Retour Phil 2026-07-23 : le mois EN COURS est VISIBLE (badge) mais
     # ne se facture qu'à partir du 1er du mois suivant — d'autres loyers
     # peuvent encore rentrer.
@@ -352,6 +388,52 @@ async def overview(
                         ),
                     }
                 )
+            # Frais de relocation : dossiers « reloué » pas encore
+            # facturés, au tarif du contrat (chambre vs logement).
+            frais_log = float(
+                getattr(imm, "frais_relocation_logement", None) or 0.0
+            )
+            frais_ch = float(
+                getattr(imm, "frais_relocation_chambre", None) or 0.0
+            )
+            for dossier, logement in reloc_par_immeuble.get(imm.id, []):
+                if dossier.id in dossiers_factures:
+                    continue
+                en_chambres = bool(
+                    getattr(logement, "location_en_chambres", False)
+                )
+                frais = frais_ch if en_chambres else frais_log
+                if frais <= 0:
+                    continue
+                quand = dossier.reloue_le
+                if depuis and quand and quand.replace(day=1) < depuis:
+                    continue
+                unite = ("ch. " if en_chambres else "log. ") + str(
+                    logement.numero
+                )
+                lbl = f"Relocation {unite}"
+                if quand:
+                    lbl += (
+                        f" · reloué le {quand.day} "
+                        f"{MOIS_FR[quand.month - 1]}"
+                    )
+                solde += frais
+                manques.append(
+                    {
+                        "mois": (
+                            quand.isoformat()
+                            if quand
+                            else premier_mois_courant.isoformat()
+                        ),
+                        "label": lbl,
+                        "revenus": 0.0,
+                        "montant": round(frais, 2),
+                        "type": "relocation",
+                        "facturable": True,
+                        "facturable_des": None,
+                        "dossier_id": dossier.id,
+                    }
+                )
             manques.sort(key=lambda x: x["mois"])
         if actif and f:
             nb_f += 1
@@ -364,6 +446,18 @@ async def overview(
                 address=imm.address,
                 frais_gestion_actif=actif,
                 frais_gestion_pct=pct,
+                frais_relocation_logement=(
+                    float(imm.frais_relocation_logement)
+                    if getattr(imm, "frais_relocation_logement", None)
+                    is not None
+                    else None
+                ),
+                frais_relocation_chambre=(
+                    float(imm.frais_relocation_chambre)
+                    if getattr(imm, "frais_relocation_chambre", None)
+                    is not None
+                    else None
+                ),
                 qbo_customer_id=getattr(imm, "qbo_customer_id", None),
                 qbo_customer_name=getattr(imm, "qbo_customer_name", None),
                 revenus=rev,
@@ -405,12 +499,19 @@ async def overview(
             immeuble_name=noms.get(f.immeuble_id, f"Immeuble {f.immeuble_id}"),
             mois=f.mois_couvert.isoformat(),
             label=(
-                f"{MOIS_FR[f.mois_couvert.month - 1]} {f.mois_couvert.year}"
+                getattr(f, "libelle", None)
+                if getattr(f, "type_ligne", "gestion") != "gestion"
+                and getattr(f, "libelle", None)
+                else (
+                    f"{MOIS_FR[f.mois_couvert.month - 1]} "
+                    f"{f.mois_couvert.year}"
+                )
             ),
             montant=float(f.montant or 0.0),
             doc_number=f.qbo_doc_number,
             created_at=(f.created_at.isoformat() if f.created_at else None),
             complement=bool(getattr(f, "est_complement", False)),
+            type_ligne=getattr(f, "type_ligne", None) or "gestion",
         )
         for f in (
             await db.execute(
@@ -451,6 +552,10 @@ async def patch_immeuble(
         imm.frais_gestion_depuis = payload.frais_gestion_depuis.replace(
             day=1
         )
+    if payload.frais_relocation_logement is not None:
+        imm.frais_relocation_logement = payload.frais_relocation_logement
+    if payload.frais_relocation_chambre is not None:
+        imm.frais_relocation_chambre = payload.frais_relocation_chambre
     if payload.qbo_customer_id is not None:
         imm.qbo_customer_id = payload.qbo_customer_id or None
         imm.qbo_customer_name = payload.qbo_customer_name or None
@@ -662,7 +767,13 @@ async def facturer(
 
 class LigneGroupeIn(BaseModel):
     immeuble_id: int
-    mois: date
+    #: Ligne « gestion » : 1er du mois de revenus facturé. Absent pour
+    #: les lignes relocation/manuel.
+    mois: Optional[date] = None
+    #: Ligne « relocation » : dossier de relocation abouti à facturer.
+    dossier_id: Optional[int] = None
+    #: Ligne « manuel » : description libre du frais.
+    libelle: Optional[str] = Field(default=None, max_length=255)
     #: Montant FINAL de la ligne — modifiable à la main dans le panier.
     montant: float = Field(gt=0)
 
@@ -678,6 +789,25 @@ class FacturerGroupeOut(BaseModel):
     doc_number: Optional[str] = None
     total: float = 0.0
     nb_lignes: int = 0
+
+
+def _desc_ligne(d: Dict[str, Any]) -> str:
+    """Description QuickBooks d'une ligne du panier selon son type."""
+    if d["type_ligne"] == "relocation":
+        return f"Frais de relocation — {d['libelle']} — {d['imm'].name}"
+    if d["type_ligne"] == "manuel":
+        return f"{d['libelle']} — {d['imm'].name}"
+    mois_label = f"{MOIS_FR[d['mois'].month - 1]} {d['mois'].year}"
+    if d["complement"]:
+        return (
+            f"Complément — frais de gestion {d['pct']:g} % — loyers "
+            f"additionnels de {mois_label} ({d['revenus']:.2f} $) — "
+            f"{d['imm'].name}"
+        )
+    return (
+        f"Frais de gestion {d['pct']:g} % — revenus locatifs de "
+        f"{mois_label} ({d['revenus']:.2f} $) — {d['imm'].name}"
+    )
 
 
 @router.post("/facturer-groupe", response_model=FacturerGroupeOut)
@@ -700,15 +830,28 @@ async def facturer_groupe(
                 FactureGestion.immeuble_id,
                 FactureGestion.mois_couvert,
                 func.sum(FactureGestion.revenus),
-            ).group_by(
+            )
+            .where(FactureGestion.type_ligne == "gestion")
+            .group_by(
                 FactureGestion.immeuble_id, FactureGestion.mois_couvert
             )
         )
     ).all():
         factures_sommes[(int(iid), fm)] = float(frev or 0.0)
+    dossiers_factures = {
+        int(did)
+        for (did,) in (
+            await db.execute(
+                select(FactureGestion.relocation_dossier_id).where(
+                    FactureGestion.relocation_dossier_id.is_not(None)
+                )
+            )
+        ).all()
+    }
     premier_mois_courant = datetime.now(timezone.utc).date().replace(day=1)
     details: List[Dict[str, Any]] = []
     vus: set = set()
+    vus_dossiers: set = set()
     for ligne in payload.lignes:
         imm = await db.get(Immeuble, ligne.immeuble_id)
         if not imm:
@@ -720,6 +863,93 @@ async def facturer_groupe(
                     f"« {imm.name} » n'est pas associé à ce client "
                     "QuickBooks — une facture = un seul client."
                 ),
+            )
+
+        # ── Ligne RELOCATION : frais fixe au contrat, dossier abouti. ──
+        if ligne.dossier_id is not None:
+            dossier = await db.get(LocationDossier, ligne.dossier_id)
+            if not dossier or dossier.statut != "reloue":
+                raise HTTPException(
+                    status_code=404,
+                    detail="Dossier de relocation introuvable ou pas abouti.",
+                )
+            logement = await db.get(Logement, dossier.logement_id)
+            if not logement or int(logement.immeuble_id) != imm.id:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Ce dossier de relocation n'appartient pas à "
+                        f"« {imm.name} »."
+                    ),
+                )
+            if (
+                dossier.id in dossiers_factures
+                or dossier.id in vus_dossiers
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"La relocation du {logement.numero} "
+                        f"({imm.name}) est déjà facturée."
+                    ),
+                )
+            vus_dossiers.add(dossier.id)
+            en_chambres = bool(
+                getattr(logement, "location_en_chambres", False)
+            )
+            unite = ("ch. " if en_chambres else "log. ") + str(
+                logement.numero
+            )
+            quand = dossier.reloue_le
+            lib = f"Relocation {unite}"
+            if quand:
+                lib += (
+                    f" · reloué le {quand.day} {MOIS_FR[quand.month - 1]} "
+                    f"{quand.year}"
+                )
+            details.append(
+                {
+                    "imm": imm,
+                    "mois": (quand or premier_mois_courant).replace(day=1),
+                    "montant": round(float(ligne.montant), 2),
+                    "revenus": 0.0,
+                    "complement": False,
+                    "type_ligne": "relocation",
+                    "dossier_id": dossier.id,
+                    "libelle": lib,
+                    "pct": 0.0,
+                }
+            )
+            continue
+
+        # ── Ligne MANUELLE : frais libre saisi dans le panier. ──
+        if ligne.libelle is not None and ligne.mois is None:
+            lib = ligne.libelle.strip()
+            if not lib:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Décris le frais manuel (libellé vide).",
+                )
+            details.append(
+                {
+                    "imm": imm,
+                    "mois": premier_mois_courant,
+                    "montant": round(float(ligne.montant), 2),
+                    "revenus": 0.0,
+                    "complement": False,
+                    "type_ligne": "manuel",
+                    "dossier_id": None,
+                    "libelle": lib,
+                    "pct": 0.0,
+                }
+            )
+            continue
+
+        # ── Ligne GESTION : X % des revenus du mois. ──
+        if ligne.mois is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Ligne invalide : mois manquant.",
             )
         m = ligne.mois.replace(day=1)
         if m >= premier_mois_courant:
@@ -770,6 +1000,9 @@ async def facturer_groupe(
                 "montant": round(float(ligne.montant), 2),
                 "revenus": revenus_ligne,
                 "complement": complement,
+                "type_ligne": "gestion",
+                "dossier_id": None,
+                "libelle": None,
                 "pct": float(
                     getattr(imm, "frais_gestion_pct", None) or DEFAULT_PCT
                 ),
@@ -840,22 +1073,7 @@ async def facturer_groupe(
                 {
                     "DetailType": "SalesItemLineDetail",
                     "Amount": d["montant"],
-                    "Description": (
-                        (
-                            f"Complément — frais de gestion {d['pct']:g} % "
-                            f"— loyers additionnels de "
-                            f"{MOIS_FR[d['mois'].month - 1]} "
-                            f"{d['mois'].year} ({d['revenus']:.2f} $) — "
-                            f"{d['imm'].name}"
-                        )
-                        if d["complement"]
-                        else (
-                            f"Frais de gestion {d['pct']:g} % — revenus "
-                            f"locatifs de {MOIS_FR[d['mois'].month - 1]} "
-                            f"{d['mois'].year} ({d['revenus']:.2f} $) — "
-                            f"{d['imm'].name}"
-                        )
-                    ),
+                    "Description": _desc_ligne(d),
                     "SalesItemLineDetail": {
                         "ItemRef": {"value": str(item["Id"])},
                         "Qty": 1,
@@ -904,6 +1122,9 @@ async def facturer_groupe(
                 pct=d["pct"],
                 montant=d["montant"],
                 est_complement=d["complement"],
+                type_ligne=d["type_ligne"],
+                relocation_dossier_id=d["dossier_id"],
+                libelle=d["libelle"],
                 qbo_invoice_id=invoice_id,
                 qbo_doc_number=doc_number,
                 created_by_user_id=user.id,

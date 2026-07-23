@@ -170,7 +170,7 @@ PAGES: list[PageEntry] = [
        "/immobilier/depots"),
     _p("immobilier.bons_travail", "Bons de travail (locatif)", "immobilier",
        "employee", "/immobilier/bons-travail"),
-    _p("immobilier.frais_gestion", "Frais de gestion", "immobilier",
+    _p("immobilier.frais_gestion", "Facturation", "immobilier",
        "manager", "/immobilier/frais-gestion"),
     # ── Gestion d'entreprise (comportement actuel : owner/admin + volet) ──
     _p("entreprises.accueil", "Entreprises", "entreprises", "admin",
