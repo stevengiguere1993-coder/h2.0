@@ -29,7 +29,8 @@ import {
   DollarSign,
   CalendarDays,
   Wallet,
-  FileText
+  FileText,
+  ChevronDown
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -595,14 +596,14 @@ export default function FeuilleDeTempsPage() {
           view === "equipe"
             ? "Feuilles de temps — Équipe"
             : view === "dashboard"
-              ? "Feuilles de temps — Dashboard"
+              ? "Feuilles de temps — Facturation"
               : selectedUserId != null
                 ? `Feuille de : ${detail?.employee_name ?? "…"}`
                 : "Ma feuille de temps"
         }
         subtitle={
           view === "dashboard"
-            ? "Soldes cumulés paie & refacturation · règlements"
+            ? "Factures QuickBooks · soldes paie & refacturation"
             : detail && view !== "equipe"
               ? `${detail.employee_name} · ${formatPeriod(
                   detail.period_start,
@@ -627,7 +628,7 @@ export default function FeuilleDeTempsPage() {
                   Équipe
                 </TabBtn>
                 <TabBtn active={view === "dashboard"} onClick={() => void switchView("dashboard")} icon={Wallet}>
-                  Dashboard
+                  Facturation
                 </TabBtn>
               </div>
             )}
@@ -1451,8 +1452,6 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Company | null>(null);
   const [adding, setAdding] = useState(false);
-  const [qboOpts, setQboOpts] = useState<QboOptions | null>(null);
-
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -1465,32 +1464,6 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     void load();
   }, [load]);
-  useEffect(() => {
-    void (async () => {
-      try {
-        const r = await authedFetch("/api/v1/timesheets/qbo-options");
-        if (r.ok) setQboOpts(await r.json());
-      } catch {
-        /* noop */
-      }
-    })();
-  }, []);
-
-  const saveTaxCode = async (id: string) => {
-    const name =
-      qboOpts?.tax_codes.find((t) => t.id === id)?.name || "";
-    await authedFetch("/api/v1/timesheets/qbo-options", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        tax_code_id: id || null,
-        tax_code_name: name || null
-      })
-    });
-    setQboOpts((p) =>
-      p ? { ...p, tax_code_id: id || null, tax_code_name: name || null } : p
-    );
-  };
 
   const saveCompany = async (c: Partial<Company>, id?: number) => {
     if (id) {
@@ -1544,56 +1517,9 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
-      {/* Facturation QuickBooks : code de taxe (obligatoire pour créer
-          les factures) + association des clients par compagnie via le
-          crayon de chaque ligne. */}
-      <div className="mb-4 rounded-xl border border-[var(--qg-border)] bg-[var(--qg-bg)]/40 p-3">
-        <div className="text-sm font-medium">Facturation QuickBooks</div>
-        {!qboOpts ? (
-          <div className="mt-1 text-xs text-[var(--qg-text-faint)]">
-            Chargement…
-          </div>
-        ) : !qboOpts.connected ? (
-          <div className="mt-1 text-xs text-[var(--qg-text-faint)]">
-            Le QuickBooks de Gestion d&apos;entreprise n&apos;est pas
-            connecté — va dans Paramètres → Comptabilité → « QuickBooks —
-            autres pôles ».
-          </div>
-        ) : (
-          <>
-            <label className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-[var(--qg-text-faint)]">
-                Code de taxe des factures :
-              </span>
-              <select
-                value={qboOpts.tax_code_id || ""}
-                onChange={(e) => void saveTaxCode(e.target.value)}
-                className="rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--qg-accent)]"
-              >
-                <option value="">— choisir (obligatoire) —</option>
-                {qboOpts.tax_codes.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="mt-1 text-xs text-[var(--qg-text-faint)]">
-              Le client QuickBooks de chaque compagnie se choisit avec le
-              crayon de sa ligne (sinon : créé automatiquement avec le
-              même nom).
-            </p>
-            {qboOpts.error && (
-              <p className="mt-1 text-xs text-red-400">{qboOpts.error}</p>
-            )}
-          </>
-        )}
-      </div>
-
       {adding && (
         <CompanyEditor
           company={null}
-          qboOpts={qboOpts}
           onCancel={() => setAdding(false)}
           onSave={(c) => saveCompany(c)}
         />
@@ -1605,7 +1531,6 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
             <CompanyEditor
               key={c.id}
               company={c}
-              qboOpts={qboOpts}
               onCancel={() => setEditing(null)}
               onSave={(patch) => saveCompany(patch, c.id)}
             />
@@ -1626,14 +1551,6 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
                     title="Compagnie interne : toutes ses heures sont non refacturables (payées, jamais facturées)"
                   >
                     interne
-                  </span>
-                )}
-                {c.qbo_customer_name && (
-                  <span
-                    className="text-xs text-[var(--qg-text-faint)]"
-                    title="Client QuickBooks associé pour la facturation"
-                  >
-                    → QBO : {c.qbo_customer_name}
                   </span>
                 )}
               </div>
@@ -1657,19 +1574,16 @@ function CompaniesManager({ onClose }: { onClose: () => void }) {
 
 function CompanyEditor({
   company,
-  qboOpts,
   onCancel,
   onSave
 }: {
   company: Company | null;
-  qboOpts: QboOptions | null;
   onCancel: () => void;
   onSave: (c: Partial<Company>) => void;
 }) {
   const [label, setLabel] = useState(company?.label || "");
   const [active, setActive] = useState(company?.is_active ?? true);
   const [nrOk, setNrOk] = useState(company?.heures_nr_autorisees === true);
-  const [qboCust, setQboCust] = useState(company?.qbo_customer_id || "");
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--qg-accent)]/40 bg-[var(--qg-bg)]/40 p-3">
@@ -1680,21 +1594,6 @@ function CompanyEditor({
         placeholder="Nom de la compagnie"
         className="flex-1 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
       />
-      {qboOpts?.connected && (
-        <select
-          value={qboCust}
-          onChange={(e) => setQboCust(e.target.value)}
-          title="Client QuickBooks à facturer pour cette compagnie"
-          className="max-w-[240px] rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-2 text-sm outline-none focus:border-[var(--qg-accent)]"
-        >
-          <option value="">Client QBO : auto (même nom)</option>
-          {qboOpts.customers.map((cu) => (
-            <option key={cu.id} value={cu.id}>
-              {cu.name}
-            </option>
-          ))}
-        </select>
-      )}
       {company && (
         <label className="flex items-center gap-1.5 text-sm">
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
@@ -1720,11 +1619,6 @@ function CompanyEditor({
           onSave({
             label: label.trim(),
             heures_nr_autorisees: nrOk,
-            qbo_customer_id: qboCust,
-            qbo_customer_name: qboCust
-              ? qboOpts?.customers.find((cu) => cu.id === qboCust)?.name ||
-                ""
-              : "",
             ...(company ? { is_active: active } : {})
           })
         }
@@ -1745,6 +1639,181 @@ function todayISO(): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${d.getFullYear()}-${m}-${day}`;
+}
+
+function QboFacturationConfig() {
+  const [opts, setOpts] = useState<QboOptions | null>(null);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [ro, rc] = await Promise.all([
+          authedFetch("/api/v1/timesheets/qbo-options"),
+          authedFetch("/api/v1/timesheets/companies")
+        ]);
+        if (ro.ok) setOpts(await ro.json());
+        if (rc.ok) {
+          const list: Company[] = await rc.json();
+          setCompanies(
+            list.filter((c) => c.is_active && !c.heures_nr_autorisees)
+          );
+        }
+      } catch {
+        /* noop */
+      }
+    })();
+  }, []);
+
+  const saveTax = async (id: string) => {
+    const name = opts?.tax_codes.find((t) => t.id === id)?.name || "";
+    await authedFetch("/api/v1/timesheets/qbo-options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tax_code_id: id || null,
+        tax_code_name: name || null
+      })
+    });
+    setOpts((p) =>
+      p ? { ...p, tax_code_id: id || null, tax_code_name: name || null } : p
+    );
+  };
+
+  const saveCustomer = async (companyId: number, custId: string) => {
+    setSavingId(companyId);
+    try {
+      const name = custId
+        ? opts?.customers.find((c) => c.id === custId)?.name || ""
+        : "";
+      await authedFetch(`/api/v1/timesheets/companies/${companyId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          qbo_customer_id: custId,
+          qbo_customer_name: name
+        })
+      });
+      setCompanies((prev) =>
+        prev.map((c) =>
+          c.id === companyId
+            ? {
+                ...c,
+                qbo_customer_id: custId || null,
+                qbo_customer_name: name || null
+              }
+            : c
+        )
+      );
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const statut = !opts ? (
+    <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--qg-text-faint)]" />
+  ) : !opts.connected ? (
+    <span className="badge badge-amber">QuickBooks non connecté</span>
+  ) : !opts.tax_code_id ? (
+    <span className="badge badge-amber">Code de taxe à choisir</span>
+  ) : (
+    <span className="badge badge-emerald">
+      Prêt · {opts.tax_code_name}
+    </span>
+  );
+
+  return (
+    <div className={CARD}>
+      <button
+        className="flex w-full items-center justify-between gap-2 text-left"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="flex items-center gap-2 text-sm font-medium">
+          <Building2 className="h-4 w-4" />
+          Réglages QuickBooks (taxes &amp; clients)
+        </span>
+        <span className="flex items-center gap-2">
+          {statut}
+          <ChevronDown
+            className={`h-4 w-4 text-[var(--qg-text-faint)] transition ${open ? "rotate-180" : ""}`}
+          />
+        </span>
+      </button>
+
+      {open && !opts?.connected && (
+        <p className="mt-3 text-sm text-[var(--qg-text-faint)]">
+          Connecte d&apos;abord le QuickBooks de Gestion d&apos;entreprise :
+          Paramètres → Comptabilité → « QuickBooks — autres pôles ».
+        </p>
+      )}
+
+      {open && opts?.connected && (
+        <div className="mt-4 space-y-4">
+          <label className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-[var(--qg-text-faint)]">
+              Code de taxe des factures (obligatoire) :
+            </span>
+            <select
+              value={opts.tax_code_id || ""}
+              onChange={(e) => void saveTax(e.target.value)}
+              className="rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--qg-accent)]"
+            >
+              <option value="">— choisir —</option>
+              {opts.tax_codes.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div>
+            <div className="mb-1 text-sm font-medium">
+              Client QuickBooks facturé pour chaque compagnie
+            </div>
+            <p className="mb-2 text-xs text-[var(--qg-text-faint)]">
+              Sans choix : Kratos prend (ou crée) le client QuickBooks du
+              même nom. Enregistré dès que tu changes la sélection.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {companies.map((c) => (
+                <label
+                  key={c.id}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-bg)]/40 px-3 py-2 text-sm"
+                >
+                  <span className="truncate">{c.label}</span>
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    {savingId === c.id && (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    )}
+                    <select
+                      value={c.qbo_customer_id || ""}
+                      onChange={(e) =>
+                        void saveCustomer(c.id, e.target.value)
+                      }
+                      className="max-w-[200px] rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1 text-sm outline-none focus:border-[var(--qg-accent)]"
+                    >
+                      <option value="">auto (même nom)</option>
+                      {opts.customers.map((cu) => (
+                        <option key={cu.id} value={cu.id}>
+                          {cu.name}
+                        </option>
+                      ))}
+                    </select>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+          {opts.error && (
+            <p className="text-xs text-red-400">{opts.error}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
@@ -1843,6 +1912,9 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
           {billMsg.text}
         </div>
       )}
+
+      {/* Réglages de facturation (taxes + clients QBO) */}
+      <QboFacturationConfig />
 
       {/* Tuiles totaux */}
       <div className="grid gap-4 sm:grid-cols-2">
@@ -1953,7 +2025,7 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
                       <th className="py-1 pr-2 text-right">Dû</th>
                       <th className="py-1 pr-2 text-right">Refacturé</th>
                       <th className="py-1 pr-2 text-right">Solde</th>
-                      <th className="py-1" />
+                      <th className="py-1 pl-2 text-right">Facturation</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1979,12 +2051,12 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
                         >
                           {money(c.solde)}
                         </td>
-                        <td className="py-1.5 text-right">
-                          <span className="inline-flex items-center gap-1">
+                        <td className="py-1.5 pl-2 text-right">
+                          <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
                             {c.solde > 0 && (
                               <button
-                                className="btn-ghost btn-xs"
-                                title="Créer la facture dans QuickBooks (Gestion d'entreprise) — le solde sera marqué refacturé automatiquement"
+                                className="btn-accent btn-xs whitespace-nowrap"
+                                title="Crée la facture dans ton QuickBooks (heures × taux + taxes) et marque le solde refacturé automatiquement"
                                 disabled={
                                   billBusy === `${emp.user_id}-${c.company_id}`
                                 }
@@ -1992,15 +2064,16 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
                               >
                                 {billBusy ===
                                 `${emp.user_id}-${c.company_id}` ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                 ) : (
-                                  <FileText className="h-4 w-4" />
+                                  <FileText className="h-3.5 w-3.5" />
                                 )}
+                                Créer la facture
                               </button>
                             )}
                             <button
-                              className="btn-ghost btn-xs"
-                              title="Enregistrer manuellement une refacturation (déjà facturée ailleurs)"
+                              className="btn-secondary btn-xs whitespace-nowrap"
+                              title="Déjà facturé ailleurs ? Enregistre le montant à la main — le solde diminue sans créer de facture QuickBooks"
                               onClick={() =>
                                 setModal({
                                   kind: "refacturation",
@@ -2009,7 +2082,8 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
                                 })
                               }
                             >
-                              <DollarSign className="h-4 w-4" />
+                              <DollarSign className="h-3.5 w-3.5" />
+                              Déjà facturé
                             </button>
                           </span>
                         </td>
