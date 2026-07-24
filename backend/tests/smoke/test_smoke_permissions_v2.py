@@ -245,3 +245,30 @@ def test_capability_override_grants_and_denies(run, employee_id):
         assert run(_check("qbo.push")) is False
     finally:
         _clear_overrides(run, employee_id)
+
+
+def test_pole_pages_not_general(run, employee_id):
+    """Bug Phil 2026-07-24 (2e vague) : les pages INTERNES d'un pôle ne
+    passent plus par une entrée « general » — Tâches/Réglages QG sont
+    des pages du volet entreprises (défaut admin) et un employé
+    « feuille de temps seulement » ne les voit plus."""
+    assert PAGES_BY_KEY["entreprises.taches"].default_min_role == "admin"
+    assert PAGES_BY_KEY["entreprises.reglages"].default_min_role == "admin"
+    # Les entrées transverses ne couvrent plus les routes du QG.
+    assert PAGES_BY_KEY["general.mes_taches"].routes == ("/mes-taches",)
+    assert (
+        "/entreprises/reglages"
+        not in PAGES_BY_KEY["general.parametres"].routes
+    )
+    # Scénario terrain : employé + volet entreprises → feuille visible,
+    # Tâches/Réglages QG fermées.
+    try:
+        _set_volets(run, employee_id, ["entreprises"])
+        access = _access(run, employee_id)
+        assert access["page:entreprises.feuille_de_temps"] is True
+        assert access["page:entreprises.taches"] is False
+        assert access["page:entreprises.reglages"] is False
+        # /mes-taches (app perso) reste ouverte — transverse employé.
+        assert access["page:general.mes_taches"] is True
+    finally:
+        _set_volets(run, employee_id, None)
