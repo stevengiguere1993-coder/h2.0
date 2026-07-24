@@ -19,6 +19,7 @@ from sqlalchemy import delete, func, or_, select
 from app.api.deps import CurrentUser, DBSession
 from app.integrations.quickbooks import QuickBooksError, get_qbo
 from app.models.automation_setting import AutomationSetting
+from app.services.permissions_service import user_has_capability
 from app.models.timesheet import (
     TIMESHEET_DAYS,
     Timesheet,
@@ -1339,7 +1340,7 @@ async def facturer_solde_qbo(
     solde de refacturation (employé, compagnie) : client QBO = le nom de
     la compagnie, ligne = heures × taux. Puis enregistre automatiquement
     le règlement « refacturation » → le solde du dashboard tombe à 0."""
-    if not _is_manager(user):
+    if not await user_has_capability(db, user, "timesheet.facturer_qbo"):
         raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
     emp = await db.get(User, payload.user_id)
     if not emp:
@@ -1726,7 +1727,7 @@ async def submit_timesheet(
 async def approve_timesheet(
     timesheet_id: int, db: DBSession, user: CurrentUser
 ) -> TimesheetDetail:
-    if not _is_manager(user):
+    if not await user_has_capability(db, user, "timesheet.approve"):
         raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
     ts = await db.get(Timesheet, timesheet_id)
     if not ts:
@@ -1747,9 +1748,9 @@ async def reopen_timesheet(
     ts = await db.get(Timesheet, timesheet_id)
     if not ts:
         raise HTTPException(status_code=404, detail="Feuille introuvable")
-    # Rouvrir = GESTIONNAIRE seulement : une feuille soumise est figée
-    # pour l'employé (retour Phil 2026-07-22).
-    if not _is_manager(user):
+    # Rouvrir = capacité configurable (défaut gestionnaire) : une feuille
+    # soumise est figée pour l'employé (retour Phil 2026-07-22).
+    if not await user_has_capability(db, user, "timesheet.reopen"):
         raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
     ts.status = "brouillon"
     ts.submitted_at = None
@@ -1766,7 +1767,9 @@ async def delete_timesheet(
     ts = await db.get(Timesheet, timesheet_id)
     if not ts:
         raise HTTPException(status_code=404, detail="Feuille introuvable")
-    if not _is_manager(user):
+    # Capacité configurable, sinon un employé peut supprimer SA feuille
+    # tant qu'elle n'est pas approuvée.
+    if not await user_has_capability(db, user, "timesheet.delete"):
         if ts.user_id != user.id or ts.status == "approuve":
             raise HTTPException(status_code=403, detail="Accès refusé")
     await db.execute(

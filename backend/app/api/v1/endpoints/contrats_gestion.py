@@ -364,7 +364,9 @@ async def update_contrat(
     summary="Envoyer pour signature (au Mandataire MGV d'abord)",
 )
 async def send_contrat(
-    contrat_id: int, db: DBSession, user: RequireManager
+    contrat_id: int,
+    db: DBSession,
+    user: Annotated[User, Depends(require_capability("contrat_gestion.send"))],
 ) -> ContratRead:
     contrat = await _load(db, contrat_id)
     if contrat.status == ContratGestionStatus.SIGNE.value:

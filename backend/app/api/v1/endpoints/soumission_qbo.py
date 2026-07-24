@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, DBSession
+from app.services.permissions_service import user_has_capability
 from app.services.soumission_qbo import (
     SoumissionSyncError,
     sync_soumission_to_qbo,
@@ -31,8 +32,13 @@ class QboSyncResult(BaseModel):
     summary="Push this soumission to QuickBooks Online as an Estimate",
 )
 async def qbo_sync(
-    soumission_id: int, db: DBSession, _: CurrentUser
+    soumission_id: int, db: DBSession, user: CurrentUser
 ) -> QboSyncResult:
+    if not await user_has_capability(db, user, "qbo.push"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissions insuffisantes pour cette action.",
+        )
     try:
         result = await sync_soumission_to_qbo(db, soumission_id)
     except SoumissionSyncError as exc:

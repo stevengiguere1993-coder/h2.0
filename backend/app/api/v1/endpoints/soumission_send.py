@@ -8,6 +8,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr, Field
 
 from app.api.deps import CurrentUser, DBSession
+from app.services.permissions_service import user_has_capability
 from app.schemas.business import SoumissionRead
 from app.services.soumission_pdf import render_soumission_pdf
 from app.services.soumission_send import SoumissionSendError, send_soumission
@@ -55,8 +56,13 @@ async def send_soumission_endpoint(
     data: SoumissionSendRequest,
     db: DBSession,
     background: BackgroundTasks,
-    _: CurrentUser,
+    user: CurrentUser,
 ) -> SoumissionRead:
+    if not await user_has_capability(db, user, "soumission.send"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissions insuffisantes pour cette action.",
+        )
     try:
         sm = await send_soumission(
             db,

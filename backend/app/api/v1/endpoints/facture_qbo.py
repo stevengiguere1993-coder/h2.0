@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, DBSession
+from app.services.permissions_service import user_has_capability
 from app.services.facture_qbo import FactureSyncError, sync_facture_to_qbo
 
 
@@ -30,8 +31,13 @@ class QboSyncResult(BaseModel):
 async def sync_facture(
     facture_id: int,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ) -> QboSyncResult:
+    if not await user_has_capability(db, user, "qbo.push"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissions insuffisantes pour cette action.",
+        )
     try:
         result = await sync_facture_to_qbo(db, facture_id)
     except FactureSyncError as exc:

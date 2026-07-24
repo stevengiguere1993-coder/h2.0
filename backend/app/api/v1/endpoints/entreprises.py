@@ -349,6 +349,15 @@ async def delete_entreprise(
     corbeille (POST /entreprises/{id}/restore). On ne fait plus de
     suppression définitive en cascade — trop risqué (perte de données)."""
     _require_volet(user)
+    # Capacité configurable (défaut admin — permissions v2 : cette
+    # suppression n'avait aucun garde de rôle avant l'audit).
+    from app.services.permissions_service import user_has_capability
+
+    if not await user_has_capability(db, user, "entreprise.delete"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissions insuffisantes pour cette action.",
+        )
     e = await db.get(Entreprise, entreprise_id)
     if e is None:
         raise HTTPException(404, "Entreprise non trouvée")

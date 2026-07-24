@@ -25,6 +25,7 @@ from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.integrations.quickbooks import QuickBooksError, get_qbo
+from app.services.permissions_service import user_has_capability
 from app.models.automation_setting import AutomationSetting
 from app.models.immobilier import (
     Bail,
@@ -569,7 +570,7 @@ async def facturer(
 ) -> FacturerOut:
     """Crée la facture QuickBooks des frais de gestion (X % des revenus
     du mois demandé) et coche le mois dans la checklist."""
-    if not _is_manager(user):
+    if not await user_has_capability(db, user, "frais_gestion.facturer"):
         raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
     imm = await db.get(Immeuble, payload.immeuble_id)
     if not imm:
@@ -818,7 +819,7 @@ async def facturer_groupe(
     de frais de gestion (le « panier » de la page) — montants finaux
     fournis par l'UI (modifiables à la main). Coche chaque
     (immeuble, mois) dans la checklist."""
-    if not _is_manager(user):
+    if not await user_has_capability(db, user, "frais_gestion.facturer"):
         raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
 
     # Validation des lignes + collecte des infos (immeuble, revenus, pct).
@@ -1151,7 +1152,7 @@ async def delete_facture(
 ) -> dict:
     """Décoche un mois (ex. facture supprimée dans QuickBooks) — la
     ligne redevient « à facturer »."""
-    if not _is_manager(user):
+    if not await user_has_capability(db, user, "frais_gestion.delete"):
         raise HTTPException(status_code=403, detail="Réservé aux gestionnaires")
     f = await db.get(FactureGestion, facture_id)
     if not f:
