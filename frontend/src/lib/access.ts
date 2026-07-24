@@ -99,3 +99,53 @@ export function canDo(
   if (fallbackMinRole) return hasMinRole(user, fallbackMinRole);
   return true;
 }
+
+/** Forme minimale acceptée par les helpers de pôle — un CurrentUser
+ *  complet OU juste `{ access }` (ex. le sélecteur de portail qui garde
+ *  l'access en state avant d'avoir un objet user). */
+export type AccessHolder = { access?: Record<string, boolean> | null };
+
+/**
+ * L'utilisateur peut-il ENTRER dans un pôle ? (permissions v2)
+ *
+ * Vrai dès qu'AU MOINS UNE page du volet lui est accessible — la seule
+ * règle qui pilote la tuile du portail ET le layout du pôle, alignée sur
+ * le backend (``compute_access`` dérive ``volet:<v>`` de la même façon).
+ * Aucun rôle codé en dur : un employé avec une seule page accordée voit
+ * le pôle et n'y voit que cette page.
+ *
+ * `keyPrefix` = préfixe des clés de pages du volet (ex. "entreprises",
+ * "devlogiciel" pour le volet developpement_logiciel). Fail-open si le
+ * dict access est absent/vide ou ne contient aucune page du volet
+ * (vieux backend pendant un déploiement).
+ */
+export function canEnterVolet(
+  user: AccessHolder | null,
+  keyPrefix: string
+): boolean {
+  if (!user) return false;
+  const access = user.access;
+  if (!access || Object.keys(access).length === 0) return true;
+  const pages = Object.entries(access).filter(([k]) =>
+    k.startsWith(`page:${keyPrefix}.`)
+  );
+  if (pages.length === 0) return true;
+  return pages.some(([, v]) => v === true);
+}
+
+/** Première page ACCESSIBLE d'un volet (ordre du registre) — la cible
+ *  d'atterrissage quand on clique la tuile du pôle ou quand sa racine
+ *  est refusée. `null` si aucune page du volet n'est accessible. */
+export function firstAllowedPath(
+  user: AccessHolder | null,
+  map: AccessMapEntry[] | null,
+  volet: string
+): string | null {
+  if (!user || !map) return null;
+  for (const entry of map) {
+    if (entry.volet !== volet || entry.routes.length === 0) continue;
+    const v = user.access?.[`page:${entry.key}`];
+    if (v !== false) return entry.routes[0];
+  }
+  return null;
+}

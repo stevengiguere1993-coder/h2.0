@@ -20,6 +20,7 @@ import { KratosLogo } from "@/components/kratos-logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { canEnterVolet } from "@/lib/access";
 
 type NavItem = {
   href: string;
@@ -57,7 +58,8 @@ export default function InvestisseurLayout({
   if (!user) return null;
 
   const initialTheme = (user.theme_preference as Theme) || "light";
-  const allowed = (user.volets || []).includes("investisseur");
+  // Permissions v2 : au moins une page du volet accessible = on entre.
+  const allowed = canEnterVolet(user, "investisseur");
 
   function isActive(href: string) {
     if (href === "/investisseur")

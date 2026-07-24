@@ -131,21 +131,25 @@ async def get_current_admin_or_owner(
 
 
 def require_volet(*volets: str):
-    """Garde d'accès PAR PÔLE (volet) — refonte permissions 2026-07.
+    """Garde d'accès PAR PÔLE (volet) — permissions v2 (2026-07-24).
 
     Fabrique une dépendance FastAPI qui exige que l'utilisateur courant ait
-    accès à AU MOINS UN des volets donnés (``User.has_volet`` : owner/admin
-    = tous les volets, sinon ``volets_json`` + whitelists de dev). Plusieurs
-    volets = ressource partagée entre pôles (ex. bons de travail :
-    construction OU immobilier). À appliquer à l'inclusion des routeurs
-    métier (``dependencies=[Depends(require_volet("prospection"))]``) —
-    les routeurs transverses/publics n'en ont pas.
+    accès à AU MOINS UN des volets donnés : volet coché (``User.has_volet``,
+    owner/admin = tous) OU exception individuelle qui accorde le volet ou
+    une de ses pages (``user_access_overrides``) — les MÊMES règles que
+    ``compute_access``, pour que ce que l'UI affiche soit toujours servi
+    par l'API. Plusieurs volets = ressource partagée entre pôles (ex. bons
+    de travail : construction OU immobilier). À appliquer à l'inclusion des
+    routeurs métier (``dependencies=[Depends(require_volet("prospection"))]``).
     """
 
     async def check(
         current_user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)],
     ) -> User:
-        if not any(current_user.has_volet(v) for v in volets):
+        from app.services.access_service import user_has_volet_access
+
+        if not await user_has_volet_access(db, current_user, *volets):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Accès au pôle non autorisé.",
