@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { canEnterVolet } from "@/lib/access";
 import { hasMinRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
@@ -58,6 +59,10 @@ type Section = {
   label: string; // libellé court pour le filtre
   title: string; // titre complet de section
   icon: LucideIcon;
+  //: Préfixe des clés de pages du pôle (permissions v2) — la section
+  //: n'apparaît QUE si l'utilisateur a accès à ce pôle. Absent = section
+  //: transverse (Général), visible pour tous.
+  volet?: string;
   cards: Card[];
   // Pôle sans réglage pour l'instant : la section reste affichée avec ce
   // message (structure claire par pôle, prête à recevoir ses réglages).
@@ -89,7 +94,8 @@ const SECTIONS: Section[] = [
         title: "Clés API",
         desc: "Générer des clés pour connecter tes assistants Claude / outils externes.",
         href: "/app/parametres/cles-api",
-        icon: KeyRound
+        icon: KeyRound,
+        minRole: "manager"
       },
       {
         title: "Journal d'activité",
@@ -118,6 +124,7 @@ const SECTIONS: Section[] = [
     label: "Construction",
     title: "Construction",
     icon: HardHat,
+    volet: "construction",
     cards: [
       {
         title: "Bons de travail",
@@ -161,6 +168,7 @@ const SECTIONS: Section[] = [
     label: "Gestion d'entreprise",
     title: "Gestion d'entreprise & comptabilité",
     icon: Building2,
+    volet: "entreprises",
     cards: [
       {
         title: "Entreprises du portefeuille",
@@ -197,6 +205,7 @@ const SECTIONS: Section[] = [
     label: "Gestion immobilière",
     title: "Gestion immobilière",
     icon: Home,
+    volet: "immobilier",
     cards: [
       {
         title: "Contrat de gestion — modèle",
@@ -210,7 +219,7 @@ const SECTIONS: Section[] = [
         desc: "Trousse bail, avis TAL, DPA… — aperçu de chaque modèle et où les générer.",
         href: "/immobilier/modeles-documents",
         icon: FileSignature,
-        minRole: "employee"
+        minRole: "manager"
       }
     ]
   },
@@ -219,6 +228,7 @@ const SECTIONS: Section[] = [
     label: "Prospection",
     title: "Prospection",
     icon: MapIcon,
+    volet: "prospection",
     cards: [
       {
         title: "Préférences carte",
@@ -268,6 +278,7 @@ const SECTIONS: Section[] = [
     label: "Investisseurs",
     title: "Investisseurs",
     icon: TrendingUp,
+    volet: "investisseur",
     cards: [],
     emptyNote:
       "Aucun réglage pour ce pôle pour l'instant. Les réglages du volet Investisseurs apparaîtront ici."
@@ -277,6 +288,7 @@ const SECTIONS: Section[] = [
     label: "Dev logiciel",
     title: "Développement logiciel",
     icon: Code2,
+    volet: "devlogiciel",
     cards: [
       {
         title: "Soumissions — valeurs par défaut",
@@ -292,6 +304,7 @@ const SECTIONS: Section[] = [
     label: "Téléphonie",
     title: "Téléphonie",
     icon: Phone,
+    volet: "communication",
     cards: [],
     emptyNote:
       "Aucun réglage pour ce pôle pour l'instant. Les réglages de la téléphonie apparaîtront ici."
@@ -303,15 +316,22 @@ export default function ParametresHubPage() {
   const { user } = useCurrentUser();
   const [active, setActive] = useState<string>("all");
 
-  // Filtre par rôle d'abord : une section sans carte visible disparaît
-  // (et son onglet de filtre aussi) — SAUF les pôles structurellement vides
-  // (emptyNote) qu'on garde affichés pour la structure par pôle.
+  // Filtre par PÔLE d'abord (permissions v2 : la section d'un pôle
+  // n'apparaît que si l'utilisateur y a accès — un employé « feuille de
+  // temps » ne voit pas les réglages Prospection), puis par rôle carte
+  // par carte. Une section sans carte visible disparaît (et son onglet
+  // de filtre aussi) — SAUF les pôles structurellement vides (emptyNote)
+  // qu'on garde pour la structure, s'ils sont accessibles.
   const visibleSections = useMemo(
     () =>
-      SECTIONS.map((s) => ({
-        ...s,
-        cards: s.cards.filter((c) => !c.minRole || hasMinRole(user, c.minRole))
-      })).filter((s) => s.cards.length > 0 || s.emptyNote),
+      SECTIONS.filter((s) => !s.volet || canEnterVolet(user, s.volet))
+        .map((s) => ({
+          ...s,
+          cards: s.cards.filter(
+            (c) => !c.minRole || hasMinRole(user, c.minRole)
+          )
+        }))
+        .filter((s) => s.cards.length > 0 || s.emptyNote),
     [user]
   );
 
