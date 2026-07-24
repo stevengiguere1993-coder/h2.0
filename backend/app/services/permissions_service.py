@@ -18,11 +18,12 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.access_registry import PAGE_KEY_PREFIX, PAGES_BY_KEY
 from app.core.capabilities import CAPABILITIES_BY_ID
-from app.db.session import AsyncSessionLocal
+from app.db.session import AsyncSessionLocal, get_db
 from app.models.role_permission import RolePermission
 from app.models.user import User
 
@@ -67,15 +68,40 @@ async def get_min_role(capability: str) -> str:
     return "owner"
 
 
+async def user_has_capability(db, user: User, capability: str) -> bool:
+    """L'utilisateur a-t-il la capacité ? — mêmes règles que
+    ``compute_access`` (permissions v2, 2026-07-24) : exception
+    individuelle d'abord (allow force l'accès, deny le retire — owner
+    jamais bloqué), sinon rôle ≥ seuil configuré."""
+    from app.models.user_access_override import UserAccessOverride
+
+    row = (
+        await db.execute(
+            select(UserAccessOverride).where(
+                UserAccessOverride.user_id == user.id,
+                UserAccessOverride.key == capability,
+            )
+        )
+    ).scalars().first()
+    if row is not None:
+        if row.allow:
+            return True
+        if user.role != "owner":
+            return False
+    return user.has_min_role(await get_min_role(capability))
+
+
 def require_capability(capability: str):
-    """Dépendance FastAPI : 403 si le compte courant n'atteint pas le rôle
-    minimum configuré pour ``capability``."""
+    """Dépendance FastAPI : 403 si le compte courant n'a pas la capacité
+    (rôle ≥ seuil configuré OU exception individuelle qui l'accorde —
+    l'UI Paramètres → Permissions et les endpoints disent toujours
+    pareil)."""
 
     async def check(
         current_user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)],
     ) -> User:
-        min_role = await get_min_role(capability)
-        if not current_user.has_min_role(min_role):
+        if not await user_has_capability(db, current_user, capability):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Permissions insuffisantes pour cette action.",

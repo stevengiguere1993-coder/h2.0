@@ -95,3 +95,22 @@ prospection, plan de suivi, /dev, /letmetalk, contact devlog public.
 Entrée fantôme `entreprises.projets` retirée. ⚠️ `/app/paie` et
 `/immobilier/utilisateurs` héritaient d'un seuil EMPLOYÉ — désormais
 admin par défaut (reconfigurables dans Paramètres → Permissions).
+
+## Actions v2 (2026-07-24) — couverture élargie
+
+10 nouvelles capacités branchées (endpoint + grille « Actions
+sensibles » + vue « par utilisateur ») :
+
+| Capacité | Défaut | Endpoints |
+|---|---|---|
+| `timesheet.approve` / `timesheet.reopen` / `timesheet.delete` / `timesheet.facturer_qbo` | gestionnaire | timesheets.py (approve / reopen / delete / facturer-qbo) |
+| `frais_gestion.facturer` / `frais_gestion.delete` | gestionnaire | immobilier_frais_gestion.py (facturer, facturer-groupe / delete facture) |
+| `soumission.send` | employé | soumission_send.py |
+| `contrat_gestion.send` | gestionnaire | contrats_gestion.py (send) |
+| `qbo.push` | employé | facture_qbo.py, achat_qbo.py, soumission_qbo.py |
+| `entreprise.delete` | **admin** ⚠️ (aucun garde de rôle avant) | entreprises.py (delete) |
+
+`require_capability` honore désormais les **exceptions individuelles**
+(`user_has_capability` : allow force l'accès, deny le retire, owner
+jamais bloqué) — même règle que `compute_access`, donc la vue « par
+utilisateur » et les endpoints disent toujours la même chose.

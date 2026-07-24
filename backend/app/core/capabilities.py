@@ -181,6 +181,112 @@ CAPABILITIES: list[Capability] = [
         category="Facturation & envois",
         default_min_role="employee",
     ),
+    # ─── Feuille de temps (Gestion d'entreprise) — permissions v2
+    # (2026-07-24). Défauts « gestionnaire » = comportement actuel
+    # (_is_manager inline remplacé par la garde configurable).
+    Capability(
+        id="timesheet.approve",
+        label="Approuver une feuille de temps",
+        description=(
+            "Approuver la feuille soumise d'un employé (déclenche les "
+            "soldes de paie et de refacturation)."
+        ),
+        category="Feuille de temps",
+        default_min_role="manager",
+    ),
+    Capability(
+        id="timesheet.reopen",
+        label="Rouvrir une feuille soumise/approuvée",
+        description=(
+            "Remettre une feuille de temps en brouillon pour correction."
+        ),
+        category="Feuille de temps",
+        default_min_role="manager",
+    ),
+    Capability(
+        id="timesheet.delete",
+        label="Supprimer une feuille de temps",
+        description="Effacer définitivement une feuille de temps.",
+        category="Feuille de temps",
+        default_min_role="manager",
+    ),
+    Capability(
+        id="timesheet.facturer_qbo",
+        label="Facturer la refacturation (QuickBooks)",
+        description=(
+            "Créer la facture QuickBooks du solde de refacturation "
+            "d'une compagnie."
+        ),
+        category="Feuille de temps",
+        default_min_role="manager",
+    ),
+    # ─── Facturation immobilière (page Facturation du locatif).
+    Capability(
+        id="frais_gestion.facturer",
+        label="Créer une facture de frais de gestion",
+        description=(
+            "Créer la facture QuickBooks des frais de gestion / "
+            "relocation / frais manuels d'un propriétaire."
+        ),
+        category="Facturation immobilière",
+        default_min_role="manager",
+    ),
+    Capability(
+        id="frais_gestion.delete",
+        label="Décocher une facture de gestion",
+        description=(
+            "Supprimer une ligne facturée (la transaction redevient à "
+            "facturer) — après suppression de la facture dans QuickBooks."
+        ),
+        category="Facturation immobilière",
+        default_min_role="manager",
+    ),
+    # ─── Envois & QuickBooks transverses. Défauts = comportement actuel
+    # (soumission/QBO étaient ouverts à tout utilisateur connecté ;
+    # contrat de gestion exigeait gestionnaire).
+    Capability(
+        id="soumission.send",
+        label="Envoyer une soumission au client",
+        description=(
+            "Envoyer une soumission de construction par courriel (PDF + "
+            "lien de signature)."
+        ),
+        category="Facturation & envois",
+        default_min_role="employee",
+    ),
+    Capability(
+        id="contrat_gestion.send",
+        label="Envoyer un contrat de gestion pour signature",
+        description=(
+            "Envoyer la convention de gestion immobilière aux parties "
+            "pour signature en ligne."
+        ),
+        category="Contrat de gestion",
+        default_min_role="manager",
+    ),
+    Capability(
+        id="qbo.push",
+        label="Pousser vers QuickBooks",
+        description=(
+            "Créer/pousser des factures et dépenses dans QuickBooks "
+            "depuis les fiches (constructions, achats, soumissions)."
+        ),
+        category="Facturation & envois",
+        default_min_role="employee",
+    ),
+    # ─── Gestion d'entreprise. ⚠️ Défaut « admin » : la suppression
+    # d'une entreprise n'avait AUCUN garde de rôle (volet seulement) —
+    # verrou volontaire (permissions v2).
+    Capability(
+        id="entreprise.delete",
+        label="Supprimer une entreprise",
+        description=(
+            "Effacer une entreprise du QG (fiches, tâches et historique "
+            "associés)."
+        ),
+        category="Gestion d'entreprise",
+        default_min_role="admin",
+    ),
     # ─── Accès à des pôles/pages sensibles (remplace les listes d'emails
     # codées en dur côté client — P-05d). Défaut « admin » = comportement
     # actuel (l'accès était owner/admin + quelques emails). Exposé au front

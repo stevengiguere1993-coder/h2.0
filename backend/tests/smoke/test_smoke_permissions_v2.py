@@ -191,3 +191,57 @@ def test_registry_covers_orphan_pages():
         assert key in PAGES_BY_KEY, key
     # Entrée fantôme retirée (aucune page frontend correspondante).
     assert "entreprises.projets" not in PAGES_BY_KEY
+
+
+def test_new_capabilities_registered(client, auth_headers):
+    """Les actions sensibles auditées (2026-07-24) sont dans la grille
+    Paramètres → Permissions — chacune branchée sur son endpoint."""
+    resp = client.get("/api/v1/permissions", headers=auth_headers)
+    assert resp.status_code == 200, resp.text
+    ids = [c["capability"] for c in resp.json()["capabilities"]]
+    for cap in (
+        "timesheet.approve",
+        "timesheet.reopen",
+        "timesheet.delete",
+        "timesheet.facturer_qbo",
+        "frais_gestion.facturer",
+        "frais_gestion.delete",
+        "soumission.send",
+        "contrat_gestion.send",
+        "qbo.push",
+        "entreprise.delete",
+    ):
+        assert cap in ids, cap
+
+
+def test_capability_override_grants_and_denies(run, employee_id):
+    """require_capability v2 : une exception individuelle accorde une
+    capacité au-dessus du rôle (allow) ou la retire (deny)."""
+    from app.services.permissions_service import user_has_capability
+
+    async def _check(cap):
+        async with TestSessionLocal() as s:
+            u = await s.get(User, employee_id)
+            return await user_has_capability(s, u, cap)
+
+    # Défauts par rôle : approve = gestionnaire (refusé), qbo.push =
+    # employé (accordé).
+    assert run(_check("timesheet.approve")) is False
+    assert run(_check("qbo.push")) is True
+
+    async def _override(key, allow):
+        async with TestSessionLocal() as s:
+            s.add(
+                UserAccessOverride(
+                    user_id=employee_id, key=key, allow=allow
+                )
+            )
+            await s.commit()
+
+    try:
+        run(_override("timesheet.approve", True))
+        run(_override("qbo.push", False))
+        assert run(_check("timesheet.approve")) is True
+        assert run(_check("qbo.push")) is False
+    finally:
+        _clear_overrides(run, employee_id)
