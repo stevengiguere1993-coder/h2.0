@@ -73,12 +73,16 @@ def _p(
 #: chemin sans entrée = non régi (accessible, comportement historique).
 PAGES: list[PageEntry] = [
     # ── Général (transverse — pas de volet, seuil de rôle seulement) ──
+    # ⚠️ Les routes INTERNES à un pôle ne vont PAS dans une entrée
+    # « general » : une page transverse échappe au check de volet et
+    # n'apparaît pas sous son pôle dans Paramètres → Permissions (bug
+    # Tâches/Réglages QG, retour Phil 2026-07-24). /entreprises/taches et
+    # /entreprises/reglages ont leur entrée entreprises.* plus bas.
     _p("general.parametres", "Paramètres", GENERAL, "employee",
-       "/parametres", "/app/parametres", "/prospection/parametres",
-       "/entreprises/reglages"),
+       "/parametres", "/app/parametres", "/prospection/parametres"),
     _p("general.profil", "Mon profil", GENERAL, "employee", "/profil"),
     _p("general.mes_taches", "Mes tâches", GENERAL, "employee",
-       "/mes-taches", "/entreprises/taches"),
+       "/mes-taches"),
     _p("general.utilisateurs", "Utilisateurs & rôles", GENERAL, "owner",
        "/app/utilisateurs"),
     _p("general.dev_tools", "Outils dev (mode dev)", GENERAL, "admin",
@@ -214,6 +218,13 @@ PAGES: list[PageEntry] = [
     # employée Madagascar).
     _p("entreprises.feuille_de_temps", "Feuille de temps", "entreprises",
        "employee", "/entreprises/feuille-de-temps"),
+    # Pages QG qui passaient par des entrées « general » (donc sans
+    # check de volet et invisibles sous Gestion d'entreprise dans la
+    # grille) — défaut admin = comportement pré-v2 du pôle.
+    _p("entreprises.taches", "Tâches (QG)", "entreprises", "admin",
+       "/entreprises/taches"),
+    _p("entreprises.reglages", "Réglages (QG)", "entreprises", "admin",
+       "/entreprises/reglages"),
     _p("entreprises.organigramme", "Organigramme", "entreprises", "admin",
        "/entreprises/organigramme"),
     _p("entreprises.distribution_taches", "Distribution des tâches",

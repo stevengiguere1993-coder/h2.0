@@ -282,7 +282,6 @@ export default function EntreprisesLayout({
     },
     { href: "/entreprises/vision", label: "Vision & Stratégie", icon: BarChart3 },
     { href: "/entreprises/comparatif", label: "Comparatif", icon: BarChart3 },
-    { href: "/entreprises/projets", label: "Projets", icon: Briefcase },
     { href: "/entreprises/contacts", label: "Contacts", icon: ContactIcon },
     ...(vaultAccess
       ? [
@@ -386,9 +385,17 @@ export default function EntreprisesLayout({
               <main className="flex-1 overflow-x-hidden">
                 {allowed ? <AccessGuard>{children}</AccessGuard> : <NoAccess />}
               </main>
-              {/* Kratos + ThemeToggle intégrés dans QGTopbar/EntreprisesTopbar */}
-              {allowed ? <QGCommandBar /> : null}
-              {allowed ? <KratosFloating /> : null}
+              {/* Kratos + ThemeToggle intégrés dans QGTopbar/EntreprisesTopbar.
+                  L'assistant Kratos et la barre de commande fouillent tout
+                  le QG → réservés aux comptes qui voient la page Kratos
+                  (pas à un employé « feuille de temps seulement »). */}
+              {allowed &&
+              user.access?.["page:entreprises.kratos"] !== false ? (
+                <>
+                  <QGCommandBar />
+                  <KratosFloating />
+                </>
+              ) : null}
               <HelpButton />
               {addEntOpen ? (
                 <div
