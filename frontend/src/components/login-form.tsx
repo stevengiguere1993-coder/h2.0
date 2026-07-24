@@ -17,10 +17,50 @@ import {
 } from "lucide-react";
 
 import { useRouter } from "@/i18n/navigation";
+import {
+  canEnterVolet,
+  firstAllowedPath,
+  getAccessMap
+} from "@/lib/access";
 import { authedFetch, getMe, getToken, login, setToken } from "@/lib/auth";
-// Accès Dev / Téléphonie : plus de listes d'emails en dur (P-05d). On lit
-// les capacités « devlog.access » / « telephonie.access » depuis
-// user.access (calculé par /auth/me), en repli sur le rôle owner/admin.
+// Permissions v2 (2026-07-24) : les tuiles de pôle sont pilotées par
+// user.access (calculé par /auth/me, exceptions individuelles comprises)
+// — une tuile s'affiche dès qu'AU MOINS UNE page du pôle est accessible
+// et mène à la PREMIÈRE page accessible. Plus aucun rôle codé en dur.
+
+//: Préfixes de clés de pages des pôles autres que construction — sert à
+//: détecter l'employé « chantier seulement » (redirigé direct vers /m).
+const AUTRES_POLES = [
+  "prospection",
+  "entreprises",
+  "immobilier",
+  "investisseur",
+  "devlogiciel",
+  "communication"
+];
+
+/** Employé dont le SEUL pôle accessible est construction → app mobile
+ *  chantier directe, sans passer par le sélecteur. Dès qu'un autre pôle
+ *  lui est ouvert (ex. feuille de temps), il voit le sélecteur. */
+function fileVersMobile(me: {
+  role?: string;
+  volets?: unknown;
+  access?: Record<string, boolean> | null;
+}): boolean {
+  if (me.role !== "employee") return false;
+  const access = me.access || {};
+  if (Object.keys(access).length === 0) {
+    // Vieux backend sans dict access — comportement historique.
+    const v = Array.isArray(me.volets) ? (me.volets as string[]) : [];
+    return v.length === 0 || v.includes("construction");
+  }
+  const acc = { access };
+  return (
+    access["page:construction.mobile"] !== false &&
+    canEnterVolet(acc, "construction") &&
+    !AUTRES_POLES.some((p) => canEnterVolet(acc, p))
+  );
+}
 
 /**
  * After a successful login, we show a small picker asking the user
@@ -37,7 +77,6 @@ export function LoginForm() {
   const [authed, setAuthed] = useState(false);
   const [nextUrl, setNextUrl] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [userVolets, setUserVolets] = useState<string[]>([]);
   const [userRole, setUserRole] = useState<string>("");
   const [userAccess, setUserAccess] = useState<Record<string, boolean>>({});
   const [pendingHelp, setPendingHelp] = useState(0);
@@ -59,21 +98,15 @@ export function LoginForm() {
         const me = await getMe(existing);
         if (cancelled) return;
         if (me.must_change_password) return; // laisse le user voir le form
-        // Employé construction (ou compte legacy sans volets_json) →
-        // bypass picker, app mobile chantier directe. Un employé d'un
-        // AUTRE volet (ex. prospection) doit voir le sélecteur de
-        // portail pour atterrir sur SON volet — on ne le force pas
-        // vers /m (qui est l'app chantier construction).
-        if (me.role === "employee") {
-          const v = Array.isArray(me.volets) ? me.volets : [];
-          if (v.length === 0 || v.includes("construction")) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            router.replace("/m" as any);
-            return;
-          }
+        // Employé « chantier seulement » → app mobile directe. Dès
+        // qu'un autre pôle lui est accessible (ex. feuille de temps,
+        // immobilier), il voit le sélecteur pour choisir.
+        if (fileVersMobile(me)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          router.replace("/m" as any);
+          return;
         }
         setUserEmail(me.email || null);
-        setUserVolets(Array.isArray(me.volets) ? me.volets : []);
         setUserRole(me.role || "");
         setUserAccess(me.access || {});
         setAuthed(true);
@@ -115,22 +148,17 @@ export function LoginForm() {
           router.replace("/changer-mot-de-passe" as any);
           return;
         }
-        if (me.role === "employee") {
-          const v = Array.isArray(me.volets) ? me.volets : [];
-          // Seul un employé construction (ou legacy sans volets) file
-          // direct vers /m. Les autres voient le sélecteur de portail.
-          if (v.length === 0 || v.includes("construction")) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            router.replace("/m" as any);
-            return;
-          }
+        // Employé « chantier seulement » → /m direct ; sinon sélecteur.
+        if (fileVersMobile(me)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          router.replace("/m" as any);
+          return;
         }
         // IMPORTANT : on hydrate volets + role AVANT setAuthed(true)
         // sinon le picker rend avec userRole="" et les pastilles
         // gated sur le rôle (Gestion d'entreprises, etc.) restent
         // cachées jusqu'au prochain refresh.
         setUserEmail(me.email || null);
-        setUserVolets(Array.isArray(me.volets) ? me.volets : []);
         setUserRole(me.role || "");
         setUserAccess(me.access || {});
       } catch {
@@ -188,24 +216,29 @@ export function LoginForm() {
       role0 === "owner" ||
       role0 === "admin" ||
       userAccess["devlog.access"] === true;
-    // Filtre les pastilles de portail selon les volets accessibles.
-    // Si la liste est vide (anciens comptes sans volets_json), on
-    // affiche tout par sécurité (backward-compat).
-    const has = (v: string) =>
-      userVolets.length === 0 || userVolets.includes(v);
-    // Comparaison de rôle insensible à la casse / espaces pour éviter
-    // de cacher la pastille « Gestion d'entreprises » à cause d'un
-    // « Owner » / « OWNER » / « owner  » qui ne matcherait pas
-    // l'égalité stricte.
+    // Permissions v2 : chaque tuile de pôle s'affiche dès qu'AU MOINS
+    // UNE page du pôle est accessible (user.access, exceptions
+    // individuelles comprises) et mène à la PREMIÈRE page accessible.
+    const acc = { access: userAccess };
+    const enter = (prefix: string) => canEnterVolet(acc, prefix);
+    const goVolet = (volet: string, fallback: string) => {
+      void (async () => {
+        let target = fallback;
+        try {
+          const map = await getAccessMap();
+          target = firstAllowedPath(acc, map, volet) || fallback;
+        } catch {
+          /* fallback = racine historique du pôle */
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        router.replace(target as any);
+      })();
+    };
     const role = (userRole || "").toLowerCase().trim();
-    const isOwner = role === "owner";
     const isAdminOrOwner = role === "owner" || role === "admin";
-    // Accès Téléphonie = rôle owner/admin, volet « communication », ou
-    // capacité telephonie.access accordée (P-05d).
+    // Téléphonie : pages du pôle OU capacité telephonie.access accordée.
     const showTelephonie =
-      isAdminOrOwner ||
-      has("communication") ||
-      userAccess["telephonie.access"] === true;
+      enter("communication") || userAccess["telephonie.access"] === true;
     return (
       <div className="relative space-y-4">
         {showDev ? (
@@ -241,13 +274,10 @@ export function LoginForm() {
         <div className="grid gap-3 md:grid-cols-2 md:items-start md:gap-4">
           {/* Colonne gauche : volets opérationnels principaux. */}
           <div className="space-y-3">
-          {has("construction") ? (
+          {enter("construction") ? (
             <button
               type="button"
-              onClick={() => {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                router.replace("/app" as any);
-              }}
+              onClick={() => goVolet("construction", "/app")}
               className="group flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-accent-500 hover:bg-brand-800"
             >
               <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500 group-hover:bg-accent-500 group-hover:text-brand-950">
@@ -265,7 +295,8 @@ export function LoginForm() {
             </button>
           ) : null}
 
-          {has("construction") ? (
+          {enter("construction") &&
+          userAccess["page:construction.mobile"] !== false ? (
             <button
               type="button"
               onClick={() => {
@@ -289,13 +320,10 @@ export function LoginForm() {
             </button>
           ) : null}
 
-          {has("prospection") ? (
+          {enter("prospection") ? (
             <button
               type="button"
-              onClick={() => {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                router.replace("/prospection" as any);
-              }}
+              onClick={() => goVolet("prospection", "/prospection")}
               className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-accent-500 hover:bg-brand-800"
             >
               <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-brand-950">
@@ -316,15 +344,14 @@ export function LoginForm() {
             </button>
           ) : null}
 
-          {/* Pôle Développement logiciel — réservé admin/owner
-              (Phil + Steven). Caché aux autres rôles. */}
-          {isAdminOrOwner ? (
+          {/* Pôle Développement logiciel — pages admin par défaut,
+              configurable via Paramètres → Permissions. */}
+          {enter("devlogiciel") ? (
           <button
             type="button"
-            onClick={() => {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              router.replace("/dev-logiciel" as any);
-            }}
+            onClick={() =>
+              goVolet("developpement_logiciel", "/dev-logiciel")
+            }
             className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-blue-400 hover:bg-brand-800"
           >
             <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500/15 text-blue-400 group-hover:bg-blue-500 group-hover:text-white">
@@ -349,13 +376,10 @@ export function LoginForm() {
           {/* Colonne droite : volets en développement, partenaires,
               et secrétaire IA téléphonique. */}
           <div className="space-y-3">
-          {has("entreprises") && isAdminOrOwner ? (
+          {enter("entreprises") ? (
             <button
               type="button"
-              onClick={() => {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                router.replace("/entreprises" as any);
-              }}
+              onClick={() => goVolet("entreprises", "/entreprises")}
               className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-violet-400 hover:bg-brand-800"
             >
               <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-violet-500/15 text-violet-300 group-hover:bg-violet-500 group-hover:text-white">
@@ -376,13 +400,10 @@ export function LoginForm() {
             </button>
           ) : null}
 
-          {has("immobilier") ? (
+          {enter("immobilier") ? (
             <button
               type="button"
-              onClick={() => {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                router.replace("/immobilier" as any);
-              }}
+              onClick={() => goVolet("immobilier", "/immobilier")}
               className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-sky-400 hover:bg-brand-800"
             >
               <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-sky-500/15 text-sky-300 group-hover:bg-sky-500 group-hover:text-white">
@@ -403,13 +424,10 @@ export function LoginForm() {
             </button>
           ) : null}
 
-          {has("investisseur") ? (
+          {enter("investisseur") ? (
             <button
               type="button"
-              onClick={() => {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                router.replace("/investisseur" as any);
-              }}
+              onClick={() => goVolet("investisseur", "/investisseur")}
               className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-emerald-400 hover:bg-brand-800"
             >
               <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-300 group-hover:bg-emerald-500 group-hover:text-brand-950">

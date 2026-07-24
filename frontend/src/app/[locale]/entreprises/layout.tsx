@@ -42,6 +42,7 @@ import { SidebarFooter } from "@/components/sidebar-footer";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useNavAccess } from "@/hooks/use-nav-access";
+import { canEnterVolet } from "@/lib/access";
 import { authedFetch } from "@/lib/auth";
 
 type NavItem = {
@@ -255,14 +256,11 @@ export default function EntreprisesLayout({
   if (!user) return null;
 
   const initialTheme = (user.theme_preference as Theme) || "light";
-  // Le volet Gestion d'entreprise est ouvert aux owners ET admins
-  // (« accès total » dans la définition des rôles). Reste fermé aux
-  // managers/employés tant que certains modules ne sont pas prêts pour
-  // ces rôles (l'assignation des tâches utilise les users, pas les
-  // employés).
-  const allowed =
-    (user.volets || []).includes("entreprises") &&
-    (user.role === "owner" || user.role === "admin");
+  // Permissions v2 : on entre dans le pôle dès qu'AU MOINS UNE page du
+  // volet est accessible (ex. un employé « feuille de temps seulement »).
+  // Plus aucun rôle codé en dur — la sidebar et l'AccessGuard filtrent
+  // ensuite page par page.
+  const allowed = canEnterVolet(user, "entreprises");
 
   const NAVIGATION: NavItem[] = [
     { href: "/entreprises", label: "Entreprises", icon: Briefcase },

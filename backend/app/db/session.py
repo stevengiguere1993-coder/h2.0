@@ -580,6 +580,73 @@ async def ensure_immobilier_aux_tables() -> None:
         log.warning("ensure_immobilier_aux_tables failed: %s", exc)
 
 
+async def ensure_volets_whitelist_migration() -> None:
+    """Migration one-shot (permissions v2, 2026-07-24) : les whitelists
+    d'emails codées en dur qui AJOUTAIENT les volets entreprises /
+    immobilier / investisseur ont été retirées de ``User.volets`` — on
+    reporte ces volets dans ``volets_json`` pour que les comptes visés
+    gardent exactement le même accès, désormais géré depuis l'app.
+    Idempotent (fusion d'ensembles) ; sans effet pour owner/admin (tous
+    les volets d'office) ou si le compte n'existe pas."""
+    import json
+    import logging
+
+    from sqlalchemy import func, select
+
+    log = logging.getLogger("db.ensure_volets_whitelist_migration")
+    legacy: dict[str, list[str]] = {
+        "stevengiguere1993@gmail.com": [
+            "entreprises", "immobilier", "investisseur",
+        ],
+        "sgiguere@immohorizon.com": [
+            "entreprises", "immobilier", "investisseur",
+        ],
+        "pmeuser@immohorizon.com": [
+            "entreprises", "immobilier", "investisseur",
+        ],
+        "philippe.meuser@immohorizon.com": [
+            "entreprises", "immobilier", "investisseur",
+        ],
+        "mvilliard@immohorizon.com": ["entreprises"],
+    }
+    try:
+        from app.models.user import DEFAULT_VOLETS, User
+
+        async with AsyncSessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(User).where(
+                        func.lower(User.email).in_(list(legacy.keys()))
+                    )
+                )
+            ).scalars().all()
+            changed = False
+            for u in rows:
+                extras = legacy.get((u.email or "").strip().lower(), [])
+                if not extras or u.role in ("owner", "admin"):
+                    continue
+                try:
+                    base = json.loads(u.volets_json) if u.volets_json else None
+                    if not isinstance(base, list):
+                        base = None
+                except Exception:  # noqa: BLE001
+                    base = None
+                if base is None:
+                    base = list(DEFAULT_VOLETS)
+                merged = sorted(set(base) | set(extras))
+                if sorted(set(base)) != merged:
+                    u.volets_json = json.dumps(merged)
+                    changed = True
+                    log.info(
+                        "volets whitelist -> volets_json pour %s : %s",
+                        u.email, merged,
+                    )
+            if changed:
+                await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_volets_whitelist_migration failed: %s", exc)
+
+
 async def ensure_qbo_connections_table() -> None:
     """Crée la table ``qbo_connections`` (QuickBooks multi-compagnies,
     scopes entreprise/immobilier) dans sa propre transaction. La table

@@ -25,6 +25,7 @@ from app.db.session import (
     ensure_role_permissions_tables,
     ensure_qbo_connections_table,
     ensure_timesheet_tables,
+    ensure_volets_whitelist_migration,
     init_db,
 )
 
@@ -85,6 +86,16 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning(
             "ensure_qbo_connections_table failed during startup: %s", exc
+        )
+
+    # Permissions v2 : reporte les volets des anciennes whitelists
+    # d'emails dans volets_json (one-shot idempotent) — transaction isolée.
+    try:
+        await ensure_volets_whitelist_migration()
+    except Exception as exc:
+        logger.warning(
+            "ensure_volets_whitelist_migration failed during startup: %s",
+            exc,
         )
 
     # Table Corrections/améliorations de projet (Flux A) — transaction

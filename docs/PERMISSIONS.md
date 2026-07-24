@@ -60,3 +60,38 @@ découvrent automatiquement.
 - Le cache des seuils (permissions_service) a un TTL de 30 s : un
   changement dans la grille peut mettre jusqu'à 30 s à s'appliquer côté
   API (l'UI, elle, recharge `/auth/me` à la navigation).
+
+## Permissions v2 (2026-07-24) — résolution unifiée
+
+Bug d'origine : un employé avec les volets « entreprises (feuille de
+temps) + immobilier » ne voyait pas Gestion d'entreprise — la tuile du
+portail et le layout du pôle exigeaient un rôle owner/admin codé en dur.
+
+**Règle unique, partout** : *on entre dans un pôle dès qu'AU MOINS UNE de
+ses pages est accessible* (rôle ≥ seuil configuré OU exception
+individuelle). Cette règle pilote :
+
+- la tuile du sélecteur de portail (`login-form.tsx`, `canEnterVolet`) —
+  qui mène à la PREMIÈRE page accessible (`firstAllowedPath`) ;
+- le layout du pôle (`entreprises`/`immobilier`/`investisseur`) — plus
+  aucun rôle codé en dur ;
+- l'AccessGuard — racine de pôle refusée → redirection auto vers la
+  première page accessible ; page profonde refusée → écran verrou avec
+  bouton « Aller à mes pages » ;
+- les routeurs API (`require_volet` → `user_has_volet_access`) — une
+  exception de page ouvre aussi les API du volet (fini l'UI qui montre
+  une page dont les données 403ent) ;
+- `compute_access` dérive `volet:<v>` = « au moins une page visible »
+  APRÈS application des exceptions.
+
+**Whitelists d'emails supprimées** (`user.py`) : les volets viennent
+uniquement de `volets_json` (page Utilisateurs / Permissions). Migration
+one-shot au boot (`ensure_volets_whitelist_migration`) : les comptes
+anciennement whitelistés gardent leurs volets, désormais en DB.
+
+**Registre complété** : paie (admin), communications, suivis,
+utilisateurs immobilier (admin), diagnostic, comparables, kanban
+prospection, plan de suivi, /dev, /letmetalk, contact devlog public.
+Entrée fantôme `entreprises.projets` retirée. ⚠️ `/app/paie` et
+`/immobilier/utilisateurs` héritaient d'un seuil EMPLOYÉ — désormais
+admin par défaut (reconfigurables dans Paramètres → Permissions).

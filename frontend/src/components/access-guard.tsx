@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Garde d'accès aux pages (refonte permissions 2026-07).
+ * Garde d'accès aux pages (permissions v2, 2026-07-24).
  *
  * Monté dans les layouts de pôle autour de {children}. À chaque navigation :
  * matche le chemin courant contre le registre central (access-map backend),
@@ -10,22 +10,34 @@
  *
  * FAIL-OPEN : pendant le chargement, sans access-map, pour un chemin non
  * régi ou une clé absente → laisse passer (comportement historique). On ne
- * bloque QUE sur un refus explicite (false) → écran « Accès non autorisé »
- * à la place du contenu (pas de redirect : zéro risque de boucle).
+ * bloque QUE sur un refus explicite (false).
+ *
+ * Refus sur la RACINE d'un pôle (ex. /entreprises refusée mais Feuille de
+ * temps permise) → redirection automatique vers la PREMIÈRE page accessible
+ * du pôle — un employé « une seule page » atterrit toujours au bon endroit.
+ * Refus sur une page profonde → écran « Accès non autorisé » avec un bouton
+ * vers sa première page accessible (pas de redirect : zéro risque de boucle).
  */
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Lock } from "lucide-react";
 
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { useCurrentUser } from "@/hooks/use-current-user";
-import { getAccessMap, matchPageKey } from "@/lib/access";
+import {
+  firstAllowedPath,
+  getAccessMap,
+  matchPageKey,
+  stripLocale
+} from "@/lib/access";
 
 export function AccessGuard({ children }: { children: React.ReactNode }) {
   const { user } = useCurrentUser();
   const pathname = usePathname();
+  const router = useRouter();
   const [denied, setDenied] = useState(false);
+  const [fallback, setFallback] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,12 +59,38 @@ export function AccessGuard({ children }: { children: React.ReactNode }) {
         setDenied(false);
         return;
       }
-      setDenied(user.access[`page:${key}`] === false);
+      if (user.access[`page:${key}`] !== false) {
+        setDenied(false);
+        return;
+      }
+      // Page refusée — où renvoyer l'utilisateur dans ce pôle ?
+      const entry = map.find((e) => e.key === key);
+      const target = entry
+        ? firstAllowedPath(user, map, entry.volet)
+        : null;
+      // Racine du pôle (1re entrée de son volet dans le registre, chemin
+      // exact) → on redirige direct vers sa première page accessible.
+      const path = stripLocale(pathname);
+      const rootEntry = entry
+        ? map.find((e) => e.volet === entry.volet)
+        : null;
+      const isVoletRoot =
+        entry &&
+        rootEntry &&
+        entry.key === rootEntry.key &&
+        entry.routes.includes(path);
+      if (isVoletRoot && target) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        router.replace(target as any);
+        return;
+      }
+      setFallback(target);
+      setDenied(true);
     })();
     return () => {
       cancelled = true;
     };
-  }, [user, pathname]);
+  }, [user, pathname, router]);
 
   if (denied) {
     return (
@@ -69,13 +107,27 @@ export function AccessGuard({ children }: { children: React.ReactNode }) {
             c&apos;est une erreur, parles-en à ton gestionnaire.
           </p>
         </div>
-        <Link
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/" as any}
-          className="btn-secondary text-sm"
-        >
-          Retour au portail
-        </Link>
+        <div className="flex items-center gap-2">
+          {fallback ? (
+            <button
+              type="button"
+              className="btn-accent text-sm"
+              onClick={() => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                router.replace(fallback as any);
+              }}
+            >
+              Aller à mes pages
+            </button>
+          ) : null}
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/" as any}
+            className="btn-secondary text-sm"
+          >
+            Retour au portail
+          </Link>
+        </div>
       </div>
     );
   }

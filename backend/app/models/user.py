@@ -56,37 +56,6 @@ VALID_VOLETS = (
 )
 DEFAULT_VOLETS = ["construction", "prospection", "developpement_logiciel"]
 
-#: Whitelists temporaires pour les volets en développement. Mis à jour
-#: au cas par cas en attendant la généralisation. Comparaison
-#: insensible à la casse.
-ENTREPRISES_WHITELIST_EMAILS = {
-    "stevengiguere1993@gmail.com",
-    "sgiguere@immohorizon.com",
-    "pmeuser@immohorizon.com",
-    "philippe.meuser@immohorizon.com",
-    "mvilliard@immohorizon.com",
-}
-
-IMMOBILIER_WHITELIST_EMAILS = {
-    "stevengiguere1993@gmail.com",
-    "sgiguere@immohorizon.com",
-    "pmeuser@immohorizon.com",
-    "philippe.meuser@immohorizon.com",
-}
-
-INVESTISSEUR_WHITELIST_EMAILS = {
-    "stevengiguere1993@gmail.com",
-    "sgiguere@immohorizon.com",
-    "pmeuser@immohorizon.com",
-    "philippe.meuser@immohorizon.com",
-}
-
-
-def email_in_whitelist(email: Optional[str], whitelist: set[str]) -> bool:
-    if not email:
-        return False
-    return email.strip().lower() in {w.lower() for w in whitelist}
-
 
 class User(Base, TimestampMixin):
     """User account. The legacy `is_admin` flag is kept in sync with the
@@ -235,44 +204,23 @@ class User(Base, TimestampMixin):
 
     @property
     def volets(self) -> list[str]:
-        """Liste des volets accessibles. NULL → tous les volets
-        historiques (backward compat).
-
-        Les 3 nouveaux volets (entreprises, immobilier, investisseur)
-        sont ajoutés automatiquement si l'email du user est dans la
-        whitelist correspondante — peu importe ce qui est stocké dans
-        `volets_json`. Ça permet d'activer un volet sans toucher la
-        DB le temps du développement."""
-        # Owner & admin = « accès total » (cf. définition des rôles dans
-        # /utilisateurs) : ils voient TOUS les volets sans avoir à les
-        # cocher un par un, et sans dépendre des whitelists de dev.
+        """Liste des volets accessibles — UNIQUEMENT ce qui est configuré
+        dans l'app (permissions v2, 2026-07-24) : ``volets_json`` (page
+        Utilisateurs / Permissions), NULL → volets historiques par défaut.
+        Owner & admin = tous les volets. Les anciennes whitelists d'emails
+        codées en dur ont été retirées (migrées en DB au boot —
+        ``ensure_volets_whitelist_migration``)."""
         if self.role in (UserRole.OWNER.value, UserRole.ADMIN.value):
             return list(VALID_VOLETS)
-        base: list[str]
         if not self.volets_json:
-            base = list(DEFAULT_VOLETS)
-        else:
-            try:
-                parsed = json.loads(self.volets_json)
-                if isinstance(parsed, list):
-                    base = [str(v) for v in parsed if v in VALID_VOLETS]
-                else:
-                    base = list(DEFAULT_VOLETS)
-            except Exception:
-                base = list(DEFAULT_VOLETS)
-
-        # Whitelist override pour les volets en développement.
-        out = list(base)
-        if email_in_whitelist(self.email, ENTREPRISES_WHITELIST_EMAILS):
-            if "entreprises" not in out:
-                out.append("entreprises")
-        if email_in_whitelist(self.email, IMMOBILIER_WHITELIST_EMAILS):
-            if "immobilier" not in out:
-                out.append("immobilier")
-        if email_in_whitelist(self.email, INVESTISSEUR_WHITELIST_EMAILS):
-            if "investisseur" not in out:
-                out.append("investisseur")
-        return out
+            return list(DEFAULT_VOLETS)
+        try:
+            parsed = json.loads(self.volets_json)
+            if isinstance(parsed, list):
+                return [str(v) for v in parsed if v in VALID_VOLETS]
+        except Exception:  # noqa: BLE001
+            pass
+        return list(DEFAULT_VOLETS)
 
     def has_volet(self, volet: str) -> bool:
         return volet in self.volets

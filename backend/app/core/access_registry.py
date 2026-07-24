@@ -81,6 +81,15 @@ PAGES: list[PageEntry] = [
        "/mes-taches", "/entreprises/taches"),
     _p("general.utilisateurs", "Utilisateurs & rôles", GENERAL, "owner",
        "/app/utilisateurs"),
+    _p("general.dev_tools", "Outils dev (mode dev)", GENERAL, "admin",
+       "/dev"),
+    _p("general.letmetalk", "LetMeTalk", GENERAL, "manager", "/letmetalk"),
+    # Page de contact PUBLIQUE du produit Dev logiciel — entrée « general »
+    # pour qu'un utilisateur connecté ne soit pas bloqué par le seuil
+    # admin de la racine /dev-logiciel (les visiteurs non connectés ne
+    # passent pas par le garde).
+    _p("general.devlog_contact", "Contact Dev logiciel (public)", GENERAL,
+       "employee", "/dev-logiciel/contact"),
     # ── Construction ──
     _p("construction.accueil", "Accueil Construction", "construction",
        "employee", "/app"),
@@ -124,6 +133,14 @@ PAGES: list[PageEntry] = [
        "manager", "/app/relances"),
     _p("construction.mobile", "App mobile staff", "construction", "employee",
        "/m"),
+    # Pages qui héritaient silencieusement de la racine /app (audit
+    # permissions v2, 2026-07-24) — désormais réglables individuellement.
+    # ⚠️ Paie = données salariales → admin (verrou volontaire).
+    _p("construction.paie", "Paie", "construction", "admin", "/app/paie"),
+    _p("construction.communications", "Communications", "construction",
+       "manager", "/app/communications"),
+    _p("construction.suivis", "Suivis", "construction", "manager",
+       "/app/suivis"),
     # ── Prospection ──
     _p("prospection.carte", "Carte", "prospection", "employee",
        "/prospection"),
@@ -147,6 +164,10 @@ PAGES: list[PageEntry] = [
        "employee", "/prospection/dashboard"),
     _p("prospection.driveby", "Drive-by (mobile)", "prospection", "employee",
        "/m/prospection"),
+    _p("prospection.comparables", "Comparables", "prospection", "employee",
+       "/prospection/comparables"),
+    _p("prospection.kanban", "Kanban Prospection", "prospection", "employee",
+       "/prospection/kanban"),
     # ── Gestion immobilière ──
     _p("immobilier.vue_ensemble", "Vue d'ensemble locative", "immobilier",
        "employee", "/immobilier"),
@@ -172,6 +193,12 @@ PAGES: list[PageEntry] = [
        "employee", "/immobilier/bons-travail"),
     _p("immobilier.frais_gestion", "Facturation", "immobilier",
        "manager", "/immobilier/frais-gestion"),
+    # ⚠️ Gestion des accès aux immeubles → admin (héritait de la racine
+    # employé avant l'audit permissions v2).
+    _p("immobilier.utilisateurs", "Utilisateurs (immobilier)", "immobilier",
+       "admin", "/immobilier/utilisateurs"),
+    _p("immobilier.diagnostic", "Diagnostic", "immobilier", "manager",
+       "/immobilier/diagnostic"),
     # ── Gestion d'entreprise (comportement actuel : owner/admin + volet) ──
     _p("entreprises.accueil", "Entreprises", "entreprises", "admin",
        "/entreprises"),
@@ -195,8 +222,8 @@ PAGES: list[PageEntry] = [
        "/entreprises/vision"),
     _p("entreprises.comparatif", "Comparatif", "entreprises", "admin",
        "/entreprises/comparatif"),
-    _p("entreprises.projets", "Projets (entreprises)", "entreprises",
-       "admin", "/entreprises/projets"),
+    _p("entreprises.plan_suivi", "Plan de suivi", "entreprises", "admin",
+       "/entreprises/plan-suivi"),
     _p("entreprises.contacts", "Contacts", "entreprises", "admin",
        "/entreprises/contacts"),
     _p("entreprises.abonnements", "Abonnements", "entreprises", "admin",

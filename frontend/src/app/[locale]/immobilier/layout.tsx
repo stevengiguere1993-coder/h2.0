@@ -41,6 +41,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useNavAccess } from "@/hooks/use-nav-access";
+import { canEnterVolet } from "@/lib/access";
 import { authedFetch } from "@/lib/auth";
 
 type NavItem = {
@@ -170,7 +171,9 @@ export default function ImmobilierLayout({
   if (!user) return null;
 
   const initialTheme = (user.theme_preference as Theme) || "light";
-  const allowed = (user.volets || []).includes("immobilier");
+  // Permissions v2 : au moins une page du volet accessible = on entre
+  // (exceptions individuelles comprises) — plus de check du volet brut.
+  const allowed = canEnterVolet(user, "immobilier");
 
   function isActive(href: string) {
     if (href === "/immobilier")
