@@ -864,6 +864,73 @@ async def ensure_role_permissions_tables() -> None:
         log.warning("ensure_role_permissions_tables failed: %s", exc)
 
 
+async def ensure_permissions_defaults_metier() -> None:
+    """Migration one-shot (permissions v2, 2026-07-24) : passe les seuils
+    SEMÉS des pages immobilier + données financières prospection de
+    « employé » à « gestionnaire » (logique métier — la gestion locative
+    et les analyses d'achat sont le travail des gestionnaires).
+
+    Le seed initial (ON CONFLICT DO NOTHING) a figé les vieux défauts en
+    DB : changer le défaut du registre ne suffit pas. On ne touche QUE
+    les lignes encore à l'ancien défaut (un choix explicite de l'owner
+    est préservé) et une SENTINELLE garantit une exécution unique — si
+    l'owner remet « employé » plus tard, on ne le réécrase jamais."""
+    import logging
+
+    from sqlalchemy import text
+
+    log = logging.getLogger("db.ensure_permissions_defaults_metier")
+    sentinel = "migration:defaults_metier_2026_07_24"
+    upgrades = [
+        "page:immobilier.vue_ensemble",
+        "page:immobilier.immeubles",
+        "page:immobilier.logements",
+        "page:immobilier.locataires",
+        "page:immobilier.baux",
+        "page:immobilier.locations",
+        "page:immobilier.modeles_documents",
+        "page:immobilier.finances",
+        "page:immobilier.renouvellements",
+        "page:immobilier.depots",
+        "page:immobilier.bons_travail",
+        "page:prospection.analyses",
+        "page:prospection.pipeline",
+        "page:prospection.dashboard",
+    ]
+    try:
+        async with engine.begin() as conn:
+            done = (
+                await conn.execute(
+                    text(
+                        "SELECT 1 FROM role_permissions "
+                        "WHERE capability = :s"
+                    ),
+                    {"s": sentinel},
+                )
+            ).first()
+            if done:
+                return
+            for key in upgrades:
+                await conn.execute(
+                    text(
+                        "UPDATE role_permissions SET min_role = 'manager' "
+                        "WHERE capability = :k AND min_role = 'employee'"
+                    ),
+                    {"k": key},
+                )
+            await conn.execute(
+                text(
+                    "INSERT INTO role_permissions (capability, min_role) "
+                    "VALUES (:s, 'owner') "
+                    "ON CONFLICT (capability) DO NOTHING"
+                ),
+                {"s": sentinel},
+            )
+            log.info("Défauts métier appliqués (%d seuils)", len(upgrades))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_permissions_defaults_metier failed: %s", exc)
+
+
 async def ensure_contrat_gestion_tables() -> None:
     """Crée les tables du Contrat de gestion (`contrats_gestion` +
     `contrat_gestion_template`) dans leur PROPRE transaction, puis sème

@@ -61,18 +61,56 @@ def _access(run, user_id: int) -> dict:
 
 def test_employee_volet_grant_opens_pages(run, employee_id):
     """Le scénario Phil : employé + volets entreprises/immobilier →
-    feuille de temps visible (seuil employé), pages admin fermées,
-    les DEUX volets ouverts."""
+    feuille de temps visible (seuil employé), pages admin fermées.
+    Défauts MÉTIER (2026-07-24) : l'immobilier est un pôle de
+    GESTIONNAIRES → un employé avec le volet coché ne voit RIEN par
+    défaut (accès page par page via exceptions)."""
     try:
         _set_volets(run, employee_id, ["entreprises", "immobilier"])
         access = _access(run, employee_id)
         assert access["page:entreprises.feuille_de_temps"] is True
         assert access["page:entreprises.kratos"] is False  # seuil admin
         assert access["volet:entreprises"] is True
-        assert access["volet:immobilier"] is True
+        # Immobilier = gestionnaire par défaut → rien pour un employé.
+        assert access["page:immobilier.immeubles"] is False
+        assert access["volet:immobilier"] is False
         # Volet non coché → fermé.
         assert access["volet:prospection"] is False
     finally:
+        _set_volets(run, employee_id, None)
+
+
+def test_defaults_metier(run, employee_id):
+    """Logique d'entreprise : immobilier + données financières
+    prospection = gestionnaire ; repérage terrain prospection = employé.
+    Un gestionnaire avec le volet voit tout l'immobilier."""
+    from app.core.access_registry import PAGES
+
+    for p in PAGES:
+        if p.volet == "immobilier" and p.key != "immobilier.utilisateurs":
+            assert p.default_min_role == "manager", p.key
+    assert PAGES_BY_KEY["prospection.analyses"].default_min_role == "manager"
+    assert PAGES_BY_KEY["prospection.pipeline"].default_min_role == "manager"
+    assert (
+        PAGES_BY_KEY["prospection.dashboard"].default_min_role == "manager"
+    )
+    assert PAGES_BY_KEY["prospection.carte"].default_min_role == "employee"
+    assert PAGES_BY_KEY["prospection.leads"].default_min_role == "employee"
+
+    async def _set_role(role):
+        async with TestSessionLocal() as s:
+            u = await s.get(User, employee_id)
+            u.role = role
+            await s.commit()
+
+    try:
+        _set_volets(run, employee_id, ["immobilier"])
+        run(_set_role("manager"))
+        access = _access(run, employee_id)
+        assert access["page:immobilier.immeubles"] is True
+        assert access["volet:immobilier"] is True
+    finally:
+        run(_set_role("employee"))
         _set_volets(run, employee_id, None)
 
 

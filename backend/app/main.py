@@ -22,6 +22,7 @@ from app.db.session import (
     ensure_project_corrections_tables,
     ensure_raci_tables,
     ensure_relance_tables,
+    ensure_permissions_defaults_metier,
     ensure_role_permissions_tables,
     ensure_qbo_connections_table,
     ensure_timesheet_tables,
@@ -124,6 +125,17 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning(
             "ensure_role_permissions_tables failed during startup: %s", exc
+        )
+
+    # Permissions v2 : seuils MÉTIER (immobilier + données financières
+    # prospection → gestionnaire) sur les lignes encore au vieux défaut
+    # « employé » — one-shot avec sentinelle, APRÈS le seed ci-dessus.
+    try:
+        await ensure_permissions_defaults_metier()
+    except Exception as exc:
+        logger.warning(
+            "ensure_permissions_defaults_metier failed during startup: %s",
+            exc,
         )
 
     # Tables du Contrat de gestion (onglet fiche immeuble) + seed du
