@@ -16,6 +16,9 @@ export type SearchSelectOption = {
   value: string;
   label: string;
   group?: string;
+  /** Toujours proposée, même quand la recherche ne la matche pas
+   *  (ex. « + Nouveau fournisseur… »). */
+  pinned?: boolean;
 };
 
 function norm(s: string): string {
@@ -71,7 +74,9 @@ export function SearchSelect({
   const filtered = useMemo(() => {
     const q = norm(query.trim());
     if (!typing || !q) return options;
-    return options.filter((o) => norm(o.label).includes(q));
+    return options.filter(
+      (o) => o.pinned || norm(o.label).includes(q)
+    );
   }, [options, query, typing]);
 
   // Regroupe en conservant l'ordre d'apparition des groupes.

@@ -544,27 +544,30 @@ export default function AchatDetailPage() {
                   </div>
                   <div>
                     <label htmlFor="af" className="label">Fournisseur</label>
-                    <select
+                    <SearchSelect
                       id="af"
                       value={fournisseurId}
-                      onChange={(e) => {
-                        const v = e.target.value;
+                      onChange={(v) => {
                         if (v === "__new__") {
                           setShowFournisseurModal(true);
                           return;
                         }
                         setFournisseurId(v);
                       }}
-                      className="input"
-                    >
-                      <option value="">— Aucun —</option>
-                      {fournisseurs.map((fr) => (
-                        <option key={fr.id} value={String(fr.id)}>
-                          {fr.name}
-                        </option>
-                      ))}
-                      <option value="__new__">+ Nouveau fournisseur…</option>
-                    </select>
+                      emptyLabel="— Aucun —"
+                      placeholder="Choisis ou tape le nom du fournisseur…"
+                      options={[
+                        ...fournisseurs.map((fr) => ({
+                          value: String(fr.id),
+                          label: fr.name
+                        })),
+                        {
+                          value: "__new__",
+                          label: "+ Nouveau fournisseur…",
+                          pinned: true
+                        }
+                      ]}
+                    />
                   </div>
                 </div>
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">

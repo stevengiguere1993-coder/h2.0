@@ -515,18 +515,17 @@ export default function AchatsPage() {
                 : [])
             ]}
           />
-          <select
+          <SearchSelect
             value={fFournisseur}
-            onChange={(e) => setFFournisseur(e.target.value)}
-            className="input w-48"
-          >
-            <option value="">Tous les fournisseurs</option>
-            {fournisseurs.map((fr) => (
-              <option key={fr.id} value={String(fr.id)}>
-                {fr.name}
-              </option>
-            ))}
-          </select>
+            onChange={setFFournisseur}
+            className="w-48"
+            emptyLabel="Tous les fournisseurs"
+            placeholder="Fournisseur — tape pour chercher…"
+            options={fournisseurs.map((fr) => ({
+              value: String(fr.id),
+              label: fr.name
+            }))}
+          />
 
           <div className="ml-auto rounded-md bg-brand-900 px-3 py-2 text-sm">
             <span className="text-white/50">Total filtré </span>
