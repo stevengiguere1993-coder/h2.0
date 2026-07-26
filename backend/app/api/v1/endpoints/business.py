@@ -767,6 +767,21 @@ def make_crud_router(
             from app.services.numbering import resync_po_counter
 
             await resync_po_counter(db)
+        # Même recyclage pour les factures et les soumissions : supprimer
+        # la dernière facture « 173 » libère son numéro — la prochaine
+        # facture créée reprend 173 au lieu de continuer à 174. Un trou
+        # « du milieu » reste un trou (les numéros suivants existent
+        # déjà), et le compteur ne redescend jamais sous le numéro
+        # supprimé (l'historique QuickBooks peut être plus long que
+        # Kratos).
+        if model is Facture:
+            from app.services.numbering import resync_facture_counter
+
+            await resync_facture_counter(db, snap.get("reference"))
+        if model is Soumission:
+            from app.services.numbering import resync_soumission_counter
+
+            await resync_soumission_counter(db, snap.get("reference"))
 
     return router
 

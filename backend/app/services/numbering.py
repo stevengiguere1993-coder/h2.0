@@ -16,7 +16,8 @@ souhaité plus tard, on l'ajoute à la lecture.
 
 from __future__ import annotations
 
-from typing import Literal
+import re
+from typing import Literal, Optional
 
 from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -89,6 +90,96 @@ async def next_po_number(db: AsyncSession) -> str:
     Cohérent avec ce que la cie utilise déjà (PO-0026, PO-0025, …)."""
     n = await _next(db, "po")
     return f"PO-{n:04d}"
+
+
+def _ref_num(ref: Optional[str]) -> Optional[int]:
+    """Numéro entier d'une référence (« 173 », « FA-173 »… → 173).
+    None si la référence ne se termine pas par un nombre."""
+    m = re.search(r"(\d+)\s*$", (ref or "").strip())
+    return int(m.group(1)) if m else None
+
+
+async def _recycle_deleted_number(
+    db: AsyncSession,
+    *,
+    counter_column,
+    deleted_reference: Optional[str],
+    remaining_refs: list[Optional[str]],
+) -> Optional[int]:
+    """Recycle le numéro d'un document SUPPRIMÉ : recale le compteur sur
+    (max des numéros restants + 1) pour que le prochain document reprenne
+    le numéro libéré au lieu de continuer la séquence.
+
+    Garde-fous :
+    - jamais SOUS le numéro supprimé (l'historique QuickBooks peut être
+      plus long que Kratos — on ne veut pas retomber sur un DocNumber
+      déjà pris dans QB) ;
+    - jamais AU-DESSUS du compteur courant (on recycle, on n'avance pas) ;
+    - un trou « du milieu » reste un trou (seule la fin de séquence se
+      recycle — supprimer la dernière facture 173 → la prochaine est 173).
+    """
+    deleted_num = _ref_num(deleted_reference)
+    if deleted_num is None:
+        return None
+    max_num = 0
+    for ref in remaining_refs:
+        n = _ref_num(ref)
+        if n is not None and n > max_num:
+            max_num = n
+    new_next = max(max_num + 1, deleted_num)
+    row = await _ensure_row(db)
+    current = int(
+        (
+            await db.execute(
+                select(counter_column).where(NumberingCounter.id == 1)
+            )
+        ).scalar_one()
+    )
+    _ = row
+    if new_next >= current:
+        return None  # rien à recycler (suppression « du milieu »)
+    await db.execute(
+        update(NumberingCounter)
+        .where(NumberingCounter.id == 1)
+        .values({counter_column: new_next})
+    )
+    await db.flush()
+    return new_next
+
+
+async def resync_facture_counter(
+    db: AsyncSession, deleted_reference: Optional[str]
+) -> Optional[int]:
+    """Après suppression d'une facture, recycle son numéro : supprimer la
+    dernière facture « 173 » fait que la prochaine créée reprend 173."""
+    from app.models.facture import Facture
+
+    refs = list(
+        (await db.execute(select(Facture.reference))).scalars().all()
+    )
+    return await _recycle_deleted_number(
+        db,
+        counter_column=NumberingCounter.next_facture_number,
+        deleted_reference=deleted_reference,
+        remaining_refs=refs,
+    )
+
+
+async def resync_soumission_counter(
+    db: AsyncSession, deleted_reference: Optional[str]
+) -> Optional[int]:
+    """Même recyclage pour les soumissions supprimées."""
+    from app.models.soumission import Soumission
+
+    refs = list(
+        (await db.execute(select(Soumission.reference))).scalars().all()
+    )
+    return await _recycle_deleted_number(
+        db,
+        counter_column=NumberingCounter.next_soumission_number,
+        deleted_reference=deleted_reference,
+        remaining_refs=refs,
+    )
 
 
 async def resync_po_counter(db: AsyncSession) -> int:
