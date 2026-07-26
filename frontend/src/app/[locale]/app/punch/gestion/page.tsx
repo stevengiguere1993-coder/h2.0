@@ -35,7 +35,17 @@ type BonMini = {
   reference: string;
   title: string;
   status: string;
+  address?: string | null;
+  project_id?: number | null;
 };
+
+// Libellé d'un bon dans les sélecteurs : numéro + adresse du chantier +
+// description (titre) — ex. « BT-26-005 — 1647, Rue Desautels · Dégât
+// d'eau, arrachage du plancher ».
+function bonLabel(b: BonMini): string {
+  const addr = (b.address || "").trim();
+  return `${b.reference} — ${addr ? `${addr} · ` : ""}${b.title}`;
+}
 type ClientMini = { id: number; name: string };
 
 type Punch = {
@@ -753,7 +763,7 @@ export default function PunchGestionPage() {
                     ? clientById.get(p.client_id)
                     : null;
                   const target = bon
-                    ? `Bon — ${bon.reference} ${bon.title}`
+                    ? `Bon — ${bonLabel(bon)}`
                     : proj
                     ? proj.kind === "bon_travail"
                       ? `Bon — ${proj.name}`
@@ -1017,21 +1027,30 @@ function PunchModal({
                     label: projectLabel(p),
                     group: "Projets"
                   })),
-                // Bons de travail : les bons CLIENT passent par leur
-                // projet lié (kind=bon_travail, nom « BT-… — titre »),
-                // les bons INTERNES par bon_travail_id.
-                ...projects
-                  .filter((p) => p.kind === "bon_travail")
-                  .map((p) => ({
-                    value: `p-${p.id}`,
-                    label: p.name,
-                    group: "Bons de travail"
-                  })),
+                // Bons de travail : chaque bon apparaît UNE fois, pointé
+                // par bon_travail_id. Les projets porteurs (kind=
+                // bon_travail) ne sont listés que s'ils n'ont plus de bon
+                // actif correspondant (bon déjà facturé/annulé).
                 ...bons.map((b) => ({
                   value: `b-${b.id}`,
-                  label: `${b.reference} — ${b.title}`,
+                  label: bonLabel(b),
                   group: "Bons de travail"
                 })),
+                ...(() => {
+                  const covered = new Set(
+                    bons.map((b) => b.project_id).filter(Boolean)
+                  );
+                  return projects
+                    .filter(
+                      (p) =>
+                        p.kind === "bon_travail" && !covered.has(p.id)
+                    )
+                    .map((p) => ({
+                      value: `p-${p.id}`,
+                      label: p.name,
+                      group: "Bons de travail"
+                    }));
+                })(),
                 ...clients.map((c) => ({
                   value: `cl-${c.id}`,
                   label: c.name,

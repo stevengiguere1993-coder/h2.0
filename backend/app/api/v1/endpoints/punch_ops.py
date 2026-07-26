@@ -40,6 +40,8 @@ class PunchRead(BaseModel):
     employe_id: int
     project_id: Optional[int]
     contact_request_id: Optional[int]
+    bon_travail_id: Optional[int] = None
+    client_id: Optional[int] = None
     started_at: datetime
     ended_at: Optional[datetime]
     hours: Optional[float]
@@ -1192,6 +1194,11 @@ class PunchManualCreate(BaseModel):
     employe_id: int
     project_id: Optional[int] = None
     contact_request_id: Optional[int] = None
+    # Heures pointées sur un bon de travail / un client direct — mêmes
+    # cibles que la gestion admin (sans ces champs, choisir un bon dans
+    # le modal admin retombait en « Administration » en silence).
+    bon_travail_id: Optional[int] = None
+    client_id: Optional[int] = None
     started_at: datetime
     ended_at: Optional[datetime] = None
     hours: Optional[float] = None
@@ -1204,6 +1211,8 @@ class PunchManualUpdate(BaseModel):
     employe_id: Optional[int] = None
     project_id: Optional[int] = None
     contact_request_id: Optional[int] = None
+    bon_travail_id: Optional[int] = None
+    client_id: Optional[int] = None
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     hours: Optional[float] = None
@@ -1237,6 +1246,8 @@ async def create_manual_punch(
         employe_id=data.employe_id,
         project_id=data.project_id,
         contact_request_id=data.contact_request_id,
+        bon_travail_id=data.bon_travail_id,
+        client_id=data.client_id,
         started_at=data.started_at,
         ended_at=data.ended_at,
         hours=hours,
