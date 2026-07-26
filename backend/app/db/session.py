@@ -471,6 +471,29 @@ async def ensure_critical_columns() -> None:
     except Exception as exc:  # noqa: BLE001
         log.warning("backfill bons legacy->interne failed: %s", exc)
 
+    # Renommage 2026-07 : préfixe unifié « BT- » pour TOUTES les références
+    # de bons de travail. Les bons créés depuis la Gestion immobilière
+    # portaient « BON-AAAAMMJJ-HHMMSS » ; on garde le corps de la référence
+    # (traçabilité) et on remplace seulement le préfixe. Idempotent (plus
+    # aucune ligne ne matche après le premier run) ; le NOT EXISTS protège
+    # la contrainte UNIQUE dans le cas improbable d'une collision.
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE bons_travail SET "
+                    "reference = 'BT-' || substring(reference FROM 5) "
+                    "WHERE reference LIKE 'BON-%' "
+                    "AND NOT EXISTS ("
+                    "  SELECT 1 FROM bons_travail b2 "
+                    "  WHERE b2.reference = "
+                    "    'BT-' || substring(bons_travail.reference FROM 5)"
+                    ")"
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("backfill bons BON- -> BT- failed: %s", exc)
+
 
 async def ensure_raci_tables() -> None:
     """Crée les tables RACI dans leur PROPRE transaction.

@@ -31,6 +31,19 @@ HOURS_RATE_FLOOR = 90.0
 BON_HOURS_RATE = 55.0
 
 
+#: Préfixe de ligne client selon la nature de l'achat (kind). Toute nature
+#: inconnue retombe sur « Matériel ».
+ACHAT_KIND_LINE_PREFIXES = {
+    "sub_invoice": "Sous-traitant",
+    "tools": "Outils",
+    "tool_rental": "Location d'outils",
+}
+
+
+def achat_line_prefix(kind: str | None) -> str:
+    return ACHAT_KIND_LINE_PREFIXES.get(kind or "", "Matériel")
+
+
 def _merge_label_key(label: str) -> str:
     """Clé de REGROUPEMENT des lignes d'achat au même descriptif : accents
     retirés, casse et espaces normalisés — « Matériel — Matériaux Divers »
@@ -327,9 +340,7 @@ async def import_into_facture(
                 ac, data.achat_markup_overrides, contracts_by_st
             )
             base_desc = ac.description or f"Achat {ac.reference or ac.id}"
-            line_prefix = (
-                "Sous-traitant" if ac.kind == "sub_invoice" else "Matériel"
-            )
+            line_prefix = achat_line_prefix(ac.kind)
             # La majoration / règle (`rule_label`) est INTERNE : appliquée
             # au montant mais jamais affichée dans la description client.
             label = f"{line_prefix} — {base_desc}"

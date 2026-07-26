@@ -460,7 +460,10 @@ async def convert_project_to_facture(
         # facture sélectionnée AVEC sa majoration. Les lignes horaires
         # (contrat flat_hourly) ne fusionnent jamais. Chaque achat garde son
         # lien retour (facture_item_id) pour la dé-refacturation.
-        from app.api.v1.endpoints.facture_import import _merge_label_key
+        from app.api.v1.endpoints.facture_import import (
+            _merge_label_key,
+            achat_line_prefix,
+        )
 
         merged: dict[str, FactureItem] = {}
         for ac in achats:
@@ -468,9 +471,7 @@ async def convert_project_to_facture(
                 ac, data.achat_markup_overrides, contracts_by_st
             )
             base_desc = ac.description or f"Achat {ac.reference or ac.id}"
-            line_prefix = (
-                "Sous-traitant" if ac.kind == "sub_invoice" else "Matériel"
-            )
+            line_prefix = achat_line_prefix(ac.kind)
             # La majoration / règle de facturation (`rule_label`) est
             # INTERNE : on l'applique au montant (`billed`) mais on ne
             # l'affiche JAMAIS dans la description vue par le client.

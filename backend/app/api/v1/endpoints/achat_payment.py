@@ -116,6 +116,8 @@ class QboPullResult(BaseModel):
     paid_synced: int = 0
     total_qbo_bills: int
     deduped: int = 0  # doublons supprimés automatiquement après l'import
+    # Factures multi-projets divisées en un achat par projet à l'import.
+    split_multi_projets: int = 0
 
 
 @router.post(

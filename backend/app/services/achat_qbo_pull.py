@@ -53,16 +53,22 @@ def _norm(s: Optional[str]) -> str:
 
 async def _existing_achats_by_qbo_bill_id(
     db: AsyncSession,
-) -> Dict[str, Achat]:
+) -> Dict[str, List[Achat]]:
     """Charge tous les Achats Kratos avec un qbo_bill_id, indexes par
-    cet Id. Permet a la fois de detecter les doublons et de mettre a
-    jour le statut paye lors d'un re-pull."""
+    cet Id — en LISTE : une facture divisee sur plusieurs projets donne
+    plusieurs achats partageant le meme Id QB. Permet a la fois de
+    detecter les doublons et de mettre a jour le statut paye lors d'un
+    re-pull."""
     rows = (
         await db.execute(
             select(Achat).where(Achat.qbo_bill_id.isnot(None))
         )
     ).scalars().all()
-    return {str(a.qbo_bill_id): a for a in rows if a.qbo_bill_id}
+    out: Dict[str, List[Achat]] = {}
+    for a in rows:
+        if a.qbo_bill_id:
+            out.setdefault(str(a.qbo_bill_id), []).append(a)
+    return out
 
 
 async def _find_or_create_fournisseur(
@@ -138,6 +144,67 @@ async def _find_project_by_class(
         )
     ).scalar_one_or_none()
     return row
+
+
+async def _bill_project_allocations(
+    db: AsyncSession, bill: Dict[str, Any]
+) -> List[Tuple[Optional[Project], float, Optional[str]]]:
+    """Ventile les lignes de depense du Bill PAR PROJET via la Class de
+    chaque ligne (= adresse du chantier, cf. _find_project_by_class).
+
+    Une facture fournisseur peut etre DIVISEE sur plusieurs projets dans
+    QB ; dans ce cas Kratos doit creer un achat PAR projet plutot qu'un
+    seul bloc. Retourne, dans l'ordre des lignes, des triplets
+    ``(project | None, ht, description)`` — le slot ``None`` regroupe les
+    lignes sans Class / sans projet correspondant.
+    """
+    out: List[Tuple[Optional[Project], float, Optional[str]]] = []
+    slots: Dict[Optional[int], int] = {}  # project_id -> index dans out
+    cache: Dict[str, Optional[Project]] = {}
+    for line in bill.get("Line") or []:
+        if line.get("DetailType") != "AccountBasedExpenseLineDetail":
+            continue
+        amt = line.get("Amount")
+        if amt is None:
+            continue
+        detail = line.get("AccountBasedExpenseLineDetail") or {}
+        cname = ((detail.get("ClassRef") or {}).get("name") or "").strip()
+        proj: Optional[Project] = None
+        if cname:
+            if cname not in cache:
+                cache[cname] = await _find_project_by_class(db, cname)
+            proj = cache[cname]
+        key = proj.id if proj is not None else None
+        desc = (
+            str(line.get("Description"))[:1000]
+            if line.get("Description")
+            else None
+        )
+        if key in slots:
+            idx = slots[key]
+            prev_proj, prev_ht, prev_desc = out[idx]
+            out[idx] = (
+                prev_proj,
+                prev_ht + float(Decimal(str(amt))),
+                prev_desc or desc,
+            )
+        else:
+            slots[key] = len(out)
+            out.append((proj, float(Decimal(str(amt))), desc))
+    return out
+
+
+def _split_tax_shares(
+    taxes: float, hts: List[float]
+) -> List[float]:
+    """Repartit les taxes au prorata des HT ; le dernier slot recoit le
+    reliquat d'arrondi pour retomber exactement sur le total."""
+    total_ht = sum(hts)
+    if total_ht <= 0 or not hts:
+        return [0.0 for _ in hts]
+    shares = [round(taxes * h / total_ht, 2) for h in hts[:-1]]
+    shares.append(round(taxes - sum(shares), 2))
+    return shares
 
 
 def _sum_bill_amounts(bill: Dict[str, Any]) -> Tuple[float, float]:
@@ -307,23 +374,28 @@ async def pull_new_bills_from_qbo(
         if not bill_id:
             continue
         if bill_id in existing_by_id:
-            existing_achat = existing_by_id[bill_id]
             # Si QB a une BillPayment non encore enregistree cote
-            # Kratos ET l'Achat n'est pas deja paye → on bascule.
+            # Kratos ET l'Achat n'est pas deja paye → on bascule. Une
+            # facture DIVISEE (plusieurs achats pour le meme Bill) voit
+            # TOUTES ses parts basculer.
             paid_info = payments_idx.get(bill_id)
-            if (
-                paid_info is not None
-                and not existing_achat.qbo_bill_payment_id
-                and existing_achat.status != AchatStatus.PAID.value
-            ):
-                bp_id, paid_at, method_hint = paid_info
-                existing_achat.status = AchatStatus.PAID.value
-                existing_achat.paid_at = paid_at
-                existing_achat.payment_method = (
-                    method_hint or PaymentMethod.CHEQUE_HORIZON.value
-                )
-                existing_achat.due_at = None
-                existing_achat.qbo_bill_payment_id = bp_id or bill_id
+            any_paid = False
+            for existing_achat in existing_by_id[bill_id]:
+                if (
+                    paid_info is not None
+                    and not existing_achat.qbo_bill_payment_id
+                    and existing_achat.status != AchatStatus.PAID.value
+                ):
+                    bp_id, paid_at, method_hint = paid_info
+                    existing_achat.status = AchatStatus.PAID.value
+                    existing_achat.paid_at = paid_at
+                    existing_achat.payment_method = (
+                        method_hint or PaymentMethod.CHEQUE_HORIZON.value
+                    )
+                    existing_achat.due_at = None
+                    existing_achat.qbo_bill_payment_id = bp_id or bill_id
+                    any_paid = True
+            if any_paid:
                 stats["paid_synced"] += 1
             else:
                 stats["skipped_existing"] += 1
@@ -377,6 +449,55 @@ async def pull_new_bills_from_qbo(
             base = invoice_date or datetime.now(timezone.utc)
             due_at = base + timedelta(days=terms)
 
+        # Facture DIVISEE sur plusieurs projets (une Class differente par
+        # ligne) → un achat PAR projet : HT = somme des lignes du projet,
+        # taxes au prorata. Sinon, un seul achat (comportement historique).
+        allocations = await _bill_project_allocations(db, bill)
+        distinct_projects = {
+            p.id for p, _ht, _d in allocations if p is not None
+        }
+        if len(distinct_projects) >= 2:
+            tax_shares = _split_tax_shares(
+                amount_taxes, [ht for _p, ht, _d in allocations]
+            )
+            for (proj_i, ht_i, desc_i), tax_i in zip(
+                allocations, tax_shares
+            ):
+                db.add(
+                    Achat(
+                        qbo_bill_id=bill_id,
+                        qbo_doc_number=doc_number,
+                        qbo_sync_token=str(bill.get("SyncToken") or ""),
+                        fournisseur_id=fournisseur.id,
+                        project_id=proj_i.id if proj_i else None,
+                        kind="material",
+                        description=desc_i or description,
+                        amount=round(ht_i, 2),
+                        amount_taxes=tax_i,
+                        supplier_invoice_number=(
+                            doc_number[:64] if doc_number else None
+                        ),
+                        invoice_date=(
+                            invoice_date.date() if invoice_date else None
+                        ),
+                        payment_method=method,
+                        status=status_value,
+                        received_at=invoice_date,
+                        paid_at=paid_at,
+                        due_at=due_at,
+                        qbo_bill_payment_id=bp_id,
+                        is_billable=False,
+                    )
+                )
+                if proj_i is None:
+                    stats["unmatched_project"] += 1
+            stats["imported"] += 1
+            stats["split_multi_projets"] = (
+                stats.get("split_multi_projets", 0) + 1
+            )
+            if is_paid:
+                stats["imported_paid"] += 1
+            continue
         achat = Achat(
             qbo_bill_id=bill_id,
             qbo_doc_number=doc_number,

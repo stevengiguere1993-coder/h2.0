@@ -206,6 +206,136 @@ def _txn_customer_refs(txn: dict) -> set[str]:
     return out
 
 
+def _project_allocations(
+    txn: dict, proj_by_job: dict[str, Project]
+) -> list[dict]:
+    """Ventilation PAR PROJET des lignes de dépense d'un Bill/Purchase QB.
+
+    Une facture fournisseur peut être DIVISÉE sur plusieurs projets dans
+    QB (un CustomerRef différent par ligne — ex. Atlant #173 : 3 510 $ →
+    2081 Préfontaine, 540 $ → 9085 Millen). Retourne, dans l'ordre des
+    lignes, un slot par projet DISTINCT connu de Kratos :
+    ``{"project": Project, "ht": float, "description": str | None}``.
+    ``ht`` = somme des montants de lignes (HT côté QB) imputées à ce
+    projet ; ``description`` = première description de ligne du projet.
+    """
+    out: list[dict] = []
+    by_id: dict[int, dict] = {}
+    for line in txn.get("Line") or []:
+        for key in (
+            "AccountBasedExpenseLineDetail",
+            "ItemBasedExpenseLineDetail",
+        ):
+            d = line.get(key)
+            if not d:
+                continue
+            cref = ((d.get("CustomerRef") or {}).get("value"))
+            if not cref or str(cref) not in proj_by_job:
+                continue
+            proj = proj_by_job[str(cref)]
+            slot = by_id.get(proj.id)
+            if slot is None:
+                slot = {"project": proj, "ht": 0.0, "description": None}
+                by_id[proj.id] = slot
+                out.append(slot)
+            slot["ht"] += _num(line.get("Amount"))
+            if slot["description"] is None and line.get("Description"):
+                slot["description"] = str(line["Description"])[:1000]
+    return out
+
+
+def _split_amounts(total: float, allocations: list[dict]) -> list[float]:
+    """Répartit ``total`` (typiquement le TTC de la transaction) entre les
+    allocations AU PRORATA de leur HT de lignes. Le dernier slot reçoit le
+    reliquat d'arrondi pour que la somme retombe exactement sur le total."""
+    known_ht = sum(float(a["ht"]) for a in allocations)
+    if known_ht <= 0 or not allocations:
+        return []
+    shares: list[float] = []
+    for a in allocations[:-1]:
+        shares.append(round(total * float(a["ht"]) / known_ht, 2))
+    shares.append(round(total - sum(shares), 2))
+    return shares
+
+
+async def _split_achat_multi_projets(
+    db: AsyncSession,
+    ach: Achat,
+    allocs: list[dict],
+    base_desc: Optional[str],
+    is_billable_fn,
+) -> bool:
+    """RÉPARE un achat importé EN BLOC alors que la transaction QB est
+    ventilée sur plusieurs projets : l'achat existant devient la part du
+    PREMIER projet ; un achat frère (même lien QB) est créé pour chaque
+    autre projet. Montants au prorata du HT des lignes QB — la somme des
+    parts retombe exactement sur les montants d'origine. Renvoie True si
+    la division a eu lieu."""
+    amount_shares = _split_amounts(
+        round(float(ach.amount or 0), 2), allocs
+    )
+    if not amount_shares or len(amount_shares) != len(allocs):
+        return False
+    # Style de stockage : TTC (import pull-costs, amount_taxes vide) ou
+    # HT + taxes (import sync-from-qbo). On préserve le style en divisant
+    # chaque composante au même prorata.
+    ht_style = float(ach.amount_taxes or 0) > 0
+    tax_shares = (
+        _split_amounts(round(float(ach.amount_taxes or 0), 2), allocs)
+        if ht_style
+        else None
+    )
+    first = allocs[0]
+    ach.project_id = first["project"].id
+    if first["description"]:
+        ach.description = first["description"]
+    ach.amount = amount_shares[0]
+    if ht_style and tax_shares:
+        ach.amount_taxes = tax_shares[0]
+        # La ventilation TPS/TVQ d'origine ne vaut plus pour une part :
+        # on la laisse se recalculer (fallback taux QC standard).
+        ach.amount_tps = None
+        ach.amount_tvq = None
+    if ach.invoiced_at is None and not ach.billable_manual:
+        ach.is_billable = is_billable_fn(first["project"])
+    for i, alloc in enumerate(allocs[1:], start=1):
+        db.add(
+            Achat(
+                fournisseur_id=ach.fournisseur_id,
+                sous_traitant_id=ach.sous_traitant_id,
+                kind=ach.kind,
+                project_id=alloc["project"].id,
+                is_billable=is_billable_fn(alloc["project"]),
+                description=alloc["description"] or base_desc,
+                amount=amount_shares[i],
+                amount_taxes=(
+                    tax_shares[i] if ht_style and tax_shares else None
+                ),
+                status=ach.status,
+                payment_method=ach.payment_method,
+                received_at=ach.received_at,
+                paid_at=ach.paid_at,
+                due_at=ach.due_at,
+                invoice_date=ach.invoice_date,
+                supplier_invoice_number=ach.supplier_invoice_number,
+                qbo_bill_id=ach.qbo_bill_id,
+                qbo_purchase_id=ach.qbo_purchase_id,
+                qbo_doc_number=ach.qbo_doc_number,
+                qbo_bill_payment_id=ach.qbo_bill_payment_id,
+                markup_percent=ach.markup_percent,
+            )
+        )
+    await db.flush()
+    return True
+
+
+def _covers_full_txn(ach: Achat, total: float) -> bool:
+    """Vrai si l'achat porte (encore) le MONTANT COMPLET de la transaction
+    QB (TTC) — condition pour oser le re-ventiler en plusieurs parts."""
+    ttc = round(float(ach.amount or 0) + float(ach.amount_taxes or 0), 2)
+    return abs(ttc - round(total, 2)) <= 0.02
+
+
 def _local_name_of(row: dict) -> str:
     fqn = row.get("FullyQualifiedName") or ""
     seg = fqn.split(":")[-1] if fqn else (row.get("DisplayName") or "")
@@ -303,24 +433,24 @@ async def pull_project_costs_from_qbo(
     except Exception:  # noqa: BLE001
         paid_bill_methods = {}
 
-    # Achats déjà liés par qbo_bill_id (objet complet → on peut refléter
-    # le PAIEMENT QB → Kratos sur un Bill déjà importé).
-    existing_bill: dict[str, Achat] = {
-        str(a.qbo_bill_id): a
-        for a in (
-            await db.execute(
-                select(Achat).where(Achat.qbo_bill_id.is_not(None))
-            )
-        ).scalars().all()
-    }
-    existing_purchase: dict[str, Achat] = {
-        str(a.qbo_purchase_id): a
-        for a in (
-            await db.execute(
-                select(Achat).where(Achat.qbo_purchase_id.is_not(None))
-            )
-        ).scalars().all()
-    }
+    # Achats déjà liés par qbo_bill_id (objets complets → on peut refléter
+    # le PAIEMENT QB → Kratos sur un Bill déjà importé). LISTE par id QB :
+    # une facture DIVISÉE sur plusieurs projets donne plusieurs achats
+    # Kratos qui partagent le même qbo_bill_id.
+    existing_bill: dict[str, list[Achat]] = {}
+    for a in (
+        await db.execute(
+            select(Achat).where(Achat.qbo_bill_id.is_not(None))
+        )
+    ).scalars().all():
+        existing_bill.setdefault(str(a.qbo_bill_id), []).append(a)
+    existing_purchase: dict[str, list[Achat]] = {}
+    for a in (
+        await db.execute(
+            select(Achat).where(Achat.qbo_purchase_id.is_not(None))
+        )
+    ).scalars().all():
+        existing_purchase.setdefault(str(a.qbo_purchase_id), []).append(a)
     # Compte de paiement QB (Id) → mode de paiement Horizon exact
     # (cc_olivier, cheque_horizon…). Sert à refléter le rapprochement : quand
     # une dépense est rapprochée dans QB, on remonte la carte/compte réel.
@@ -492,10 +622,80 @@ async def pull_project_costs_from_qbo(
                  "vendor": vendor, "status": "deja_importe"}
             )
             continue
-        if bid in existing_bill:
+        achs_bill = existing_bill.get(bid) or []
+        if len(achs_bill) > 1:
+            # Facture déjà DIVISÉE en plusieurs achats (multi-projets) :
+            # chaque achat porte SA part — on ne resynchronise que le
+            # PAIEMENT et la date, jamais montant/description/projet.
+            synced = False
+            if not dry_run:
+                _new_date = _parse_date(b.get("TxnDate"))
+                _real_pm = paid_bill_methods.get(bid)
+                for ach in achs_bill:
+                    if _new_date and _new_date != ach.invoice_date:
+                        ach.invoice_date = _new_date
+                    if paid and ach.status != "paid":
+                        ach.status = "paid"
+                        ach.paid_at = ach.paid_at or now
+                        if _real_pm and (
+                            ach.payment_method or "bill_to_pay"
+                        ) in ("", "bill_to_pay"):
+                            ach.payment_method = _real_pm
+                        synced = True
+                await db.flush()
+            if synced:
+                stats["paid_synced"] += 1
+            else:
+                stats["skipped_existing"] += 1
+            preview.append(
+                {"type": "bill", "qbo_id": bid, "amount": total,
+                 "vendor": vendor,
+                 "status": "paiement_synchro" if synced else "deja_importe"}
+            )
+            continue
+        if achs_bill:
             # Déjà importé → on reflète le PAIEMENT QB (Bill soldé) ET les
             # MODIFICATIONS faites dans QB (montant, description).
-            ach = existing_bill[bid]
+            ach = achs_bill[0]
+            # RÉPARATION facture MULTI-PROJETS importée EN BLOC : la
+            # facture QB est ventilée sur ≥ 2 projets (CustomerRef par
+            # ligne) mais Kratos n'a qu'UN achat au montant complet (cas
+            # Atlant #173). On le divise comme dans QB : une part par
+            # projet, au prorata des lignes. Jamais si l'achat est déjà
+            # refacturé (invoiced_at / facture_item).
+            _allocs = _project_allocations(b, proj_by_job)
+            if (
+                not dry_run
+                and len(_allocs) >= 2
+                and ach.invoiced_at is None
+                and ach.facture_item_id is None
+                and _covers_full_txn(ach, total)
+            ):
+                # Reflète d'abord le paiement QB pour que les parts créées
+                # héritent du bon statut.
+                if paid and ach.status != "paid":
+                    ach.status = "paid"
+                    ach.paid_at = ach.paid_at or now
+                    _real_pm = paid_bill_methods.get(bid)
+                    if _real_pm and (
+                        ach.payment_method or "bill_to_pay"
+                    ) in ("", "bill_to_pay"):
+                        ach.payment_method = _real_pm
+                if await _split_achat_multi_projets(
+                    db, ach, _allocs, _txn_description(b), _is_billable
+                ):
+                    stats["split_multi_projets"] = (
+                        stats.get("split_multi_projets", 0) + 1
+                    )
+                    preview.append(
+                        {"type": "bill", "qbo_id": bid, "amount": total,
+                         "vendor": vendor,
+                         "status": "divise_multi_projets",
+                         "projets": [
+                             a["project"].id for a in _allocs
+                         ]}
+                    )
+                    continue
             updated = False
             # Fournisseur : backfill s'il manque, ET reflet d'un CHANGEMENT
             # de fournisseur fait dans QB (avant, seul le backfill existait —
@@ -594,42 +794,68 @@ async def pull_project_costs_from_qbo(
                  "vendor": vendor, "status": "sans_projet"}
             )
             continue
+        # Facture DIVISÉE sur plusieurs projets dans QB → un achat PAR
+        # projet, montant TTC au prorata du HT des lignes. Sinon, un seul
+        # achat au montant complet (comportement historique).
+        bill_allocs = _project_allocations(b, proj_by_job)
+        bill_shares = (
+            _split_amounts(round(total, 2), bill_allocs)
+            if len(bill_allocs) >= 2
+            else []
+        )
         preview.append(
             {"type": "bill", "qbo_id": bid, "project_id": proj.id,
              "amount": total, "paid": paid, "vendor": vendor,
-             "status": "a_importer"}
+             "status": "a_importer",
+             **(
+                 {"projets": [a["project"].id for a in bill_allocs]}
+                 if bill_shares
+                 else {}
+             )}
         )
         if not dry_run:
-            db.add(
-                Achat(
-                    # Fournisseur lié — CRÉÉ dans Kratos s'il n'existait
-                    # pas (il travaille sur un projet Kratos).
-                    fournisseur_id=await _fournisseur_id_for(
-                        db,
-                        fourn_by_name,
-                        vendor,
-                        (b.get("VendorRef") or {}).get("value"),
-                    ),
-                    project_id=proj.id,
-                    is_billable=_is_billable(proj),
-                    description=_txn_description(b),
-                    amount=total,
-                    status="paid" if paid else "received",
-                    # Bill payé → mode réel (chèque/carte) déduit de QB ;
-                    # sinon « Sur compte » (à payer).
-                    payment_method=(
-                        paid_bill_methods.get(bid) or "bill_to_pay"
-                        if paid
-                        else "bill_to_pay"
-                    ),
-                    received_at=now,
-                    paid_at=now if paid else None,
-                    invoice_date=_parse_date(b.get("TxnDate")),
-                    supplier_invoice_number=doc or None,
-                    qbo_bill_id=bid,
-                    qbo_doc_number=doc or None,
-                )
+            # Fournisseur lié — CRÉÉ dans Kratos s'il n'existait
+            # pas (il travaille sur un projet Kratos).
+            _fid = await _fournisseur_id_for(
+                db,
+                fourn_by_name,
+                vendor,
+                (b.get("VendorRef") or {}).get("value"),
             )
+            _base_desc = _txn_description(b)
+            _pm = (
+                paid_bill_methods.get(bid) or "bill_to_pay"
+                if paid
+                else "bill_to_pay"
+            )
+            _targets = (
+                [
+                    (a["project"], share, a["description"] or _base_desc)
+                    for a, share in zip(bill_allocs, bill_shares)
+                ]
+                if bill_shares
+                else [(proj, total, _base_desc)]
+            )
+            for _tproj, _tamount, _tdesc in _targets:
+                db.add(
+                    Achat(
+                        fournisseur_id=_fid,
+                        project_id=_tproj.id,
+                        is_billable=_is_billable(_tproj),
+                        description=_tdesc,
+                        amount=_tamount,
+                        status="paid" if paid else "received",
+                        # Bill payé → mode réel (chèque/carte) déduit de
+                        # QB ; sinon « Sur compte » (à payer).
+                        payment_method=_pm,
+                        received_at=now,
+                        paid_at=now if paid else None,
+                        invoice_date=_parse_date(b.get("TxnDate")),
+                        supplier_invoice_number=doc or None,
+                        qbo_bill_id=bid,
+                        qbo_doc_number=doc or None,
+                    )
+                )
             await db.flush()
         stats["bills_imported"] += 1
 
@@ -654,8 +880,70 @@ async def pull_project_costs_from_qbo(
         # QB → Kratos : date + mode de paiement réel (compte de la dépense).
         # Corrige « la dépense a été rapprochée dans QB mais Kratos gardait
         # l'ancienne date / la mauvaise carte », sans jamais re-pousser.
-        existing = existing_bill.get(pid) or existing_purchase.get(pid)
+        _achs_map: dict[int, Achat] = {}
+        for _a in (existing_bill.get(pid) or []) + (
+            existing_purchase.get(pid) or []
+        ):
+            _achs_map[int(_a.id)] = _a
+        achs_p = list(_achs_map.values())
+        if len(achs_p) > 1:
+            # Dépense déjà DIVISÉE en plusieurs achats (multi-projets) :
+            # seule la réconciliation date / mode de paiement se reflète —
+            # jamais montant/description/projet (chaque achat = SA part).
+            _new_date = _parse_date(p.get("TxnDate"))
+            _acc_id = (p.get("AccountRef") or {}).get("value")
+            _new_method = (
+                purchase_acct_methods.get(str(_acc_id)) if _acc_id else None
+            )
+            updated_any = False
+            if not dry_run:
+                for ach in achs_p:
+                    if _new_date and _new_date != ach.invoice_date:
+                        ach.invoice_date = _new_date
+                        updated_any = True
+                    if _new_method and _new_method != (
+                        ach.payment_method or ""
+                    ):
+                        ach.payment_method = _new_method
+                        updated_any = True
+                await db.flush()
+            if updated_any:
+                stats["reconciled_synced"] += 1
+            else:
+                stats["skipped_existing"] += 1
+            preview.append(
+                {"type": "purchase", "qbo_id": pid, "amount": total,
+                 "vendor": vendor,
+                 "status": "rapproche_maj" if updated_any else "deja_importe"}
+            )
+            continue
+        existing = achs_p[0] if achs_p else None
         if existing is not None:
+            # RÉPARATION dépense MULTI-PROJETS importée EN BLOC (même
+            # logique que les Bills — cf. cas Atlant #173).
+            _allocs = _project_allocations(p, proj_by_job)
+            if (
+                not dry_run
+                and len(_allocs) >= 2
+                and existing.invoiced_at is None
+                and existing.facture_item_id is None
+                and _covers_full_txn(existing, total)
+            ):
+                if await _split_achat_multi_projets(
+                    db, existing, _allocs, _txn_description(p), _is_billable
+                ):
+                    stats["split_multi_projets"] = (
+                        stats.get("split_multi_projets", 0) + 1
+                    )
+                    preview.append(
+                        {"type": "purchase", "qbo_id": pid,
+                         "amount": total, "vendor": vendor,
+                         "status": "divise_multi_projets",
+                         "projets": [
+                             a["project"].id for a in _allocs
+                         ]}
+                    )
+                    continue
             updated: list[str] = []
             new_date = _parse_date(p.get("TxnDate"))
             if new_date and new_date != existing.invoice_date:
@@ -740,35 +1028,59 @@ async def pull_project_costs_from_qbo(
             "Check": "cheque",
             "CreditCard": "cc",
         }.get(ptype)
+        # Dépense DIVISÉE sur plusieurs projets dans QB → un achat PAR
+        # projet, montant TTC au prorata du HT des lignes (cf. Bills).
+        pur_allocs = _project_allocations(p, proj_by_job)
+        pur_shares = (
+            _split_amounts(round(total, 2), pur_allocs)
+            if len(pur_allocs) >= 2
+            else []
+        )
         preview.append(
             {"type": "purchase", "qbo_id": pid, "project_id": proj.id,
-             "amount": total, "vendor": vendor, "status": "a_importer"}
+             "amount": total, "vendor": vendor, "status": "a_importer",
+             **(
+                 {"projets": [a["project"].id for a in pur_allocs]}
+                 if pur_shares
+                 else {}
+             )}
         )
         if not dry_run:
-            db.add(
-                Achat(
-                    # Fournisseur lié — CRÉÉ dans Kratos s'il n'existait
-                    # pas (il travaille sur un projet Kratos).
-                    fournisseur_id=await _fournisseur_id_for(
-                        db,
-                        fourn_by_name,
-                        vendor,
-                        (p.get("EntityRef") or {}).get("value"),
-                    ),
-                    project_id=proj.id,
-                    is_billable=_is_billable(proj),
-                    description=_txn_description(p),
-                    amount=total,
-                    status="paid",
-                    payment_method=pm,
-                    received_at=now,
-                    paid_at=now,
-                    invoice_date=_parse_date(p.get("TxnDate")),
-                    supplier_invoice_number=doc or None,
-                    qbo_purchase_id=pid,
-                    qbo_doc_number=doc or None,
-                )
+            # Fournisseur lié — CRÉÉ dans Kratos s'il n'existait
+            # pas (il travaille sur un projet Kratos).
+            _fid = await _fournisseur_id_for(
+                db,
+                fourn_by_name,
+                vendor,
+                (p.get("EntityRef") or {}).get("value"),
             )
+            _base_desc = _txn_description(p)
+            _targets = (
+                [
+                    (a["project"], share, a["description"] or _base_desc)
+                    for a, share in zip(pur_allocs, pur_shares)
+                ]
+                if pur_shares
+                else [(proj, total, _base_desc)]
+            )
+            for _tproj, _tamount, _tdesc in _targets:
+                db.add(
+                    Achat(
+                        fournisseur_id=_fid,
+                        project_id=_tproj.id,
+                        is_billable=_is_billable(_tproj),
+                        description=_tdesc,
+                        amount=_tamount,
+                        status="paid",
+                        payment_method=pm,
+                        received_at=now,
+                        paid_at=now,
+                        invoice_date=_parse_date(p.get("TxnDate")),
+                        supplier_invoice_number=doc or None,
+                        qbo_purchase_id=pid,
+                        qbo_doc_number=doc or None,
+                    )
+                )
             await db.flush()
         stats["purchases_imported"] += 1
 
@@ -789,6 +1101,12 @@ async def pull_project_costs_from_qbo(
                     Achat.project_id.in_(billable_proj_ids),
                     Achat.invoiced_at.is_(None),
                     Achat.is_billable.is_(False),
+                    # ⚠️ JAMAIS re-cocher une dépense décochée À LA MAIN
+                    # (billable_manual) : sans cette garde, chaque
+                    # « Importer de QB » écrasait le choix de l'utilisateur
+                    # (cas des factures Christian décochées qui revenaient
+                    # « À refacturer »).
+                    Achat.billable_manual.is_(False),
                     (
                         Achat.qbo_bill_id.is_not(None)
                         | Achat.qbo_purchase_id.is_not(None)
