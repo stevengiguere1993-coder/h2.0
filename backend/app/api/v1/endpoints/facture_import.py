@@ -214,7 +214,28 @@ async def import_into_facture(
     #    ignorés. Marquage des punches après création des items pour
     #    traçabilité et garde-fou anti-doublon.
     if data.include_hours and fa.project_id:
-        stmt = select(Punch).where(Punch.project_id == fa.project_id)
+        from sqlalchemy import or_ as _or_punch
+
+        from app.models.bon_travail import BonTravail as _BonPunch
+
+        # Heures du projet + heures pointées DIRECTEMENT sur un bon de
+        # travail lié à ce projet (punch.bon_travail_id, sans project_id —
+        # cas des bons internes pointés depuis le mobile).
+        _bt_ids = list(
+            (
+                await db.execute(
+                    select(_BonPunch.id).where(
+                        _BonPunch.project_id == fa.project_id
+                    )
+                )
+            ).scalars().all()
+        )
+        _punch_cond = Punch.project_id == fa.project_id
+        if _bt_ids:
+            _punch_cond = _or_punch(
+                _punch_cond, Punch.bon_travail_id.in_(_bt_ids)
+            )
+        stmt = select(Punch).where(_punch_cond)
         if data.only_approved:
             stmt = stmt.where(Punch.approved.is_(True))
         stmt = stmt.where(Punch.hours.is_not(None))

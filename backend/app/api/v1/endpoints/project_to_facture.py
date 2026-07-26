@@ -334,7 +334,29 @@ async def convert_project_to_facture(
     #    `billing_rate` de l'employé (fallback hourly_rate), groupées
     #    par (employé, taux). Marquage des punches après création.
     if data.include_hours:
-        stmt = select(Punch).where(Punch.project_id == project_id)
+        from sqlalchemy import or_ as _or_punch
+
+        from app.models.bon_travail import BonTravail as _BonPunch
+
+        # Heures du projet + heures pointées DIRECTEMENT sur un bon de
+        # travail lié à ce projet (punch.bon_travail_id, sans project_id —
+        # cas des bons internes pointés depuis le mobile). Sans ça, la
+        # facture d'un bon n'importait aucune heure.
+        _bt_ids = list(
+            (
+                await db.execute(
+                    select(_BonPunch.id).where(
+                        _BonPunch.project_id == project_id
+                    )
+                )
+            ).scalars().all()
+        )
+        _punch_cond = Punch.project_id == project_id
+        if _bt_ids:
+            _punch_cond = _or_punch(
+                _punch_cond, Punch.bon_travail_id.in_(_bt_ids)
+            )
+        stmt = select(Punch).where(_punch_cond)
         if data.only_approved:
             stmt = stmt.where(Punch.approved.is_(True))
         stmt = stmt.where(Punch.hours.is_not(None))

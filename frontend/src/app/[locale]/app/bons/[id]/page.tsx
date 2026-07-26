@@ -171,6 +171,7 @@ export default function BonDetailPage() {
   const [itemBusy, setItemBusy] = useState<number | "new" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [factureBusy, setFactureBusy] = useState(false);
 
   const [recap, setRecap] = useState<Recap | null>(null);
   const [workNotes, setWorkNotes] = useState("");
@@ -583,6 +584,50 @@ export default function BonDetailPage() {
     }
   }
 
+  // « Créer facture » — comme sur un projet : garantit le projet lié du
+  // bon, crée la facture (brouillon) et importe les heures punchées
+  // (approuvées) + les achats/matériel refacturables, puis ouvre la
+  // facture dans Facturation.
+  async function createFacture() {
+    if (!b) return;
+    setFactureBusy(true);
+    setSendNotice(null);
+    try {
+      const ep = await authedFetch(
+        `/api/v1/bons-travail/${id}/ensure-project`,
+        { method: "POST" }
+      );
+      if (!ep.ok) throw new Error(`http_${ep.status}`);
+      const { project_id } = (await ep.json()) as { project_id: number };
+      const res = await authedFetch(
+        `/api/v1/projects/${project_id}/convert-to-facture`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            include_soumission: false,
+            include_hours: true,
+            only_approved: true,
+            include_achats: true,
+            due_in_days: 0
+          })
+        }
+      );
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 240) || `http_${res.status}`);
+      }
+      const created = (await res.json()) as { id: number };
+      const locale =
+        (params as { locale?: string })?.locale === "en" ? "en" : "fr";
+      router.push(`/${locale}/app/facturation/${created.id}`);
+    } catch (err) {
+      setSendNotice(
+        `Création de facture échouée : ${(err as Error).message}`
+      );
+      setFactureBusy(false);
+    }
+  }
+
   async function manageProject() {
     try {
       const res = await authedFetch(
@@ -708,13 +753,35 @@ export default function BonDetailPage() {
                         ? "Nos hommes à tout faire"
                         : "À classifier"}
                   </p>
-                ) : client ? (
+                ) : null}
+                {client ? (
                   <p className="mt-1 text-xs text-white/50">
-                    Client : {client.name}
+                    Client :{" "}
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={`/app/clients/${client.id}` as any}
+                      className="font-medium text-accent-400 underline decoration-dotted hover:text-accent-300"
+                    >
+                      {client.name}
+                    </Link>
                   </p>
                 ) : null}
               </div>
               <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={createFacture}
+                  disabled={factureBusy}
+                  className="btn-accent btn-sm"
+                  title="Crée une facture brouillon dans Facturation et importe les heures punchées (approuvées) et le matériel refacturable du bon"
+                >
+                  {factureBusy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileText className="h-4 w-4" />
+                  )}
+                  Créer facture
+                </button>
                 <button
                   type="button"
                   onClick={toggleUrgent}

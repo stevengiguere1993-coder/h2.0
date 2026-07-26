@@ -136,11 +136,19 @@ async def bon_recap(bon_id: int, db: DBSession, user: CurrentUser) -> dict:
         out["total"] = round(fixed_amount or 0.0, 2)
         return out
 
-    # Heures (T&M)
+    # Heures (T&M) — celles du PROJET lié + celles pointées DIRECTEMENT
+    # sur le bon (punch.bon_travail_id, sans project_id — pointage mobile
+    # des bons internes).
+    from sqlalchemy import or_ as _or_punch
+
     punches = (
         await db.execute(
             select(Punch).where(
-                Punch.project_id == pid, Punch.hours.is_not(None)
+                _or_punch(
+                    Punch.project_id == pid,
+                    Punch.bon_travail_id == bon.id,
+                ),
+                Punch.hours.is_not(None),
             )
         )
     ).scalars().all()
@@ -158,13 +166,20 @@ async def bon_recap(bon_id: int, db: DBSession, user: CurrentUser) -> dict:
     hours = 0.0
     labor = 0.0
     for p in punches:
-        emp = emps.get(p.employe_id)
-        if emp and emp.billing_rate is not None:
-            rate = float(emp.billing_rate)
-        elif emp and emp.hourly_rate:
-            rate = float(emp.hourly_rate)
+        # Heure pointée sur le BON directement → taux bon de travail
+        # (55 $/h), aligné sur l'import facture (BON_HOURS_RATE).
+        if p.bon_travail_id:
+            from app.api.v1.endpoints.facture_import import BON_HOURS_RATE
+
+            rate = BON_HOURS_RATE
         else:
-            rate = 0.0
+            emp = emps.get(p.employe_id)
+            if emp and emp.billing_rate is not None:
+                rate = float(emp.billing_rate)
+            elif emp and emp.hourly_rate:
+                rate = float(emp.hourly_rate)
+            else:
+                rate = 0.0
         h = float(p.hours or 0)
         hours += h
         labor += h * rate
