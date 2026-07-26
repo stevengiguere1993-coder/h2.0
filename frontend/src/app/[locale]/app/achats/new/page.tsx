@@ -188,7 +188,7 @@ export default function NewAchatPage() {
           authedFetch("/api/v1/fournisseurs?limit=500"),
           authedFetch("/api/v1/purchase-orders?limit=500"),
           authedFetch("/api/v1/sous-traitants?limit=500"),
-          authedFetch("/api/v1/bons?limit=500"),
+          authedFetch("/api/v1/bons-travail?limit=500"),
           authedFetch("/api/v1/clients?limit=500")
         ]);
         if (!cancelled) {
@@ -247,7 +247,7 @@ export default function NewAchatPage() {
         // reçu suit alors toute la machinerie projet (sous-client QB
         // « BT-xx », classe, refacturation).
         const bp = await authedFetch(
-          `/api/v1/bons/${Number(bonId)}/ensure-project`,
+          `/api/v1/bons-travail/${Number(bonId)}/ensure-project`,
           { method: "POST" }
         );
         if (!bp.ok) throw new Error("Projet du bon introuvable.");

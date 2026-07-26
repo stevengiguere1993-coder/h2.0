@@ -251,7 +251,7 @@ export default function PunchGestionPage() {
           authedFetch("/api/v1/employes?limit=500&volet=construction"),
           authedFetch("/api/v1/projects?limit=500"),
           authedFetch("/api/v1/contact?limit=500"),
-          authedFetch("/api/v1/bons?limit=500"),
+          authedFetch("/api/v1/bons-travail?limit=500"),
           authedFetch("/api/v1/clients?limit=500")
         ]);
         if (!pRes.ok) throw new Error(`http_${pRes.status}`);
