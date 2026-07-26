@@ -207,7 +207,9 @@ def _txn_customer_refs(txn: dict) -> set[str]:
 
 
 def _project_allocations(
-    txn: dict, proj_by_job: dict[str, Project]
+    txn: dict,
+    proj_by_job: dict[str, Project],
+    class_resolver=None,
 ) -> list[dict]:
     """Ventilation PAR PROJET des lignes de dépense d'un Bill/Purchase QB.
 
@@ -218,6 +220,12 @@ def _project_allocations(
     ``{"project": Project, "ht": float, "description": str | None}``.
     ``ht`` = somme des montants de lignes (HT côté QB) imputées à ce
     projet ; ``description`` = première description de ligne du projet.
+
+    Résolution par ligne : CustomerRef → sous-client d'un projet
+    (proj_by_job) ; REPLI sur la CLASSE de ligne (= adresse du chantier)
+    via ``class_resolver`` quand le CustomerRef pointe le client MÈRE
+    plutôt que le sous-client (cas réel Atlant #173 : ligne « 9520-8955
+    Québec Inc. » classée « 9085 Avenue Millen »).
     """
     out: list[dict] = []
     by_id: dict[int, dict] = {}
@@ -230,9 +238,14 @@ def _project_allocations(
             if not d:
                 continue
             cref = ((d.get("CustomerRef") or {}).get("value"))
-            if not cref or str(cref) not in proj_by_job:
+            proj = (
+                proj_by_job.get(str(cref)) if cref else None
+            )
+            if proj is None and class_resolver is not None:
+                cname = ((d.get("ClassRef") or {}).get("name") or "")
+                proj = class_resolver(cname)
+            if proj is None:
                 continue
-            proj = proj_by_job[str(cref)]
             slot = by_id.get(proj.id)
             if slot is None:
                 slot = {"project": proj, "ht": 0.0, "description": None}
@@ -528,6 +541,44 @@ async def pull_project_costs_from_qbo(
         proj_by_job = {
             _resolved[p.id]: p for p in _projects if _resolved.get(p.id)
         }
+    # Repli de résolution par CLASSE de ligne (= adresse du chantier) pour
+    # la ventilation multi-projets : couvre les lignes dont le CustomerRef
+    # pointe le client MÈRE plutôt que le sous-client du projet (cas
+    # Atlant #173). On indexe TOUS les projets (pas seulement le scope) par
+    # adresse et nom normalisés ; correspondance exacte d'abord, puis par
+    # inclusion (les Class QB sont souvent l'adresse tronquée).
+    _class_projects = list(
+        (await db.execute(select(Project))).scalars().all()
+    )
+
+    def _norm_cls(s: str) -> str:
+        return " ".join((s or "").strip().lower().split())
+
+    _class_exact: dict[str, Project] = {}
+    _class_rows: list[tuple[str, Project]] = []
+    for _cp in _class_projects:
+        for _k in (
+            _norm_cls(_cp.address or ""),
+            _norm_cls(_cp.name or ""),
+        ):
+            if not _k:
+                continue
+            _class_exact.setdefault(_k, _cp)
+            _class_rows.append((_k, _cp))
+
+    def _resolve_class_project(cname: str) -> Optional[Project]:
+        c = _norm_cls(cname)
+        # Trop court = risque de faux positif par inclusion → on ignore.
+        if len(c) < 5:
+            return None
+        hit = _class_exact.get(c)
+        if hit is not None:
+            return hit
+        for _k, _cp in _class_rows:
+            if _k.startswith(c) or c.startswith(_k) or c in _k or _k in c:
+                return _cp
+        return None
+
     # Refs QB du client (parent + sous-clients) : ne garder que ses
     # dépenses dans l'aperçu détaillé scopé.
     client_refs: Optional[set[str]] = None
@@ -663,7 +714,9 @@ async def pull_project_costs_from_qbo(
             # Atlant #173). On le divise comme dans QB : une part par
             # projet, au prorata des lignes. Jamais si l'achat est déjà
             # refacturé (invoiced_at / facture_item).
-            _allocs = _project_allocations(b, proj_by_job)
+            _allocs = _project_allocations(
+                b, proj_by_job, _resolve_class_project
+            )
             if (
                 not dry_run
                 and len(_allocs) >= 2
@@ -797,7 +850,9 @@ async def pull_project_costs_from_qbo(
         # Facture DIVISÉE sur plusieurs projets dans QB → un achat PAR
         # projet, montant TTC au prorata du HT des lignes. Sinon, un seul
         # achat au montant complet (comportement historique).
-        bill_allocs = _project_allocations(b, proj_by_job)
+        bill_allocs = _project_allocations(
+            b, proj_by_job, _resolve_class_project
+        )
         bill_shares = (
             _split_amounts(round(total, 2), bill_allocs)
             if len(bill_allocs) >= 2
@@ -921,7 +976,9 @@ async def pull_project_costs_from_qbo(
         if existing is not None:
             # RÉPARATION dépense MULTI-PROJETS importée EN BLOC (même
             # logique que les Bills — cf. cas Atlant #173).
-            _allocs = _project_allocations(p, proj_by_job)
+            _allocs = _project_allocations(
+                p, proj_by_job, _resolve_class_project
+            )
             if (
                 not dry_run
                 and len(_allocs) >= 2
@@ -1030,7 +1087,9 @@ async def pull_project_costs_from_qbo(
         }.get(ptype)
         # Dépense DIVISÉE sur plusieurs projets dans QB → un achat PAR
         # projet, montant TTC au prorata du HT des lignes (cf. Bills).
-        pur_allocs = _project_allocations(p, proj_by_job)
+        pur_allocs = _project_allocations(
+            p, proj_by_job, _resolve_class_project
+        )
         pur_shares = (
             _split_amounts(round(total, 2), pur_allocs)
             if len(pur_allocs) >= 2

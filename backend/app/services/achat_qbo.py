@@ -19,6 +19,7 @@ Bill/Purchase pour la traçabilité comptable.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date
 from typing import Any, Dict, Optional
 
@@ -81,6 +82,26 @@ def _is_stale_token(exc: Exception) -> bool:
         or "en même temps" in msg
         or "en meme temps" in msg
     )
+
+
+_DUP_TXNID_RE = re.compile(r"TxnId=(\d+)")
+
+
+def _dup_docnumber_txn_id(exc: Exception) -> Optional[str]:
+    """Id de la transaction QB existante quand QBO refuse une CRÉATION pour
+    « Numéro de document en double » (errorCode 6140). Le détail QBO inclut
+    l'Id du doublon (« DocNumber=… is assigned to TxnType=… with
+    TxnId=NNNN ») → on peut se RELIER à l'existant au lieu d'échouer."""
+    msg = str(exc)
+    low = msg.lower()
+    if not (
+        "6140" in low
+        or "duplicate document number" in low
+        or "document en double" in low
+    ):
+        return None
+    m = _DUP_TXNID_RE.search(msg)
+    return m.group(1) if m else None
 
 
 async def _load_achat(db: AsyncSession, achat_id: int) -> Optional[Achat]:
@@ -915,6 +936,90 @@ async def sync_achat_to_qbo(
         # taxe (repli, ~1 cent d'écart).
         tps_rate_id, tvq_rate_id = await _resolve_purchase_tax_rate_ids(qbo)
 
+        # Création avec rattrapage « Numéro de document en double » (6140) :
+        # si QBO refuse la création parce qu'un Bill/Purchase porte déjà ce
+        # DocNumber (facture déjà dans QB dont le lien Kratos s'est perdu),
+        # on se RELIE à l'objet existant (Id fourni dans le détail d'erreur)
+        # et on le met à jour, au lieu d'échouer en « double ».
+        async def _create_bill_or_link(
+            payload: Dict[str, Any]
+        ) -> Dict[str, Any]:
+            nonlocal did_create
+            try:
+                obj = await qbo.create_bill(payload)
+                did_create = True
+                return obj
+            except QuickBooksError as exc:
+                if _is_invalid_tax_rate(exc) and _strip_txn_tax_detail(
+                    payload
+                ):
+                    log.warning(
+                        "QBO taxe exacte refusée → repli calcul QBO "
+                        "(achat %s)",
+                        achat.id,
+                    )
+                    obj = await qbo.create_bill(payload)
+                    did_create = True
+                    return obj
+                dup_id = _dup_docnumber_txn_id(exc)
+                if not dup_id:
+                    raise
+                log.warning(
+                    "Achat %s : DocNumber déjà pris dans QB (TxnId=%s) → "
+                    "rattachement à l'objet existant",
+                    achat.id,
+                    dup_id,
+                )
+                try:
+                    fresh = await qbo.get_bill(dup_id)
+                except QuickBooksError:
+                    # Le doublon n'est pas un Bill (ex. Dépense) : on se
+                    # contente de RELIER — la prochaine synchro routera
+                    # selon le type réel (règles Bill/Purchase plus haut).
+                    return await qbo.get_purchase(dup_id)
+                payload["Id"] = dup_id
+                payload["SyncToken"] = str(fresh.get("SyncToken") or "0")
+                payload["sparse"] = True
+                return await qbo.update_bill(payload)
+
+        async def _create_purchase_or_link(
+            payload: Dict[str, Any]
+        ) -> Dict[str, Any]:
+            nonlocal did_create
+            try:
+                obj = await qbo.create_purchase(payload)
+                did_create = True
+                return obj
+            except QuickBooksError as exc:
+                if _is_invalid_tax_rate(exc) and _strip_txn_tax_detail(
+                    payload
+                ):
+                    log.warning(
+                        "QBO taxe exacte refusée → repli calcul QBO "
+                        "(achat %s)",
+                        achat.id,
+                    )
+                    obj = await qbo.create_purchase(payload)
+                    did_create = True
+                    return obj
+                dup_id = _dup_docnumber_txn_id(exc)
+                if not dup_id:
+                    raise
+                log.warning(
+                    "Achat %s : DocNumber déjà pris dans QB (TxnId=%s) → "
+                    "rattachement à l'objet existant",
+                    achat.id,
+                    dup_id,
+                )
+                try:
+                    fresh = await qbo.get_purchase(dup_id)
+                except QuickBooksError:
+                    return await qbo.get_bill(dup_id)
+                payload["Id"] = dup_id
+                payload["SyncToken"] = str(fresh.get("SyncToken") or "0")
+                payload["sparse"] = True
+                return await qbo.update_purchase(payload)
+
         # Anti-doublon : si cet Achat n'est pas encore lie a un objet QB,
         # on verifie qu'un Bill/Purchase equivalent (meme fournisseur,
         # meme total TTC, ~meme date) existe deja cote QuickBooks. Si oui,
@@ -932,6 +1037,26 @@ async def sync_achat_to_qbo(
                 #    s'y relie au lieu de recréer (cas migration : la facture
                 #    était déjà dans QB).
                 dup = await qbo.find_txn_by_docnumber(entity, docnum)
+                # 1b) Même numéro mais dans l'AUTRE type de transaction :
+                #     un Bill « Facture à payer » existe déjà avec ce numéro
+                #     alors que l'achat est en mode payé (chèque/CC). On se
+                #     relie au Bill (ses paiements QB y sont rattachés) au
+                #     lieu de créer une dépense en double — cas Atlant #173.
+                if not (dup and dup.get("Id")) and as_purchase:
+                    dup_bill = await qbo.find_txn_by_docnumber(
+                        "Bill", docnum
+                    )
+                    if dup_bill and dup_bill.get("Id"):
+                        dup = dup_bill
+                        as_purchase = False
+                        log.info(
+                            "Achat %s : Bill QB existant %s porte déjà le "
+                            "DocNumber %s → on reste en facture "
+                            "fournisseur",
+                            achat.id,
+                            dup_bill.get("Id"),
+                            docnum,
+                        )
                 # 2) Repli : même fournisseur + même total TTC + ~même date.
                 if not (dup and dup.get("Id")):
                     if as_purchase:
@@ -1037,8 +1162,7 @@ async def sync_achat_to_qbo(
                         payload.pop("Id", None)
                         payload.pop("SyncToken", None)
                         payload.pop("sparse", None)
-                        qbo_obj = await qbo.create_purchase(payload)
-                        did_create = True
+                        qbo_obj = await _create_purchase_or_link(payload)
                     elif _is_invalid_tax_rate(exc) and _strip_txn_tax_detail(
                         payload
                     ):
@@ -1053,21 +1177,7 @@ async def sync_achat_to_qbo(
                     else:
                         raise
             else:
-                try:
-                    qbo_obj = await qbo.create_purchase(payload)
-                except QuickBooksError as exc:
-                    if _is_invalid_tax_rate(exc) and _strip_txn_tax_detail(
-                        payload
-                    ):
-                        log.warning(
-                            "QBO taxe exacte refusée → repli calcul QBO "
-                            "(achat %s)",
-                            achat.id,
-                        )
-                        qbo_obj = await qbo.create_purchase(payload)
-                    else:
-                        raise
-                did_create = True
+                qbo_obj = await _create_purchase_or_link(payload)
         else:
             # Sur compte fournisseur (chèque / net-30) → Bill
             payload = _build_bill_payload(
@@ -1107,8 +1217,7 @@ async def sync_achat_to_qbo(
                         payload.pop("Id", None)
                         payload.pop("SyncToken", None)
                         payload.pop("sparse", None)
-                        qbo_obj = await qbo.create_bill(payload)
-                        did_create = True
+                        qbo_obj = await _create_bill_or_link(payload)
                     elif _is_invalid_tax_rate(exc) and _strip_txn_tax_detail(
                         payload
                     ):
@@ -1121,21 +1230,7 @@ async def sync_achat_to_qbo(
                     else:
                         raise
             else:
-                try:
-                    qbo_obj = await qbo.create_bill(payload)
-                except QuickBooksError as exc:
-                    if _is_invalid_tax_rate(exc) and _strip_txn_tax_detail(
-                        payload
-                    ):
-                        log.warning(
-                            "QBO taxe exacte refusée → repli calcul QBO "
-                            "(achat %s)",
-                            achat.id,
-                        )
-                        qbo_obj = await qbo.create_bill(payload)
-                    else:
-                        raise
-                did_create = True
+                qbo_obj = await _create_bill_or_link(payload)
     except QuickBooksError as exc:
         if _is_locked_txn(exc):
             raise AchatSyncError(
