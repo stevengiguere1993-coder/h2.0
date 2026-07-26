@@ -19,6 +19,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { FournisseurModal } from "@/components/fournisseur-modal";
 import { ReceiptScanner } from "@/components/receipt-scanner";
+import { SearchSelect } from "@/components/search-select";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -72,7 +73,14 @@ type Achat = {
   facture_item_id: number | null;
 };
 
-type Project = { id: number; name: string; address?: string | null };
+type Project = {
+  id: number;
+  name: string;
+  address?: string | null;
+  // "construction" (projet régulier) ou "bon_travail" (projet porteur
+  // d'un bon de travail — son nom contient le numéro « BT-… »).
+  kind?: string | null;
+};
 type Fournisseur = { id: number; name: string };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -503,20 +511,36 @@ export default function AchatDetailPage() {
                 </h2>
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
                   <div>
-                    <label htmlFor="ap" className="label">Projet</label>
-                    <select
+                    <label htmlFor="ap" className="label">
+                      Projet / Bon de travail
+                    </label>
+                    <SearchSelect
                       id="ap"
                       value={projectId}
-                      onChange={(e) => setProjectId(e.target.value)}
-                      className="input"
-                    >
-                      <option value="">— Aucun —</option>
-                      {projects.map((p) => (
-                        <option key={p.id} value={String(p.id)}>
-                          {projectLabel(p)}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setProjectId}
+                      emptyLabel="— Aucun —"
+                      placeholder="Choisis ou tape pour chercher…"
+                      options={[
+                        ...projects
+                          .filter((p) => p.kind !== "bon_travail")
+                          .map((p) => ({
+                            value: String(p.id),
+                            label: projectLabel(p),
+                            group: "Projets"
+                          })),
+                        ...projects
+                          .filter((p) => p.kind === "bon_travail")
+                          .map((p) => ({
+                            value: String(p.id),
+                            label: p.name,
+                            group: "Bons de travail"
+                          }))
+                      ]}
+                    />
+                    <p className="mt-1 text-[11px] text-white/50">
+                      Rattacher à un bon de travail = le reçu suit le bon
+                      (sous-client QB « BT-… », refacturation T&M).
+                    </p>
                   </div>
                   <div>
                     <label htmlFor="af" className="label">Fournisseur</label>

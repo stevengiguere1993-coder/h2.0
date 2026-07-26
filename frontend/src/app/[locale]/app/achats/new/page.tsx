@@ -10,6 +10,7 @@ import { ArrowLeft, Loader2 } from "lucide-react";
 import { AppTopbar } from "@/components/app-topbar";
 import { FournisseurModal } from "@/components/fournisseur-modal";
 import { ReceiptScanner } from "@/components/receipt-scanner";
+import { SearchSelect } from "@/components/search-select";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -76,25 +77,13 @@ export default function NewAchatPage() {
   const [clientIdSel, setClientIdSel] = useState("");
   const [bons, setBons] = useState<BonMini[]>([]);
   const [clients, setClients] = useState<ClientMini[]>([]);
-  // Saisies avec autocomplétion (datalist) : « taper pour proposer ».
-  const [projectQuery, setProjectQuery] = useState("");
-  const [bonQuery, setBonQuery] = useState("");
-  const [clientQuery, setClientQuery] = useState("");
-
-  // Étiquettes uniques « libellé (#id) » : l'id en suffixe garantit une
-  // résolution exacte du choix tapé/sélectionné dans la datalist.
-  const projectOption = (p: Project) => `${projectLabel(p)} (#${p.id})`;
-  const bonOption = (b: BonMini) =>
-    `${b.reference} — ${b.title} (#${b.id})`;
-  const clientOption = (c: ClientMini) => `${c.name} (#${c.id})`;
-  const idFromOption = (v: string): string => {
-    const m = v.match(/\(#(\d+)\)\s*$/);
-    return m ? m[1] : "";
-  };
 
   const [fournisseurId, setFournisseurId] = useState("");
-  // Phase C — facture sous-traitant.
-  const [kind, setKind] = useState<"material" | "sub_invoice">("material");
+  // Nature de l'achat : matériel, facture sous-traitant, outils ou
+  // location d'outils.
+  const [kind, setKind] = useState<
+    "material" | "sub_invoice" | "tools" | "tool_rental"
+  >("material");
   const [sousTraitantId, setSousTraitantId] = useState("");
   const [hours, setHours] = useState("");
   const [sousTraitants, setSousTraitants] = useState<
@@ -156,17 +145,6 @@ export default function NewAchatPage() {
   const [invoiceDate, setInvoiceDate] = useState(() => todayIso());
 
   const [projects, setProjects] = useState<Project[]>([]);
-
-  // Pré-remplissage ?project_id=… (depuis une fiche projet).
-  useEffect(() => {
-    if (!prefilledProjectId || projectQuery) return;
-    const p = projects.find(
-      (x) => String(x.id) === String(prefilledProjectId)
-    );
-    if (p) setProjectQuery(projectOption(p));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, prefilledProjectId]);
-
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<POMini[]>([]);
   const [showFournisseurModal, setShowFournisseurModal] = useState(false);
@@ -391,10 +369,6 @@ export default function NewAchatPage() {
                     if (po.project_id) {
                       setProjectId(String(po.project_id));
                       setTargetType("projet");
-                      const pp = projects.find(
-                        (x) => x.id === po.project_id
-                      );
-                      if (pp) setProjectQuery(projectOption(pp));
                     }
                     if (po.payment_method)
                       setPaymentMethod(po.payment_method);
@@ -450,62 +424,41 @@ export default function NewAchatPage() {
                 ))}
               </div>
               {targetType === "projet" ? (
-                <>
-                  <input
-                    id="project"
-                    className="input"
-                    list="dl-projets"
-                    placeholder="Tape pour chercher un projet… (vide = frais généraux)"
-                    value={projectQuery}
-                    onChange={(e) => {
-                      setProjectQuery(e.target.value);
-                      setProjectId(idFromOption(e.target.value));
-                    }}
-                  />
-                  <datalist id="dl-projets">
-                    {projects.map((p) => (
-                      <option key={p.id} value={projectOption(p)} />
-                    ))}
-                  </datalist>
-                </>
+                <SearchSelect
+                  id="project"
+                  value={projectId}
+                  onChange={setProjectId}
+                  options={projects.map((p) => ({
+                    value: String(p.id),
+                    label: projectLabel(p)
+                  }))}
+                  placeholder="Choisis ou tape pour chercher un projet…"
+                  emptyLabel="— Aucun (frais généraux) —"
+                />
               ) : targetType === "bon" ? (
-                <>
-                  <input
-                    id="bon"
-                    className="input"
-                    list="dl-bons"
-                    placeholder="Tape pour chercher un bon de travail…"
-                    value={bonQuery}
-                    onChange={(e) => {
-                      setBonQuery(e.target.value);
-                      setBonId(idFromOption(e.target.value));
-                    }}
-                  />
-                  <datalist id="dl-bons">
-                    {bons.map((b) => (
-                      <option key={b.id} value={bonOption(b)} />
-                    ))}
-                  </datalist>
-                </>
+                <SearchSelect
+                  id="bon"
+                  value={bonId}
+                  onChange={setBonId}
+                  options={bons.map((b) => ({
+                    value: String(b.id),
+                    label: `${b.reference} — ${b.title}`
+                  }))}
+                  placeholder="Choisis ou tape pour chercher un bon de travail…"
+                  emptyLabel="— Aucun —"
+                />
               ) : (
-                <>
-                  <input
-                    id="client-direct"
-                    className="input"
-                    list="dl-clients"
-                    placeholder="Tape pour chercher un client…"
-                    value={clientQuery}
-                    onChange={(e) => {
-                      setClientQuery(e.target.value);
-                      setClientIdSel(idFromOption(e.target.value));
-                    }}
-                  />
-                  <datalist id="dl-clients">
-                    {clients.map((c) => (
-                      <option key={c.id} value={clientOption(c)} />
-                    ))}
-                  </datalist>
-                </>
+                <SearchSelect
+                  id="client-direct"
+                  value={clientIdSel}
+                  onChange={setClientIdSel}
+                  options={clients.map((c) => ({
+                    value: String(c.id),
+                    label: c.name
+                  }))}
+                  placeholder="Choisis ou tape pour chercher un client…"
+                  emptyLabel="— Aucun —"
+                />
               )}
             </div>
             <div>
@@ -690,43 +643,31 @@ export default function NewAchatPage() {
 
           {/* Nature de l'achat — matériel ou facture sous-traitant */}
           <div className="rounded-xl border border-brand-800 bg-brand-900/40 p-4">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-white/60">
+            <label
+              htmlFor="akind"
+              className="mb-3 block text-xs font-semibold uppercase tracking-wider text-white/60"
+            >
               Nature de l&apos;achat
-            </p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <label
-                className={`flex cursor-pointer items-center gap-2 rounded-lg border p-2 text-sm ${
-                  kind === "material"
-                    ? "border-accent-500 bg-accent-500/10 text-white"
-                    : "border-brand-800 bg-brand-900 text-white/70"
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="kind"
-                  value="material"
-                  checked={kind === "material"}
-                  onChange={() => setKind("material")}
-                />
-                Matériel / Marchandise
-              </label>
-              <label
-                className={`flex cursor-pointer items-center gap-2 rounded-lg border p-2 text-sm ${
-                  kind === "sub_invoice"
-                    ? "border-accent-500 bg-accent-500/10 text-white"
-                    : "border-brand-800 bg-brand-900 text-white/70"
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="kind"
-                  value="sub_invoice"
-                  checked={kind === "sub_invoice"}
-                  onChange={() => setKind("sub_invoice")}
-                />
-                Facture sous-traitant
-              </label>
-            </div>
+            </label>
+            <select
+              id="akind"
+              value={kind}
+              onChange={(e) =>
+                setKind(
+                  e.target.value as
+                    | "material"
+                    | "sub_invoice"
+                    | "tools"
+                    | "tool_rental"
+                )
+              }
+              className="input"
+            >
+              <option value="material">Matériel / Marchandise</option>
+              <option value="sub_invoice">Facture sous-traitant</option>
+              <option value="tools">Outils</option>
+              <option value="tool_rental">Location d&apos;outils</option>
+            </select>
             {kind === "sub_invoice" ? (
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <div>

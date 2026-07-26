@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { SearchSelect } from "@/components/search-select";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { Link } from "@/i18n/navigation";
@@ -75,7 +76,14 @@ function daysBetween(a: Date, b: Date): number {
   return Math.floor(ms / 86_400_000);
 }
 
-type Project = { id: number; name: string; address?: string | null };
+type Project = {
+  id: number;
+  name: string;
+  address?: string | null;
+  // "construction" (projet régulier) ou "bon_travail" (projet porteur
+  // d'un bon de travail — son nom contient le numéro « BT-… »).
+  kind?: string | null;
+};
 type Fournisseur = { id: number; name: string };
 type SousTraitant = { id: number; full_name: string };
 
@@ -120,6 +128,9 @@ export default function AchatsPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [fStatus, setFStatus] = useState("");
+  // Séparation Projet / Bon de travail : "" = tout, "projet" = achats
+  // rattachés à un projet régulier, "bon" = achats rattachés à un bon.
+  const [fTarget, setFTarget] = useState<"" | "projet" | "bon">("");
   const [fProject, setFProject] = useState("");
   const [fFournisseur, setFFournisseur] = useState("");
   const [payTarget, setPayTarget] = useState<Achat | null>(null);
@@ -245,6 +256,20 @@ export default function AchatsPage() {
     projects.forEach((p) => m.set(p.id, p));
     return m;
   }, [projects]);
+  // Projets réguliers vs projets porteurs d'un bon de travail (le bon
+  // porte ses achats via son projet lié, nommé « BT-… — titre »).
+  const regularProjects = useMemo(
+    () => projects.filter((p) => p.kind !== "bon_travail"),
+    [projects]
+  );
+  const bonProjects = useMemo(
+    () => projects.filter((p) => p.kind === "bon_travail"),
+    [projects]
+  );
+  const bonProjectIds = useMemo(
+    () => new Set(bonProjects.map((p) => p.id)),
+    [bonProjects]
+  );
   const frById = useMemo(() => {
     const m = new Map<number, Fournisseur>();
     fournisseurs.forEach((f) => m.set(f.id, f));
@@ -274,6 +299,16 @@ export default function AchatsPage() {
     const q = search.trim().toLowerCase();
     const list = items.filter((a) => {
       if (fStatus && a.status !== fStatus) return false;
+      if (
+        fTarget === "projet" &&
+        (!a.project_id || bonProjectIds.has(a.project_id))
+      )
+        return false;
+      if (
+        fTarget === "bon" &&
+        (!a.project_id || !bonProjectIds.has(a.project_id))
+      )
+        return false;
       if (fProject && String(a.project_id || "") !== fProject) return false;
       if (fFournisseur && String(a.fournisseur_id || "") !== fFournisseur)
         return false;
@@ -299,7 +334,10 @@ export default function AchatsPage() {
       });
     }
     return list;
-  }, [items, search, fStatus, fProject, fFournisseur, partyName]);
+  }, [
+    items, search, fStatus, fTarget, bonProjectIds, fProject,
+    fFournisseur, partyName
+  ]);
 
   const totalHT = useMemo(
     () =>
@@ -431,17 +469,52 @@ export default function AchatsPage() {
             ))}
           </select>
           <select
-            value={fProject}
-            onChange={(e) => setFProject(e.target.value)}
-            className="input w-48"
+            value={fTarget}
+            onChange={(e) => {
+              setFTarget(e.target.value as "" | "projet" | "bon");
+              // Le rattachement sélectionné peut ne plus être du bon
+              // type → on repart de « tous ».
+              setFProject("");
+            }}
+            className="input w-44"
           >
-            <option value="">Tous les projets</option>
-            {projects.map((p) => (
-              <option key={p.id} value={String(p.id)}>
-                {projectLabel(p)}
-              </option>
-            ))}
+            <option value="">Projets + bons</option>
+            <option value="projet">Projets</option>
+            <option value="bon">Bons de travail</option>
           </select>
+          <SearchSelect
+            value={fProject}
+            onChange={setFProject}
+            className="w-56"
+            emptyLabel={
+              fTarget === "bon"
+                ? "Tous les bons de travail"
+                : fTarget === "projet"
+                  ? "Tous les projets"
+                  : "Tous les projets et bons"
+            }
+            placeholder={
+              fTarget === "bon"
+                ? "Tous les bons — tape pour chercher…"
+                : "Tous — tape pour chercher…"
+            }
+            options={[
+              ...(fTarget !== "bon"
+                ? regularProjects.map((p) => ({
+                    value: String(p.id),
+                    label: projectLabel(p),
+                    group: "Projets"
+                  }))
+                : []),
+              ...(fTarget !== "projet"
+                ? bonProjects.map((p) => ({
+                    value: String(p.id),
+                    label: p.name,
+                    group: "Bons de travail"
+                  }))
+                : [])
+            ]}
+          />
           <select
             value={fFournisseur}
             onChange={(e) => setFFournisseur(e.target.value)}
@@ -477,7 +550,7 @@ export default function AchatsPage() {
                 <tr>
                   <th className="px-4 py-3">Référence</th>
                   <th className="px-4 py-3">Fournisseur</th>
-                  <th className="px-4 py-3">Projet</th>
+                  <th className="px-4 py-3">Projet / Bon</th>
                   <th className="px-4 py-3">Description</th>
                   <th className="px-4 py-3 text-right">Montant</th>
                   <th className="px-4 py-3">Échéance</th>
@@ -510,7 +583,19 @@ export default function AchatsPage() {
                         {fr?.name || partyName(a) || "—"}
                       </td>
                       <td className="px-4 py-3 text-white/70">
-                        {projectLabel(pr)}
+                        {pr?.kind === "bon_travail" ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <span
+                              className="rounded bg-sky-500/15 px-1 py-0.5 text-[10px] font-bold text-sky-300"
+                              title="Bon de travail"
+                            >
+                              BT
+                            </span>
+                            {pr.name}
+                          </span>
+                        ) : (
+                          projectLabel(pr)
+                        )}
                       </td>
                       <td className="px-4 py-3 text-xs text-white/60">
                         <span className="line-clamp-1">{a.description || "—"}</span>
