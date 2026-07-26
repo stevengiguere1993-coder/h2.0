@@ -30,6 +30,7 @@ type BonMini = {
   title: string;
   status: string;
   kind?: string | null;
+  address?: string | null;
 };
 type ClientMini = { id: number; name: string };
 type POMini = {
@@ -442,7 +443,12 @@ export default function NewAchatPage() {
                   onChange={setBonId}
                   options={bons.map((b) => ({
                     value: String(b.id),
-                    label: `${b.reference} — ${b.title}`
+                    // Numéro + adresse du chantier + description.
+                    label: `${b.reference} — ${
+                      (b.address || "").trim()
+                        ? `${(b.address || "").trim()} · `
+                        : ""
+                    }${b.title}`
                   }))}
                   placeholder="Choisis ou tape pour chercher un bon de travail…"
                   emptyLabel="— Aucun —"
