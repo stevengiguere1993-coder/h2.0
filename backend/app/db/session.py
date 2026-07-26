@@ -158,6 +158,9 @@ async def ensure_critical_columns() -> None:
         # plante et casse tout le flux d'appel entrant. On les met ici
         # (transaction par colonne) pour survivre à un abort d'init_db.
         ("projects", "responsible_user_id", "INTEGER"),
+        # Punch sur un CLIENT directement (gestion admin des punchs) —
+        # la table préexiste, create_all ne pose pas la colonne.
+        ("punches", "client_id", "INTEGER"),
         # Type de projet ; DEFAULT backfille les lignes existantes en
         # 'construction' (Postgres) → les projets actuels restent visibles.
         ("projects", "kind", "VARCHAR(32) NOT NULL DEFAULT 'construction'"),

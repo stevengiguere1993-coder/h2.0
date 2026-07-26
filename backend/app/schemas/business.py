@@ -348,6 +348,12 @@ class BonTravailRead(_Base):
 class PunchCreate(BaseModel):
     employe_id: int
     project_id: Optional[int] = None
+    # Heures pointées sur un PROSPECT (avant projet) — la gestion admin
+    # les envoyait déjà, mais le champ manquait au schéma (perdu en
+    # silence à la création).
+    contact_request_id: Optional[int] = None
+    # Heures pointées sur un CLIENT directement (sans projet ni bon).
+    client_id: Optional[int] = None
     # Heures pointées sur un bon de travail interne (entretien de nos immeubles).
     bon_travail_id: Optional[int] = None
     started_at: datetime
@@ -370,6 +376,7 @@ class PunchUpdate(BaseModel):
     notes: Optional[str] = None
     project_id: Optional[int] = None
     contact_request_id: Optional[int] = None
+    client_id: Optional[int] = None
     bon_travail_id: Optional[int] = None
     employe_id: Optional[int] = None
 
@@ -378,6 +385,8 @@ class PunchRead(_Base):
     id: int
     employe_id: int
     project_id: Optional[int]
+    contact_request_id: Optional[int] = None
+    client_id: Optional[int] = None
     bon_travail_id: Optional[int] = None
     started_at: datetime
     ended_at: Optional[datetime]

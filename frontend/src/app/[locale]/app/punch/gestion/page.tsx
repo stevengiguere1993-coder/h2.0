@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { SearchSelect } from "@/components/search-select";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -20,14 +21,30 @@ import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
 
 type Employe = { id: number; full_name: string; email: string | null };
-type Project = { id: number; name: string; address?: string | null };
+type Project = {
+  id: number;
+  name: string;
+  address?: string | null;
+  // "construction" (projet régulier) ou "bon_travail" (projet porteur
+  // d'un bon de travail client — son nom contient le numéro BT).
+  kind?: string | null;
+};
 type Prospect = { id: number; name: string; status: string };
+type BonMini = {
+  id: number;
+  reference: string;
+  title: string;
+  status: string;
+};
+type ClientMini = { id: number; name: string };
 
 type Punch = {
   id: number;
   employe_id: number;
   project_id: number | null;
   contact_request_id: number | null;
+  client_id: number | null;
+  bon_travail_id: number | null;
   started_at: string;
   ended_at: string | null;
   hours: number | string | null;
@@ -163,6 +180,8 @@ export default function PunchGestionPage() {
   const [employes, setEmployes] = useState<Employe[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [prospects, setProspects] = useState<Prospect[]>([]);
+  const [bons, setBons] = useState<BonMini[]>([]);
+  const [clients, setClients] = useState<ClientMini[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<null | Punch | { fresh: true }>(null);
@@ -227,22 +246,33 @@ export default function PunchGestionPage() {
       setLoading(true);
       setError(null);
       try {
-        const [pRes, eRes, prRes, csRes] = await Promise.all([
+        const [pRes, eRes, prRes, csRes, bRes, clRes] = await Promise.all([
           authedFetch("/api/v1/punch?limit=500"),
           authedFetch("/api/v1/employes?limit=500&volet=construction"),
           authedFetch("/api/v1/projects?limit=500"),
-          authedFetch("/api/v1/contact?limit=500")
+          authedFetch("/api/v1/contact?limit=500"),
+          authedFetch("/api/v1/bons?limit=500"),
+          authedFetch("/api/v1/clients?limit=500")
         ]);
         if (!pRes.ok) throw new Error(`http_${pRes.status}`);
         const ps = (await pRes.json()) as Punch[];
         const es = eRes.ok ? ((await eRes.json()) as Employe[]) : [];
         const prs = prRes.ok ? ((await prRes.json()) as Project[]) : [];
         const css = csRes.ok ? ((await csRes.json()) as Prospect[]) : [];
+        const bs = bRes.ok ? ((await bRes.json()) as BonMini[]) : [];
+        const cls = clRes.ok ? ((await clRes.json()) as ClientMini[]) : [];
         if (cancelled) return;
         setPunches(ps);
         setEmployes(es);
         setProjects(prs);
         setProspects(css);
+        // Bons actifs seulement (pas annulés / déjà facturés).
+        setBons(
+          bs.filter(
+            (b) => b.status !== "cancelled" && b.status !== "facture"
+          )
+        );
+        setClients(cls);
       } catch {
         if (!cancelled) setError("Impossible de charger les punches.");
       } finally {
@@ -272,6 +302,18 @@ export default function PunchGestionPage() {
     prospects.forEach((c) => m.set(c.id, c));
     return m;
   }, [prospects]);
+
+  const bonById = useMemo(() => {
+    const m = new Map<number, BonMini>();
+    bons.forEach((b) => m.set(b.id, b));
+    return m;
+  }, [bons]);
+
+  const clientById = useMemo(() => {
+    const m = new Map<number, ClientMini>();
+    clients.forEach((c) => m.set(c.id, c));
+    return m;
+  }, [clients]);
 
   const visible = useMemo(() => {
     return punches
@@ -704,8 +746,20 @@ export default function PunchGestionPage() {
                   const prospect = p.contact_request_id
                     ? prospById.get(p.contact_request_id)
                     : null;
-                  const target = proj
-                    ? `Projet — ${proj.name}`
+                  const bon = p.bon_travail_id
+                    ? bonById.get(p.bon_travail_id)
+                    : null;
+                  const cli = p.client_id
+                    ? clientById.get(p.client_id)
+                    : null;
+                  const target = bon
+                    ? `Bon — ${bon.reference} ${bon.title}`
+                    : proj
+                    ? proj.kind === "bon_travail"
+                      ? `Bon — ${proj.name}`
+                      : `Projet — ${proj.name}`
+                    : cli
+                    ? `Client — ${cli.name}`
                     : prospect
                     ? `Prospect — ${prospect.name}`
                     : "Administration";
@@ -784,6 +838,8 @@ export default function PunchGestionPage() {
           employes={employes}
           projects={projects}
           prospects={prospects}
+          bons={bons}
+          clients={clients}
           onClose={() => setModal(null)}
           onSaved={(p) => {
             upsert(p);
@@ -800,6 +856,8 @@ function PunchModal({
   employes,
   projects,
   prospects,
+  bons,
+  clients,
   onClose,
   onSaved
 }: {
@@ -807,6 +865,8 @@ function PunchModal({
   employes: Employe[];
   projects: Project[];
   prospects: Prospect[];
+  bons: BonMini[];
+  clients: ClientMini[];
   onClose: () => void;
   onSaved: (p: Punch) => void;
 }) {
@@ -814,10 +874,17 @@ function PunchModal({
   const [employeId, setEmployeId] = useState(
     existing ? String(existing.employe_id) : ""
   );
+  // Cible du punch : `p-<id>` projet (régulier ou porteur d'un bon
+  // client), `b-<id>` bon de travail interne, `cl-<id>` client direct,
+  // `c-<id>` prospect, "" = administration.
   const [target, setTarget] = useState(
     existing
-      ? existing.project_id
+      ? existing.bon_travail_id
+        ? `b-${existing.bon_travail_id}`
+        : existing.project_id
         ? `p-${existing.project_id}`
+        : existing.client_id
+        ? `cl-${existing.client_id}`
         : existing.contact_request_id
         ? `c-${existing.contact_request_id}`
         : ""
@@ -865,7 +932,13 @@ function PunchModal({
         notes: notes.trim() || null,
         approved,
         project_id: target.startsWith("p-") ? Number(target.slice(2)) : null,
-        contact_request_id: target.startsWith("c-")
+        bon_travail_id: target.startsWith("b-")
+          ? Number(target.slice(2))
+          : null,
+        client_id: target.startsWith("cl-")
+          ? Number(target.slice(3))
+          : null,
+        contact_request_id: target.startsWith("c-") && !target.startsWith("cl-")
           ? Number(target.slice(2))
           : null
       };
@@ -928,34 +1001,49 @@ function PunchModal({
 
           <div>
             <label htmlFor="p_target" className="label">
-              Projet ou prospect
+              Client, projet, bon de travail ou prospect
             </label>
-            <select
+            <SearchSelect
               id="p_target"
               value={target}
-              onChange={(e) => setTarget(e.target.value)}
-              className="input"
-            >
-              <option value="">— Administration —</option>
-              {projects.length > 0 ? (
-                <optgroup label="Projets">
-                  {projects.map((p) => (
-                    <option key={`p-${p.id}`} value={`p-${p.id}`}>
-                      {projectLabel(p)}
-                    </option>
-                  ))}
-                </optgroup>
-              ) : null}
-              {prospects.length > 0 ? (
-                <optgroup label="Prospects">
-                  {prospects.map((c) => (
-                    <option key={`c-${c.id}`} value={`c-${c.id}`}>
-                      {c.name}
-                    </option>
-                  ))}
-                </optgroup>
-              ) : null}
-            </select>
+              onChange={setTarget}
+              emptyLabel="— Administration —"
+              placeholder="Choisis ou tape pour chercher…"
+              options={[
+                ...projects
+                  .filter((p) => p.kind !== "bon_travail")
+                  .map((p) => ({
+                    value: `p-${p.id}`,
+                    label: projectLabel(p),
+                    group: "Projets"
+                  })),
+                // Bons de travail : les bons CLIENT passent par leur
+                // projet lié (kind=bon_travail, nom « BT-… — titre »),
+                // les bons INTERNES par bon_travail_id.
+                ...projects
+                  .filter((p) => p.kind === "bon_travail")
+                  .map((p) => ({
+                    value: `p-${p.id}`,
+                    label: p.name,
+                    group: "Bons de travail"
+                  })),
+                ...bons.map((b) => ({
+                  value: `b-${b.id}`,
+                  label: `${b.reference} — ${b.title}`,
+                  group: "Bons de travail"
+                })),
+                ...clients.map((c) => ({
+                  value: `cl-${c.id}`,
+                  label: c.name,
+                  group: "Clients"
+                })),
+                ...prospects.map((c) => ({
+                  value: `c-${c.id}`,
+                  label: c.name,
+                  group: "Prospects"
+                }))
+              ]}
+            />
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">

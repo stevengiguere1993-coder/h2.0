@@ -27,6 +27,14 @@ class Punch(Base, TimestampUpdateMixin):
         nullable=True,
         index=True,
     )
+    # Heures pointées sur un CLIENT directement (sans projet ni bon) —
+    # ex. service après-vente, visite chez un client converti. Saisie
+    # depuis la gestion admin des punchs.
+    client_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("clients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
