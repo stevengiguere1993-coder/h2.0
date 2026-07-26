@@ -378,20 +378,27 @@ async def run_qbo_nets() -> Dict[str, Any]:
         from app.models.achat import Achat
         from app.services.achat_qbo import sync_achat_to_qbo
 
-        recent = datetime.now(timezone.utc) - timedelta(days=14)
         async with AsyncSessionLocal() as db:
             ids = [
                 int(r[0])
                 for r in (
                     await db.execute(
                         select(Achat.id).where(
-                            (
-                                Achat.project_id.is_not(None)
-                                | (Achat.created_at >= recent)
-                            ),
+                            # TOUT achat actif entré dans Kratos part vers QB,
+                            # AVEC ou SANS projet/client (le Bill/Purchase QB
+                            # se crée alors sans CustomerRef). L'ancien filtre
+                            # « projet OU créé depuis 14 j » laissait les
+                            # reçus sans projet/client orphelins de QB.
+                            # On ne retient que les achats effectivement
+                            # poussables (fournisseur + montant > 0 : les
+                            # prérequis de sync_achat_to_qbo) pour ne pas
+                            # boucler sur des erreurs.
                             Achat.status.in_(("received", "paid")),
                             Achat.qbo_bill_id.is_(None),
                             Achat.qbo_purchase_id.is_(None),
+                            Achat.fournisseur_id.is_not(None),
+                            Achat.amount.is_not(None),
+                            Achat.amount > 0,
                         )
                     )
                 ).all()

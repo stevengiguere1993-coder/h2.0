@@ -209,12 +209,29 @@ async def dedupe_achats(db: AsyncSession) -> int:
         tx, ty = _ttc(x), _ttc(y)
         return abs(tx - ty) <= max(0.05, 0.01 * max(tx, ty))
 
+    # Signal 1 : achats déjà vus par Id de transaction QB. Liste (pas un
+    # simple représentant) pour pouvoir comparer les PROJETS : une facture
+    # QB DIVISÉE sur plusieurs projets donne plusieurs achats Kratos
+    # légitimes qui partagent le même Id — ce ne sont PAS des doublons.
+    qb_seen: dict[str, list[Achat]] = defaultdict(list)
+
     for a in achats:
         uf.find(a.id)
-        # 1) Transaction QB (cross-champ).
+        # 1) Transaction QB (cross-champ). Deux achats de la même
+        # transaction ne fusionnent PAS s'ils portent des projets
+        # DIFFÉRENTS (facture divisée multi-projets).
         for qid in (a.qbo_bill_id, a.qbo_purchase_id):
             if qid:
-                link(f"qb:{qid}", a.id)
+                for other in qb_seen[str(qid)]:
+                    if (
+                        a.project_id
+                        and other.project_id
+                        and a.project_id != other.project_id
+                    ):
+                        continue  # parts d'une facture divisée
+                    uf.union(other.id, a.id)
+                    break
+                qb_seen[str(qid)].append(a)
         # 2) Fournisseur + n° facture fournisseur.
         inv = (a.supplier_invoice_number or "").strip().lower()
         if inv and a.fournisseur_id:
@@ -286,6 +303,24 @@ async def dedupe_achats(db: AsyncSession) -> int:
         keeper = max(members, key=_keeper_score)
         for a in members:
             if a.id == keeper.id:
+                continue
+            # GARDE-FOU facture divisée : deux achats liés à la MÊME
+            # transaction QB mais imputés à des PROJETS différents sont les
+            # parts d'une facture multi-projets — jamais des doublons. On ne
+            # supprime NI l'achat NI (surtout) l'objet QuickBooks partagé.
+            shared_qids = (
+                {str(a.qbo_bill_id or ""), str(a.qbo_purchase_id or "")}
+                & {
+                    str(keeper.qbo_bill_id or ""),
+                    str(keeper.qbo_purchase_id or ""),
+                }
+            ) - {""}
+            if (
+                shared_qids
+                and a.project_id
+                and keeper.project_id
+                and a.project_id != keeper.project_id
+            ):
                 continue
             # Id(s) QB du perdant, AVANT merge (le merge peut en transférer
             # au gardé s'il n'en a pas — dans ce cas on ne les supprime pas).
