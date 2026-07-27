@@ -1002,7 +1002,7 @@ export default function FacturationImmoPage() {
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
+                  <table className="w-full min-w-[620px] text-sm">
                     <thead>
                       <tr className="border-b border-brand-800 text-left text-xs uppercase tracking-wide text-white/50">
                         <th className="px-3 py-2">Immeuble</th>
@@ -1097,7 +1097,7 @@ export default function FacturationImmoPage() {
 
               {showConfig && data && (
                 <div className="mt-4 overflow-x-auto">
-                  <table className="w-full text-sm">
+                  <table className="w-full min-w-[820px] text-sm">
                     <thead>
                       <tr className="border-b border-brand-800 text-left text-xs uppercase tracking-wide text-white/50">
                         <th className="px-3 py-2">Immeuble</th>
