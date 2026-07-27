@@ -10,6 +10,7 @@ import {
   Filter,
   Loader2,
   Mail,
+  Plus,
   Search,
   Send,
   Settings,
@@ -55,7 +56,21 @@ type ImmeubleBloc = {
   locataires: Destinataire[];
 };
 
-type Reglages = { from_email: string; from_name: string; reply_to: string };
+type ProfilEnvoi = {
+  label: string;
+  from_email: string;
+  from_name: string;
+  reply_to: string;
+};
+
+type Reglages = {
+  from_email: string;
+  from_name: string;
+  reply_to: string;
+  // Profils d'expéditeurs approuvés (cas « deux gestionnaires ») —
+  // sélectionnables par tous, gérés par les managers.
+  profils: ProfilEnvoi[];
+};
 
 type EnvoiResultat = {
   envoyes: number;
@@ -149,6 +164,9 @@ export default function CommunicationsPage() {
   const [fromEmail, setFromEmail] = useState("");
   const [fromName, setFromName] = useState("");
   const [replyTo, setReplyTo] = useState("");
+  // "" = défauts / champs manuels ; sinon label d'un profil approuvé.
+  const [profilSel, setProfilSel] = useState("");
+  const [nvProfilLabel, setNvProfilLabel] = useState("");
   const [savingReglages, setSavingReglages] = useState(false);
   const [reglagesMsg, setReglagesMsg] = useState<string | null>(null);
 
@@ -264,6 +282,80 @@ export default function CommunicationsPage() {
     else setImmSel(new Set(blocs.map((b) => b.immeuble_id)));
   };
 
+  const profils = reglages?.profils || [];
+  const profilActif = profils.find((p) => p.label === profilSel) || null;
+  // Ce qui sera réellement utilisé comme expéditeur (affichage + validation).
+  const effFromEmail = profilActif ? profilActif.from_email : fromEmail;
+
+  const saveProfils = async (next: ProfilEnvoi[], okMsg: string) => {
+    if (!reglages) return;
+    setSavingReglages(true);
+    setReglagesMsg(null);
+    try {
+      const r = await authedFetch(
+        "/api/v1/immobilier/communications/reglages",
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            from_email: reglages.from_email,
+            from_name: reglages.from_name,
+            reply_to: reglages.reply_to,
+            profils: next
+          })
+        }
+      );
+      if (r.status === 403) {
+        setReglagesMsg("Réservé aux gestionnaires.");
+        return;
+      }
+      if (!r.ok) throw new Error();
+      const cfg = (await r.json()) as Reglages;
+      setReglages(cfg);
+      setReglagesMsg(okMsg);
+    } catch {
+      setReglagesMsg("Enregistrement impossible.");
+    } finally {
+      setSavingReglages(false);
+    }
+  };
+
+  const ajouterProfil = async () => {
+    const label = nvProfilLabel.trim();
+    if (!label) {
+      setReglagesMsg("Donne un nom au profil (ex. « Kyle »).");
+      return;
+    }
+    if (!fromEmail.trim()) {
+      setReglagesMsg(
+        "Remplis d'abord les champs ci-dessus — ils deviendront le profil."
+      );
+      return;
+    }
+    const next = [
+      ...profils.filter((p) => p.label !== label),
+      {
+        label,
+        from_email: fromEmail.trim(),
+        from_name: fromName.trim(),
+        reply_to: replyTo.trim()
+      }
+    ];
+    await saveProfils(next, `Profil « ${label} » enregistré.`);
+    setNvProfilLabel("");
+    setProfilSel(label);
+  };
+
+  const supprimerProfil = async (label: string) => {
+    if (!window.confirm(`Supprimer le profil d'expéditeur « ${label} » ?`))
+      return;
+    await saveProfils(
+      profils.filter((p) => p.label !== label),
+      `Profil « ${label} » supprimé.`
+    );
+    if (profilSel === label) setProfilSel("");
+  };
+
   const saveReglages = async () => {
     setSavingReglages(true);
     setReglagesMsg(null);
@@ -276,7 +368,8 @@ export default function CommunicationsPage() {
           body: JSON.stringify({
             from_email: fromEmail,
             from_name: fromName,
-            reply_to: replyTo
+            reply_to: replyTo,
+            profils
           })
         }
       );
@@ -309,11 +402,11 @@ export default function CommunicationsPage() {
       setErr("Avis d'accès : choisis la date de la visite.");
       return;
     }
-    if (!fromEmail.trim()) {
+    if (!effFromEmail.trim()) {
       setErr(
         estManager
           ? "Remplis la section « De qui » : l'adresse d'envoi est obligatoire."
-          : "La section « De qui » n'est pas configurée — demande à ton gestionnaire d'enregistrer les défauts d'envoi."
+          : "La section « De qui » n'est pas configurée — demande à ton gestionnaire d'enregistrer les défauts d'envoi ou choisis un profil."
       );
       return;
     }
@@ -342,9 +435,10 @@ export default function CommunicationsPage() {
               type === "avis_acces" ? accesPlage || undefined : undefined,
             acces_motif:
               type === "avis_acces" ? accesMotif || undefined : undefined,
-            from_email: fromEmail || undefined,
-            from_name: fromName || undefined,
-            reply_to: replyTo || undefined
+            profil: profilActif ? profilActif.label : undefined,
+            from_email: profilActif ? undefined : fromEmail || undefined,
+            from_name: profilActif ? undefined : fromName || undefined,
+            reply_to: profilActif ? undefined : replyTo || undefined
           })
         }
       );
@@ -717,15 +811,60 @@ export default function CommunicationsPage() {
           <h2 className="mb-3 flex items-center gap-2 text-base font-bold text-white">
             <Settings className="h-4 w-4 text-accent-500" /> De qui
           </h2>
+          {profils.length > 0 || estManager ? (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setProfilSel("")}
+                className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                  profilSel === ""
+                    ? "bg-accent-500 text-brand-950"
+                    : "border border-white/10 bg-brand-950 text-white/60 hover:text-white"
+                }`}
+                title="Utiliser les défauts (ou les champs ci-dessous)"
+              >
+                Défauts
+              </button>
+              {profils.map((pr) => (
+                <span
+                  key={pr.label}
+                  className={`inline-flex items-center gap-1 rounded-full text-xs font-semibold transition ${
+                    profilSel === pr.label
+                      ? "bg-accent-500 text-brand-950"
+                      : "border border-white/10 bg-brand-950 text-white/60"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setProfilSel(pr.label)}
+                    className={`py-1 pl-3 ${estManager ? "pr-1" : "pr-3"} hover:opacity-90`}
+                    title={`Envoyer en tant que ${pr.from_name || pr.from_email} (${pr.from_email})`}
+                  >
+                    {pr.label}
+                  </button>
+                  {estManager ? (
+                    <button
+                      type="button"
+                      onClick={() => void supprimerProfil(pr.label)}
+                      className="pr-2 opacity-60 hover:opacity-100"
+                      title={`Supprimer le profil « ${pr.label} »`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  ) : null}
+                </span>
+              ))}
+            </div>
+          ) : null}
           <div className="grid gap-3 sm:grid-cols-3">
             <div>
               <label className="text-xs font-medium text-white/60">
                 Adresse d&apos;envoi (boîte Microsoft 365)
               </label>
               <input
-                value={fromEmail}
+                value={profilActif ? profilActif.from_email : fromEmail}
                 onChange={(e) => setFromEmail(e.target.value)}
-                disabled={!estManager}
+                disabled={!estManager || profilActif != null}
                 placeholder="ex. info@immohorizon.com"
                 className="input mt-1 w-full disabled:opacity-60"
               />
@@ -735,9 +874,9 @@ export default function CommunicationsPage() {
                 Nom affiché
               </label>
               <input
-                value={fromName}
+                value={profilActif ? profilActif.from_name : fromName}
                 onChange={(e) => setFromName(e.target.value)}
-                disabled={!estManager}
+                disabled={!estManager || profilActif != null}
                 placeholder="Kyle — Gestion Horizon"
                 className="input mt-1 w-full disabled:opacity-60"
               />
@@ -747,9 +886,9 @@ export default function CommunicationsPage() {
                 Répondre à (peut être externe)
               </label>
               <input
-                value={replyTo}
+                value={profilActif ? profilActif.reply_to : replyTo}
                 onChange={(e) => setReplyTo(e.target.value)}
-                disabled={!estManager}
+                disabled={!estManager || profilActif != null}
                 placeholder="kyle.gestion@gmail.com"
                 className="input mt-1 w-full disabled:opacity-60"
               />
@@ -762,14 +901,16 @@ export default function CommunicationsPage() {
                 Microsoft 365 (sinon le courriel tomberait en spam). Pour un
                 gestionnaire externe : mets son nom dans « Nom affiché » et
                 son adresse dans « Répondre à » — les réponses des locataires
-                iront directement chez lui. Section obligatoire avant tout
-                envoi.
+                iront directement chez lui. Plusieurs gestionnaires ? Remplis
+                les champs puis « Enregistrer comme profil » : chacun devient
+                un bouton sélectionnable par toute l&apos;équipe. Section
+                obligatoire avant tout envoi.
               </>
             ) : (
               <>
                 Ces valeurs sont définies par ton gestionnaire (défauts
-                verrouillés) — tes envois partiront toujours avec cet
-                expéditeur.
+                verrouillés). S&apos;il y a plusieurs profils d&apos;expéditeur
+                ci-dessus, choisis le bon avant d&apos;envoyer.
               </>
             )}
           </p>
@@ -786,6 +927,19 @@ export default function CommunicationsPage() {
               )}
               Envoyer ({Math.max(0, effectifs.length - sansEmail)})
             </button>
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              disabled={sending || (immSel.size === 0 && locSel.size === 0)}
+              onClick={() => {
+                setImmSel(new Set());
+                setLocSel(new Map());
+              }}
+              title="Vider la liste d'envoi (immeubles cochés + locataires ajoutés)"
+            >
+              <X className="h-3.5 w-3.5" />
+              Tout effacer
+            </button>
             {estManager ? (
               <button
                 className="btn-secondary btn-sm"
@@ -800,6 +954,27 @@ export default function CommunicationsPage() {
                 )}
                 Enregistrer comme défauts
               </button>
+            ) : null}
+            {estManager ? (
+              <span className="inline-flex items-center gap-1.5">
+                <input
+                  value={nvProfilLabel}
+                  onChange={(e) => setNvProfilLabel(e.target.value)}
+                  placeholder="Nom du profil (ex. Kyle)"
+                  className="input w-44 py-1.5 text-xs"
+                  disabled={profilActif != null}
+                  title="Les champs ci-dessus deviendront un profil réutilisable"
+                />
+                <button
+                  className="btn-secondary btn-sm"
+                  disabled={savingReglages || profilActif != null}
+                  onClick={() => void ajouterProfil()}
+                  title="Sauvegarder l'adresse, le nom et le répondre-à ci-dessus comme profil sélectionnable par toute l'équipe"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Enregistrer comme profil
+                </button>
+              </span>
             ) : null}
             {reglagesMsg && (
               <span className="text-xs text-white/60">{reglagesMsg}</span>

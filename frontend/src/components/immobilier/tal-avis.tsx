@@ -1061,7 +1061,7 @@ export function BailSignature({ bailId }: { bailId: number }) {
             ? "Génère d'abord un document (Générer ▾) — le bouton s'activera"
             : `${n} document${n > 1 ? "s" : ""} — ouvrir la bibliothèque`
         }
-        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-65 ${
           signe
             ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
             : envoye
@@ -1579,7 +1579,13 @@ export function BailDocActions({
     }
   }
 
-  async function remplacer(file: File) {
+  // Import en 2 temps (retour Phil 2026-07-27) : on choisit le fichier,
+  // PUIS un mini-modal demande la date d'entrée en vigueur — elle donne
+  // le titre « Bail signé 2026-07-01 » dans les Documents.
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [dateEntree, setDateEntree] = useState("");
+
+  function demanderDate(file: File) {
     if (
       hasDoc &&
       !window.confirm(
@@ -1587,11 +1593,17 @@ export function BailDocActions({
       )
     )
       return;
+    setDateEntree("");
+    setPendingFile(file);
+  }
+
+  async function remplacer(file: File, date: string) {
     setBusy(true);
     setErr(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
+      if (date) fd.append("date_entree", date);
       const r = await authedFetch(
         `/api/v1/immobilier/baux/${bailId}/document`,
         { method: "POST", body: fd }
@@ -1632,12 +1644,61 @@ export function BailDocActions({
       <ImportDocButton
         label={hasDoc ? "Remplacer" : "Importer le bail"}
         busy={busy}
-        onPick={(f) => void remplacer(f)}
+        onPick={demanderDate}
       />
       {err ? (
         <span className="text-[10px] text-rose-300" title={err}>
           {err.slice(0, 60)}
         </span>
+      ) : null}
+      {pendingFile ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setPendingFile(null)}
+        >
+          <div
+            className="w-full max-w-xs rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-bold text-white">
+              Date d&apos;entrée en vigueur du bail
+            </h3>
+            <p className="mt-1 text-xs text-white/50">
+              Affichée dans les Documents : « Bail signé 2026-07-01 ».
+              Laisse vide pour reprendre la date de début du bail.
+            </p>
+            <input
+              type="date"
+              value={dateEntree}
+              onChange={(e) => setDateEntree(e.target.value)}
+              className="input mt-3 w-full"
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                className="btn-secondary btn-xs"
+                onClick={() => setPendingFile(null)}
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                className="btn-accent btn-xs"
+                disabled={busy}
+                onClick={() => {
+                  const f = pendingFile;
+                  setPendingFile(null);
+                  if (f) void remplacer(f, dateEntree);
+                }}
+              >
+                {busy ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : null}
+                Importer
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </span>
   );

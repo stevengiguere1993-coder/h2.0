@@ -281,6 +281,12 @@ async def get_document_pdf(
 async def delete_document(
     doc_id: int, db: DBSession, user: CurrentUser
 ) -> None:
+    """Supprimer un document DÉ-POINTE aussi ce qui le référence (retour
+    Phil 2026-07-27 : « ils sont reliés ») :
+    - bail courant → le bouton « Bail » retombe sur le signé en ligne ;
+    - avis de renouvellement → le cycle sans réponse est supprimé, la
+      ligne redevient « à envoyer » dans Suivis annuels ;
+    - relevé 31 → statut ramené à « à produire »."""
     _require_volet(user)
     d = await db.get(ImmDocument, doc_id)
     if d is None:
@@ -290,6 +296,38 @@ async def delete_document(
             status_code=status.HTTP_409_CONFLICT,
             detail="Un document signé ne peut pas être supprimé.",
         )
+    from sqlalchemy import update as _update
+
+    from app.models.immobilier import BailRenouvellement, Releve31
+
+    await db.execute(
+        _update(Bail)
+        .where(Bail.document_id == doc_id)
+        .values(document_id=None)
+    )
+    renous = (
+        await db.execute(
+            select(BailRenouvellement).where(
+                BailRenouvellement.document_id == doc_id
+            )
+        )
+    ).scalars().all()
+    for r in renous:
+        if r.status == "propose" and r.nouveau_loyer is None:
+            # Cycle jamais répondu ni chiffré : l'avis supprimé annule le
+            # cycle — la ligne redevient « à envoyer ».
+            await db.delete(r)
+        else:
+            r.document_id = None
+    releves = (
+        await db.execute(
+            select(Releve31).where(Releve31.document_id == doc_id)
+        )
+    ).scalars().all()
+    for rel in releves:
+        rel.document_id = None
+        if rel.statut in ("produit", "remis"):
+            rel.statut = "a_produire"
     await db.delete(d)
     await db.commit()
 
@@ -677,20 +715,26 @@ async def upload_bail_document(
     db: DBSession,
     user: CurrentUser,
     file: UploadFile = File(...),
+    date_entree: Optional[str] = Form(None),
 ) -> DocumentRead:
     """Importe LE bail signé — ou le remplace. Le nouveau devient celui
     qui s'ouvre au clic ; l'ancien reste dans les Documents du logement
-    et du locataire."""
+    et du locataire. ``date_entree`` (AAAA-MM-JJ, demandée à l'import) =
+    entrée en vigueur affichée dans le titre « Bail signé 2026-07-01 » —
+    défaut : la date de début du bail (retour Phil 2026-07-27)."""
     _require_volet(user)
     bail = await db.get(Bail, bail_id)
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
     ancien = bail.document_id
+    vigueur = (date_entree or "").strip() or (
+        bail.date_debut.isoformat() if bail.date_debut else ""
+    )
     obj = await _import_document(
         db, user,
         file=file,
         doc_type="bail",
-        titre="Bail signé",
+        titre=f"Bail signé {vigueur}".strip(),
         bail_id=bail.id,
         locataire_id=bail.locataire_id,
         logement_id=bail.logement_id,
