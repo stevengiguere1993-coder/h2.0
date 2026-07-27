@@ -694,6 +694,15 @@ async def sync_achat_to_qbo(
         raise AchatSyncError(
             "L'achat doit avoir un montant > 0 pour être poussé."
         )
+    # Achat IMPORTÉ de QB comme DÉPENSE (Purchase) : son lien QB vit dans
+    # `qbo_purchase_id` seulement. On l'ADOPTE comme lien de push
+    # (qbo_bill_id) pour que toute synchro METTE À JOUR l'objet QB
+    # existant au lieu d'en créer un nouveau — les re-push sans lien
+    # fabriquaient des « Factures à payer » doublons A-<id> (cas des
+    # dépenses Christian Villiard multipliées).
+    if not achat.qbo_bill_id and achat.qbo_purchase_id:
+        achat.qbo_bill_id = str(achat.qbo_purchase_id)
+        await db.flush()
 
     fournisseur: Optional[Fournisseur] = None
     if achat.fournisseur_id:
@@ -865,6 +874,39 @@ async def sync_achat_to_qbo(
 
         method = (achat.payment_method or "bill_to_pay").lower()
         as_purchase = method in PAID_METHODS
+
+        # Mode de paiement GÉNÉRIQUE hérité d'un import QB (« cc »,
+        # « cheque », « comptant »…) : la dépense est DÉJÀ payée dans QB
+        # et aucun compte Horizon n'y correspond. On ne (re)crée JAMAIS
+        # rien pour ces achats — un push complet les transformait en
+        # « Facture à payer » doublon. On reflète seulement la coche
+        # facturable sur la transaction QB existante.
+        generic_paid = {
+            "cc", "cheque", "comptant", "cash", "check",
+            "creditcard", "interac",
+        }
+        if method in generic_paid:
+            if achat.qbo_bill_id or achat.qbo_purchase_id:
+                try:
+                    await set_qbo_billable_status(
+                        db, int(achat.id), bool(achat.is_billable)
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                return {
+                    "ok": True,
+                    "qbo_bill_id": str(
+                        achat.qbo_bill_id or achat.qbo_purchase_id or ""
+                    ),
+                    "qbo_doc_number": str(achat.qbo_doc_number or ""),
+                    "qbo_vendor_id": vendor_id,
+                }
+            raise AchatSyncError(
+                f"Mode de paiement importé de QB (« {method} ») sans "
+                "compte Horizon mappé — choisis un mode Horizon "
+                "(chèque / CC) sur l'achat, ou saisis la dépense "
+                "directement dans QuickBooks."
+            )
 
         # Cohérence de TYPE avec l'objet QB déjà lié. Deux règles :
         #
@@ -1071,6 +1113,48 @@ async def sync_achat_to_qbo(
                             total=total_ttc,
                             txn_date=_txn_date(achat),
                         )
+                # 3) Repli CROSS-TYPE : l'équivalent existe dans l'AUTRE
+                #    type de transaction (ex. la dépense payée existe déjà
+                #    dans QB alors qu'on s'apprêtait à créer une facture à
+                #    payer). On se RELIE à l'existant sans rien créer ni
+                #    convertir — c'est ce qui multipliait les « Factures à
+                #    payer » doublons.
+                if not (dup and dup.get("Id")):
+                    cross = (
+                        await qbo.find_existing_bill(
+                            vendor_id=vendor_id,
+                            total=total_ttc,
+                            txn_date=_txn_date(achat),
+                        )
+                        if as_purchase
+                        else await qbo.find_existing_purchase(
+                            vendor_id=vendor_id,
+                            total=total_ttc,
+                            txn_date=_txn_date(achat),
+                        )
+                    )
+                    if cross and cross.get("Id"):
+                        achat.qbo_bill_id = str(cross["Id"])
+                        achat.qbo_sync_token = str(
+                            cross.get("SyncToken") or "0"
+                        )
+                        if cross.get("DocNumber"):
+                            achat.qbo_doc_number = str(cross["DocNumber"])
+                        await db.flush()
+                        log.info(
+                            "Achat %s relié CROSS-TYPE à l'objet QB "
+                            "existant %s — aucune création",
+                            achat.id,
+                            achat.qbo_bill_id,
+                        )
+                        return {
+                            "ok": True,
+                            "qbo_bill_id": str(achat.qbo_bill_id),
+                            "qbo_doc_number": str(
+                                achat.qbo_doc_number or ""
+                            ),
+                            "qbo_vendor_id": vendor_id,
+                        }
             except QuickBooksError as exc:
                 # Recherche best-effort : si la query echoue, on continue
                 # le push normal plutot que de bloquer.
