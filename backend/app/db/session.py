@@ -2694,6 +2694,39 @@ async def init_db() -> None:
             VALUES ('achat_unrefacture_orphans_v1')
             ON CONFLICT (key) DO NOTHING
             """,
+            # One-shot MÉNAGE : supprime de Kratos les factures fournisseurs
+            # IMPORTÉES de QB en masse SANS aucun lien Kratos (ni projet,
+            # ni BT, ni client) et jamais touchées par l'utilisateur —
+            # l'import « sync-from-qbo » ramenait TOUTES les factures QB.
+            # Critères stricts « importé et intact » : lien QB présent,
+            # aucun rattachement, pas refacturé, pas de PO, pas de reçu,
+            # is_billable FALSE (défaut d'import ; une saisie Kratos est
+            # TRUE par défaut et un choix manuel pose billable_manual),
+            # référence et notes vides. Les objets QB ne sont PAS touchés
+            # (ces factures continuent de vivre dans QuickBooks).
+            """
+            DELETE FROM achats
+            WHERE (qbo_bill_id IS NOT NULL OR qbo_purchase_id IS NOT NULL)
+              AND project_id IS NULL
+              AND client_id IS NULL
+              AND invoiced_at IS NULL
+              AND facture_item_id IS NULL
+              AND purchase_order_id IS NULL
+              AND receipt_image_content_type IS NULL
+              AND is_billable = FALSE
+              AND billable_manual = FALSE
+              AND COALESCE(reference, '') = ''
+              AND COALESCE(notes, '') = ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM applied_backfills
+                  WHERE key = 'achat_menage_qb_sans_lien_v1'
+              )
+            """,
+            """
+            INSERT INTO applied_backfills (key)
+            VALUES ('achat_menage_qb_sans_lien_v1')
+            ON CONFLICT (key) DO NOTHING
+            """,
             # One-shot : resynchronise les TOTAUX STOCKÉS des factures avec
             # la somme réelle de leurs items. L'import « Importer du
             # projet » sur une facture existante ne recalculait pas
