@@ -22,6 +22,7 @@ import {
   FileSignature,
   HardHat,
   Hash,
+  History,
   Home,
   KeyRound,
   LayoutGrid,
@@ -207,6 +208,13 @@ const SECTIONS: Section[] = [
     icon: Home,
     volet: "immobilier",
     cards: [
+      {
+        title: "Démarrage de la gestion locative",
+        desc: "Date à partir de laquelle les soldes, historiques et mois facturables comptent.",
+        href: "/app/parametres/locatif",
+        icon: History,
+        minRole: "manager"
+      },
       {
         title: "Contrat de gestion — modèle",
         desc: "Gabarit par défaut de la convention de gestion (tous les immeubles).",

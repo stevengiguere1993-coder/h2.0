@@ -61,6 +61,9 @@ type Overview = {
   nb_retards: number;
   nb_attente: number;
   total_solde_du?: number;
+  //: Démarrage du pôle : les soldes ne remontent pas avant (réglable
+  //: dans Paramètres → Gestion locative).
+  solde_depuis?: string | null;
 };
 
 type Echeance = {
@@ -101,6 +104,11 @@ function monthLabel(mois: string): string {
     month: "long",
     year: "numeric"
   });
+}
+
+/** "2026-07-01" → "juillet 2026" (date de démarrage du pôle). */
+function moisLabelCourt(iso: string): string {
+  return monthLabel(iso.slice(0, 7));
 }
 
 function shiftMonth(mois: string, delta: number): string {
@@ -511,7 +519,11 @@ export default function BauxPage() {
             <StatTile
               label="Solde dû"
               value={fmtMoney(kpi.total_solde_du)}
-              sub="loyers échus + frais − reçus"
+              sub={
+                data?.solde_depuis
+                  ? `depuis ${moisLabelCourt(data.solde_depuis)}`
+                  : "loyers échus + frais − reçus"
+              }
               tone={kpi.total_solde_du > 0 ? "rose" : undefined}
             />
           </div>
