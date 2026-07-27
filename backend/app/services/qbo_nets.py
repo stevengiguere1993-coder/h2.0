@@ -421,6 +421,65 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet achats échoué", exc_info=True)
 
+    # ── Paiements d'achats jamais parvenus à QB → BillPayment ──
+    # « Marquer payé » pousse la BillPayment UNE seule fois, en fond : si
+    # l'achat n'était pas encore relié au Bill QB, si le compte du mode de
+    # paiement n'était pas mappé ou si QBO était indisponible, le Bill
+    # restait « à payer » dans QB pour toujours (cas Rona payées dans
+    # Kratos). Ce filet rattrape chaque heure les achats payés reliés à un
+    # Bill sans BillPayment. Idempotent : qbo_bill_payment_id + garde
+    # anti-double-paiement (Bill déjà soldé → sentinelle, rien de créé).
+    try:
+        from sqlalchemy import select as _sel_bp
+
+        from app.models.achat import Achat as _AchatBP
+        from app.services.achat_qbo import (
+            PAID_METHODS as _PAID_BP,
+            push_bill_payment_to_qbo as _push_bp_qb,
+        )
+
+        async with AsyncSessionLocal() as db:
+            bp_ids = [
+                int(r[0])
+                for r in (
+                    await db.execute(
+                        _sel_bp(_AchatBP.id).where(
+                            _AchatBP.status == "paid",
+                            _AchatBP.qbo_bill_id.is_not(None),
+                            _AchatBP.qbo_bill_payment_id.is_(None),
+                            # Seulement les modes Horizon mappés à un
+                            # compte QB — les modes génériques importés
+                            # (« cc », « cheque ») n'ont pas de compte.
+                            _AchatBP.payment_method.in_(list(_PAID_BP)),
+                        ).limit(200)
+                    )
+                ).all()
+            ]
+        bp_pushed = bp_failed = 0
+        for aid in bp_ids:
+            try:
+                async with AsyncSessionLocal() as s:
+                    r = await _push_bp_qb(s, aid)
+                    await s.commit()
+                if r.get("ok"):
+                    bp_pushed += 1
+                else:
+                    bp_failed += 1
+            except Exception as exc:  # noqa: BLE001
+                bp_failed += 1
+                log.warning(
+                    "Achat %s : BillPayment de rattrapage échouée : %s",
+                    aid, exc,
+                )
+        if bp_ids:
+            out["bill_payments"] = {
+                "candidates": len(bp_ids),
+                "pushed": bp_pushed,
+                "failed": bp_failed,
+            }
+    except Exception:  # noqa: BLE001
+        log.warning("Filet BillPayments achats échoué", exc_info=True)
+
     # ── Bons de travail CLIENT en cours → projet lié + sous-client QB ──
     # Le hook de création couvre les NOUVEAUX bons ; ce filet rattrape les
     # bons créés AVANT la fonctionnalité (ou dont le push en fond a échoué) :
