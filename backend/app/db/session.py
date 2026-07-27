@@ -2756,6 +2756,35 @@ async def init_db() -> None:
             VALUES ('achat_menage_qb_client_seul_v2')
             ON CONFLICT (key) DO NOTHING
             """,
+            # v3 : ménage RENFORCÉ des factures IMPORTÉES de QB sans
+            # projet/BT — les v1/v2 rataient celles portant un REÇU (les
+            # images Rona viennent de QB elles-mêmes) ou un drapeau
+            # is_billable modifié par un automatisme. Règle finale : une
+            # facture VENUE de QB sans projet/BT ne vit pas dans Kratos,
+            # reliée à un client ou pas. Restent protégées : les saisies
+            # Kratos (billable_manual posé au choix explicite de création,
+            # référence ou notes remplies), le refacturé, et les achats
+            # issus d'un PO. Les objets QuickBooks ne sont pas touchés.
+            """
+            DELETE FROM achats
+            WHERE (qbo_bill_id IS NOT NULL OR qbo_purchase_id IS NOT NULL)
+              AND project_id IS NULL
+              AND invoiced_at IS NULL
+              AND facture_item_id IS NULL
+              AND purchase_order_id IS NULL
+              AND billable_manual = FALSE
+              AND COALESCE(reference, '') = ''
+              AND COALESCE(notes, '') = ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM applied_backfills
+                  WHERE key = 'achat_menage_qb_sans_projet_v3'
+              )
+            """,
+            """
+            INSERT INTO applied_backfills (key)
+            VALUES ('achat_menage_qb_sans_projet_v3')
+            ON CONFLICT (key) DO NOTHING
+            """,
             # One-shot : resynchronise les TOTAUX STOCKÉS des factures avec
             # la somme réelle de leurs items. L'import « Importer du
             # projet » sur une facture existante ne recalculait pas
