@@ -298,6 +298,75 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet pull coûts échoué", exc_info=True)
 
+    # ── Bills « A-<id> » ORPHELINS dans QB → suppression ──
+    # Un DocNumber « A-<id> » ne peut venir QUE d'un push Kratos (repli
+    # _doc_number quand l'achat n'a pas de n° de facture fournisseur).
+    # Un Bill QB IMPAYÉ portant ce motif et qu'AUCUN achat Kratos ne
+    # référence est une copie parasite (doublons « Factures à payer »
+    # dont la ligne Kratos a été supprimée par le ménage / la dédup) :
+    # on le supprime de QB. Les Bills payés ou rapprochés ne sont jamais
+    # touchés (delete_bill refuse et on journalise).
+    try:
+        import re as _re_orph
+
+        from sqlalchemy import select as _sel_orph
+
+        from app.integrations.quickbooks import get_qbo as _get_qbo_orph
+        from app.models.achat import Achat as _AchatOrph
+
+        _qbo = _get_qbo_orph()
+        await _qbo._load_refresh_from_db()
+        if _qbo.ready:
+            _auto_re = _re_orph.compile(r"^A-\d+$")
+            _bills = await _qbo.query(
+                "SELECT * FROM Bill WHERE DocNumber LIKE 'A-%' "
+                "MAXRESULTS 1000"
+            )
+            async with AsyncSessionLocal() as db:
+                _linked: set[str] = set()
+                for _bid, _pid in (
+                    await db.execute(
+                        _sel_orph(
+                            _AchatOrph.qbo_bill_id,
+                            _AchatOrph.qbo_purchase_id,
+                        )
+                    )
+                ).all():
+                    if _bid:
+                        _linked.add(str(_bid))
+                    if _pid:
+                        _linked.add(str(_pid))
+            _removed = _kept = 0
+            for _b in _bills:
+                _bid = str(_b.get("Id") or "")
+                _doc = str(_b.get("DocNumber") or "")
+                if (
+                    not _bid
+                    or not _auto_re.fullmatch(_doc)
+                    or _bid in _linked
+                    or float(_b.get("Balance") or 0) <= 0
+                ):
+                    continue
+                try:
+                    if await _qbo.delete_bill(_bid):
+                        _removed += 1
+                        log.info(
+                            "Bill QB orphelin %s (%s) supprimé "
+                            "(copie parasite sans achat Kratos)",
+                            _bid, _doc,
+                        )
+                    else:
+                        _kept += 1
+                except Exception:  # noqa: BLE001
+                    _kept += 1
+            if _removed or _kept:
+                out["bills_orphelins"] = {
+                    "supprimes": _removed,
+                    "non_supprimables": _kept,
+                }
+    except Exception:  # noqa: BLE001
+        log.warning("Balayage Bills orphelins échoué", exc_info=True)
+
     # ── Heures approuvées sans feuille de temps QB → push ──
     # Punches approuvés + terminés + liés à un projet dont la TimeActivity
     # QB n'existe pas encore (push immédiat échoué ou antérieur à la
