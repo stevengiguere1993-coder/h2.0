@@ -42,6 +42,7 @@ from app.repositories.user import UserRepository
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.user import User
+from app.services.locatif_demarrage import get_demarrage, set_demarrage
 from app.services.permissions_service import require_capability
 from app.models.entreprise import Entreprise
 from app.models.bon_travail import BonTravail
@@ -298,6 +299,42 @@ async def put_alertes_config(
     )
     await db.commit()
     return clean
+
+
+# ── Démarrage du pôle : d'où partent les soldes ────────────────────────
+# Demande Phil 2026-07-27 : « je commence pour vrai — tout ce qui est
+# avant le 1er juillet 2026 ne doit plus être d'actualité ». Un locataire
+# qui traînait avril+mai+juin impayés repart à 0 $ en juillet. Rien n'est
+# supprimé : l'historique reste en base, il est ignoré dans les calculs.
+
+
+class DemarrageConfig(BaseModel):
+    #: 1er du mois à partir duquel l'argent locatif compte.
+    date: date
+
+
+@router.get("/demarrage", response_model=DemarrageConfig)
+async def get_demarrage_config(
+    db: DBSession, user: CurrentUser
+) -> DemarrageConfig:
+    _require_volet(user)
+    return DemarrageConfig(date=await get_demarrage())
+
+
+@router.put("/demarrage", response_model=DemarrageConfig)
+async def put_demarrage_config(
+    payload: DemarrageConfig, db: DBSession, user: CurrentUser
+) -> DemarrageConfig:
+    _require_volet(user)
+    if not user.has_min_role("manager"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Réservé aux gestionnaires.",
+        )
+    d = await set_demarrage(db, payload.date, user_id=user.id)
+    await db.commit()
+    log.info("Démarrage locatif réglé au %s par %s", d, user.email)
+    return DemarrageConfig(date=d)
 
 
 # ── Immeubles : liste + KPIs agrégés ────────────────────────────────────
@@ -2104,13 +2141,19 @@ async def locataire_dossier(
             )
         )
 
+    # Historique d'argent : à partir du DÉMARRAGE du pôle seulement — ce
+    # qui précède ne compte plus (totaux, retards, solde).
+    depuis = await get_demarrage()
     paiements = []
     bail_ids = [b.id for b in baux]
     if bail_ids:
         for pmt in (
             await db.execute(
                 select(PaiementLoyer)
-                .where(PaiementLoyer.bail_id.in_(bail_ids))
+                .where(
+                    PaiementLoyer.bail_id.in_(bail_ids),
+                    PaiementLoyer.mois_couvert >= depuis,
+                )
                 .order_by(PaiementLoyer.mois_couvert.desc())
             )
         ).scalars().all():
@@ -2613,10 +2656,15 @@ async def locataire_etat_de_compte_pdf(
     bail_ids = [b.id for b in baux]
     paiements = []
     if bail_ids:
+        # Même borne que la fiche : rien avant le démarrage du pôle.
+        depuis = await get_demarrage()
         paiements = (
             await db.execute(
                 select(PaiementLoyer)
-                .where(PaiementLoyer.bail_id.in_(bail_ids))
+                .where(
+                    PaiementLoyer.bail_id.in_(bail_ids),
+                    PaiementLoyer.mois_couvert >= depuis,
+                )
                 .order_by(PaiementLoyer.mois_couvert.desc())
             )
         ).scalars().all()
@@ -2896,10 +2944,15 @@ async def list_paiements(
     bail_id: int, db: DBSession, user: CurrentUser
 ) -> List[PaiementLoyerRead]:
     _require_volet(user)
+    # Rien avant le démarrage du pôle (l'historique d'essai ne compte plus).
+    depuis = await get_demarrage()
     rows = (
         await db.execute(
             select(PaiementLoyer)
-            .where(PaiementLoyer.bail_id == bail_id)
+            .where(
+                PaiementLoyer.bail_id == bail_id,
+                PaiementLoyer.mois_couvert >= depuis,
+            )
             .order_by(PaiementLoyer.mois_couvert.desc())
         )
     ).scalars().all()
@@ -3004,9 +3057,13 @@ async def create_paiement(
         raise HTTPException(status_code=400, detail="Montant invalide.")
 
     # Mettre à jour le score du locataire (basique : % paiements à temps)
+    # — uniquement sur l'historique qui compte (depuis le démarrage).
     paiements = (
         await db.execute(
-            select(PaiementLoyer).where(PaiementLoyer.bail_id == bail.id)
+            select(PaiementLoyer).where(
+                PaiementLoyer.bail_id == bail.id,
+                PaiementLoyer.mois_couvert >= await get_demarrage(),
+            )
         )
     ).scalars().all()
     total = len(paiements) + 1
@@ -3075,11 +3132,10 @@ async def annuler_paiements_mois(
 # mois donné — LA vue quotidienne du gestionnaire (qui a payé, qui est
 # en retard, marquer payé en 1 clic depuis la page Baux & paiements).
 
-#: Point de départ du SOLDE CUMULATIF (demande Phil 2026-07-22 : « mets
-#: le solde de tous les locataires à 0 à partir du 1er juillet 2026 »).
-#: L'historique d'avant cette date (loyers échus, paiements, frais) est
-#: IGNORÉ dans le calcul du solde — les baux existants repartent à zéro.
-SOLDE_DEPUIS = date(2026, 7, 1)
+#: Point de départ des soldes = date de DÉMARRAGE du pôle, réglable dans
+#: Paramètres → Gestion locative (défaut 1er juillet 2026). Tout ce qui
+#: précède (loyers échus, paiements, frais) est IGNORÉ : les baux
+#: existants repartent à zéro. Voir services/locatif_demarrage.py.
 
 
 class FraisRow(BaseModel):
@@ -3125,6 +3181,9 @@ class LoyerOverview(BaseModel):
     nb_attente: int
     #: Somme des soldes dus (tuile KPI).
     total_solde_du: float = 0.0
+    #: Date de démarrage du pôle : les soldes ne remontent pas avant
+    #: (affichée dans l'UI pour qu'on sache d'où part le cumul).
+    solde_depuis: Optional[date] = None
 
 
 @router.get("/loyers/overview", response_model=LoyerOverview)
@@ -3143,6 +3202,7 @@ async def loyers_overview(
     _require_volet(user)
 
     today = datetime.now(timezone.utc).date()
+    solde_depuis = await get_demarrage()
     if mois:
         try:
             month_start = datetime.strptime(mois + "-01", "%Y-%m-%d").date()
@@ -3180,6 +3240,7 @@ async def loyers_overview(
             nb_payes=0,
             nb_retards=0,
             nb_attente=0,
+            solde_depuis=solde_depuis,
         )
 
     logements = (
@@ -3247,7 +3308,7 @@ async def loyers_overview(
                 )
                 .where(
                     PaiementLoyer.bail_id.in_(bail_ids),
-                    PaiementLoyer.mois_couvert >= SOLDE_DEPUIS,
+                    PaiementLoyer.mois_couvert >= solde_depuis,
                 )
                 .group_by(PaiementLoyer.bail_id)
             )
@@ -3260,7 +3321,7 @@ async def loyers_overview(
                 )
                 .where(
                     FraisLocatif.bail_id.in_(bail_ids),
-                    FraisLocatif.mois_couvert >= SOLDE_DEPUIS,
+                    FraisLocatif.mois_couvert >= solde_depuis,
                     FraisLocatif.mois_couvert <= month_start,
                 )
                 .group_by(FraisLocatif.bail_id)
@@ -3271,8 +3332,8 @@ async def loyers_overview(
     def _mois_echus(b: Bail) -> int:
         """Nombre de 1ers de mois couverts par le bail jusqu'au mois
         affiché inclus (borné à aujourd'hui) — pour le solde cumulatif.
-        Ne remonte jamais avant SOLDE_DEPUIS (remise à zéro 2026-07-01)."""
-        debut = max(b.date_debut.replace(day=1), SOLDE_DEPUIS)
+        Ne remonte jamais avant la date de démarrage du pôle."""
+        debut = max(b.date_debut.replace(day=1), solde_depuis)
         fin = min(month_start, today.replace(day=1))
         if b.date_fin:
             fin = min(fin, b.date_fin.replace(day=1))
@@ -3406,6 +3467,7 @@ async def loyers_overview(
         nb_retards=nb_retards,
         nb_attente=nb_attente,
         total_solde_du=round(total_solde_du, 2),
+        solde_depuis=solde_depuis,
     )
 
 
@@ -3971,7 +4033,9 @@ async def finances_pnl(
     """
     _require_volet(user)
     year = annee or datetime.now(timezone.utc).year
-    y_start = date(year, 1, 1)
+    # Les revenus encaissés ne remontent pas avant le démarrage du pôle
+    # (l'année du démarrage compte donc à partir de ce mois-là).
+    y_start = max(date(year, 1, 1), await get_demarrage())
     y_end = date(year, 12, 31)
 
     imm_q = select(Immeuble).where(Immeuble.is_active.is_(True))

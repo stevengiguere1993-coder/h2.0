@@ -25,6 +25,7 @@ from app.models.immobilier import (
     Logement,
     PaiementLoyer,
 )
+from app.services.locatif_demarrage import get_demarrage
 from app.services.notifications import notify_role
 
 
@@ -38,6 +39,9 @@ async def _run() -> None:
         if today.day <= 5:
             return
         month_start = today.replace(day=1)
+        # Rien avant le démarrage du pôle (Paramètres → Gestion locative).
+        if month_start < await get_demarrage():
+            return
 
         # Immeubles en GESTION EXTERNE exclus : la perception des loyers
         # (et les relances) relève du gestionnaire tiers. isnot(True)

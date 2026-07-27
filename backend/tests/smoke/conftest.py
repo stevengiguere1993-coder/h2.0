@@ -242,6 +242,9 @@ class SyncClient:
     def post(self, url: str, **kw: Any) -> httpx.Response:
         return self.request("POST", url, **kw)
 
+    def put(self, url: str, **kw: Any) -> httpx.Response:
+        return self.request("PUT", url, **kw)
+
     def patch(self, url: str, **kw: Any) -> httpx.Response:
         return self.request("PATCH", url, **kw)
 

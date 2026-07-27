@@ -25,6 +25,7 @@ from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.integrations.quickbooks import QuickBooksError, get_qbo
+from app.services.locatif_demarrage import get_demarrage
 from app.services.permissions_service import user_has_capability
 from app.services.qbo_monthly_invoice import add_lines_to_monthly_invoice
 from app.models.automation_setting import AutomationSetting
@@ -72,8 +73,11 @@ def _mois_precedent(d: date) -> date:
 
 
 async def _revenus_tous_mois(db) -> Dict[tuple, float]:
-    """Revenus locatifs encaissés par (immeuble, mois) — tous les mois
-    confondus. Sert au solde des mois manqués + au mois affiché."""
+    """Revenus locatifs encaissés par (immeuble, mois), depuis le
+    DÉMARRAGE du pôle. Sert au solde des mois manqués + au mois affiché.
+    Les mois d'avant le démarrage ne sont donc jamais proposés à la
+    facturation (retour Phil 2026-07-27)."""
+    depuis = await get_demarrage()
     out: Dict[tuple, float] = {}
     rows = (
         await db.execute(
@@ -84,6 +88,7 @@ async def _revenus_tous_mois(db) -> Dict[tuple, float]:
             )
             .join(Bail, Bail.id == PaiementLoyer.bail_id)
             .join(Logement, Logement.id == Bail.logement_id)
+            .where(PaiementLoyer.mois_couvert >= depuis)
             .group_by(Logement.immeuble_id, PaiementLoyer.mois_couvert)
         )
     ).all()
@@ -98,6 +103,7 @@ async def _revenus_tous_mois(db) -> Dict[tuple, float]:
                 func.sum(PaiementExterne.montant),
             )
             .join(Logement, Logement.id == PaiementExterne.logement_id)
+            .where(PaiementExterne.mois_couvert >= depuis)
             .group_by(Logement.immeuble_id, PaiementExterne.mois_couvert)
         )
     ).all()
@@ -593,6 +599,16 @@ async def facturer(
                 "le 1er du mois suivant."
             ),
         )
+    demarrage = await get_demarrage()
+    if m < demarrage:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{MOIS_FR[m.month - 1]} {m.year} précède le démarrage de "
+                f"la gestion locative ({MOIS_FR[demarrage.month - 1]} "
+                f"{demarrage.year}) — ce mois ne se facture plus."
+            ),
+        )
     existing = (
         await db.execute(
             select(FactureGestion)
@@ -828,6 +844,7 @@ async def facturer_groupe(
         ).all()
     }
     premier_mois_courant = datetime.now(timezone.utc).date().replace(day=1)
+    demarrage = await get_demarrage()
     details: List[Dict[str, Any]] = []
     vus: set = set()
     vus_dossiers: set = set()
@@ -931,6 +948,16 @@ async def facturer_groupe(
                 detail="Ligne invalide : mois manquant.",
             )
         m = ligne.mois.replace(day=1)
+        if m < demarrage:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"« {imm.name} » — {MOIS_FR[m.month - 1]} {m.year} "
+                    "précède le démarrage de la gestion locative "
+                    f"({MOIS_FR[demarrage.month - 1]} {demarrage.year}) : "
+                    "ce mois ne se facture plus."
+                ),
+            )
         if m >= premier_mois_courant:
             if m.month == 12:
                 prochain = m.replace(year=m.year + 1, month=1)
