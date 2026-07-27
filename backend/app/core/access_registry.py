@@ -192,6 +192,8 @@ PAGES: list[PageEntry] = [
        "/immobilier/baux"),
     _p("immobilier.locations", "Locations (relocation)", "immobilier",
        "manager", "/immobilier/locations"),
+    _p("immobilier.communications", "Communications", "immobilier",
+       "manager", "/immobilier/communications"),
     _p("immobilier.modeles_documents", "Modèles de documents", "immobilier",
        "manager", "/immobilier/modeles-documents"),
     _p("immobilier.finances", "Finances locatives", "immobilier", "manager",

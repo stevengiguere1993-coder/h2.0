@@ -1,0 +1,583 @@
+"""Page COMMUNICATIONS — Gestion locative (retour Phil 2026-07-27).
+
+    GET  /immobilier/communications/destinataires  → immeubles + locataires
+    GET  /immobilier/communications/reglages       → expéditeur par défaut
+    PUT  /immobilier/communications/reglages       (manager+)
+    POST /immobilier/communications/envoyer        → envoi individualisé
+    GET  /immobilier/communications                → audit filtrable
+
+Principe : ce qui PART vers le locataire sans exiger de signature vit
+ici — modèles d'avis « courriel » (rappel de paiement, avis d'accès,
+demande d'assurance) + message libre. Un envoi de masse produit UN
+courriel PAR locataire (jamais d'adresses visibles entre eux), avec ses
+propres variables, et chaque courriel laisse une trace : ligne d'audit
+``imm_communications`` + entrée Communications sur la fiche du
+locataire. Les avis TAL à signature restent dans le flux Documents.
+
+Expéditeur : boîte du tenant M365 (Graph n'envoie pas depuis un domaine
+externe). Un gestionnaire contractuel (ex. kyle.gestion@gmail.com) est
+géré par ``from_name`` (nom affiché) + ``reply_to`` (les réponses des
+locataires vont chez lui). Défauts réglables ici, modifiables à l'envoi.
+"""
+
+from __future__ import annotations
+
+import logging
+import secrets
+from datetime import date, datetime, timezone
+from typing import Dict, List, Optional
+
+from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select
+
+from app.api.deps import CurrentUser, DBSession
+from app.integrations.email_graph import get_mailer
+from app.models.immobilier import (
+    Bail,
+    BailStatus,
+    FraisLocatif,
+    ImmCommunication,
+    Immeuble,
+    ImmeubleOwnership,
+    Locataire,
+    LocataireCommunication,
+    Logement,
+    PaiementLoyer,
+)
+from app.models.entreprise import Entreprise
+from app.services.automation_state import (
+    get_automation_config,
+    set_automation_config,
+)
+from app.services.tal_forms import (
+    GABARITS_DEFAUT,
+    SIGNATURE_NON_REQUISE,
+    TalContext,
+    render_lettre_courriel,
+)
+
+log = logging.getLogger("immobilier.communications")
+
+router = APIRouter(
+    prefix="/immobilier/communications", tags=["immobilier-communications"]
+)
+
+#: Types envoyables depuis la page : les lettres SANS signature (le
+#: relevé 31 reste dans Suivis annuels — demande Phil) + message libre.
+TYPES_ENVOYABLES = tuple(GABARITS_DEFAUT.keys()) + ("libre",)
+
+_REGLAGES_KEY = "immo.communications"
+_MAX_DESTINATAIRES = 500
+
+
+def _require_volet(user: CurrentUser) -> None:
+    volets = getattr(user, "volets", None)
+    if volets is None or "immobilier" not in volets:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Volet « Gestion immobilière » non autorisé.",
+        )
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+# ── Destinataires ──────────────────────────────────────────────────────
+
+
+class DestinataireOut(BaseModel):
+    locataire_id: int
+    bail_id: int
+    nom: str
+    email: Optional[str] = None
+    logement: Optional[str] = None
+
+
+class ImmeubleDestinatairesOut(BaseModel):
+    immeuble_id: int
+    immeuble_name: str
+    locataires: List[DestinataireOut]
+
+
+@router.get(
+    "/destinataires", response_model=List[ImmeubleDestinatairesOut]
+)
+async def list_destinataires(
+    db: DBSession, user: CurrentUser
+) -> List[ImmeubleDestinatairesOut]:
+    """Tous les locataires à bail ACTIF, groupés par immeuble — la
+    matière du sélecteur « À qui » (gestion externe incluse : un avis
+    d'accès reste pertinent même si la perception est déléguée)."""
+    _require_volet(user)
+    rows = (
+        await db.execute(
+            select(Bail, Locataire, Logement, Immeuble)
+            .join(Locataire, Locataire.id == Bail.locataire_id)
+            .join(Logement, Logement.id == Bail.logement_id)
+            .join(Immeuble, Immeuble.id == Logement.immeuble_id)
+            .where(
+                Bail.status == BailStatus.ACTIF.value,
+                Immeuble.is_active.is_(True),
+            )
+            .order_by(Immeuble.name.asc(), Logement.numero.asc())
+        )
+    ).all()
+    par_immeuble: Dict[int, ImmeubleDestinatairesOut] = {}
+    for bail, loc, lg, imm in rows:
+        bloc = par_immeuble.get(imm.id)
+        if bloc is None:
+            bloc = ImmeubleDestinatairesOut(
+                immeuble_id=imm.id, immeuble_name=imm.name, locataires=[]
+            )
+            par_immeuble[imm.id] = bloc
+        bloc.locataires.append(
+            DestinataireOut(
+                locataire_id=loc.id,
+                bail_id=bail.id,
+                nom=loc.full_name or f"Locataire {loc.id}",
+                email=(loc.email or "").strip() or None,
+                logement=lg.numero,
+            )
+        )
+    return list(par_immeuble.values())
+
+
+# ── Réglages d'envoi (expéditeur par défaut) ───────────────────────────
+
+
+class ReglagesEnvoi(BaseModel):
+    #: Boîte M365 d'envoi (vide = celle du système, info@…).
+    from_email: str = ""
+    #: Nom affiché dans « De : » (vide = nom de la compagnie).
+    from_name: str = ""
+    #: Adresse de RÉPONSE — peut être externe (gmail du gestionnaire).
+    reply_to: str = ""
+
+
+@router.get("/reglages", response_model=ReglagesEnvoi)
+async def get_reglages(db: DBSession, user: CurrentUser) -> ReglagesEnvoi:
+    _require_volet(user)
+    cfg = await get_automation_config(_REGLAGES_KEY)
+    return ReglagesEnvoi(
+        from_email=str(cfg.get("from_email") or ""),
+        from_name=str(cfg.get("from_name") or ""),
+        reply_to=str(cfg.get("reply_to") or ""),
+    )
+
+
+@router.put("/reglages", response_model=ReglagesEnvoi)
+async def put_reglages(
+    payload: ReglagesEnvoi, db: DBSession, user: CurrentUser
+) -> ReglagesEnvoi:
+    _require_volet(user)
+    if not user.has_min_role("manager"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Réservé aux gestionnaires.",
+        )
+    clean = ReglagesEnvoi(
+        from_email=payload.from_email.strip(),
+        from_name=payload.from_name.strip(),
+        reply_to=payload.reply_to.strip(),
+    )
+    await set_automation_config(
+        db, _REGLAGES_KEY, clean.model_dump(), user_id=user.id
+    )
+    await db.commit()
+    return clean
+
+
+# ── Envoi ──────────────────────────────────────────────────────────────
+
+
+class EnvoyerIn(BaseModel):
+    #: 'rappel_paiement' | 'avis_acces' | 'demande_assurance' | 'libre'
+    type: str
+    immeuble_ids: List[int] = []
+    locataire_ids: List[int] = []
+    #: Message libre : sujet + corps (variables {locataire} {adresse}
+    #: {logement} {locateur} remplacées par destinataire).
+    sujet: Optional[str] = Field(default=None, max_length=255)
+    corps: Optional[str] = None
+    #: Rappel de paiement : 1er du mois réclamé (défaut = mois courant).
+    mois: Optional[date] = None
+    #: Avis d'accès : quand / plage horaire / motif (communs à tous).
+    acces_date: Optional[date] = None
+    acces_plage: Optional[str] = Field(default=None, max_length=120)
+    acces_motif: Optional[str] = Field(default=None, max_length=255)
+    #: Expéditeur (défauts = réglages).
+    from_email: Optional[str] = None
+    from_name: Optional[str] = None
+    reply_to: Optional[str] = None
+
+
+class EnvoyerOut(BaseModel):
+    group_id: str
+    envoyes: int
+    #: Rappel de paiement : locataires sautés car le mois est payé.
+    ignores_payes: List[str] = []
+    #: Locataires sans adresse courriel (à compléter sur leur fiche).
+    sans_email: List[str] = []
+    #: Échecs d'envoi (nom — erreur).
+    echecs: List[str] = []
+
+
+async def _resoudre_destinataires(
+    db, immeuble_ids: List[int], locataire_ids: List[int]
+) -> List[tuple]:
+    """(bail, locataire, logement, immeuble) des baux ACTIFS visés —
+    union immeubles ∪ locataires, dédupliquée par locataire."""
+    if not immeuble_ids and not locataire_ids:
+        return []
+    q = (
+        select(Bail, Locataire, Logement, Immeuble)
+        .join(Locataire, Locataire.id == Bail.locataire_id)
+        .join(Logement, Logement.id == Bail.logement_id)
+        .join(Immeuble, Immeuble.id == Logement.immeuble_id)
+        .where(Bail.status == BailStatus.ACTIF.value)
+        .order_by(Immeuble.name.asc(), Logement.numero.asc())
+    )
+    rows = (await db.execute(q)).all()
+    vus: set[int] = set()
+    out: List[tuple] = []
+    imm_set = set(immeuble_ids)
+    loc_set = set(locataire_ids)
+    for bail, loc, lg, imm in rows:
+        if imm.id not in imm_set and loc.id not in loc_set:
+            continue
+        if loc.id in vus:
+            continue
+        vus.add(loc.id)
+        out.append((bail, loc, lg, imm))
+    return out
+
+
+async def _locateurs_par_immeuble(db, imm_ids: List[int]) -> Dict[int, str]:
+    """Nom de l'entreprise propriétaire (première ownership) par immeuble."""
+    if not imm_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(ImmeubleOwnership.immeuble_id, Entreprise.name)
+            .join(Entreprise, Entreprise.id == ImmeubleOwnership.entreprise_id)
+            .where(ImmeubleOwnership.immeuble_id.in_(imm_ids))
+        )
+    ).all()
+    out: Dict[int, str] = {}
+    for iid, name in rows:
+        out.setdefault(int(iid), name)
+    return out
+
+
+async def _du_du_mois(
+    db, bail_ids: List[int], mois: date
+) -> Dict[str, Dict[int, float]]:
+    """Sommes payées et frais du mois par bail — le dû du rappel se
+    calcule ensuite loyer + frais − payé (même logique que la page
+    Loyers). Sert à personnaliser le montant ET à sauter les payés."""
+    if not bail_ids:
+        return {"payes": {}, "frais": {}}
+    payes: Dict[int, float] = {}
+    for bid, total in (
+        await db.execute(
+            select(PaiementLoyer.bail_id, func.sum(PaiementLoyer.montant))
+            .where(
+                PaiementLoyer.bail_id.in_(bail_ids),
+                PaiementLoyer.mois_couvert == mois,
+            )
+            .group_by(PaiementLoyer.bail_id)
+        )
+    ).all():
+        payes[int(bid)] = float(total or 0)
+    frais: Dict[int, float] = {}
+    for bid, total in (
+        await db.execute(
+            select(FraisLocatif.bail_id, func.sum(FraisLocatif.montant))
+            .where(
+                FraisLocatif.bail_id.in_(bail_ids),
+                FraisLocatif.mois_couvert == mois,
+            )
+            .group_by(FraisLocatif.bail_id)
+        )
+    ).all():
+        frais[int(bid)] = float(total or 0)
+    return {"payes": payes, "frais": frais}  # type: ignore[return-value]
+
+
+def _corps_html(texte: str) -> str:
+    """Texte → HTML minimal (paragraphes), échappé."""
+    import html as _html
+
+    paras = [p.strip() for p in texte.split("\n\n") if p.strip()]
+    return "".join(
+        "<p>" + _html.escape(p).replace("\n", "<br/>") + "</p>"
+        for p in paras
+    )
+
+
+def _remplir_libre(texte: str, variables: Dict[str, str]) -> str:
+    for k, v in variables.items():
+        texte = texte.replace("{" + k + "}", v)
+    return texte
+
+
+@router.post("/envoyer", response_model=EnvoyerOut)
+async def envoyer(
+    payload: EnvoyerIn, db: DBSession, user: CurrentUser
+) -> EnvoyerOut:
+    """UN courriel individualisé PAR locataire visé + trace d'audit +
+    entrée Communications sur sa fiche. Envoi MANUEL uniquement."""
+    _require_volet(user)
+    if payload.type not in TYPES_ENVOYABLES:
+        raise HTTPException(
+            status_code=422,
+            detail="Type d'envoi inconnu (avis sans signature ou libre).",
+        )
+    assert payload.type in SIGNATURE_NON_REQUISE or payload.type == "libre"
+    if payload.type == "libre":
+        if not (payload.sujet or "").strip() or not (payload.corps or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail="Message libre : sujet et corps obligatoires.",
+            )
+    if payload.type == "avis_acces" and payload.acces_date is None:
+        raise HTTPException(
+            status_code=422, detail="Avis d'accès : indique la date."
+        )
+
+    cibles = await _resoudre_destinataires(
+        db, payload.immeuble_ids, payload.locataire_ids
+    )
+    if not cibles:
+        raise HTTPException(
+            status_code=422,
+            detail="Choisis au moins un immeuble ou un locataire.",
+        )
+    if len(cibles) > _MAX_DESTINATAIRES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Trop de destinataires (max {_MAX_DESTINATAIRES}).",
+        )
+
+    mailer = get_mailer()
+    if not mailer.ready:
+        raise HTTPException(
+            status_code=503,
+            detail="L'envoi de courriels (Microsoft 365) n'est pas configuré.",
+        )
+
+    # Expéditeur : payload > réglages > défaut système.
+    cfg = await get_automation_config(_REGLAGES_KEY)
+    from_email = (
+        (payload.from_email or "").strip()
+        or str(cfg.get("from_email") or "").strip()
+        or None
+    )
+    from_name = (
+        (payload.from_name or "").strip()
+        or str(cfg.get("from_name") or "").strip()
+        or None
+    )
+    reply_to = (
+        (payload.reply_to or "").strip()
+        or str(cfg.get("reply_to") or "").strip()
+        or None
+    )
+
+    gabarit = None
+    if payload.type in GABARITS_DEFAUT:
+        from app.api.v1.endpoints.immobilier_extras import _gabarit_override
+
+        gabarit = await _gabarit_override(payload.type)
+
+    locateurs = await _locateurs_par_immeuble(
+        db, list({imm.id for _b, _l, _lg, imm in cibles})
+    )
+
+    mois = (payload.mois or _now().date()).replace(day=1)
+    dus: Dict[str, Dict[int, float]] = {}
+    if payload.type == "rappel_paiement":
+        dus = await _du_du_mois(db, [b.id for b, _l, _lg, _i in cibles], mois)
+
+    group_id = secrets.token_hex(8)
+    envoyes = 0
+    ignores_payes: List[str] = []
+    sans_email: List[str] = []
+    echecs: List[str] = []
+
+    for bail, loc, lg, imm in cibles:
+        nom = loc.full_name or f"Locataire {loc.id}"
+        email = (loc.email or "").strip()
+        montant_du = None
+        if payload.type == "rappel_paiement":
+            montant_du = round(
+                float(bail.loyer_mensuel or 0)
+                + dus.get("frais", {}).get(bail.id, 0.0)
+                - dus.get("payes", {}).get(bail.id, 0.0),
+                2,
+            )
+            if montant_du <= 0.005:
+                ignores_payes.append(nom)
+                continue
+        if not email:
+            sans_email.append(nom)
+            continue
+
+        ctx = TalContext(
+            locateur_nom=locateurs.get(imm.id),
+            locataire_nom=nom,
+            locataire_email=email,
+            logement_adresse=imm.address,
+            logement_numero=lg.numero,
+            logement_ville=imm.city,
+            bail_date_debut=bail.date_debut,
+            bail_date_fin=bail.date_fin,
+            bail_loyer_mensuel=(
+                float(bail.loyer_mensuel) if bail.loyer_mensuel else None
+            ),
+            mois_concerne=mois,
+            montant_du=montant_du,
+            acces_date=payload.acces_date,
+            acces_plage=payload.acces_plage,
+            acces_motif=payload.acces_motif,
+        )
+        if payload.type == "libre":
+            variables = {
+                "locataire": nom,
+                "adresse": (
+                    f"{imm.address}, {lg.numero}" if lg.numero else imm.address
+                ),
+                "logement": lg.numero or "",
+                "locateur": locateurs.get(imm.id) or "",
+            }
+            sujet = _remplir_libre(payload.sujet or "", variables)
+            corps = _remplir_libre(payload.corps or "", variables)
+        else:
+            sujet, corps = render_lettre_courriel(
+                payload.type, ctx, gabarit=gabarit
+            )
+
+        statut, erreur = "envoye", None
+        try:
+            await mailer.send(
+                to=[email],
+                subject=sujet,
+                html_body=_corps_html(corps),
+                reply_to=reply_to,
+                from_email=from_email,
+                from_name=from_name,
+            )
+            envoyes += 1
+        except Exception as exc:  # noqa: BLE001 — un échec ne bloque pas le lot
+            statut, erreur = "echec", str(exc)[:500]
+            echecs.append(f"{nom} — {str(exc)[:120]}")
+            log.warning("Envoi communication à %s en échec: %s", email, exc)
+
+        db.add(
+            ImmCommunication(
+                group_id=group_id,
+                type=payload.type,
+                sujet=sujet,
+                corps=corps,
+                locataire_id=loc.id,
+                bail_id=bail.id,
+                immeuble_id=imm.id,
+                locataire_nom=nom,
+                immeuble_nom=imm.name,
+                destinataire_email=email,
+                from_email=from_email,
+                from_name=from_name,
+                reply_to=reply_to,
+                statut=statut,
+                erreur=erreur,
+                created_by_email=getattr(user, "email", None),
+                created_at=_now(),
+            )
+        )
+        if statut == "envoye":
+            db.add(
+                LocataireCommunication(
+                    locataire_id=loc.id,
+                    kind="courriel",
+                    contenu=f"Courriel envoyé : {sujet} (à {email})",
+                    auteur=getattr(user, "email", None),
+                )
+            )
+
+    await db.commit()
+    log.info(
+        "Communications %s (%s) : %d envoyés, %d payés ignorés, "
+        "%d sans courriel, %d échecs",
+        group_id, payload.type, envoyes, len(ignores_payes),
+        len(sans_email), len(echecs),
+    )
+    return EnvoyerOut(
+        group_id=group_id,
+        envoyes=envoyes,
+        ignores_payes=ignores_payes,
+        sans_email=sans_email,
+        echecs=echecs,
+    )
+
+
+# ── Audit ──────────────────────────────────────────────────────────────
+
+
+class CommunicationRow(BaseModel):
+    id: int
+    group_id: str
+    type: str
+    sujet: str
+    corps: str
+    locataire_id: Optional[int] = None
+    locataire_nom: Optional[str] = None
+    immeuble_id: Optional[int] = None
+    immeuble_nom: Optional[str] = None
+    destinataire_email: str
+    from_email: Optional[str] = None
+    from_name: Optional[str] = None
+    reply_to: Optional[str] = None
+    statut: str
+    erreur: Optional[str] = None
+    created_by_email: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+@router.get("", response_model=List[CommunicationRow])
+async def list_communications(
+    db: DBSession,
+    user: CurrentUser,
+    immeuble_id: Optional[int] = None,
+    locataire_id: Optional[int] = None,
+    type: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> List[CommunicationRow]:
+    """Audit des envois, du plus récent au plus ancien, filtrable."""
+    _require_volet(user)
+    query = select(ImmCommunication)
+    if immeuble_id is not None:
+        query = query.where(ImmCommunication.immeuble_id == immeuble_id)
+    if locataire_id is not None:
+        query = query.where(ImmCommunication.locataire_id == locataire_id)
+    if type:
+        query = query.where(ImmCommunication.type == type)
+    if q and q.strip():
+        needle = f"%{q.strip().lower()}%"
+        query = query.where(
+            func.lower(ImmCommunication.sujet).like(needle)
+            | func.lower(
+                func.coalesce(ImmCommunication.locataire_nom, "")
+            ).like(needle)
+            | func.lower(ImmCommunication.destinataire_email).like(needle)
+        )
+    rows = (
+        await db.execute(
+            query.order_by(
+                ImmCommunication.created_at.desc(), ImmCommunication.id.desc()
+            ).limit(limit)
+        )
+    ).scalars().all()
+    return [CommunicationRow.model_validate(r, from_attributes=True) for r in rows]

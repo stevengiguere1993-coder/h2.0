@@ -141,6 +141,7 @@ from app.models.immobilier import (  # noqa: F401
     EvaluationKind,
     Hypotheque,
     HypothequeStatus,
+    ImmCommunication,
     Immeuble,
     ImmeubleOwnership,
     ImmeubleType,
