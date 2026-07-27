@@ -801,7 +801,7 @@ export default function FacturationImmoPage() {
                   return (
                     <div
                       key={clientId || "sans-client"}
-                      className={`rounded-2xl border bg-brand-900 p-5 shadow-card ${
+                      className={`min-w-0 rounded-2xl border bg-brand-900 p-5 shadow-card ${
                         clientId
                           ? "border-brand-800"
                           : "border-amber-500/40"
