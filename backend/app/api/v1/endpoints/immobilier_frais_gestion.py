@@ -26,6 +26,7 @@ from sqlalchemy import func, select
 from app.api.deps import CurrentUser, DBSession
 from app.integrations.quickbooks import QuickBooksError, get_qbo
 from app.services.permissions_service import user_has_capability
+from app.services.qbo_monthly_invoice import add_lines_to_monthly_invoice
 from app.models.automation_setting import AutomationSetting
 from app.models.immobilier import (
     Bail,
@@ -226,6 +227,9 @@ class FacturerOut(BaseModel):
     revenus: float = 0.0
     pct: float = 0.0
     montant: float = 0.0
+    #: True = nouvelle facture mensuelle démarrée, False = ligne
+    #: ajoutée à la facture du mois déjà ouverte.
+    created: bool = True
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────
@@ -670,27 +674,15 @@ async def facturer(
             "Frais de gestion",
             description="Frais de gestion immobilière mensuels",
         )
-        # Numéro de facture calculé (les compagnies avec numéros
-        # personnalisés laissent le champ vide sinon).
-        next_num: Optional[str] = None
-        try:
-            nums_rows = await qbo.query(
-                "SELECT DocNumber FROM Invoice "
-                "ORDERBY MetaData.CreateTime DESC MAXRESULTS 100"
-            )
-            nums = [
-                int(str(r.get("DocNumber")))
-                for r in nums_rows
-                if str(r.get("DocNumber") or "").isdigit()
-            ]
-            next_num = str(max(nums) + 1) if nums else "1000"
-        except QuickBooksError:
-            next_num = None
-        base_payload: Dict[str, Any] = {
-            "CustomerRef": {"value": str(imm.qbo_customer_id)},
-            "TxnDate": datetime.now(timezone.utc).date().isoformat(),
-            "GlobalTaxCalculation": "TaxExcluded",
-            "Line": [
+        # Facture MENSUELLE ouverte : la ligne s'ajoute à LA facture du
+        # mois du client (créée au premier clic, jamais envoyée par
+        # Kratos) — équivalent du « débit différé » voulu par Phil.
+        result = await add_lines_to_monthly_invoice(
+            db,
+            qbo,
+            scope=qbo.scope,
+            customer_id=str(imm.qbo_customer_id),
+            lines=[
                 {
                     "DetailType": "SalesItemLineDetail",
                     "Amount": montant,
@@ -706,37 +698,17 @@ async def facturer(
                     },
                 }
             ],
-            "PrivateNote": (
-                f"Créé par Kratos — frais de gestion {imm.name}, "
-                f"revenus {mois_label}"
+            private_note=(
+                "Créé par Kratos — facture mensuelle (frais de gestion "
+                "locative)"
             ),
-        }
-        tries = 0
-        while True:
-            body = dict(base_payload)
-            if next_num:
-                body["DocNumber"] = next_num
-            try:
-                inv = await qbo.create_invoice(body)
-                break
-            except QuickBooksError as exc:
-                msg = str(exc)
-                if (
-                    next_num
-                    and tries < 3
-                    and ("6140" in msg or "uplicate" in msg or "double" in msg)
-                ):
-                    tries += 1
-                    next_num = str(int(next_num) + 1)
-                    continue
-                raise
+        )
     except QuickBooksError as exc:
         raise HTTPException(
             status_code=502, detail=f"QuickBooks a refusé la facture : {exc}"
         )
-    invoice = inv.get("Invoice") or inv
-    invoice_id = str(invoice.get("Id") or "") or None
-    doc_number = str(invoice.get("DocNumber") or "") or None
+    invoice_id = result["invoice_id"] or None
+    doc_number = result["doc_number"]
 
     db.add(
         FactureGestion(
@@ -753,8 +725,10 @@ async def facturer(
     )
     await db.commit()
     log.info(
-        "Facture gestion QBO %s — %s %s (%.2f $)",
-        doc_number or invoice_id, imm.name, mois_label, montant,
+        "Facture mensuelle QBO %s %s — %s %s (%.2f $)",
+        doc_number or invoice_id,
+        "créée" if result["created"] else "mise à jour",
+        imm.name, mois_label, montant,
     )
     return FacturerOut(
         ok=True,
@@ -763,6 +737,7 @@ async def facturer(
         revenus=revenus,
         pct=pct,
         montant=montant,
+        created=bool(result["created"]),
     )
 
 
@@ -790,6 +765,9 @@ class FacturerGroupeOut(BaseModel):
     doc_number: Optional[str] = None
     total: float = 0.0
     nb_lignes: int = 0
+    #: True = nouvelle facture mensuelle démarrée, False = lignes
+    #: ajoutées à la facture du mois déjà ouverte.
+    created: bool = True
 
 
 def _desc_ligne(d: Dict[str, Any]) -> str:
@@ -1052,25 +1030,15 @@ async def facturer_groupe(
             "Frais de gestion",
             description="Frais de gestion immobilière mensuels",
         )
-        next_num: Optional[str] = None
-        try:
-            nums_rows = await qbo.query(
-                "SELECT DocNumber FROM Invoice "
-                "ORDERBY MetaData.CreateTime DESC MAXRESULTS 100"
-            )
-            nums = [
-                int(str(r.get("DocNumber")))
-                for r in nums_rows
-                if str(r.get("DocNumber") or "").isdigit()
-            ]
-            next_num = str(max(nums) + 1) if nums else "1000"
-        except QuickBooksError:
-            next_num = None
-        base_payload: Dict[str, Any] = {
-            "CustomerRef": {"value": payload.qbo_customer_id},
-            "TxnDate": datetime.now(timezone.utc).date().isoformat(),
-            "GlobalTaxCalculation": "TaxExcluded",
-            "Line": [
+        # Facture MENSUELLE ouverte : les lignes du panier s'ajoutent à
+        # LA facture du mois du client (créée au premier clic, jamais
+        # envoyée par Kratos) — équivalent du « débit différé ».
+        result = await add_lines_to_monthly_invoice(
+            db,
+            qbo,
+            scope=qbo.scope,
+            customer_id=payload.qbo_customer_id,
+            lines=[
                 {
                     "DetailType": "SalesItemLineDetail",
                     "Amount": d["montant"],
@@ -1084,34 +1052,17 @@ async def facturer_groupe(
                 }
                 for d in details
             ],
-            "PrivateNote": "Créé par Kratos — frais de gestion mensuels",
-        }
-        tries = 0
-        while True:
-            body = dict(base_payload)
-            if next_num:
-                body["DocNumber"] = next_num
-            try:
-                inv = await qbo.create_invoice(body)
-                break
-            except QuickBooksError as exc:
-                msg = str(exc)
-                if (
-                    next_num
-                    and tries < 3
-                    and ("6140" in msg or "uplicate" in msg or "double" in msg)
-                ):
-                    tries += 1
-                    next_num = str(int(next_num) + 1)
-                    continue
-                raise
+            private_note=(
+                "Créé par Kratos — facture mensuelle (frais de gestion "
+                "locative)"
+            ),
+        )
     except QuickBooksError as exc:
         raise HTTPException(
             status_code=502, detail=f"QuickBooks a refusé la facture : {exc}"
         )
-    invoice = inv.get("Invoice") or inv
-    invoice_id = str(invoice.get("Id") or "") or None
-    doc_number = str(invoice.get("DocNumber") or "") or None
+    invoice_id = result["invoice_id"] or None
+    doc_number = result["doc_number"]
 
     now = datetime.now(timezone.utc)
     for d in details:
@@ -1134,8 +1085,10 @@ async def facturer_groupe(
         )
     await db.commit()
     log.info(
-        "Facture gestion groupée QBO %s — %d lignes (%.2f $)",
-        doc_number or invoice_id, len(details), total,
+        "Facture mensuelle QBO %s %s — %d lignes (%.2f $)",
+        doc_number or invoice_id,
+        "créée" if result["created"] else "mise à jour",
+        len(details), total,
     )
     return FacturerGroupeOut(
         ok=True,
@@ -1143,6 +1096,7 @@ async def facturer_groupe(
         doc_number=doc_number,
         total=total,
         nb_lignes=len(details),
+        created=bool(result["created"]),
     )
 
 

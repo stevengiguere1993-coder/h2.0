@@ -674,20 +674,29 @@ async def ensure_volets_whitelist_migration() -> None:
 
 
 async def ensure_qbo_connections_table() -> None:
-    """Crée la table ``qbo_connections`` (QuickBooks multi-compagnies,
-    scopes entreprise/immobilier) dans sa propre transaction. La table
-    historique ``qbo_tokens`` (Construction) n'est pas touchée."""
+    """Crée les tables QuickBooks récentes dans leur propre transaction :
+    ``qbo_connections`` (multi-compagnies, scopes entreprise/immobilier)
+    et ``qbo_monthly_invoices`` (facture mensuelle ouverte par client,
+    2026-07-27). La table historique ``qbo_tokens`` (Construction) n'est
+    pas touchée."""
     import logging
 
     log = logging.getLogger("db.ensure_qbo_connections_table")
     try:
         from app.db.base import Base
         from app.models.qbo_connection import QboConnection  # noqa: F401
+        from app.models.qbo_monthly_invoice import (  # noqa: F401
+            QboMonthlyInvoice,
+        )
 
         async with engine.begin() as conn:
             await conn.run_sync(
                 lambda c: Base.metadata.create_all(
-                    c, tables=[QboConnection.__table__]
+                    c,
+                    tables=[
+                        QboConnection.__table__,
+                        QboMonthlyInvoice.__table__,
+                    ],
                 )
             )
     except Exception as exc:  # noqa: BLE001

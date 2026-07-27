@@ -355,7 +355,7 @@ export default function FacturationImmoPage() {
     }
     if (
       !window.confirm(
-        `Créer la facture QuickBooks pour ${panierClient.name} ?\n\n${panier.length} ligne${panier.length > 1 ? "s" : ""} — total ${money(totalPanier)} + taxes.`
+        `Ajouter à la facture du mois de ${panierClient.name} dans QuickBooks ?\n\n${panier.length} ligne${panier.length > 1 ? "s" : ""} — total ${money(totalPanier)} + taxes.\n\n(La facture du mois est créée au premier ajout et n'est JAMAIS envoyée par Kratos — tu l'envoies depuis QuickBooks une fois par mois.)`
       )
     )
       return;
@@ -386,7 +386,9 @@ export default function FacturationImmoPage() {
       }
       setMsg({
         ok: true,
-        text: `Facture QuickBooks ${d.doc_number ? `#${d.doc_number}` : ""} créée pour ${panierClient.name} : ${d.nb_lignes} ligne${d.nb_lignes > 1 ? "s" : ""}, ${money(d.total)} + taxes.`
+        text: d.created
+          ? `Facture du mois ${d.doc_number ? `#${d.doc_number} ` : ""}démarrée dans QuickBooks pour ${panierClient.name} : ${d.nb_lignes} ligne${d.nb_lignes > 1 ? "s" : ""}, ${money(d.total)} + taxes. Elle reste ouverte — les prochains frais du mois s'y ajouteront.`
+          : `${d.nb_lignes} ligne${d.nb_lignes > 1 ? "s" : ""} (${money(d.total)} + taxes) ajoutée${d.nb_lignes > 1 ? "s" : ""} à la facture du mois ${d.doc_number ? `#${d.doc_number} ` : ""}de ${panierClient.name} dans QuickBooks.`
       });
       // Les brouillons de frais manuels facturés disparaissent des cartes.
       const factures = panier
@@ -492,9 +494,10 @@ export default function FacturationImmoPage() {
               Facturation
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
-              Frais de gestion, relocations et frais ponctuels — les
-              transactions s&apos;accumulent par client, ajoute-les à la
-              facture puis crée-la dans QuickBooks.
+              Frais de gestion, relocations et frais ponctuels — chaque
+              client a UNE facture par mois dans QuickBooks : les frais
+              s&apos;y greffent au fur et à mesure et tu l&apos;envoies
+              toi-même en fin de mois.
             </p>
           </div>
           <div className="flex items-center gap-6 rounded-2xl border border-brand-800 bg-brand-900 px-5 py-3 shadow-card">
@@ -650,6 +653,7 @@ export default function FacturationImmoPage() {
                 <button
                   className="btn-accent btn-sm"
                   disabled={creating}
+                  title="La facture du mois est créée au premier ajout et n'est jamais envoyée par Kratos — tu l'envoies depuis QuickBooks une fois par mois."
                   onClick={() => void creerFacture()}
                 >
                   {creating ? (
@@ -657,7 +661,7 @@ export default function FacturationImmoPage() {
                   ) : (
                     <FileText className="h-4 w-4" />
                   )}
-                  Créer la facture dans QuickBooks
+                  Ajouter à la facture du mois (QuickBooks)
                 </button>
               </div>
             </>
@@ -992,13 +996,13 @@ export default function FacturationImmoPage() {
                 <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/15">
                   <Receipt className="h-5 w-5 text-emerald-400" />
                 </span>
-                Factures créées
+                Lignes facturées
               </h2>
               {historiqueAffiche.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-brand-800 px-5 py-6 text-center text-sm text-white/45">
                   {filtresActifs
-                    ? "Aucune facture ne correspond aux filtres."
-                    : "Aucune facture créée pour l'instant."}
+                    ? "Aucune ligne facturée ne correspond aux filtres."
+                    : "Aucune ligne facturée pour l'instant."}
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -1008,8 +1012,8 @@ export default function FacturationImmoPage() {
                         <th className="px-3 py-2">Immeuble</th>
                         <th className="px-3 py-2">Ligne</th>
                         <th className="px-3 py-2 text-right">Montant</th>
-                        <th className="px-3 py-2">Facture</th>
-                        <th className="px-3 py-2">Créée le</th>
+                        <th className="px-3 py-2">Facture du mois</th>
+                        <th className="px-3 py-2">Ajoutée le</th>
                         <th className="px-3 py-2" />
                       </tr>
                     </thead>
