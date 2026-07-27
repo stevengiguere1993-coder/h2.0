@@ -45,6 +45,7 @@ import {
 } from "@/components/immobilier/logement-fiche";
 import { LocationsBoard } from "@/components/immobilier/locations-board";
 import {
+  BailDocActions,
   BailSignature,
   TalFormDropdown
 } from "@/components/immobilier/tal-avis";
@@ -104,6 +105,7 @@ type Bail = {
   status: string;
   signed_at?: string | null;
   signed_by_name?: string | null;
+  document_id?: number | null;
 };
 
 type Hypotheque = {
@@ -932,6 +934,14 @@ export default function ImmeubleDetailPage({
               logements={logements}
               locataires={locataires}
               highlightBailId={highlightBailId}
+              onDocsChanged={() => {
+                void (async () => {
+                  const bx = await authedFetch(
+                    `/api/v1/immobilier/immeubles/${immeubleId}/baux`
+                  );
+                  if (bx.ok) setBaux((await bx.json()) as Bail[]);
+                })();
+              }}
               onRelocation={async (b) => {
                 setActionErr(null);
                 const r = await authedFetch(
@@ -2223,7 +2233,8 @@ function BauxTab({
   logements,
   locataires,
   highlightBailId,
-  onRelocation
+  onRelocation,
+  onDocsChanged
 }: {
   immeubleId: number;
   list: Bail[] | null;
@@ -2231,6 +2242,8 @@ function BauxTab({
   locataires: { id: number; full_name: string }[];
   highlightBailId: number | null;
   onRelocation: (b: Bail) => void | Promise<void>;
+  /** Recharge les baux après import/remplacement du bail courant. */
+  onDocsChanged?: () => void;
 }) {
   const logMap = new Map((logements || []).map((l) => [l.id, l.numero]));
   const locMap = new Map(locataires.map((l) => [l.id, l.full_name]));
@@ -2313,7 +2326,15 @@ function BauxTab({
                     <BailSignButton bailId={b.id} signed={!!b.signed_at} />
                   </td>
                   <td className="px-4 py-2 text-right">
-                    <TalFormDropdown bailId={b.id} />
+                    <span className="inline-flex items-center gap-1.5">
+                      <TalFormDropdown bailId={b.id} />
+                      <BailDocActions
+                        bailId={b.id}
+                        hasDoc={b.document_id != null}
+                        signedAt={b.signed_at}
+                        onChanged={onDocsChanged}
+                      />
+                    </span>
                   </td>
                   <td className="px-4 py-2 text-right">
                     {b.status === "actif" ? (

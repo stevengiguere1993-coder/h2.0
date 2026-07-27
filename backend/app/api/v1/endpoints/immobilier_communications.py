@@ -161,6 +161,17 @@ async def list_destinataires(
 # ── Réglages d'envoi (expéditeur par défaut) ───────────────────────────
 
 
+class ProfilEnvoi(BaseModel):
+    """Un EXPÉDITEUR approuvé (retour Phil : « si j'ai deux gestionnaires
+    différents ») — les non-managers choisissent parmi ces profils, sans
+    jamais taper d'adresse libre."""
+
+    label: str = Field(min_length=1, max_length=80)
+    from_email: str = ""
+    from_name: str = ""
+    reply_to: str = ""
+
+
 class ReglagesEnvoi(BaseModel):
     #: Boîte M365 d'envoi (vide = celle du système, info@…).
     from_email: str = ""
@@ -168,16 +179,25 @@ class ReglagesEnvoi(BaseModel):
     from_name: str = ""
     #: Adresse de RÉPONSE — peut être externe (gmail du gestionnaire).
     reply_to: str = ""
+    #: Expéditeurs supplémentaires approuvés (gérés par les managers).
+    profils: List[ProfilEnvoi] = []
 
 
 @router.get("/reglages", response_model=ReglagesEnvoi)
 async def get_reglages(db: DBSession, user: CurrentUser) -> ReglagesEnvoi:
     _require_volet(user)
     cfg = await get_automation_config(_REGLAGES_KEY)
+    profils = []
+    for raw in cfg.get("profils") or []:
+        try:
+            profils.append(ProfilEnvoi(**raw))
+        except Exception:  # noqa: BLE001 — profil corrompu ignoré
+            continue
     return ReglagesEnvoi(
         from_email=str(cfg.get("from_email") or ""),
         from_name=str(cfg.get("from_name") or ""),
         reply_to=str(cfg.get("reply_to") or ""),
+        profils=profils,
     )
 
 
@@ -195,6 +215,16 @@ async def put_reglages(
         from_email=payload.from_email.strip(),
         from_name=payload.from_name.strip(),
         reply_to=payload.reply_to.strip(),
+        profils=[
+            ProfilEnvoi(
+                label=pr.label.strip(),
+                from_email=pr.from_email.strip(),
+                from_name=pr.from_name.strip(),
+                reply_to=pr.reply_to.strip(),
+            )
+            for pr in payload.profils
+            if pr.label.strip()
+        ][:10],
     )
     await set_automation_config(
         db, _REGLAGES_KEY, clean.model_dump(), user_id=user.id
@@ -225,6 +255,9 @@ class EnvoyerIn(BaseModel):
     from_email: Optional[str] = None
     from_name: Optional[str] = None
     reply_to: Optional[str] = None
+    #: Label d'un PROFIL approuvé des réglages — seule façon pour un
+    #: non-manager de choisir un autre expéditeur que le défaut.
+    profil: Optional[str] = Field(default=None, max_length=80)
 
 
 class EnvoyerOut(BaseModel):
@@ -389,7 +422,24 @@ async def envoyer(
     # aucun repli silencieux sur la boîte système.
     cfg = await get_automation_config(_REGLAGES_KEY)
     est_manager = bool(user.has_min_role("manager"))
-    if est_manager:
+    # Un PROFIL approuvé (des réglages) peut être choisi par tout le
+    # monde — c'est la réponse au cas « deux gestionnaires ».
+    profil_choisi = None
+    if (payload.profil or "").strip():
+        for raw in cfg.get("profils") or []:
+            if str(raw.get("label") or "").strip() == payload.profil.strip():
+                profil_choisi = raw
+                break
+        if profil_choisi is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Expéditeur inconnu — choisis un profil de la liste.",
+            )
+    if profil_choisi is not None:
+        from_email = str(profil_choisi.get("from_email") or "").strip() or None
+        from_name = str(profil_choisi.get("from_name") or "").strip() or None
+        reply_to = str(profil_choisi.get("reply_to") or "").strip() or None
+    elif est_manager:
         from_email = (
             (payload.from_email or "").strip()
             or str(cfg.get("from_email") or "").strip()

@@ -378,7 +378,7 @@ export default function RenouvellementsPage() {
     "renouvellements" | "releves31" | "assurances"
   >("renouvellements");
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<"all" | "todo" | "envoye">("todo");
+  const [filter, setFilter] = useState<"all" | "todo" | "envoye">("all");
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -503,6 +503,11 @@ export default function RenouvellementsPage() {
     }
     return true;
   });
+  // Les avis déjà envoyés (verts) descendent en bas de la liste — le
+  // travail à faire reste en haut. Ordre backend conservé dans chaque groupe.
+  const sorted = [...filtered].sort(
+    (a, b) => Number(a.fenetre === "envoye") - Number(b.fenetre === "envoye")
+  );
 
   return (
     <>
@@ -620,7 +625,7 @@ export default function RenouvellementsPage() {
           <p className="mt-6 text-xs text-white/50">
             <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Chargement…
           </p>
-        ) : filtered.length === 0 ? (
+        ) : sorted.length === 0 ? (
           <p className="mt-6 rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
             Aucun bail dans cette catégorie.
           </p>
@@ -638,8 +643,15 @@ export default function RenouvellementsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-800">
-                {filtered.map((r) => (
-                  <tr key={r.bail_id} className="hover:bg-brand-950/50">
+                {sorted.map((r) => (
+                  <tr
+                    key={r.bail_id}
+                    className={
+                      r.fenetre === "envoye"
+                        ? "bg-emerald-500/10 hover:bg-emerald-500/15"
+                        : "hover:bg-brand-950/50"
+                    }
+                  >
                     <td className="px-4 py-2.5">
                       <Link
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1568,7 +1580,7 @@ function Releves31Tab() {
                           ) : (
                             <Upload className="h-3 w-3" />
                           )}
-                          {r.document_id ? "Remplacer" : "PDF"}
+                          {r.document_id ? "Remplacer" : "Importer"}
                         </button>
                         <button
                           type="button"

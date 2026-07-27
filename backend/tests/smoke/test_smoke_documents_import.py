@@ -16,11 +16,13 @@ import pytest
 
 from app.models.immobilier import (
     Bail,
+    BailRenouvellement,
     BailStatus,
     Immeuble,
     Locataire,
     Logement,
     LogementStatus,
+    Releve31,
 )
 
 from .conftest import TestSessionLocal
@@ -145,3 +147,114 @@ def test_bail_courant_et_remplacement(client, auth_headers, doc_seed):
     ):
         ids2 = {x["id"] for x in client.get(url, headers=auth_headers).json()}
         assert v1["id"] in ids2 and v2["id"] in ids2
+
+
+def test_titre_bail_avec_date_entree(client, auth_headers, doc_seed):
+    """Retour Phil : « Bail signé [LA date d'entrée en vigueur] » — la
+    date est demandée à l'import ; sans elle, la date de début du bail."""
+    r = _upload(
+        client, auth_headers,
+        f"/api/v1/immobilier/baux/{doc_seed['bail_id']}/document",
+        {"date_entree": "2026-07-15"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["titre"] == "Bail signé 2026-07-15"
+
+    r2 = _upload(
+        client, auth_headers,
+        f"/api/v1/immobilier/baux/{doc_seed['bail_id']}/document",
+    )
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["titre"] == "Bail signé 2026-07-01"  # date_debut du seed
+
+
+def test_suppression_liee_bail(client, auth_headers, doc_seed, run):
+    """Delete du document courant du bail → le bail est dé-pointé
+    (« ils sont reliés »)."""
+    bail_id = doc_seed["bail_id"]
+    doc_id = _upload(
+        client, auth_headers, f"/api/v1/immobilier/baux/{bail_id}/document"
+    ).json()["id"]
+
+    d = client.delete(
+        f"/api/v1/immobilier/documents/{doc_id}", headers=auth_headers
+    )
+    assert d.status_code == 204, d.text
+
+    async def _check():
+        async with TestSessionLocal() as s:
+            return (await s.get(Bail, bail_id)).document_id
+
+    assert run(_check()) is None
+
+
+def test_suppression_liee_renouvellement(client, auth_headers, doc_seed, run):
+    """Delete de l'avis importé d'un cycle sans réponse → le cycle
+    disparaît : la ligne redevient « à envoyer » dans Suivis annuels."""
+    r = client.post(
+        "/api/v1/immobilier/renouvellements/importer",
+        headers=auth_headers,
+        files={"file": ("avis.pdf", _PDF, "application/pdf")},
+        data={"bail_id": str(doc_seed["bail_id"])},
+    )
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["id"]
+
+    d = client.delete(
+        f"/api/v1/immobilier/documents/{doc_id}", headers=auth_headers
+    )
+    assert d.status_code == 204, d.text
+
+    async def _check():
+        from sqlalchemy import select
+
+        async with TestSessionLocal() as s:
+            rows = (
+                await s.execute(
+                    select(BailRenouvellement).where(
+                        BailRenouvellement.bail_id == doc_seed["bail_id"]
+                    )
+                )
+            ).scalars().all()
+            return len(rows)
+
+    assert run(_check()) == 0
+
+
+def test_suppression_liee_releve31(client, auth_headers, doc_seed, run):
+    """Delete de la copie PDF d'un relevé 31 produit → retour « à
+    produire », copie dé-pointée."""
+    doc_id = _upload(
+        client, auth_headers, "/api/v1/immobilier/documents/import",
+        {"locataire_id": str(doc_seed["locataire_id"]), "type": "releve31",
+         "titre": "Relevé 31 — 2026"},
+    ).json()["id"]
+
+    async def _seed_releve():
+        async with TestSessionLocal() as s:
+            rel = Releve31(
+                annee=2026,
+                logement_id=doc_seed["logement_id"],
+                immeuble_id=doc_seed["immeuble_id"],
+                bail_id=doc_seed["bail_id"],
+                locataire_id=doc_seed["locataire_id"],
+                statut="produit",
+                document_id=doc_id,
+            )
+            s.add(rel)
+            await s.commit()
+            return rel.id
+
+    rel_id = run(_seed_releve())
+
+    d = client.delete(
+        f"/api/v1/immobilier/documents/{doc_id}", headers=auth_headers
+    )
+    assert d.status_code == 204, d.text
+
+    async def _check():
+        async with TestSessionLocal() as s:
+            rel = await s.get(Releve31, rel_id)
+            return (rel.statut, rel.document_id)
+
+    assert run(_check()) == ("a_produire", None)

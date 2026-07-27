@@ -347,3 +347,65 @@ def test_destinataires_exposent_le_du_du_mois(
     par_nom = {l["nom"]: l for l in bloc["locataires"]}
     assert par_nom["Alice Comm"]["du_mois"] == 0.0
     assert par_nom["Bob Comm"]["du_mois"] == 802.0
+
+
+def test_envoi_via_profil_expediteur(
+    client, auth_headers, comm_seed, fake_mailer
+):
+    """Profils d'expéditeurs approuvés (cas « deux gestionnaires ») :
+    l'envoi avec profil=label applique l'expéditeur du profil ; un label
+    inconnu est refusé."""
+    resp = client.put(
+        "/api/v1/immobilier/communications/reglages",
+        headers=auth_headers,
+        json={
+            "from_email": "",
+            "from_name": "",
+            "reply_to": "",
+            "profils": [
+                {
+                    "label": "Kyle",
+                    "from_email": "gestion@immohorizon.com",
+                    "from_name": "Kyle — Gestion Horizon",
+                    "reply_to": "kyle.gestion@gmail.com",
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert [p["label"] for p in resp.json()["profils"]] == ["Kyle"]
+
+    resp2 = client.post(
+        "/api/v1/immobilier/communications/envoyer",
+        headers=auth_headers,
+        json={
+            "type": "demande_assurance",
+            "immeuble_ids": [],
+            "locataire_ids": [comm_seed["locataire_bob"]],
+            "profil": "Kyle",
+        },
+    )
+    assert resp2.status_code == 200, resp2.text
+    m = fake_mailer.sent[-1]
+    assert m["from_email"] == "gestion@immohorizon.com"
+    assert m["from_name"] == "Kyle — Gestion Horizon"
+    assert m["reply_to"] == "kyle.gestion@gmail.com"
+
+    resp3 = client.post(
+        "/api/v1/immobilier/communications/envoyer",
+        headers=auth_headers,
+        json={
+            "type": "demande_assurance",
+            "immeuble_ids": [],
+            "locataire_ids": [comm_seed["locataire_bob"]],
+            "profil": "Inconnu",
+        },
+    )
+    assert resp3.status_code == 422
+
+    # Nettoyage pour les autres tests.
+    client.put(
+        "/api/v1/immobilier/communications/reglages",
+        headers=auth_headers,
+        json={"from_email": "", "from_name": "", "reply_to": "", "profils": []},
+    )
