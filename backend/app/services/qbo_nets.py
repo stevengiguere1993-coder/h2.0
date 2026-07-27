@@ -549,6 +549,75 @@ async def run_qbo_nets() -> Dict[str, Any]:
     except Exception:  # noqa: BLE001
         log.warning("Filet BillPayments achats échoué", exc_info=True)
 
+    # ── Paiements de factures ORPHELINS dans QB → suppression ──
+    # Un « Paiement de factures (chèque) » créé par Kratos dont le Bill a
+    # disparu (erreur corrigée, doublon nettoyé) reste dans QB comme
+    # paiement NON APPLIQUÉ et pollue le rapport « Factures à payer non
+    # réglées » (cas Planchers Économiques 104 / Portes et Moulures). On
+    # supprime les BillPayments SANS AUCUN Bill lié ET qu'aucun achat
+    # Kratos ne référence. Un paiement appliqué à un Bill, référencé par
+    # Kratos, ou rapproché (delete refuse) n'est jamais touché.
+    try:
+        from sqlalchemy import select as _sel_pmo
+
+        from app.integrations.quickbooks import get_qbo as _get_qbo_pmo
+        from app.models.achat import Achat as _AchatPmo
+
+        _qbo = _get_qbo_pmo()
+        await _qbo._load_refresh_from_db()
+        if _qbo.ready:
+            _pmts = await _qbo.query(
+                "SELECT * FROM BillPayment MAXRESULTS 1000"
+            )
+            async with AsyncSessionLocal() as db:
+                _refd = {
+                    str(r[0])
+                    for r in (
+                        await db.execute(
+                            _sel_pmo(
+                                _AchatPmo.qbo_bill_payment_id
+                            ).where(
+                                _AchatPmo.qbo_bill_payment_id.is_not(None)
+                            )
+                        )
+                    ).all()
+                }
+            _prm = _pkept = 0
+            for _p in _pmts:
+                _pid = str(_p.get("Id") or "")
+                if not _pid or _pid in _refd:
+                    continue
+                _linked = [
+                    lt
+                    for line in (_p.get("Line") or [])
+                    for lt in (line.get("LinkedTxn") or [])
+                    if lt.get("TxnType") == "Bill"
+                ]
+                if _linked:
+                    continue  # paie encore un Bill → légitime
+                try:
+                    if await _qbo.delete_bill_payment(_pid):
+                        _prm += 1
+                        log.info(
+                            "BillPayment QB orphelin %s supprimé "
+                            "(%s $, %s — aucun Bill lié, aucun achat "
+                            "Kratos)",
+                            _pid,
+                            _p.get("TotalAmt"),
+                            (_p.get("VendorRef") or {}).get("name"),
+                        )
+                    else:
+                        _pkept += 1
+                except Exception:  # noqa: BLE001
+                    _pkept += 1
+            if _prm or _pkept:
+                out["paiements_orphelins"] = {
+                    "supprimes": _prm,
+                    "non_supprimables": _pkept,
+                }
+    except Exception:  # noqa: BLE001
+        log.warning("Balayage BillPayments orphelins échoué", exc_info=True)
+
     # ── Bons de travail CLIENT en cours → projet lié + sous-client QB ──
     # Le hook de création couvre les NOUVEAUX bons ; ce filet rattrape les
     # bons créés AVANT la fonctionnalité (ou dont le push en fond a échoué) :
