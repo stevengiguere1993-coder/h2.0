@@ -740,13 +740,12 @@ export default function RenouvellementsPage() {
                             Avis
                           </button>
                         ) : null}
-                        {r.renouvellement_id ? (
-                          <ImportAvisButton
-                            renouvellementId={r.renouvellement_id}
-                            hasDoc={r.document_id != null}
-                            onDone={() => void reload()}
-                          />
-                        ) : null}
+                        <ImportAvisButton
+                          renouvellementId={r.renouvellement_id}
+                          bailId={r.bail_id}
+                          hasDoc={r.document_id != null}
+                          onDone={() => void reload()}
+                        />
                         <button
                           type="button"
                           onClick={() => setPrepFor(r)}
@@ -1189,6 +1188,10 @@ const R31_STATUT: Record<string, { label: string; badge: string }> = {
 function Releves31Tab() {
   const [data, setData] = useState<Releve31Overview | null>(null);
   const [annee, setAnnee] = useState<number | null>(null);
+  // Filtres (retour Phil 2026-07-27 : parité avec Renouvellements /
+  // Assurances) — immeuble + recherche, appliqués côté client.
+  const [fImmeuble, setFImmeuble] = useState("");
+  const [search31, setSearch31] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -1313,6 +1316,16 @@ function Releves31Tab() {
     return [now, now - 1, now - 2];
   })();
 
+  const rows31 = (data?.rows || []).filter((r) => {
+    if (fImmeuble && String(r.immeuble_id ?? "") !== fImmeuble) return false;
+    if (search31.trim()) {
+      const q = search31.toLowerCase();
+      const hay = `${r.locataire_nom || ""} ${r.immeuble_name || ""} ${r.logement_numero || ""} ${r.numero_releve || ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
   return (
     <div className="mt-4 space-y-4">
       <input
@@ -1369,6 +1382,33 @@ function Releves31Tab() {
             ))}
           </select>
         </label>
+        <select
+          value={fImmeuble}
+          onChange={(e) => setFImmeuble(e.target.value)}
+          className="input w-auto text-sm"
+        >
+          <option value="">Tous les immeubles</option>
+          {Array.from(
+            new Map(
+              (data?.rows || [])
+                .filter((r) => r.immeuble_id != null)
+                .map((r) => [r.immeuble_id as number, r.immeuble_name || ""])
+            ).entries()
+          ).map(([iid, nom]) => (
+            <option key={iid} value={String(iid)}>
+              {nom}
+            </option>
+          ))}
+        </select>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
+          <input
+            value={search31}
+            onChange={(e) => setSearch31(e.target.value)}
+            placeholder="Locataire, immeuble, logement…"
+            className="input w-56 pl-8 text-sm"
+          />
+        </div>
         {data ? (
           <span className="text-xs text-white/50">
             {data.rows.length} logement{data.rows.length > 1 ? "s" : ""} occupé
@@ -1401,10 +1441,11 @@ function Releves31Tab() {
         <p className="flex items-center gap-2 text-xs text-white/50">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
         </p>
-      ) : data.rows.length === 0 ? (
+      ) : rows31.length === 0 ? (
         <p className="rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
-          Aucun logement occupé au 31 décembre {data.annee} (gestion externe
-          exclue).
+          {data.rows.length === 0
+            ? `Aucun logement occupé au 31 décembre ${data.annee} (gestion externe exclue).`
+            : "Aucun relevé ne correspond aux filtres."}
         </p>
       ) : (
         <div className="overflow-x-auto rounded-2xl border border-brand-800 bg-brand-900">
@@ -1420,7 +1461,7 @@ function Releves31Tab() {
               </tr>
             </thead>
             <tbody className="divide-y divide-brand-800">
-              {data.rows.map((r) => {
+              {rows31.map((r) => {
                 const st = R31_STATUT[r.statut] || R31_STATUT.a_produire;
                 const busy = busyId === r.logement_id;
                 return (
@@ -1570,10 +1611,14 @@ function Releves31Tab() {
  *  Documents (retour Phil 2026-07-27). */
 function ImportAvisButton({
   renouvellementId,
+  bailId,
   hasDoc,
   onDone
 }: {
-  renouvellementId: number;
+  /** Cycle existant → remplace son avis courant. */
+  renouvellementId?: number | null;
+  /** Pas encore de cycle → l'import en crée un (avis déjà envoyé papier). */
+  bailId?: number;
   hasDoc: boolean;
   onDone: () => void;
 }) {
@@ -1592,8 +1637,13 @@ function ImportAvisButton({
     try {
       const fd = new FormData();
       fd.append("file", file);
+      if (renouvellementId == null && bailId != null) {
+        fd.append("bail_id", String(bailId));
+      }
       const r = await authedFetch(
-        `/api/v1/immobilier/renouvellements/${renouvellementId}/document`,
+        renouvellementId != null
+          ? `/api/v1/immobilier/renouvellements/${renouvellementId}/document`
+          : "/api/v1/immobilier/renouvellements/importer",
         { method: "POST", body: fd }
       );
       if (!r.ok) {

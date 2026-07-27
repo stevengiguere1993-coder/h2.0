@@ -21,6 +21,7 @@ import { useSearchParams } from "next/navigation";
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import {
+  BailDocActions,
   BailSignature,
   DocumentsSection,
   TalFormDropdown
@@ -52,6 +53,7 @@ type DossierBail = {
   status: string;
   document_url: string | null;
   signed_at: string | null;
+  document_id?: number | null;
 };
 
 type DossierBon = {
@@ -325,10 +327,7 @@ export default function LogementDetailPage({
   const bauxHistorique = dossier
     ? dossier.baux.filter((b) => b.id !== bailActif?.id)
     : [];
-  const documents = dossier
-    ? dossier.baux.filter((b) => !!b.document_url)
-    : [];
-  const maxLoyer = dossier
+    const maxLoyer = dossier
     ? Math.max(...dossier.historique_loyer.map((p) => p.loyer_mensuel), 1)
     : 1;
 
@@ -731,18 +730,14 @@ export default function LogementDetailPage({
                         {BAIL_STATUS_LABEL[bailActif.status] ??
                           bailActif.status}
                       </span>
-                      {bailActif.document_url ? (
-                        <a
-                          href={bailActif.document_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 text-xs text-accent-500 hover:underline"
-                        >
-                          <FileText className="h-3.5 w-3.5" /> Voir le bail
-                        </a>
-                      ) : null}
                       <TalFormDropdown bailId={bailActif.id} />
                       <BailSignature bailId={bailActif.id} />
+                      <BailDocActions
+                        bailId={bailActif.id}
+                        hasDoc={bailActif.document_id != null}
+                        signedAt={bailActif.signed_at}
+                        onChanged={() => void loadDossier()}
+                      />
                     </div>
                   </div>
                 ) : (
@@ -806,18 +801,12 @@ export default function LogementDetailPage({
                             </span>
                           </td>
                           <td className="py-2.5 text-right">
-                            {b.document_url ? (
-                              <a
-                                href={b.document_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1 text-xs text-accent-500 hover:underline"
-                              >
-                                <FileText className="h-3.5 w-3.5" /> Bail
-                              </a>
-                            ) : (
-                              <span className="text-xs text-white/30">—</span>
-                            )}
+                            <BailDocActions
+                              bailId={b.id}
+                              hasDoc={b.document_id != null}
+                              signedAt={b.signed_at}
+                              onChanged={() => void loadDossier()}
+                            />
                           </td>
                         </tr>
                       ))}
@@ -954,48 +943,6 @@ export default function LogementDetailPage({
               )}
             </section>
 
-            {/* (f) Documents */}
-            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-              <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-accent-500">
-                <FileText className="h-4 w-4" />
-                Documents
-              </h2>
-              {documents.length === 0 ? (
-                <p className="text-sm text-white/50">
-                  Aucun document — les baux avec un PDF apparaîtront ici.
-                </p>
-              ) : (
-                <ul className="space-y-2">
-                  {documents.map((b) => (
-                    <li
-                      key={b.id}
-                      className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
-                    >
-                      <a
-                        href={b.document_url as string}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1.5 font-medium text-accent-500 hover:underline"
-                      >
-                        <FileText className="h-4 w-4" />
-                        Bail {fmtDate(b.date_debut)} →{" "}
-                        {fmtDate(b.date_fin)}
-                      </a>
-                      {b.locataire ? (
-                        <span className="text-xs text-white/60">
-                          {b.locataire.full_name}
-                        </span>
-                      ) : null}
-                      {b.signed_at ? (
-                        <span className="badge badge-emerald">
-                          Signé le {fmtDate(b.signed_at)}
-                        </span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
 
             {/* (g) Notes */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">

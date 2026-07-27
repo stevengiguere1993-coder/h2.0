@@ -93,6 +93,9 @@ class DestinataireOut(BaseModel):
     nom: str
     email: Optional[str] = None
     logement: Optional[str] = None
+    #: Dû du MOIS COURANT (loyer + frais − payé) — alimente le bouton
+    #: « Retards du mois » de la page (retour Phil 2026-07-27).
+    du_mois: float = 0.0
 
 
 class ImmeubleDestinatairesOut(BaseModel):
@@ -124,6 +127,8 @@ async def list_destinataires(
             .order_by(Immeuble.name.asc(), Logement.numero.asc())
         )
     ).all()
+    mois_courant = _now().date().replace(day=1)
+    dus = await _du_du_mois(db, [b.id for b, _l, _lg, _i in rows], mois_courant)
     par_immeuble: Dict[int, ImmeubleDestinatairesOut] = {}
     for bail, loc, lg, imm in rows:
         bloc = par_immeuble.get(imm.id)
@@ -139,6 +144,15 @@ async def list_destinataires(
                 nom=loc.full_name or f"Locataire {loc.id}",
                 email=(loc.email or "").strip() or None,
                 logement=lg.numero,
+                du_mois=max(
+                    0.0,
+                    round(
+                        float(bail.loyer_mensuel or 0)
+                        + dus["frais"].get(bail.id, 0.0)
+                        - dus["payes"].get(bail.id, 0.0),
+                        2,
+                    ),
+                ),
             )
         )
     return list(par_immeuble.values())
@@ -368,23 +382,46 @@ async def envoyer(
             detail="L'envoi de courriels (Microsoft 365) n'est pas configuré.",
         )
 
-    # Expéditeur : payload > réglages > défaut système.
+    # Expéditeur : les MANAGERS peuvent ajuster à l'envoi ; les autres
+    # (gestionnaire contractuel, employé) sont VERROUILLÉS sur les
+    # défauts posés dans les réglages — impossible d'usurper le « De qui »
+    # (retour Phil 2026-07-27). Et la section De qui est OBLIGATOIRE :
+    # aucun repli silencieux sur la boîte système.
     cfg = await get_automation_config(_REGLAGES_KEY)
-    from_email = (
-        (payload.from_email or "").strip()
-        or str(cfg.get("from_email") or "").strip()
-        or None
-    )
-    from_name = (
-        (payload.from_name or "").strip()
-        or str(cfg.get("from_name") or "").strip()
-        or None
-    )
-    reply_to = (
-        (payload.reply_to or "").strip()
-        or str(cfg.get("reply_to") or "").strip()
-        or None
-    )
+    est_manager = bool(user.has_min_role("manager"))
+    if est_manager:
+        from_email = (
+            (payload.from_email or "").strip()
+            or str(cfg.get("from_email") or "").strip()
+            or None
+        )
+        from_name = (
+            (payload.from_name or "").strip()
+            or str(cfg.get("from_name") or "").strip()
+            or None
+        )
+        reply_to = (
+            (payload.reply_to or "").strip()
+            or str(cfg.get("reply_to") or "").strip()
+            or None
+        )
+    else:
+        from_email = str(cfg.get("from_email") or "").strip() or None
+        from_name = str(cfg.get("from_name") or "").strip() or None
+        reply_to = str(cfg.get("reply_to") or "").strip() or None
+    if not from_email:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "La section « De qui » n'est pas remplie : indique "
+                "l'adresse d'envoi (boîte Microsoft 365)"
+                + (
+                    "." if est_manager
+                    else " — demande à ton gestionnaire de configurer "
+                    "les défauts d'envoi."
+                )
+            ),
+        )
 
     gabarit = None
     if payload.type in GABARITS_DEFAUT:

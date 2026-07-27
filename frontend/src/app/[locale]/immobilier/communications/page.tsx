@@ -17,7 +17,10 @@ import {
   X
 } from "lucide-react";
 
-import { authedFetch } from "@/lib/auth";
+import { useSearchParams } from "next/navigation";
+
+import { authedFetch, hasMinRole } from "@/lib/auth";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import { ImmobilierTopbar } from "../layout";
 
 /**
@@ -42,6 +45,8 @@ type Destinataire = {
   nom: string;
   email?: string | null;
   logement?: string | null;
+  //: Dû du mois courant (loyer + frais − payé) — bouton « Retards ».
+  du_mois?: number;
 };
 
 type ImmeubleBloc = {
@@ -113,6 +118,12 @@ function fmtDate(iso?: string | null): string {
 }
 
 export default function CommunicationsPage() {
+  const { user: me } = useCurrentUser();
+  // « De qui » : seuls les managers peuvent dévier des défauts — un
+  // gestionnaire contractuel ne peut pas usurper l'expéditeur (le
+  // backend le force aussi).
+  const estManager = hasMinRole(me, "manager");
+  const searchParams = useSearchParams();
   const [blocs, setBlocs] = useState<ImmeubleBloc[] | null>(null);
   const [reglages, setReglages] = useState<Reglages | null>(null);
 
@@ -183,6 +194,22 @@ export default function CommunicationsPage() {
   useEffect(() => {
     void loadAudit();
   }, [loadAudit]);
+
+  // « Écrire à ce locataire » depuis sa fiche : ?locataire_id=N →
+  // pré-coché en chip dès que les destinataires sont chargés.
+  useEffect(() => {
+    const lid = Number(searchParams.get("locataire_id") || "");
+    if (!lid || !blocs) return;
+    setLocSel((prev) => {
+      if (prev.has(lid)) return prev;
+      for (const b of blocs) {
+        const l = b.locataires.find((x) => x.locataire_id === lid);
+        if (l) return new Map(prev).set(lid, l);
+      }
+      return prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blocs]);
 
   // Destinataires effectifs = locataires des immeubles cochés ∪ chips.
   const effectifs = useMemo(() => {
@@ -280,6 +307,14 @@ export default function CommunicationsPage() {
     }
     if (type === "avis_acces" && !accesDate) {
       setErr("Avis d'accès : choisis la date de la visite.");
+      return;
+    }
+    if (!fromEmail.trim()) {
+      setErr(
+        estManager
+          ? "Remplis la section « De qui » : l'adresse d'envoi est obligatoire."
+          : "La section « De qui » n'est pas configurée — demande à ton gestionnaire d'enregistrer les défauts d'envoi."
+      );
       return;
     }
     if (
@@ -386,11 +421,32 @@ export default function CommunicationsPage() {
               <h2 className="flex items-center gap-2 text-base font-bold text-white">
                 <Users className="h-4 w-4 text-accent-500" /> À qui
               </h2>
-              <button className="btn-secondary btn-xs" onClick={toutCocher}>
-                {blocs && immSel.size === blocs.length
-                  ? "Tout décocher"
-                  : "Tous les immeubles"}
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button className="btn-secondary btn-xs" onClick={toutCocher}>
+                  {blocs && immSel.size === blocs.length
+                    ? "Tout décocher"
+                    : "Tous les immeubles"}
+                </button>
+                <button
+                  className="inline-flex items-center gap-1 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
+                  title="Sélectionner tous les locataires qui n'ont pas payé le mois courant au complet"
+                  onClick={() => {
+                    if (!blocs) return;
+                    setLocSel((prev) => {
+                      const next = new Map(prev);
+                      for (const b of blocs) {
+                        for (const l of b.locataires) {
+                          if ((l.du_mois ?? 0) > 0.005)
+                            next.set(l.locataire_id, l);
+                        }
+                      }
+                      return next;
+                    });
+                  }}
+                >
+                  Retards du mois
+                </button>
+              </div>
             </div>
 
             {blocs === null ? (
@@ -669,8 +725,9 @@ export default function CommunicationsPage() {
               <input
                 value={fromEmail}
                 onChange={(e) => setFromEmail(e.target.value)}
-                placeholder="info@immohorizon.com (défaut)"
-                className="input mt-1 w-full"
+                disabled={!estManager}
+                placeholder="ex. info@immohorizon.com"
+                className="input mt-1 w-full disabled:opacity-60"
               />
             </div>
             <div>
@@ -680,8 +737,9 @@ export default function CommunicationsPage() {
               <input
                 value={fromName}
                 onChange={(e) => setFromName(e.target.value)}
+                disabled={!estManager}
                 placeholder="Kyle — Gestion Horizon"
-                className="input mt-1 w-full"
+                className="input mt-1 w-full disabled:opacity-60"
               />
             </div>
             <div>
@@ -691,17 +749,29 @@ export default function CommunicationsPage() {
               <input
                 value={replyTo}
                 onChange={(e) => setReplyTo(e.target.value)}
+                disabled={!estManager}
                 placeholder="kyle.gestion@gmail.com"
-                className="input mt-1 w-full"
+                className="input mt-1 w-full disabled:opacity-60"
               />
             </div>
           </div>
           <p className="mt-2 text-xs text-white/45">
-            L&apos;adresse d&apos;envoi doit être une boîte de votre
-            Microsoft 365 (sinon le courriel tomberait en spam). Pour un
-            gestionnaire externe : mets son nom dans « Nom affiché » et son
-            adresse dans « Répondre à » — les réponses des locataires iront
-            directement chez lui.
+            {estManager ? (
+              <>
+                L&apos;adresse d&apos;envoi doit être une boîte de votre
+                Microsoft 365 (sinon le courriel tomberait en spam). Pour un
+                gestionnaire externe : mets son nom dans « Nom affiché » et
+                son adresse dans « Répondre à » — les réponses des locataires
+                iront directement chez lui. Section obligatoire avant tout
+                envoi.
+              </>
+            ) : (
+              <>
+                Ces valeurs sont définies par ton gestionnaire (défauts
+                verrouillés) — tes envois partiront toujours avec cet
+                expéditeur.
+              </>
+            )}
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <button
@@ -716,19 +786,21 @@ export default function CommunicationsPage() {
               )}
               Envoyer ({Math.max(0, effectifs.length - sansEmail)})
             </button>
-            <button
-              className="btn-secondary btn-sm"
-              disabled={savingReglages}
-              onClick={() => void saveReglages()}
-              title="Retenir cette adresse, ce nom et ce répondre-à comme défauts"
-            >
-              {savingReglages ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Check className="h-3.5 w-3.5" />
-              )}
-              Enregistrer comme défauts
-            </button>
+            {estManager ? (
+              <button
+                className="btn-secondary btn-sm"
+                disabled={savingReglages}
+                onClick={() => void saveReglages()}
+                title="Retenir cette adresse, ce nom et ce répondre-à comme défauts"
+              >
+                {savingReglages ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Check className="h-3.5 w-3.5" />
+                )}
+                Enregistrer comme défauts
+              </button>
+            ) : null}
             {reglagesMsg && (
               <span className="text-xs text-white/60">{reglagesMsg}</span>
             )}

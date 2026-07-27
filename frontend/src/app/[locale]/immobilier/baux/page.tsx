@@ -810,8 +810,18 @@ export default function BauxPage() {
                                 )}
                                 Relancer
                               </button>
+                              {/* Délimitation paiement | documents | bail
+                                  (retour Phil 2026-07-27 : « mélangeant »). */}
+                              <span
+                                aria-hidden
+                                className="mx-1 h-5 w-px shrink-0 bg-brand-700"
+                              />
                               <TalFormDropdown bailId={r.bail_id} />
                               <BailSignature bailId={r.bail_id} />
+                              <span
+                                aria-hidden
+                                className="mx-1 h-5 w-px shrink-0 bg-brand-700"
+                              />
                               <BailDocActions
                                 bailId={r.bail_id}
                                 hasDoc={r.document_id != null}
