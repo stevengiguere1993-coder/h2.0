@@ -554,11 +554,13 @@ async def run_qbo_nets() -> Dict[str, Any]:
     # disparu (erreur corrigée, doublon nettoyé) reste dans QB comme
     # paiement NON APPLIQUÉ et pollue le rapport « Factures à payer non
     # réglées » (cas Planchers Économiques 104 / Portes et Moulures). On
-    # supprime les BillPayments SANS AUCUN Bill lié ET qu'aucun achat
-    # Kratos ne référence. Un paiement appliqué à un Bill, référencé par
-    # Kratos, ou rapproché (delete refuse) n'est jamais touché.
+    # supprime TOUT BillPayment SANS AUCUN Bill lié — il ne paie rien,
+    # même si un achat Kratos le référence encore (la référence est alors
+    # nettoyée pour garder l'état cohérent). Un paiement APPLIQUÉ à un
+    # Bill (il solde une vraie facture) ou rapproché (delete refuse)
+    # n'est jamais touché.
     try:
-        from sqlalchemy import select as _sel_pmo
+        from sqlalchemy import update as _upd_pmo
 
         from app.integrations.quickbooks import get_qbo as _get_qbo_pmo
         from app.models.achat import Achat as _AchatPmo
@@ -569,23 +571,10 @@ async def run_qbo_nets() -> Dict[str, Any]:
             _pmts = await _qbo.query(
                 "SELECT * FROM BillPayment MAXRESULTS 1000"
             )
-            async with AsyncSessionLocal() as db:
-                _refd = {
-                    str(r[0])
-                    for r in (
-                        await db.execute(
-                            _sel_pmo(
-                                _AchatPmo.qbo_bill_payment_id
-                            ).where(
-                                _AchatPmo.qbo_bill_payment_id.is_not(None)
-                            )
-                        )
-                    ).all()
-                }
             _prm = _pkept = 0
             for _p in _pmts:
                 _pid = str(_p.get("Id") or "")
-                if not _pid or _pid in _refd:
+                if not _pid:
                     continue
                 _linked = [
                     lt
@@ -600,12 +589,24 @@ async def run_qbo_nets() -> Dict[str, Any]:
                         _prm += 1
                         log.info(
                             "BillPayment QB orphelin %s supprimé "
-                            "(%s $, %s — aucun Bill lié, aucun achat "
-                            "Kratos)",
+                            "(%s $, %s — aucun Bill lié)",
                             _pid,
                             _p.get("TotalAmt"),
                             (_p.get("VendorRef") or {}).get("name"),
                         )
+                        # Nettoie la référence Kratos éventuelle : l'achat
+                        # redevient « paiement non reflété » — le filet
+                        # BillPayment le repaiera correctement si son Bill
+                        # existe toujours.
+                        async with AsyncSessionLocal() as db:
+                            await db.execute(
+                                _upd_pmo(_AchatPmo)
+                                .where(
+                                    _AchatPmo.qbo_bill_payment_id == _pid
+                                )
+                                .values(qbo_bill_payment_id=None)
+                            )
+                            await db.commit()
                     else:
                         _pkept += 1
                 except Exception:  # noqa: BLE001
