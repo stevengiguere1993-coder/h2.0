@@ -2185,7 +2185,7 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
   const facturerQbo = async (emp: DashEmployee, c: DashCompanyRow) => {
     if (
       !window.confirm(
-        `Créer une facture QuickBooks à « ${c.label} » pour les heures de ${emp.name} (≈ ${money(c.solde)}) ?\n\nLa facture sera créée dans le QuickBooks de Gestion d'entreprise et le solde sera automatiquement marqué refacturé.`
+        `Ajouter les heures de ${emp.name} (≈ ${money(c.solde)}) à la facture du mois de « ${c.label} » dans QuickBooks ?\n\nLa facture du mois est créée au premier ajout et n'est JAMAIS envoyée par Kratos — tu l'envoies depuis QuickBooks une fois par mois. Le solde sera automatiquement marqué refacturé.`
       )
     )
       return;
@@ -2209,7 +2209,9 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
       }
       setBillMsg({
         ok: true,
-        text: `Facture QuickBooks ${d.doc_number ? `#${d.doc_number}` : ""} créée pour ${c.label} : ${(d.heures as number).toLocaleString("fr-CA")} h × ${money(d.taux)} = ${money(d.montant)}. Solde mis à jour.`
+        text: d.created
+          ? `Facture du mois ${d.doc_number ? `#${d.doc_number} ` : ""}démarrée dans QuickBooks pour ${c.label} : ${(d.heures as number).toLocaleString("fr-CA")} h × ${money(d.taux)} = ${money(d.montant)}. Elle reste ouverte — les prochains ajouts du mois s'y grefferont. Solde mis à jour.`
+          : `${(d.heures as number).toLocaleString("fr-CA")} h × ${money(d.taux)} = ${money(d.montant)} ajouté à la facture du mois ${d.doc_number ? `#${d.doc_number} ` : ""}de ${c.label} dans QuickBooks. Solde mis à jour.`
       });
       await load();
     } catch (e: any) {
@@ -2347,7 +2349,7 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
                             {c.solde > 0 && (
                               <button
                                 className="btn-accent btn-xs whitespace-nowrap"
-                                title="Crée la facture dans ton QuickBooks (heures × taux + taxes) et marque le solde refacturé automatiquement"
+                                title="Ajoute les heures à la facture du mois de cette compagnie dans QuickBooks (créée au premier ajout, jamais envoyée par Kratos) et marque le solde refacturé automatiquement"
                                 disabled={
                                   billBusy === `${emp.user_id}-${c.company_id}`
                                 }
@@ -2359,7 +2361,7 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
                                 ) : (
                                   <FileText className="h-3.5 w-3.5" />
                                 )}
-                                Créer la facture
+                                Facturer le mois
                               </button>
                             )}
                             <button

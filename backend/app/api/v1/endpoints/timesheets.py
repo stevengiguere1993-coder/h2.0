@@ -18,6 +18,7 @@ from sqlalchemy import delete, func, or_, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.integrations.quickbooks import QuickBooksError, get_qbo
+from app.services.qbo_monthly_invoice import add_lines_to_monthly_invoice
 from app.models.automation_setting import AutomationSetting
 from app.services.permissions_service import user_has_capability
 from app.models.timesheet import (
@@ -1330,6 +1331,9 @@ class FactureQboOut(BaseModel):
     montant: float = 0.0
     heures: float = 0.0
     taux: float = 0.0
+    #: True = une nouvelle facture mensuelle a été démarrée, False = les
+    #: lignes ont été ajoutées à la facture du mois déjà ouverte.
+    created: bool = True
 
 
 @router.post("/facturer-qbo", response_model=FactureQboOut)
@@ -1454,30 +1458,15 @@ async def facturer_solde_qbo(
             "Heures", description="Heures de main-d'oeuvre refacturées"
         )
 
-        # Numéro de facture : quand QBO a « numéros d'opération
-        # personnalisés » activé, l'API laisse le DocNumber VIDE si on
-        # n'en fournit pas (vu chez Phil). On calcule donc le prochain
-        # numéro nous-mêmes (max numérique des factures récentes + 1).
-        next_num: Optional[str] = None
-        try:
-            rows = await qbo.query(
-                "SELECT DocNumber FROM Invoice "
-                "ORDERBY MetaData.CreateTime DESC MAXRESULTS 100"
-            )
-            nums = [
-                int(str(r.get("DocNumber")))
-                for r in rows
-                if str(r.get("DocNumber") or "").isdigit()
-            ]
-            next_num = str(max(nums) + 1) if nums else "1000"
-        except QuickBooksError:
-            next_num = None  # QBO choisira (ou laissera vide)
-
-        base_payload = {
-            "CustomerRef": {"value": customer_ref},
-            "TxnDate": _today().isoformat(),
-            "GlobalTaxCalculation": "TaxExcluded",
-            "Line": [
+        # Facture MENSUELLE ouverte : la ligne s'ajoute à LA facture du
+        # mois du client (créée au premier clic, jamais envoyée par
+        # Kratos) — équivalent du « débit différé » voulu par Phil.
+        result = await add_lines_to_monthly_invoice(
+            db,
+            qbo,
+            scope="entreprise",
+            customer_id=customer_ref,
+            lines=[
                 {
                     "DetailType": "SalesItemLineDetail",
                     "Amount": montant,
@@ -1493,39 +1482,17 @@ async def facturer_solde_qbo(
                     },
                 }
             ],
-            "PrivateNote": (
-                "Créé par Kratos — refacturation feuille de temps "
-                f"({emp_name})"
+            private_note=(
+                "Créé par Kratos — facture mensuelle "
+                "(refacturations feuille de temps)"
             ),
-        }
-        # Collision de numéro (erreur 6140 « en double ») → on incrémente
-        # et on réessaie (max 3 fois).
-        tries = 0
-        while True:
-            body = dict(base_payload)
-            if next_num:
-                body["DocNumber"] = next_num
-            try:
-                inv = await qbo.create_invoice(body)
-                break
-            except QuickBooksError as exc:
-                msg = str(exc)
-                if (
-                    next_num
-                    and tries < 3
-                    and ("6140" in msg or "uplicate" in msg or "double" in msg)
-                ):
-                    tries += 1
-                    next_num = str(int(next_num) + 1)
-                    continue
-                raise
+        )
     except QuickBooksError as exc:
         raise HTTPException(
             status_code=502, detail=f"QuickBooks a refusé la facture : {exc}"
         )
-    invoice = inv.get("Invoice") or inv
-    invoice_id = str(invoice.get("Id") or "")
-    doc_number = str(invoice.get("DocNumber") or "") or None
+    invoice_id = result["invoice_id"]
+    doc_number = result["doc_number"]
 
     db.add(
         TimesheetReglement(
@@ -1535,16 +1502,18 @@ async def facturer_solde_qbo(
             montant=montant,
             date_reglement=_today(),
             note=(
-                f"Facture QuickBooks #{doc_number or invoice_id} — "
-                f"{qty:g} h × {taux_moyen:.2f} $/h ({emp_name})"
+                f"Ajouté à la facture QuickBooks #{doc_number or invoice_id} "
+                f"du mois — {qty:g} h × {taux_moyen:.2f} $/h ({emp_name})"
             ),
             created_by_user_id=user.id,
         )
     )
     await db.commit()
     log.info(
-        "Facture QBO %s créée pour %s / %s (%.2f $)",
-        doc_number or invoice_id, emp_name, comp.label, montant,
+        "Facture mensuelle QBO %s %s pour %s / %s (%.2f $)",
+        doc_number or invoice_id,
+        "créée" if result["created"] else "mise à jour",
+        emp_name, comp.label, montant,
     )
     return FactureQboOut(
         ok=True,
@@ -1553,6 +1522,7 @@ async def facturer_solde_qbo(
         montant=montant,
         heures=qty,
         taux=taux_moyen,
+        created=bool(result["created"]),
     )
 
 
