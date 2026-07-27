@@ -655,31 +655,34 @@ export default function LocataireDetailPage({
           </div>
         ) : (
           <div className="mt-4 space-y-6">
-            <header className="flex items-start gap-4">
-              <span className="flex h-14 w-14 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
-                <User className="h-6 w-6" />
-              </span>
-              <div className="min-w-0">
-                <h1 className="text-2xl font-bold text-white">
-                  {loc.full_name}
-                </h1>
-                <div className="mt-1 flex flex-wrap gap-3 text-sm text-white/60">
-                  {loc.email ? (
-                    <a
-                      href={`mailto:${loc.email}`}
-                      className="inline-flex items-center gap-1 hover:text-accent-500"
-                    >
-                      <Mail className="h-3.5 w-3.5" /> {loc.email}
-                    </a>
-                  ) : null}
-                  {loc.phone ? (
-                    <span className="inline-flex items-center gap-1">
-                      <Phone className="h-3.5 w-3.5" /> {loc.phone}
-                    </span>
-                  ) : null}
+            <header className="flex flex-wrap items-start gap-4">
+              <div className="flex min-w-0 flex-1 items-start gap-4">
+                <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+                  <User className="h-6 w-6" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h1 className="break-words text-2xl font-bold text-white">
+                    {loc.full_name}
+                  </h1>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-white/60">
+                    {loc.email ? (
+                      <a
+                        href={`mailto:${loc.email}`}
+                        className="inline-flex min-w-0 items-center gap-1 hover:text-accent-500"
+                      >
+                        <Mail className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{loc.email}</span>
+                      </a>
+                    ) : null}
+                    {loc.phone ? (
+                      <span className="inline-flex items-center gap-1">
+                        <Phone className="h-3.5 w-3.5 shrink-0" /> {loc.phone}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
               </div>
-              <div className="ml-auto flex shrink-0 items-center gap-2">
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={startEdit}
