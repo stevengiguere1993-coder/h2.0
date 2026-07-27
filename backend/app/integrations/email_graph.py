@@ -78,8 +78,16 @@ class GraphMailer:
         reply_to: Optional[str] = None,
         attachments: Optional[List[EmailAttachment]] = None,
         internal: bool = False,
+        from_email: Optional[str] = None,
+        from_name: Optional[str] = None,
     ) -> None:
+        """``from_email`` doit être une boîte du tenant M365 (Graph refuse
+        sinon) ; ``from_name`` change seulement le nom affiché — utile pour
+        un gestionnaire contractuel (« Kyle — Gestion Horizon ») dont les
+        réponses partent vers ``reply_to`` (son adresse externe)."""
         token = await self._token()
+        sender = (from_email or "").strip() or self.sender
+        display_name = (from_name or "").strip() or settings.mail_from_name
         to_list = list(to)
         recipients = [{"emailAddress": {"address": addr}} for addr in to_list]
         # Copie cachée de supervision : tout courriel externe (client,
@@ -100,7 +108,7 @@ class GraphMailer:
                 "subject": subject,
                 "body": {"contentType": "HTML", "content": html_body},
                 "toRecipients": recipients,
-                "from": {"emailAddress": {"address": self.sender, "name": settings.mail_from_name}},
+                "from": {"emailAddress": {"address": sender, "name": display_name}},
             },
             "saveToSentItems": True,
         }
@@ -128,7 +136,7 @@ class GraphMailer:
 
         async with httpx.AsyncClient(timeout=30.0) as http:
             r = await http.post(
-                _SEND_URL.format(sender=self.sender),
+                _SEND_URL.format(sender=sender),
                 headers={"Authorization": f"Bearer {token}"},
                 json=msg,
             )

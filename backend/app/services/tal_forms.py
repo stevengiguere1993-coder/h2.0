@@ -511,3 +511,32 @@ def generate_tal_pdf(
     flow = _build_lettre(form_type, ctx, styles, gabarit)
     doc.build(flow)
     return buf.getvalue()
+
+
+def render_lettre_courriel(
+    form_type: str,
+    ctx: TalContext,
+    gabarit: Optional[dict] = None,
+) -> tuple[str, str]:
+    """Rend une lettre sans signature en COURRIEL : (sujet, corps texte).
+
+    Page Communications (retour Phil 2026-07-27) : « c'est juste un
+    modèle courriel » — le même gabarit que le PDF (titre + paragraphes,
+    override ``immo.gabarit.<type>`` respecté, {variables} par
+    locataire), mais rendu en texte pour partir dans le corps du message.
+    Le **gras** des gabarits est conservé tel quel (lisible en texte).
+    """
+    defaut = GABARITS_DEFAUT[form_type]
+    titre = (gabarit or {}).get("titre") or defaut["titre"]
+    paragraphes = (gabarit or {}).get("paragraphes") or defaut["paragraphes"]
+    variables = _lettre_variables(form_type, ctx)
+
+    def _remplir(texte: str) -> str:
+        for k, v in variables.items():
+            texte = texte.replace("{" + k + "}", v)
+        return texte
+
+    corps = "\n\n".join(
+        _remplir(str(p)) for p in paragraphes if str(p).strip()
+    )
+    return _remplir(str(titre)), corps

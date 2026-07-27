@@ -560,6 +560,7 @@ async def ensure_immobilier_aux_tables() -> None:
             FactureExterne,
             FactureGestion,
             FraisLocatif,
+            ImmCommunication,
             ImmDocPersoModele,
             ImmDocTemplate,
             ImmDocument,
@@ -578,6 +579,7 @@ async def ensure_immobilier_aux_tables() -> None:
                     c,
                     tables=[
                         RelanceLoyer.__table__,
+                        ImmCommunication.__table__,
                         LocataireCommunication.__table__,
                         LocationDossier.__table__,
                         LocationAnnonce.__table__,

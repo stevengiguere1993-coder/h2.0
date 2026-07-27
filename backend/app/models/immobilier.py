@@ -30,6 +30,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.orm import Mapped, deferred, mapped_column
 
@@ -380,6 +381,74 @@ class LocataireCommunication(Base, TimestampUpdateMixin):
     # Nom de l'employé qui consigne (snapshot, pas de FK — l'historique
     # survit à la suppression d'un compte).
     auteur: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+
+class ImmCommunication(Base):
+    """Courriel ENVOYÉ à un locataire depuis la page Communications.
+
+    Une ligne PAR courriel (jamais d'envoi groupé avec plusieurs adresses
+    visibles) — c'est l'audit demandé par Phil 2026-07-27 : qui a reçu
+    quoi, quand, envoyé par qui et depuis quelle adresse. ``group_id``
+    relie les courriels d'un même envoi de masse. Le contenu est un
+    SNAPSHOT (le gabarit peut changer ensuite). Nouvelle table →
+    ensure_immobilier_aux_tables.
+    """
+
+    __tablename__ = "imm_communications"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    #: Regroupe les courriels d'un même clic « Envoyer ».
+    group_id: Mapped[str] = mapped_column(
+        String(32), nullable=False, index=True
+    )
+    #: 'rappel_paiement' | 'avis_acces' | 'demande_assurance' | 'libre'
+    type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    sujet: Mapped[str] = mapped_column(String(255), nullable=False)
+    corps: Mapped[str] = mapped_column(Text, nullable=False)
+
+    locataire_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_locataires.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
+    bail_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )
+    immeuble_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )
+    #: Snapshots pour que l'audit survive aux suppressions.
+    locataire_nom: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    immeuble_nom: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    destinataire_email: Mapped[str] = mapped_column(
+        String(320), nullable=False
+    )
+
+    from_email: Mapped[Optional[str]] = mapped_column(
+        String(320), nullable=True
+    )
+    from_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    reply_to: Mapped[Optional[str]] = mapped_column(
+        String(320), nullable=True
+    )
+
+    #: 'envoye' | 'echec'
+    statut: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="envoye", server_default="envoye"
+    )
+    erreur: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_by_email: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 # ─── RELOCATION (pipeline « Locations » / vacances) ─────────────────────

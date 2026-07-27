@@ -56,6 +56,7 @@ from app.api.v1.endpoints import (
     entreprise_partners_links,
     contrats_gestion,
     immobilier,
+    immobilier_communications,
     immobilier_documents,
     immobilier_extras,
     immobilier_import_excel,
@@ -469,6 +470,10 @@ api_router.include_router(
 # Documents locatifs conservés (avis TAL, trousse, DPA) + envoi signature.
 api_router.include_router(
     immobilier_documents.router, dependencies=DEP_IMMOBILIER
+)
+# Page Communications — envois courriel sans signature + audit.
+api_router.include_router(
+    immobilier_communications.router, dependencies=DEP_IMMOBILIER
 )
 # Relevés 31 (Revenu Québec) — suivi annuel par logement.
 api_router.include_router(
