@@ -91,6 +91,25 @@ def _ttc(a: Achat) -> float:
     return round(float(a.amount or 0) + float(a.amount_taxes or 0), 2)
 
 
+_AUTO_REF_RE = re.compile(r"^a-\d+$")
+
+
+def _is_auto_doc(a: Achat) -> bool:
+    """Vrai si l'achat n'a AUCUN identifiant de document réel : pas de n°
+    de facture fournisseur, et référence / n° doc QB absents ou AUTO
+    (« A-<id> », posé par le push faute de numéro). Ces achats ne peuvent
+    être dédupliqués par les signaux 2-4 (leurs « références » divergent
+    par construction) — le signal 5 les regroupe par (fournisseur, TTC,
+    date de facture)."""
+    if (a.supplier_invoice_number or "").strip():
+        return False
+    for v in (a.reference, a.qbo_doc_number):
+        t = (v or "").strip().lower()
+        if t and not _AUTO_REF_RE.fullmatch(t):
+            return False
+    return True
+
+
 def _tokens(a: Achat) -> set[str]:
     """Identifiants « parlants » de l'achat (référence interne, n° de
     facture fournisseur, n° de doc QB), normalisés."""
@@ -125,7 +144,14 @@ def _merge_into_keeper(keeper: Achat, other: Achat) -> None:
     description…), et reflète l'état de paiement le PLUS avancé — avec le
     mode de paiement RÉEL, jamais « sur compte » si un paiement a eu lieu."""
     # Lien QB : ne jamais perdre la transaction QuickBooks rattachée.
-    if not keeper.qbo_bill_id and other.qbo_bill_id:
+    # ⚠️ Sauf si le gardé a DÉJÀ son propre objet QB via qbo_purchase_id
+    # (dépense importée) : adopter le lien du doublon le rattacherait au
+    # Bill parasite — qui doit au contraire être SUPPRIMÉ côté QB.
+    if (
+        not keeper.qbo_bill_id
+        and not keeper.qbo_purchase_id
+        and other.qbo_bill_id
+    ):
         keeper.qbo_bill_id = other.qbo_bill_id
         keeper.qbo_sync_token = other.qbo_sync_token
         keeper.qbo_doc_number = other.qbo_doc_number or keeper.qbo_doc_number
@@ -241,6 +267,25 @@ async def dedupe_achats(db: AsyncSession) -> int:
         if ttc > 0:
             for tok in _tokens(a):
                 link(f"tok:{tok}|{ttc:.2f}", a.id)
+        # 5) Doublons AUTO-référencés : même fournisseur/sous-traitant,
+        # même montant TTC, même DATE de facture, et AUCUN identifiant de
+        # document réel des deux côtés (réf auto « A-<id> »). Cas réel :
+        # la même dépense re-poussée / ré-importée en plusieurs « Factures
+        # à payer » A-210 / A-221 / … (doublons Christian Villiard) — les
+        # signaux 2-4 ne peuvent pas les voir, leurs références divergent
+        # par construction.
+        if (
+            ttc > 0
+            and a.invoice_date is not None
+            and (a.fournisseur_id or a.sous_traitant_id)
+            and _is_auto_doc(a)
+        ):
+            link(
+                "auto:"
+                f"f{a.fournisseur_id or 0}:s{a.sous_traitant_id or 0}:"
+                f"{ttc:.2f}:{a.invoice_date.isoformat()}",
+                a.id,
+            )
         # 4) Fournisseur + référence NORMALISÉE + montant proche (Rona).
         if a.fournisseur_id and ttc > 0:
             for tok in _tokens(a):
