@@ -32,6 +32,7 @@ import {
   DocumentsSection,
   TalFormDropdown
 } from "@/components/immobilier/tal-avis";
+import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
 import { ImmobilierTopbar } from "../../layout";
 
 type Locataire = {
@@ -992,9 +993,18 @@ export default function LocataireDetailPage({
 
             {/* Baux */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
-                Baux
-              </h2>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  Baux
+                </h2>
+                <AssignerBailButton
+                  mode="locataire"
+                  locataireId={locataireId}
+                  locataireNom={dossier?.locataire.full_name}
+                  onDone={() => void loadDossier()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-2.5 py-1 text-xs font-semibold text-accent-500 transition hover:bg-accent-500/20"
+                />
+              </div>
               {departMsg ? (
                 <p className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
                   {departMsg}{" "}
