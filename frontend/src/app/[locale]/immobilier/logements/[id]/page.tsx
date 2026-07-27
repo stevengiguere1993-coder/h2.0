@@ -26,6 +26,7 @@ import {
   TalFormDropdown
 } from "@/components/immobilier/tal-avis";
 import { ImmobilierTopbar } from "../../layout";
+import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
 import {
   fmtPieces,
   type LogementFicheData
@@ -651,28 +652,39 @@ export default function LogementDetailPage({
               </div>
 
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-                <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                     Locataire actuel &amp; bail actif
                   </h2>
-                  <button
-                    type="button"
-                    disabled={relocBusy}
-                    title={
-                      bailActif
-                        ? "Le locataire confirme son départ — ouvrir un dossier de relocation (Locations)"
-                        : "Ouvrir un dossier de relocation pour ce logement vacant"
-                    }
-                    onClick={() =>
-                      void ouvrirRelocation(bailActif ? bailActif.id : null)
-                    }
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
-                  >
-                    {relocBusy ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
+                  <div className="flex items-center gap-2">
+                    {!bailActif ? (
+                      <AssignerBailButton
+                        mode="logement"
+                        logementId={logementId}
+                        logementLabel={`Logement ${lg.numero}`}
+                        onDone={() => void loadDossier()}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-2.5 py-1 text-xs font-semibold text-accent-500 transition hover:bg-accent-500/20"
+                      />
                     ) : null}
-                    {bailActif ? "Départ" : "Relouer"}
-                  </button>
+                    <button
+                      type="button"
+                      disabled={relocBusy}
+                      title={
+                        bailActif
+                          ? "Le locataire confirme son départ — ouvrir un dossier de relocation (Locations)"
+                          : "Ouvrir un dossier de relocation pour ce logement vacant"
+                      }
+                      onClick={() =>
+                        void ouvrirRelocation(bailActif ? bailActif.id : null)
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
+                    >
+                      {relocBusy ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : null}
+                      {bailActif ? "Départ" : "Relouer"}
+                    </button>
+                  </div>
                 </div>
                 {relocMsg ? (
                   <p className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">

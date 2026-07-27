@@ -228,7 +228,7 @@ export default function ModelesDocumentsPage() {
                   ) : null}
                   {f.signature_requise === false ? (
                     <span className="rounded-full border border-sky-400/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-300">
-                      Courriel — sans signature
+                      Courriel — s'envoie depuis Communications
                     </span>
                   ) : null}
                   {f.custom_filename ? (
@@ -525,7 +525,7 @@ function PersoSection() {
                   </span>
                 ) : (
                   <span className="rounded-full border border-sky-400/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-300">
-                    Courriel — sans signature
+                    Courriel — s'envoie depuis Communications
                   </span>
                 )}
                 {m.has_pdf ? (

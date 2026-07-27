@@ -299,7 +299,10 @@ export function TalFormDropdown({ bailId }: { bailId: number }) {
       </button>
       {open ? (
         <div className="absolute right-0 z-30 mt-1 w-60 rounded-lg border border-brand-700 bg-brand-950 py-1 shadow-2xl">
-          {TAL_FORMS.map((f) => (
+          {/* Démêlage 2026-07-27 : « Générer ▾ » = documents à SIGNATURE
+              seulement. Les avis courriel (retard, accès, assurance) se
+              font depuis la page Communications — lien en bas du menu. */}
+          {TAL_FORMS.filter((f) => !f.sansSignature).map((f) => (
             <button
               key={f.code}
               type="button"
@@ -343,6 +346,15 @@ export function TalFormDropdown({ bailId }: { bailId: number }) {
               ))}
             </>
           ) : null}
+          <div className="mx-3 my-1 border-t border-brand-800" />
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/immobilier/communications" as any}
+            className="block px-3 py-1.5 text-left text-xs text-accent-500 hover:bg-brand-900"
+            title="Rappel de paiement, avis d'accès, demande d'assurance, message libre — envoyés par courriel depuis la page Communications"
+          >
+            Avis courriel (retard, accès…) → Communications
+          </Link>
         </div>
       ) : null}
       {paramsCode ? (
