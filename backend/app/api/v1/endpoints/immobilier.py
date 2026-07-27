@@ -1710,11 +1710,11 @@ async def download_bail_document(
     db: DBSession,
     user: CurrentUser,
 ) -> Response:
-    """Telecharge le PDF du bail signe (regenere a la volee).
+    """Ouvre LE bail courant — c'est la cible du clic sur un bail.
 
-    Disponible uniquement pour un bail effectivement signe. Independant
-    du Drive : la piece reste recuperable depuis Kratos meme si l'immeuble
-    n'a pas de Drive lie.
+    Priorité au document importé/remplacé (``bail.document_id``, retour
+    Phil 2026-07-27) ; sinon le PDF du bail signé EN LIGNE (régénéré à la
+    volée). 409 si le bail n'a ni l'un ni l'autre.
     """
     _require_volet(user)
     bail = await db.get(Bail, bail_id)
@@ -1722,10 +1722,37 @@ async def download_bail_document(
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, detail="Bail introuvable."
         )
+
+    doc_id = getattr(bail, "document_id", None)
+    if doc_id:
+        from sqlalchemy.orm import undefer as _undefer
+
+        from app.models.immobilier import ImmDocument as _ImmDocument
+
+        d = (
+            await db.execute(
+                select(_ImmDocument)
+                .options(_undefer(_ImmDocument.pdf_blob))
+                .where(_ImmDocument.id == int(doc_id))
+            )
+        ).scalar_one_or_none()
+        if d is not None and d.pdf_blob:
+            fname = (getattr(d, "filename", None) or f"Bail_{bail_id}.pdf")
+            return Response(
+                content=d.pdf_blob,
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": f'inline; filename="{fname}"'
+                },
+            )
+
     if bail.signed_at is None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            detail="Ce bail n'est pas encore signe.",
+            detail=(
+                "Aucun bail au dossier — importe le bail signé "
+                "(bouton « Importer le bail »)."
+            ),
         )
     from app.services.bail_signed_pdf import render_bail_signed_pdf
 
@@ -3161,6 +3188,8 @@ class LoyerOverviewRow(BaseModel):
     paye_le: Optional[date] = None
     # "paye" | "partiel" | "retard" | "attente"
     etat: str
+    #: LE bail courant (imm_documents) — clic sur la ligne = l'ouvrir.
+    document_id: Optional[int] = None
     #: Frais ponctuels du MOIS affiché (retard, etc.) — supprimables.
     frais_mois: List[FraisRow] = []
     #: SOLDE CUMULATIF dû sur le bail (loyers échus + tous les frais −
@@ -3416,6 +3445,7 @@ async def loyers_overview(
                 montant_paye=paye_mois if ps else None,
                 paye_le=dernier.paye_le if dernier else None,
                 etat=etat,
+                document_id=getattr(b, "document_id", None),
                 frais_mois=[
                     FraisRow(
                         id=f.id,

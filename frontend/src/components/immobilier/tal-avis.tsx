@@ -8,7 +8,7 @@
  * (backend services/tal_forms.py).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
   Eye,
@@ -18,6 +18,7 @@ import {
   Mail,
   Pencil,
   Trash2,
+  Upload,
   X
 } from "lucide-react";
 
@@ -28,6 +29,7 @@ export type BailDocument = {
   id: number;
   bail_id: number | null;
   locataire_id: number | null;
+  logement_id?: number | null;
   type: string;
   titre: string;
   params: Record<string, unknown>;
@@ -37,7 +39,86 @@ export type BailDocument = {
   ouvert_le: string | null;
   signed_at: string | null;
   signed_by_name: string | null;
+  /** 'genere' | 'importe' — importé = pièce déposée à la main. */
+  source?: string;
+  filename?: string | null;
+  remplace_document_id?: number | null;
+  /** false = simple communication (rappel, avis d'accès…). */
+  signature_requise?: boolean;
 };
+
+/** Téléverse un document au dossier (bouton « Importer »). */
+export async function importDocument(opts: {
+  file: File;
+  type?: string;
+  titre?: string;
+  bailId?: number;
+  locataireId?: number;
+  logementId?: number;
+  immeubleId?: number;
+}): Promise<BailDocument> {
+  const fd = new FormData();
+  fd.append("file", opts.file);
+  fd.append("type", opts.type || "autre");
+  if (opts.titre) fd.append("titre", opts.titre);
+  if (opts.bailId != null) fd.append("bail_id", String(opts.bailId));
+  if (opts.locataireId != null)
+    fd.append("locataire_id", String(opts.locataireId));
+  if (opts.logementId != null)
+    fd.append("logement_id", String(opts.logementId));
+  if (opts.immeubleId != null)
+    fd.append("immeuble_id", String(opts.immeubleId));
+  const r = await authedFetch("/api/v1/immobilier/documents/import", {
+    method: "POST",
+    body: fd
+  });
+  const d = await r.json().catch(() => null);
+  if (!r.ok) {
+    throw new Error((d && (d.detail || d.message)) || `Erreur ${r.status}`);
+  }
+  return d as BailDocument;
+}
+
+/** Bouton « Importer » réutilisable (input fichier caché). */
+export function ImportDocButton({
+  label,
+  onPick,
+  busy
+}: {
+  label: string;
+  onPick: (file: File) => void;
+  busy?: boolean;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="application/pdf,image/jpeg,image/png"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onPick(f);
+          e.target.value = "";
+        }}
+      />
+      <button
+        type="button"
+        className="btn-secondary btn-xs"
+        disabled={busy}
+        onClick={() => inputRef.current?.click()}
+      >
+        {busy ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Upload className="h-3.5 w-3.5" />
+        )}
+        {label}
+      </button>
+    </>
+  );
+}
 
 // Les composants d'une même ligne (Générer ▾ / Envoyer pour signature)
 // se resynchronisent via cet événement quand un document est créé.
@@ -1144,7 +1225,11 @@ export function DocsList({
                     <span className="text-sm font-medium text-white">
                       {d.titre}
                     </span>
-                    {SANS_SIGNATURE.has(d.type) ? (
+                    {d.source === "importe" ? (
+                      <span className="ml-2 rounded bg-sky-500/15 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-sky-300">
+                        importé
+                      </span>
+                    ) : SANS_SIGNATURE.has(d.type) ? (
                       <span className="ml-2 rounded bg-white/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-white/50">
                         courriel
                       </span>
@@ -1167,6 +1252,10 @@ export function DocsList({
                         <span className="text-white/50">
                           Envoyé à {d.envoye_a} {fmtDateTime(d.envoye_le)}
                         </span>
+                      ) : d.source === "importe" ? (
+                        <span className="text-white/40">
+                          {d.filename || "Fichier déposé au dossier"}
+                        </span>
                       ) : (
                         <span className="text-white/40">
                           Brouillon — pas encore envoyé
@@ -1184,7 +1273,9 @@ export function DocsList({
                     >
                       <Eye className="h-3 w-3" />
                     </button>
-                    {TYPES_AVEC_PARAMS.has(d.type) && !d.signed_at ? (
+                    {TYPES_AVEC_PARAMS.has(d.type) &&
+                    !d.signed_at &&
+                    d.source !== "importe" ? (
                       <button
                         type="button"
                         onClick={() => setEditDoc(d)}
@@ -1195,7 +1286,7 @@ export function DocsList({
                         <Pencil className="h-3 w-3" />
                       </button>
                     ) : null}
-                    {!d.signed_at ? (
+                    {!d.signed_at && d.source !== "importe" ? (
                       <button
                         type="button"
                         onClick={() => void envoyer(d)}
@@ -1307,12 +1398,16 @@ export function DocumentsSection({
 }) {
   const [docs, setDocs] = useState<BailDocument[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
+    // categorie=dossier : uniquement les pièces SIGNÉES ou IMPORTÉES —
+    // les simples communications vivent dans le journal, pas ici
+    // (retour Phil 2026-07-27).
     const url =
       locataireId != null
-        ? `/api/v1/immobilier/locataires/${locataireId}/documents`
-        : `/api/v1/immobilier/logements/${logementId}/documents`;
+        ? `/api/v1/immobilier/locataires/${locataireId}/documents?categorie=dossier`
+        : `/api/v1/immobilier/logements/${logementId}/documents?categorie=dossier`;
     try {
       const r = await authedFetch(url);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -1321,6 +1416,26 @@ export function DocumentsSection({
       setErr(`Documents : ${(e as Error).message}`);
     }
   }, [locataireId, logementId]);
+
+  const doImport = useCallback(
+    async (file: File) => {
+      setImporting(true);
+      setErr(null);
+      try {
+        await importDocument({
+          file,
+          locataireId,
+          logementId
+        });
+        await load();
+      } catch (e) {
+        setErr(`Import : ${(e as Error).message}`);
+      } finally {
+        setImporting(false);
+      }
+    },
+    [locataireId, logementId, load]
+  );
 
   useEffect(() => {
     void load();
@@ -1340,6 +1455,11 @@ export function DocumentsSection({
           {docs ? `${docs.length} document${docs.length > 1 ? "s" : ""}` : ""}
         </span>
         <span className="ml-auto flex flex-wrap items-center gap-2">
+          <ImportDocButton
+            label="Importer"
+            busy={importing}
+            onPick={(f) => void doImport(f)}
+          />
           {bails.map((b) => (
             <span key={b.id} className="inline-flex items-center gap-1.5">
               {bails.length > 1 ? (
@@ -1395,9 +1515,118 @@ export function DocumentsSection({
         <DocsList
           docs={docs}
           onChanged={() => void load()}
-          emptyText="Aucun document généré — utilise « Générer ▾ » ci-dessus (avis TAL, lettres) ou la section DPA."
+          emptyText="Aucun document au dossier — importe un fichier (bouton « Importer ») ou génère un avis avec « Générer ▾ ». Les documents signés en ligne arrivent ici automatiquement."
         />
       )}
     </section>
+  );
+}
+
+/**
+ * « LE bail » d'une ligne : bouton qui OUVRE le bail courant (importé,
+ * sinon signé en ligne) + bouton Importer/Remplacer. Remplacer archive
+ * l'ancien dans les Documents (retour Phil 2026-07-27).
+ */
+export function BailDocActions({
+  bailId,
+  hasDoc,
+  signedAt,
+  onChanged
+}: {
+  bailId: number;
+  /** bail.document_id présent (un bail importé existe). */
+  hasDoc: boolean;
+  /** Bail signé en ligne (le PDF régénéré sert de repli). */
+  signedAt?: string | null;
+  onChanged?: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const ouvrable = hasDoc || Boolean(signedAt);
+
+  async function ouvrir() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/document`
+      );
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        throw new Error(
+          (d && (d.detail || d.message)) || `HTTP ${r.status}`
+        );
+      }
+      const url = URL.createObjectURL(await r.blob());
+      window.open(url, "_blank");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remplacer(file: File) {
+    if (
+      hasDoc &&
+      !window.confirm(
+        "Remplacer le bail ? L'ancien reste conservé dans les Documents du logement et du locataire — seul celui qui s'ouvre au clic change."
+      )
+    )
+      return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/document`,
+        { method: "POST", body: fd }
+      );
+      const d = await r.json().catch(() => null);
+      if (!r.ok) {
+        throw new Error(
+          (d && (d.detail || d.message)) || `HTTP ${r.status}`
+        );
+      }
+      notifyDocumentsChanged(bailId);
+      onChanged?.();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {ouvrable ? (
+        <button
+          type="button"
+          className="btn-secondary btn-xs"
+          disabled={busy}
+          onClick={() => void ouvrir()}
+          title="Ouvrir le bail (PDF)"
+        >
+          {busy ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <FileDown className="h-3 w-3" />
+          )}
+          Bail
+        </button>
+      ) : null}
+      <ImportDocButton
+        label={hasDoc ? "Remplacer" : "Importer le bail"}
+        busy={busy}
+        onPick={(f) => void remplacer(f)}
+      />
+      {err ? (
+        <span className="text-[10px] text-rose-300" title={err}>
+          {err.slice(0, 60)}
+        </span>
+      ) : null}
+    </span>
   );
 }

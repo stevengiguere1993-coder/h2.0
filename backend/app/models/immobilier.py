@@ -568,10 +568,18 @@ class Bail(Base, TimestampUpdateMixin):
         index=True,
     )
 
-    # PDF du bail signé (URL S3 ou vault). À implémenter dans la phase
-    # documents séparée.
+    # PDF du bail signé (URL S3 ou vault). Legacy — remplacé par
+    # ``document_id`` (le PDF vit dans imm_documents).
     document_url: Mapped[Optional[str]] = mapped_column(
         String(1000), nullable=True
+    )
+
+    #: LE bail courant (imm_documents) — celui qui s'ouvre au clic depuis
+    #: la page Baux. Remplacer le bail change ce pointeur ; l'ancien reste
+    #: en base et apparaît dans les Documents du logement/locataire
+    #: (retour Phil 2026-07-27). Nouvelle colonne → ensure_critical_columns.
+    document_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
     )
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -638,6 +646,14 @@ class BailRenouvellement(Base, TimestampUpdateMixin):
     )
     locataire_repondu_le: Mapped[Optional[date]] = mapped_column(
         Date, nullable=True
+    )
+
+    #: L'AVIS courant (imm_documents) — celui qui s'ouvre au clic depuis
+    #: Suivis annuels. En importer un nouveau change ce pointeur ;
+    #: l'ancien reste dans les Documents (retour Phil 2026-07-27).
+    #: Nouvelle colonne → ensure_critical_columns.
+    document_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
     )
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -985,9 +1001,30 @@ class ImmDocument(Base, TimestampUpdateMixin):
     immeuble_id: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True, index=True
     )
+    #: Rattachement direct à un logement (document importé sur la fiche
+    #: du logement, sans passer par un bail). Nouvelle colonne →
+    #: ensure_critical_columns.
+    logement_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )
 
     type: Mapped[str] = mapped_column(String(48), nullable=False)
     titre: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: 'genere' (produit par Kratos) | 'importe' (téléversé à la main).
+    #: Sépare le DOSSIER (signé/importé) des simples communications
+    #: (retour Phil 2026-07-27). Nouvelle colonne.
+    source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="genere", server_default="genere"
+    )
+    #: Nom du fichier d'origine (import) — affiché tel quel dans la liste.
+    filename: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    #: Document que celui-ci REMPLACE (bail/avis/relevé changé) : garde la
+    #: chaîne des versions pour l'historique.
+    remplace_document_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )
     # Paramètres de génération (JSON) — permet « Modifier » = rouvrir le
     # formulaire prérempli puis régénérer une nouvelle version.
     params_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
