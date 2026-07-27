@@ -20,7 +20,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.orm import undefer
@@ -58,6 +58,7 @@ class DocumentRead(BaseModel):
     id: int
     bail_id: Optional[int]
     locataire_id: Optional[int]
+    logement_id: Optional[int] = None
     type: str
     titre: str
     params: dict = {}
@@ -67,6 +68,24 @@ class DocumentRead(BaseModel):
     ouvert_le: Optional[datetime] = None
     signed_at: Optional[datetime] = None
     signed_by_name: Optional[str] = None
+    #: 'genere' | 'importe' — l'importé est toujours une pièce au dossier.
+    source: str = "genere"
+    filename: Optional[str] = None
+    #: Document remplacé par celui-ci (version précédente d'un bail,
+    #: d'un avis de renouvellement…).
+    remplace_document_id: Optional[int] = None
+    #: False pour les simples communications (avis d'accès, rappel de
+    #: paiement…) — elles vivent dans le journal, pas au dossier.
+    signature_requise: bool = True
+
+
+def _est_dossier(d: ImmDocument) -> bool:
+    """Pièce du DOSSIER = importée à la main, ou signée/à signer.
+    Les modèles sans signature (rappel de paiement, avis d'accès…) sont
+    des communications : elles n'encombrent pas la section Documents."""
+    if (getattr(d, "source", "genere") or "genere") == "importe":
+        return True
+    return d.type not in SIGNATURE_NON_REQUISE
 
 
 def _doc_read(d: ImmDocument) -> DocumentRead:
@@ -82,6 +101,7 @@ def _doc_read(d: ImmDocument) -> DocumentRead:
         id=d.id,
         bail_id=d.bail_id,
         locataire_id=d.locataire_id,
+        logement_id=getattr(d, "logement_id", None),
         type=d.type,
         titre=d.titre,
         params=params,
@@ -91,6 +111,10 @@ def _doc_read(d: ImmDocument) -> DocumentRead:
         ouvert_le=d.ouvert_le,
         signed_at=d.signed_at,
         signed_by_name=d.signed_by_name,
+        source=(getattr(d, "source", "genere") or "genere"),
+        filename=getattr(d, "filename", None),
+        remplace_document_id=getattr(d, "remplace_document_id", None),
+        signature_requise=d.type not in SIGNATURE_NON_REQUISE,
     )
 
 
@@ -128,8 +152,13 @@ async def save_document(
 
 @router.get("/baux/{bail_id}/documents", response_model=List[DocumentRead])
 async def list_bail_documents(
-    bail_id: int, db: DBSession, user: CurrentUser
+    bail_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    categorie: str = "tout",
 ) -> List[DocumentRead]:
+    """``categorie=dossier`` : seulement les pièces du dossier (signées
+    ou importées) — les simples communications sont exclues."""
     _require_volet(user)
     rows = (
         await db.execute(
@@ -138,6 +167,8 @@ async def list_bail_documents(
             .order_by(ImmDocument.created_at.desc(), ImmDocument.id.desc())
         )
     ).scalars().all()
+    if categorie == "dossier":
+        rows = [d for d in rows if _est_dossier(d)]
     return [_doc_read(d) for d in rows]
 
 
@@ -146,10 +177,14 @@ async def list_bail_documents(
     response_model=List[DocumentRead],
 )
 async def list_logement_documents(
-    logement_id: int, db: DBSession, user: CurrentUser
+    logement_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    categorie: str = "tout",
 ) -> List[DocumentRead]:
-    """Documents des baux (passés et actifs) d'un logement — section
-    Documents de la fiche logement (retour Phil 2026-07-20)."""
+    """Documents des baux (passés et actifs) du logement + ceux importés
+    directement sur sa fiche. ``categorie=dossier`` exclut les simples
+    communications."""
     _require_volet(user)
     from app.models.immobilier import Bail as _Bail
 
@@ -161,15 +196,18 @@ async def list_logement_documents(
             )
         ).all()
     ]
-    if not bail_ids:
-        return []
+    cond = ImmDocument.logement_id == logement_id
+    if bail_ids:
+        cond = cond | ImmDocument.bail_id.in_(bail_ids)
     rows = (
         await db.execute(
             select(ImmDocument)
-            .where(ImmDocument.bail_id.in_(bail_ids))
+            .where(cond)
             .order_by(ImmDocument.created_at.desc(), ImmDocument.id.desc())
         )
     ).scalars().all()
+    if categorie == "dossier":
+        rows = [d for d in rows if _est_dossier(d)]
     return [_doc_read(d) for d in rows]
 
 
@@ -178,9 +216,15 @@ async def list_logement_documents(
     response_model=List[DocumentRead],
 )
 async def list_locataire_documents(
-    locataire_id: int, db: DBSession, user: CurrentUser
+    locataire_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    categorie: str = "tout",
 ) -> List[DocumentRead]:
-    """Documents du locataire : les siens (DPA…) + ceux de ses baux."""
+    """Documents du locataire : les siens (DPA…) + ceux de ses baux.
+    ``categorie=dossier`` = uniquement les pièces signées ou importées —
+    c'est ce qu'affiche la section Documents de sa fiche ; ses courriels
+    sont dans Communications."""
     _require_volet(user)
     bail_ids = [
         r[0]
@@ -200,6 +244,8 @@ async def list_locataire_documents(
             .order_by(ImmDocument.created_at.desc(), ImmDocument.id.desc())
         )
     ).scalars().all()
+    if categorie == "dossier":
+        rows = [d for d in rows if _est_dossier(d)]
     return [_doc_read(d) for d in rows]
 
 
@@ -520,3 +566,179 @@ async def envoyer_courriel(
     return EnvoyerCourrielResult(
         document_id=d.id, envoye_a=dest, envoye_le=d.envoye_le
     )
+
+
+# ── IMPORT de documents + « document courant » ────────────────────────
+# Retour Phil 2026-07-27 : démêlage communications / documents.
+#   • Documents = ce qui est SIGNÉ ou DÉPOSÉ au dossier (≠ courriels).
+#   • Le bail, l'avis de renouvellement et le relevé 31 ont chacun UN
+#     document courant : c'est lui qui s'ouvre au clic depuis la page.
+#     En importer un nouveau change le pointeur ; l'ancien reste en base
+#     et continue d'apparaître dans les Documents (historique).
+
+_MAX_UPLOAD = 20_000_000  # 20 Mo
+_ALLOWED_UPLOAD = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+}
+
+
+async def _read_upload(file: UploadFile) -> tuple[bytes, str]:
+    """Lit et valide un fichier téléversé. Retourne (contenu, nom)."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Fichier vide.")
+    if len(data) > _MAX_UPLOAD:
+        raise HTTPException(
+            status_code=400, detail="Fichier trop volumineux (max 20 Mo)."
+        )
+    ctype = (file.content_type or "").split(";")[0].strip().lower()
+    is_pdf = data[:5].startswith(b"%PDF-")
+    if not is_pdf and ctype not in _ALLOWED_UPLOAD:
+        raise HTTPException(
+            status_code=400,
+            detail="Format accepté : PDF, JPG ou PNG.",
+        )
+    return data, (file.filename or "document")[:255]
+
+
+async def _import_document(
+    db,
+    user,
+    *,
+    file: UploadFile,
+    doc_type: str,
+    titre: Optional[str],
+    bail_id: Optional[int] = None,
+    locataire_id: Optional[int] = None,
+    logement_id: Optional[int] = None,
+    immeuble_id: Optional[int] = None,
+    remplace_document_id: Optional[int] = None,
+) -> ImmDocument:
+    data, fname = await _read_upload(file)
+    obj = ImmDocument(
+        bail_id=bail_id,
+        locataire_id=locataire_id,
+        logement_id=logement_id,
+        immeuble_id=immeuble_id,
+        type=doc_type,
+        titre=(titre or "").strip() or fname,
+        source="importe",
+        filename=fname,
+        remplace_document_id=remplace_document_id,
+        pdf_blob=data,
+        created_by_email=getattr(user, "email", None),
+    )
+    db.add(obj)
+    await db.flush()
+    return obj
+
+
+@router.post("/documents/import", response_model=DocumentRead)
+async def import_document(
+    db: DBSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+    type: str = Form("autre"),
+    titre: Optional[str] = Form(None),
+    bail_id: Optional[int] = Form(None),
+    locataire_id: Optional[int] = Form(None),
+    logement_id: Optional[int] = Form(None),
+    immeuble_id: Optional[int] = Form(None),
+) -> DocumentRead:
+    """Dépose un document au dossier (bouton « Importer » des sections
+    Documents). Aucun envoi, aucune signature : c'est une pièce classée."""
+    _require_volet(user)
+    if not any([bail_id, locataire_id, logement_id, immeuble_id]):
+        raise HTTPException(
+            status_code=422,
+            detail="Précise à quoi rattacher le document.",
+        )
+    obj = await _import_document(
+        db, user,
+        file=file,
+        doc_type=(type or "autre").strip()[:48] or "autre",
+        titre=titre,
+        bail_id=bail_id,
+        locataire_id=locataire_id,
+        logement_id=logement_id,
+        immeuble_id=immeuble_id,
+    )
+    await db.commit()
+    await db.refresh(obj)
+    log.info("Document importé #%s (%s) par %s", obj.id, obj.type, user.email)
+    return _doc_read(obj)
+
+
+@router.post("/baux/{bail_id}/document", response_model=DocumentRead)
+async def upload_bail_document(
+    bail_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+) -> DocumentRead:
+    """Importe LE bail signé — ou le remplace. Le nouveau devient celui
+    qui s'ouvre au clic ; l'ancien reste dans les Documents du logement
+    et du locataire."""
+    _require_volet(user)
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        raise HTTPException(status_code=404, detail="Bail introuvable.")
+    ancien = bail.document_id
+    obj = await _import_document(
+        db, user,
+        file=file,
+        doc_type="bail",
+        titre="Bail signé",
+        bail_id=bail.id,
+        locataire_id=bail.locataire_id,
+        logement_id=bail.logement_id,
+        remplace_document_id=ancien,
+    )
+    bail.document_id = obj.id
+    await db.commit()
+    await db.refresh(obj)
+    log.info(
+        "Bail %s : document courant → #%s (ancien #%s)",
+        bail_id, obj.id, ancien,
+    )
+    return _doc_read(obj)
+
+
+@router.post(
+    "/renouvellements/{renouvellement_id}/document",
+    response_model=DocumentRead,
+)
+async def upload_renouvellement_document(
+    renouvellement_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+) -> DocumentRead:
+    """Importe (ou remplace) l'avis de renouvellement courant. L'ancien
+    reste au dossier."""
+    _require_volet(user)
+    from app.models.immobilier import BailRenouvellement
+
+    r = await db.get(BailRenouvellement, renouvellement_id)
+    if r is None:
+        raise HTTPException(
+            status_code=404, detail="Renouvellement introuvable."
+        )
+    bail = await db.get(Bail, r.bail_id)
+    ancien = r.document_id
+    obj = await _import_document(
+        db, user,
+        file=file,
+        doc_type="avis_renouvellement",
+        titre=f"Avis de renouvellement — {r.avis_envoye_le}",
+        bail_id=r.bail_id,
+        locataire_id=bail.locataire_id if bail else None,
+        logement_id=bail.logement_id if bail else None,
+        remplace_document_id=ancien,
+    )
+    r.document_id = obj.id
+    await db.commit()
+    await db.refresh(obj)
+    return _doc_read(obj)

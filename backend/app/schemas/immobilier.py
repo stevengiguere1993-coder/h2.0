@@ -269,6 +269,9 @@ class BailRead(BailBase):
     updated_at: datetime
     signed_at: Optional[datetime] = None
     signed_by_name: Optional[str] = None
+    #: LE bail courant (imm_documents) — s'ouvre au clic depuis la page
+    #: Baux ; « Remplacer le bail » change ce pointeur.
+    document_id: Optional[int] = None
 
 
 # ─── Hypothèque ─────────────────────────────────────────────────────────

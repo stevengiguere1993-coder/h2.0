@@ -19,6 +19,7 @@ import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 import {
+  BailDocActions,
   BailSignature,
   TalFormDropdown
 } from "@/components/immobilier/tal-avis";
@@ -45,6 +46,8 @@ type Row = {
   montant_paye: number | null;
   paye_le: string | null;
   etat: string; // "retard" | "attente" | "paye" | "partiel"
+  //: LE bail courant (imm_documents) — clic = l'ouvrir.
+  document_id?: number | null;
   // Frais ponctuels du mois (retard…) + solde cumulatif dû sur le bail.
   frais_mois?: { id: number; montant: number; libelle: string }[];
   solde_total?: number;
@@ -809,6 +812,11 @@ export default function BauxPage() {
                               </button>
                               <TalFormDropdown bailId={r.bail_id} />
                               <BailSignature bailId={r.bail_id} />
+                              <BailDocActions
+                                bailId={r.bail_id}
+                                hasDoc={r.document_id != null}
+                                onChanged={() => void load()}
+                              />
                               {(r.montant_paye ?? 0) > 0 ? (
                                 <button
                                   type="button"

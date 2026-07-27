@@ -337,6 +337,17 @@ async def ensure_critical_columns() -> None:
         # Dépôts de garantie opérationnels 2026-07 : date de remise du
         # dépôt au locataire (page Dépôts → « Marquer rendu »).
         ("imm_baux", "depot_rendu_le", "DATE"),
+        # Documents 2026-07-27 (démêlage communications / dossier) :
+        # « document courant » du bail et de l'avis de renouvellement
+        # (celui qui s'ouvre au clic ; le remplacer archive l'ancien),
+        # + origine/rattachement des documents pour l'import manuel.
+        ("imm_baux", "document_id", "INTEGER"),
+        ("imm_bail_renouvellements", "document_id", "INTEGER"),
+        ("imm_documents", "logement_id", "INTEGER"),
+        ("imm_documents", "source",
+         "VARCHAR(16) NOT NULL DEFAULT 'genere'"),
+        ("imm_documents", "filename", "VARCHAR(255)"),
+        ("imm_documents", "remplace_document_id", "INTEGER"),
         # Locations v2 2026-07 : enquêtes de prélocation + candidat retenu
         # sur les visites (table créée au déploiement précédent SANS ces
         # colonnes → additif obligatoire ici).

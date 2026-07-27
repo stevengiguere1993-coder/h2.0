@@ -764,6 +764,12 @@ async def renouvellements_overview(
                     else None
                 ),
                 renouvellement_status=last_ren.status if last_ren else None,
+                renouvellement_id=last_ren.id if last_ren else None,
+                document_id=(
+                    getattr(last_ren, "document_id", None)
+                    if last_ren
+                    else None
+                ),
                 avis_doc_envoye_le=(
                     last_doc_by_bail[b.id].envoye_le
                     if b.id in last_doc_by_bail

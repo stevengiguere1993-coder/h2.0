@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ClipboardList,
   Eye,
+  FileDown,
   FileText,
   KeyRound,
   Loader2,
@@ -34,6 +35,11 @@ type RenouvellementOverview = {
   avis_envoye_le?: string | null;
   nouveau_loyer?: number | null;
   renouvellement_status?: string | null;
+  //: Dernier cycle (cible de l'import d'avis).
+  renouvellement_id?: number | null;
+  //: L'AVIS courant (imm_documents) — clic = l'ouvrir ; « Remplacer »
+  //: archive l'ancien dans les Documents.
+  document_id?: number | null;
   // Suivi du document d'avis (TAL-806) : envoyé → ouvert → signé.
   avis_doc_envoye_le?: string | null;
   avis_doc_ouvert_le?: string | null;
@@ -396,6 +402,21 @@ export default function RenouvellementsPage() {
     void reload();
   }, []);
 
+  // Ouvre un document conservé (l'avis courant) dans un nouvel onglet.
+  async function ouvrirDoc(docId: number) {
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/documents/${docId}/pdf`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const url = URL.createObjectURL(await r.blob());
+      window.open(url, "_blank");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      setMsg(`Ouverture échouée : ${(e as Error).message}`);
+    }
+  }
+
   // « Scanner & envoyer » (batch) retiré — demande Phil 2026-07-10 :
   // aucun envoi de masse, chaque avis part via son bouton, vérifié.
 
@@ -708,6 +729,24 @@ export default function RenouvellementsPage() {
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       <span className="inline-flex items-center gap-1.5">
+                        {r.document_id ? (
+                          <button
+                            type="button"
+                            onClick={() => void ouvrirDoc(r.document_id!)}
+                            className="btn-secondary btn-sm"
+                            title="Ouvrir l'avis de renouvellement courant (PDF)"
+                          >
+                            <FileDown className="h-3.5 w-3.5" />
+                            Avis
+                          </button>
+                        ) : null}
+                        {r.renouvellement_id ? (
+                          <ImportAvisButton
+                            renouvellementId={r.renouvellement_id}
+                            hasDoc={r.document_id != null}
+                            onDone={() => void reload()}
+                          />
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => setPrepFor(r)}
@@ -1477,14 +1516,18 @@ function Releves31Tab() {
                             fileRef.current?.click();
                           }}
                           className="btn-secondary btn-xs"
-                          title="Téléverser la copie PDF du relevé (émise par Revenu Québec)"
+                          title={
+                            r.document_id
+                              ? "Remplacer le relevé courant — l'ancien reste dans les Documents"
+                              : "Téléverser la copie PDF du relevé (émise par Revenu Québec)"
+                          }
                         >
                           {busy ? (
                             <Loader2 className="h-3 w-3 animate-spin" />
                           ) : (
                             <Upload className="h-3 w-3" />
                           )}
-                          PDF
+                          {r.document_id ? "Remplacer" : "PDF"}
                         </button>
                         <button
                           type="button"
@@ -1518,5 +1561,86 @@ function Releves31Tab() {
         de la fiche du locataire et du logement.
       </p>
     </div>
+  );
+}
+
+
+/** Import (ou remplacement) de l'AVIS de renouvellement courant — le
+ *  nouveau devient celui qui s'ouvre au clic, l'ancien reste dans les
+ *  Documents (retour Phil 2026-07-27). */
+function ImportAvisButton({
+  renouvellementId,
+  hasDoc,
+  onDone
+}: {
+  renouvellementId: number;
+  hasDoc: boolean;
+  onDone: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function pick(file: File) {
+    if (
+      hasDoc &&
+      !window.confirm(
+        "Remplacer l'avis de renouvellement ? L'ancien reste conservé dans les Documents — seul celui qui s'ouvre au clic change."
+      )
+    )
+      return;
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await authedFetch(
+        `/api/v1/immobilier/renouvellements/${renouvellementId}/document`,
+        { method: "POST", body: fd }
+      );
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        throw new Error(
+          (d && (d.detail || d.message)) || `HTTP ${r.status}`
+        );
+      }
+      onDone();
+    } catch (e) {
+      window.alert(`Import échoué : ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="application/pdf,image/jpeg,image/png"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void pick(f);
+          e.target.value = "";
+        }}
+      />
+      <button
+        type="button"
+        className="btn-secondary btn-sm"
+        disabled={busy}
+        title={
+          hasDoc
+            ? "Remplacer l'avis courant (l'ancien reste dans les Documents)"
+            : "Importer l'avis signé/reçu"
+        }
+        onClick={() => inputRef.current?.click()}
+      >
+        {busy ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Upload className="h-3.5 w-3.5" />
+        )}
+        {hasDoc ? "Remplacer" : "Importer"}
+      </button>
+    </>
   );
 }

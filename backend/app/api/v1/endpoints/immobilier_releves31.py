@@ -339,6 +339,12 @@ async def upload_releve31_pdf(
         pdf=data,
         created_by_email=getattr(user, "email", None),
     )
+    # Pièce téléversée (pas générée) + chaîne des versions : re-téléverser
+    # remplace LE relevé courant, l'ancien reste dans les Documents
+    # (retour Phil 2026-07-27).
+    doc.source = "importe"
+    doc.filename = (file.filename or f"releve31-{annee}.pdf")[:255]
+    doc.remplace_document_id = obj.document_id
     obj.document_id = doc.id
     obj.bail_id = bail.id if bail else None
     obj.locataire_id = bail.locataire_id if bail else None

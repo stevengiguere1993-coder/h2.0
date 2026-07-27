@@ -138,6 +138,11 @@ class RenouvellementOverview(BaseModel):
     avis_envoye_le: Optional[date] = None
     nouveau_loyer: Optional[float] = None
     renouvellement_status: Optional[str] = None
+    #: Dernier cycle de renouvellement (cible du POST …/document).
+    renouvellement_id: Optional[int] = None
+    #: L'AVIS courant (imm_documents) — clic = l'ouvrir ; « Remplacer »
+    #: l'archive et change ce pointeur (retour Phil 2026-07-27).
+    document_id: Optional[int] = None
     # Suivi du DOCUMENT d'avis (TAL-806 conservé dans imm_documents) :
     # envoyé → ouvert (1re consultation du lien) → signé.
     avis_doc_envoye_le: Optional[datetime] = None
