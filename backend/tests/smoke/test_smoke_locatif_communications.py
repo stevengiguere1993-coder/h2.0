@@ -126,6 +126,7 @@ def test_avis_acces_un_courriel_par_locataire(
             "acces_date": date.today().isoformat(),
             "acces_plage": "entre 9 h et 12 h",
             "acces_motif": "inspection des détecteurs de fumée",
+            "from_email": "info@immohorizon.com",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -182,6 +183,7 @@ def test_rappel_paiement_saute_les_payes(
             "type": "rappel_paiement",
             "immeuble_ids": [comm_seed["immeuble_id"]],
             "locataire_ids": [],
+            "from_email": "info@immohorizon.com",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -251,3 +253,97 @@ def test_envoyer_sans_cible_422(client, auth_headers, fake_mailer):
     )
     assert resp.status_code == 422
     assert fake_mailer.sent == []
+
+
+def test_de_qui_obligatoire_422(client, auth_headers, comm_seed, fake_mailer):
+    """Sans expéditeur (ni payload ni réglages) → refus explicite, rien
+    ne part (retour Phil : « le email est parti quand même »)."""
+    resp = client.post(
+        "/api/v1/immobilier/communications/envoyer",
+        headers=auth_headers,
+        json={
+            "type": "demande_assurance",
+            "immeuble_ids": [comm_seed["immeuble_id"]],
+            "locataire_ids": [],
+        },
+    )
+    assert resp.status_code == 422, resp.text
+    assert "De qui" in resp.json()["detail"]
+    assert fake_mailer.sent == []
+
+
+def test_employe_ne_peut_pas_changer_l_expediteur(
+    client, auth_headers, employee_headers, comm_seed, fake_mailer, run
+):
+    """Un non-manager envoie avec les DÉFAUTS des réglages — son payload
+    from/reply-to est ignoré (pas d'usurpation d'expéditeur)."""
+    import json as _json
+
+    from app.models.user import User
+
+    from .conftest import TestSessionLocal
+
+    # L'employé de test doit avoir le volet immobilier.
+    async def _volets():
+        async with TestSessionLocal() as s:
+            from sqlalchemy import select
+
+            emp = (
+                await s.execute(
+                    select(User).where(User.role == "employee")
+                )
+            ).scalars().first()
+            emp.volets_json = _json.dumps(["immobilier"])
+            await s.commit()
+            return emp.id
+
+    run(_volets())
+    client.put(
+        "/api/v1/immobilier/communications/reglages",
+        headers=auth_headers,
+        json={
+            "from_email": "gestion@immohorizon.com",
+            "from_name": "Gestion Horizon",
+            "reply_to": "kyle.gestion@gmail.com",
+        },
+    )
+    resp = client.post(
+        "/api/v1/immobilier/communications/envoyer",
+        headers=employee_headers,
+        json={
+            "type": "demande_assurance",
+            "immeuble_ids": [],
+            "locataire_ids": [comm_seed["locataire_bob"]],
+            "from_email": "pirate@evil.com",
+            "from_name": "Faux Nom",
+            "reply_to": "pirate@evil.com",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    m = fake_mailer.sent[-1]
+    assert m["from_email"] == "gestion@immohorizon.com"  # payload ignoré
+    assert m["reply_to"] == "kyle.gestion@gmail.com"
+    client.put(
+        "/api/v1/immobilier/communications/reglages",
+        headers=auth_headers,
+        json={"from_email": "", "from_name": "", "reply_to": ""},
+    )
+
+
+def test_destinataires_exposent_le_du_du_mois(
+    client, auth_headers, comm_seed
+):
+    """Le bouton « Retards du mois » se nourrit de du_mois : Alice (payée)
+    à 0, Bob avec son loyer dû."""
+    resp = client.get(
+        "/api/v1/immobilier/communications/destinataires",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    bloc = next(
+        b for b in resp.json()
+        if b["immeuble_id"] == comm_seed["immeuble_id"]
+    )
+    par_nom = {l["nom"]: l for l in bloc["locataires"]}
+    assert par_nom["Alice Comm"]["du_mois"] == 0.0
+    assert par_nom["Bob Comm"]["du_mois"] == 802.0

@@ -477,6 +477,9 @@ class DossierBail(BaseModel):
     loyer_mensuel: float
     depot_garantie: Optional[float] = None
     status: str
+    #: LE bail courant (imm_documents) — bouton « Bail » de la fiche.
+    document_id: Optional[int] = None
+    signed_at: Optional[datetime] = None
 
 
 class DossierPaiement(BaseModel):
@@ -562,6 +565,8 @@ class LogementDossierBail(BaseModel):
     status: str
     document_url: Optional[str] = None
     signed_at: Optional[datetime] = None
+    #: LE bail courant (imm_documents) — bouton « Bail » de la fiche.
+    document_id: Optional[int] = None
 
 
 class LogementDossierBon(BaseModel):

@@ -1902,6 +1902,7 @@ async def logement_dossier(
                 status=b.status,
                 document_url=b.document_url,
                 signed_at=b.signed_at,
+                document_id=b.document_id,
             )
         )
 
@@ -2165,6 +2166,8 @@ async def locataire_dossier(
                     else None
                 ),
                 status=b.status,
+                document_id=b.document_id,
+                signed_at=b.signed_at,
             )
         )
 

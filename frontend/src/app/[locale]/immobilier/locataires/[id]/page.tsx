@@ -28,6 +28,7 @@ import { useSearchParams } from "next/navigation";
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import {
+  BailDocActions,
   BailSignature,
   DocumentsSection,
   TalFormDropdown
@@ -64,6 +65,8 @@ type DossierBail = {
   loyer_mensuel: number;
   depot_garantie: number | null;
   status: string;
+  document_id?: number | null;
+  signed_at?: string | null;
 };
 
 type DossierPaiement = {
@@ -1163,6 +1166,12 @@ export default function LocataireDetailPage({
                               ) : null}
                               <TalFormDropdown bailId={b.id} />
                               <BailSignature bailId={b.id} />
+                              <BailDocActions
+                                bailId={b.id}
+                                hasDoc={b.document_id != null}
+                                signedAt={b.signed_at}
+                                onChanged={() => void loadDossier()}
+                              />
                             </span>
                           </td>
                           <td className="py-2.5 pl-2 text-right">
@@ -1269,9 +1278,22 @@ export default function LocataireDetailPage({
 
             {/* Communications — journal manuel */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
-                Communications
-              </h2>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  Communications
+                </h2>
+                <Link
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={
+                    `/immobilier/communications?locataire_id=${locataireId}` as any
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-2.5 py-1 text-xs font-semibold text-accent-500 transition hover:bg-accent-500/20"
+                  title="Ouvre la page Communications avec ce locataire déjà coché — reste à choisir le quoi et l'expéditeur"
+                >
+                  <Mail className="h-3.5 w-3.5" />
+                  Écrire à ce locataire
+                </Link>
+              </div>
 
               <form
                 onSubmit={addCommunication}

@@ -742,3 +742,50 @@ async def upload_renouvellement_document(
     await db.commit()
     await db.refresh(obj)
     return _doc_read(obj)
+
+
+@router.post("/renouvellements/importer", response_model=DocumentRead)
+async def importer_avis_pour_bail(
+    db: DBSession,
+    user: CurrentUser,
+    bail_id: int = Form(...),
+    file: UploadFile = File(...),
+) -> DocumentRead:
+    """Importe un avis de renouvellement pour un bail SANS cycle en cours
+    (ex. avis papier envoyé avant Kratos) : crée le renouvellement
+    (avis envoyé aujourd'hui, statut proposé) et y attache le PDF comme
+    avis courant. La prochaine préparation d'avis démarrera un nouveau
+    cycle qui prendra le dessus (retour Phil 2026-07-27)."""
+    _require_volet(user)
+    from datetime import date as _date
+
+    from app.models.immobilier import BailRenouvellement
+
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        raise HTTPException(status_code=404, detail="Bail introuvable.")
+    r = BailRenouvellement(
+        bail_id=bail.id,
+        avis_envoye_le=_date.today(),
+    )
+    r.created_at = _now()
+    r.updated_at = _now()
+    db.add(r)
+    await db.flush()
+    obj = await _import_document(
+        db, user,
+        file=file,
+        doc_type="avis_renouvellement",
+        titre=f"Avis de renouvellement — {r.avis_envoye_le}",
+        bail_id=bail.id,
+        locataire_id=bail.locataire_id,
+        logement_id=bail.logement_id,
+    )
+    r.document_id = obj.id
+    await db.commit()
+    await db.refresh(obj)
+    log.info(
+        "Avis de renouvellement importé pour bail %s (renouvellement #%s)",
+        bail_id, r.id,
+    )
+    return _doc_read(obj)
