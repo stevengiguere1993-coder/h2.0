@@ -2727,6 +2727,35 @@ async def init_db() -> None:
             VALUES ('achat_menage_qb_sans_lien_v1')
             ON CONFLICT (key) DO NOTHING
             """,
+            # v2 : même ménage pour les factures importées de QB reliées à
+            # un CLIENT SEUL (sans projet/BT) — la règle est « client ET
+            # projet/BT » : un client seul ne justifie pas l'import. Mêmes
+            # critères stricts « importé et intact » ; les reçus saisis
+            # DANS Kratos sur un client sont exclus (is_billable posé
+            # explicitement à la création → billable_manual TRUE).
+            """
+            DELETE FROM achats
+            WHERE (qbo_bill_id IS NOT NULL OR qbo_purchase_id IS NOT NULL)
+              AND project_id IS NULL
+              AND client_id IS NOT NULL
+              AND invoiced_at IS NULL
+              AND facture_item_id IS NULL
+              AND purchase_order_id IS NULL
+              AND receipt_image_content_type IS NULL
+              AND is_billable = FALSE
+              AND billable_manual = FALSE
+              AND COALESCE(reference, '') = ''
+              AND COALESCE(notes, '') = ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM applied_backfills
+                  WHERE key = 'achat_menage_qb_client_seul_v2'
+              )
+            """,
+            """
+            INSERT INTO applied_backfills (key)
+            VALUES ('achat_menage_qb_client_seul_v2')
+            ON CONFLICT (key) DO NOTHING
+            """,
             # One-shot : resynchronise les TOTAUX STOCKÉS des factures avec
             # la somme réelle de leurs items. L'import « Importer du
             # projet » sur une facture existante ne recalculait pas

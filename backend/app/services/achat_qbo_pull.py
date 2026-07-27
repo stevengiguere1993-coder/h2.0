@@ -371,11 +371,9 @@ async def pull_new_bills_from_qbo(
         log.warning("BillPayment query failed: %s", exc)
         payments_idx = {}
 
-    # Index de CLASSEMENT Kratos : sous-clients de projets (qbo_job_id)
-    # et clients meres (qbo_customer_id). Une facture QB n'est importee
-    # QUE si elle se relie a l'un d'eux (ou a un projet via sa Class).
-    from app.models.client import Client
-
+    # Index de CLASSEMENT Kratos : sous-clients de projets/BT
+    # (qbo_job_id). Une facture QB n'est importee QUE si elle se relie a
+    # un projet/BT (via sa Class de ligne ou un CustomerRef).
     proj_by_job: Dict[str, Project] = {
         str(p.qbo_job_id): p
         for p in (
@@ -385,15 +383,6 @@ async def pull_new_bills_from_qbo(
         ).scalars().all()
         if p.qbo_job_id
     }
-    client_by_qbo: Dict[str, int] = {
-        str(c.qbo_customer_id): int(c.id)
-        for c in (
-            await db.execute(
-                select(Client).where(Client.qbo_customer_id.isnot(None))
-            )
-        ).scalars().all()
-        if c.qbo_customer_id
-    }
 
     stats = {
         "imported": 0,
@@ -401,8 +390,8 @@ async def pull_new_bills_from_qbo(
         "imported_paid": 0,
         "skipped_existing": 0,
         "paid_synced": 0,  # Achats existants bascules en paye via QB
-        # Factures QB SANS lien Kratos (ni projet, ni BT, ni client) :
-        # laissees dans QB, jamais importees.
+        # Factures QB sans PROJET/BT Kratos identifiable : laissees dans
+        # QB, jamais importees (un client seul ne suffit pas).
         "skipped_unlinked": 0,
         "total_qbo_bills": len(bills),
     }
@@ -439,27 +428,22 @@ async def pull_new_bills_from_qbo(
                 stats["skipped_existing"] += 1
             continue
 
-        # CLASSEMENT Kratos OBLIGATOIRE avant tout import : un projet
-        # (Class de ligne = adresse du chantier, ou CustomerRef =
-        # sous-client d'un projet/BT) ou, a defaut, un CLIENT Kratos
-        # (CustomerRef = client mere). Les autres factures QB (depenses
-        # generales saisies directement dans QB) RESTENT dans QB —
-        # Kratos n'est pas un miroir comptable complet.
+        # CLASSEMENT Kratos OBLIGATOIRE avant tout import : la facture
+        # doit se relier a un PROJET ou un BON DE TRAVAIL Kratos (donc
+        # client + chantier) — via la Class de ligne (= adresse du
+        # chantier) ou un CustomerRef pointant le sous-client d'un
+        # projet/BT. Un client seul NE suffit PAS (sinon toute facture
+        # QB posee sur un client mere serait aspiree). Les autres
+        # factures QB (depenses generales) RESTENT dans QB — Kratos
+        # n'est pas un miroir comptable complet.
         class_name = _bill_class_name(bill)
         project = await _find_project_by_class(db, class_name)
-        crefs = _bill_customer_refs(bill)
         if project is None:
-            for cr in crefs:
+            for cr in _bill_customer_refs(bill):
                 if cr in proj_by_job:
                     project = proj_by_job[cr]
                     break
-        linked_client_id: Optional[int] = None
         if project is None:
-            for cr in crefs:
-                if cr in client_by_qbo:
-                    linked_client_id = client_by_qbo[cr]
-                    break
-        if project is None and linked_client_id is None:
             stats["skipped_unlinked"] += 1
             continue
 
@@ -563,9 +547,6 @@ async def pull_new_bills_from_qbo(
             qbo_sync_token=str(bill.get("SyncToken") or ""),
             fournisseur_id=fournisseur.id,
             project_id=project.id if project else None,
-            # Facture reliee a un CLIENT Kratos sans projet : rattachement
-            # direct au client (le cout lui est attribue).
-            client_id=(linked_client_id if project is None else None),
             kind="material",
             description=description,
             amount=amount_ht,
