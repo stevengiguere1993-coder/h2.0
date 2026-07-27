@@ -318,9 +318,11 @@ async def run_qbo_nets() -> Dict[str, Any]:
         await _qbo._load_refresh_from_db()
         if _qbo.ready:
             _auto_re = _re_orph.compile(r"^A-\d+$")
+            # TOUS les Bills impayés — pour attraper aussi les doublons
+            # d'une dépense DÉJÀ PAYÉE (ex. petinos payé par carte : la
+            # Purchase existe, la « facture à payer » en trop doit partir).
             _bills = await _qbo.query(
-                "SELECT * FROM Bill WHERE DocNumber LIKE 'A-%' "
-                "MAXRESULTS 1000"
+                "SELECT * FROM Bill WHERE Balance > '0' MAXRESULTS 1000"
             )
             async with AsyncSessionLocal() as db:
                 _linked: set[str] = set()
@@ -337,23 +339,59 @@ async def run_qbo_nets() -> Dict[str, Any]:
                     if _pid:
                         _linked.add(str(_pid))
             _removed = _kept = 0
+            _lookups = 0
             for _b in _bills:
                 _bid = str(_b.get("Id") or "")
-                _doc = str(_b.get("DocNumber") or "")
-                if (
-                    not _bid
-                    or not _auto_re.fullmatch(_doc)
-                    or _bid in _linked
-                    or float(_b.get("Balance") or 0) <= 0
-                ):
+                _doc = str(_b.get("DocNumber") or "").strip()
+                _total = float(_b.get("TotalAmt") or 0)
+                _balance = float(_b.get("Balance") or 0)
+                if not _bid or _bid in _linked or _balance <= 0:
+                    continue
+                # Partiellement payée = vivante (ex. Eco dépôt) → jamais
+                # touchée.
+                if abs(_balance - _total) > 0.01:
+                    continue
+                _dup_reason = None
+                if _doc and _auto_re.fullmatch(_doc):
+                    # DocNumber auto « A-<id> » : ne peut venir que d'un
+                    # push Kratos dont la ligne a disparu.
+                    _dup_reason = "docnumber_auto_kratos"
+                elif _lookups < 50:
+                    # Une DÉPENSE PAYÉE équivalente existe-t-elle déjà
+                    # dans QB ? Même DocNumber, sinon même fournisseur +
+                    # même total à ± 3 jours.
+                    _lookups += 1
+                    _pur = None
+                    if _doc:
+                        _pur = await _qbo.find_txn_by_docnumber(
+                            "Purchase", _doc
+                        )
+                    if not (_pur and _pur.get("Id")):
+                        _vid = str(
+                            (_b.get("VendorRef") or {}).get("value") or ""
+                        )
+                        _txnd = str(_b.get("TxnDate") or "")
+                        if _vid and _txnd and _total > 0:
+                            _pur = await _qbo.find_existing_purchase(
+                                vendor_id=_vid,
+                                total=_total,
+                                txn_date=_txnd,
+                            )
+                    if _pur and _pur.get("Id"):
+                        _dup_reason = (
+                            f"depense_payee_existante_{_pur.get('Id')}"
+                        )
+                if not _dup_reason:
                     continue
                 try:
                     if await _qbo.delete_bill(_bid):
                         _removed += 1
                         log.info(
-                            "Bill QB orphelin %s (%s) supprimé "
-                            "(copie parasite sans achat Kratos)",
-                            _bid, _doc,
+                            "Bill QB doublon %s (doc=%s, %s $, %s) "
+                            "supprimé — %s",
+                            _bid, _doc, _total,
+                            (_b.get("VendorRef") or {}).get("name"),
+                            _dup_reason,
                         )
                     else:
                         _kept += 1
