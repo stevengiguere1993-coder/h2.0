@@ -223,8 +223,8 @@ function AssurancesTab() {
           Aucun locataire avec bail actif.
         </p>
       ) : (
-        <div className="mt-4 overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
-          <table className="w-full text-left text-sm">
+        <div className="mt-4 overflow-x-auto rounded-2xl border border-brand-800 bg-brand-900">
+          <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
               <tr>
                 <th className="px-4 py-2.5">Logement</th>
@@ -604,8 +604,8 @@ export default function RenouvellementsPage() {
             Aucun bail dans cette catégorie.
           </p>
         ) : (
-          <div className="mt-4 overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
-            <table className="w-full text-left text-sm">
+          <div className="mt-4 overflow-x-auto rounded-2xl border border-brand-800 bg-brand-900">
+            <table className="w-full min-w-[820px] text-left text-sm">
               <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
                 <tr>
                   <th className="px-4 py-2.5">Logement</th>

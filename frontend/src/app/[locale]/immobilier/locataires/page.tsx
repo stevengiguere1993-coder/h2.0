@@ -245,8 +245,8 @@ export default function LocatairesPage() {
               : "enregistré"}.
           </p>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
-            <table className="w-full text-left text-sm">
+          <div className="overflow-x-auto rounded-2xl border border-brand-800 bg-brand-900">
+            <table className="w-full min-w-[820px] text-left text-sm">
               <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
                 <tr>
                   <th className="px-4 py-2.5">Nom</th>

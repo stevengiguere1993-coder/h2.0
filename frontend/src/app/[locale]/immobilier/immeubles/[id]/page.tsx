@@ -2169,8 +2169,8 @@ function LogementsTab({
         </p>
         {addButton}
       </div>
-      <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
-        <table className="w-full text-left text-sm">
+      <div className="overflow-x-auto rounded-2xl border border-brand-800 bg-brand-900">
+        <table className="w-full min-w-[720px] text-left text-sm">
           <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
             <tr>
               <th className="px-4 py-2.5">Numéro</th>
@@ -2241,8 +2241,8 @@ function BauxTab({
       ) : list.length === 0 ? (
         <Empty msg="Aucun bail." />
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
-          <table className="w-full text-left text-sm">
+        <div className="overflow-x-auto rounded-2xl border border-brand-800 bg-brand-900">
+          <table className="w-full min-w-[900px] text-left text-sm">
             <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
               <tr>
                 <th className="px-4 py-2.5">Logement</th>
@@ -4132,8 +4132,8 @@ function EvaluationsTab({
       {sorted.length === 0 && !adding ? (
         <Empty msg="Aucune évaluation." />
       ) : sorted.length > 0 ? (
-        <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
-          <table className="w-full text-left text-sm">
+        <div className="overflow-x-auto rounded-2xl border border-brand-800 bg-brand-900">
+          <table className="w-full min-w-[860px] text-left text-sm">
             <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
               <tr>
                 <th className="px-4 py-2.5">Date</th>
@@ -4944,8 +4944,8 @@ function MaintenanceTab({
   return (
     <div className="space-y-6">
       {expenses}
-      <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
-        <table className="w-full text-left text-sm">
+      <div className="overflow-x-auto rounded-2xl border border-brand-800 bg-brand-900">
+        <table className="w-full min-w-[720px] text-left text-sm">
         <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
           <tr>
             <th className="px-4 py-2.5">Titre</th>
