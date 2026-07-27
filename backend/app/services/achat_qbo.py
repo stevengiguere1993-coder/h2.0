@@ -1539,6 +1539,20 @@ async def push_bill_payment_to_qbo(
     if not qbo.ready:
         return {"ok": False, "reason": "qbo_not_configured"}
 
+    # Garde anti-DOUBLE-PAIEMENT : si le Bill QB est déjà soldé (payé
+    # directement dans QB, ou par une BillPayment que Kratos ne connaît
+    # pas), on ne crée RIEN. Marqueur sentinelle pour ne pas retenter.
+    try:
+        _bill = await qbo.get_bill(str(achat.qbo_bill_id))
+        _bill = _bill.get("Bill") or _bill
+        if float(_bill.get("Balance") or 0) == 0:
+            achat.qbo_bill_payment_id = "qb_deja_paye"
+            await db.flush()
+            return {"ok": True, "reason": "bill_deja_solde_dans_qb"}
+    except QuickBooksError:
+        # Bill illisible (supprimé/converti) : on n'ose pas payer.
+        return {"ok": False, "reason": "bill_introuvable"}
+
     method = (achat.payment_method or "").lower()
     payment_account_id = await _resolve_payment_account(db, qbo, method)
     if not payment_account_id:
