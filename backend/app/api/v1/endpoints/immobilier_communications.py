@@ -181,6 +181,10 @@ class ReglagesEnvoi(BaseModel):
     reply_to: str = ""
     #: Expéditeurs supplémentaires approuvés (gérés par les managers).
     profils: List[ProfilEnvoi] = []
+    #: Label du profil PAR DÉFAUT (retour Phil v4 : « je choisis le par
+    #: défaut ») — pré-sélectionné pour tous, l'employé peut en choisir un
+    #: autre parmi la liste mais ne peut pas en créer.
+    profil_defaut: str = ""
 
 
 @router.get("/reglages", response_model=ReglagesEnvoi)
@@ -198,6 +202,7 @@ async def get_reglages(db: DBSession, user: CurrentUser) -> ReglagesEnvoi:
         from_name=str(cfg.get("from_name") or ""),
         reply_to=str(cfg.get("reply_to") or ""),
         profils=profils,
+        profil_defaut=str(cfg.get("profil_defaut") or ""),
     )
 
 
@@ -211,20 +216,25 @@ async def put_reglages(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Réservé aux gestionnaires.",
         )
+    profils_propres = [
+        ProfilEnvoi(
+            label=pr.label.strip(),
+            from_email=pr.from_email.strip(),
+            from_name=pr.from_name.strip(),
+            reply_to=pr.reply_to.strip(),
+        )
+        for pr in payload.profils
+        if pr.label.strip()
+    ][:10]
+    # Le profil par défaut doit exister parmi les profils (sinon ignoré).
+    labels = {p.label for p in profils_propres}
+    defaut = payload.profil_defaut.strip()
     clean = ReglagesEnvoi(
         from_email=payload.from_email.strip(),
         from_name=payload.from_name.strip(),
         reply_to=payload.reply_to.strip(),
-        profils=[
-            ProfilEnvoi(
-                label=pr.label.strip(),
-                from_email=pr.from_email.strip(),
-                from_name=pr.from_name.strip(),
-                reply_to=pr.reply_to.strip(),
-            )
-            for pr in payload.profils
-            if pr.label.strip()
-        ][:10],
+        profils=profils_propres,
+        profil_defaut=defaut if defaut in labels else "",
     )
     await set_automation_config(
         db, _REGLAGES_KEY, clean.model_dump(), user_id=user.id
@@ -423,14 +433,20 @@ async def envoyer(
     cfg = await get_automation_config(_REGLAGES_KEY)
     est_manager = bool(user.has_min_role("manager"))
     # Un PROFIL approuvé (des réglages) peut être choisi par tout le
-    # monde — c'est la réponse au cas « deux gestionnaires ».
+    # monde — c'est la réponse au cas « deux gestionnaires ». À défaut de
+    # choix explicite, on prend le profil PAR DÉFAUT des réglages.
+    label_voulu = (payload.profil or "").strip() or str(
+        cfg.get("profil_defaut") or ""
+    ).strip()
     profil_choisi = None
-    if (payload.profil or "").strip():
+    if label_voulu:
         for raw in cfg.get("profils") or []:
-            if str(raw.get("label") or "").strip() == payload.profil.strip():
+            if str(raw.get("label") or "").strip() == label_voulu:
                 profil_choisi = raw
                 break
-        if profil_choisi is None:
+        # Erreur seulement si l'utilisateur a EXPLICITEMENT demandé un
+        # profil inconnu (le défaut effacé ne bloque pas l'envoi).
+        if profil_choisi is None and (payload.profil or "").strip():
             raise HTTPException(
                 status_code=422,
                 detail="Expéditeur inconnu — choisis un profil de la liste.",

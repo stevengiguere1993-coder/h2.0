@@ -1293,7 +1293,23 @@ function Grille({
                       <td className="border-l border-[var(--qg-border)] bg-amber-500/5 px-3 py-1.5 text-center font-semibold tabular-nums">
                         {tot ? tot.toLocaleString("fr-CA") : ""}
                       </td>
-                      <td className="px-2 py-1" />
+                      {/* Notes AUSSI sur la ligne non refacturable (MGV) —
+                          retour Phil : les employés pouvaient saisir des
+                          heures mais pas de note comme sur les autres lignes. */}
+                      <td className="px-2 py-1">
+                        {canEdit ? (
+                          <input
+                            value={notes[l.company_id] || ""}
+                            onChange={(e) => onNote(l.company_id, e.target.value)}
+                            placeholder="—"
+                            className="w-full rounded border border-transparent bg-transparent px-2 py-1 text-sm outline-none hover:border-[var(--qg-border)] focus:border-[var(--qg-accent)]"
+                          />
+                        ) : (
+                          <span className="text-sm text-[var(--qg-text-faint)]">
+                            {notes[l.company_id] || ""}
+                          </span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
