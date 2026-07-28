@@ -242,10 +242,16 @@ function AssurancesTab() {
             <tbody className="divide-y divide-brand-800">
               {rows.map((r) => {
                 const [badge, label] = ASSU_BADGE[r.statut];
+                // Confirmées (OK) = vertes et déjà triées en bas côté
+                // backend (retour Phil v4).
                 return (
                   <tr
                     key={`${r.bail_id}-${r.locataire_id}`}
-                    className="hover:bg-brand-950/50"
+                    className={
+                      r.statut === "ok"
+                        ? "bg-emerald-500/10 hover:bg-emerald-500/15"
+                        : "hover:bg-brand-950/50"
+                    }
                   >
                     <td className="px-4 py-2.5">
                       {r.immeuble_id != null ? (
@@ -349,8 +355,8 @@ function fmtDateTime(iso: string | null | undefined): string {
 }
 
 const FENETRE_LABELS: Record<RenouvellementOverview["fenetre"], string> = {
-  imminente: "Imminente (<3 mois)",
-  a_envoyer: "À envoyer (4-6 mois)",
+  imminente: "Imminente (< 3 mois)",
+  a_envoyer: "À envoyer",
   envoye: "Avis envoyé",
   hors_fenetre: "Hors fenêtre"
 };

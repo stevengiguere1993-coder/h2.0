@@ -505,7 +505,11 @@ export default function CommunicationsPage() {
           </div>
         ) : null}
 
-        <div className="grid gap-5 xl:grid-cols-2">
+        {/* grid-cols-1 EXPLICITE : sans lui, la colonne unique mobile se
+            dimensionne au contenu (auto) et déborde à droite sans pouvoir
+            scroller (retour Phil v4). grid-cols-1 = minmax(0,1fr) borne la
+            largeur ; les enfants tronquent alors correctement. */}
+        <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-2">
           {/* ── 1. À QUI ── */}
           <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4 shadow-card sm:p-5">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -554,15 +558,14 @@ export default function CommunicationsPage() {
                           type="checkbox"
                           checked={immSel.has(b.immeuble_id)}
                           onChange={() => toggleImm(b.immeuble_id)}
-                          className="h-4 w-4 accent-[var(--accent-500,#f59e0b)]"
+                          className="h-4 w-4 shrink-0 accent-[var(--accent-500,#f59e0b)]"
                         />
                         <Building2 className="h-3.5 w-3.5 shrink-0 text-white/40" />
                         <span className="min-w-0 flex-1 truncate text-sm text-white">
                           {b.immeuble_name}
                         </span>
-                        <span className="text-xs text-white/45">
-                          {b.locataires.length} locataire
-                          {b.locataires.length > 1 ? "s" : ""}
+                        <span className="shrink-0 text-xs text-white/45">
+                          {b.locataires.length} loc.
                         </span>
                         <button
                           className="rounded p-1 text-white/40 hover:text-white"

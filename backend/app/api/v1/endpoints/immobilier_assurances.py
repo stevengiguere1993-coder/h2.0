@@ -52,7 +52,12 @@ def _require_volet(user: CurrentUser) -> None:
         )
 
 
-def _statut(confirmee_le: Optional[date]) -> str:
+def _statut(confirmee_le: Optional[date], cfg=None) -> str:
+    """Statut d'assurance selon la bascule annuelle configurée (défaut :
+    re-confirmation à partir du 1er janvier)."""
+    if cfg is not None:
+        return cfg.statut_assurance(confirmee_le)
+    # Repli (fenêtre par défaut) si la config n'est pas chargée.
     if confirmee_le is None:
         return "jamais"
     delta = (date.today() - confirmee_le).days
@@ -127,6 +132,9 @@ async def assurances_overview(
             ).scalars().all()
         }
 
+    from app.services.locatif_suivis import get_suivis
+
+    suivis_cfg = await get_suivis()
     rows: List[AssuranceRow] = []
     for b in baux:
         lg = log_by_id.get(b.logement_id)
@@ -146,10 +154,10 @@ async def assurances_overview(
                 logement_id=lg.id if lg else None,
                 logement_numero=lg.numero if lg else None,
                 assurance_confirmee_le=lo.assurance_confirmee_le,
-                statut=_statut(lo.assurance_confirmee_le),
+                statut=_statut(lo.assurance_confirmee_le, suivis_cfg),
             )
         )
-    # À traiter en premier : jamais confirmées, puis à reconfirmer.
+    # À traiter en premier : jamais confirmées, puis à reconfirmer, OK en bas.
     ordre = {"jamais": 0, "a_reconfirmer": 1, "ok": 2}
     rows.sort(
         key=lambda r: (ordre.get(r.statut, 9), r.immeuble_name or "", r.logement_numero or "")
