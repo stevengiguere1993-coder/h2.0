@@ -175,10 +175,13 @@ async def releves31_overview(
 ) -> Releve31Overview:
     _require_volet(user)
     today = date.today()
-    # Année fiscale « en cours » : jusqu'à fin février on travaille
-    # encore sur l'année précédente (échéance du RL-31).
+    # Année fiscale « en cours » : jusqu'au mois de bascule inclus (réglable,
+    # défaut février) on travaille encore sur l'année précédente. Après, sur
+    # l'année courante (retour Phil 2026-07-28).
     if annee is None:
-        annee = today.year - 1 if today.month <= 2 else today.year
+        from app.services.locatif_suivis import get_suivis
+
+        annee = (await get_suivis()).annee_releve31_defaut(today)
     occupations = await _occupations_31_dec(db, annee)
 
     suivis = {

@@ -623,6 +623,9 @@ async def renouvellements_overview(
     """Liste les baux actifs dont la fin tombe dans les 12 prochains mois,
     avec leur statut de renouvellement actuel."""
     _require_volet(user)
+    from app.services.locatif_suivis import get_suivis
+
+    suivis_cfg = await get_suivis()
     today = date.today()
     horizon = today + timedelta(days=365)
 
@@ -734,14 +737,11 @@ async def renouvellements_overview(
         last_ren = last_ren_by_bail.get(b.id)
 
         delta = (b.date_fin - today).days
-        if last_ren is not None:
-            fenetre = "envoye"
-        elif delta <= 90:
-            fenetre = "imminente"
-        elif 120 <= delta <= 180:
-            fenetre = "a_envoyer"
-        else:
-            fenetre = "hors_fenetre"
+        # Fenêtre « à envoyer » = jusqu'à N mois avant la fin (réglable,
+        # défaut 6). Retour Phil 2026-07-28.
+        fenetre = suivis_cfg.fenetre_renouvellement(
+            delta, avis_envoye=last_ren is not None
+        )
 
         out.append(
             RenouvellementOverview(

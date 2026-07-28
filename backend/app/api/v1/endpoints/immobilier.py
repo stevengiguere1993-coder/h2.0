@@ -337,6 +337,63 @@ async def put_demarrage_config(
     return DemarrageConfig(date=d)
 
 
+# ── Fenêtres des SUIVIS ANNUELS (réglables) ─────────────────────────────
+# Retour Phil 2026-07-28 : « à partir de quand tu switch pour à confirmer /
+# à produire ? » — renouvellement N mois avant la fin, assurances et
+# relevés 31 à partir d'un mois de bascule. Tout réglable ici.
+
+
+class SuivisConfigIn(BaseModel):
+    renouvellement_mois_avant: int = 6
+    assurance_bascule_mois: int = 1
+    releve31_bascule_mois: int = 2
+
+
+@router.get("/suivis-config", response_model=SuivisConfigIn)
+async def get_suivis_config(
+    db: DBSession, user: CurrentUser
+) -> SuivisConfigIn:
+    _require_volet(user)
+    from app.services.locatif_suivis import get_suivis
+
+    c = await get_suivis()
+    return SuivisConfigIn(
+        renouvellement_mois_avant=c.renouvellement_mois_avant,
+        assurance_bascule_mois=c.assurance_bascule_mois,
+        releve31_bascule_mois=c.releve31_bascule_mois,
+    )
+
+
+@router.put("/suivis-config", response_model=SuivisConfigIn)
+async def put_suivis_config(
+    payload: SuivisConfigIn, db: DBSession, user: CurrentUser
+) -> SuivisConfigIn:
+    _require_volet(user)
+    if not user.has_min_role("manager"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Réservé aux gestionnaires.",
+        )
+    from app.services.locatif_suivis import SuivisConfig, set_suivis
+
+    c = await set_suivis(
+        db,
+        SuivisConfig(
+            renouvellement_mois_avant=payload.renouvellement_mois_avant,
+            assurance_bascule_mois=payload.assurance_bascule_mois,
+            releve31_bascule_mois=payload.releve31_bascule_mois,
+        ),
+        user_id=user.id,
+    )
+    await db.commit()
+    log.info("Fenêtres de suivis réglées par %s", user.email)
+    return SuivisConfigIn(
+        renouvellement_mois_avant=c.renouvellement_mois_avant,
+        assurance_bascule_mois=c.assurance_bascule_mois,
+        releve31_bascule_mois=c.releve31_bascule_mois,
+    )
+
+
 # ── Immeubles : liste + KPIs agrégés ────────────────────────────────────
 
 
