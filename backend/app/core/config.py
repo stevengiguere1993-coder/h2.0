@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     env: str = "development"
     port: int = 8000
     debug: bool = False
+    #: STAGING (dev.immohorizon.com) : True = aucun courriel ne part —
+    #: les envois sont journalisés puis « réussissent » silencieusement,
+    #: pour tester les flux complets sans écrire à de vraies personnes.
+    mail_capture_only: bool = False
 
     # Database
     database_url: str
