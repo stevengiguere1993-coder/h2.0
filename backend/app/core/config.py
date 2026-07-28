@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     #: courriel réel dans sa boîte, personne d'autre ne reçoit rien.
     #: Le sujet est préfixé avec le destinataire original.
     mail_redirect_all_to: str = ""
+    #: STAGING : premier compte OWNER créé au démarrage SI la table users
+    #: est vide (l'inscription est admin-only — sur une base neuve,
+    #: personne ne peut créer le premier compte). Sans effet dès qu'un
+    #: utilisateur existe.
+    bootstrap_admin_email: str = ""
+    bootstrap_admin_password: str = ""
 
     # Database
     database_url: str
