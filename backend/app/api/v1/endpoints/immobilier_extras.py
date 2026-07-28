@@ -631,6 +631,9 @@ async def renouvellements_overview(
 
     # Gestion externe : les renouvellements relèvent du gestionnaire
     # tiers → exclu (isnot(True) couvre les NULL legacy).
+    # Borne basse : les baux ÉCHUS depuis moins d'un an restent visibles
+    # (badge « Bail échu ») au lieu de disparaître silencieusement — la
+    # date doit être corrigée (retour Phil 2026-07-28).
     bails = (
         await db.execute(
             select(Bail)
@@ -639,7 +642,7 @@ async def renouvellements_overview(
             .where(
                 and_(
                     Bail.status == BailStatus.ACTIF.value,
-                    Bail.date_fin >= today,
+                    Bail.date_fin >= today - timedelta(days=365),
                     Bail.date_fin <= horizon,
                     Immeuble.gestion_externe.isnot(True),
                 )

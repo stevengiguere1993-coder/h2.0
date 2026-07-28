@@ -134,7 +134,7 @@ class RenouvellementOverview(BaseModel):
     bail_date_fin: date
     bail_loyer_mensuel: float
     jours_avant_fin: int
-    fenetre: str  # "imminente" | "a_envoyer" | "envoye" | "hors_fenetre"
+    fenetre: str  # "echu" | "imminente" | "a_envoyer" | "envoye" | "hors_fenetre"
     avis_envoye_le: Optional[date] = None
     nouveau_loyer: Optional[float] = None
     renouvellement_status: Optional[str] = None
