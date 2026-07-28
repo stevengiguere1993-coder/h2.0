@@ -409,3 +409,81 @@ def test_envoi_via_profil_expediteur(
         headers=auth_headers,
         json={"from_email": "", "from_name": "", "reply_to": "", "profils": []},
     )
+
+
+def test_profil_par_defaut_applique_sans_choix(
+    client, auth_headers, comm_seed, fake_mailer
+):
+    """Retour Phil v4 : le manager choisit un profil PAR DÉFAUT ; un envoi
+    SANS `profil` explicite l'utilise. Le défaut doit exister parmi les
+    profils (sinon ignoré à l'enregistrement)."""
+    resp = client.put(
+        "/api/v1/immobilier/communications/reglages",
+        headers=auth_headers,
+        json={
+            "from_email": "",
+            "from_name": "",
+            "reply_to": "",
+            "profils": [
+                {
+                    "label": "Bureau",
+                    "from_email": "info@immohorizon.com",
+                    "from_name": "Gestion Horizon",
+                    "reply_to": "",
+                },
+                {
+                    "label": "Kyle",
+                    "from_email": "gestion@immohorizon.com",
+                    "from_name": "Kyle — Gestion Horizon",
+                    "reply_to": "kyle.gestion@gmail.com",
+                },
+            ],
+            "profil_defaut": "Kyle",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["profil_defaut"] == "Kyle"
+
+    # Envoi SANS profil → le défaut « Kyle » s'applique.
+    resp2 = client.post(
+        "/api/v1/immobilier/communications/envoyer",
+        headers=auth_headers,
+        json={
+            "type": "demande_assurance",
+            "immeuble_ids": [],
+            "locataire_ids": [comm_seed["locataire_bob"]],
+        },
+    )
+    assert resp2.status_code == 200, resp2.text
+    m = fake_mailer.sent[-1]
+    assert m["from_email"] == "gestion@immohorizon.com"
+    assert m["reply_to"] == "kyle.gestion@gmail.com"
+
+    # Un défaut hors liste est nettoyé (ignoré) à l'enregistrement.
+    resp3 = client.put(
+        "/api/v1/immobilier/communications/reglages",
+        headers=auth_headers,
+        json={
+            "from_email": "",
+            "from_name": "",
+            "reply_to": "",
+            "profils": [
+                {
+                    "label": "Kyle",
+                    "from_email": "gestion@immohorizon.com",
+                    "from_name": "",
+                    "reply_to": "",
+                }
+            ],
+            "profil_defaut": "Fantome",
+        },
+    )
+    assert resp3.status_code == 200, resp3.text
+    assert resp3.json()["profil_defaut"] == ""
+
+    # Nettoyage.
+    client.put(
+        "/api/v1/immobilier/communications/reglages",
+        headers=auth_headers,
+        json={"from_email": "", "from_name": "", "reply_to": "", "profils": []},
+    )

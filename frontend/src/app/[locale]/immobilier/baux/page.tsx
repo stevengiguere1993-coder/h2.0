@@ -615,8 +615,11 @@ export default function BauxPage() {
               )}
             </div>
           ) : (
+            // min-w : sur mobile la table défile horizontalement plutôt que
+            // de compresser la colonne d'actions (sinon les boutons s'empilent
+            // et les lignes deviennent très hautes — retour Phil v4).
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[1180px] text-sm">
                 <thead className="bg-brand-950/60 text-left text-[11px] uppercase tracking-wider text-white/50">
                   <tr>
                     <th className="px-3 py-2.5">État</th>
@@ -763,102 +766,106 @@ export default function BauxPage() {
                         ) : null}
                       </td>
                       <td className="px-3 py-2.5 text-right">
-                        {r.etat !== "paye" ? (
-                          <div className="flex flex-col items-end gap-1.5">
-                            <div className="flex flex-wrap items-center justify-end gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => void marquerPaye(r)}
-                                disabled={payingId === r.bail_id}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                              >
-                                {payingId === r.bail_id ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <Check className="h-3 w-3" />
-                                )}
-                                Marquer payé
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void marquerPartiel(r)}
-                                disabled={payingId === r.bail_id}
-                                title="Enregistrer un paiement partiel (montant saisi)"
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
-                              >
-                                Partiel
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void ajouterFrais(r)}
-                                title="Ajouter un frais ponctuel au solde (ex. frais de retard 20 $)"
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10"
-                              >
-                                + Frais
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void relancer(r)}
-                                disabled={relancingId === r.bail_id}
-                                title="Envoyer un rappel de loyer par courriel au locataire"
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
-                              >
-                                {relancingId === r.bail_id ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <Mail className="h-3 w-3" />
-                                )}
-                                Relancer
-                              </button>
-                              {/* Délimitation paiement | documents | bail
-                                  (retour Phil 2026-07-27 : « mélangeant »). */}
-                              <span
-                                aria-hidden
-                                className="mx-1 h-5 w-px shrink-0 bg-brand-700"
-                              />
-                              <TalFormDropdown bailId={r.bail_id} />
-                              <BailSignature bailId={r.bail_id} />
-                              <span
-                                aria-hidden
-                                className="mx-1 h-5 w-px shrink-0 bg-brand-700"
-                              />
-                              <BailDocActions
-                                bailId={r.bail_id}
-                                hasDoc={r.document_id != null}
-                                onChanged={() => void load()}
-                              />
-                              {(r.montant_paye ?? 0) > 0 ? (
+                        {/* 3 groupes visuellement délimités (retour Phil v4) :
+                            Paiement | Documents | Bail. Les groupes Documents
+                            et Bail restent visibles même une fois payé. */}
+                        <div className="flex flex-col items-end gap-1.5">
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            {/* ── Groupe 1 — Paiement ── */}
+                            <div className="inline-flex items-center gap-1.5 rounded-xl border border-brand-700 px-1.5 py-1">
+                              {r.etat !== "paye" ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => void marquerPaye(r)}
+                                    disabled={payingId === r.bail_id}
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                                  >
+                                    {payingId === r.bail_id ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <Check className="h-3 w-3" />
+                                    )}
+                                    Marquer payé
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void marquerPartiel(r)}
+                                    disabled={payingId === r.bail_id}
+                                    title="Enregistrer un paiement partiel (montant saisi)"
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+                                  >
+                                    Partiel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void ajouterFrais(r)}
+                                    title="Ajouter un frais ponctuel au solde (ex. frais de retard 20 $)"
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10"
+                                  >
+                                    + Frais
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void relancer(r)}
+                                    disabled={relancingId === r.bail_id}
+                                    title="Envoyer un rappel de loyer par courriel au locataire"
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
+                                  >
+                                    {relancingId === r.bail_id ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <Mail className="h-3 w-3" />
+                                    )}
+                                    Relancer
+                                  </button>
+                                  {(r.montant_paye ?? 0) > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => void corrigerPaiement(r)}
+                                      disabled={payingId === r.bail_id}
+                                      title="Erreur de saisie ? Annule les paiements du mois pour ressaisir"
+                                      className="px-1 text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                                    >
+                                      Corriger
+                                    </button>
+                                  ) : null}
+                                </>
+                              ) : (
                                 <button
                                   type="button"
                                   onClick={() => void corrigerPaiement(r)}
                                   disabled={payingId === r.bail_id}
                                   title="Erreur de saisie ? Annule les paiements du mois pour ressaisir"
-                                  className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/60 transition hover:text-rose-300 disabled:opacity-50"
                                 >
                                   Corriger
                                 </button>
-                              ) : null}
+                              )}
                             </div>
-                            {r.nb_relances > 0 ? (
-                              <span className="text-[10px] text-white/40">
-                                Relancé {r.nb_relances}×
-                                {r.derniere_relance_le
-                                  ? ` · dernière ${r.derniere_relance_le}`
-                                  : ""}
-                              </span>
-                            ) : null}
+                            {/* ── Groupe 2 — Documents (avis + signature) ── */}
+                            <div className="inline-flex items-center gap-1.5 rounded-xl border border-brand-700 px-1.5 py-1">
+                              <TalFormDropdown bailId={r.bail_id} />
+                              <BailSignature bailId={r.bail_id} />
+                            </div>
+                            {/* ── Groupe 3 — Bail (import / voir) ── */}
+                            <div className="inline-flex items-center gap-1.5 rounded-xl border border-brand-700 px-1.5 py-1">
+                              <BailDocActions
+                                bailId={r.bail_id}
+                                hasDoc={r.document_id != null}
+                                onChanged={() => void load()}
+                              />
+                            </div>
                           </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => void corrigerPaiement(r)}
-                            disabled={payingId === r.bail_id}
-                            title="Erreur de saisie ? Annule les paiements du mois pour ressaisir"
-                            className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
-                          >
-                            Corriger
-                          </button>
-                        )}
+                          {r.nb_relances > 0 ? (
+                            <span className="text-[10px] text-white/40">
+                              Relancé {r.nb_relances}×
+                              {r.derniere_relance_le
+                                ? ` · dernière ${r.derniere_relance_le}`
+                                : ""}
+                            </span>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))}

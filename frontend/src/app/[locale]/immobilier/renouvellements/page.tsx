@@ -1328,15 +1328,23 @@ function Releves31Tab() {
     return [now, now - 1, now - 2];
   })();
 
-  const rows31 = (data?.rows || []).filter((r) => {
-    if (fImmeuble && String(r.immeuble_id ?? "") !== fImmeuble) return false;
-    if (search31.trim()) {
-      const q = search31.toLowerCase();
-      const hay = `${r.locataire_nom || ""} ${r.immeuble_name || ""} ${r.logement_numero || ""} ${r.numero_releve || ""}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
+  const rows31 = (data?.rows || [])
+    .filter((r) => {
+      if (fImmeuble && String(r.immeuble_id ?? "") !== fImmeuble) return false;
+      if (search31.trim()) {
+        const q = search31.toLowerCase();
+        const hay = `${r.locataire_nom || ""} ${r.immeuble_name || ""} ${r.logement_numero || ""} ${r.numero_releve || ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    })
+    // Retour Phil v4 : les relevés traités (produit / remis) descendent
+    // en bas de la liste, « à produire » reste en haut. Ordre backend
+    // conservé dans chaque groupe (tri stable).
+    .sort(
+      (a, b) =>
+        Number(a.statut !== "a_produire") - Number(b.statut !== "a_produire")
+    );
 
   return (
     <div className="mt-4 space-y-4">
@@ -1476,8 +1484,16 @@ function Releves31Tab() {
               {rows31.map((r) => {
                 const st = R31_STATUT[r.statut] || R31_STATUT.a_produire;
                 const busy = busyId === r.logement_id;
+                const traite = r.statut !== "a_produire";
                 return (
-                  <tr key={r.logement_id} className="hover:bg-brand-950/50">
+                  <tr
+                    key={r.logement_id}
+                    className={
+                      traite
+                        ? "bg-emerald-500/10 hover:bg-emerald-500/15"
+                        : "hover:bg-brand-950/50"
+                    }
+                  >
                     <td className="px-4 py-2.5">
                       {r.immeuble_id != null ? (
                         <Link

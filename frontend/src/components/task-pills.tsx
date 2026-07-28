@@ -495,6 +495,36 @@ export function AssigneePicker({
 
 // ─── DatePill ─────────────────────────────────────────────────────
 
+const MOIS_FR = [
+  "janvier",
+  "février",
+  "mars",
+  "avril",
+  "mai",
+  "juin",
+  "juillet",
+  "août",
+  "septembre",
+  "octobre",
+  "novembre",
+  "décembre"
+];
+const JOURS_FR = ["L", "M", "M", "J", "V", "S", "D"];
+
+function toISODate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const j = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${j}`;
+}
+
+/**
+ * Capsule de date butoir avec un MINI-CALENDRIER maison (pas le picker
+ * natif). Retour Phil 2026-07-28 : le picker natif se refermait « tout de
+ * suite » après le clic sur un jour — ici le popover RESTE ouvert après
+ * la sélection (jour surligné), navigation de mois avec ‹ ›, et il ne se
+ * ferme qu'au clic dehors ou sur « Fermer ». Fonctionne desktop + mobile.
+ */
 export function DatePill({
   value,
   onChange
@@ -502,26 +532,30 @@ export function DatePill({
   value: string | null;
   onChange: (d: string | null) => void;
 }) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const selected = value ? new Date(value + "T12:00:00") : null;
+  const [cursor, setCursor] = useState<Date>(() => {
+    const base = selected || new Date();
+    return new Date(base.getFullYear(), base.getMonth(), 1);
+  });
 
-  function open() {
-    const el = inputRef.current;
-    if (!el) return;
-    // Focus AVANT showPicker : `showPicker()` n'attribue PAS le focus à
-    // l'input, donc sans ça la sélection n'était jamais commitée sur la
-    // tuile du kanban (bug Phil 2026-07-24). On commite désormais au
-    // `change` (fiable desktop + mobile) — voir plus bas.
-    el.focus();
-    const anyEl = el as HTMLInputElement & { showPicker?: () => void };
-    if (typeof anyEl.showPicker === "function") {
-      try {
-        anyEl.showPicker();
-        return;
-      } catch {
-        /* fallback */
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
       }
     }
-    el.click();
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+
+  function ouvrir() {
+    // Réaligne le mois affiché sur la date choisie (ou aujourd'hui).
+    const base = value ? new Date(value + "T12:00:00") : new Date();
+    setCursor(new Date(base.getFullYear(), base.getMonth(), 1));
+    setOpen(true);
   }
 
   const formatted = value
@@ -531,11 +565,48 @@ export function DatePill({
       })
     : null;
 
+  // Grille du mois, lundi comme premier jour.
+  const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+  const startOffset = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(
+    cursor.getFullYear(),
+    cursor.getMonth() + 1,
+    0
+  ).getDate();
+  const cells: (Date | null)[] = [];
+  for (let i = 0; i < startOffset; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) {
+    cells.push(new Date(cursor.getFullYear(), cursor.getMonth(), d));
+  }
+  const todayISO = toISODate(new Date());
+
+  const dayBtn = (d: Date) => {
+    const iso = toISODate(d);
+    const isSel = iso === value;
+    const isToday = iso === todayISO;
+    return (
+      <button
+        key={iso}
+        type="button"
+        onClick={() => onChange(iso)}
+        className={
+          isSel
+            ? "rounded py-1 text-[11px] font-semibold bg-accent-500 text-brand-950"
+            : isToday
+              ? "rounded py-1 text-[11px] text-white ring-1 ring-accent-500/50 hover:bg-brand-900"
+              : "rounded py-1 text-[11px] text-white/70 hover:bg-brand-900"
+        }
+      >
+        {d.getDate()}
+      </button>
+    );
+  };
+
   return (
-    <div className="relative">
+    <div className="relative" ref={wrapRef}>
       <button
         type="button"
-        onClick={open}
+        onClick={() => (open ? setOpen(false) : ouvrir())}
         aria-label="Date butoir"
         className={
           formatted
@@ -543,33 +614,87 @@ export function DatePill({
             : "inline-flex items-center gap-1.5 rounded-md border border-dashed border-brand-700 px-2 py-1 text-[10px] font-medium text-white/40 transition hover:border-brand-600 hover:text-white/60"
         }
       >
-        {formatted ? (
-          <>
-            <Calendar className="h-2.5 w-2.5 flex-shrink-0 text-white/60" />
-            <span>{formatted}</span>
-          </>
-        ) : (
-          <>
-            <Calendar className="h-2.5 w-2.5 flex-shrink-0 opacity-60" />
-            <span>Date</span>
-          </>
-        )}
+        <Calendar
+          className={`h-2.5 w-2.5 flex-shrink-0 ${formatted ? "text-white/60" : "opacity-60"}`}
+        />
+        <span>{formatted || "Date"}</span>
       </button>
-      <input
-        // Input CONTRÔLÉ (value liée à la prop) SANS `key` : le calendrier
-        // natif ne fire `change` qu'à la sélection d'un jour (jamais pendant
-        // la navigation des mois), et l'absence de `key` évite le remontage
-        // qui fermait le picker (ancien bug 2026-07-10). On commite direct
-        // au `change` → fiable sur desktop (showPicker) ET mobile.
-        ref={inputRef}
-        type="date"
-        value={value || ""}
-        onChange={(e) => {
-          const next = e.target.value || null;
-          if (next !== (value ?? null)) onChange(next);
-        }}
-        className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
-      />
+      {open ? (
+        <div
+          className="absolute left-0 z-40 mt-1 w-[210px] rounded-lg border border-brand-800 bg-brand-950 p-2 shadow-lg"
+          // Empêche le drag-and-drop de la carte de démarrer sur un clic
+          // dans le calendrier.
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <div className="mb-1 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() =>
+                setCursor(
+                  new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1)
+                )
+              }
+              className="rounded px-1.5 py-0.5 text-white/60 hover:bg-brand-900 hover:text-white"
+              aria-label="Mois précédent"
+            >
+              ‹
+            </button>
+            <span className="text-[11px] font-semibold capitalize text-white">
+              {MOIS_FR[cursor.getMonth()]} {cursor.getFullYear()}
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                setCursor(
+                  new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1)
+                )
+              }
+              className="rounded px-1.5 py-0.5 text-white/60 hover:bg-brand-900 hover:text-white"
+              aria-label="Mois suivant"
+            >
+              ›
+            </button>
+          </div>
+          <div className="grid grid-cols-7 gap-0.5 text-center">
+            {JOURS_FR.map((j, i) => (
+              <span
+                key={i}
+                className="py-0.5 text-[9px] font-medium text-white/40"
+              >
+                {j}
+              </span>
+            ))}
+            {cells.map((d, i) =>
+              d === null ? <span key={`e${i}`} /> : dayBtn(d)
+            )}
+          </div>
+          <div className="mt-1.5 flex items-center justify-between border-t border-brand-800 pt-1.5">
+            <button
+              type="button"
+              onClick={() => onChange(todayISO)}
+              className="text-[10px] font-medium text-accent-400 hover:underline"
+            >
+              Aujourd&apos;hui
+            </button>
+            {value ? (
+              <button
+                type="button"
+                onClick={() => onChange(null)}
+                className="text-[10px] text-white/40 transition hover:text-rose-300"
+              >
+                Effacer
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="text-[10px] text-white/60 transition hover:text-white"
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

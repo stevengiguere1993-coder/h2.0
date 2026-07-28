@@ -14,6 +14,8 @@ import {
   Search,
   Send,
   Settings,
+  Star,
+  Trash2,
   Users,
   X
 } from "lucide-react";
@@ -70,6 +72,8 @@ type Reglages = {
   // Profils d'expéditeurs approuvés (cas « deux gestionnaires ») —
   // sélectionnables par tous, gérés par les managers.
   profils: ProfilEnvoi[];
+  // Label du profil pré-sélectionné pour tous (choisi par le manager).
+  profil_defaut: string;
 };
 
 type EnvoiResultat = {
@@ -160,13 +164,16 @@ export default function CommunicationsPage() {
   const [sujet, setSujet] = useState("");
   const [corps, setCorps] = useState("");
 
-  // De qui
-  const [fromEmail, setFromEmail] = useState("");
-  const [fromName, setFromName] = useState("");
-  const [replyTo, setReplyTo] = useState("");
-  // "" = défauts / champs manuels ; sinon label d'un profil approuvé.
+  // De qui — piloté par les PROFILS (l'expéditeur libre vit dans les
+  // réglages, édité via la modale « Gérer les profils »).
+  // "" = profil par défaut des réglages ; sinon label d'un profil choisi.
   const [profilSel, setProfilSel] = useState("");
-  const [nvProfilLabel, setNvProfilLabel] = useState("");
+  // Modale « Gérer les profils » (manager) + formulaire d'ajout.
+  const [gestionOuverte, setGestionOuverte] = useState(false);
+  const [nvLabel, setNvLabel] = useState("");
+  const [nvEmail, setNvEmail] = useState("");
+  const [nvNom, setNvNom] = useState("");
+  const [nvReply, setNvReply] = useState("");
   const [savingReglages, setSavingReglages] = useState(false);
   const [reglagesMsg, setReglagesMsg] = useState<string | null>(null);
 
@@ -202,9 +209,8 @@ export default function CommunicationsPage() {
       if (rr.ok) {
         const cfg = (await rr.json()) as Reglages;
         setReglages(cfg);
-        setFromEmail(cfg.from_email);
-        setFromName(cfg.from_name);
-        setReplyTo(cfg.reply_to);
+        // Pré-sélectionne le profil par défaut (retour Phil v4).
+        if (cfg.profil_defaut) setProfilSel(cfg.profil_defaut);
       }
     })();
   }, []);
@@ -283,11 +289,25 @@ export default function CommunicationsPage() {
   };
 
   const profils = reglages?.profils || [];
+  const profilDefaut = reglages?.profil_defaut || "";
   const profilActif = profils.find((p) => p.label === profilSel) || null;
-  // Ce qui sera réellement utilisé comme expéditeur (affichage + validation).
-  const effFromEmail = profilActif ? profilActif.from_email : fromEmail;
+  // Ce qui sera réellement utilisé comme expéditeur (affichage + validation) :
+  // profil choisi > profil par défaut > défauts plats des réglages.
+  const profilEffectif =
+    profilActif ||
+    profils.find((p) => p.label === profilDefaut) ||
+    null;
+  const effFromEmail = profilEffectif
+    ? profilEffectif.from_email
+    : reglages?.from_email || "";
 
-  const saveProfils = async (next: ProfilEnvoi[], okMsg: string) => {
+  // PUT complet des réglages (profils + profil par défaut), en conservant
+  // les défauts plats existants. Réservé aux managers côté serveur.
+  const persistReglages = async (
+    next: ProfilEnvoi[],
+    defaut: string,
+    okMsg: string
+  ) => {
     if (!reglages) return;
     setSavingReglages(true);
     setReglagesMsg(null);
@@ -301,7 +321,8 @@ export default function CommunicationsPage() {
             from_email: reglages.from_email,
             from_name: reglages.from_name,
             reply_to: reglages.reply_to,
-            profils: next
+            profils: next,
+            profil_defaut: defaut
           })
         }
       );
@@ -321,69 +342,46 @@ export default function CommunicationsPage() {
   };
 
   const ajouterProfil = async () => {
-    const label = nvProfilLabel.trim();
+    const label = nvLabel.trim();
     if (!label) {
       setReglagesMsg("Donne un nom au profil (ex. « Kyle »).");
       return;
     }
-    if (!fromEmail.trim()) {
-      setReglagesMsg(
-        "Remplis d'abord les champs ci-dessus — ils deviendront le profil."
-      );
+    if (!nvEmail.trim()) {
+      setReglagesMsg("L'adresse d'envoi (boîte Microsoft 365) est requise.");
       return;
     }
     const next = [
       ...profils.filter((p) => p.label !== label),
       {
         label,
-        from_email: fromEmail.trim(),
-        from_name: fromName.trim(),
-        reply_to: replyTo.trim()
+        from_email: nvEmail.trim(),
+        from_name: nvNom.trim(),
+        reply_to: nvReply.trim()
       }
     ];
-    await saveProfils(next, `Profil « ${label} » enregistré.`);
-    setNvProfilLabel("");
+    // Le 1er profil créé devient automatiquement le défaut.
+    const defaut = profils.length === 0 ? label : profilDefaut;
+    await persistReglages(next, defaut, `Profil « ${label} » enregistré.`);
+    setNvLabel("");
+    setNvEmail("");
+    setNvNom("");
+    setNvReply("");
     setProfilSel(label);
   };
 
   const supprimerProfil = async (label: string) => {
     if (!window.confirm(`Supprimer le profil d'expéditeur « ${label} » ?`))
       return;
-    await saveProfils(
-      profils.filter((p) => p.label !== label),
-      `Profil « ${label} » supprimé.`
-    );
-    if (profilSel === label) setProfilSel("");
+    const next = profils.filter((p) => p.label !== label);
+    const defaut =
+      profilDefaut === label ? next[0]?.label || "" : profilDefaut;
+    await persistReglages(next, defaut, `Profil « ${label} » supprimé.`);
+    if (profilSel === label) setProfilSel(defaut);
   };
 
-  const saveReglages = async () => {
-    setSavingReglages(true);
-    setReglagesMsg(null);
-    try {
-      const r = await authedFetch(
-        "/api/v1/immobilier/communications/reglages",
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            from_email: fromEmail,
-            from_name: fromName,
-            reply_to: replyTo,
-            profils
-          })
-        }
-      );
-      if (r.status === 403) {
-        setReglagesMsg("Réservé aux gestionnaires.");
-        return;
-      }
-      if (!r.ok) throw new Error();
-      setReglagesMsg("Défauts d'envoi enregistrés.");
-    } catch {
-      setReglagesMsg("Enregistrement impossible.");
-    } finally {
-      setSavingReglages(false);
-    }
+  const definirDefaut = async (label: string) => {
+    await persistReglages(profils, label, `« ${label} » est le défaut.`);
   };
 
   const envoyer = async () => {
@@ -435,10 +433,9 @@ export default function CommunicationsPage() {
               type === "avis_acces" ? accesPlage || undefined : undefined,
             acces_motif:
               type === "avis_acces" ? accesMotif || undefined : undefined,
-            profil: profilActif ? profilActif.label : undefined,
-            from_email: profilActif ? undefined : fromEmail || undefined,
-            from_name: profilActif ? undefined : fromName || undefined,
-            reply_to: profilActif ? undefined : replyTo || undefined
+            // Profil sélectionné (défaut si non modifié) — le backend
+            // retombe sur le profil par défaut si vide.
+            profil: profilSel || undefined
           })
         }
       );
@@ -510,12 +507,12 @@ export default function CommunicationsPage() {
 
         <div className="grid gap-5 xl:grid-cols-2">
           {/* ── 1. À QUI ── */}
-          <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-card">
-            <div className="mb-3 flex items-center justify-between">
+          <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4 shadow-card sm:p-5">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h2 className="flex items-center gap-2 text-base font-bold text-white">
                 <Users className="h-4 w-4 text-accent-500" /> À qui
               </h2>
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <button className="btn-secondary btn-xs" onClick={toutCocher}>
                   {blocs && immSel.size === blocs.length
                     ? "Tout décocher"
@@ -670,23 +667,39 @@ export default function CommunicationsPage() {
                   </div>
                 )}
 
-                <p className="mt-3 border-t border-brand-800 pt-3 text-sm text-white/60">
-                  <strong className="text-white">{effectifs.length}</strong>{" "}
-                  destinataire{effectifs.length > 1 ? "s" : ""}
-                  {sansEmail > 0 && (
-                    <span className="text-amber-300">
-                      {" "}
-                      · {sansEmail} sans courriel (ignoré
-                      {sansEmail > 1 ? "s" : ""})
-                    </span>
-                  )}
-                </p>
+                <div className="mt-3 flex items-center justify-between gap-2 border-t border-brand-800 pt-3">
+                  <p className="text-sm text-white/60">
+                    <strong className="text-white">{effectifs.length}</strong>{" "}
+                    destinataire{effectifs.length > 1 ? "s" : ""}
+                    {sansEmail > 0 && (
+                      <span className="text-amber-300">
+                        {" "}
+                        · {sansEmail} sans courriel (ignoré
+                        {sansEmail > 1 ? "s" : ""})
+                      </span>
+                    )}
+                  </p>
+                  {immSel.size > 0 || locSel.size > 0 ? (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-white/50 transition hover:text-rose-300"
+                      onClick={() => {
+                        setImmSel(new Set());
+                        setLocSel(new Map());
+                      }}
+                      title="Désélectionner tous les immeubles et locataires"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Tout effacer
+                    </button>
+                  ) : null}
+                </div>
               </>
             )}
           </section>
 
           {/* ── 2. QUOI ── */}
-          <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-card">
+          <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4 shadow-card sm:p-5">
             <h2 className="mb-3 flex items-center gap-2 text-base font-bold text-white">
               <Mail className="h-4 w-4 text-accent-500" /> Quoi
             </h2>
@@ -807,113 +820,88 @@ export default function CommunicationsPage() {
         </div>
 
         {/* ── 3. DE QUI + ENVOYER ── */}
-        <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-card">
-          <h2 className="mb-3 flex items-center gap-2 text-base font-bold text-white">
-            <Settings className="h-4 w-4 text-accent-500" /> De qui
-          </h2>
-          {profils.length > 0 || estManager ? (
-            <div className="mb-3 flex flex-wrap items-center gap-2">
+        <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4 shadow-card sm:p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="flex items-center gap-2 text-base font-bold text-white">
+              <Settings className="h-4 w-4 text-accent-500" /> De qui
+            </h2>
+            {estManager ? (
               <button
                 type="button"
-                onClick={() => setProfilSel("")}
-                className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-                  profilSel === ""
-                    ? "bg-accent-500 text-brand-950"
-                    : "border border-white/10 bg-brand-950 text-white/60 hover:text-white"
-                }`}
-                title="Utiliser les défauts (ou les champs ci-dessous)"
+                className="btn-secondary btn-xs"
+                onClick={() => setGestionOuverte(true)}
+                title="Créer, supprimer et choisir le profil d'expéditeur par défaut"
               >
-                Défauts
+                <Settings className="h-3.5 w-3.5" /> Gérer les profils
               </button>
-              {profils.map((pr) => (
-                <span
-                  key={pr.label}
-                  className={`inline-flex items-center gap-1 rounded-full text-xs font-semibold transition ${
-                    profilSel === pr.label
-                      ? "bg-accent-500 text-brand-950"
-                      : "border border-white/10 bg-brand-950 text-white/60"
-                  }`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setProfilSel(pr.label)}
-                    className={`py-1 pl-3 ${estManager ? "pr-1" : "pr-3"} hover:opacity-90`}
-                    title={`Envoyer en tant que ${pr.from_name || pr.from_email} (${pr.from_email})`}
-                  >
-                    {pr.label}
-                  </button>
-                  {estManager ? (
-                    <button
-                      type="button"
-                      onClick={() => void supprimerProfil(pr.label)}
-                      className="pr-2 opacity-60 hover:opacity-100"
-                      title={`Supprimer le profil « ${pr.label} »`}
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  ) : null}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div>
-              <label className="text-xs font-medium text-white/60">
-                Adresse d&apos;envoi (boîte Microsoft 365)
-              </label>
-              <input
-                value={profilActif ? profilActif.from_email : fromEmail}
-                onChange={(e) => setFromEmail(e.target.value)}
-                disabled={!estManager || profilActif != null}
-                placeholder="ex. info@immohorizon.com"
-                className="input mt-1 w-full disabled:opacity-60"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-white/60">
-                Nom affiché
-              </label>
-              <input
-                value={profilActif ? profilActif.from_name : fromName}
-                onChange={(e) => setFromName(e.target.value)}
-                disabled={!estManager || profilActif != null}
-                placeholder="Kyle — Gestion Horizon"
-                className="input mt-1 w-full disabled:opacity-60"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-white/60">
-                Répondre à (peut être externe)
-              </label>
-              <input
-                value={profilActif ? profilActif.reply_to : replyTo}
-                onChange={(e) => setReplyTo(e.target.value)}
-                disabled={!estManager || profilActif != null}
-                placeholder="kyle.gestion@gmail.com"
-                className="input mt-1 w-full disabled:opacity-60"
-              />
-            </div>
+            ) : null}
           </div>
-          <p className="mt-2 text-xs text-white/45">
-            {estManager ? (
-              <>
-                L&apos;adresse d&apos;envoi doit être une boîte de votre
-                Microsoft 365 (sinon le courriel tomberait en spam). Pour un
-                gestionnaire externe : mets son nom dans « Nom affiché » et
-                son adresse dans « Répondre à » — les réponses des locataires
-                iront directement chez lui. Plusieurs gestionnaires ? Remplis
-                les champs puis « Enregistrer comme profil » : chacun devient
-                un bouton sélectionnable par toute l&apos;équipe. Section
-                obligatoire avant tout envoi.
-              </>
-            ) : (
-              <>
-                Ces valeurs sont définies par ton gestionnaire (défauts
-                verrouillés). S&apos;il y a plusieurs profils d&apos;expéditeur
-                ci-dessus, choisis le bon avant d&apos;envoyer.
-              </>
-            )}
-          </p>
+
+          {profils.length > 0 ? (
+            <>
+              {/* Sélecteur de profil — le profil ★ est le défaut. Tout le
+                  monde peut choisir un autre profil pour cet envoi. */}
+              <div className="flex flex-wrap items-center gap-2">
+                {profils.map((pr) => {
+                  const sel =
+                    profilSel === pr.label ||
+                    (profilSel === "" && pr.label === profilDefaut);
+                  return (
+                    <button
+                      key={pr.label}
+                      type="button"
+                      onClick={() => setProfilSel(pr.label)}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                        sel
+                          ? "bg-accent-500 text-brand-950"
+                          : "border border-white/10 bg-brand-950 text-white/70 hover:text-white"
+                      }`}
+                      title={`${pr.from_name || pr.from_email} <${pr.from_email}>`}
+                    >
+                      {pr.label === profilDefaut ? (
+                        <Star className="h-3 w-3" />
+                      ) : null}
+                      {pr.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {profilEffectif ? (
+                <p className="mt-2 text-xs text-white/55">
+                  Envoie depuis{" "}
+                  <span className="font-medium text-white/80">
+                    {profilEffectif.from_name || profilEffectif.from_email}
+                  </span>{" "}
+                  &lt;{profilEffectif.from_email}&gt;
+                  {profilEffectif.reply_to ? (
+                    <> · réponses → {profilEffectif.reply_to}</>
+                  ) : null}
+                </p>
+              ) : null}
+            </>
+          ) : reglages?.from_email ? (
+            <p className="text-sm text-white/70">
+              Expéditeur :{" "}
+              <span className="font-medium text-white">
+                {reglages.from_name || reglages.from_email}
+              </span>{" "}
+              &lt;{reglages.from_email}&gt;
+              {estManager ? (
+                <span className="mt-1 block text-xs text-white/45">
+                  Plusieurs gestionnaires ? Ouvre « Gérer les profils » pour
+                  créer des expéditeurs sélectionnables par toute l&apos;équipe.
+                </span>
+              ) : null}
+            </p>
+          ) : (
+            <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+              Aucun expéditeur configuré.{" "}
+              {estManager
+                ? "Ouvre « Gérer les profils » pour en créer un."
+                : "Demande à ton gestionnaire d'en configurer un."}
+            </p>
+          )}
+
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <button
               className="btn-accent btn-sm"
@@ -927,63 +915,152 @@ export default function CommunicationsPage() {
               )}
               Envoyer ({Math.max(0, effectifs.length - sansEmail)})
             </button>
-            <button
-              type="button"
-              className="btn-secondary btn-sm"
-              disabled={sending || (immSel.size === 0 && locSel.size === 0)}
-              onClick={() => {
-                setImmSel(new Set());
-                setLocSel(new Map());
-              }}
-              title="Vider la liste d'envoi (immeubles cochés + locataires ajoutés)"
-            >
-              <X className="h-3.5 w-3.5" />
-              Tout effacer
-            </button>
-            {estManager ? (
-              <button
-                className="btn-secondary btn-sm"
-                disabled={savingReglages}
-                onClick={() => void saveReglages()}
-                title="Retenir cette adresse, ce nom et ce répondre-à comme défauts"
-              >
-                {savingReglages ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Check className="h-3.5 w-3.5" />
-                )}
-                Enregistrer comme défauts
-              </button>
-            ) : null}
-            {estManager ? (
-              <span className="inline-flex items-center gap-1.5">
-                <input
-                  value={nvProfilLabel}
-                  onChange={(e) => setNvProfilLabel(e.target.value)}
-                  placeholder="Nom du profil (ex. Kyle)"
-                  className="input w-44 py-1.5 text-xs"
-                  disabled={profilActif != null}
-                  title="Les champs ci-dessus deviendront un profil réutilisable"
-                />
-                <button
-                  className="btn-secondary btn-sm"
-                  disabled={savingReglages || profilActif != null}
-                  onClick={() => void ajouterProfil()}
-                  title="Sauvegarder l'adresse, le nom et le répondre-à ci-dessus comme profil sélectionnable par toute l'équipe"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Enregistrer comme profil
-                </button>
-              </span>
-            ) : null}
             {reglagesMsg && (
               <span className="text-xs text-white/60">{reglagesMsg}</span>
             )}
           </div>
         </section>
 
+        {/* Modale « Gérer les profils » (manager) — création, suppression
+            et choix du profil par défaut. */}
+        {gestionOuverte ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+            onClick={() => setGestionOuverte(false)}
+          >
+            <div
+              className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-brand-800 bg-brand-900 p-4 shadow-card sm:p-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="flex items-center gap-2 text-base font-bold text-white">
+                  <Settings className="h-4 w-4 text-accent-500" /> Profils
+                  d&apos;expéditeur
+                </h3>
+                <button
+                  onClick={() => setGestionOuverte(false)}
+                  className="text-white/50 transition hover:text-white"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <p className="mb-3 text-xs text-white/50">
+                Chaque profil = un expéditeur (boîte Microsoft 365 + nom
+                affiché + adresse de réponse). Tout le monde choisit parmi ces
+                profils ; le profil ★ est proposé par défaut.
+              </p>
+
+              <div className="space-y-1.5">
+                {profils.length === 0 ? (
+                  <p className="text-sm text-white/45">
+                    Aucun profil pour l&apos;instant — crée le premier
+                    ci-dessous.
+                  </p>
+                ) : (
+                  profils.map((pr) => (
+                    <div
+                      key={pr.label}
+                      className="flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 text-sm font-semibold text-white">
+                          {pr.label === profilDefaut ? (
+                            <Star className="h-3.5 w-3.5 text-accent-500" />
+                          ) : null}
+                          {pr.label}
+                        </div>
+                        <div className="truncate text-xs text-white/50">
+                          {pr.from_name ? `${pr.from_name} · ` : ""}
+                          {pr.from_email}
+                          {pr.reply_to ? ` · ↩ ${pr.reply_to}` : ""}
+                        </div>
+                      </div>
+                      {pr.label === profilDefaut ? (
+                        <span className="badge badge-emerald shrink-0">
+                          Défaut
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => void definirDefaut(pr.label)}
+                          disabled={savingReglages}
+                          className="btn-secondary btn-xs shrink-0"
+                          title="Proposer ce profil par défaut à toute l'équipe"
+                        >
+                          Par défaut
+                        </button>
+                      )}
+                      <button
+                        onClick={() => void supprimerProfil(pr.label)}
+                        disabled={savingReglages}
+                        className="shrink-0 rounded p-1 text-white/40 transition hover:text-rose-300"
+                        title={`Supprimer « ${pr.label} »`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="mt-4 space-y-2 border-t border-brand-800 pt-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-white/45">
+                  Nouveau profil
+                </p>
+                <input
+                  value={nvLabel}
+                  onChange={(e) => setNvLabel(e.target.value)}
+                  placeholder="Nom du profil (ex. Kyle)"
+                  className="input w-full text-sm"
+                />
+                <input
+                  value={nvEmail}
+                  onChange={(e) => setNvEmail(e.target.value)}
+                  placeholder="Adresse d'envoi — boîte Microsoft 365 (ex. info@immohorizon.com)"
+                  className="input w-full text-sm"
+                />
+                <input
+                  value={nvNom}
+                  onChange={(e) => setNvNom(e.target.value)}
+                  placeholder="Nom affiché (ex. Kyle — Gestion Horizon)"
+                  className="input w-full text-sm"
+                />
+                <input
+                  value={nvReply}
+                  onChange={(e) => setNvReply(e.target.value)}
+                  placeholder="Répondre à — peut être externe (ex. kyle.gestion@gmail.com)"
+                  className="input w-full text-sm"
+                />
+                <p className="text-[11px] text-white/40">
+                  L&apos;adresse d&apos;envoi doit être une boîte de votre
+                  Microsoft 365. Pour un gestionnaire externe, mets son adresse
+                  dans « Répondre à » — les réponses lui iront directement.
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="btn-accent btn-sm"
+                    disabled={savingReglages}
+                    onClick={() => void ajouterProfil()}
+                  >
+                    {savingReglages ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Plus className="h-3.5 w-3.5" />
+                    )}
+                    Ajouter le profil
+                  </button>
+                  {reglagesMsg && (
+                    <span className="text-xs text-white/60">
+                      {reglagesMsg}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {/* ── 4. AUDIT ── */}
-        <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-card">
+        <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4 shadow-card sm:p-5">
           <div className="mb-3 flex flex-wrap items-center gap-3">
             <h2 className="flex items-center gap-2 text-base font-bold text-white">
               <Filter className="h-4 w-4 text-accent-500" /> Envois passés
@@ -1101,7 +1178,7 @@ export default function CommunicationsPage() {
           onClick={() => setDetail(null)}
         >
           <div
-            className="max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-card"
+            className="max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-brand-800 bg-brand-900 p-4 shadow-card sm:p-5"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-3 flex items-start justify-between gap-3">
