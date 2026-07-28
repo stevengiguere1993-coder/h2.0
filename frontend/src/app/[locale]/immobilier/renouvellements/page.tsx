@@ -467,6 +467,12 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
   // « Non renouvelé » : le bail ne sera pas prolongé → ouvre un dossier
   // de relocation dans Locations (prérempli depuis le bail).
   async function nonRenouvele(bailId: number) {
+    if (
+      !window.confirm(
+        "Marquer ce bail « non renouvelé » ?\n\nUn dossier de relocation sera ouvert dans la page Locations pour relouer le logement."
+      )
+    )
+      return;
     setRelocatingId(bailId);
     setMsg(null);
     try {

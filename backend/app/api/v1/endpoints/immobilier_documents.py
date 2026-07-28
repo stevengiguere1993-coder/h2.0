@@ -716,16 +716,21 @@ async def upload_bail_document(
     user: CurrentUser,
     file: UploadFile = File(...),
     date_entree: Optional[str] = Form(None),
+    au_mois: Optional[str] = Form(None),
 ) -> DocumentRead:
     """Importe LE bail signé — ou le remplace. Le nouveau devient celui
     qui s'ouvre au clic ; l'ancien reste dans les Documents du logement
     et du locataire. ``date_entree`` (AAAA-MM-JJ, demandée à l'import) =
     entrée en vigueur affichée dans le titre « Bail signé 2026-07-01 » —
-    défaut : la date de début du bail (retour Phil 2026-07-27)."""
+    défaut : la date de début du bail (retour Phil 2026-07-27).
+    ``au_mois`` ('true'/'false', demandé au même moment) marque le bail
+    au mois — chambres, reconduction auto (retour Phil 2026-07-28)."""
     _require_volet(user)
     bail = await db.get(Bail, bail_id)
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
+    if au_mois is not None and au_mois.strip() != "":
+        bail.au_mois = au_mois.strip().lower() in ("true", "1", "oui")
     ancien = bail.document_id
     vigueur = (date_entree or "").strip() or (
         bail.date_debut.isoformat() if bail.date_debut else ""

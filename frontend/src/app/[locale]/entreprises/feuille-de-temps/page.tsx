@@ -790,7 +790,7 @@ export default function FeuilleDeTempsPage() {
 
             {/* Tuiles paie + refacturation (la refacturation = ce que
                 Phil facture aux compagnies → gestionnaires seulement) */}
-            <div className={`grid gap-4 ${isManager ? "lg:grid-cols-3" : ""}`}>
+            <div className={`grid min-w-0 grid-cols-1 gap-4 ${isManager ? "lg:grid-cols-3" : ""}`}>
               <div className={`${CARD} lg:col-span-1`}>
                 <div className="flex items-center gap-2 text-sm font-medium text-[var(--qg-text-muted)]">
                   <DollarSign className="h-4 w-4" /> Montant à verser
@@ -1136,7 +1136,7 @@ function Grille({
           <tr className="bg-[var(--qg-bg)]/60">
             <th
               rowSpan={2}
-              className="sticky left-0 z-20 min-w-[200px] border-b border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-4 py-2 text-left font-semibold"
+              className="sticky left-0 z-20 w-[110px] min-w-[110px] max-w-[110px] border-b border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-2 text-left font-semibold sm:w-auto sm:min-w-[200px] sm:max-w-none sm:px-4"
             >
               Compagnie
             </th>
@@ -1191,8 +1191,10 @@ function Grille({
             const tot = perCompanyR[l.company_id] || 0;
             return (
               <tr key={l.company_id} className="group border-b border-[var(--qg-border)]/60">
-                <td className="sticky left-0 z-10 min-w-[200px] border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-4 py-1.5 font-medium group-hover:bg-[var(--qg-bg)]/30">
-                  {l.label}
+                <td className="sticky left-0 z-10 w-[110px] min-w-[110px] max-w-[110px] border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1.5 font-medium sm:w-auto sm:min-w-[200px] sm:max-w-none sm:px-4">
+                  <div className="truncate" title={l.label}>
+                    {l.label}
+                  </div>
                 </td>
                 {Array.from({ length: DAYS }).map((_, i) => (
                   <td
@@ -1260,11 +1262,13 @@ function Grille({
                       key={`nr-${l.company_id}`}
                       className="group border-b border-[var(--qg-border)]/60 bg-rose-500/[0.03]"
                     >
-                      <td className="sticky left-0 z-10 min-w-[200px] border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-4 py-1.5 font-medium group-hover:bg-[var(--qg-bg)]/30">
-                        {l.label}{" "}
-                        <span className="text-xs font-normal text-rose-400/80">
-                          · non refact.
-                        </span>
+                      <td className="sticky left-0 z-10 w-[110px] min-w-[110px] max-w-[110px] border-r border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-1.5 font-medium sm:w-auto sm:min-w-[200px] sm:max-w-none sm:px-4">
+                        <div className="truncate" title={`${l.label} · non refacturable`}>
+                          {l.label}{" "}
+                          <span className="text-xs font-normal text-rose-400/80">
+                            · non refact.
+                          </span>
+                        </div>
                       </td>
                       {Array.from({ length: DAYS }).map((_, i) => (
                         <td
@@ -1318,7 +1322,7 @@ function Grille({
         </tbody>
         <tfoot>
           <tr className="bg-[var(--qg-bg)]/70 font-semibold">
-            <td className="sticky left-0 z-10 border-r border-t-2 border-[var(--qg-border)] bg-[var(--qg-bg)]/90 px-4 py-2">
+            <td className="sticky left-0 z-10 w-[110px] min-w-[110px] max-w-[110px] border-r border-t-2 border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-2 py-2 sm:w-auto sm:min-w-0 sm:max-w-none sm:px-4">
               Total / jour
             </td>
             {perDay.map((d, i) => {
@@ -2305,7 +2309,7 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
             </button>
           </div>
 
-          <div className="grid gap-4">
+          <div className="grid min-w-0 grid-cols-1 gap-4">
             {/* Refacturation par compagnie */}
             <div className="rounded-xl border border-[var(--qg-border)] bg-[var(--qg-bg)]/40 p-4 lg:col-span-2">
               <div className="mb-2 flex items-center justify-between">
