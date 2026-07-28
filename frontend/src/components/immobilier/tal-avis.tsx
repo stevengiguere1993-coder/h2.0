@@ -1644,6 +1644,7 @@ export function BailDocActions({
   // le titre « Bail signé 2026-07-01 » dans les Documents.
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [dateEntree, setDateEntree] = useState("");
+  const [importAuMois, setImportAuMois] = useState(false);
 
   function demanderDate(file: File) {
     if (
@@ -1654,16 +1655,21 @@ export function BailDocActions({
     )
       return;
     setDateEntree("");
+    setImportAuMois(false);
     setPendingFile(file);
   }
 
-  async function remplacer(file: File, date: string) {
+  async function remplacer(file: File, date: string, auMois: boolean) {
     setBusy(true);
     setErr(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
       if (date) fd.append("date_entree", date);
+      // « Au mois » demandé au même moment que la date (retour Phil
+      // 2026-07-28) — coché seulement, on n'écrase pas un réglage
+      // existant quand la case reste vide.
+      if (auMois) fd.append("au_mois", "true");
       const r = await authedFetch(
         `/api/v1/immobilier/baux/${bailId}/document`,
         { method: "POST", body: fd }
@@ -1733,6 +1739,19 @@ export function BailDocActions({
               onChange={(e) => setDateEntree(e.target.value)}
               className="input mt-3 w-full"
             />
+            <label className="mt-3 flex cursor-pointer items-start gap-2">
+              <input
+                type="checkbox"
+                checked={importAuMois}
+                onChange={(e) => setImportAuMois(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-[var(--accent-500,#f59e0b)]"
+              />
+              <span className="text-xs text-white/60">
+                <span className="font-semibold text-white">Bail au mois</span>{" "}
+                (chambre) — reconduction automatique, jamais d&apos;avis de
+                renouvellement.
+              </span>
+            </label>
             <div className="mt-3 flex justify-end gap-2">
               <button
                 type="button"
@@ -1748,7 +1767,7 @@ export function BailDocActions({
                 onClick={() => {
                   const f = pendingFile;
                   setPendingFile(null);
-                  if (f) void remplacer(f, dateEntree);
+                  if (f) void remplacer(f, dateEntree, importAuMois);
                 }}
               >
                 {busy ? (

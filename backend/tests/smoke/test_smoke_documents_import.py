@@ -149,16 +149,28 @@ def test_bail_courant_et_remplacement(client, auth_headers, doc_seed):
         assert v1["id"] in ids2 and v2["id"] in ids2
 
 
-def test_titre_bail_avec_date_entree(client, auth_headers, doc_seed):
+def test_titre_bail_avec_date_entree(client, auth_headers, doc_seed, run):
     """Retour Phil : « Bail signé [LA date d'entrée en vigueur] » — la
     date est demandée à l'import ; sans elle, la date de début du bail."""
     r = _upload(
         client, auth_headers,
         f"/api/v1/immobilier/baux/{doc_seed['bail_id']}/document",
-        {"date_entree": "2026-07-15"},
+        {"date_entree": "2026-07-15", "au_mois": "true"},
     )
     assert r.status_code == 200, r.text
     assert r.json()["titre"] == "Bail signé 2026-07-15"
+
+    # « Au mois » coché à l'import → le bail est marqué (retour Phil
+    # 2026-07-28 : demandé au même endroit que la date).
+    async def _check():
+        from app.models.immobilier import Bail
+
+        from .conftest import TestSessionLocal
+
+        async with TestSessionLocal() as s:
+            return (await s.get(Bail, doc_seed["bail_id"])).au_mois
+
+    assert run(_check()) is True
 
     r2 = _upload(
         client, auth_headers,

@@ -1012,22 +1012,35 @@ function DossierModal({
           {d.statut !== "annule" && d.statut !== "reloue" ? (
             <button
               type="button"
-              onClick={() => void onPatch({ statut: "annule" })}
+              title="Le logement ne se reloue plus pour l'instant — le dossier est CONSERVÉ dans la section Annulés (historique des annonces et visites)"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    "Annuler la relocation ? Le dossier reste conservé dans la section Annulés (avec ses annonces et visites)."
+                  )
+                )
+                  void onPatch({ statut: "annule" });
+              }}
               className="text-xs text-white/40 hover:text-white/70"
             >
-              Annuler la relocation
+              Annuler (garder la trace)
             </button>
           ) : null}
           <button
             type="button"
+            title="Efface DÉFINITIVEMENT le dossier, ses annonces et ses visites — pour un dossier créé par erreur"
             onClick={async () => {
-              if (window.confirm("Supprimer ce dossier de relocation ?")) {
+              if (
+                window.confirm(
+                  "Supprimer DÉFINITIVEMENT ce dossier de relocation (annonces et visites incluses) ? Pour garder une trace, utilise plutôt « Annuler »."
+                )
+              ) {
                 if (await api(`/${d.id}`, "DELETE")) onDeleted();
               }
             }}
             className="inline-flex items-center gap-1 text-xs text-rose-300/60 hover:text-rose-300"
           >
-            <Trash2 className="h-3 w-3" /> Supprimer le dossier
+            <Trash2 className="h-3 w-3" /> Supprimer définitivement
           </button>
           <button
             type="button"
