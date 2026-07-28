@@ -340,6 +340,9 @@ async def ensure_critical_columns() -> None:
         # Bail AU MOIS (chambres) : reconduction auto, jamais d'avis de
         # renouvellement, loyers qui courent sans egard a date_fin.
         ("imm_baux", "au_mois", "BOOLEAN"),
+        # Hub Rencontres v2 : source d'import + fichiers archives Drive.
+        ("rencontres", "source", "VARCHAR(16)"),
+        ("rencontres", "drive_links_json", "TEXT"),
         # Documents 2026-07-27 (démêlage communications / dossier) :
         # « document courant » du bail et de l'avis de renouvellement
         # (celui qui s'ouvre au clic ; le remplacer archive l'ancien),
