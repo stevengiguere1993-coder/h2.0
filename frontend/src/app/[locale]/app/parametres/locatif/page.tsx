@@ -50,6 +50,7 @@ export default function LocatifDemarragePage() {
     renouvellement_mois_avant: number;
     assurance_bascule_mois: number;
     releve31_bascule_mois: number;
+    assurance_inclut_au_mois: boolean;
   };
   const [suivis, setSuivis] = useState<Suivis | null>(null);
   const [suivisEnr, setSuivisEnr] = useState<Suivis | null>(null);
@@ -329,6 +330,25 @@ export default function LocatifDemarragePage() {
                     Toute preuve confirmée avant cette bascule repasse « à
                     reconfirmer ».
                   </p>
+                  <label className="mt-2 flex cursor-pointer items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={suivis.assurance_inclut_au_mois}
+                      disabled={!canEdit}
+                      onChange={(e) =>
+                        setSuivis({
+                          ...suivis,
+                          assurance_inclut_au_mois: e.target.checked
+                        })
+                      }
+                      className="mt-0.5 h-4 w-4 accent-[var(--accent-500,#f59e0b)]"
+                    />
+                    <span className="text-xs text-white/60">
+                      Inclure les <strong>baux au mois</strong> (chambres)
+                      dans le suivi des assurances — décoché, on n&apos;exige
+                      rien des chambreurs.
+                    </span>
+                  </label>
                 </div>
 
                 <div>

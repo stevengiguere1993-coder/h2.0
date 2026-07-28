@@ -337,6 +337,9 @@ async def ensure_critical_columns() -> None:
         # Dépôts de garantie opérationnels 2026-07 : date de remise du
         # dépôt au locataire (page Dépôts → « Marquer rendu »).
         ("imm_baux", "depot_rendu_le", "DATE"),
+        # Bail AU MOIS (chambres) : reconduction auto, jamais d'avis de
+        # renouvellement, loyers qui courent sans egard a date_fin.
+        ("imm_baux", "au_mois", "BOOLEAN"),
         # Documents 2026-07-27 (démêlage communications / dossier) :
         # « document courant » du bail et de l'avis de renouvellement
         # (celui qui s'ouvre au clic ; le remplacer archive l'ancien),

@@ -40,6 +40,10 @@ class SuivisConfig:
     assurance_bascule_mois: int = DEFAULT_ASSURANCE_BASCULE_MOIS
     #: Jusqu'à ce mois inclus (1..12), les relevés 31 par défaut = année N-1.
     releve31_bascule_mois: int = DEFAULT_RELEVE31_BASCULE_MOIS
+    #: Inclure les baux AU MOIS (chambres) dans le suivi des assurances.
+    #: Défaut False : le proprio assure la maison de chambres, on n'exige
+    #: rien du chambreur (retour Phil 2026-07-28).
+    assurance_inclut_au_mois: bool = False
 
     def statut_assurance(self, confirmee_le: date | None) -> str:
         """'jamais' | 'a_reconfirmer' | 'ok' selon la bascule annuelle."""
@@ -101,6 +105,7 @@ def parse_suivis(cfg: dict) -> SuivisConfig:
         releve31_bascule_mois=_clamp_mois(
             cfg.get("releve31_bascule_mois"), DEFAULT_RELEVE31_BASCULE_MOIS
         ),
+        assurance_inclut_au_mois=bool(cfg.get("assurance_inclut_au_mois")),
     )
 
 
@@ -127,6 +132,7 @@ async def set_suivis(
         releve31_bascule_mois=_clamp_mois(
             cfg.releve31_bascule_mois, DEFAULT_RELEVE31_BASCULE_MOIS
         ),
+        assurance_inclut_au_mois=bool(cfg.assurance_inclut_au_mois),
     )
     await set_automation_config(
         db,
@@ -135,6 +141,7 @@ async def set_suivis(
             "renouvellement_mois_avant": clean.renouvellement_mois_avant,
             "assurance_bascule_mois": clean.assurance_bascule_mois,
             "releve31_bascule_mois": clean.releve31_bascule_mois,
+            "assurance_inclut_au_mois": clean.assurance_inclut_au_mois,
         },
         user_id=user_id,
     )

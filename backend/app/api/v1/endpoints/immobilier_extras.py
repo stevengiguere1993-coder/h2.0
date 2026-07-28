@@ -613,6 +613,54 @@ async def envoyer_renouvellement(
 # avec un contenu vérifié. Rien d'automatique ni de masse.
 
 
+class ReconduireResult(BaseModel):
+    bail_id: int
+    ancienne_date_fin: date
+    nouvelle_date_fin: date
+
+
+def _plus_un_an(d: date) -> date:
+    """Même jour l'année suivante (29 février → 28 février)."""
+    try:
+        return d.replace(year=d.year + 1)
+    except ValueError:
+        return d.replace(year=d.year + 1, day=28)
+
+
+@router.post(
+    "/baux/{bail_id}/reconduire", response_model=ReconduireResult
+)
+async def reconduire_bail(
+    bail_id: int, db: DBSession, user: CurrentUser
+) -> ReconduireResult:
+    """RECONDUCTION TACITE : le bail s'étire d'un an tel quel, sans avis
+    (retour Phil 2026-07-28 : « une année je ne les augmente pas, le bail
+    s'étire tout seul »). Ne touche ni la date de début (l'historique des
+    soldes en dépend), ni le loyer, ni les inclusions — seulement la date
+    de fin, +1 an. La ligne sort du suivi des renouvellements."""
+    _require_volet(user)
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        raise HTTPException(status_code=404, detail="Bail introuvable.")
+    if bail.status != BailStatus.ACTIF.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Seul un bail actif peut être reconduit.",
+        )
+    ancienne = bail.date_fin
+    bail.date_fin = _plus_un_an(bail.date_fin)
+    await db.commit()
+    log.info(
+        "Bail %s reconduit tel quel par %s : %s → %s",
+        bail_id, user.email, ancienne, bail.date_fin,
+    )
+    return ReconduireResult(
+        bail_id=bail_id,
+        ancienne_date_fin=ancienne,
+        nouvelle_date_fin=bail.date_fin,
+    )
+
+
 @router.get(
     "/renouvellements/overview",
     response_model=List[RenouvellementOverview],
@@ -645,6 +693,9 @@ async def renouvellements_overview(
                     Bail.date_fin >= today - timedelta(days=365),
                     Bail.date_fin <= horizon,
                     Immeuble.gestion_externe.isnot(True),
+                    # Baux AU MOIS : reconduction auto, jamais d'avis —
+                    # hors du suivi (retour Phil 2026-07-28).
+                    Bail.au_mois.isnot(True),
                 )
             ).order_by(Bail.date_fin.asc())
         )

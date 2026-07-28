@@ -239,6 +239,9 @@ class BailBase(BaseModel):
     status: str = Field(default="actif", max_length=16)
     document_url: Optional[str] = Field(default=None, max_length=1000)
     notes: Optional[str] = None
+    #: Bail AU MOIS (chambres) : reconduction auto, hors du suivi des
+    #: renouvellements, loyers sans égard à date_fin.
+    au_mois: Optional[bool] = None
 
 
 class BailCreate(BailBase):
@@ -259,6 +262,7 @@ class BailUpdate(BaseModel):
     status: Optional[str] = Field(default=None, max_length=16)
     document_url: Optional[str] = Field(default=None, max_length=1000)
     notes: Optional[str] = None
+    au_mois: Optional[bool] = None
 
 
 class BailRead(BailBase):
@@ -480,6 +484,7 @@ class DossierBail(BaseModel):
     #: LE bail courant (imm_documents) — bouton « Bail » de la fiche.
     document_id: Optional[int] = None
     signed_at: Optional[datetime] = None
+    au_mois: Optional[bool] = None
 
 
 class DossierPaiement(BaseModel):
@@ -567,6 +572,7 @@ class LogementDossierBail(BaseModel):
     signed_at: Optional[datetime] = None
     #: LE bail courant (imm_documents) — bouton « Bail » de la fiche.
     document_id: Optional[int] = None
+    au_mois: Optional[bool] = None
 
 
 class LogementDossierBon(BaseModel):

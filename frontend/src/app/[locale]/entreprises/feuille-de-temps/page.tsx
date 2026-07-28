@@ -1407,7 +1407,7 @@ function TeamView({
 
   return (
     <div className={CARD}>
-      <table className="w-full text-sm">
+      <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-sm">
         <thead>
           <tr className="border-b border-[var(--qg-border)] text-left text-xs uppercase tracking-wide text-[var(--qg-text-muted)]">
             <th className="px-3 py-2">Employé</th>
@@ -1497,7 +1497,7 @@ function TeamView({
             </tr>
           </tfoot>
         )}
-      </table>
+      </table></div>
     </div>
   );
 }
@@ -1981,7 +1981,7 @@ function PaiesView({
             Aucune feuille en attente d&apos;approbation.
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-sm">
             <thead>
               <tr className="border-b border-[var(--qg-border)] text-left text-xs uppercase tracking-wide text-[var(--qg-text-muted)]">
                 <th className="px-3 py-2">Employé</th>
@@ -2022,7 +2022,7 @@ function PaiesView({
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </div>
 
@@ -2091,7 +2091,7 @@ function PaiesView({
           <div className="mb-3 text-base font-semibold">
             Paiements enregistrés
           </div>
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-sm">
             <thead>
               <tr className="border-b border-[var(--qg-border)] text-left text-xs uppercase tracking-wide text-[var(--qg-text-muted)]">
                 <th className="px-2 py-2">Date</th>
@@ -2133,7 +2133,7 @@ function PaiesView({
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         </div>
       )}
 
@@ -2326,7 +2326,7 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
                   Rien à refacturer.
                 </div>
               ) : (
-                <table className="w-full text-sm">
+                <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-sm">
                   <thead>
                     <tr className="text-left text-xs uppercase tracking-wide text-[var(--qg-text-faint)]">
                       <th className="py-1 pr-2">Compagnie</th>
@@ -2399,7 +2399,7 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               )}
             </div>
           </div>
@@ -2413,7 +2413,7 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
           <div className="mb-3 text-base font-semibold">
             Refacturations enregistrées
           </div>
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-sm">
             <thead>
               <tr className="border-b border-[var(--qg-border)] text-left text-xs uppercase tracking-wide text-[var(--qg-text-muted)]">
                 <th className="px-2 py-2">Date</th>
@@ -2459,7 +2459,7 @@ function DashboardView({ onOpen }: { onOpen: (userId: number) => void }) {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         </div>
       )}
 

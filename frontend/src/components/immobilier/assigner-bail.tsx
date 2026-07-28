@@ -29,7 +29,12 @@ type LocataireItem = {
 
 type ImmeubleItem = { id: number; name: string };
 
-type LogementItem = { id: number; numero?: string | null; status: string };
+type LogementItem = {
+  id: number;
+  numero?: string | null;
+  status: string;
+  location_en_chambres?: boolean | null;
+};
 
 /** Prochain 30 juin « utile » : au moins ~3 mois de bail. */
 function finParDefaut(debut: string): string {
@@ -43,6 +48,7 @@ export function AssignerBailButton({
   mode,
   logementId,
   logementLabel,
+  logementEnChambres,
   locataireId,
   locataireNom,
   onDone,
@@ -51,6 +57,8 @@ export function AssignerBailButton({
   mode: "logement" | "locataire";
   logementId?: number;
   logementLabel?: string;
+  /** Pré-coche « Bail au mois » (les chambres se louent au mois). */
+  logementEnChambres?: boolean;
   locataireId?: number;
   locataireNom?: string;
   onDone: () => void;
@@ -77,6 +85,7 @@ export function AssignerBailButton({
           mode={mode}
           logementId={logementId}
           logementLabel={logementLabel}
+          logementEnChambres={logementEnChambres}
           locataireId={locataireId}
           locataireNom={locataireNom}
           onClose={() => setOpen(false)}
@@ -94,6 +103,7 @@ function AssignerBailModal({
   mode,
   logementId,
   logementLabel,
+  logementEnChambres,
   locataireId,
   locataireNom,
   onClose,
@@ -102,6 +112,7 @@ function AssignerBailModal({
   mode: "logement" | "locataire";
   logementId?: number;
   logementLabel?: string;
+  logementEnChambres?: boolean;
   locataireId?: number;
   locataireNom?: string;
   onClose: () => void;
@@ -129,6 +140,9 @@ function AssignerBailModal({
   );
   const [fin, setFin] = useState(() => finParDefaut(""));
   const [depot, setDepot] = useState("");
+  // Bail AU MOIS (chambres) : reconduction auto, jamais d'avis de
+  // renouvellement. Pré-coché quand le logement est loué en chambres.
+  const [auMois, setAuMois] = useState(Boolean(logementEnChambres));
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -233,7 +247,8 @@ function AssignerBailModal({
           depot_garantie: depot.trim()
             ? parseFloat(depot.replace(",", "."))
             : null,
-          status: "actif"
+          status: "actif",
+          au_mois: auMois
         })
       });
       if (!rb.ok) {
@@ -409,7 +424,13 @@ function AssignerBailModal({
               </label>
               <select
                 value={logId}
-                onChange={(e) => setLogId(e.target.value)}
+                onChange={(e) => {
+                  setLogId(e.target.value);
+                  const lg = (logements || []).find(
+                    (l) => String(l.id) === e.target.value
+                  );
+                  if (lg?.location_en_chambres) setAuMois(true);
+                }}
                 disabled={!immId}
                 className="input mt-1 w-full disabled:opacity-50"
               >
@@ -482,6 +503,21 @@ function AssignerBailModal({
             />
           </div>
         </div>
+
+        <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2">
+          <input
+            type="checkbox"
+            checked={auMois}
+            onChange={(e) => setAuMois(e.target.checked)}
+            className="mt-0.5 h-4 w-4 accent-[var(--accent-500,#f59e0b)]"
+          />
+          <span className="text-xs text-white/70">
+            <span className="font-semibold text-white">Bail au mois</span>{" "}
+            (chambres) — reconduction automatique au même prix : jamais
+            d&apos;avis de renouvellement, le loyer court jusqu&apos;au
+            départ. Modifiable ensuite sur le bail.
+          </span>
+        </label>
 
         <button
           className="btn-accent btn-sm mt-4 w-full justify-center disabled:opacity-50"

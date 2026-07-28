@@ -82,6 +82,7 @@ def test_config_aller_retour(client, auth_headers):
         "renouvellement_mois_avant": 8,
         "assurance_bascule_mois": 3,
         "releve31_bascule_mois": 1,
+        "assurance_inclut_au_mois": False,
     }
 
     # Remise aux défauts pour ne pas polluer les autres tests.
@@ -94,3 +95,120 @@ def test_config_aller_retour(client, auth_headers):
             "releve31_bascule_mois": 2,
         },
     )
+
+
+def test_bail_au_mois_et_reconduction(client, auth_headers, run):
+    """Bail AU MOIS : hors du suivi des renouvellements (même échu) et du
+    suivi des assurances (défaut) ; « Reconduire tel quel » roule la date
+    de fin d'un an sans toucher au reste."""
+    from datetime import date, timedelta
+
+    from app.models.immobilier import (
+        Bail,
+        BailStatus,
+        Immeuble,
+        Locataire,
+        Logement,
+        LogementStatus,
+    )
+
+    from .conftest import TestSessionLocal
+
+    async def _seed():
+        async with TestSessionLocal() as s:
+            imm = Immeuble(
+                name="Maison de chambres", address="1 rue Chambre",
+                is_active=True,
+            )
+            s.add(imm)
+            await s.flush()
+            lg = Logement(
+                immeuble_id=imm.id, numero="CH-1",
+                status=LogementStatus.OCCUPE.value,
+                location_en_chambres=True,
+            )
+            loc = Locataire(full_name="Chambreur Smoke")
+            s.add_all([lg, loc])
+            await s.flush()
+            # Bail au mois ÉCHU (date_fin passée) — ne doit PAS apparaître.
+            b1 = Bail(
+                logement_id=lg.id, locataire_id=loc.id,
+                date_debut=date.today() - timedelta(days=400),
+                date_fin=date.today() - timedelta(days=30),
+                loyer_mensuel=500.0,
+                status=BailStatus.ACTIF.value,
+                au_mois=True,
+            )
+            # Bail annuel dans la fenêtre — sert au test de reconduction.
+            lg2 = Logement(
+                immeuble_id=imm.id, numero="CH-2",
+                status=LogementStatus.OCCUPE.value,
+            )
+            loc2 = Locataire(full_name="Annuel Smoke")
+            s.add_all([lg2, loc2])
+            await s.flush()
+            b2 = Bail(
+                logement_id=lg2.id, locataire_id=loc2.id,
+                date_debut=date.today() - timedelta(days=250),
+                date_fin=date.today() + timedelta(days=115),
+                loyer_mensuel=900.0,
+                status=BailStatus.ACTIF.value,
+            )
+            s.add_all([b1, b2])
+            await s.commit()
+            return {"au_mois": b1.id, "annuel": b2.id,
+                    "fin_annuel": b2.date_fin}
+
+    ids = run(_seed())
+
+    # Renouvellements : le bail au mois (échu !) est absent, l'annuel présent.
+    rows = client.get(
+        "/api/v1/immobilier/renouvellements/overview", headers=auth_headers
+    ).json()
+    par_bail = {r["bail_id"]: r for r in rows}
+    assert ids["au_mois"] not in par_bail
+    assert ids["annuel"] in par_bail
+
+    # Assurances : le chambreur est absent par défaut…
+    rows = client.get(
+        "/api/v1/immobilier/assurances/overview", headers=auth_headers
+    ).json()["rows"]
+    noms = {r["locataire_nom"] for r in rows}
+    assert "Chambreur Smoke" not in noms
+    assert "Annuel Smoke" in noms
+    # … mais revient si le réglage l'inclut.
+    client.put(
+        "/api/v1/immobilier/suivis-config",
+        headers=auth_headers,
+        json={
+            "renouvellement_mois_avant": 6,
+            "assurance_bascule_mois": 1,
+            "releve31_bascule_mois": 2,
+            "assurance_inclut_au_mois": True,
+        },
+    )
+    rows = client.get(
+        "/api/v1/immobilier/assurances/overview", headers=auth_headers
+    ).json()["rows"]
+    assert "Chambreur Smoke" in {r["locataire_nom"] for r in rows}
+    client.put(
+        "/api/v1/immobilier/suivis-config",
+        headers=auth_headers,
+        json={
+            "renouvellement_mois_avant": 6,
+            "assurance_bascule_mois": 1,
+            "releve31_bascule_mois": 2,
+            "assurance_inclut_au_mois": False,
+        },
+    )
+
+    # Reconduction tacite : date_fin +1 an, même jour.
+    r = client.post(
+        f"/api/v1/immobilier/baux/{ids['annuel']}/reconduire",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    d = r.json()
+    fin = ids["fin_annuel"]
+    assert d["ancienne_date_fin"] == fin.isoformat()
+    assert d["nouvelle_date_fin"] == fin.replace(year=fin.year + 1).isoformat()

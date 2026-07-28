@@ -616,6 +616,12 @@ class Bail(Base, TimestampUpdateMixin):
     # NULL = toujours détenu (ou à rendre si le bail est terminé/résilié).
     depot_rendu_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
+    #: Bail AU MOIS (chambres, retour Phil 2026-07-28) : reconduction
+    #: automatique au même prix — jamais dans le suivi des renouvellements
+    #: (ni « échu »), loyers qui courent sans égard à date_fin, exclu du
+    #: suivi d'assurance (réglable). Colonne additive → ensure_critical_columns.
+    au_mois: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+
     # Inclusions (chauffage, eau chaude, électricité, internet…)
     chauffage_inclus: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
