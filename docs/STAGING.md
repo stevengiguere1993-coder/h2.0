@@ -1,20 +1,27 @@
-# Environnement de test — dev.immohorizon.com
+# Environnement de test (staging)
 
-Environnement de STAGING identique à la production, à 0 $/mois :
-le nouveau code se merge d'abord sur la branche `dev`, se teste sur
-**dev.immohorizon.com**, puis — après le GO — se pousse sur `main`
-(production, immohorizon.com).
+**Adresse du staging : https://h2-0-web-dev.onrender.com**
+
+Le nouveau code se merge d'abord sur la branche `dev`, se teste sur le
+staging, puis — après le GO — se pousse sur `main` (production,
+immohorizon.com).
 
 ```
-branche dev  → h2-0-dev (API) + h2-0-web-dev (site) → dev.immohorizon.com
-branche main → h2-0     (API) + h2-0-web     (site) → immohorizon.com
+branche dev  → h2-0-dev (API) + h2-0-web-dev (site) → h2-0-web-dev.onrender.com
+branche main → h2.0     (API) + h2.0-0-web   (site) → immohorizon.com
 ```
+
+> Pas de domaine dev.immohorizon.com : le plan gratuit Render limite à
+> 2 domaines personnalisés par workspace et la prod les utilise déjà
+> (immohorizon.com + www). L'URL onrender.com est équivalente (HTTPS
+> inclus) — à mettre en favori. Pour débloquer plus de domaines :
+> workspace Professional (~19 $ US/mois), pas justifié.
 
 ## Garanties de sécurité (déjà codées)
 
 | Chose                | Production            | Staging (dev)                          |
 |----------------------|-----------------------|----------------------------------------|
-| Base de données      | Postgres Render       | **Neon gratuite, séparée** — jamais la prod |
+| Base de données      | Postgres Render (h2-0db) | **kratos-staging** (Render Basic-256mb, ~6 $/mois) — séparée, jamais la prod |
 | Courriels (M365)     | Envoyés aux vrais destinataires | **Tous redirigés vers Phil** (`MAIL_REDIRECT_ALL_TO`) — sujet préfixé « [TEST → destinataire réel] », cc/bcc vidés |
 | QuickBooks           | Synchronisé           | **Débranché** (aucune clé posée)       |
 | Twilio (SMS/appels)  | Actifs                | **Débranchés** (aucune clé posée)      |
@@ -133,12 +140,14 @@ Environment Variables :
 3. Retour dans Render : le domaine passe « Verified » après quelques
    minutes, certificat HTTPS automatique.
 
-### 5. Premier compte sur le staging
-La base de test est VIDE (aucun locataire réel). Ouvre
-dev.immohorizon.com, crée ton compte, puis ajoute un immeuble/locataire
-bidon pour tester. Mets TON courriel sur le locataire bidon si tu veux
-recevoir les courriels de test (ils te seraient redirigés de toute
-façon).
+### 5. Premier compte sur le staging (bootstrap owner)
+L'inscription Kratos est réservée aux admins → sur la base NEUVE, le
+premier compte se crée par BOOTSTRAP : poser sur **h2-0-dev** les
+variables `BOOTSTRAP_ADMIN_EMAIL` + `BOOTSTRAP_ADMIN_PASSWORD` → au
+prochain démarrage, si la table users est VIDE, un compte owner est créé
+avec ces identifiants. Sans effet dès qu'un utilisateur existe (donc
+inoffensif en prod). Ensuite : connexion sur le staging avec ces
+identifiants, puis créer les immeubles/locataires bidon.
 
 ## Au quotidien (rien à faire — pour référence)
 
