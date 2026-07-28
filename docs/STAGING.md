@@ -38,37 +38,54 @@ disponible : `MAIL_CAPTURE_ONLY=true` (journalise sans rien envoyer).
 > Fais tout ça dans le même workspace Render que ta production (celui où
 > tu vois le service `h2-0`).
 
-### 1. La base de données de test (Neon, gratuite) — 5 min
-1. Va sur **https://neon.tech** → « Sign up » (avec le compte GitHub).
-2. Crée un projet (nom : `kratos-staging`, région : US East).
-3. Sur le tableau de bord du projet, copie la **Connection string**
-   (commence par `postgresql://…neon.tech/…`). Garde-la pour l'étape 2.
+### 1. La base de données de test (Render, ~7 $ US/mois) — 3 min
+> Pourquoi pas la gratuite ? Le Postgres GRATUIT de Render s'autodétruit
+> après 30 jours — le staging casserait chaque mois. La plus petite base
+> payante Render (~7 $ US/mois) est pérenne et reste 100 % dans le setup
+> actuel. (Alternative 0 $ si jamais : Neon.tech, gratuit et pérenne,
+> mais c'est un compte externe de plus.)
+
+1. Render → **+ New → Postgres**.
+2. Name : `kratos-staging` · Region : **Oregon (US West)** (même que le
+   reste) · Plan : le plus petit payant (**Basic-256mb**, ~7 $ US/mois).
+3. **Create Database**, attends ~1 min qu'elle soit « Available ».
+4. Sur la page de la base, section **Connections** : copie
+   l'**Internal Database URL** (commence par `postgresql://…`). Garde-la
+   pour l'étape 2.
 
 > Le backend crée toutes ses tables tout seul au premier démarrage —
 > rien d'autre à faire côté base.
 
-### 2. Le service BACKEND de test — 4 min
-Render → bouton **+ New → Web Service** → choisis le repo `h2.0`, puis :
+### 2. Le service BACKEND de test — 5 min, écran par écran
+1. Render → **+ New → Web Service**.
+2. Écran « Source Code » : clique la ligne
+   **stevengiguere1993-coder / h2.0**.
+3. Le formulaire de configuration s'ouvre. Remplis EXACTEMENT :
 
 | Champ              | Valeur                                       |
 |--------------------|----------------------------------------------|
 | Name               | `h2-0-dev`                                   |
-| Language           | Python 3                                     |
-| Branch             | **`dev`**                                    |
-| Region             | Oregon                                       |
+| Project            | (laisser tel quel, ou choisir H2.0 WEB SERVICE) |
+| Language           | Python 3 (normalement détecté tout seul)     |
+| Branch             | **`dev`** ⚠️ dérouler — le défaut est main   |
+| Region             | Oregon (US West)                             |
 | Root Directory     | `backend`                                    |
 | Build Command      | `pip install -r requirements.txt`            |
 | Start Command      | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
 | Instance Type      | **Free**                                     |
 
-Puis section **Environment Variables** (avant ou après création, onglet
-Environment) :
+4. Plus bas, section **Environment Variables** : bouton « + Add
+   Environment Variable », une ligne par variable du tableau ci-dessous.
+   (Pour les 3 valeurs AZURE : ouvre dans un AUTRE onglet le service
+   **h2-0** → Environment → clique l'œil pour révéler → copie-colle.)
+5. Bouton **Deploy Web Service** tout en bas. Le premier build prend
+   5-10 min ; à la fin le statut passe « Live ».
 
 | Clé | Valeur |
 |-----|--------|
 | `PYTHON_VERSION` | `3.11.11` |
 | `ENV` | `staging` |
-| `DATABASE_URL` | la connection string **Neon** (étape 1) |
+| `DATABASE_URL` | l'**Internal Database URL** de `kratos-staging` (étape 1) |
 | `JWT_SECRET` | une longue chaîne aléatoire (PAS celle de prod) |
 | `FRONTEND_ORIGINS` | `https://dev.immohorizon.com,https://h2-0-web-dev.onrender.com` |
 | `MAIL_REDIRECT_ALL_TO` | `phil.meuser@hotmail.com` |
@@ -83,8 +100,9 @@ Environment) :
 > QuickBooks/Twilio/Monday — c'est voulu, ces intégrations restent
 > débranchées en staging.
 
-### 3. Le service FRONTEND de test — 3 min
-Render → **+ New → Web Service** → repo `h2.0` :
+### 3. Le service FRONTEND de test — 4 min
+Même chemin : **+ New → Web Service** → ligne
+**stevengiguere1993-coder / h2.0**, puis :
 
 | Champ              | Valeur                          |
 |--------------------|---------------------------------|
@@ -137,6 +155,5 @@ façon).
   permanence, ~50 s d'attente au premier clic. (Le staging n'est PAS
   dans le workflow keep-alive — c'est voulu.) Pour un staging toujours
   chaud : plan Starter (7 $ US/mois) dans Render, réversible en un clic.
-- Neon gratuit dort aussi et se réveille en ~1 s — transparent.
 - Pour tester avec des données réalistes, demander à Claude un script de
   copie prod → staging (à la demande, jamais automatique).
