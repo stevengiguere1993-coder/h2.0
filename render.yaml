@@ -178,13 +178,22 @@ services:
         value: "60"
       - key: FRONTEND_ORIGINS
         value: "https://dev.immohorizon.com,https://h2-0-web-dev.onrender.com"
-      # AUCUN courriel ne part : les envois sont journalisés et
-      # « réussissent » — les flux (signatures, rappels, communications)
-      # se testent au complet sans écrire à de vraies personnes.
-      - key: MAIL_CAPTURE_ONLY
-        value: "true"
+      # TOUS les courriels du staging partent vers l'adresse de Phil
+      # (au lieu des vrais destinataires) — il voit le courriel réel
+      # dans sa boîte, sujet préfixé « [TEST → destinataire réel] »,
+      # cc/bcc vidés, BCC superviseur sauté. Demande Phil 2026-07-28.
+      # Nécessite les clés Azure (mêmes valeurs que la prod, service
+      # h2-0 → Environment).
+      - key: MAIL_REDIRECT_ALL_TO
+        value: "phil.meuser@hotmail.com"
+      - key: AZURE_TENANT_ID
+        sync: false
+      - key: AZURE_CLIENT_ID
+        sync: false
+      - key: AZURE_CLIENT_SECRET
+        sync: false
       - key: MAIL_FROM_EMAIL
-        value: "test@immohorizon.com"
+        value: "info@immohorizon.com"
       - key: MAIL_FROM_NAME
         value: "Horizon (TEST)"
       # IA gratuite utile en staging (facultatif — coller les mêmes
@@ -194,7 +203,7 @@ services:
       - key: GROQ_API_KEY
         sync: false
       # VOLONTAIREMENT ABSENTS (intégrations réelles neutralisées) :
-      # QUICKBOOKS_*, QBO_*, TWILIO_*, AZURE_*, MONDAY_API_TOKEN.
+      # QUICKBOOKS_*, QBO_*, TWILIO_*, MONDAY_API_TOKEN.
 
   - type: web
     name: h2-0-web-dev

@@ -15,65 +15,112 @@ branche main → h2-0     (API) + h2-0-web     (site) → immohorizon.com
 | Chose                | Production            | Staging (dev)                          |
 |----------------------|-----------------------|----------------------------------------|
 | Base de données      | Postgres Render       | **Neon gratuite, séparée** — jamais la prod |
-| Courriels (M365)     | Envoyés pour vrai     | **Capturés** (journalisés, rien ne part) — `MAIL_CAPTURE_ONLY=true` |
+| Courriels (M365)     | Envoyés aux vrais destinataires | **Tous redirigés vers Phil** (`MAIL_REDIRECT_ALL_TO`) — sujet préfixé « [TEST → destinataire réel] », cc/bcc vidés |
 | QuickBooks           | Synchronisé           | **Débranché** (aucune clé posée)       |
 | Twilio (SMS/appels)  | Actifs                | **Débranchés** (aucune clé posée)      |
 | Crons (rappels…)     | Actifs                | **Aucun cron** en staging              |
 | Interface            | Normale               | Bandeau jaune « ENVIRONNEMENT DE TEST » |
 
-Le mode capture (`MAIL_CAPTURE_ONLY`) rend le mailer « prêt » : tous les
-flux d'envoi (communications, signatures, rappels) se testent au complet —
-le succès s'affiche, l'audit s'écrit, mais AUCUN courriel ne part. Les
-courriels capturés sont visibles dans les logs Render du service
-`h2-0-dev` (préfixe `[MAIL CAPTURÉ — staging]`).
+La redirection courriel : chaque envoi du staging part POUR VRAI, mais
+uniquement vers l'adresse configurée (`MAIL_REDIRECT_ALL_TO`) — Phil
+reçoit le courriel exact que le locataire/client aurait reçu, avec le
+destinataire original dans le sujet. Personne d'autre ne reçoit rien
+(cc/bcc vidés, copie superviseur sautée). Variante silencieuse
+disponible : `MAIL_CAPTURE_ONLY=true` (journalise sans rien envoyer).
 
 ## Mise en place — ~15 minutes de clics (une seule fois)
 
+> ⚠️ On crée les 2 services **à la main** (PAS via « Blueprint ») : les
+> services de prod n'ont pas été créés par blueprint, et une instance
+> Blueprint essaierait de les DUPLIQUER (double backend, crons en double
+> → doubles courriels de rappel). Création manuelle = zéro risque.
+>
+> Fais tout ça dans le même workspace Render que ta production (celui où
+> tu vois le service `h2-0`).
+
 ### 1. La base de données de test (Neon, gratuite) — 5 min
-1. Va sur **https://neon.tech** → « Sign up » (avec le compte GitHub, c'est 2 clics).
-2. Crée un projet (nom : `kratos-staging`, région : US East/Ohio — proche d'Oregon ça va).
+1. Va sur **https://neon.tech** → « Sign up » (avec le compte GitHub).
+2. Crée un projet (nom : `kratos-staging`, région : US East).
 3. Sur le tableau de bord du projet, copie la **Connection string**
-   (commence par `postgresql://…neon.tech/…`). Garde-la pour l'étape 3.
+   (commence par `postgresql://…neon.tech/…`). Garde-la pour l'étape 2.
 
-> Le backend crée toutes ses tables tout seul au premier démarrage
-> (init_db) — rien d'autre à faire côté base.
+> Le backend crée toutes ses tables tout seul au premier démarrage —
+> rien d'autre à faire côté base.
 
-### 2. Les deux services Render — 5 min
-1. **https://dashboard.render.com** → bouton **New → Blueprint**.
-2. Choisis le repo `h2.0` → Render lit `render.yaml` et propose la liste
-   des services. Les services existants (h2-0, h2-0-web, crons) sont
-   reconnus ; les DEUX NOUVEAUX sont `h2-0-dev` et `h2-0-web-dev`.
-3. Approuve la création. (S'il demande des valeurs pour `DATABASE_URL` /
-   `JWT_SECRET` de h2-0-dev, passe à l'étape 3.)
+### 2. Le service BACKEND de test — 4 min
+Render → bouton **+ New → Web Service** → choisis le repo `h2.0`, puis :
 
-*Alternative si le Blueprint chicane* : crée les 2 services à la main
-(New → Web Service → repo h2.0) en recopiant les réglages de la section
-STAGING de `render.yaml` (branche **dev**, rootDir backend/frontend,
-plan **Free**).
+| Champ              | Valeur                                       |
+|--------------------|----------------------------------------------|
+| Name               | `h2-0-dev`                                   |
+| Language           | Python 3                                     |
+| Branch             | **`dev`**                                    |
+| Region             | Oregon                                       |
+| Root Directory     | `backend`                                    |
+| Build Command      | `pip install -r requirements.txt`            |
+| Start Command      | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+| Instance Type      | **Free**                                     |
 
-### 3. Les variables du backend de test — 2 min
-Dans Render → service **h2-0-dev** → onglet **Environment** :
-- `DATABASE_URL` = la connection string Neon de l'étape 1
-- `JWT_SECRET` = n'importe quelle longue chaîne aléatoire (PAS celle de
-  prod — les sessions de test restent séparées)
-- (facultatif) `GEMINI_API_KEY` / `GROQ_API_KEY` = mêmes valeurs que le
-  service h2-0, si on veut tester les features IA en staging
+Puis section **Environment Variables** (avant ou après création, onglet
+Environment) :
+
+| Clé | Valeur |
+|-----|--------|
+| `PYTHON_VERSION` | `3.11.11` |
+| `ENV` | `staging` |
+| `DATABASE_URL` | la connection string **Neon** (étape 1) |
+| `JWT_SECRET` | une longue chaîne aléatoire (PAS celle de prod) |
+| `FRONTEND_ORIGINS` | `https://dev.immohorizon.com,https://h2-0-web-dev.onrender.com` |
+| `MAIL_REDIRECT_ALL_TO` | `phil.meuser@hotmail.com` |
+| `MAIL_FROM_EMAIL` | `info@immohorizon.com` |
+| `MAIL_FROM_NAME` | `Horizon (TEST)` |
+| `AZURE_TENANT_ID` | même valeur que le service h2-0 (Environment) |
+| `AZURE_CLIENT_ID` | même valeur que le service h2-0 |
+| `AZURE_CLIENT_SECRET` | même valeur que le service h2-0 |
+
+> Les 3 clés Azure servent UNIQUEMENT à ce que les courriels de test
+> puissent partir (vers ton adresse). NE PAS copier les clés
+> QuickBooks/Twilio/Monday — c'est voulu, ces intégrations restent
+> débranchées en staging.
+
+### 3. Le service FRONTEND de test — 3 min
+Render → **+ New → Web Service** → repo `h2.0` :
+
+| Champ              | Valeur                          |
+|--------------------|---------------------------------|
+| Name               | `h2-0-web-dev`                  |
+| Language           | Node                            |
+| Branch             | **`dev`**                       |
+| Region             | Oregon                          |
+| Root Directory     | `frontend`                      |
+| Build Command      | `npm install && npm run build`  |
+| Start Command      | `npm run start`                 |
+| Instance Type      | **Free**                        |
+
+Environment Variables :
+
+| Clé | Valeur |
+|-----|--------|
+| `NODE_VERSION` | `20` |
+| `NEXT_PUBLIC_SITE_URL` | `https://dev.immohorizon.com` |
+| `NEXT_PUBLIC_API_BASE_URL` | `https://h2-0-dev.onrender.com` |
+| `NEXT_PUBLIC_DEFAULT_LOCALE` | `fr` |
+| `NEXT_PUBLIC_ENV_BADGE` | `Environnement de test` |
 
 ### 4. Le domaine dev.immohorizon.com — 3 min
 1. Render → service **h2-0-web-dev** → **Settings → Custom Domains** →
-   ajoute `dev.immohorizon.com`. Render affiche la cible CNAME
-   (`h2-0-web-dev.onrender.com`).
-2. **Cloudflare** (le DNS du domaine) → zone immohorizon.com → **DNS →
-   Add record** : type `CNAME`, nom `dev`, cible
-   `h2-0-web-dev.onrender.com`, proxy activé ou non (les deux marchent).
+   ajoute `dev.immohorizon.com`. Render affiche la cible CNAME.
+2. **Cloudflare** → zone immohorizon.com → **DNS → Add record** :
+   type `CNAME`, nom `dev`, cible `h2-0-web-dev.onrender.com`.
 3. Retour dans Render : le domaine passe « Verified » après quelques
    minutes, certificat HTTPS automatique.
 
 ### 5. Premier compte sur le staging
 La base de test est VIDE (aucun locataire réel). Ouvre
-dev.immohorizon.com, crée ton compte — le premier compte peut être promu
-admin comme au lancement de la prod. Ensuite ajoute un immeuble/locataire
-bidon pour tester.
+dev.immohorizon.com, crée ton compte, puis ajoute un immeuble/locataire
+bidon pour tester. Mets TON courriel sur le locataire bidon si tu veux
+recevoir les courriels de test (ils te seraient redirigés de toute
+façon).
 
 ## Au quotidien (rien à faire — pour référence)
 
@@ -87,9 +134,9 @@ bidon pour tester.
 ## Notes
 
 - Les services free s'endorment après ~15 min sans trafic : 0 $ en
-  permanence, ~50 s d'attente au premier clic. Pour un staging toujours
-  chaud : passer h2-0-dev (et/ou h2-0-web-dev) au plan Starter
-  (7 $ US/mois chacun) dans Render — réversible en un clic.
+  permanence, ~50 s d'attente au premier clic. (Le staging n'est PAS
+  dans le workflow keep-alive — c'est voulu.) Pour un staging toujours
+  chaud : plan Starter (7 $ US/mois) dans Render, réversible en un clic.
 - Neon gratuit dort aussi et se réveille en ~1 s — transparent.
 - Pour tester avec des données réalistes, demander à Claude un script de
   copie prod → staging (à la demande, jamais automatique).
