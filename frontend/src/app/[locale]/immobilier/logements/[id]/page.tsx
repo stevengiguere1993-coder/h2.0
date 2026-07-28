@@ -21,6 +21,7 @@ import { useSearchParams } from "next/navigation";
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import {
+  AuMoisToggle,
   BailDocActions,
   BailSignature,
   DocumentsSection,
@@ -54,6 +55,7 @@ type DossierBail = {
   document_url: string | null;
   signed_at: string | null;
   document_id?: number | null;
+  au_mois?: boolean | null;
 };
 
 type DossierBon = {
@@ -661,6 +663,7 @@ export default function LogementDetailPage({
                         mode="logement"
                         logementId={logementId}
                         logementLabel={`Logement ${lg.numero}`}
+                        logementEnChambres={!!lg.location_en_chambres}
                         onDone={() => void loadDossier()}
                         className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-2.5 py-1 text-xs font-semibold text-accent-500 transition hover:bg-accent-500/20"
                       />
@@ -720,7 +723,11 @@ export default function LogementDetailPage({
                       />
                       <Row
                         label="Période"
-                        value={`${fmtDate(bailActif.date_debut)} → ${fmtDate(bailActif.date_fin)}`}
+                        value={
+                          bailActif.au_mois
+                            ? `${fmtDate(bailActif.date_debut)} → au mois`
+                            : `${fmtDate(bailActif.date_debut)} → ${fmtDate(bailActif.date_fin)}`
+                        }
                       />
                     </dl>
                     <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -730,6 +737,11 @@ export default function LogementDetailPage({
                         {BAIL_STATUS_LABEL[bailActif.status] ??
                           bailActif.status}
                       </span>
+                      <AuMoisToggle
+                        bailId={bailActif.id}
+                        auMois={!!bailActif.au_mois}
+                        onChanged={() => void loadDossier()}
+                      />
                       <TalFormDropdown bailId={bailActif.id} />
                       <BailSignature bailId={bailActif.id} />
                       <BailDocActions

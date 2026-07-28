@@ -28,6 +28,7 @@ import { useSearchParams } from "next/navigation";
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import {
+  AuMoisToggle,
   BailDocActions,
   BailSignature,
   DocumentsSection,
@@ -67,6 +68,7 @@ type DossierBail = {
   status: string;
   document_id?: number | null;
   signed_at?: string | null;
+  au_mois?: boolean | null;
 };
 
 type DossierPaiement = {
@@ -1071,7 +1073,8 @@ export default function LocataireDetailPage({
                             ) : null}
                           </td>
                           <td className="py-2.5 pr-3 text-xs text-white/60">
-                            {b.date_debut} → {b.date_fin}
+                            {b.date_debut} →{" "}
+                            {b.au_mois ? "au mois" : b.date_fin}
                           </td>
                           <td
                             className="py-2.5 pr-3 text-right text-white/80"
@@ -1164,6 +1167,11 @@ export default function LocataireDetailPage({
                                   Départ
                                 </button>
                               ) : null}
+                              <AuMoisToggle
+                                bailId={b.id}
+                                auMois={!!b.au_mois}
+                                onChanged={() => void loadDossier()}
+                              />
                               <TalFormDropdown bailId={b.id} />
                               <BailSignature bailId={b.id} />
                               <BailDocActions

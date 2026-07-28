@@ -143,6 +143,10 @@ async def assurances_overview(
         # Gestion externe (immeuble absent du dict) → hors du suivi.
         if lo is None or im is None:
             continue
+        # Baux AU MOIS (chambres) : pas d'assurance exigée par défaut —
+        # réglable dans Paramètres → Suivis annuels.
+        if b.au_mois and not suivis_cfg.assurance_inclut_au_mois:
+            continue
         rows.append(
             AssuranceRow(
                 locataire_id=lo.id,

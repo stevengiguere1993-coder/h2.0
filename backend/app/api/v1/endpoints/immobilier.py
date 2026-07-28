@@ -347,6 +347,8 @@ class SuivisConfigIn(BaseModel):
     renouvellement_mois_avant: int = 6
     assurance_bascule_mois: int = 1
     releve31_bascule_mois: int = 2
+    #: Inclure les baux au mois (chambres) dans le suivi des assurances.
+    assurance_inclut_au_mois: bool = False
 
 
 @router.get("/suivis-config", response_model=SuivisConfigIn)
@@ -361,6 +363,7 @@ async def get_suivis_config(
         renouvellement_mois_avant=c.renouvellement_mois_avant,
         assurance_bascule_mois=c.assurance_bascule_mois,
         releve31_bascule_mois=c.releve31_bascule_mois,
+        assurance_inclut_au_mois=c.assurance_inclut_au_mois,
     )
 
 
@@ -382,6 +385,7 @@ async def put_suivis_config(
             renouvellement_mois_avant=payload.renouvellement_mois_avant,
             assurance_bascule_mois=payload.assurance_bascule_mois,
             releve31_bascule_mois=payload.releve31_bascule_mois,
+            assurance_inclut_au_mois=payload.assurance_inclut_au_mois,
         ),
         user_id=user.id,
     )
@@ -391,6 +395,7 @@ async def put_suivis_config(
         renouvellement_mois_avant=c.renouvellement_mois_avant,
         assurance_bascule_mois=c.assurance_bascule_mois,
         releve31_bascule_mois=c.releve31_bascule_mois,
+        assurance_inclut_au_mois=c.assurance_inclut_au_mois,
     )
 
 
@@ -1960,6 +1965,7 @@ async def logement_dossier(
                 document_url=b.document_url,
                 signed_at=b.signed_at,
                 document_id=b.document_id,
+                au_mois=b.au_mois,
             )
         )
 
@@ -2225,6 +2231,7 @@ async def locataire_dossier(
                 status=b.status,
                 document_id=b.document_id,
                 signed_at=b.signed_at,
+                au_mois=b.au_mois,
             )
         )
 
@@ -3424,7 +3431,9 @@ async def loyers_overview(
         Ne remonte jamais avant la date de démarrage du pôle."""
         debut = max(b.date_debut.replace(day=1), solde_depuis)
         fin = min(month_start, today.replace(day=1))
-        if b.date_fin:
+        # Bail AU MOIS : reconduction auto — les loyers courent sans
+        # egard a la date de fin (retour Phil 2026-07-28).
+        if b.date_fin and not b.au_mois:
             fin = min(fin, b.date_fin.replace(day=1))
         if fin < debut:
             return 0

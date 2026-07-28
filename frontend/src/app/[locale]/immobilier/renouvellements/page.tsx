@@ -428,6 +428,42 @@ export default function RenouvellementsPage() {
   // « Scanner & envoyer » (batch) retiré — demande Phil 2026-07-10 :
   // aucun envoi de masse, chaque avis part via son bouton, vérifié.
 
+  // « Reconduire tel quel » : pas de hausse cette année → le bail
+  // s'étire d'un an sans avis (reconduction tacite — retour Phil
+  // 2026-07-28). La ligne sort de la liste.
+  const [reconduireId, setReconduireId] = useState<number | null>(null);
+  async function reconduire(r: RenouvellementOverview) {
+    if (
+      !window.confirm(
+        `Reconduire le bail de ${r.locataire_nom} tel quel (même loyer, sans avis) ?
+
+La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
+      )
+    )
+      return;
+    setReconduireId(r.bail_id);
+    setMsg(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/baux/${r.bail_id}/reconduire`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      const d = (await res.json()) as { nouvelle_date_fin: string };
+      setMsg(
+        `Bail reconduit tel quel — nouvelle fin : ${d.nouvelle_date_fin}.`
+      );
+      void reload();
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setReconduireId(null);
+    }
+  }
+
   // « Non renouvelé » : le bail ne sera pas prolongé → ouvre un dossier
   // de relocation dans Locations (prérempli depuis le bail).
   async function nonRenouvele(bailId: number) {
@@ -778,6 +814,22 @@ export default function RenouvellementsPage() {
                           <Mail className="h-3.5 w-3.5" />
                           Préparer
                         </button>
+                        {r.fenetre !== "envoye" ? (
+                          <button
+                            type="button"
+                            title="Pas de hausse cette année : le bail s'étire d'un an tel quel, sans avis (reconduction tacite)"
+                            disabled={reconduireId === r.bail_id}
+                            onClick={() => void reconduire(r)}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                          >
+                            {reconduireId === r.bail_id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                            )}
+                            Reconduire tel quel
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           title="Le bail ne sera PAS renouvelé — ouvrir un dossier de relocation dans Locations"

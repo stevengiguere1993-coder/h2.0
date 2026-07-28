@@ -1539,6 +1539,66 @@ export function DocumentsSection({
  * sinon signé en ligne) + bouton Importer/Remplacer. Remplacer archive
  * l'ancien dans les Documents (retour Phil 2026-07-27).
  */
+/**
+ * Badge-interrupteur « Au mois » d'un bail (chambres — retour Phil
+ * 2026-07-28) : reconduction automatique au même prix, jamais d'avis de
+ * renouvellement, loyer qui court jusqu'au départ. Cliquer bascule le
+ * mode (PATCH /baux/{id}) — visible sur la fiche logement et la fiche
+ * locataire, changeable en tout temps.
+ */
+export function AuMoisToggle({
+  bailId,
+  auMois,
+  onChanged
+}: {
+  bailId: number;
+  auMois: boolean;
+  onChanged?: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function basculer() {
+    const msg = auMois
+      ? "Repasser ce bail en bail à durée fixe ? Il réapparaîtra dans le suivi des renouvellements."
+      : "Passer ce bail « au mois » ? Reconduction automatique au même prix : plus d'avis de renouvellement, le loyer court jusqu'au départ.";
+    if (!window.confirm(msg)) return;
+    setBusy(true);
+    try {
+      const r = await authedFetch(`/api/v1/immobilier/baux/${bailId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ au_mois: !auMois })
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      onChanged?.();
+    } catch {
+      window.alert("Changement impossible — réessaie.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => void basculer()}
+      title={
+        auMois
+          ? "Bail au mois : reconduction auto, pas d'avis de renouvellement — cliquer pour repasser à durée fixe"
+          : "Bail à durée fixe (suivi des renouvellements) — cliquer pour passer au mois (chambres)"
+      }
+      className={
+        auMois
+          ? "inline-flex items-center gap-1 rounded-full border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-[11px] font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+          : "inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-white/50 transition hover:text-white disabled:opacity-50"
+      }
+    >
+      {auMois ? "Au mois ✓" : "Au mois ?"}
+    </button>
+  );
+}
+
 export function BailDocActions({
   bailId,
   hasDoc,
