@@ -31,8 +31,17 @@ type Rencontre = {
   location: string | null;
   entreprise_ids_json: string | null;
   status: string;
+  source: string | null;
+  global_summary: string | null;
   created_at: string;
   sections_count: number;
+};
+
+const SOURCE_BADGES: Record<string, { label: string; cls: string }> = {
+  audio: { label: "Audio", cls: "badge badge-violet" },
+  teams: { label: "Teams", cls: "badge badge-sky" },
+  texte: { label: "Texte", cls: "badge badge-sky" },
+  notes: { label: "Notes", cls: "badge badge-neutral" }
 };
 
 type EntrepriseMini = { id: number; name: string };
@@ -147,6 +156,7 @@ export default function RencontresListPage() {
   const [fDate, setFDate] = useState("");
   const [fLocation, setFLocation] = useState("");
   const [fAttendees, setFAttendees] = useState("");
+  const [fTexte, setFTexte] = useState("");
   const [fEntIds, setFEntIds] = useState<number[]>(
     filterEntId ? [filterEntId] : []
   );
@@ -203,6 +213,28 @@ export default function RencontresListPage() {
     if (!fTitle.trim()) return;
     setCreating(true);
     try {
+      if (fTexte.trim()) {
+        // Un transcript/notes collé → import unifié (le serveur détecte
+        // un VTT Teams collé, archive dans Drive) + résumé IA auto.
+        const form = new FormData();
+        form.append("texte", fTexte);
+        form.append("title", fTitle.trim());
+        if (fDate) form.append("meeting_date", fDate);
+        if (fAttendees.trim()) form.append("attendees", fAttendees.trim());
+        if (fEntIds.length > 0) {
+          form.append("entreprise_ids", JSON.stringify(fEntIds));
+        }
+        const r = await authedFetch("/api/v1/rencontres/importer", {
+          method: "POST",
+          body: form
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const created = (await r.json()) as { id: number };
+        window.location.assign(
+          `/entreprises/rencontres/${created.id}?resume=1`
+        );
+        return;
+      }
       const r = await authedFetch("/api/v1/rencontres", {
         method: "POST",
         body: JSON.stringify({
@@ -232,55 +264,27 @@ export default function RencontresListPage() {
     setError(null);
     setSyncMsg(null);
     try {
-      const base =
-        file.name.replace(/\.[^.]+$/, "").trim().slice(0, 120) ||
-        "Réunion importée";
-      const rr = await authedFetch("/api/v1/rencontres", {
-        method: "POST",
-        body: JSON.stringify({
-          title: base,
-          meeting_date: null,
-          location: null,
-          attendees: null,
-          entreprise_ids: filterEntId ? [filterEntId] : null
-        })
-      });
-      if (!rr.ok) throw new Error(`HTTP ${rr.status}`);
-      const renc = (await rr.json()) as { id: number };
-
-      const sr = await authedFetch(`/api/v1/rencontres/${renc.id}/sections`, {
-        method: "POST",
-        body: JSON.stringify({ title: base })
-      });
-      if (!sr.ok) throw new Error(`HTTP ${sr.status}`);
-      const sec = (await sr.json()) as { id: number };
-
-      const isText =
-        /\.(txt|md|text|vtt|srt|rtf|log|csv)$/i.test(file.name) ||
-        file.type.startsWith("text/");
-      if (isText) {
-        const raw = (await file.text()).trim();
-        if (raw) {
-          await authedFetch(
-            `/api/v1/rencontres/${renc.id}/sections/${sec.id}`,
-            { method: "PATCH", body: JSON.stringify({ transcript: raw }) }
-          );
-        }
-      } else {
-        const form = new FormData();
-        form.append("file", file);
-        const tr = await authedFetch(
-          `/api/v1/rencontres/${renc.id}/sections/${sec.id}/transcribe`,
-          { method: "POST", body: form }
-        );
-        if (!tr.ok) {
-          const t = await tr.text();
-          setError(
-            `Transcription échouée : ${t.slice(0, 200)}. La rencontre est créée — réessaie l'audio depuis sa fiche.`
-          );
-        }
+      // Import unifié : UN appel — le serveur détecte le type (audio →
+      // transcription, .vtt Teams → interlocuteurs conservés, texte),
+      // archive l'original + le transcript dans Google Drive, et la
+      // fiche lance le résumé IA à l'arrivée (?resume=1).
+      const form = new FormData();
+      form.append("file", file);
+      if (filterEntId) {
+        form.append("entreprise_ids", JSON.stringify([filterEntId]));
       }
-      window.location.assign(`/entreprises/rencontres/${renc.id}`);
+      const rr = await authedFetch("/api/v1/rencontres/importer", {
+        method: "POST",
+        body: form
+      });
+      if (!rr.ok) {
+        const t = await rr.text();
+        throw new Error(t.slice(0, 250) || `HTTP ${rr.status}`);
+      }
+      const renc = (await rr.json()) as { id: number };
+      window.location.assign(
+        `/entreprises/rencontres/${renc.id}?resume=1`
+      );
     } catch (e) {
       setError(`Import échoué : ${(e as Error).message}`);
       setImportingMeeting(false);
@@ -493,7 +497,20 @@ export default function RencontresListPage() {
                             Teams
                           </span>
                         ) : null}
+                        {r.source && SOURCE_BADGES[r.source] ? (
+                          <span className={SOURCE_BADGES[r.source].cls}>
+                            {SOURCE_BADGES[r.source].label}
+                          </span>
+                        ) : null}
                       </div>
+                      {r.global_summary ? (
+                        <p
+                          className="mt-1 line-clamp-2 text-[11px]"
+                          style={{ color: "var(--qg-text-muted)" }}
+                        >
+                          {r.global_summary}
+                        </p>
+                      ) : null}
                       {entNames.length > 0 ? (
                         <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px]" style={{ color: "var(--qg-text-muted)" }}>
                           <Users className="h-3 w-3" />
@@ -577,6 +594,17 @@ export default function RencontresListPage() {
                 value={fAttendees}
                 onChange={(e) => setFAttendees(e.target.value)}
                 placeholder="Steven, Philippe, Cidrik…"
+              />
+            </div>
+            <div>
+              <label className="label text-[10px] uppercase">
+                Transcript ou notes (colle ton texte — optionnel)
+              </label>
+              <textarea
+                className="input min-h-[110px] font-mono text-[12px]"
+                value={fTexte}
+                onChange={(e) => setFTexte(e.target.value)}
+                placeholder="Colle ici un transcript Teams, des notes brutes ou un compte rendu — Kratos le range, l'archive dans Drive et le résume tout seul."
               />
             </div>
             <div>
