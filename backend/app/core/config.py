@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     #: les envois sont journalisés puis « réussissent » silencieusement,
     #: pour tester les flux complets sans écrire à de vraies personnes.
     mail_capture_only: bool = False
+    #: STAGING (variante préférée de Phil) : TOUS les courriels partent
+    #: vers CETTE adresse au lieu des vrais destinataires — il voit le
+    #: courriel réel dans sa boîte, personne d'autre ne reçoit rien.
+    #: Le sujet est préfixé avec le destinataire original.
+    mail_redirect_all_to: str = ""
 
     # Database
     database_url: str

@@ -99,6 +99,21 @@ class GraphMailer:
                 len(attachments or []),
             )
             return
+        # STAGING (redirection) : le courriel part POUR VRAI mais vers
+        # l'adresse de test uniquement — cc/bcc vidés, BCC superviseur
+        # sauté, destinataires originaux affichés dans le sujet.
+        redirect = (settings.mail_redirect_all_to or "").strip()
+        if redirect:
+            originaux = ", ".join(list(to)) or "(aucun)"
+            log.info(
+                "[MAIL REDIRIGÉ — staging] destinataires réels=%s → %s "
+                "subject=%r", originaux, redirect, subject,
+            )
+            subject = f"[TEST → {originaux}] {subject}"
+            to = [redirect]
+            cc = None
+            bcc = None
+            internal = True  # pas de BCC superviseur sur les tests
         token = await self._token()
         sender = (from_email or "").strip() or self.sender
         display_name = (from_name or "").strip() or settings.mail_from_name

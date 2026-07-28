@@ -487,3 +487,88 @@ def test_profil_par_defaut_applique_sans_choix(
         headers=auth_headers,
         json={"from_email": "", "from_name": "", "reply_to": "", "profils": []},
     )
+
+
+def test_redirect_all_to_staging(client, auth_headers, comm_seed, monkeypatch):
+    """MAIL_REDIRECT_ALL_TO (staging) : le courriel part uniquement vers
+    l'adresse de test, sujet préfixé avec le destinataire réel, cc/bcc
+    vidés — vérifié sur le VRAI GraphMailer.send (pas le FakeMailer),
+    en capturant l'appel HTTP Graph."""
+    import app.integrations.email_graph as eg
+    from app.api.v1.endpoints import immobilier_communications as mod
+
+    envois = []
+
+    class _FakeHTTP:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, **kw):
+            class _R:
+                status_code = 202
+                text = ""
+
+                def raise_for_status(self):
+                    return None
+
+                def json(self):
+                    return {"access_token": "t", "expires_in": 3600}
+
+            if "oauth2" in url:
+                return _R()
+            envois.append(kw.get("json"))
+            return _R()
+
+    mailer = eg.GraphMailer()
+    mailer.tenant = "t"
+    mailer.client_id = "c"
+    mailer.client_secret = "s"
+    mailer.sender = "info@immohorizon.com"
+    monkeypatch.setattr(eg, "httpx", type("H", (), {"AsyncClient": _FakeHTTP}))
+    monkeypatch.setattr(
+        eg.settings, "mail_redirect_all_to", "phil.test@example.com"
+    )
+    monkeypatch.setattr(mod, "get_mailer", lambda: mailer)
+
+    # Réglages minimaux pour passer la validation « De qui ».
+    client.put(
+        "/api/v1/immobilier/communications/reglages",
+        headers=auth_headers,
+        json={
+            "from_email": "info@immohorizon.com",
+            "from_name": "",
+            "reply_to": "",
+            "profils": [],
+        },
+    )
+    r = client.post(
+        "/api/v1/immobilier/communications/envoyer",
+        headers=auth_headers,
+        json={
+            "type": "demande_assurance",
+            "immeuble_ids": [],
+            "locataire_ids": [comm_seed["locataire_bob"]],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert len(envois) == 1
+    m = envois[0]["message"]
+    dests = [x["emailAddress"]["address"] for x in m["toRecipients"]]
+    assert dests == ["phil.test@example.com"]          # redirigé
+    assert "bob@test.local" in m["subject"]            # destinataire réel visible
+    assert m["subject"].startswith("[TEST")
+    assert "ccRecipients" not in m
+    assert "bccRecipients" not in m                    # pas de BCC superviseur
+
+    # Nettoyage réglages.
+    client.put(
+        "/api/v1/immobilier/communications/reglages",
+        headers=auth_headers,
+        json={"from_email": "", "from_name": "", "reply_to": "", "profils": []},
+    )
