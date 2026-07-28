@@ -31,7 +31,7 @@ type RenouvellementOverview = {
   bail_date_fin: string;
   bail_loyer_mensuel: number;
   jours_avant_fin: number;
-  fenetre: "imminente" | "a_envoyer" | "envoye" | "hors_fenetre";
+  fenetre: "echu" | "imminente" | "a_envoyer" | "envoye" | "hors_fenetre";
   avis_envoye_le?: string | null;
   nouveau_loyer?: number | null;
   renouvellement_status?: string | null;
@@ -355,6 +355,7 @@ function fmtDateTime(iso: string | null | undefined): string {
 }
 
 const FENETRE_LABELS: Record<RenouvellementOverview["fenetre"], string> = {
+  echu: "Bail échu — corriger la date",
   imminente: "Imminente (< 3 mois)",
   a_envoyer: "À envoyer",
   envoye: "Avis envoyé",
@@ -362,6 +363,7 @@ const FENETRE_LABELS: Record<RenouvellementOverview["fenetre"], string> = {
 };
 
 const FENETRE_TONE: Record<RenouvellementOverview["fenetre"], string> = {
+  echu: "badge-rose",
   imminente: "badge-rose",
   a_envoyer: "badge-amber",
   envoye: "badge-emerald",
@@ -655,7 +657,9 @@ export default function RenouvellementsPage() {
                     className={
                       r.fenetre === "envoye"
                         ? "bg-emerald-500/10 hover:bg-emerald-500/15"
-                        : "hover:bg-brand-950/50"
+                        : r.fenetre === "echu"
+                          ? "bg-rose-500/10 hover:bg-rose-500/15"
+                          : "hover:bg-brand-950/50"
                     }
                   >
                     <td className="px-4 py-2.5">
@@ -711,7 +715,9 @@ export default function RenouvellementsPage() {
                         {r.bail_date_fin}
                       </div>
                       <div className="text-[10px] text-white/40">
-                        dans {r.jours_avant_fin}j
+                        {r.jours_avant_fin < 0
+                          ? `échu depuis ${-r.jours_avant_fin}j`
+                          : `dans ${r.jours_avant_fin}j`}
                       </div>
                     </td>
                     <td className="px-4 py-2.5">

@@ -20,6 +20,10 @@ def test_fenetre_renouvellement_reglable():
     # Fenêtre élargie à 8 mois → 200 j (~6,6 mois) devient « à envoyer ».
     c8 = SuivisConfig(renouvellement_mois_avant=8)
     assert c8.fenetre_renouvellement(200, avis_envoye=False) == "a_envoyer"
+    # Bail ÉCHU sans avis → « echu » (visible, à corriger) ; avec avis
+    # dans le système → reste « envoye ».
+    assert c.fenetre_renouvellement(-10, avis_envoye=False) == "echu"
+    assert c.fenetre_renouvellement(-10, avis_envoye=True) == "envoye"
 
 
 def test_statut_assurance_bascule_janvier():

@@ -62,7 +62,14 @@ class SuivisConfig:
     def fenetre_renouvellement(
         self, jours_avant_fin: int, avis_envoye: bool
     ) -> str:
-        """'envoye' | 'imminente' | 'a_envoyer' | 'hors_fenetre'."""
+        """'echu' | 'envoye' | 'imminente' | 'a_envoyer' | 'hors_fenetre'.
+
+        « Échu » (date de fin passée SANS avis dans le système) prime sur
+        tout : le bail est reconduit tacitement en vrai, mais sa date doit
+        être corrigée dans Kratos — avant, il disparaissait silencieusement
+        de la liste (retour Phil 2026-07-28)."""
+        if jours_avant_fin < 0 and not avis_envoye:
+            return "echu"
         if avis_envoye:
             return "envoye"
         seuil = self.renouvellement_mois_avant * 30
