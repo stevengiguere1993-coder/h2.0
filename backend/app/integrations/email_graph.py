@@ -45,6 +45,10 @@ class GraphMailer:
 
     @property
     def ready(self) -> bool:
+        # STAGING (capture) : toujours prêt — les flux d'envoi se testent
+        # au complet, aucun courriel ne part (voir send()).
+        if settings.mail_capture_only:
+            return True
         return bool(self.tenant and self.client_id and self.client_secret and self.sender)
 
     async def _token(self) -> str:
@@ -85,6 +89,16 @@ class GraphMailer:
         sinon) ; ``from_name`` change seulement le nom affiché — utile pour
         un gestionnaire contractuel (« Kyle — Gestion Horizon ») dont les
         réponses partent vers ``reply_to`` (son adresse externe)."""
+        # STAGING : capture au lieu d'envoyer — le flux appelant voit un
+        # succès (audit, statuts) mais RIEN ne part vers de vraies boîtes.
+        if settings.mail_capture_only:
+            log.info(
+                "[MAIL CAPTURÉ — staging] to=%s subject=%r from=%s reply_to=%s "
+                "attachments=%d",
+                list(to), subject, from_email or self.sender, reply_to,
+                len(attachments or []),
+            )
+            return
         token = await self._token()
         sender = (from_email or "").strip() or self.sender
         display_name = (from_name or "").strip() or settings.mail_from_name

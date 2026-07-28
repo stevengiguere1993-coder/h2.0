@@ -139,6 +139,86 @@ services:
       - key: NEXT_PUBLIC_SEARCH_CONSOLE_VERIFICATION
         value: "df-YUga-WwjKVQGNgHeqbykIibgxiav5Wq4WbetFrMc"
 
+  # ==============================================================
+  # STAGING — dev.immohorizon.com (branche `dev`)
+  # ==============================================================
+  # Environnement de TEST identique à la prod, 0 $/mois :
+  #   - plan free (s'endort après ~15 min, réveil ~50 s au 1er accès)
+  #   - base de données SÉPARÉE (Neon gratuite — jamais la prod !)
+  #   - AUCUN envoi réel : MAIL_CAPTURE_ONLY journalise les courriels ;
+  #     pas de clés QuickBooks/Twilio/Azure → intégrations inertes
+  #   - bandeau « ENVIRONNEMENT DE TEST » dans l'interface
+  # Flux : merge sur `dev` → test sur dev.immohorizon.com → GO → main.
+  # Doc pas-à-pas : docs/STAGING.md
+
+  - type: web
+    name: h2-0-dev
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: backend
+    branch: dev
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+      - key: ENV
+        value: staging
+      # Base Neon GRATUITE (jamais celle de prod) — coller l'URL
+      # postgresql://... de Neon ici (dashboard Render → Environment).
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "60"
+      - key: FRONTEND_ORIGINS
+        value: "https://dev.immohorizon.com,https://h2-0-web-dev.onrender.com"
+      # AUCUN courriel ne part : les envois sont journalisés et
+      # « réussissent » — les flux (signatures, rappels, communications)
+      # se testent au complet sans écrire à de vraies personnes.
+      - key: MAIL_CAPTURE_ONLY
+        value: "true"
+      - key: MAIL_FROM_EMAIL
+        value: "test@immohorizon.com"
+      - key: MAIL_FROM_NAME
+        value: "Horizon (TEST)"
+      # IA gratuite utile en staging (facultatif — coller les mêmes
+      # clés que la prod si on veut tester les features IA).
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      # VOLONTAIREMENT ABSENTS (intégrations réelles neutralisées) :
+      # QUICKBOOKS_*, QBO_*, TWILIO_*, AZURE_*, MONDAY_API_TOKEN.
+
+  - type: web
+    name: h2-0-web-dev
+    runtime: node
+    region: oregon
+    plan: free
+    rootDir: frontend
+    branch: dev
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NEXT_PUBLIC_SITE_URL
+        value: "https://dev.immohorizon.com"
+      - key: NEXT_PUBLIC_API_BASE_URL
+        value: "https://h2-0-dev.onrender.com"
+      - key: NEXT_PUBLIC_DEFAULT_LOCALE
+        value: "fr"
+      # Bandeau permanent en haut de l'écran — impossible de confondre
+      # le test avec la prod.
+      - key: NEXT_PUBLIC_ENV_BADGE
+        value: "Environnement de test"
+
   # --------------------------------------------------------------
   # Cron — daily SEO article generation via Claude API
   # --------------------------------------------------------------

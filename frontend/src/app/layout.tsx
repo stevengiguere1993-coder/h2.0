@@ -72,11 +72,22 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // STAGING (dev.immohorizon.com) : bandeau permanent pour ne jamais
+  // confondre l'environnement de test avec la production. Activé par
+  // NEXT_PUBLIC_ENV_BADGE sur le service Render de dev — absent en prod.
+  const envBadge = process.env.NEXT_PUBLIC_ENV_BADGE;
   return (
     <html
       className={`${inter.variable} ${display.variable} ${fraunces.variable} ${mono.variable}`}
     >
       <body>
+        {envBadge ? (
+          <div className="pointer-events-none fixed inset-x-0 top-0 z-[2000] flex justify-center">
+            <span className="rounded-b-lg bg-amber-500 px-3 py-0.5 text-[11px] font-bold uppercase tracking-wider text-black shadow">
+              {envBadge}
+            </span>
+          </div>
+        ) : null}
         {children}
         <PwaRegister />
       </body>
