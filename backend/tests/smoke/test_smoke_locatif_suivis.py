@@ -212,3 +212,31 @@ def test_bail_au_mois_et_reconduction(client, auth_headers, run):
     fin = ids["fin_annuel"]
     assert d["ancienne_date_fin"] == fin.isoformat()
     assert d["nouvelle_date_fin"] == fin.replace(year=fin.year + 1).isoformat()
+
+
+def test_bootstrap_admin_noop_si_users_existent(run, seeded_users, monkeypatch):
+    """Le bootstrap du premier compte (staging) ne fait RIEN dès qu'un
+    utilisateur existe — poser les variables en prod est sans effet."""
+    from sqlalchemy import func, select
+
+    import app.services.bootstrap_admin as ba
+    from app.core.config import settings
+    from app.models.user import User
+
+    from .conftest import TestSessionLocal
+
+    monkeypatch.setattr(settings, "bootstrap_admin_email", "boot@test.local")
+    monkeypatch.setattr(settings, "bootstrap_admin_password", "x" * 12)
+    # La fonction utilise la session de PROD — on la pointe sur la DB de test.
+    monkeypatch.setattr(
+        "app.db.session.AsyncSessionLocal", TestSessionLocal
+    )
+
+    async def _count():
+        async with TestSessionLocal() as s:
+            return (await s.execute(select(func.count(User.id)))).scalar()
+
+    avant = run(_count())
+    assert avant > 0  # le conftest seed des comptes
+    run(ba.ensure_bootstrap_admin())
+    assert run(_count()) == avant  # aucun compte créé

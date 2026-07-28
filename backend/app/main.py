@@ -58,6 +58,14 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning("ensure_critical_columns failed during startup: %s", exc)
 
+    # STAGING : premier compte owner sur base vide (no-op partout ailleurs).
+    try:
+        from app.services.bootstrap_admin import ensure_bootstrap_admin
+
+        await ensure_bootstrap_admin()
+    except Exception as exc:
+        logger.warning("bootstrap admin failed during startup: %s", exc)
+
     # Tables RACI (Distribution des tâches) — créées dans leur propre
     # transaction pour survivre à un abort d'init_db.
     try:
