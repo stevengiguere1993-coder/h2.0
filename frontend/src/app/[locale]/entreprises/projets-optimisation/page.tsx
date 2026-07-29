@@ -111,13 +111,42 @@ type LocataireDispo = {
   deja_suivi: boolean;
 };
 
-const NEGO_STATUTS: Record<string, { label: string; cls: string }> = {
-  en_place: { label: "En place", cls: "badge badge-neutral" },
-  a_contacter: { label: "À contacter", cls: "badge badge-amber" },
-  en_discussion: { label: "En discussion", cls: "badge badge-sky" },
-  entente: { label: "Entente conclue", cls: "badge badge-emerald" },
-  parti: { label: "Parti", cls: "badge badge-neutral" },
-  reste: { label: "Reste en place", cls: "badge badge-emerald" }
+const NEGO_STATUTS: Record<
+  string,
+  { label: string; court: string; cls: string; dot: string }
+> = {
+  en_place: {
+    label: "En place",
+    court: "En place",
+    cls: "badge badge-neutral",
+    dot: "bg-slate-400"
+  },
+  a_contacter: {
+    label: "À contacter",
+    court: "À contacter",
+    cls: "badge badge-amber",
+    dot: "bg-amber-400"
+  },
+  en_discussion: {
+    label: "En discussion",
+    court: "En discussion",
+    cls: "badge badge-sky",
+    dot: "bg-sky-400"
+  },
+  entente: {
+    label: "Entente conclue",
+    court: "Entente",
+    cls: "badge badge-emerald",
+    dot: "bg-emerald-400"
+  },
+  // Rouge : le locataire reste au même loyer — l'optimisation n'a pas
+  // eu lieu sur ce logement (retour Phil).
+  reste: {
+    label: "Reste en place (statu quo)",
+    court: "Statu quo",
+    cls: "badge badge-rose",
+    dot: "bg-rose-400"
+  }
 };
 
 const TYPES_ENTENTE: Record<string, string> = {
@@ -1630,9 +1659,13 @@ const KANBAN_COLS = [
   "a_contacter",
   "en_discussion",
   "entente",
-  "reste",
-  "parti"
+  "reste"
 ];
+
+/** Colonne d'accueil d'une négo (statut legacy → première colonne). */
+function colonneDe(statut: string): string {
+  return KANBAN_COLS.includes(statut) ? statut : "en_place";
+}
 
 function NegosSection({
   projet,
@@ -1752,10 +1785,13 @@ function NegosSection({
           locataires en place à suivre.
         </p>
       ) : view === "kanban" ? (
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+        <div className="-mx-1 mt-3 flex gap-3 overflow-x-auto px-1 pb-2">
           {KANBAN_COLS.map((col) => {
             const st = NEGO_STATUTS[col];
-            const cards = projet.negos.filter((n) => n.statut === col);
+            const cards = projet.negos.filter(
+              (n) => colonneDe(n.statut) === col
+            );
+            const isHover = dragOverCol === col;
             return (
               <div
                 key={col}
@@ -1775,24 +1811,47 @@ function NegosSection({
                   setDragId(null);
                   setDragOverCol(null);
                 }}
-                className={`min-h-[120px] w-44 flex-shrink-0 rounded-lg border p-2 transition ${
-                  dragOverCol === col ? "border-accent-500" : ""
+                className={`flex w-[248px] flex-shrink-0 flex-col rounded-2xl border transition ${
+                  isHover ? "border-accent-500 ring-2 ring-accent-500/20" : ""
                 }`}
                 style={{
-                  borderColor:
-                    dragOverCol === col ? undefined : "var(--qg-border-soft)"
+                  borderColor: isHover ? undefined : "var(--qg-border)",
+                  backgroundColor: "var(--qg-bg-alt)"
                 }}
               >
-                <div className="mb-1.5 flex items-center justify-between gap-1">
-                  <span className={st.cls}>{st.label}</span>
+                <div
+                  className="flex items-center justify-between gap-2 border-b px-3 py-2.5"
+                  style={{ borderColor: "var(--qg-border)" }}
+                >
+                  <h4
+                    className="inline-flex min-w-0 items-center gap-2 text-[11px] font-semibold uppercase tracking-wider"
+                    style={{ color: "var(--qg-text)" }}
+                  >
+                    <span
+                      className={`h-2 w-2 flex-shrink-0 rounded-full ${st.dot}`}
+                    />
+                    <span className="truncate">{st.court}</span>
+                  </h4>
                   <span
-                    className="text-[10px] tabular-nums"
-                    style={{ color: "var(--qg-text-muted)" }}
+                    className="flex-shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold tabular-nums"
+                    style={{
+                      backgroundColor: "var(--qg-card-bg)",
+                      color: "var(--qg-text-muted)"
+                    }}
                   >
                     {cards.length}
                   </span>
                 </div>
-                <div className="space-y-1.5">
+
+                <div className="flex min-h-[96px] flex-col gap-2 p-2">
+                  {cards.length === 0 ? (
+                    <p
+                      className="px-1 py-4 text-center text-[11px]"
+                      style={{ color: "var(--qg-text-faint)" }}
+                    >
+                      Glisse une carte ici
+                    </p>
+                  ) : null}
                   {cards.map((n) => (
                     <button
                       key={n.id}
@@ -1804,37 +1863,65 @@ function NegosSection({
                         setDragOverCol(null);
                       }}
                       onClick={() => setModalNegoId(n.id)}
-                      className="block w-full cursor-grab rounded-lg border p-2 text-left transition hover:border-accent-500 active:cursor-grabbing"
-                      style={{ borderColor: "var(--qg-border)" }}
+                      className={`group block w-full cursor-grab rounded-xl border p-2.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-accent-500 hover:shadow-md active:cursor-grabbing ${
+                        dragId === n.id ? "opacity-40" : ""
+                      }`}
+                      style={{
+                        borderColor: "var(--qg-border)",
+                        backgroundColor: "var(--qg-bg)"
+                      }}
                     >
                       <span
-                        className="block truncate text-[12px] font-medium"
+                        className="block truncate text-[13px] font-semibold"
                         style={{ color: "var(--qg-text)" }}
                       >
                         {n.nom_locataire}
                       </span>
-                      <span
-                        className="mt-0.5 block text-[10px]"
-                        style={{ color: "var(--qg-text-muted)" }}
-                      >
-                        {n.logement_label ? `${n.logement_label} · ` : ""}
-                        {n.loyer_actuel
-                          ? `${fmtMoney(n.loyer_actuel)}/mois`
-                          : ""}
-                      </span>
-                      {n.type_entente && TYPES_ENTENTE[n.type_entente] ? (
+                      {n.logement_label || n.loyer_actuel ? (
                         <span
-                          className="mt-0.5 block text-[10px]"
+                          className="mt-1 flex items-center gap-1.5 text-[11px]"
                           style={{ color: "var(--qg-text-muted)" }}
                         >
-                          {TYPES_ENTENTE[n.type_entente]}
-                          {n.montant_entente
-                            ? ` · ${fmtMoney(n.montant_entente)}`
-                            : ""}
+                          {n.logement_label ? (
+                            <span className="inline-flex items-center gap-1">
+                              <Building2 className="h-3 w-3" />
+                              {n.logement_label}
+                            </span>
+                          ) : null}
+                          {n.loyer_actuel ? (
+                            <span className="tabular-nums">
+                              {fmtMoney(n.loyer_actuel)}/mois
+                            </span>
+                          ) : null}
                         </span>
-                      ) : n.montant_entente ? (
-                        <span className="mt-0.5 block text-[10px] text-amber-300">
-                          {fmtMoney(n.montant_entente)}
+                      ) : null}
+                      {n.type_entente || n.montant_entente || n.date_cible ? (
+                        <span className="mt-2 flex flex-wrap items-center gap-1">
+                          {n.type_entente && TYPES_ENTENTE[n.type_entente] ? (
+                            <span
+                              className="rounded-md px-1.5 py-0.5 text-[10px] font-medium"
+                              style={{
+                                backgroundColor: "var(--qg-bg-alt)",
+                                color: "var(--qg-text-muted)"
+                              }}
+                            >
+                              {TYPES_ENTENTE[n.type_entente]}
+                            </span>
+                          ) : null}
+                          {n.montant_entente ? (
+                            <span className="rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-amber-500">
+                              {fmtMoney(n.montant_entente)}
+                            </span>
+                          ) : null}
+                          {n.date_cible ? (
+                            <span
+                              className="inline-flex items-center gap-0.5 text-[10px] tabular-nums"
+                              style={{ color: "var(--qg-text-faint)" }}
+                            >
+                              <Calendar className="h-2.5 w-2.5" />
+                              {n.date_cible}
+                            </span>
+                          ) : null}
                         </span>
                       ) : null}
                     </button>

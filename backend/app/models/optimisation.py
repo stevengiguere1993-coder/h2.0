@@ -128,8 +128,8 @@ class OptimisationNego(Base, TimestampUpdateMixin):
         Numeric(10, 2), nullable=True
     )
 
-    #: en_place | a_contacter | en_discussion | entente | depart_prevu |
-    #: parti | reste
+    #: en_place | a_contacter | en_discussion | entente | reste
+    #: (« reste » = statu quo, l'optimisation n'a pas eu lieu)
     statut: Mapped[str] = mapped_column(
         String(24), nullable=False,
         default="en_place", server_default="en_place",
