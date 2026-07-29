@@ -48,9 +48,10 @@ from app.models.optimisation import (
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/optimisation", tags=["optimisation"])
 
+#: « parti » et « depart_prevu » retirés (retours Phil) — la sortie du
+#: locataire se lit dans « Entente conclue » + le type d'entente.
 _NEGO_STATUTS = (
-    "en_place", "a_contacter", "en_discussion", "entente",
-    "parti", "reste",
+    "en_place", "a_contacter", "en_discussion", "entente", "reste",
 )
 
 _TYPES_ENTENTE = ("cash_for_raise", "cash_for_keys", "renovation", "autre")
