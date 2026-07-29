@@ -5,13 +5,13 @@ import {
   Building2,
   Calendar,
   Loader2,
-  Pencil,
   Plus,
   RefreshCw,
   Settings2,
   Target,
   Trash2,
   TrendingUp,
+  UserPlus,
   Users
 } from "lucide-react";
 
@@ -21,9 +21,10 @@ import { QGTopbar, useEntreprisesLayout } from "../layout";
 
 /**
  * Projets - Optimisation : un projet = une INC + un immeuble.
- * 1) Budget par enveloppe vs dépensé réel QuickBooks (lecture seule)
- * 2) Objectifs initiaux vs réels de la Gestion locative
- * 3) Négociations avec les locataires en place (statuts + timeline)
+ * 1) Budget : catégories du plan comptable QuickBooks cochées dans ⚙,
+ *    budget manuel, dépensé lu de QBO, écart vert/rouge.
+ * 2) Objectifs vs réel locatif (+ progression mensuelle des revenus).
+ * 3) Négociations locataires (import sélectif, type d'entente, timeline).
  */
 
 type BudgetLigne = {
@@ -43,6 +44,7 @@ type Nego = {
   logement_label: string | null;
   loyer_actuel: number | null;
   statut: string;
+  type_entente: string | null;
   entente: string | null;
   montant_entente: number | null;
   date_cible: string | null;
@@ -79,6 +81,8 @@ type Projet = {
   immeuble_nom: string;
   revenus_actuels_mensuels: number;
   depenses_actuelles_mensuelles: number;
+  nb_logements: number;
+  revenus_historique: { mois: string; montant: number }[];
   budget_lignes: BudgetLigne[];
   negos: Nego[];
 };
@@ -90,9 +94,21 @@ type QboCompte = {
   fully_qualified_name: string;
   account_type: string;
 };
-type ObjectifLibre = { label: string; cible: number; actuel: number };
+type ObjectifLibre = {
+  label: string;
+  cible: number;
+  actuel: number;
+  unite?: string;
+};
+type LocataireDispo = {
+  locataire_id: number;
+  nom: string;
+  logement: string | null;
+  loyer: number | null;
+  deja_suivi: boolean;
+};
 
-const QBO_SCOPES = [
+const QBO_SCOPES_FIXES = [
   { value: "immobilier", label: "QuickBooks — Gestion locative" },
   { value: "entreprise", label: "QuickBooks — Gestion d'entreprise" },
   { value: "construction", label: "QuickBooks — Construction" }
@@ -103,9 +119,15 @@ const NEGO_STATUTS: Record<string, { label: string; cls: string }> = {
   a_contacter: { label: "À contacter", cls: "badge badge-amber" },
   en_discussion: { label: "En discussion", cls: "badge badge-sky" },
   entente: { label: "Entente conclue", cls: "badge badge-emerald" },
-  depart_prevu: { label: "Départ prévu", cls: "badge badge-violet" },
   parti: { label: "Parti", cls: "badge badge-neutral" },
-  reste: { label: "Reste (statu quo)", cls: "badge badge-emerald" }
+  reste: { label: "Reste en place", cls: "badge badge-emerald" }
+};
+
+const TYPES_ENTENTE: Record<string, string> = {
+  cash_for_raise: "Cash for raise",
+  cash_for_keys: "Cash for keys",
+  renovation: "Rénovation",
+  autre: "Autre"
 };
 
 function fmtMoney(v: number | null | undefined): string {
@@ -115,6 +137,11 @@ function fmtMoney(v: number | null | undefined): string {
     currency: "CAD",
     maximumFractionDigits: 0
   }).format(v);
+}
+
+function fmtVal(v: number, unite?: string): string {
+  if (!unite || unite === "$") return fmtMoney(v);
+  return `${new Intl.NumberFormat("fr-CA").format(v)} ${unite}`;
 }
 
 function parseAccounts(json: string | null): { id: string; name: string }[] {
@@ -160,27 +187,31 @@ export default function ProjetsOptimisationPage() {
 
   const [immeubles, setImmeubles] = useState<ImmeubleMini[]>([]);
 
-  // Dépenses QBO par ligne + erreur éventuelle.
   const [qboDep, setQboDep] = useState<Record<number, number>>({});
   const [qboErr, setQboErr] = useState<string | null>(null);
   const [qboLoading, setQboLoading] = useState(false);
 
-  const loadList = useCallback(async (keepSel = false) => {
+  const loadList = useCallback(async () => {
     try {
       const r = await authedFetch("/api/v1/optimisation/projets");
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const rows = (await r.json()) as ProjetLite[];
-      setProjets(rows);
-      setSelId((cur) => {
-        if (keepSel && cur && rows.some((x) => x.id === cur)) return cur;
-        return rows.find((x) => x.status === "actif")?.id ?? rows[0]?.id ?? null;
-      });
+      setProjets((await r.json()) as ProjetLite[]);
     } catch (e) {
       setError(`Chargement échoué : ${(e as Error).message}`);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  // Sélection automatique du premier projet actif à l'arrivée — pas
+  // besoin de cliquer une tuile pour voir les détails.
+  useEffect(() => {
+    if (selId === null && projets.length > 0) {
+      setSelId(
+        projets.find((x) => x.status === "actif")?.id ?? projets[0].id
+      );
+    }
+  }, [projets, selId]);
 
   const loadDetail = useCallback(async (id: number) => {
     setLoadingDetail(true);
@@ -288,7 +319,7 @@ export default function ProjetsOptimisationPage() {
       );
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setDetail((await r.json()) as Projet);
-      void loadList(true);
+      void loadList();
     } catch (e) {
       setError(`Sauvegarde échouée : ${(e as Error).message}`);
     }
@@ -311,14 +342,10 @@ export default function ProjetsOptimisationPage() {
     if (r.ok || r.status === 204) {
       setDetail(null);
       setSelId(null);
+      setProjets((xs) => xs.filter((x) => x.id !== detail.id));
       await loadList();
     }
   }
-
-  const sel = useMemo(
-    () => projets.find((p) => p.id === selId) || null,
-    [projets, selId]
-  );
 
   return (
     <>
@@ -430,18 +457,21 @@ export default function ProjetsOptimisationPage() {
                   onPatch={patchProjet}
                   onDelete={deleteProjet}
                 />
-                <BudgetSection
-                  projet={detail}
-                  qboDep={qboDep}
-                  qboErr={qboErr}
-                  qboLoading={qboLoading}
-                  onRefreshQbo={() => void loadQbo(detail.id)}
-                  onChanged={() => {
-                    void loadDetail(detail.id);
-                    void loadQbo(detail.id);
-                  }}
-                />
-                <ObjectifsSection projet={detail} onPatch={patchProjet} />
+                <div className="grid min-w-0 grid-cols-1 items-start gap-5 xl:grid-cols-2">
+                  <BudgetSection
+                    projet={detail}
+                    qboDep={qboDep}
+                    qboErr={qboErr}
+                    qboLoading={qboLoading}
+                    onRefreshQbo={() => void loadQbo(detail.id)}
+                    onPatchProjet={patchProjet}
+                    onChanged={() => {
+                      void loadDetail(detail.id);
+                      void loadQbo(detail.id);
+                    }}
+                  />
+                  <ObjectifsSection projet={detail} onPatch={patchProjet} />
+                </div>
                 <NegosSection
                   projet={detail}
                   onChanged={() => void loadDetail(detail.id)}
@@ -576,7 +606,7 @@ export default function ProjetsOptimisationPage() {
   );
 }
 
-// ─── En-tête projet + réglages ─────────────────────────────────
+// ─── En-tête projet + réglages (engrenage discret) ─────────────
 
 function ProjetHeader({
   projet,
@@ -630,21 +660,19 @@ function ProjetHeader({
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            className="btn-outline-accent btn-sm"
-          >
-            <Settings2 className="h-3.5 w-3.5" />
-            Réglages
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="btn-ghost flex h-7 w-7 items-center justify-center rounded-lg p-0"
+          title="Réglages du projet"
+        >
+          <Settings2 className="h-4 w-4" />
+        </button>
       </div>
 
       {open ? (
         <div
-          className="mt-3 grid grid-cols-1 gap-3 rounded-lg border p-3 sm:grid-cols-2 xl:grid-cols-4"
+          className="mt-3 grid grid-cols-1 gap-3 rounded-lg border p-3 sm:grid-cols-3"
           style={{ borderColor: "var(--qg-border-soft)" }}
         >
           <div>
@@ -680,8 +708,7 @@ function ProjetHeader({
               <option value="termine">Terminé</option>
             </select>
           </div>
-          <QboScopeField projet={projet} onPatch={onPatch} />
-          <div className="sm:col-span-2 xl:col-span-3">
+          <div className="sm:col-span-2">
             <label className="label text-[10px] uppercase">Notes</label>
             <textarea
               className="input min-h-[60px]"
@@ -705,111 +732,7 @@ function ProjetHeader({
   );
 }
 
-// ─── Choix + statut de la connexion QuickBooks du projet ───────
-
-function QboScopeField({
-  projet,
-  onPatch
-}: {
-  projet: Projet;
-  onPatch: (p: Record<string, unknown>) => Promise<void>;
-}) {
-  const incScope = `inc:${projet.entreprise_id}`;
-  const scope = projet.qbo_scope || "";
-  const [status, setStatus] = useState<{
-    connected: boolean;
-    company_name: string | null;
-  } | null>(null);
-  const [connecting, setConnecting] = useState(false);
-
-  useEffect(() => {
-    setStatus(null);
-    if (!scope) return;
-    let dead = false;
-    void (async () => {
-      try {
-        const r = await authedFetch(
-          `/api/v1/qbo/status?scope=${encodeURIComponent(scope)}`
-        );
-        if (!r.ok) return;
-        const d = (await r.json()) as {
-          connected: boolean;
-          company_name: string | null;
-        };
-        if (!dead) setStatus(d);
-      } catch {
-        /* le statut restera inconnu */
-      }
-    })();
-    return () => {
-      dead = true;
-    };
-  }, [scope]);
-
-  async function connecter() {
-    setConnecting(true);
-    try {
-      const r = await authedFetch(
-        `/api/v1/qbo/connect?scope=${encodeURIComponent(scope)}`
-      );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const d = (await r.json()) as { auth_url: string };
-      // Intuit demande quelle compagnie autoriser → choisir le fichier
-      // QuickBooks de CETTE INC. Le retour ramène sur cette page.
-      window.location.assign(d.auth_url);
-    } catch {
-      setConnecting(false);
-    }
-  }
-
-  return (
-    <div>
-      <label className="label text-[10px] uppercase">
-        Connexion QuickBooks
-      </label>
-      <select
-        className="input"
-        value={scope}
-        onChange={(e) => void onPatch({ qbo_scope: e.target.value || null })}
-      >
-        <option value="">— aucune —</option>
-        <option value={incScope}>
-          QuickBooks de {projet.entreprise_nom} (propre à l&apos;INC)
-        </option>
-        {QBO_SCOPES.map((s) => (
-          <option key={s.value} value={s.value}>
-            {s.label}
-          </option>
-        ))}
-      </select>
-      {scope && status ? (
-        status.connected ? (
-          <p className="mt-1 text-[11px] text-emerald-400">
-            ✓ Connecté{status.company_name ? ` — ${status.company_name}` : ""}
-          </p>
-        ) : (
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <span className="text-[11px] text-amber-300">Non connecté.</span>
-            <button
-              type="button"
-              onClick={() => void connecter()}
-              disabled={connecting}
-              className="btn-outline-accent btn-sm disabled:opacity-50"
-              title="Ouvre Intuit : choisis le fichier QuickBooks de cette compagnie et autorise Kratos (lecture)."
-            >
-              {connecting ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : null}
-              Connecter ce QuickBooks
-            </button>
-          </div>
-        )
-      ) : null}
-    </div>
-  );
-}
-
-// ─── Section 1 : Budget vs QuickBooks ──────────────────────────
+// ─── Section 1 : Budget (catégories QBO cochées) ───────────────
 
 function BudgetSection({
   projet,
@@ -817,6 +740,7 @@ function BudgetSection({
   qboErr,
   qboLoading,
   onRefreshQbo,
+  onPatchProjet,
   onChanged
 }: {
   projet: Projet;
@@ -824,41 +748,10 @@ function BudgetSection({
   qboErr: string | null;
   qboLoading: boolean;
   onRefreshQbo: () => void;
+  onPatchProjet: (p: Record<string, unknown>) => Promise<void>;
   onChanged: () => void;
 }) {
-  const confirm = useConfirm();
-  const [adding, setAdding] = useState(false);
-  const [nNom, setNNom] = useState("");
-  const [nMontant, setNMontant] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  // Mapping des comptes QBO d'une ligne.
-  const [mapLigne, setMapLigne] = useState<BudgetLigne | null>(null);
-
-  async function addLigne(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!nNom.trim()) return;
-    setSaving(true);
-    try {
-      const r = await authedFetch(
-        `/api/v1/optimisation/projets/${projet.id}/budget-lignes`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            nom: nNom.trim(),
-            budget_montant: Number(nMontant) || 0
-          })
-        }
-      );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setNNom("");
-      setNMontant("");
-      setAdding(false);
-      onChanged();
-    } finally {
-      setSaving(false);
-    }
-  }
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   async function patchLigne(id: number, patch: Record<string, unknown>) {
     const r = await authedFetch(`/api/v1/optimisation/budget-lignes/${id}`, {
@@ -866,21 +759,6 @@ function BudgetSection({
       body: JSON.stringify(patch)
     });
     if (r.ok) onChanged();
-  }
-
-  async function deleteLigne(l: BudgetLigne) {
-    const ok = await confirm({
-      title: `Supprimer l'enveloppe « ${l.nom} » ?`,
-      description: "Le budget et son mapping QuickBooks seront retirés.",
-      confirmLabel: "Supprimer",
-      destructive: true
-    });
-    if (!ok) return;
-    const r = await authedFetch(
-      `/api/v1/optimisation/budget-lignes/${l.id}`,
-      { method: "DELETE" }
-    );
-    if (r.ok || r.status === 204) onChanged();
   }
 
   const totalBudget = projet.budget_lignes.reduce(
@@ -894,41 +772,40 @@ function BudgetSection({
 
   return (
     <section
-      className="rounded-xl border p-4"
+      className="min-w-0 rounded-xl border p-4"
       style={{
         borderColor: "var(--qg-border)",
         backgroundColor: "var(--qg-card-bg)"
       }}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2">
         <h3
           className="text-sm font-semibold"
           style={{ color: "var(--qg-text)" }}
         >
           Budget &amp; dépensé (QuickBooks)
         </h3>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={onRefreshQbo}
             disabled={qboLoading}
-            className="btn-outline-accent btn-sm disabled:opacity-50"
-            title="Relit les dépenses réelles dans QuickBooks (lecture seule)"
+            className="btn-ghost flex h-7 w-7 items-center justify-center rounded-lg p-0 disabled:opacity-50"
+            title="Rafraîchir le dépensé depuis QuickBooks (lecture seule)"
           >
             {qboLoading ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
               <RefreshCw className="h-3.5 w-3.5" />
             )}
-            Actualiser QuickBooks
           </button>
           <button
             type="button"
-            onClick={() => setAdding((v) => !v)}
-            className="btn-secondary btn-sm"
+            onClick={() => setSettingsOpen(true)}
+            className="btn-ghost flex h-7 w-7 items-center justify-center rounded-lg p-0"
+            title="Connexion QuickBooks + choix des catégories du plan comptable"
           >
-            <Plus className="h-3.5 w-3.5" />
-            Enveloppe
+            <Settings2 className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -939,64 +816,25 @@ function BudgetSection({
         </p>
       ) : null}
 
-      {adding ? (
-        <form
-          onSubmit={addLigne}
-          className="mt-3 flex flex-wrap items-end gap-2"
-        >
-          <div className="min-w-[180px] flex-1">
-            <label className="label text-[10px] uppercase">Enveloppe</label>
-            <input
-              className="input"
-              value={nNom}
-              onChange={(e) => setNNom(e.target.value)}
-              placeholder="ex. Frais professionnels"
-              autoFocus
-            />
-          </div>
-          <div className="w-36">
-            <label className="label text-[10px] uppercase">Budget ($)</label>
-            <input
-              className="input"
-              type="number"
-              step="0.01"
-              value={nMontant}
-              onChange={(e) => setNMontant(e.target.value)}
-              placeholder="25000"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={saving || !nNom.trim()}
-            className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
-          >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Ajouter
-          </button>
-        </form>
-      ) : null}
-
       {projet.budget_lignes.length === 0 ? (
         <p className="mt-3 text-xs" style={{ color: "var(--qg-text-muted)" }}>
-          Pose tes enveloppes de départ (Frais professionnels, Travaux,
-          Négociation…), puis mappe chacune aux comptes correspondants de
-          ton plan comptable QuickBooks — le dépensé réel se met à jour
-          tout seul.
+          Clique sur <Settings2 className="inline h-3 w-3" /> pour connecter
+          le QuickBooks de l&apos;INC et cocher les catégories du plan
+          comptable à suivre — chacune devient une enveloppe : budget saisi
+          ici, dépensé lu de QuickBooks, écart calculé.
         </p>
       ) : (
         <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
+          <table className="w-full min-w-[430px] text-sm">
             <thead>
               <tr
                 className="text-left text-[10px] uppercase tracking-wider"
                 style={{ color: "var(--qg-text-muted)" }}
               >
-                <th className="pb-2 pr-2">Enveloppe</th>
+                <th className="pb-2 pr-2">Catégorie</th>
                 <th className="pb-2 pr-2">Budget</th>
-                <th className="pb-2 pr-2">Dépensé (QBO)</th>
-                <th className="pb-2 pr-2">Reste</th>
-                <th className="pb-2 pr-2 w-[26%]">Avancement</th>
-                <th className="pb-2" />
+                <th className="pb-2 pr-2">Dépensé</th>
+                <th className="pb-2 text-right">Écart</th>
               </tr>
             </thead>
             <tbody>
@@ -1004,43 +842,26 @@ function BudgetSection({
                 const dep = qboDep[l.id] ?? null;
                 const budget = Number(l.budget_montant) || 0;
                 const reste = dep === null ? null : budget - dep;
-                const pct =
-                  budget > 0 && dep !== null
-                    ? Math.min(100, Math.round((dep / budget) * 100))
-                    : 0;
                 const over = reste !== null && reste < 0;
-                const comptes = parseAccounts(l.qbo_accounts_json);
                 return (
                   <tr
                     key={l.id}
                     className="border-t"
                     style={{ borderColor: "var(--qg-border-soft)" }}
                   >
-                    <td className="py-2 pr-2">
-                      <span
-                        className="font-medium"
-                        style={{ color: "var(--qg-text)" }}
-                      >
-                        {l.nom}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setMapLigne(l)}
-                        className="ml-2 inline-flex items-center gap-1 text-[10px] text-accent-500 hover:underline"
-                        title="Choisir les comptes QuickBooks comptés dans cette enveloppe"
-                      >
-                        <Pencil className="h-2.5 w-2.5" />
-                        {comptes.length > 0
-                          ? `${comptes.length} compte${comptes.length > 1 ? "s" : ""} QBO`
-                          : "Mapper QBO"}
-                      </button>
+                    <td
+                      className="py-2 pr-2 font-medium"
+                      style={{ color: "var(--qg-text)" }}
+                    >
+                      {l.nom}
                     </td>
                     <td className="py-2 pr-2">
                       <input
-                        className="input h-8 w-28 text-[13px]"
+                        className="input h-8 w-24 text-[13px]"
                         type="number"
                         step="0.01"
-                        defaultValue={budget}
+                        defaultValue={budget || ""}
+                        placeholder="0"
                         onBlur={(e) => {
                           const v = Number(e.target.value) || 0;
                           if (v !== budget)
@@ -1055,38 +876,15 @@ function BudgetSection({
                       {dep === null ? "—" : fmtMoney(dep)}
                     </td>
                     <td
-                      className={`py-2 pr-2 font-semibold tabular-nums ${
-                        over ? "text-rose-400" : "text-emerald-400"
+                      className={`py-2 text-right font-semibold tabular-nums ${
+                        reste === null
+                          ? ""
+                          : over
+                            ? "text-rose-400"
+                            : "text-emerald-400"
                       }`}
                     >
                       {reste === null ? "—" : fmtMoney(reste)}
-                    </td>
-                    <td className="py-2 pr-2">
-                      <div
-                        className="h-2 w-full overflow-hidden rounded-full"
-                        style={{ backgroundColor: "var(--qg-border-soft)" }}
-                      >
-                        <div
-                          className={`h-full rounded-full ${
-                            over
-                              ? "bg-rose-500"
-                              : pct >= 85
-                                ? "bg-amber-500"
-                                : "bg-emerald-500"
-                          }`}
-                          style={{ width: `${over ? 100 : pct}%` }}
-                        />
-                      </div>
-                    </td>
-                    <td className="py-2 text-right">
-                      <button
-                        type="button"
-                        onClick={() => void deleteLigne(l)}
-                        className="text-rose-400/70 hover:text-rose-400"
-                        title="Supprimer l'enveloppe"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
                     </td>
                   </tr>
                 );
@@ -1111,7 +909,7 @@ function BudgetSection({
                   {fmtMoney(totalDepense)}
                 </td>
                 <td
-                  className={`py-2 pr-2 tabular-nums ${
+                  className={`py-2 text-right tabular-nums ${
                     totalBudget - totalDepense < 0
                       ? "text-rose-400"
                       : "text-emerald-400"
@@ -1119,97 +917,190 @@ function BudgetSection({
                 >
                   {fmtMoney(totalBudget - totalDepense)}
                 </td>
-                <td colSpan={2} />
               </tr>
             </tbody>
           </table>
         </div>
       )}
 
-      {mapLigne ? (
-        <MapComptesModal
+      {settingsOpen ? (
+        <BudgetSettingsModal
           projet={projet}
-          ligne={mapLigne}
-          onClose={() => setMapLigne(null)}
-          onSaved={() => {
-            setMapLigne(null);
-            onChanged();
-          }}
+          onPatchProjet={onPatchProjet}
+          onClose={() => setSettingsOpen(false)}
+          onChanged={onChanged}
         />
       ) : null}
     </section>
   );
 }
 
-// ─── Modal mapping comptes QBO ─────────────────────────────────
+// ─── Modal réglages budget : connexion QBO + catégories ────────
 
-function MapComptesModal({
+function BudgetSettingsModal({
   projet,
-  ligne,
+  onPatchProjet,
   onClose,
-  onSaved
+  onChanged
 }: {
   projet: Projet;
-  ligne: BudgetLigne;
+  onPatchProjet: (p: Record<string, unknown>) => Promise<void>;
   onClose: () => void;
-  onSaved: () => void;
+  onChanged: () => void;
 }) {
+  const confirm = useConfirm();
+  const incScope = `inc:${projet.entreprise_id}`;
+  const scope = projet.qbo_scope || "";
+
+  const [status, setStatus] = useState<{
+    connected: boolean;
+    company_name: string | null;
+  } | null>(null);
+  const [connecting, setConnecting] = useState(false);
+
   const [comptes, setComptes] = useState<QboCompte[]>([]);
-  const [err, setErr] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [comptesErr, setComptesErr] = useState<string | null>(null);
+  const [comptesLoading, setComptesLoading] = useState(false);
   const [filter, setFilter] = useState("");
-  const [sel, setSel] = useState<Map<string, string>>(
-    () =>
-      new Map(parseAccounts(ligne.qbo_accounts_json).map((a) => [a.id, a.name]))
-  );
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    void (async () => {
-      if (!projet.qbo_scope) {
-        setErr(
-          "Choisis d'abord la connexion QuickBooks du projet (Réglages)."
-        );
-        setLoading(false);
-        return;
+  // Comptes déjà suivis (une ligne budget = un compte).
+  const lignesParCompte = useMemo(() => {
+    const m = new Map<string, BudgetLigne>();
+    for (const l of projet.budget_lignes) {
+      for (const a of parseAccounts(l.qbo_accounts_json)) {
+        m.set(a.id, l);
       }
+    }
+    return m;
+  }, [projet.budget_lignes]);
+  const [sel, setSel] = useState<Map<string, string>>(
+    () =>
+      new Map(
+        Array.from(lignesParCompte.entries()).map(([id, l]) => [id, l.nom])
+      )
+  );
+
+  // Statut de la connexion choisie.
+  useEffect(() => {
+    setStatus(null);
+    if (!scope) return;
+    let dead = false;
+    void (async () => {
       try {
         const r = await authedFetch(
-          `/api/v1/optimisation/qbo-comptes?scope=${encodeURIComponent(projet.qbo_scope)}`
+          `/api/v1/qbo/status?scope=${encodeURIComponent(scope)}`
+        );
+        if (!r.ok) return;
+        const d = (await r.json()) as {
+          connected: boolean;
+          company_name: string | null;
+        };
+        if (!dead) setStatus(d);
+      } catch {
+        /* statut inconnu */
+      }
+    })();
+    return () => {
+      dead = true;
+    };
+  }, [scope]);
+
+  // Plan comptable dès que connecté.
+  useEffect(() => {
+    setComptes([]);
+    setComptesErr(null);
+    if (!scope || !status?.connected) return;
+    let dead = false;
+    setComptesLoading(true);
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/optimisation/qbo-comptes?scope=${encodeURIComponent(scope)}`
         );
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const d = (await r.json()) as {
           comptes: QboCompte[];
           erreur: string | null;
         };
-        if (d.erreur) setErr(d.erreur);
+        if (dead) return;
+        if (d.erreur) setComptesErr(d.erreur);
         setComptes(d.comptes || []);
       } catch (e) {
-        setErr(`Plan comptable illisible : ${(e as Error).message}`);
+        if (!dead)
+          setComptesErr(`Plan comptable illisible : ${(e as Error).message}`);
       } finally {
-        setLoading(false);
+        if (!dead) setComptesLoading(false);
       }
     })();
-  }, [projet.qbo_scope]);
+    return () => {
+      dead = true;
+    };
+  }, [scope, status?.connected]);
+
+  async function connecter() {
+    if (!scope) return;
+    setConnecting(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/qbo/connect?scope=${encodeURIComponent(scope)}`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as { auth_url: string };
+      window.location.assign(d.auth_url);
+    } catch {
+      setConnecting(false);
+    }
+  }
 
   async function save() {
     setSaving(true);
     try {
-      const arr = Array.from(sel.entries()).map(([id, name]) => ({
-        id,
-        name
-      }));
-      const r = await authedFetch(
-        `/api/v1/optimisation/budget-lignes/${ligne.id}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ qbo_accounts_json: JSON.stringify(arr) })
-        }
+      // Nouvelles catégories cochées → une enveloppe chacune.
+      const aCreer = Array.from(sel.entries()).filter(
+        ([id]) => !lignesParCompte.has(id)
       );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      onSaved();
-    } catch (e) {
-      setErr(`Sauvegarde échouée : ${(e as Error).message}`);
+      // Catégories décochées → suppression de leur enveloppe.
+      const aSupprimer = Array.from(lignesParCompte.entries()).filter(
+        ([id]) => !sel.has(id)
+      );
+      if (aSupprimer.length > 0) {
+        const ok = await confirm({
+          title: `Retirer ${aSupprimer.length} catégorie${
+            aSupprimer.length > 1 ? "s" : ""
+          } ?`,
+          description:
+            "Les budgets saisis sur ces enveloppes seront perdus. (Rien n'est touché dans QuickBooks.)",
+          confirmLabel: "Retirer",
+          destructive: true
+        });
+        if (!ok) {
+          setSaving(false);
+          return;
+        }
+      }
+      for (const [id, name] of aCreer) {
+        await authedFetch(
+          `/api/v1/optimisation/projets/${projet.id}/budget-lignes`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              nom: name,
+              budget_montant: 0,
+              qbo_accounts_json: JSON.stringify([{ id, name }])
+            })
+          }
+        );
+      }
+      const idsSupprimes = new Set(aSupprimer.map(([, l]) => l.id));
+      for (const lid of idsSupprimes) {
+        await authedFetch(`/api/v1/optimisation/budget-lignes/${lid}`, {
+          method: "DELETE"
+        });
+      }
+      onChanged();
+      onClose();
+    } finally {
       setSaving(false);
     }
   }
@@ -1225,7 +1116,7 @@ function MapComptesModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[80vh] w-full max-w-lg flex-col rounded-2xl border p-4"
+        className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-2xl border p-4"
         style={{
           borderColor: "var(--qg-border)",
           backgroundColor: "var(--qg-card-bg)"
@@ -1235,76 +1126,133 @@ function MapComptesModal({
           className="text-sm font-semibold"
           style={{ color: "var(--qg-text)" }}
         >
-          Comptes QuickBooks — « {ligne.nom} »
+          Réglages QuickBooks du budget
         </h3>
-        <p className="mt-1 text-[11px]" style={{ color: "var(--qg-text-muted)" }}>
-          Coche les comptes du plan comptable dont les dépenses comptent
-          dans cette enveloppe.
-        </p>
-        {err ? (
-          <p className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-            {err}
+
+        <label className="label mt-3 text-[10px] uppercase">
+          Connexion QuickBooks
+        </label>
+        <select
+          className="input"
+          value={scope}
+          onChange={(e) =>
+            void onPatchProjet({ qbo_scope: e.target.value || null })
+          }
+        >
+          <option value="">— choisir —</option>
+          <option value={incScope}>
+            QuickBooks de {projet.entreprise_nom} (propre à l&apos;INC)
+          </option>
+          {QBO_SCOPES_FIXES.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        {!scope ? (
+          <p
+            className="mt-2 text-[11px]"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            Choisis d&apos;abord la connexion — normalement le QuickBooks
+            propre à l&apos;INC du projet.
+          </p>
+        ) : status && !status.connected ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-amber-300">Non connecté.</span>
+            <button
+              type="button"
+              onClick={() => void connecter()}
+              disabled={connecting}
+              className="btn-outline-accent btn-sm disabled:opacity-50"
+              title="Ouvre Intuit : choisis le fichier QuickBooks de cette compagnie et autorise Kratos (lecture)."
+            >
+              {connecting ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : null}
+              Connecter ce QuickBooks
+            </button>
+          </div>
+        ) : status?.connected ? (
+          <p className="mt-1 text-[11px] text-emerald-400">
+            ✓ Connecté{status.company_name ? ` — ${status.company_name}` : ""}
           </p>
         ) : null}
-        {loading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
-          </div>
-        ) : comptes.length > 0 ? (
+
+        {status?.connected ? (
           <>
-            <input
-              className="input mt-2"
-              placeholder="Filtrer…"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-            />
-            <div className="mt-2 flex-1 space-y-0.5 overflow-y-auto pr-1">
-              {visibles.map((c) => (
-                <label
-                  key={c.id}
-                  className="flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1 text-[12px] hover:bg-accent-500/10"
-                  style={{ color: "var(--qg-text)" }}
-                >
-                  <input
-                    type="checkbox"
-                    className="mt-0.5"
-                    checked={sel.has(c.id)}
-                    onChange={(e) =>
-                      setSel((prev) => {
-                        const next = new Map(prev);
-                        if (e.target.checked) next.set(c.id, c.name);
-                        else next.delete(c.id);
-                        return next;
-                      })
-                    }
-                  />
-                  <span>
-                    {c.fully_qualified_name}
-                    <span
-                      className="ml-1 text-[10px]"
-                      style={{ color: "var(--qg-text-muted)" }}
+            <label className="label mt-3 text-[10px] uppercase">
+              Catégories du plan comptable à suivre
+            </label>
+            {comptesErr ? (
+              <p className="mt-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                {comptesErr}
+              </p>
+            ) : null}
+            {comptesLoading ? (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+              </div>
+            ) : comptes.length > 0 ? (
+              <>
+                <input
+                  className="input mt-1"
+                  placeholder="Filtrer…"
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                />
+                <div className="mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1">
+                  {visibles.map((c) => (
+                    <label
+                      key={c.id}
+                      className="flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1 text-[12px] hover:bg-accent-500/10"
+                      style={{ color: "var(--qg-text)" }}
                     >
-                      ({c.account_type})
-                    </span>
-                  </span>
-                </label>
-              ))}
-            </div>
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={sel.has(c.id)}
+                        onChange={(e) =>
+                          setSel((prev) => {
+                            const next = new Map(prev);
+                            if (e.target.checked) next.set(c.id, c.name);
+                            else next.delete(c.id);
+                            return next;
+                          })
+                        }
+                      />
+                      <span>
+                        {c.fully_qualified_name}
+                        <span
+                          className="ml-1 text-[10px]"
+                          style={{ color: "var(--qg-text-muted)" }}
+                        >
+                          ({c.account_type})
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            ) : null}
           </>
         ) : null}
+
         <div className="mt-3 flex items-center justify-end gap-2">
           <button type="button" onClick={onClose} className="btn-ghost btn-sm">
-            Annuler
+            Fermer
           </button>
-          <button
-            type="button"
-            onClick={() => void save()}
-            disabled={saving}
-            className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
-          >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Enregistrer ({sel.size})
-          </button>
+          {status?.connected && comptes.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={saving}
+              className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Enregistrer ({sel.size})
+            </button>
+          ) : null}
         </div>
       </div>
     </div>
@@ -1323,6 +1271,7 @@ function ObjectifsSection({
   const objectifs = parseObjectifs(projet.objectifs_json);
   const [nLabel, setNLabel] = useState("");
   const [nCible, setNCible] = useState("");
+  const [nUnite, setNUnite] = useState("");
 
   function saveObjectifs(next: ObjectifLibre[]) {
     void onPatch({ objectifs_json: JSON.stringify(next) });
@@ -1330,13 +1279,21 @@ function ObjectifsSection({
 
   const revObj = Number(projet.objectif_revenus_mensuels) || 0;
   const revAct = projet.revenus_actuels_mensuels || 0;
-  const revPct = revObj > 0 ? Math.min(100, Math.round((revAct / revObj) * 100)) : 0;
+  const revPct =
+    revObj > 0 ? Math.min(100, Math.round((revAct / revObj) * 100)) : 0;
   const depObj = Number(projet.objectif_depenses_mensuelles) || 0;
   const depAct = projet.depenses_actuelles_mensuelles || 0;
 
+  const histo = projet.revenus_historique || [];
+  const histoMax = Math.max(
+    revObj,
+    ...histo.map((h) => h.montant),
+    1
+  );
+
   return (
     <section
-      className="rounded-xl border p-4"
+      className="min-w-0 rounded-xl border p-4"
       style={{
         borderColor: "var(--qg-border)",
         backgroundColor: "var(--qg-card-bg)"
@@ -1350,8 +1307,8 @@ function ObjectifsSection({
         Objectifs vs réel (Gestion locative)
       </h3>
 
-      <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
-        {/* Revenus */}
+      <div className="mt-3 grid grid-cols-1 gap-3">
+        {/* Revenus + progression mensuelle */}
         <div
           className="rounded-lg border p-3"
           style={{ borderColor: "var(--qg-border-soft)" }}
@@ -1391,7 +1348,8 @@ function ObjectifsSection({
               className="ml-1 text-xs font-normal"
               style={{ color: "var(--qg-text-muted)" }}
             >
-              / {revObj ? fmtMoney(revObj) : "—"} (baux actifs)
+              / {revObj ? fmtMoney(revObj) : "—"} par mois si tous les
+              loyers rentrent
             </span>
           </p>
           {revObj > 0 ? (
@@ -1416,6 +1374,48 @@ function ObjectifsSection({
                   : `${revPct} % — il manque ${fmtMoney(revObj - revAct)} / mois`}
               </p>
             </>
+          ) : null}
+          {histo.length > 1 ? (
+            <div className="mt-3">
+              <p
+                className="mb-1 text-[10px] uppercase tracking-wider"
+                style={{ color: "var(--qg-text-muted)" }}
+              >
+                Progression depuis le début du projet
+              </p>
+              <div className="relative flex h-20 items-end gap-[3px]">
+                {revObj > 0 ? (
+                  <div
+                    className="absolute left-0 right-0 border-t border-dashed border-amber-400/70"
+                    style={{
+                      bottom: `${Math.min(100, (revObj / histoMax) * 100)}%`
+                    }}
+                    title={`Objectif : ${fmtMoney(revObj)}`}
+                  />
+                ) : null}
+                {histo.map((h) => (
+                  <div
+                    key={h.mois}
+                    className={`flex-1 rounded-t ${
+                      revObj > 0 && h.montant >= revObj
+                        ? "bg-emerald-500/80"
+                        : "bg-accent-500/70"
+                    }`}
+                    style={{
+                      height: `${Math.max(3, (h.montant / histoMax) * 100)}%`
+                    }}
+                    title={`${h.mois} : ${fmtMoney(h.montant)}`}
+                  />
+                ))}
+              </div>
+              <div
+                className="mt-0.5 flex justify-between text-[9px]"
+                style={{ color: "var(--qg-text-muted)" }}
+              >
+                <span>{histo[0]?.mois}</span>
+                <span>{histo[histo.length - 1]?.mois}</span>
+              </div>
+            </div>
           ) : null}
         </div>
 
@@ -1459,7 +1459,7 @@ function ObjectifsSection({
               className="ml-1 text-xs font-normal"
               style={{ color: "var(--qg-text-muted)" }}
             >
-              / {depObj ? fmtMoney(depObj) : "—"} (fiche immeuble)
+              / {depObj ? fmtMoney(depObj) : "—"} (cashflow de l&apos;immeuble)
             </span>
           </p>
           {depObj > 0 ? (
@@ -1474,102 +1474,130 @@ function ObjectifsSection({
             </p>
           ) : null}
         </div>
+
+        {/* Objectifs libres — même style de tuile */}
+        {objectifs.map((o, i) => {
+          const pct =
+            o.cible > 0
+              ? Math.min(100, Math.round(((o.actuel || 0) / o.cible) * 100))
+              : 0;
+          return (
+            <div
+              key={i}
+              className="rounded-lg border p-3"
+              style={{ borderColor: "var(--qg-border-soft)" }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span
+                  className="text-xs font-medium"
+                  style={{ color: "var(--qg-text)" }}
+                >
+                  {o.label}
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    saveObjectifs(objectifs.filter((_, j) => j !== i))
+                  }
+                  className="text-rose-400/70 hover:text-rose-400"
+                  title="Retirer cet objectif"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+              <p
+                className="mt-2 text-lg font-semibold tabular-nums"
+                style={{ color: "var(--qg-text)" }}
+              >
+                <input
+                  className="input inline-block h-8 w-28 text-[15px] font-semibold"
+                  type="number"
+                  step="0.01"
+                  defaultValue={o.actuel || ""}
+                  placeholder="0"
+                  onBlur={(e) => {
+                    const next = [...objectifs];
+                    next[i] = { ...o, actuel: Number(e.target.value) || 0 };
+                    saveObjectifs(next);
+                  }}
+                />
+                <span
+                  className="ml-1 text-xs font-normal"
+                  style={{ color: "var(--qg-text-muted)" }}
+                >
+                  / {fmtVal(o.cible, o.unite)}
+                </span>
+              </p>
+              <div
+                className="mt-2 h-2 w-full overflow-hidden rounded-full"
+                style={{ backgroundColor: "var(--qg-border-soft)" }}
+              >
+                <div
+                  className={`h-full rounded-full ${
+                    pct >= 100 ? "bg-emerald-500" : "bg-accent-500"
+                  }`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <p
+                className="mt-1 text-[11px]"
+                style={{ color: "var(--qg-text-muted)" }}
+              >
+                {pct} %{pct >= 100 ? " — objectif atteint ✓" : ""}
+              </p>
+            </div>
+          );
+        })}
       </div>
 
-      {/* Objectifs libres */}
-      <div className="mt-3">
-        {objectifs.length > 0 ? (
-          <ul className="space-y-1.5">
-            {objectifs.map((o, i) => {
-              const pct =
-                o.cible > 0
-                  ? Math.min(100, Math.round(((o.actuel || 0) / o.cible) * 100))
-                  : 0;
-              return (
-                <li
-                  key={i}
-                  className="flex flex-wrap items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs"
-                  style={{
-                    borderColor: "var(--qg-border-soft)",
-                    color: "var(--qg-text)"
-                  }}
-                >
-                  <span className="min-w-[140px] flex-1 font-medium">
-                    {o.label}
-                  </span>
-                  <span
-                    className="flex items-center gap-1 text-[11px]"
-                    style={{ color: "var(--qg-text-muted)" }}
-                  >
-                    Rendu à
-                    <input
-                      className="input h-7 w-24 text-right text-[12px]"
-                      type="number"
-                      step="0.01"
-                      defaultValue={o.actuel || ""}
-                      onBlur={(e) => {
-                        const next = [...objectifs];
-                        next[i] = {
-                          ...o,
-                          actuel: Number(e.target.value) || 0
-                        };
-                        saveObjectifs(next);
-                      }}
-                    />
-                    / {fmtMoney(o.cible)}
-                  </span>
-                  <span className="w-10 text-right tabular-nums">{pct} %</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      saveObjectifs(objectifs.filter((_, j) => j !== i))
-                    }
-                    className="text-rose-400/70 hover:text-rose-400"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        ) : null}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!nLabel.trim()) return;
-            saveObjectifs([
-              ...objectifs,
-              { label: nLabel.trim(), cible: Number(nCible) || 0, actuel: 0 }
-            ]);
-            setNLabel("");
-            setNCible("");
-          }}
-          className="mt-2 flex flex-wrap items-center gap-2"
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!nLabel.trim()) return;
+          saveObjectifs([
+            ...objectifs,
+            {
+              label: nLabel.trim(),
+              cible: Number(nCible) || 0,
+              actuel: 0,
+              unite: nUnite.trim() || "$"
+            }
+          ]);
+          setNLabel("");
+          setNCible("");
+          setNUnite("");
+        }}
+        className="mt-3 flex flex-wrap items-center gap-2"
+      >
+        <input
+          className="input h-8 min-w-[150px] flex-1 text-[12px]"
+          placeholder="Autre objectif (ex. chambres louées)"
+          value={nLabel}
+          onChange={(e) => setNLabel(e.target.value)}
+        />
+        <input
+          className="input h-8 w-24 text-[12px]"
+          type="number"
+          step="0.01"
+          placeholder="Cible"
+          value={nCible}
+          onChange={(e) => setNCible(e.target.value)}
+        />
+        <input
+          className="input h-8 w-24 text-[12px]"
+          placeholder="Unité ($)"
+          value={nUnite}
+          onChange={(e) => setNUnite(e.target.value)}
+        />
+        <button
+          type="submit"
+          disabled={!nLabel.trim()}
+          className="btn-secondary btn-sm disabled:opacity-50"
         >
-          <input
-            className="input h-8 w-52 text-[12px]"
-            placeholder="Autre objectif (ex. valeur visée)"
-            value={nLabel}
-            onChange={(e) => setNLabel(e.target.value)}
-          />
-          <input
-            className="input h-8 w-28 text-[12px]"
-            type="number"
-            step="0.01"
-            placeholder="Cible $"
-            value={nCible}
-            onChange={(e) => setNCible(e.target.value)}
-          />
-          <button
-            type="submit"
-            disabled={!nLabel.trim()}
-            className="btn-secondary btn-sm disabled:opacity-50"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Ajouter
-          </button>
-        </form>
-      </div>
+          <Plus className="h-3.5 w-3.5" />
+          Ajouter
+        </button>
+      </form>
     </section>
   );
 }
@@ -1584,24 +1612,10 @@ function NegosSection({
   onChanged: () => void;
 }) {
   const confirm = useConfirm();
-  const [importing, setImporting] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
-  const [addOpen, setAddOpen] = useState(false);
-  const [aNom, setANom] = useState("");
-  const [aLog, setALog] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
 
-  async function importer() {
-    setImporting(true);
-    try {
-      const r = await authedFetch(
-        `/api/v1/optimisation/projets/${projet.id}/importer-locataires`,
-        { method: "POST" }
-      );
-      if (r.ok) onChanged();
-    } finally {
-      setImporting(false);
-    }
-  }
+  const nEntentes = projet.negos.filter((n) => n.statut === "entente").length;
 
   async function patchNego(id: number, patch: Record<string, unknown>) {
     const r = await authedFetch(`/api/v1/optimisation/negos/${id}`, {
@@ -1626,27 +1640,6 @@ function NegosSection({
     if (r.ok || r.status === 204) onChanged();
   }
 
-  async function addNego(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!aNom.trim()) return;
-    const r = await authedFetch(
-      `/api/v1/optimisation/projets/${projet.id}/negos`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          nom_locataire: aNom.trim(),
-          logement_label: aLog.trim() || null
-        })
-      }
-    );
-    if (r.ok) {
-      setANom("");
-      setALog("");
-      setAddOpen(false);
-      onChanged();
-    }
-  }
-
   return (
     <section
       className="rounded-xl border p-4"
@@ -1657,7 +1650,7 @@ function NegosSection({
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3
-          className="flex items-center gap-1.5 text-sm font-semibold"
+          className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold"
           style={{ color: "var(--qg-text)" }}
         >
           <Users className="h-4 w-4 text-accent-500" />
@@ -1666,69 +1659,35 @@ function NegosSection({
             className="text-xs font-normal"
             style={{ color: "var(--qg-text-muted)" }}
           >
-            ({projet.negos.length})
+            {projet.nb_logements} logement
+            {projet.nb_logements > 1 ? "s" : ""} · {projet.negos.length}{" "}
+            locataire{projet.negos.length > 1 ? "s" : ""} suivi
+            {projet.negos.length > 1 ? "s" : ""}
+          </span>
+          <span
+            className={`badge ${
+              nEntentes > 0 ? "badge-emerald" : "badge-neutral"
+            }`}
+            title="Ententes conclues / locataires suivis"
+          >
+            Ententes {nEntentes}/{projet.negos.length}
           </span>
         </h3>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void importer()}
-            disabled={importing}
-            className="btn-outline-accent btn-sm disabled:opacity-50"
-            title="Ajoute les locataires à bail actif de l'immeuble qui ne sont pas encore suivis"
-          >
-            {importing ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3.5 w-3.5" />
-            )}
-            Importer les locataires
-          </button>
-          <button
-            type="button"
-            onClick={() => setAddOpen((v) => !v)}
-            className="btn-secondary btn-sm"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Ajouter
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => setImportOpen(true)}
+          className="btn-ghost flex h-7 w-7 items-center justify-center rounded-lg p-0"
+          title="Importer des locataires de l'immeuble dans le suivi"
+        >
+          <UserPlus className="h-4 w-4" />
+        </button>
       </div>
-
-      {addOpen ? (
-        <form onSubmit={addNego} className="mt-3 flex flex-wrap items-end gap-2">
-          <div className="min-w-[180px] flex-1">
-            <label className="label text-[10px] uppercase">Locataire</label>
-            <input
-              className="input"
-              value={aNom}
-              onChange={(e) => setANom(e.target.value)}
-              autoFocus
-            />
-          </div>
-          <div className="w-28">
-            <label className="label text-[10px] uppercase">Logement</label>
-            <input
-              className="input"
-              value={aLog}
-              onChange={(e) => setALog(e.target.value)}
-              placeholder="ex. 101"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={!aNom.trim()}
-            className="btn-accent text-sm disabled:opacity-50"
-          >
-            Ajouter
-          </button>
-        </form>
-      ) : null}
 
       {projet.negos.length === 0 ? (
         <p className="mt-3 text-xs" style={{ color: "var(--qg-text-muted)" }}>
-          Aucun locataire suivi. « Importer les locataires » récupère ceux
-          à bail actif sur l&apos;immeuble.
+          Aucun locataire suivi. Clique sur{" "}
+          <UserPlus className="inline h-3 w-3" /> pour choisir les
+          locataires en place à suivre.
         </p>
       ) : (
         <ul className="mt-3 space-y-2">
@@ -1769,17 +1728,17 @@ function NegosSection({
                       {fmtMoney(n.loyer_actuel)}/mois
                     </span>
                   ) : null}
-                  {n.montant_entente ? (
-                    <span className="text-[11px] tabular-nums text-amber-300">
-                      entente {fmtMoney(n.montant_entente)}
-                    </span>
-                  ) : null}
-                  {n.date_cible ? (
+                  {n.type_entente && TYPES_ENTENTE[n.type_entente] ? (
                     <span
                       className="text-[11px]"
                       style={{ color: "var(--qg-text-muted)" }}
                     >
-                      {n.date_cible}
+                      {TYPES_ENTENTE[n.type_entente]}
+                    </span>
+                  ) : null}
+                  {n.montant_entente ? (
+                    <span className="text-[11px] tabular-nums text-amber-300">
+                      {fmtMoney(n.montant_entente)}
                     </span>
                   ) : null}
                   <span className={st.cls}>{st.label}</span>
@@ -1805,6 +1764,27 @@ function NegosSection({
                           {Object.entries(NEGO_STATUTS).map(([k, v]) => (
                             <option key={k} value={k}>
                               {v.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label text-[10px] uppercase">
+                          Type d&apos;entente
+                        </label>
+                        <select
+                          className="input"
+                          value={n.type_entente || ""}
+                          onChange={(e) =>
+                            void patchNego(n.id, {
+                              type_entente: e.target.value || null
+                            })
+                          }
+                        >
+                          <option value="">—</option>
+                          {Object.entries(TYPES_ENTENTE).map(([k, v]) => (
+                            <option key={k} value={k}>
+                              {v}
                             </option>
                           ))}
                         </select>
@@ -1842,17 +1822,7 @@ function NegosSection({
                           }
                         />
                       </div>
-                      <div className="flex items-end justify-end">
-                        <button
-                          type="button"
-                          onClick={() => void deleteNego(n)}
-                          className="btn-outline-rose btn-sm"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          Retirer
-                        </button>
-                      </div>
-                      <div className="sm:col-span-2 xl:col-span-4">
+                      <div className="sm:col-span-2 xl:col-span-3">
                         <label className="label text-[10px] uppercase">
                           Entente / notes
                         </label>
@@ -1866,6 +1836,16 @@ function NegosSection({
                           }
                           placeholder="ex. Accepte de quitter le 1er juillet contre 3 mois de loyer…"
                         />
+                      </div>
+                      <div className="flex items-end justify-end">
+                        <button
+                          type="button"
+                          onClick={() => void deleteNego(n)}
+                          className="btn-outline-rose btn-sm"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Retirer
+                        </button>
                       </div>
                     </div>
 
@@ -1902,11 +1882,9 @@ function NegosSection({
                       <form
                         onSubmit={(e) => {
                           e.preventDefault();
-                          const input = (
-                            e.currentTarget.elements.namedItem(
-                              "ev"
-                            ) as HTMLInputElement
-                          );
+                          const input = e.currentTarget.elements.namedItem(
+                            "ev"
+                          ) as HTMLInputElement;
                           const v = input.value.trim();
                           if (!v) return;
                           void patchNego(n.id, { add_event: v });
@@ -1931,6 +1909,172 @@ function NegosSection({
           })}
         </ul>
       )}
+
+      {importOpen ? (
+        <ImportLocatairesModal
+          projet={projet}
+          onClose={() => setImportOpen(false)}
+          onImported={() => {
+            setImportOpen(false);
+            onChanged();
+          }}
+        />
+      ) : null}
     </section>
+  );
+}
+
+// ─── Modal import sélectif des locataires ──────────────────────
+
+function ImportLocatairesModal({
+  projet,
+  onClose,
+  onImported
+}: {
+  projet: Projet;
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const [rows, setRows] = useState<LocataireDispo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [sel, setSel] = useState<Set<number>>(new Set());
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/optimisation/projets/${projet.id}/locataires-disponibles`
+        );
+        if (!r.ok) return;
+        const d = (await r.json()) as LocataireDispo[];
+        setRows(d);
+        setSel(
+          new Set(
+            d.filter((x) => !x.deja_suivi).map((x) => x.locataire_id)
+          )
+        );
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [projet.id]);
+
+  async function importer() {
+    setSaving(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/optimisation/projets/${projet.id}/importer-locataires`,
+        {
+          method: "POST",
+          body: JSON.stringify({ locataire_ids: Array.from(sel) })
+        }
+      );
+      if (r.ok) onImported();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[80vh] w-full max-w-md flex-col rounded-2xl border p-4"
+        style={{
+          borderColor: "var(--qg-border)",
+          backgroundColor: "var(--qg-card-bg)"
+        }}
+      >
+        <h3
+          className="text-sm font-semibold"
+          style={{ color: "var(--qg-text)" }}
+        >
+          Importer des locataires — {projet.immeuble_nom}
+        </h3>
+        <p className="mt-1 text-[11px]" style={{ color: "var(--qg-text-muted)" }}>
+          Locataires à bail actif de l&apos;immeuble. Choisis ceux à suivre
+          dans les négociations.
+        </p>
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+          </div>
+        ) : rows.length === 0 ? (
+          <p
+            className="py-6 text-center text-xs"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            Aucun locataire à bail actif sur cet immeuble.
+          </p>
+        ) : (
+          <div className="mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1">
+            {rows.map((x) => (
+              <label
+                key={x.locataire_id}
+                className={`flex items-center gap-2 rounded-md px-1.5 py-1.5 text-[12px] ${
+                  x.deja_suivi
+                    ? "opacity-50"
+                    : "cursor-pointer hover:bg-accent-500/10"
+                }`}
+                style={{ color: "var(--qg-text)" }}
+              >
+                <input
+                  type="checkbox"
+                  disabled={x.deja_suivi}
+                  checked={x.deja_suivi || sel.has(x.locataire_id)}
+                  onChange={(e) =>
+                    setSel((prev) => {
+                      const next = new Set(prev);
+                      if (e.target.checked) next.add(x.locataire_id);
+                      else next.delete(x.locataire_id);
+                      return next;
+                    })
+                  }
+                />
+                <span className="flex-1">
+                  {x.nom}
+                  {x.logement ? (
+                    <span style={{ color: "var(--qg-text-muted)" }}>
+                      {" "}· {x.logement}
+                    </span>
+                  ) : null}
+                </span>
+                {x.loyer ? (
+                  <span
+                    className="tabular-nums text-[11px]"
+                    style={{ color: "var(--qg-text-muted)" }}
+                  >
+                    {fmtMoney(x.loyer)}
+                  </span>
+                ) : null}
+                {x.deja_suivi ? (
+                  <span className="badge badge-neutral">déjà suivi</span>
+                ) : null}
+              </label>
+            ))}
+          </div>
+        )}
+        <div className="mt-3 flex items-center justify-end gap-2">
+          <button type="button" onClick={onClose} className="btn-ghost btn-sm">
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={() => void importer()}
+            disabled={saving || sel.size === 0}
+            className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : (
+              <UserPlus className="h-4 w-4" />
+            )}
+            Importer ({sel.size})
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

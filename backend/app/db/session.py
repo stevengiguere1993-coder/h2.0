@@ -343,6 +343,8 @@ async def ensure_critical_columns() -> None:
         # Hub Rencontres v2 : source d'import + fichiers archives Drive.
         ("rencontres", "source", "VARCHAR(16)"),
         ("rencontres", "drive_links_json", "TEXT"),
+        # Optimisation v2 : type d'entente de la négo locataire.
+        ("optimisation_negos", "type_entente", "VARCHAR(24)"),
         # Documents 2026-07-27 (démêlage communications / dossier) :
         # « document courant » du bail et de l'avis de renouvellement
         # (celui qui s'ouvre au clic ; le remplacer archive l'ancien),

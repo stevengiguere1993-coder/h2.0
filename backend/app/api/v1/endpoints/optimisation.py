@@ -50,8 +50,10 @@ router = APIRouter(prefix="/optimisation", tags=["optimisation"])
 
 _NEGO_STATUTS = (
     "en_place", "a_contacter", "en_discussion", "entente",
-    "depart_prevu", "parti", "reste",
+    "parti", "reste",
 )
+
+_TYPES_ENTENTE = ("cash_for_raise", "cash_for_keys", "renovation", "autre")
 
 
 # ── Schémas ──────────────────────────────────────────────────────
@@ -76,6 +78,7 @@ class NegoRead(BaseModel):
     logement_label: Optional[str]
     loyer_actuel: Optional[float]
     statut: str
+    type_entente: Optional[str]
     entente: Optional[str]
     montant_entente: Optional[float]
     date_cible: Optional[date]
@@ -115,6 +118,11 @@ class ProjetRead(BaseModel):
     #: Réels tirés de la Gestion locative (baux actifs / dépenses).
     revenus_actuels_mensuels: float = 0.0
     depenses_actuelles_mensuelles: float = 0.0
+    nb_logements: int = 0
+    #: Revenus mensuels reconstitués depuis les baux (dates de début/fin)
+    #: — [{"mois": "2026-01", "montant": 4200.0}], du début du projet à
+    #: aujourd'hui (max 24 mois).
+    revenus_historique: List[Dict[str, object]] = Field(default_factory=list)
     budget_lignes: List[BudgetLigneRead] = Field(default_factory=list)
     negos: List[NegoRead] = Field(default_factory=list)
 
@@ -161,6 +169,7 @@ class NegoCreate(BaseModel):
 
 class NegoUpdate(BaseModel):
     statut: Optional[str] = None
+    type_entente: Optional[str] = None
     entente: Optional[str] = None
     montant_entente: Optional[float] = None
     date_cible: Optional[date] = None
@@ -183,6 +192,59 @@ async def _projet_or_404(db, projet_id: int) -> OptimisationProjet:
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Projet introuvable.")
     return row
+
+
+def _mois_range(debut: date, fin: date, cap: int = 24) -> List[date]:
+    """Premiers du mois de ``debut`` à ``fin`` inclus (bornés aux
+    ``cap`` derniers mois)."""
+    out: List[date] = []
+    cur = date(debut.year, debut.month, 1)
+    stop = date(fin.year, fin.month, 1)
+    while cur <= stop:
+        out.append(cur)
+        cur = (
+            date(cur.year + 1, 1, 1)
+            if cur.month == 12
+            else date(cur.year, cur.month + 1, 1)
+        )
+    return out[-cap:]
+
+
+async def _revenus_historique(
+    db, immeuble_id: int, debut: Optional[date]
+) -> List[Dict[str, object]]:
+    """Revenus mensuels reconstitués : pour chaque mois depuis le début
+    du projet, somme des loyers des baux couvrant ce mois (d'après leurs
+    dates — si tous les loyers rentrent)."""
+    today = date.today()
+    start = debut or today
+    if start > today:
+        return []
+    baux = (
+        await db.execute(
+            select(Bail.loyer_mensuel, Bail.date_debut, Bail.date_fin)
+            .join(Logement, Logement.id == Bail.logement_id)
+            .where(Logement.immeuble_id == immeuble_id)
+        )
+    ).all()
+    out: List[Dict[str, object]] = []
+    for premier in _mois_range(start, today):
+        fin_mois = (
+            date(premier.year + 1, 1, 1)
+            if premier.month == 12
+            else date(premier.year, premier.month + 1, 1)
+        )
+        total = 0.0
+        for loyer, d1, d2 in baux:
+            if d1 and d1 >= fin_mois:
+                continue  # bail pas encore commencé ce mois-là
+            if d2 and d2 < premier:
+                continue  # bail déjà terminé
+            total += float(loyer or 0)
+        out.append(
+            {"mois": premier.strftime("%Y-%m"), "montant": round(total, 2)}
+        )
+    return out
 
 
 async def _reels_locatifs(db, immeuble_id: int) -> tuple[float, float]:
@@ -233,9 +295,14 @@ async def _baux_actifs_immeuble(db, immeuble_id: int):
     ).all()
 
 
-async def _seed_negos(db, projet: OptimisationProjet) -> int:
+async def _seed_negos(
+    db,
+    projet: OptimisationProjet,
+    locataire_ids: Optional[List[int]] = None,
+) -> int:
     """Crée une négo par locataire actif de l'immeuble qui n'en a pas
-    déjà une sur ce projet. Retourne le nombre créé."""
+    déjà une sur ce projet. ``locataire_ids`` restreint l'import à une
+    sélection (modal « Importer »). Retourne le nombre créé."""
     existants = {
         x
         for x in (
@@ -252,6 +319,8 @@ async def _seed_negos(db, projet: OptimisationProjet) -> int:
     created = 0
     for loc, bail, lg in rows:
         if loc.id in existants:
+            continue
+        if locataire_ids is not None and loc.id not in locataire_ids:
             continue
         existants.add(loc.id)
         db.add(
@@ -294,11 +363,23 @@ async def _projet_read(db, p: OptimisationProjet) -> ProjetRead:
         )
     ).scalars().all()
     revenus, depenses = await _reels_locatifs(db, p.immeuble_id)
+    nb_logements = len(
+        (
+            await db.execute(
+                select(Logement.id).where(
+                    Logement.immeuble_id == p.immeuble_id
+                )
+            )
+        ).scalars().all()
+    )
+    historique = await _revenus_historique(db, p.immeuble_id, p.date_debut)
     out = ProjetRead.model_validate(p)
     out.entreprise_nom = ent.name if ent else ""
     out.immeuble_nom = (imm.name or imm.address) if imm else ""
     out.revenus_actuels_mensuels = revenus
     out.depenses_actuelles_mensuelles = depenses
+    out.nb_logements = nb_logements
+    out.revenus_historique = historique
     out.budget_lignes = [BudgetLigneRead.model_validate(x) for x in lignes]
     out.negos = [NegoRead.model_validate(x) for x in negos]
     return out
@@ -598,14 +679,62 @@ async def create_nego(
     return NegoRead.model_validate(n)
 
 
+class ImporterLocatairesIn(BaseModel):
+    #: None = tous les locataires actifs ; sinon la sélection du modal.
+    locataire_ids: Optional[List[int]] = None
+
+
+@router.get("/projets/{projet_id}/locataires-disponibles")
+async def locataires_disponibles(
+    projet_id: int, db: DBSession, _: CurrentUser
+) -> List[dict]:
+    """Locataires à bail actif de l'immeuble, avec indication de ceux
+    déjà suivis — alimente le modal « Importer des locataires »."""
+    p = await _projet_or_404(db, projet_id)
+    deja = {
+        x
+        for x in (
+            await db.execute(
+                select(OptimisationNego.locataire_id).where(
+                    OptimisationNego.projet_id == p.id
+                )
+            )
+        ).scalars().all()
+        if x is not None
+    }
+    rows = await _baux_actifs_immeuble(db, p.immeuble_id)
+    out = []
+    vus: set[int] = set()
+    for loc, bail, lg in rows:
+        if loc.id in vus:
+            continue
+        vus.add(loc.id)
+        out.append(
+            {
+                "locataire_id": loc.id,
+                "nom": loc.full_name or f"Locataire #{loc.id}",
+                "logement": lg.numero,
+                "loyer": float(bail.loyer_mensuel or 0) or None,
+                "deja_suivi": loc.id in deja,
+            }
+        )
+    out.sort(key=lambda x: (x["logement"] or "", x["nom"]))
+    return out
+
+
 @router.post("/projets/{projet_id}/importer-locataires")
 async def importer_locataires(
-    projet_id: int, db: DBSession, _: CurrentUser
+    projet_id: int,
+    db: DBSession,
+    _: CurrentUser,
+    data: Optional[ImporterLocatairesIn] = None,
 ) -> dict:
-    """(Ré)importe les locataires à baux actifs de l'immeuble — n'ajoute
-    que les manquants, ne touche pas aux négos existantes."""
+    """Importe les locataires choisis (ou tous) — n'ajoute que les
+    manquants, ne touche pas aux négos existantes."""
     p = await _projet_or_404(db, projet_id)
-    created = await _seed_negos(db, p)
+    created = await _seed_negos(
+        db, p, data.locataire_ids if data else None
+    )
     await db.commit()
     return {"created": created}
 
@@ -627,6 +756,10 @@ async def update_nego(
     if "statut" in payload and payload["statut"] not in _NEGO_STATUTS:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "Statut invalide."
+        )
+    if payload.get("type_entente") and payload["type_entente"] not in _TYPES_ENTENTE:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Type d'entente invalide."
         )
     for k, v in payload.items():
         setattr(n, k, v)
