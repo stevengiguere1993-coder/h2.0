@@ -345,6 +345,15 @@ async def ensure_critical_columns() -> None:
         ("rencontres", "drive_links_json", "TEXT"),
         # Optimisation v2 : type d'entente de la négo locataire.
         ("optimisation_negos", "type_entente", "VARCHAR(24)"),
+        # Optimisation v5 : objectifs annuels, financement/comptant par
+        # enveloppe, compte bancaire du projet, recherche locataire.
+        ("optimisation_projets", "objectif_revenus_annuels", "NUMERIC(12,2)"),
+        ("optimisation_projets", "objectif_depenses_annuelles", "NUMERIC(12,2)"),
+        ("optimisation_projets", "qbo_bank_account_id", "VARCHAR(64)"),
+        ("optimisation_projets", "qbo_bank_account_name", "VARCHAR(255)"),
+        ("optimisation_budget_lignes", "qbo_financement_accounts_json", "TEXT"),
+        ("optimisation_budget_lignes", "comptant_disponible", "NUMERIC(12,2)"),
+        ("optimisation_negos", "recherche_json", "TEXT"),
         # Documents 2026-07-27 (démêlage communications / dossier) :
         # « document courant » du bail et de l'avis de renouvellement
         # (celui qui s'ouvre au clic ; le remplacer archive l'ancien),
