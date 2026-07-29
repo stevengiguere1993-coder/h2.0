@@ -680,25 +680,7 @@ function ProjetHeader({
               <option value="termine">Terminé</option>
             </select>
           </div>
-          <div>
-            <label className="label text-[10px] uppercase">
-              Connexion QuickBooks
-            </label>
-            <select
-              className="input"
-              value={projet.qbo_scope || ""}
-              onChange={(e) =>
-                void onPatch({ qbo_scope: e.target.value || null })
-              }
-            >
-              <option value="">— aucune —</option>
-              {QBO_SCOPES.map((s) => (
-                <option key={s.value} value={s.value}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-          </div>
+          <QboScopeField projet={projet} onPatch={onPatch} />
           <div className="sm:col-span-2 xl:col-span-3">
             <label className="label text-[10px] uppercase">Notes</label>
             <textarea
@@ -720,6 +702,110 @@ function ProjetHeader({
         </div>
       ) : null}
     </section>
+  );
+}
+
+// ─── Choix + statut de la connexion QuickBooks du projet ───────
+
+function QboScopeField({
+  projet,
+  onPatch
+}: {
+  projet: Projet;
+  onPatch: (p: Record<string, unknown>) => Promise<void>;
+}) {
+  const incScope = `inc:${projet.entreprise_id}`;
+  const scope = projet.qbo_scope || "";
+  const [status, setStatus] = useState<{
+    connected: boolean;
+    company_name: string | null;
+  } | null>(null);
+  const [connecting, setConnecting] = useState(false);
+
+  useEffect(() => {
+    setStatus(null);
+    if (!scope) return;
+    let dead = false;
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/qbo/status?scope=${encodeURIComponent(scope)}`
+        );
+        if (!r.ok) return;
+        const d = (await r.json()) as {
+          connected: boolean;
+          company_name: string | null;
+        };
+        if (!dead) setStatus(d);
+      } catch {
+        /* le statut restera inconnu */
+      }
+    })();
+    return () => {
+      dead = true;
+    };
+  }, [scope]);
+
+  async function connecter() {
+    setConnecting(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/qbo/connect?scope=${encodeURIComponent(scope)}`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as { auth_url: string };
+      // Intuit demande quelle compagnie autoriser → choisir le fichier
+      // QuickBooks de CETTE INC. Le retour ramène sur cette page.
+      window.location.assign(d.auth_url);
+    } catch {
+      setConnecting(false);
+    }
+  }
+
+  return (
+    <div>
+      <label className="label text-[10px] uppercase">
+        Connexion QuickBooks
+      </label>
+      <select
+        className="input"
+        value={scope}
+        onChange={(e) => void onPatch({ qbo_scope: e.target.value || null })}
+      >
+        <option value="">— aucune —</option>
+        <option value={incScope}>
+          QuickBooks de {projet.entreprise_nom} (propre à l&apos;INC)
+        </option>
+        {QBO_SCOPES.map((s) => (
+          <option key={s.value} value={s.value}>
+            {s.label}
+          </option>
+        ))}
+      </select>
+      {scope && status ? (
+        status.connected ? (
+          <p className="mt-1 text-[11px] text-emerald-400">
+            ✓ Connecté{status.company_name ? ` — ${status.company_name}` : ""}
+          </p>
+        ) : (
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-amber-300">Non connecté.</span>
+            <button
+              type="button"
+              onClick={() => void connecter()}
+              disabled={connecting}
+              className="btn-outline-accent btn-sm disabled:opacity-50"
+              title="Ouvre Intuit : choisis le fichier QuickBooks de cette compagnie et autorise Kratos (lecture)."
+            >
+              {connecting ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : null}
+              Connecter ce QuickBooks
+            </button>
+          </div>
+        )
+      ) : null}
+    </div>
   );
 }
 

@@ -59,6 +59,25 @@ def test_walk_rows_pnl():
     assert totals["81"] == 1000.0
 
 
+def test_qbo_scope_inc(client, auth_headers):
+    """Les scopes dynamiques « inc:{entreprise_id} » sont acceptés par le
+    flux de connexion QBO (un fichier QuickBooks par INC)."""
+    r = client.get(
+        "/api/v1/qbo/status?scope=inc:12", headers=auth_headers
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["connected"] is False  # rien de connecté en test
+
+    bad = client.get(
+        "/api/v1/qbo/status?scope=nimporte", headers=auth_headers
+    )
+    assert bad.status_code == 422
+    bad2 = client.get(
+        "/api/v1/qbo/status?scope=inc:abc", headers=auth_headers
+    )
+    assert bad2.status_code == 422
+
+
 def _seed_immeuble(run):
     from app.models.immobilier import (
         Bail,
