@@ -203,16 +203,6 @@ export default function ProjetsOptimisationPage() {
     }
   }, []);
 
-  // Sélection automatique du premier projet actif à l'arrivée — pas
-  // besoin de cliquer une tuile pour voir les détails.
-  useEffect(() => {
-    if (selId === null && projets.length > 0) {
-      setSelId(
-        projets.find((x) => x.status === "actif")?.id ?? projets[0].id
-      );
-    }
-  }, [projets, selId]);
-
   const loadDetail = useCallback(async (id: number) => {
     setLoadingDetail(true);
     try {
@@ -446,7 +436,18 @@ export default function ProjetsOptimisationPage() {
               ))}
             </div>
 
-            {loadingDetail && !detail ? (
+            {selId === null ? (
+              <p
+                className="rounded-xl border py-10 text-center text-sm"
+                style={{
+                  borderColor: "var(--qg-border)",
+                  color: "var(--qg-text-muted)"
+                }}
+              >
+                Choisis un projet ci-dessus pour voir son budget, ses
+                objectifs et ses négociations.
+              </p>
+            ) : loadingDetail && !detail ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
               </div>
