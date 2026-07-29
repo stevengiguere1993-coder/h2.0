@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Building2,
   Calendar,
+  LayoutGrid,
+  List,
   Loader2,
   Plus,
   RefreshCw,
@@ -12,7 +14,8 @@ import {
   Trash2,
   TrendingUp,
   UserPlus,
-  Users
+  Users,
+  X
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -107,12 +110,6 @@ type LocataireDispo = {
   loyer: number | null;
   deja_suivi: boolean;
 };
-
-const QBO_SCOPES_FIXES = [
-  { value: "immobilier", label: "QuickBooks — Gestion locative" },
-  { value: "entreprise", label: "QuickBooks — Gestion d'entreprise" },
-  { value: "construction", label: "QuickBooks — Construction" }
-];
 
 const NEGO_STATUTS: Record<string, { label: string; cls: string }> = {
   en_place: { label: "En place", cls: "badge badge-neutral" },
@@ -359,7 +356,7 @@ export default function ProjetsOptimisationPage() {
         }
       />
 
-      <div className="p-4 lg:p-6">
+      <div className="p-4 pb-28 lg:p-6 lg:pb-28">
         {error ? (
           <p
             className="mb-3 cursor-pointer rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300"
@@ -950,8 +947,17 @@ function BudgetSettingsModal({
   onChanged: () => void;
 }) {
   const confirm = useConfirm();
+  // La connexion d'un projet d'optimisation est TOUJOURS le fichier
+  // QuickBooks de l'INC (accessible via le compte comptable MGV) — pas
+  // de choix à faire : on pose le scope automatiquement.
   const incScope = `inc:${projet.entreprise_id}`;
-  const scope = projet.qbo_scope || "";
+  const scope = incScope;
+  useEffect(() => {
+    if (projet.qbo_scope !== incScope) {
+      void onPatchProjet({ qbo_scope: incScope });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incScope]);
 
   const [status, setStatus] = useState<{
     connected: boolean;
@@ -1130,55 +1136,51 @@ function BudgetSettingsModal({
           Réglages QuickBooks du budget
         </h3>
 
-        <label className="label mt-3 text-[10px] uppercase">
-          Connexion QuickBooks
-        </label>
-        <select
-          className="input"
-          value={scope}
-          onChange={(e) =>
-            void onPatchProjet({ qbo_scope: e.target.value || null })
-          }
-        >
-          <option value="">— choisir —</option>
-          <option value={incScope}>
-            QuickBooks de {projet.entreprise_nom} (propre à l&apos;INC)
-          </option>
-          {QBO_SCOPES_FIXES.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-        {!scope ? (
-          <p
-            className="mt-2 text-[11px]"
-            style={{ color: "var(--qg-text-muted)" }}
-          >
-            Choisis d&apos;abord la connexion — normalement le QuickBooks
-            propre à l&apos;INC du projet.
-          </p>
-        ) : status && !status.connected ? (
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className="text-[11px] text-amber-300">Non connecté.</span>
+        {status && !status.connected ? (
+          <div className="mt-3">
+            <p
+              className="text-[11px]"
+              style={{ color: "var(--qg-text-muted)" }}
+            >
+              Le budget se lit dans le fichier QuickBooks de{" "}
+              <strong>{projet.entreprise_nom}</strong>. Connecte-toi avec
+              ton compte comptable (MGV Développement) — Intuit te
+              demandera quelle compagnie ouvrir : choisis{" "}
+              {projet.entreprise_nom}.
+            </p>
             <button
               type="button"
               onClick={() => void connecter()}
               disabled={connecting}
-              className="btn-outline-accent btn-sm disabled:opacity-50"
-              title="Ouvre Intuit : choisis le fichier QuickBooks de cette compagnie et autorise Kratos (lecture)."
+              className="btn-accent mt-2 inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
             >
               {connecting ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : null}
-              Connecter ce QuickBooks
+              Connecter le QuickBooks de {projet.entreprise_nom}
             </button>
           </div>
         ) : status?.connected ? (
-          <p className="mt-1 text-[11px] text-emerald-400">
-            ✓ Connecté{status.company_name ? ` — ${status.company_name}` : ""}
-          </p>
-        ) : null}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <p className="text-[11px] text-emerald-400">
+              ✓ Connecté
+              {status.company_name ? ` — ${status.company_name}` : ""}
+            </p>
+            <button
+              type="button"
+              onClick={() => void connecter()}
+              disabled={connecting}
+              className="btn-ghost btn-sm"
+              title="Refaire la connexion Intuit (ex. mauvais fichier choisi)"
+            >
+              Changer
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center py-4">
+            <Loader2 className="h-4 w-4 animate-spin text-accent-500" />
+          </div>
+        )}
 
         {status?.connected ? (
           <>
@@ -1495,16 +1497,34 @@ function ObjectifsSection({
                 >
                   {o.label}
                 </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    saveObjectifs(objectifs.filter((_, j) => j !== i))
-                  }
-                  className="text-rose-400/70 hover:text-rose-400"
-                  title="Retirer cet objectif"
+                <span
+                  className="flex items-center gap-1 text-[11px]"
+                  style={{ color: "var(--qg-text-muted)" }}
                 >
-                  <Trash2 className="h-3 w-3" />
-                </button>
+                  Objectif
+                  <input
+                    className="input h-7 w-24 text-right text-[12px]"
+                    type="number"
+                    step="0.01"
+                    defaultValue={o.cible || ""}
+                    onBlur={(e) => {
+                      const next = [...objectifs];
+                      next[i] = { ...o, cible: Number(e.target.value) || 0 };
+                      saveObjectifs(next);
+                    }}
+                  />
+                  {o.unite && o.unite !== "$" ? o.unite : null}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      saveObjectifs(objectifs.filter((_, j) => j !== i))
+                    }
+                    className="ml-1 text-rose-400/70 hover:text-rose-400"
+                    title="Retirer cet objectif"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </span>
               </div>
               <p
                 className="mt-2 text-lg font-semibold tabular-nums"
@@ -1603,7 +1623,16 @@ function ObjectifsSection({
   );
 }
 
-// ─── Section 3 : Négociations locataires ───────────────────────
+// ─── Section 3 : Négociations locataires (kanban + liste) ──────
+
+const KANBAN_COLS = [
+  "en_place",
+  "a_contacter",
+  "en_discussion",
+  "entente",
+  "reste",
+  "parti"
+];
 
 function NegosSection({
   projet,
@@ -1613,10 +1642,16 @@ function NegosSection({
   onChanged: () => void;
 }) {
   const confirm = useConfirm();
+  const [view, setView] = useState<"kanban" | "liste">("kanban");
   const [openId, setOpenId] = useState<number | null>(null);
+  const [modalNegoId, setModalNegoId] = useState<number | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
 
   const nEntentes = projet.negos.filter((n) => n.statut === "entente").length;
+  const modalNego =
+    projet.negos.find((n) => n.id === modalNegoId) || null;
 
   async function patchNego(id: number, patch: Record<string, unknown>) {
     const r = await authedFetch(`/api/v1/optimisation/negos/${id}`, {
@@ -1638,7 +1673,11 @@ function NegosSection({
     const r = await authedFetch(`/api/v1/optimisation/negos/${n.id}`, {
       method: "DELETE"
     });
-    if (r.ok || r.status === 204) onChanged();
+    if (r.ok || r.status === 204) {
+      setModalNegoId(null);
+      setOpenId(null);
+      onChanged();
+    }
   }
 
   return (
@@ -1674,14 +1713,36 @@ function NegosSection({
             Ententes {nEntentes}/{projet.negos.length}
           </span>
         </h3>
-        <button
-          type="button"
-          onClick={() => setImportOpen(true)}
-          className="btn-ghost flex h-7 w-7 items-center justify-center rounded-lg p-0"
-          title="Importer des locataires de l'immeuble dans le suivi"
-        >
-          <UserPlus className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setView("kanban")}
+            className={`btn-ghost flex h-7 w-7 items-center justify-center rounded-lg p-0 ${
+              view === "kanban" ? "text-accent-500" : ""
+            }`}
+            title="Vue kanban"
+          >
+            <LayoutGrid className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("liste")}
+            className={`btn-ghost flex h-7 w-7 items-center justify-center rounded-lg p-0 ${
+              view === "liste" ? "text-accent-500" : ""
+            }`}
+            title="Vue liste"
+          >
+            <List className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setImportOpen(true)}
+            className="btn-ghost flex h-7 w-7 items-center justify-center rounded-lg p-0"
+            title="Importer des locataires de l'immeuble dans le suivi"
+          >
+            <UserPlus className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {projet.negos.length === 0 ? (
@@ -1690,11 +1751,103 @@ function NegosSection({
           <UserPlus className="inline h-3 w-3" /> pour choisir les
           locataires en place à suivre.
         </p>
+      ) : view === "kanban" ? (
+        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+          {KANBAN_COLS.map((col) => {
+            const st = NEGO_STATUTS[col];
+            const cards = projet.negos.filter((n) => n.statut === col);
+            return (
+              <div
+                key={col}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOverCol(col);
+                }}
+                onDragLeave={() =>
+                  setDragOverCol((c) => (c === col ? null : c))
+                }
+                onDrop={() => {
+                  if (dragId !== null) {
+                    const n = projet.negos.find((x) => x.id === dragId);
+                    if (n && n.statut !== col)
+                      void patchNego(dragId, { statut: col });
+                  }
+                  setDragId(null);
+                  setDragOverCol(null);
+                }}
+                className={`min-h-[120px] w-44 flex-shrink-0 rounded-lg border p-2 transition ${
+                  dragOverCol === col ? "border-accent-500" : ""
+                }`}
+                style={{
+                  borderColor:
+                    dragOverCol === col ? undefined : "var(--qg-border-soft)"
+                }}
+              >
+                <div className="mb-1.5 flex items-center justify-between gap-1">
+                  <span className={st.cls}>{st.label}</span>
+                  <span
+                    className="text-[10px] tabular-nums"
+                    style={{ color: "var(--qg-text-muted)" }}
+                  >
+                    {cards.length}
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  {cards.map((n) => (
+                    <button
+                      key={n.id}
+                      type="button"
+                      draggable
+                      onDragStart={() => setDragId(n.id)}
+                      onDragEnd={() => {
+                        setDragId(null);
+                        setDragOverCol(null);
+                      }}
+                      onClick={() => setModalNegoId(n.id)}
+                      className="block w-full cursor-grab rounded-lg border p-2 text-left transition hover:border-accent-500 active:cursor-grabbing"
+                      style={{ borderColor: "var(--qg-border)" }}
+                    >
+                      <span
+                        className="block truncate text-[12px] font-medium"
+                        style={{ color: "var(--qg-text)" }}
+                      >
+                        {n.nom_locataire}
+                      </span>
+                      <span
+                        className="mt-0.5 block text-[10px]"
+                        style={{ color: "var(--qg-text-muted)" }}
+                      >
+                        {n.logement_label ? `${n.logement_label} · ` : ""}
+                        {n.loyer_actuel
+                          ? `${fmtMoney(n.loyer_actuel)}/mois`
+                          : ""}
+                      </span>
+                      {n.type_entente && TYPES_ENTENTE[n.type_entente] ? (
+                        <span
+                          className="mt-0.5 block text-[10px]"
+                          style={{ color: "var(--qg-text-muted)" }}
+                        >
+                          {TYPES_ENTENTE[n.type_entente]}
+                          {n.montant_entente
+                            ? ` · ${fmtMoney(n.montant_entente)}`
+                            : ""}
+                        </span>
+                      ) : n.montant_entente ? (
+                        <span className="mt-0.5 block text-[10px] text-amber-300">
+                          {fmtMoney(n.montant_entente)}
+                        </span>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       ) : (
         <ul className="mt-3 space-y-2">
           {projet.negos.map((n) => {
             const st = NEGO_STATUTS[n.statut] || NEGO_STATUTS.en_place;
-            const events = parseEvents(n.events_json);
             const open = openId === n.id;
             return (
               <li
@@ -1744,165 +1897,16 @@ function NegosSection({
                   ) : null}
                   <span className={st.cls}>{st.label}</span>
                 </button>
-
                 {open ? (
                   <div
                     className="border-t px-3 py-3"
                     style={{ borderColor: "var(--qg-border-soft)" }}
                   >
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                      <div>
-                        <label className="label text-[10px] uppercase">
-                          Statut
-                        </label>
-                        <select
-                          className="input"
-                          value={n.statut}
-                          onChange={(e) =>
-                            void patchNego(n.id, { statut: e.target.value })
-                          }
-                        >
-                          {Object.entries(NEGO_STATUTS).map(([k, v]) => (
-                            <option key={k} value={k}>
-                              {v.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="label text-[10px] uppercase">
-                          Type d&apos;entente
-                        </label>
-                        <select
-                          className="input"
-                          value={n.type_entente || ""}
-                          onChange={(e) =>
-                            void patchNego(n.id, {
-                              type_entente: e.target.value || null
-                            })
-                          }
-                        >
-                          <option value="">—</option>
-                          {Object.entries(TYPES_ENTENTE).map(([k, v]) => (
-                            <option key={k} value={k}>
-                              {v}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="label text-[10px] uppercase">
-                          Montant en jeu ($)
-                        </label>
-                        <input
-                          className="input"
-                          type="number"
-                          step="0.01"
-                          defaultValue={n.montant_entente || ""}
-                          onBlur={(e) =>
-                            void patchNego(n.id, {
-                              montant_entente:
-                                Number(e.target.value) || null
-                            })
-                          }
-                          placeholder="indemnité, nouveau loyer…"
-                        />
-                      </div>
-                      <div>
-                        <label className="label text-[10px] uppercase">
-                          Date visée
-                        </label>
-                        <input
-                          className="input"
-                          type="date"
-                          defaultValue={n.date_cible || ""}
-                          onBlur={(e) =>
-                            void patchNego(n.id, {
-                              date_cible: e.target.value || null
-                            })
-                          }
-                        />
-                      </div>
-                      <div className="sm:col-span-2 xl:col-span-3">
-                        <label className="label text-[10px] uppercase">
-                          Entente / notes
-                        </label>
-                        <textarea
-                          className="input min-h-[54px]"
-                          defaultValue={n.entente || ""}
-                          onBlur={(e) =>
-                            void patchNego(n.id, {
-                              entente: e.target.value || null
-                            })
-                          }
-                          placeholder="ex. Accepte de quitter le 1er juillet contre 3 mois de loyer…"
-                        />
-                      </div>
-                      <div className="flex items-end justify-end">
-                        <button
-                          type="button"
-                          onClick={() => void deleteNego(n)}
-                          className="btn-outline-rose btn-sm"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          Retirer
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Timeline */}
-                    <div className="mt-3">
-                      <h4
-                        className="text-[10px] font-semibold uppercase tracking-wider"
-                        style={{ color: "var(--qg-text-muted)" }}
-                      >
-                        Timeline
-                      </h4>
-                      {events.length > 0 ? (
-                        <ul
-                          className="mt-1.5 space-y-1 border-l pl-3"
-                          style={{ borderColor: "var(--qg-border-soft)" }}
-                        >
-                          {events.map((ev, i) => (
-                            <li
-                              key={i}
-                              className="text-[12px]"
-                              style={{ color: "var(--qg-text)" }}
-                            >
-                              <span
-                                className="mr-2 tabular-nums text-[11px]"
-                                style={{ color: "var(--qg-text-muted)" }}
-                              >
-                                {ev.date}
-                              </span>
-                              {ev.texte}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
-                      <form
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          const input = e.currentTarget.elements.namedItem(
-                            "ev"
-                          ) as HTMLInputElement;
-                          const v = input.value.trim();
-                          if (!v) return;
-                          void patchNego(n.id, { add_event: v });
-                          input.value = "";
-                        }}
-                        className="mt-2 flex items-center gap-2"
-                      >
-                        <input
-                          name="ev"
-                          className="input h-8 flex-1 text-[12px]"
-                          placeholder="Ajouter un événement (appel, rencontre, offre…)"
-                        />
-                        <button type="submit" className="btn-secondary btn-sm">
-                          <Plus className="h-3.5 w-3.5" />
-                        </button>
-                      </form>
-                    </div>
+                    <NegoDetailPanel
+                      nego={n}
+                      onPatch={patchNego}
+                      onDelete={() => void deleteNego(n)}
+                    />
                   </div>
                 ) : null}
               </li>
@@ -1910,6 +1914,58 @@ function NegosSection({
           })}
         </ul>
       )}
+
+      {modalNego ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setModalNegoId(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border p-4"
+            style={{
+              borderColor: "var(--qg-border)",
+              backgroundColor: "var(--qg-card-bg)"
+            }}
+          >
+            <div className="mb-3 flex items-start justify-between gap-2">
+              <div>
+                <h3
+                  className="text-sm font-semibold"
+                  style={{ color: "var(--qg-text)" }}
+                >
+                  {modalNego.nom_locataire}
+                </h3>
+                <p
+                  className="text-[11px]"
+                  style={{ color: "var(--qg-text-muted)" }}
+                >
+                  {modalNego.logement_label
+                    ? `Logement ${modalNego.logement_label}`
+                    : ""}
+                  {modalNego.loyer_actuel
+                    ? `${modalNego.logement_label ? " · " : ""}${fmtMoney(
+                        modalNego.loyer_actuel
+                      )}/mois`
+                    : ""}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalNegoId(null)}
+                className="btn-ghost flex h-7 w-7 items-center justify-center rounded-lg p-0"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <NegoDetailPanel
+              nego={modalNego}
+              onPatch={patchNego}
+              onDelete={() => void deleteNego(modalNego)}
+            />
+          </div>
+        </div>
+      ) : null}
 
       {importOpen ? (
         <ImportLocatairesModal
@@ -1922,6 +1978,163 @@ function NegosSection({
         />
       ) : null}
     </section>
+  );
+}
+
+// ─── Détail d'une négo (partagé liste / modal kanban) ──────────
+
+function NegoDetailPanel({
+  nego: n,
+  onPatch,
+  onDelete
+}: {
+  nego: Nego;
+  onPatch: (id: number, patch: Record<string, unknown>) => Promise<void>;
+  onDelete: () => void;
+}) {
+  const events = parseEvents(n.events_json);
+  return (
+    <>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div>
+          <label className="label text-[10px] uppercase">Statut</label>
+          <select
+            className="input"
+            value={n.statut}
+            onChange={(e) => void onPatch(n.id, { statut: e.target.value })}
+          >
+            {Object.entries(NEGO_STATUTS).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label text-[10px] uppercase">
+            Type d&apos;entente
+          </label>
+          <select
+            className="input"
+            value={n.type_entente || ""}
+            onChange={(e) =>
+              void onPatch(n.id, { type_entente: e.target.value || null })
+            }
+          >
+            <option value="">—</option>
+            {Object.entries(TYPES_ENTENTE).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label text-[10px] uppercase">
+            Montant en jeu ($)
+          </label>
+          <input
+            className="input"
+            type="number"
+            step="0.01"
+            defaultValue={n.montant_entente || ""}
+            onBlur={(e) =>
+              void onPatch(n.id, {
+                montant_entente: Number(e.target.value) || null
+              })
+            }
+            placeholder="indemnité, nouveau loyer…"
+          />
+        </div>
+        <div>
+          <label className="label text-[10px] uppercase">Date visée</label>
+          <input
+            className="input"
+            type="date"
+            defaultValue={n.date_cible || ""}
+            onBlur={(e) =>
+              void onPatch(n.id, { date_cible: e.target.value || null })
+            }
+          />
+        </div>
+        <div className="sm:col-span-2 xl:col-span-3">
+          <label className="label text-[10px] uppercase">
+            Entente / notes
+          </label>
+          <textarea
+            className="input min-h-[54px]"
+            defaultValue={n.entente || ""}
+            onBlur={(e) =>
+              void onPatch(n.id, { entente: e.target.value || null })
+            }
+            placeholder="ex. Accepte de quitter le 1er juillet contre 3 mois de loyer…"
+          />
+        </div>
+        <div className="flex items-end justify-end">
+          <button
+            type="button"
+            onClick={onDelete}
+            className="btn-outline-rose btn-sm"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Retirer
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-3">
+        <h4
+          className="text-[10px] font-semibold uppercase tracking-wider"
+          style={{ color: "var(--qg-text-muted)" }}
+        >
+          Timeline
+        </h4>
+        {events.length > 0 ? (
+          <ul
+            className="mt-1.5 space-y-1 border-l pl-3"
+            style={{ borderColor: "var(--qg-border-soft)" }}
+          >
+            {events.map((ev, i) => (
+              <li
+                key={i}
+                className="text-[12px]"
+                style={{ color: "var(--qg-text)" }}
+              >
+                <span
+                  className="mr-2 tabular-nums text-[11px]"
+                  style={{ color: "var(--qg-text-muted)" }}
+                >
+                  {ev.date}
+                </span>
+                {ev.texte}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const input = e.currentTarget.elements.namedItem(
+              "ev"
+            ) as HTMLInputElement;
+            const v = input.value.trim();
+            if (!v) return;
+            void onPatch(n.id, { add_event: v });
+            input.value = "";
+          }}
+          className="mt-2 flex items-center gap-2"
+        >
+          <input
+            name="ev"
+            className="input h-8 flex-1 text-[12px]"
+            placeholder="Ajouter un événement (appel, rencontre, offre…)"
+          />
+          <button type="submit" className="btn-secondary btn-sm">
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </form>
+      </div>
+    </>
   );
 }
 
