@@ -135,6 +135,12 @@ class OptimisationNego(Base, TimestampUpdateMixin):
         default="en_place", server_default="en_place",
     )
 
+    #: Type d'entente : cash_for_raise | cash_for_keys | renovation |
+    #: autre. Colonne additive → ensure_critical_columns.
+    type_entente: Mapped[Optional[str]] = mapped_column(
+        String(24), nullable=True
+    )
+
     #: Résumé de l'entente prise (texte libre) + montant en jeu
     #: (indemnité de départ, nouveau loyer…) + date visée.
     entente: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

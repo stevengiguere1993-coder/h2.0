@@ -227,6 +227,25 @@ def test_projet_complet(client, auth_headers, run):
     assert o.status_code == 200
     assert float(o.json()["objectif_revenus_mensuels"]) == 2000.0
 
+    # v2 : historique mensuel des revenus (reconstitué des baux) +
+    # compteur de logements.
+    d0 = client.get(
+        f"/api/v1/optimisation/projets/{pid}", headers=auth_headers
+    ).json()
+    assert d0["nb_logements"] == 2
+    histo = d0["revenus_historique"]
+    assert histo, "historique vide"
+    assert histo[-1]["montant"] == 1500.0  # mois courant : les 2 baux
+    assert all("mois" in h and "montant" in h for h in histo)
+
+    # v2 : import sélectif — liste des disponibles puis choix.
+    dispo = client.get(
+        f"/api/v1/optimisation/projets/{pid}/locataires-disponibles",
+        headers=auth_headers,
+    )
+    assert dispo.status_code == 200, dispo.text
+    assert all(x["deja_suivi"] for x in dispo.json())  # seed les a pris
+
     # Négos : statut + entente + timeline (append).
     nid = p["negos"][0]["id"]
     n = client.patch(
@@ -241,6 +260,31 @@ def test_projet_complet(client, auth_headers, run):
     d = n.json()
     assert d["statut"] == "en_discussion"
     assert "Premier appel" in (d["events_json"] or "")
+    # v2 : type d'entente valide / invalide.
+    te = client.patch(
+        f"/api/v1/optimisation/negos/{nid}",
+        headers=auth_headers,
+        json={"type_entente": "cash_for_keys"},
+    )
+    assert te.status_code == 200, te.text
+    assert te.json()["type_entente"] == "cash_for_keys"
+    assert (
+        client.patch(
+            f"/api/v1/optimisation/negos/{nid}",
+            headers=auth_headers,
+            json={"type_entente": "nimporte"},
+        ).status_code
+        == 422
+    )
+    # v2 : depart_prevu retiré des statuts valides.
+    assert (
+        client.patch(
+            f"/api/v1/optimisation/negos/{nid}",
+            headers=auth_headers,
+            json={"statut": "depart_prevu"},
+        ).status_code
+        == 422
+    )
     bad = client.patch(
         f"/api/v1/optimisation/negos/{nid}",
         headers=auth_headers,
