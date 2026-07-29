@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Briefcase,
   Building2,
   Calendar,
   ChevronDown,
@@ -2855,11 +2854,7 @@ function RecherchePanel({
   nego: Nego;
   onPatch: (id: number, patch: Record<string, unknown>) => Promise<void>;
 }) {
-  const [ouvert, setOuvert] = useState(false);
   const r = parseRecherche(n.recherche_json);
-  const rempli = Object.values(r).filter(
-    (v) => typeof v === "string" && v.trim()
-  ).length;
 
   function setChamp(cle: keyof Recherche, valeur: string) {
     const next: Recherche = { ...r };
@@ -2881,103 +2876,69 @@ function RecherchePanel({
     },
     {
       label: "Registraire des entreprises",
-      url: `https://www.registreentreprises.gouv.qc.ca/RQAnonymeGR/GR/GR03/GR03A2_19A_PIU_RechEnt_PC/PageRechSimple.aspx`
+      url: "https://www.registreentreprises.gouv.qc.ca/RQAnonymeGR/GR/GR03/GR03A2_19A_PIU_RechEnt_PC/PageRechSimple.aspx"
     }
   ];
 
   return (
-    <div
-      className="mt-3 rounded-lg border"
-      style={{ borderColor: "var(--qg-border-soft)" }}
-    >
-      <button
-        type="button"
-        onClick={() => setOuvert((v) => !v)}
-        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
+    <div className="mt-4">
+      <h4
+        className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-semibold uppercase tracking-wider"
+        style={{ color: "var(--qg-text-muted)" }}
       >
-        <span
-          className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider"
-          style={{ color: "var(--qg-text-muted)" }}
-        >
-          <Search className="h-3 w-3" />
-          Préparation de la négo
-          {rempli > 0 ? (
-            <span className="badge badge-sky">{rempli}</span>
-          ) : null}
-        </span>
-        {ouvert ? (
-          <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 opacity-60" />
-        )}
-      </button>
-
-      {ouvert ? (
-        <div
-          className="border-t px-3 py-3"
-          style={{ borderColor: "var(--qg-border-soft)" }}
-        >
-          <div className="mb-3 flex flex-wrap items-center gap-1.5">
-            <span
-              className="inline-flex items-center gap-1 text-[11px]"
-              style={{ color: "var(--qg-text-muted)" }}
+        <Search className="h-3 w-3" />
+        Préparation de la négo
+        <span className="inline-flex flex-wrap items-center gap-1 normal-case tracking-normal">
+          {liens.map((l) => (
+            <a
+              key={l.label}
+              href={l.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-normal transition hover:border-accent-500 hover:text-accent-500"
+              style={{
+                borderColor: "var(--qg-border)",
+                color: "var(--qg-text-muted)"
+              }}
+              title={`Chercher « ${n.nom_locataire} » sur ${l.label}`}
             >
-              <Briefcase className="h-3 w-3" />
-              Chercher « {n.nom_locataire} » :
-            </span>
-            {liens.map((l) => (
-              <a
-                key={l.label}
-                href={l.url}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition hover:border-accent-500 hover:text-accent-500"
-                style={{
-                  borderColor: "var(--qg-border)",
-                  color: "var(--qg-text-muted)"
-                }}
-              >
-                {l.label}
-                <ExternalLink className="h-2.5 w-2.5" />
-              </a>
-            ))}
-          </div>
+              {l.label}
+              <ExternalLink className="h-2.5 w-2.5" />
+            </a>
+          ))}
+        </span>
+      </h4>
 
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {RECHERCHE_CHAMPS.map((c) => (
-              <div key={c.cle}>
-                <label className="label text-[10px] uppercase">
-                  {c.label}
-                </label>
-                <input
-                  className="input h-8 text-[12px]"
-                  defaultValue={(r[c.cle] as string) || ""}
-                  placeholder={c.placeholder}
-                  onBlur={(e) => {
-                    if ((e.target.value || "") !== ((r[c.cle] as string) || ""))
-                      setChamp(c.cle, e.target.value);
-                  }}
-                />
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-2">
-            <label className="label text-[10px] uppercase">
-              Notes de recherche
-            </label>
-            <textarea
-              className="input min-h-[54px] text-[12px]"
-              defaultValue={r.notes || ""}
-              placeholder="Ce qu'on sait de sa situation, ce qui peut l'intéresser dans une entente…"
+      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        {RECHERCHE_CHAMPS.map((c) => (
+          <div key={c.cle}>
+            <label className="label text-[10px] uppercase">{c.label}</label>
+            <input
+              className="input h-8 text-[12px]"
+              defaultValue={(r[c.cle] as string) || ""}
+              placeholder={c.placeholder}
               onBlur={(e) => {
-                if ((e.target.value || "") !== (r.notes || ""))
-                  setChamp("notes", e.target.value);
+                if ((e.target.value || "") !== ((r[c.cle] as string) || ""))
+                  setChamp(c.cle, e.target.value);
               }}
             />
           </div>
+        ))}
+        <div className="sm:col-span-2 xl:col-span-4">
+          <label className="label text-[10px] uppercase">
+            Notes de recherche
+          </label>
+          <textarea
+            className="input min-h-[54px] text-[12px]"
+            defaultValue={r.notes || ""}
+            placeholder="Ce qu'on sait de sa situation, ce qui peut l'intéresser dans une entente…"
+            onBlur={(e) => {
+              if ((e.target.value || "") !== (r.notes || ""))
+                setChamp("notes", e.target.value);
+            }}
+          />
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }
