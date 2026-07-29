@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 import hmac
 import logging
 import secrets
@@ -41,6 +42,13 @@ from app.models.qbo_token import QboToken
 #: Scopes de connexion valides : "construction" (legacy qbo_tokens) +
 #: les scopes multi-compagnies (qbo_connections).
 _ALL_SCOPES = ("construction",) + QBO_CONNECTION_SCOPES
+
+
+def _scope_valide(scope: str) -> bool:
+    """Scopes fixes + « inc:{entreprise_id} » : chaque INC a son propre
+    fichier QuickBooks (Phil y accède via son compte comptable) — une
+    connexion OAuth par compagnie, stockée dans qbo_connections."""
+    return scope in _ALL_SCOPES or bool(re.fullmatch(r"inc:\d{1,10}", scope))
 
 
 log = logging.getLogger(__name__)
@@ -104,7 +112,7 @@ def _verify_state(token: str) -> Optional[str]:
         if (time.time() - ts) > _STATE_TTL_SECONDS:
             return None
         scope = parts[2] if len(parts) >= 3 else "construction"
-        return scope if scope in _ALL_SCOPES else None
+        return scope if _scope_valide(scope) else None
     except Exception:
         return None
 
@@ -149,7 +157,7 @@ async def qbo_connect(
     /callback endpoint with `code` + `realmId`. La MÊME app Intuit sert
     toutes les compagnies — `scope` choisit le pôle Kratos auquel la
     compagnie autorisée sera rattachée."""
-    if scope not in _ALL_SCOPES:
+    if not _scope_valide(scope):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "scope invalide")
     if not settings.quickbooks_client_id or not settings.quickbooks_client_secret:
         raise HTTPException(
@@ -187,12 +195,18 @@ async def qbo_callback(
 
     frontend = settings.frontend_url.rstrip("/")
 
-    def _redirect(reason: str) -> RedirectResponse:
+    def _redirect(reason: str, scope: Optional[str] = None) -> RedirectResponse:
         # next-intl est configuré en localePrefix "as-needed" : la locale
         # par défaut (fr) NE doit PAS être préfixée dans l'URL, sinon
         # Next.js renvoie 404. On cible donc directement /app/...
+        # Une connexion « inc:* » revient vers Projets - Optimisation.
+        path = (
+            "/entreprises/projets-optimisation"
+            if scope and scope.startswith("inc:")
+            else "/app/parametres/comptabilite"
+        )
         return RedirectResponse(
-            f"{frontend}/app/parametres/comptabilite?qbo={reason}",
+            f"{frontend}{path}?qbo={reason}",
             status_code=status.HTTP_302_FOUND,
         )
 
@@ -228,16 +242,16 @@ async def qbo_callback(
                 log.error(
                     "QBO code exchange failed: %s %s", r.status_code, r.text
                 )
-                return _redirect("error:token_exchange_failed")
+                return _redirect("error:token_exchange_failed", scope)
             tok = r.json()
     except Exception as exc:
         log.exception("QBO code exchange crashed: %s", exc)
-        return _redirect("error:token_exchange_crashed")
+        return _redirect("error:token_exchange_crashed", scope)
 
     refresh_token = tok.get("refresh_token")
     access_token = tok.get("access_token")
     if not refresh_token or not access_token:
-        return _redirect("error:no_tokens_returned")
+        return _redirect("error:no_tokens_returned", scope)
 
     # Fetch CompanyInfo for a pretty display in the UI
     company_name: Optional[str] = None
@@ -336,7 +350,7 @@ async def qbo_callback(
         except Exception as exc:
             log.warning("Could not reset scoped QBO client: %s", exc)
 
-    return _redirect("connected")
+    return _redirect("connected", scope)
 
 
 @router.get("/status", response_model=StatusResponse)
@@ -345,7 +359,7 @@ async def qbo_status(
     _: CurrentUser,
     scope: str = Query(default="construction"),
 ) -> StatusResponse:
-    if scope not in _ALL_SCOPES:
+    if not _scope_valide(scope):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "scope invalide")
     active_env = (settings.quickbooks_env or "sandbox").lower()
     if scope == "construction":
@@ -384,7 +398,7 @@ async def qbo_disconnect(
     you want to fully revoke, do it from the QBO company settings
     (Apps → Disconnect). Keeping local-only keeps the call idempotent
     and avoids blocking on Intuit's revoke endpoint."""
-    if scope not in _ALL_SCOPES:
+    if not _scope_valide(scope):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "scope invalide")
     if scope == "construction":
         await db.execute(delete(QboToken).where(QboToken.id == 1))

@@ -12,6 +12,7 @@ import {
   BarChart3,
   Brain,
   Briefcase,
+  TrendingUp,
   Calendar,
   ChevronDown,
   Clock,
@@ -270,6 +271,11 @@ export default function EntreprisesLayout({
       label: "Tâches",
       icon: Target,
       badge: openTasksCount || undefined
+    },
+    {
+      href: "/entreprises/projets-optimisation",
+      label: "Projets · Optimisation",
+      icon: TrendingUp
     },
     { href: "/entreprises/kratos", label: "Kratos · Cerveau", icon: Brain },
     { href: "/entreprises/rencontres", label: "Rencontres", icon: Calendar },
