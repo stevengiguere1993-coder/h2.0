@@ -372,6 +372,21 @@ class QuickBooksClient:
     # ------------------------------------------------------------------
     # Customers
     # ------------------------------------------------------------------
+    async def report(
+        self, name: str, **params: str
+    ) -> Dict[str, Any]:
+        """Run a QBO REPORT (read-only) and return its raw JSON.
+
+        Example:
+            await qbo.report(
+                "ProfitAndLoss",
+                start_date="2026-01-01", end_date="2026-07-29",
+            )
+        """
+        q = {"minorversion": "70"}
+        q.update({k: v for k, v in params.items() if v is not None})
+        return await self._request("GET", f"/reports/{name}", params=q)
+
     async def query(self, sql: str) -> List[Dict[str, Any]]:
         """Run a QBO 'query' statement and return the first entity bucket.
 

@@ -97,6 +97,11 @@ from app.models.raci import (  # noqa: F401
     RaciSubsection,
 )
 from app.models.qg_embedding import Embedding  # noqa: F401
+from app.models.optimisation import (  # noqa: F401
+    OptimisationBudgetLigne,
+    OptimisationNego,
+    OptimisationProjet,
+)
 from app.models.rencontre import (  # noqa: F401
     Rencontre,
     RencontreSection,

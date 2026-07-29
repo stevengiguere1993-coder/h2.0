@@ -232,6 +232,8 @@ PAGES: list[PageEntry] = [
     # grille) — défaut admin = comportement pré-v2 du pôle.
     _p("entreprises.taches", "Tâches (QG)", "entreprises", "admin",
        "/entreprises/taches"),
+    _p("entreprises.projets_optimisation", "Projets - Optimisation",
+       "entreprises", "admin", "/entreprises/projets-optimisation"),
     _p("entreprises.reglages", "Réglages (QG)", "entreprises", "admin",
        "/entreprises/reglages"),
     _p("entreprises.organigramme", "Organigramme", "entreprises", "admin",
