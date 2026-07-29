@@ -179,6 +179,10 @@ const TYPES_ENTENTE: Record<string, string> = {
   autre: "Autre"
 };
 
+/** Fonds des deux familles de colonnes du tableau de budget. */
+const GRP_BUDGET = "bg-sky-500/[0.07]";
+const GRP_FIN = "bg-violet-500/[0.07]";
+
 function fmtMoney(v: number | null | undefined): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   return new Intl.NumberFormat("fr-CA", {
@@ -972,7 +976,7 @@ function BudgetSection({
             className="text-sm font-semibold"
             style={{ color: "var(--qg-text)" }}
           >
-            Budget &amp; dépensé (QuickBooks)
+            Budget
           </h3>
           <p
             className="mt-1 inline-flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]"
@@ -1033,29 +1037,57 @@ function BudgetSection({
         </p>
       ) : (
         <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
+          <table className="w-full min-w-[760px] text-sm">
             <thead>
+              {/* Deux familles de colonnes : le SUIVI du budget, puis
+                  le FINANCEMENT (d'où vient l'argent). */}
+              <tr className="text-left text-[10px] uppercase tracking-wider">
+                <th className="pb-1" />
+                <th
+                  colSpan={3}
+                  className={`${GRP_BUDGET} rounded-t-lg px-2 pb-1 pt-1.5 text-center font-semibold`}
+                >
+                  Suivi du budget
+                </th>
+                <th className="w-2" />
+                <th
+                  colSpan={3}
+                  className={`${GRP_FIN} rounded-t-lg px-2 pb-1 pt-1.5 text-center font-semibold`}
+                >
+                  Financement
+                </th>
+                <th className="pb-1" />
+              </tr>
               <tr
                 className="text-left text-[10px] uppercase tracking-wider"
                 style={{ color: "var(--qg-text-muted)" }}
               >
                 <th className="pb-2 pr-2">Catégorie</th>
-                <th className="pb-2 pr-2">Budget</th>
-                <th className="pb-2 pr-2">Dépensé</th>
-                <th className="pb-2 pr-2">Écart</th>
-                <th className="pb-2 pr-2" title="Argent comptant réservé à cette enveloppe">
-                  Comptant
+                <th className={`${GRP_BUDGET} pb-2 pl-2 pr-2`}>
+                  Budget total
                 </th>
-                <th className="pb-2 pr-2" title="Financement encaissé (lu de QuickBooks)">
+                <th className={`${GRP_BUDGET} pb-2 pr-2`}>Total dépensé</th>
+                <th className={`${GRP_BUDGET} pb-2 pr-2`}>Écart</th>
+                <th />
+                <th
+                  className={`${GRP_FIN} pb-2 pl-2 pr-2`}
+                  title="Argent comptant mis au départ pour cette enveloppe"
+                >
+                  Comptant initial
+                </th>
+                <th
+                  className={`${GRP_FIN} pb-2 pr-2`}
+                  title="Financement encaissé (lu de QuickBooks)"
+                >
                   Financé
                 </th>
                 <th
-                  className="pb-2 pr-2"
-                  title="(Comptant + financé) − dépensé : ce qu'il reste pour payer"
+                  className={`${GRP_FIN} pb-2 pr-2`}
+                  title="(Comptant initial + financé) − total dépensé : ce qu'il reste pour payer"
                 >
-                  Disponible
+                  Argent disponible
                 </th>
-                <th className="pb-2 text-right">État</th>
+                <th className="pb-2 pl-2 text-right">État</th>
               </tr>
             </thead>
             <tbody>
@@ -1082,7 +1114,7 @@ function BudgetSection({
                     >
                       {l.nom}
                     </td>
-                    <td className="py-2 pr-2">
+                    <td className={`${GRP_BUDGET} py-2 pl-2 pr-2`}>
                       <input
                         className="input h-8 w-24 text-[13px]"
                         type="number"
@@ -1097,13 +1129,13 @@ function BudgetSection({
                       />
                     </td>
                     <td
-                      className="py-2 pr-2 tabular-nums"
+                      className={`${GRP_BUDGET} py-2 pr-2 tabular-nums`}
                       style={{ color: "var(--qg-text)" }}
                     >
                       {dep === null ? "—" : fmtMoney(dep)}
                     </td>
                     <td
-                      className={`py-2 pr-2 font-semibold tabular-nums ${
+                      className={`${GRP_BUDGET} py-2 pr-2 font-semibold tabular-nums ${
                         ecart === null
                           ? ""
                           : ecart < 0
@@ -1113,14 +1145,15 @@ function BudgetSection({
                     >
                       {ecart === null ? "—" : fmtMoney(ecart)}
                     </td>
-                    <td className="py-2 pr-2">
+                    <td />
+                    <td className={`${GRP_FIN} py-2 pl-2 pr-2`}>
                       <input
                         className="input h-8 w-24 text-[13px]"
                         type="number"
                         step="0.01"
                         defaultValue={comptant || ""}
                         placeholder="0"
-                        title="Argent comptant disponible pour cette enveloppe"
+                        title="Argent comptant mis au départ pour cette enveloppe"
                         onBlur={(e) => {
                           const v = Number(e.target.value) || 0;
                           if (v !== comptant)
@@ -1130,7 +1163,7 @@ function BudgetSection({
                         }}
                       />
                     </td>
-                    <td className="py-2 pr-2">
+                    <td className={`${GRP_FIN} py-2 pr-2`}>
                       <button
                         type="button"
                         onClick={() => setFinLigne(l)}
@@ -1151,13 +1184,13 @@ function BudgetSection({
                       </button>
                     </td>
                     <td
-                      className={`py-2 pr-2 font-semibold tabular-nums ${
+                      className={`${GRP_FIN} py-2 pr-2 font-semibold tabular-nums ${
                         dispo < 0 ? "text-rose-400" : "text-emerald-400"
                       }`}
                     >
                       {fmtMoney(dispo)}
                     </td>
-                    <td className="py-2 text-right">
+                    <td className="py-2 pl-2 text-right">
                       {st ? <span className={st.cls}>{st.label}</span> : null}
                     </td>
                   </tr>
@@ -1171,19 +1204,19 @@ function BudgetSection({
                   Total
                 </td>
                 <td
-                  className="py-2 pr-2 tabular-nums"
+                  className={`${GRP_BUDGET} rounded-bl-lg py-2 pl-2 pr-2 tabular-nums`}
                   style={{ color: "var(--qg-text)" }}
                 >
                   {fmtMoney(totalBudget)}
                 </td>
                 <td
-                  className="py-2 pr-2 tabular-nums"
+                  className={`${GRP_BUDGET} py-2 pr-2 tabular-nums`}
                   style={{ color: "var(--qg-text)" }}
                 >
                   {fmtMoney(totalDepense)}
                 </td>
                 <td
-                  className={`py-2 pr-2 tabular-nums ${
+                  className={`${GRP_BUDGET} rounded-br-lg py-2 pr-2 tabular-nums ${
                     totalBudget - totalDepense < 0
                       ? "text-rose-400"
                       : "text-emerald-400"
@@ -1191,20 +1224,21 @@ function BudgetSection({
                 >
                   {fmtMoney(totalBudget - totalDepense)}
                 </td>
+                <td />
                 <td
-                  className="py-2 pr-2 tabular-nums"
+                  className={`${GRP_FIN} rounded-bl-lg py-2 pl-2 pr-2 tabular-nums`}
                   style={{ color: "var(--qg-text)" }}
                 >
                   {fmtMoney(totalComptant)}
                 </td>
                 <td
-                  className="py-2 pr-2 tabular-nums"
+                  className={`${GRP_FIN} py-2 pr-2 tabular-nums`}
                   style={{ color: "var(--qg-text)" }}
                 >
                   {fmtMoney(totalFinance)}
                 </td>
                 <td
-                  className={`py-2 pr-2 tabular-nums ${
+                  className={`${GRP_FIN} rounded-br-lg py-2 pr-2 tabular-nums ${
                     totalComptant + totalFinance - totalDepense < 0
                       ? "text-rose-400"
                       : "text-emerald-400"
@@ -1845,12 +1879,14 @@ function ObjectifsSection({
   const revAn = Number(projet.objectif_revenus_annuels) || 0;
   const revObj = annuel ? revAn || revMois * 12 : revMois || revAn / 12;
   const revAct = (projet.revenus_actuels_mensuels || 0) * k;
-  const revPct =
-    revObj > 0 ? Math.min(100, Math.round((revAct / revObj) * 100)) : 0;
+  //: Le pourcentage réel est affiché même au-delà de 100 % ; seule la
+  //: largeur de la barre est bornée.
+  const revPct = revObj > 0 ? Math.round((revAct / revObj) * 100) : 0;
   const depMois = Number(projet.objectif_depenses_mensuelles) || 0;
   const depAn = Number(projet.objectif_depenses_annuelles) || 0;
   const depObj = annuel ? depAn || depMois * 12 : depMois || depAn / 12;
   const depAct = (projet.depenses_actuelles_mensuelles || 0) * k;
+  const depPct = depObj > 0 ? Math.round((depAct / depObj) * 100) : 0;
   const suffixe = annuel ? "/an" : "/mois";
 
   const histo = projet.revenus_historique || [];
@@ -1968,7 +2004,7 @@ function ObjectifsSection({
                   className={`h-full rounded-full ${
                     revPct >= 100 ? "bg-emerald-500" : "bg-accent-500"
                   }`}
-                  style={{ width: `${revPct}%` }}
+                  style={{ width: `${Math.min(100, revPct)}%` }}
                 />
               </div>
               <p
@@ -1976,7 +2012,11 @@ function ObjectifsSection({
                 style={{ color: "var(--qg-text-muted)" }}
               >
                 {revAct >= revObj
-                  ? "Objectif atteint ✓"
+                  ? `${revPct} % — objectif atteint ✓${
+                      revPct > 100
+                        ? ` (+${fmtMoney(revAct - revObj)} ${suffixe})`
+                        : ""
+                    }`
                   : `${revPct} % — il manque ${fmtMoney(
                       revObj - revAct
                     )} ${suffixe}`}
@@ -2087,19 +2127,32 @@ function ObjectifsSection({
             {fmtMoney((projet.depenses_actuelles_mensuelles || 0) * 12)}/an
           </p>
           {depObj > 0 ? (
-            <p
-              className={`mt-1 text-[11px] ${
-                depAct <= depObj ? "text-emerald-400" : "text-rose-400"
-              }`}
-            >
-              {depAct <= depObj
-                ? `Sous l'objectif de ${fmtMoney(
-                    depObj - depAct
-                  )} ${suffixe} ✓`
-                : `Dépasse l'objectif de ${fmtMoney(
-                    depAct - depObj
-                  )} ${suffixe}`}
-            </p>
+            <>
+              <div
+                className="mt-2 h-2 w-full overflow-hidden rounded-full"
+                style={{ backgroundColor: "var(--qg-border-soft)" }}
+              >
+                <div
+                  className={`h-full rounded-full ${
+                    depAct <= depObj ? "bg-emerald-500" : "bg-rose-500"
+                  }`}
+                  style={{ width: `${Math.min(100, depPct)}%` }}
+                />
+              </div>
+              <p
+                className={`mt-1 text-[11px] ${
+                  depAct <= depObj ? "text-emerald-400" : "text-rose-400"
+                }`}
+              >
+                {depAct <= depObj
+                  ? `${depPct} % — sous l'objectif de ${fmtMoney(
+                      depObj - depAct
+                    )} ${suffixe} ✓`
+                  : `${depPct} % — dépasse l'objectif de ${fmtMoney(
+                      depAct - depObj
+                    )} ${suffixe}`}
+              </p>
+            </>
           ) : null}
         </div>
 
@@ -2107,7 +2160,7 @@ function ObjectifsSection({
         {objectifs.map((o, i) => {
           const pct =
             o.cible > 0
-              ? Math.min(100, Math.round(((o.actuel || 0) / o.cible) * 100))
+              ? Math.round(((o.actuel || 0) / o.cible) * 100)
               : 0;
           return (
             <div
@@ -2182,7 +2235,7 @@ function ObjectifsSection({
                   className={`h-full rounded-full ${
                     pct >= 100 ? "bg-emerald-500" : "bg-accent-500"
                   }`}
-                  style={{ width: `${pct}%` }}
+                  style={{ width: `${Math.min(100, pct)}%` }}
                 />
               </div>
               <p
