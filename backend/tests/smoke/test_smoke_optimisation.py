@@ -176,7 +176,20 @@ def test_projet_complet(client, auth_headers, run):
     # Réels locatifs : 800 + 700 de loyers ; 120 + 6000/12 = 620 de dépenses.
     assert p["revenus_actuels_mensuels"] == 1500.0
     assert p["depenses_actuelles_mensuelles"] == 620.0
-    noms = {n["nom_locataire"] for n in p["negos"]}
+    # v5 : plus d'import automatique des locataires à la création.
+    assert p["negos"] == []
+    imp0 = client.post(
+        f"/api/v1/optimisation/projets/{pid}/importer-locataires",
+        headers=auth_headers,
+    )
+    assert imp0.status_code == 200
+    assert imp0.json()["created"] == 2
+    noms = {
+        n["nom_locataire"]
+        for n in client.get(
+            f"/api/v1/optimisation/projets/{pid}", headers=auth_headers
+        ).json()["negos"]
+    }
     assert noms == {"Alice Opti", "Bob Opti"}
 
     # Budget : enveloppe + édition + mapping QBO stocké tel quel.
@@ -246,8 +259,63 @@ def test_projet_complet(client, auth_headers, run):
     assert dispo.status_code == 200, dispo.text
     assert all(x["deja_suivi"] for x in dispo.json())  # seed les a pris
 
+    # v5 : financement + comptant par enveloppe, objectifs annuels,
+    # compte bancaire du projet, recherche locataire.
+    v5 = client.patch(
+        f"/api/v1/optimisation/budget-lignes/{lid}",
+        headers=auth_headers,
+        json={
+            "comptant_disponible": 20000,
+            "qbo_financement_accounts_json": json.dumps(
+                [{"id": "90", "name": "Marge de crédit"}]
+            ),
+        },
+    )
+    assert v5.status_code == 200, v5.text
+    assert float(v5.json()["comptant_disponible"]) == 20000.0
+    assert "Marge" in (v5.json()["qbo_financement_accounts_json"] or "")
+
+    o5 = client.patch(
+        f"/api/v1/optimisation/projets/{pid}",
+        headers=auth_headers,
+        json={
+            "objectif_revenus_annuels": 24000,
+            "qbo_bank_account_id": "35",
+            "qbo_bank_account_name": "Compte projet",
+        },
+    )
+    assert o5.status_code == 200, o5.text
+    assert float(o5.json()["objectif_revenus_annuels"]) == 24000.0
+    assert o5.json()["qbo_bank_account_name"] == "Compte projet"
+
+    # La réponse QBO expose les 3 blocs même sans connexion (erreur propre).
+    q5 = client.get(
+        f"/api/v1/optimisation/projets/{pid}/qbo-depenses",
+        headers=auth_headers,
+    ).json()
+    assert "financement_par_ligne" in q5 and "solde_bancaire" in q5
+
+    # Les comptes se listent par famille (validation du paramètre kind).
+    for kind in ("depense", "financement", "banque"):
+        assert (
+            client.get(
+                f"/api/v1/optimisation/qbo-comptes?scope=immobilier&kind={kind}",
+                headers=auth_headers,
+            ).status_code
+            == 200
+        )
+    assert (
+        client.get(
+            "/api/v1/optimisation/qbo-comptes?scope=immobilier&kind=nimporte",
+            headers=auth_headers,
+        ).status_code
+        == 422
+    )
+
     # Négos : statut + entente + timeline (append).
-    nid = p["negos"][0]["id"]
+    nid = client.get(
+        f"/api/v1/optimisation/projets/{pid}", headers=auth_headers
+    ).json()["negos"][0]["id"]
     n = client.patch(
         f"/api/v1/optimisation/negos/{nid}",
         headers=auth_headers,
@@ -268,6 +336,19 @@ def test_projet_complet(client, auth_headers, run):
     )
     assert te.status_code == 200, te.text
     assert te.json()["type_entente"] == "cash_for_keys"
+    # v5 : préparation de la négo (recherche sur le locataire).
+    rc = client.patch(
+        f"/api/v1/optimisation/negos/{nid}",
+        headers=auth_headers,
+        json={
+            "recherche_json": json.dumps(
+                {"emploi": "électricien", "employeur": "Hydro"}
+            )
+        },
+    )
+    assert rc.status_code == 200, rc.text
+    # json.dumps échappe les accents (é) — on relit la structure.
+    assert json.loads(rc.json()["recherche_json"])["emploi"] == "électricien"
     assert (
         client.patch(
             f"/api/v1/optimisation/negos/{nid}",

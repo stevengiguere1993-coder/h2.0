@@ -57,11 +57,28 @@ class OptimisationProjet(Base, TimestampUpdateMixin):
         String(32), nullable=True
     )
 
-    #: Objectifs de croisière (comparés au réel locatif).
+    #: Compte bancaire QBO du projet — son solde courant s'affiche à
+    #: côté du budget. Colonnes additives.
+    qbo_bank_account_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    qbo_bank_account_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+
+    #: Objectifs de croisière (comparés au réel locatif). Mensuels ET
+    #: annuels : l'un peut être saisi sans l'autre (l'UI bascule entre
+    #: les deux vues et déduit celui qui manque × ou ÷ 12).
     objectif_revenus_mensuels: Mapped[Optional[float]] = mapped_column(
         Numeric(12, 2), nullable=True
     )
     objectif_depenses_mensuelles: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    objectif_revenus_annuels: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    objectif_depenses_annuelles: Mapped[Optional[float]] = mapped_column(
         Numeric(12, 2), nullable=True
     )
     #: Objectifs libres additionnels — JSON [{"label", "cible", "actuel"}]
@@ -97,6 +114,19 @@ class OptimisationBudgetLigne(Base, TimestampUpdateMixin):
     #: sont dénormalisés pour l'affichage hors connexion.
     qbo_accounts_json: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True
+    )
+
+    #: Comptes QBO d'ENTRÉE d'argent pour cette enveloppe (financement
+    #: encaissé : marge de crédit, prêt, apport…). On front la dépense
+    #: puis on se fait rembourser progressivement. Colonne additive.
+    qbo_financement_accounts_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+
+    #: Argent comptant réservé à cette enveloppe, saisi à la main
+    #: (ex. budget 100 k, financement promis 80 k → 20 k comptant).
+    comptant_disponible: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 2), nullable=True
     )
 
     position: Mapped[int] = mapped_column(nullable=False, default=0)
@@ -151,5 +181,12 @@ class OptimisationNego(Base, TimestampUpdateMixin):
 
     #: Timeline d'événements — JSON [{"date": "2026-07-29", "texte": …}].
     events_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    #: Préparation de la négociation : emploi, employeur, revenu estimé,
+    #: réseaux sociaux, notes de recherche — JSON libre. Colonne
+    #: additive.
+    recherche_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
 
     position: Mapped[int] = mapped_column(nullable=False, default=0)
