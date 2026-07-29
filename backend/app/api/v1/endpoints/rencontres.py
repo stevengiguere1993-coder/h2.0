@@ -13,6 +13,8 @@
   POST   /api/v1/rencontres/{id}/sections/{sid}/transcribe
                                                   upload audio → texte
   POST   /api/v1/rencontres/{id}/summarize        résumé global
+  POST   /api/v1/rencontres/importer               import unifié (hub v2)
+  POST   /api/v1/rencontres/{id}/actions-vers-taches
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from typing import List, Optional
 from fastapi import (
     APIRouter,
     File,
+    Form,
     HTTPException,
     Query,
     UploadFile,
@@ -77,6 +80,8 @@ class RencontreListItem(BaseModel):
     location: Optional[str]
     entreprise_ids_json: Optional[str]
     status: str
+    source: Optional[str] = None
+    global_summary: Optional[str] = None
     created_at: datetime
     sections_count: int = 0
 
@@ -92,6 +97,8 @@ class RencontreRead(BaseModel):
     notes: Optional[str]
     global_summary: Optional[str]
     status: str
+    source: Optional[str] = None
+    drive_links_json: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     sections: List[SectionRead] = Field(default_factory=list)
@@ -533,3 +540,218 @@ async def transcribe_section(
     await db.commit()
     await db.refresh(s)
     return SectionRead.model_validate(s)
+
+
+# ── Hub v2 : import unifié + actions → tâches ────────────────────
+
+
+@router.post(
+    "/importer",
+    response_model=RencontreRead,
+    status_code=status.HTTP_201_CREATED,
+    summary=(
+        "Import unifié : audio (transcrit), transcript Teams .vtt, "
+        "fichier texte ou texte collé → rencontre prête à résumer. "
+        "Archive l'audio + le transcript dans Google Drive (best-effort)."
+    ),
+)
+async def importer_rencontre(
+    db: DBSession,
+    user: CurrentUser,
+    file: Optional[UploadFile] = File(default=None),
+    texte: Optional[str] = Form(default=None),
+    title: Optional[str] = Form(default=None),
+    meeting_date: Optional[date] = Form(default=None),
+    attendees: Optional[str] = Form(default=None),
+    entreprise_ids: Optional[str] = Form(default=None),  # JSON "[1,2]"
+    notes: Optional[str] = Form(default=None),
+) -> RencontreRead:
+    from app.services.rencontre_import import (
+        archiver_drive,
+        detecter_type,
+        parse_vtt,
+    )
+
+    transcript: Optional[str] = None
+    source = "notes"
+    audio_pack: Optional[tuple[str, bytes, str]] = None
+
+    if file is not None:
+        data = await file.read()
+        if len(data) > _MAX_AUDIO_BYTES:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                "Fichier > 25 MB. Pour un audio long : exporte en .m4a "
+                "(compressé) ou découpe l'enregistrement.",
+            )
+        if not data:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "Fichier vide."
+            )
+        kind = detecter_type(file.filename or "", file.content_type or "")
+        if kind == "audio":
+            try:
+                transcript = await transcribe_audio(
+                    file.filename or "audio",
+                    file.content_type or "audio/mpeg",
+                    data,
+                )
+            except RuntimeError as exc:
+                raise HTTPException(
+                    status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)
+                ) from exc
+            source = "audio"
+            audio_pack = (
+                file.filename or "audio.m4a",
+                data,
+                file.content_type or "audio/mpeg",
+            )
+        else:
+            try:
+                brut = data.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                brut = data.decode("latin-1", errors="replace")
+            if kind == "vtt":
+                transcript = parse_vtt(brut)
+                source = "teams"
+            else:
+                transcript = brut.strip()
+                source = "texte"
+            if not transcript:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "Le fichier ne contient aucun texte lisible.",
+                )
+    elif texte and texte.strip():
+        brut = texte.strip()
+        # Un transcript Teams collé tel quel se reconnaît à son entête.
+        if brut.upper().startswith("WEBVTT") or "-->" in brut[:2000]:
+            transcript = parse_vtt(brut)
+            source = "teams"
+        else:
+            transcript = brut
+            source = "texte"
+
+    quand = meeting_date or date.today()
+    titre = (title or "").strip()
+    if not titre and file is not None and file.filename:
+        titre = file.filename.rsplit(".", 1)[0].strip()
+    if not titre:
+        titre = f"Rencontre du {quand.isoformat()}"
+
+    r = Rencontre(
+        title=titre[:255],
+        meeting_date=quand,
+        attendees=(attendees or None),
+        entreprise_ids_json=None,
+        notes=(notes or None),
+        status=RencontreStatus.DRAFT.value,
+        source=source,
+        created_by_user_id=user.id,
+    )
+    if entreprise_ids:
+        try:
+            ids = json.loads(entreprise_ids)
+            if isinstance(ids, list):
+                r.entreprise_ids_json = _serialize_ids(
+                    [int(x) for x in ids]
+                )
+        except Exception:  # noqa: BLE001
+            pass
+    db.add(r)
+    await db.flush()
+    db.add(
+        RencontreSection(
+            rencontre_id=r.id,
+            position=0,
+            title=r.title,
+            transcript=transcript,
+        )
+    )
+    await db.commit()
+    await db.refresh(r)
+
+    # Archivage Drive (audio original + transcript) — jamais bloquant.
+    links = await archiver_drive(
+        db,
+        user.id,
+        f"{quand.isoformat()} — {titre}",
+        audio=audio_pack,
+        transcript=transcript,
+    )
+    if links:
+        r.drive_links_json = links
+        await db.commit()
+        await db.refresh(r)
+
+    sections = (
+        await db.execute(
+            select(RencontreSection)
+            .where(RencontreSection.rencontre_id == r.id)
+            .order_by(RencontreSection.position.asc())
+        )
+    ).scalars().all()
+    out = RencontreRead.model_validate(r)
+    out.sections = [SectionRead.model_validate(x) for x in sections]
+    return out
+
+
+class ActionVersTache(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+
+
+class ActionsVersTachesIn(BaseModel):
+    entreprise_id: int
+    actions: List[ActionVersTache] = Field(..., min_length=1)
+
+
+class ActionsVersTachesOut(BaseModel):
+    created: int
+    tache_ids: List[int]
+
+
+@router.post(
+    "/{rencontre_id}/actions-vers-taches",
+    response_model=ActionsVersTachesOut,
+    summary=(
+        "Crée des tâches Kratos (entreprise_taches) à partir des "
+        "action items du résumé IA."
+    ),
+)
+async def actions_vers_taches(
+    rencontre_id: int,
+    data: ActionsVersTachesIn,
+    db: DBSession,
+    _: CurrentUser,
+) -> ActionsVersTachesOut:
+    from app.models.entreprise import Entreprise
+    from app.models.entreprise_tache import EntrepriseTache
+
+    r = await _get_rencontre_or_404(db, rencontre_id)
+    ent = (
+        await db.execute(
+            select(Entreprise).where(Entreprise.id == data.entreprise_id)
+        )
+    ).scalar_one_or_none()
+    if ent is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Entreprise introuvable."
+        )
+
+    contexte = f"De la rencontre « {r.title} »"
+    if r.meeting_date:
+        contexte += f" du {r.meeting_date.isoformat()}"
+    ids: List[int] = []
+    for a in data.actions:
+        desc = (a.description or "").strip()
+        t = EntrepriseTache(
+            entreprise_id=ent.id,
+            title=a.title.strip()[:255],
+            description=f"{contexte}.\n{desc}" if desc else f"{contexte}.",
+        )
+        db.add(t)
+        await db.flush()
+        ids.append(t.id)
+    await db.commit()
+    return ActionsVersTachesOut(created=len(ids), tache_ids=ids)

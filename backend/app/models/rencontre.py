@@ -73,6 +73,18 @@ class Rencontre(Base, TimestampUpdateMixin):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
+    #: D'où vient la rencontre (hub v2) : 'audio' | 'teams' (transcript
+    #: .vtt) | 'texte' (collé/fichier) | 'notes' (saisie manuelle).
+    #: Colonne additive → ensure_critical_columns.
+    source: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+
+    #: Fichiers archivés dans Google Drive (audio original + transcript)
+    #: — JSON [{"name": ..., "link": ...}]. Best-effort : vide si le
+    #: Drive n'est pas connecté. Colonne additive.
+    drive_links_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+
 
 class RencontreSection(Base, TimestampUpdateMixin):
     """Une section = un topic discuté pendant la rencontre. Une retraite

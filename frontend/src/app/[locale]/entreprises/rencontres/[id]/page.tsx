@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
+  ListTodo,
   ChevronLeft,
+  HardDriveDownload,
   FileAudio,
   Loader2,
   Mic,
@@ -47,9 +49,30 @@ type Rencontre = {
   notes: string | null;
   global_summary: string | null;
   status: string;
+  source: string | null;
+  drive_links_json: string | null;
   created_at: string;
   updated_at: string;
   sections: Section[];
+};
+
+type DriveLink = { name: string; link: string | null };
+
+function parseDriveLinks(json: string | null): DriveLink[] {
+  if (!json) return [];
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? v.filter((x) => x && x.name) : [];
+  } catch {
+    return [];
+  }
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  audio: "Audio transcrit",
+  teams: "Transcript Teams",
+  texte: "Texte importé",
+  notes: "Notes manuelles"
 };
 
 type SectionSummary = {
@@ -125,6 +148,43 @@ export default function RencontreDetailPage() {
   useEffect(() => {
     if (Number.isFinite(id)) void load();
   }, [id, load]);
+
+  // Arrivée depuis l'import unifié (?resume=1) : on lance le résumé IA
+  // automatiquement — section(s) avec transcript mais sans résumé, puis
+  // résumé global. Une seule fois par visite.
+  const autoResumeDone = useRef(false);
+  const [autoResuming, setAutoResuming] = useState(false);
+  useEffect(() => {
+    if (autoResumeDone.current || !data) return;
+    const wantResume =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("resume") === "1";
+    if (!wantResume) return;
+    const todo = data.sections.filter(
+      (s) => (s.transcript || "").trim() && !s.ai_summary_json
+    );
+    if (todo.length === 0) return;
+    autoResumeDone.current = true;
+    void (async () => {
+      setAutoResuming(true);
+      try {
+        for (const sec of todo) {
+          await authedFetch(
+            `/api/v1/rencontres/${id}/sections/${sec.id}/summarize`,
+            { method: "POST" }
+          );
+        }
+        await authedFetch(`/api/v1/rencontres/${id}/summarize`, {
+          method: "POST"
+        });
+      } catch {
+        /* les boutons manuels restent disponibles */
+      } finally {
+        setAutoResuming(false);
+        await load();
+      }
+    })();
+  }, [data, id, load]);
 
   async function patchRencontre(patch: Partial<Rencontre>) {
     if (!data) return;
@@ -390,6 +450,55 @@ export default function RencontreDetailPage() {
           </p>
         ) : !data ? null : (
           <div className="space-y-5">
+            {autoResuming ? (
+              <div
+                className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"
+                style={{
+                  borderColor: "var(--qg-border-soft)",
+                  backgroundColor: "var(--qg-card-bg)",
+                  color: "var(--qg-text)"
+                }}
+              >
+                <Loader2 className="h-4 w-4 animate-spin text-accent-500" />
+                Résumé IA en cours — points clés, décisions et actions
+                arrivent dans quelques secondes…
+              </div>
+            ) : null}
+            {(data.source && SOURCE_LABELS[data.source]) ||
+            parseDriveLinks(data.drive_links_json).length > 0 ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {data.source && SOURCE_LABELS[data.source] ? (
+                  <span
+                    className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px]"
+                    style={{
+                      borderColor: "var(--qg-border-soft)",
+                      color: "var(--qg-text-muted)"
+                    }}
+                  >
+                    {SOURCE_LABELS[data.source]}
+                  </span>
+                ) : null}
+                {parseDriveLinks(data.drive_links_json).map((l, i) =>
+                  l.link ? (
+                    <a
+                      key={i}
+                      href={l.link}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors hover:border-accent-500 hover:text-accent-500"
+                      style={{
+                        borderColor: "var(--qg-border)",
+                        color: "var(--qg-text)"
+                      }}
+                      title="Archivé dans Google Drive (dossier Rencontres Kratos)"
+                    >
+                      <HardDriveDownload className="h-3 w-3" />
+                      {l.name}
+                    </a>
+                  ) : null
+                )}
+              </div>
+            ) : null}
             <EntityDriveSection
               entityType="Rencontre"
               entityId={data.id}
@@ -594,6 +703,8 @@ export default function RencontreDetailPage() {
                     key={s.id}
                     rencontreId={id}
                     section={s}
+                    entreprises={entreprises}
+                    rencontreEntIds={parseIds(data.entreprise_ids_json)}
                     highlightDictation={highlightSectionId === s.id}
                     onChanged={(updated) =>
                       setData((d) =>
@@ -701,12 +812,16 @@ export default function RencontreDetailPage() {
 function SectionCard({
   rencontreId,
   section,
+  entreprises,
+  rencontreEntIds,
   onChanged,
   onDelete,
   highlightDictation = false
 }: {
   rencontreId: number;
   section: Section;
+  entreprises: { id: number; name: string }[];
+  rencontreEntIds: number[];
   onChanged: (s: Section) => void;
   onDelete: () => void;
   // Met en surbrillance (pulse) le bouton Dicter pendant quelques
@@ -720,6 +835,14 @@ function SectionCard({
   const [cleaning, setCleaning] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [listening, setListening] = useState(false);
+  // Actions IA → tâches Kratos : panneau inline sous la liste d'actions.
+  const [tasksOpen, setTasksOpen] = useState(false);
+  const [tasksEntId, setTasksEntId] = useState<number | "">(
+    rencontreEntIds[0] ?? ""
+  );
+  const [tasksChecked, setTasksChecked] = useState<Set<number>>(new Set());
+  const [tasksCreating, setTasksCreating] = useState(false);
+  const [tasksMsg, setTasksMsg] = useState<string | null>(null);
   const recogRef = useRef<unknown>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -997,6 +1120,52 @@ ${raw}` : raw;
 
   const summary = parseSummary(section.ai_summary_json);
 
+  function openTasksPanel() {
+    const n = summary?.action_items?.length || 0;
+    setTasksChecked(new Set(Array.from({ length: n }, (_, i) => i)));
+    setTasksMsg(null);
+    setTasksOpen(true);
+  }
+
+  async function createTasks() {
+    if (!summary?.action_items || tasksEntId === "") return;
+    const actions = summary.action_items
+      .filter((_, i) => tasksChecked.has(i))
+      .map((a) => ({
+        title: a.title,
+        description: [
+          a.owner ? `Responsable pressenti : ${a.owner}` : null,
+          a.due ? `Échéance mentionnée : ${a.due}` : null
+        ]
+          .filter(Boolean)
+          .join("\n") || null
+      }));
+    if (actions.length === 0) return;
+    setTasksCreating(true);
+    setTasksMsg(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/rencontres/${rencontreId}/actions-vers-taches`,
+        {
+          method: "POST",
+          body: JSON.stringify({ entreprise_id: tasksEntId, actions })
+        }
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = (await r.json()) as { created: number };
+      setTasksMsg(
+        `${d.created} tâche${d.created > 1 ? "s" : ""} créée${
+          d.created > 1 ? "s" : ""
+        } dans le kanban ✓`
+      );
+      setTasksOpen(false);
+    } catch (e) {
+      setTasksMsg(`Création échouée : ${(e as Error).message}`);
+    } finally {
+      setTasksCreating(false);
+    }
+  }
+
   return (
     <article
       id={`section-${section.id}`}
@@ -1165,6 +1334,116 @@ ${raw}` : raw;
                   </li>
                 ))}
               </ul>
+              <div className="mt-2">
+                {!tasksOpen ? (
+                  <button
+                    type="button"
+                    onClick={openTasksPanel}
+                    className="btn-outline-accent btn-sm"
+                    title="Transforme les actions ci-dessus en tâches dans le kanban Gestion d'entreprise"
+                  >
+                    <ListTodo className="h-3 w-3" />
+                    Créer des tâches Kratos
+                  </button>
+                ) : (
+                  <div
+                    className="rounded-lg border p-2.5"
+                    style={{ borderColor: "var(--qg-border)" }}
+                  >
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <span
+                        className="text-[11px] font-medium"
+                        style={{ color: "var(--qg-text)" }}
+                      >
+                        Créer dans l&apos;entreprise :
+                      </span>
+                      <select
+                        className="input h-8 w-auto text-[12px]"
+                        value={tasksEntId}
+                        onChange={(e) =>
+                          setTasksEntId(
+                            e.target.value ? Number(e.target.value) : ""
+                          )
+                        }
+                      >
+                        <option value="">— choisir —</option>
+                        {entreprises.map((e) => (
+                          <option key={e.id} value={e.id}>
+                            {e.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <ul className="space-y-1">
+                      {summary.action_items.map((a, i) => (
+                        <li key={i}>
+                          <label
+                            className="flex cursor-pointer items-start gap-2 text-[12px]"
+                            style={{ color: "var(--qg-text)" }}
+                          >
+                            <input
+                              type="checkbox"
+                              className="mt-0.5"
+                              checked={tasksChecked.has(i)}
+                              onChange={(e) =>
+                                setTasksChecked((prev) => {
+                                  const next = new Set(prev);
+                                  if (e.target.checked) next.add(i);
+                                  else next.delete(i);
+                                  return next;
+                                })
+                              }
+                            />
+                            <span>
+                              {a.title}
+                              {a.owner ? (
+                                <span style={{ color: "var(--qg-text-muted)" }}>
+                                  {" "}· {a.owner}
+                                </span>
+                              ) : null}
+                            </span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void createTasks()}
+                        disabled={
+                          tasksCreating ||
+                          tasksEntId === "" ||
+                          tasksChecked.size === 0
+                        }
+                        className="btn-accent inline-flex items-center gap-1.5 text-[11px] disabled:opacity-50"
+                      >
+                        {tasksCreating ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <ListTodo className="h-3 w-3" />
+                        )}
+                        Créer {tasksChecked.size} tâche
+                        {tasksChecked.size > 1 ? "s" : ""}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTasksOpen(false)}
+                        className="btn-ghost btn-sm"
+                      >
+                        Annuler
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {tasksMsg ? (
+                  <p
+                    className="mt-1.5 text-[11px]"
+                    style={{ color: "var(--qg-text-muted)" }}
+                  >
+                    {tasksMsg}
+                  </p>
+                ) : null}
+              </div>
             </div>
           ) : null}
           {summary.open_questions && summary.open_questions.length > 0 ? (
