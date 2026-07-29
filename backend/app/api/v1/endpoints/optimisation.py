@@ -67,6 +67,8 @@ class BudgetLigneRead(BaseModel):
     nom: str
     budget_montant: float
     qbo_accounts_json: Optional[str]
+    qbo_financement_accounts_json: Optional[str] = None
+    comptant_disponible: Optional[float] = None
     position: int
 
 
@@ -84,6 +86,7 @@ class NegoRead(BaseModel):
     montant_entente: Optional[float]
     date_cible: Optional[date]
     events_json: Optional[str]
+    recherche_json: Optional[str] = None
     position: int
 
 
@@ -110,8 +113,12 @@ class ProjetRead(BaseModel):
     status: str
     date_debut: Optional[date]
     qbo_scope: Optional[str]
+    qbo_bank_account_id: Optional[str] = None
+    qbo_bank_account_name: Optional[str] = None
     objectif_revenus_mensuels: Optional[float]
     objectif_depenses_mensuelles: Optional[float]
+    objectif_revenus_annuels: Optional[float] = None
+    objectif_depenses_annuelles: Optional[float] = None
     objectifs_json: Optional[str]
     notes: Optional[str]
     entreprise_nom: str = ""
@@ -134,7 +141,10 @@ class ProjetCreate(BaseModel):
     immeuble_id: int
     date_debut: Optional[date] = None
     qbo_scope: Optional[str] = Field(default=None, max_length=32)
-    importer_locataires: bool = True
+    #: Retour Phil : on n'importe PLUS les locataires à la création —
+    #: ça se fait ensuite depuis la section Négociations (choix à la
+    #: pièce). Le drapeau reste pour l'API/MCP.
+    importer_locataires: bool = False
 
 
 class ProjetUpdate(BaseModel):
@@ -142,8 +152,12 @@ class ProjetUpdate(BaseModel):
     status: Optional[str] = Field(default=None, pattern=r"^(actif|termine)$")
     date_debut: Optional[date] = None
     qbo_scope: Optional[str] = Field(default=None, max_length=32)
+    qbo_bank_account_id: Optional[str] = Field(default=None, max_length=64)
+    qbo_bank_account_name: Optional[str] = Field(default=None, max_length=255)
     objectif_revenus_mensuels: Optional[float] = None
     objectif_depenses_mensuelles: Optional[float] = None
+    objectif_revenus_annuels: Optional[float] = None
+    objectif_depenses_annuelles: Optional[float] = None
     objectifs_json: Optional[str] = Field(default=None, max_length=20_000)
     notes: Optional[str] = None
 
@@ -158,6 +172,10 @@ class BudgetLigneUpdate(BaseModel):
     nom: Optional[str] = Field(default=None, max_length=255)
     budget_montant: Optional[float] = None
     qbo_accounts_json: Optional[str] = Field(default=None, max_length=20_000)
+    qbo_financement_accounts_json: Optional[str] = Field(
+        default=None, max_length=20_000
+    )
+    comptant_disponible: Optional[float] = None
     position: Optional[int] = None
 
 
@@ -171,6 +189,8 @@ class NegoCreate(BaseModel):
 class NegoUpdate(BaseModel):
     statut: Optional[str] = None
     type_entente: Optional[str] = None
+    #: Préparation de la négo (JSON : emploi, employeur, réseaux…).
+    recherche_json: Optional[str] = Field(default=None, max_length=20_000)
     entente: Optional[str] = None
     montant_entente: Optional[float] = None
     date_cible: Optional[date] = None
@@ -574,6 +594,10 @@ async def delete_budget_ligne(
 
 class QboDepensesOut(BaseModel):
     par_ligne: Dict[int, float] = Field(default_factory=dict)
+    #: Financement encaissé par enveloppe (comptes d'entrée d'argent).
+    financement_par_ligne: Dict[int, float] = Field(default_factory=dict)
+    #: Solde courant du compte bancaire du projet (None si non choisi).
+    solde_bancaire: Optional[float] = None
     erreur: Optional[str] = None
 
 
@@ -586,7 +610,7 @@ async def qbo_depenses(
     """Dépensé réel par ligne de budget (somme des comptes QBO mappés,
     du début du projet à aujourd'hui). Ne casse jamais : les problèmes
     QBO reviennent dans ``erreur``."""
-    from app.services.qbo_optimisation import depenses_par_compte
+    from app.services.qbo_optimisation import depenses_par_compte, solde_compte
 
     p = await _projet_or_404(db, projet_id)
     if not p.qbo_scope:
@@ -611,17 +635,36 @@ async def qbo_depenses(
         log.info("qbo-depenses projet #%s: %s", projet_id, exc)
         return QboDepensesOut(erreur=str(exc))
 
-    par_ligne: Dict[int, float] = {}
-    for ligne in lignes:
-        total = 0.0
+    def _somme(raw: Optional[str]) -> float:
         try:
-            comptes = json.loads(ligne.qbo_accounts_json or "[]")
+            comptes = json.loads(raw or "[]")
         except Exception:  # noqa: BLE001
-            comptes = []
-        for c in comptes:
-            total += float(totaux.get(str(c.get("id")), 0.0))
-        par_ligne[ligne.id] = round(total, 2)
-    return QboDepensesOut(par_ligne=par_ligne)
+            return 0.0
+        return sum(
+            float(totaux.get(str(c.get("id")), 0.0)) for c in comptes
+        )
+
+    par_ligne: Dict[int, float] = {}
+    financement: Dict[int, float] = {}
+    for ligne in lignes:
+        par_ligne[ligne.id] = round(_somme(ligne.qbo_accounts_json), 2)
+        # Les entrées d'argent sortent tantôt en crédit (négatif) tantôt
+        # en positif selon le type de compte → on garde la magnitude.
+        financement[ligne.id] = round(
+            abs(_somme(ligne.qbo_financement_accounts_json)), 2
+        )
+
+    solde = None
+    if p.qbo_bank_account_id:
+        try:
+            solde = await solde_compte(p.qbo_scope, p.qbo_bank_account_id)
+        except Exception as exc:  # noqa: BLE001 — jamais bloquant
+            log.info("solde bancaire projet #%s: %s", projet_id, exc)
+    return QboDepensesOut(
+        par_ligne=par_ligne,
+        financement_par_ligne=financement,
+        solde_bancaire=solde,
+    )
 
 
 class QboComptesOut(BaseModel):
@@ -633,13 +676,17 @@ class QboComptesOut(BaseModel):
 async def qbo_comptes(
     _: CurrentUser,
     scope: str = Query(...),
+    kind: str = Query(
+        default="depense", pattern=r"^(depense|financement|banque)$"
+    ),
 ) -> QboComptesOut:
-    """Plan comptable (comptes de dépense) de la connexion ``scope`` —
-    pour mapper les enveloppes de budget dans l'UI."""
+    """Plan comptable de la connexion ``scope``, par famille :
+    ``depense`` (enveloppes), ``financement`` (entrées d'argent) ou
+    ``banque`` (compte dont on affiche le solde)."""
     from app.services.qbo_optimisation import lister_comptes_depense
 
     try:
-        comptes = await lister_comptes_depense(scope)
+        comptes = await lister_comptes_depense(scope, kind)
     except Exception as exc:  # noqa: BLE001
         return QboComptesOut(erreur=str(exc))
     return QboComptesOut(comptes=comptes)

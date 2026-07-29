@@ -25,11 +25,54 @@ _ACCOUNT_TYPES = (
     "Fixed Asset",
 )
 
+#: Entrées d'argent qui FINANCENT une enveloppe (prêt, marge, apport,
+#: subvention…) — on front la dépense, on se fait rembourser ensuite.
+_ACCOUNT_TYPES_FINANCEMENT = (
+    "Income",
+    "Other Income",
+    "Long Term Liability",
+    "Other Current Liability",
+    "Equity",
+)
 
-async def lister_comptes_depense(scope: str) -> List[Dict[str, Any]]:
-    """Plan comptable (comptes actifs de dépense/immobilisation) de la
-    connexion ``scope`` → [{"id", "name", "fully_qualified_name",
-    "account_type", "classification"}]. RuntimeError si non connecté."""
+#: Comptes bancaires (solde courant affiché sur le budget).
+_ACCOUNT_TYPES_BANQUE = ("Bank",)
+
+#: kind exposé par l'API → familles de comptes.
+_KINDS = {
+    "depense": _ACCOUNT_TYPES,
+    "financement": _ACCOUNT_TYPES_FINANCEMENT,
+    "banque": _ACCOUNT_TYPES_BANQUE,
+}
+
+
+async def solde_compte(scope: str, account_id: str) -> Optional[float]:
+    """Solde COURANT d'un compte QBO (``CurrentBalance``) — None si le
+    compte est introuvable. Lecture seule."""
+    from app.integrations.quickbooks import get_qbo
+
+    qbo = get_qbo(scope)
+    if not await _ready(qbo) or not account_id:
+        return None
+    safe = str(account_id).replace("'", "")
+    rows = await qbo.query(
+        f"SELECT Id, Name, CurrentBalance FROM Account WHERE Id = '{safe}'"
+    )
+    for r in rows:
+        try:
+            return float(r.get("CurrentBalance") or 0)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+async def lister_comptes_depense(
+    scope: str, kind: str = "depense"
+) -> List[Dict[str, Any]]:
+    """Plan comptable de la connexion ``scope``, filtré par famille
+    (``depense`` | ``financement`` | ``banque``) → [{"id", "name",
+    "fully_qualified_name", "account_type", "classification"}].
+    RuntimeError si non connecté."""
     from app.integrations.quickbooks import get_qbo
 
     qbo = get_qbo(scope)
@@ -38,7 +81,9 @@ async def lister_comptes_depense(scope: str) -> List[Dict[str, Any]]:
             f"QuickBooks n'est pas connecté pour « {scope} » "
             "(Paramètres → Intégrations)."
         )
-    types_sql = ", ".join(f"'{t}'" for t in _ACCOUNT_TYPES)
+    types_sql = ", ".join(
+        f"'{t}'" for t in _KINDS.get(kind, _ACCOUNT_TYPES)
+    )
     rows = await qbo.query(
         "SELECT Id, Name, FullyQualifiedName, AccountType, Classification "
         f"FROM Account WHERE Active = true AND AccountType IN ({types_sql}) "
