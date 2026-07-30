@@ -66,6 +66,13 @@ class OptimisationProjet(Base, TimestampUpdateMixin):
         String(255), nullable=True
     )
 
+    #: Point de départ du calcul de rentabilité de la compagnie
+    #: (revenus − dépenses lus de QuickBooks). Vide = depuis la
+    #: création du fichier comptable. Colonne additive.
+    rentabilite_depuis: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
+
     #: Objectifs de croisière (comparés au réel locatif). Mensuels ET
     #: annuels : l'un peut être saisi sans l'autre (l'UI bascule entre
     #: les deux vues et déduit celui qui manque × ou ÷ 12).

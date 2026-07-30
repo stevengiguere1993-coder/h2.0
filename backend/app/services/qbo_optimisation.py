@@ -170,6 +170,69 @@ async def depenses_par_compte(
     return totals
 
 
+def _groupes_pnl(node: Any, out: Dict[str, float]) -> None:
+    """Relève les TOTAUX de section d'un rapport ProfitAndLoss :
+    {"Income": …, "Expenses": …, "NetIncome": …}. QBO marque chaque
+    section d'un ``group`` et porte son total dans ``Summary``."""
+    if isinstance(node, list):
+        for r in node:
+            _groupes_pnl(r, out)
+        return
+    if not isinstance(node, dict):
+        return
+    groupe = node.get("group")
+    somme = (node.get("Summary") or {}).get("ColData")
+    if groupe and isinstance(somme, list) and somme:
+        brut = (somme[-1].get("value") or "").replace(",", "").replace("$", "")
+        try:
+            out[str(groupe)] = float(brut)
+        except ValueError:
+            pass
+    sous = (node.get("Rows") or {}).get("Row")
+    if sous:
+        _groupes_pnl(sous, out)
+
+
+async def rentabilite(
+    scope: str,
+    date_debut: Optional[str],
+    date_fin: Optional[str],
+) -> Dict[str, float]:
+    """Rentabilité de la compagnie sur la période : revenus totaux,
+    dépenses totales et résultat net (négatif = la compagnie a coûté
+    plus qu'elle n'a rapporté). Lecture seule."""
+    from app.integrations.quickbooks import get_qbo
+
+    qbo = get_qbo(scope)
+    if not await _ready(qbo):
+        raise RuntimeError(
+            f"QuickBooks n'est pas connecté pour « {scope} »."
+        )
+    params: Dict[str, str] = {"accounting_method": "Accrual"}
+    if date_debut:
+        params["start_date"] = date_debut
+    if date_fin:
+        params["end_date"] = date_fin
+    report = await qbo.report("ProfitAndLoss", **params)
+    groupes: Dict[str, float] = {}
+    _groupes_pnl(report.get("Rows", {}).get("Row") or [], groupes)
+
+    revenus = groupes.get("Income", 0.0) + groupes.get("OtherIncome", 0.0)
+    depenses = (
+        groupes.get("Expenses", 0.0)
+        + groupes.get("COGS", 0.0)
+        + groupes.get("OtherExpenses", 0.0)
+    )
+    net = groupes.get("NetIncome")
+    if net is None:
+        net = revenus - depenses
+    return {
+        "revenus": round(revenus, 2),
+        "depenses": round(depenses, 2),
+        "net": round(net, 2),
+    }
+
+
 async def _ready(qbo: Any) -> bool:
     """True si la connexion a un refresh token (DB ou env)."""
     try:
