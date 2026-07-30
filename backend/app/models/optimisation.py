@@ -116,6 +116,13 @@ class OptimisationBudgetLigne(Base, TimestampUpdateMixin):
         Numeric(12, 2), nullable=False, default=0
     )
 
+    #: NULL/"comptes" = dépensé lu des comptes QBO mappés ;
+    #: "deficit_operation" = enveloppe BUDGET DE DÉTENTION : le dépensé
+    #: est le déficit net d'opération de la compagnie (revenus −
+    #: dépenses, borné à 0 si elle est rentable) depuis
+    #: ``rentabilite_depuis``. Colonne additive.
+    mode: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+
     #: Comptes QBO dont les dépenses comptent dans cette enveloppe —
     #: JSON [{"id": "123", "name": "Frais professionnels"}]. Les noms
     #: sont dénormalisés pour l'affichage hors connexion.

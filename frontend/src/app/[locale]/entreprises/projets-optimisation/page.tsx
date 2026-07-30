@@ -44,6 +44,7 @@ type BudgetLigne = {
   qbo_accounts_json: string | null;
   qbo_financement_accounts_json: string | null;
   comptant_disponible: number | null;
+  mode: string | null;
   position: number;
 };
 
@@ -1148,6 +1149,18 @@ function BudgetSection({
                       style={{ color: "var(--qg-text)" }}
                     >
                       {l.nom}
+                      {l.mode === "deficit_operation" ? (
+                        <span
+                          className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] font-normal"
+                          style={{ color: "var(--qg-text-muted)" }}
+                          title={`Le dépensé de cette enveloppe = le déficit d'opération de la compagnie (revenus − dépenses) depuis ${
+                            projet.rentabilite_depuis || "sa création"
+                          } — 0 si elle est rentable.`}
+                        >
+                          <Scale className="h-2.5 w-2.5" />
+                          déficit d&apos;opération
+                        </span>
+                      ) : null}
                     </td>
                     <td className={`${GRP_BUDGET} py-2 pl-2 pr-2`}>
                       <input
@@ -1740,6 +1753,7 @@ function BudgetSettingsModal({
         {status?.connected ? (
           <>
             <BankAccountPicker projet={projet} onPatch={onPatchProjet} />
+            <DetentionToggle projet={projet} onChanged={onChanged} />
             <div className="mt-3">
               <label className="label text-[10px] uppercase">
                 Rentabilité de la compagnie — depuis le
@@ -1838,6 +1852,87 @@ function BudgetSettingsModal({
           ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Enveloppe « Budget de détention » (toggle des réglages) ───
+
+function DetentionToggle({
+  projet,
+  onChanged
+}: {
+  projet: Projet;
+  onChanged: () => void;
+}) {
+  const confirm = useConfirm();
+  const ligne = projet.budget_lignes.find(
+    (l) => l.mode === "deficit_operation"
+  );
+  const [busy, setBusy] = useState(false);
+
+  async function toggle(actif: boolean) {
+    setBusy(true);
+    try {
+      if (actif && !ligne) {
+        await authedFetch(
+          `/api/v1/optimisation/projets/${projet.id}/budget-lignes`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              nom: "Détention",
+              budget_montant: 0,
+              mode: "deficit_operation"
+            })
+          }
+        );
+        onChanged();
+      } else if (!actif && ligne) {
+        const ok = await confirm({
+          title: "Retirer l'enveloppe Budget de détention ?",
+          description:
+            "Le budget saisi sur cette ligne sera perdu. (Rien n'est touché dans QuickBooks.)",
+          confirmLabel: "Retirer",
+          destructive: true
+        });
+        if (ok) {
+          await authedFetch(
+            `/api/v1/optimisation/budget-lignes/${ligne.id}`,
+            { method: "DELETE" }
+          );
+          onChanged();
+        }
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3">
+      <label
+        className="flex cursor-pointer items-start gap-2 text-xs"
+        style={{ color: "var(--qg-text)" }}
+      >
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          disabled={busy}
+          checked={!!ligne}
+          onChange={(e) => void toggle(e.target.checked)}
+        />
+        <span>
+          Enveloppe <strong>Budget de détention</strong>
+          <span
+            className="block text-[10px]"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            Une ligne du budget dont le dépensé = le déficit
+            d&apos;opération de la compagnie (revenus − dépenses). Ex. :
+            50 000 $ de budget, 10 000 $ de déficit → il reste 40 000 $.
+          </span>
+        </span>
+      </label>
     </div>
   );
 }
