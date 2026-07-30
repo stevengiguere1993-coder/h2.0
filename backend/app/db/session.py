@@ -356,6 +356,8 @@ async def ensure_critical_columns() -> None:
         ("optimisation_negos", "recherche_json", "TEXT"),
         # v9 : point de départ du calcul de rentabilité de la compagnie.
         ("optimisation_projets", "rentabilite_depuis", "DATE"),
+        # v10 : enveloppe « Budget de détention » (mode de la ligne).
+        ("optimisation_budget_lignes", "mode", "VARCHAR(24)"),
         # Documents 2026-07-27 (démêlage communications / dossier) :
         # « document courant » du bail et de l'avis de renouvellement
         # (celui qui s'ouvre au clic ; le remplacer archive l'ancien),

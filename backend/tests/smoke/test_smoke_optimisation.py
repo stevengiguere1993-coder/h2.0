@@ -331,6 +331,28 @@ def test_projet_complet(client, auth_headers, run):
     assert "financement_par_ligne" in q5 and "solde_bancaire" in q5
     assert "rentabilite" in q5  # v9 — présent même sans connexion QBO
 
+    # v10 : enveloppe Budget de détention (dépensé = déficit
+    # d'opération). CRUD + validation du mode.
+    det = client.post(
+        f"/api/v1/optimisation/projets/{pid}/budget-lignes",
+        headers=auth_headers,
+        json={
+            "nom": "Détention",
+            "budget_montant": 50000,
+            "mode": "deficit_operation",
+        },
+    )
+    assert det.status_code == 201, det.text
+    assert det.json()["mode"] == "deficit_operation"
+    assert (
+        client.post(
+            f"/api/v1/optimisation/projets/{pid}/budget-lignes",
+            headers=auth_headers,
+            json={"nom": "X", "mode": "nimporte"},
+        ).status_code
+        == 422
+    )
+
     # v9 : la date de départ du calcul de rentabilité se règle.
     rd = client.patch(
         f"/api/v1/optimisation/projets/{pid}",
@@ -430,7 +452,8 @@ def test_projet_complet(client, auth_headers, run):
     lst = client.get("/api/v1/optimisation/projets", headers=auth_headers)
     assert lst.status_code == 200
     tuile = next(x for x in lst.json() if x["id"] == pid)
-    assert tuile["budget_total"] == 25000.0
+    # 25 000 (Frais professionnels) + 50 000 (Détention, v10).
+    assert tuile["budget_total"] == 75000.0
     assert tuile["nb_negos"] == 2
 
     # Suppression en cascade.
