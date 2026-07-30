@@ -2824,8 +2824,9 @@ class DepotOverview(BaseModel):
 async def depots_overview(
     db: DBSession, user: CurrentUser, entreprise_id: Optional[int] = None
 ) -> DepotOverview:
-    """Suivi des dépôts de garantie : détenus (baux actifs) vs à rendre
-    (baux terminés/résiliés). Sert à ne pas oublier de rembourser."""
+    """Suivi des dépôts de garantie : détenus vs à rendre. Un dépôt
+    n'est « à rendre » que si le logement a été REMIS EN LOCATION à un
+    autre locataire — pas simplement parce que le bail est terminé."""
     _require_volet(user)
 
     # Gestion externe : dépôts suivis par le gestionnaire tiers → exclu
@@ -2876,6 +2877,13 @@ async def depots_overview(
         BailStatus.TERMINE.value,
         BailStatus.RESILIE.value,
     }
+    # Baux ACTIFS par logement — pour savoir si un logement a été REMIS
+    # EN LOCATION (c'est ça, et pas la fin du bail, qui déclenche le
+    # remboursement du dépôt de l'ancien locataire).
+    actifs_par_logement: Dict[int, List[Bail]] = {}
+    for b in baux:
+        if b.status == BailStatus.ACTIF.value:
+            actifs_par_logement.setdefault(b.logement_id, []).append(b)
     rows: List[DepotRow] = []
     total_detenu = 0.0
     total_a_rendre = 0.0
@@ -2895,13 +2903,20 @@ async def depots_overview(
         elif b.depot_rendu_le is not None:
             statut = "rendu"
             total_rendu += montant
-        elif b.status in a_rendre_status:
+        elif b.status in a_rendre_status and any(
+            nb.id != b.id and nb.locataire_id != b.locataire_id
+            for nb in actifs_par_logement.get(b.logement_id, [])
+        ):
+            # Retour Phil 2026-07-30 : la fin du bail ne suffit pas —
+            # c'est la RELOCATION du logement à quelqu'un d'autre qui
+            # veut dire que l'ancien locataire est parti.
             statut = "a_rendre"
             total_a_rendre += montant
         else:
+            # Bail actif, ou terminé sans relocation (le locataire est
+            # probablement encore là) : l'argent est toujours détenu.
             statut = "detenu"
-            if b.status == BailStatus.ACTIF.value:
-                total_detenu += montant
+            total_detenu += montant
         loc = loc_by_id.get(b.locataire_id)
         rows.append(DepotRow(
             bail_id=b.id,
@@ -2919,7 +2934,15 @@ async def depots_overview(
         ))
 
     rank = {"a_rendre": 0, "detenu": 1, "aucun": 2, "rendu": 3}
-    rows.sort(key=lambda r: (rank.get(r.statut, 9), r.immeuble_name))
+
+    def _cle_tri(r: DepotRow):
+        # Les rendus vont tout en bas, du plus récemment rendu au plus
+        # ancien ; le reste garde l'ordre par statut puis immeuble.
+        if r.statut == "rendu" and r.depot_rendu_le is not None:
+            return (rank["rendu"], -r.depot_rendu_le.toordinal(), r.immeuble_name)
+        return (rank.get(r.statut, 9), 0, r.immeuble_name)
+
+    rows.sort(key=_cle_tri)
     return DepotOverview(
         rows=rows,
         total_detenu=round(total_detenu, 2),
