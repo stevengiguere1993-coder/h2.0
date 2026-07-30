@@ -363,6 +363,10 @@ async def ensure_critical_columns() -> None:
         ("optimisation_projets", "qbo_hypotheque_account_id", "VARCHAR(64)"),
         ("optimisation_projets", "qbo_hypotheque_account_name", "VARCHAR(255)"),
         ("optimisation_projets", "avances_accounts_json", "TEXT"),
+        # Renouvellement v3 : réponse du locataire + application au bail.
+        ("imm_bail_renouvellements", "reponse_le", "DATE"),
+        ("imm_bail_renouvellements", "refus_motif", "TEXT"),
+        ("imm_bail_renouvellements", "applique_le", "DATE"),
         # Documents 2026-07-27 (démêlage communications / dossier) :
         # « document courant » du bail et de l'avis de renouvellement
         # (celui qui s'ouvre au clic ; le remplacer archive l'ancien),

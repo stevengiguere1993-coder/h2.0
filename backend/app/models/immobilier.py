@@ -713,6 +713,12 @@ class BailRenouvellement(Base, TimestampUpdateMixin):
     nouvelle_date_fin: Mapped[Optional[date]] = mapped_column(
         Date, nullable=True
     )
+    #: v3 (2026-07-30) — réponse du locataire (date + motif de refus)
+    #: et date où le nouveau loyer/la période ont été REPORTÉS sur le
+    #: bail (application à la date effective). Colonnes additives.
+    reponse_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    refus_motif: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    applique_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     status: Mapped[str] = mapped_column(
         String(32), nullable=False,

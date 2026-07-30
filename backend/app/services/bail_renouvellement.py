@@ -267,6 +267,9 @@ async def send_renouvellement_for_bail(
         )
         if not doc.signature_token:
             doc.signature_token = secrets.token_urlsafe(32)
+        # Lien cycle ↔ document (suivi + suppression liée + réponse en
+        # ligne retrouvent le cycle par document_id).
+        obj.document_id = doc.id
         await db.flush()
     except Exception:  # noqa: BLE001
         log.exception(
@@ -338,7 +341,7 @@ def _render_email_body(ctx: TalContext, url: Optional[str] = None) -> str:
     <p style="margin:20px 0 6px 0">
       <a href="{url}" style="display:inline-block;background:#d89b3c;color:#111;
          padding:12px 20px;border-radius:8px;font-weight:bold;
-         text-decoration:none">Consulter et signer l'avis en ligne</a>
+         text-decoration:none">Consulter l'avis — accepter ou refuser</a>
     </p>
     <p style="margin:0 0 16px 0;font-size:12px;color:#555">Ou copiez ce lien : {url}</p>
     """
@@ -350,6 +353,8 @@ def _render_email_body(ctx: TalContext, url: Optional[str] = None) -> str:
     <p>Vous trouverez ci-joint l'avis officiel de modification de votre bail
     pour le logement situé au <b>{adresse}</b>.</p>
     {bloc_lien}
+    <p>Vous pouvez accepter (signer) ou refuser la modification directement
+    depuis le lien ci-dessus.</p>
     <p>Vous disposez d'un délai d'un (1) mois à compter de la réception du
     présent avis pour répondre. À défaut de réponse, vous serez réputé avoir
     accepté les modifications proposées.</p>

@@ -5,7 +5,7 @@ document locatif (avis TAL, trousse…) via un lien tokenisé
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -33,6 +33,10 @@ class PublicDocument(BaseModel):
     #: la page publique masque le bloc signature ; l'ouverture reste
     #: horodatée (suivi d'ouverture universel, retour Phil 2026-07-20).
     signature_requise: bool = True
+    #: v3 — avis de modification du bail : le locataire peut REFUSER en
+    #: ligne (art. 1945 C.c.Q. : un mois pour répondre).
+    refus_possible: bool = False
+    refuse_le: Optional[date] = None
     company_name: str = "Horizon Services Immobiliers"
     company_email: str = "info@immohorizon.com"
 
@@ -78,6 +82,34 @@ async def _load(db: AsyncSession, token: str) -> ImmDocument:
     return doc
 
 
+async def _cycle_du_doc(db: AsyncSession, doc: ImmDocument):
+    """Cycle de renouvellement lié à un avis de modification — par
+    ``document_id`` d'abord, sinon le dernier cycle du bail."""
+    from app.models.immobilier import BailRenouvellement
+
+    if doc.type != "avis_modification":
+        return None
+    r = (
+        await db.execute(
+            select(BailRenouvellement).where(
+                BailRenouvellement.document_id == doc.id
+            )
+        )
+    ).scalars().first()
+    if r is None and doc.bail_id:
+        r = (
+            await db.execute(
+                select(BailRenouvellement)
+                .where(BailRenouvellement.bail_id == doc.bail_id)
+                .order_by(
+                    BailRenouvellement.avis_envoye_le.desc(),
+                    BailRenouvellement.id.desc(),
+                )
+            )
+        ).scalars().first()
+    return r
+
+
 async def _to_public(db: AsyncSession, doc: ImmDocument) -> PublicDocument:
     locataire: Optional[Locataire] = None
     if doc.locataire_id:
@@ -86,6 +118,17 @@ async def _to_public(db: AsyncSession, doc: ImmDocument) -> PublicDocument:
         bail = await db.get(Bail, doc.bail_id)
         if bail:
             locataire = await db.get(Locataire, bail.locataire_id)
+    cycle = await _cycle_du_doc(db, doc)
+    refuse_le = None
+    refus_possible = False
+    if cycle is not None:
+        if cycle.status == "refuse":
+            refuse_le = cycle.reponse_le
+        elif doc.signed_at is None and cycle.status in (
+            "propose",
+            "en_negociation",
+        ):
+            refus_possible = True
     return PublicDocument(
         titre=doc.titre,
         type=doc.type,
@@ -94,6 +137,8 @@ async def _to_public(db: AsyncSession, doc: ImmDocument) -> PublicDocument:
         signed_at=doc.signed_at,
         signed_by_name=doc.signed_by_name,
         signature_requise=doc.type not in SIGNATURE_NON_REQUISE,
+        refus_possible=refus_possible,
+        refuse_le=refuse_le,
     )
 
 
@@ -128,6 +173,42 @@ async def public_pdf(token: str, db: DBSession) -> Response:
     )
 
 
+class RefuserDocument(BaseModel):
+    motif: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.post("/{token}/refuser", response_model=PublicDocument)
+async def public_refuse(
+    token: str, data: RefuserDocument, db: DBSession
+) -> PublicDocument:
+    """Le locataire REFUSE la modification proposée (art. 1945
+    C.c.Q.). Le cycle passe « refuse » — côté locateur, la ligne monte
+    en rouge avec la deadline de fixation TAL (1 mois, art. 1947)."""
+    doc = await _load(db, token)
+    if doc.signed_at is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="Ce document a déjà été signé (accepté).",
+        )
+    cycle = await _cycle_du_doc(db, doc)
+    if cycle is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Ce document ne peut pas être refusé en ligne.",
+        )
+    if cycle.status == "refuse":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="Le refus a déjà été enregistré.",
+        )
+    cycle.status = "refuse"
+    cycle.reponse_le = date.today()
+    cycle.refus_motif = (data.motif or "").strip()[:2000] or None
+    await db.commit()
+    await db.refresh(doc)
+    return await _to_public(db, doc)
+
+
 @router.post("/{token}/signer", response_model=PublicDocument)
 async def public_sign(
     token: str, data: SignDocument, request: Request, db: DBSession
@@ -154,6 +235,17 @@ async def public_sign(
     if sig:
         doc.signature_image = sig
         doc.signature_image_content_type = ct
+    # v3 — signer un AVIS DE MODIFICATION = accepter la hausse : le
+    # cycle passe « accepte » (le nouveau loyer sera reporté sur le
+    # bail à la date effective).
+    cycle = await _cycle_du_doc(db, doc)
+    if cycle is not None and cycle.status in (
+        "propose",
+        "en_negociation",
+        "repute_accepte",
+    ):
+        cycle.status = "accepte"
+        cycle.reponse_le = date.today()
     await db.commit()
     await db.refresh(doc)
     return await _to_public(db, doc)

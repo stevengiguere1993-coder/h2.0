@@ -16,6 +16,9 @@ type PublicDocument = {
   // false = consultation seule (avis de retard, accès…) — pas de bloc
   // signature ; l'ouverture est quand même horodatée côté serveur.
   signature_requise?: boolean;
+  // Avis de modification du bail : refus possible en ligne (1 mois).
+  refus_possible?: boolean;
+  refuse_le?: string | null;
   company_name: string;
   company_email: string;
 };
@@ -32,6 +35,8 @@ export default function SignDocumentPage() {
     null
   );
   const [submitting, setSubmitting] = useState(false);
+  const [refusMotif, setRefusMotif] = useState("");
+  const [refusing, setRefusing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,6 +89,33 @@ export default function SignDocumentPage() {
     }
   }
 
+  async function refuser() {
+    if (
+      !window.confirm(
+        "Refuser la modification proposée ?\n\nVotre refus sera transmis au locateur. Le bail actuel continue de s'appliquer tant qu'aucune entente ou décision du Tribunal n'intervient."
+      )
+    )
+      return;
+    setRefusing(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/v1/public/documents/${token}/refuser`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ motif: refusMotif.trim() || null })
+        }
+      );
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      setData((await res.json()) as PublicDocument);
+    } catch {
+      setError("Refus non enregistré — réessayez dans un instant.");
+    } finally {
+      setRefusing(false);
+    }
+  }
+
   if (loading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-brand-950 text-white">
@@ -124,6 +156,24 @@ export default function SignDocumentPage() {
             </p>
           ) : null}
         </header>
+
+        {data.refuse_le ? (
+          <div className="mt-6 rounded-xl border border-rose-500/40 bg-rose-500/10 p-5">
+            <div className="flex items-center gap-3">
+              <XCircle className="h-6 w-6 text-rose-300" />
+              <div>
+                <p className="font-semibold text-white">
+                  Modification refusée
+                </p>
+                <p className="text-sm text-rose-200">
+                  Refus enregistré le {data.refuse_le}. Le locateur
+                  communiquera avec vous — le bail actuel continue de
+                  s&apos;appliquer entre-temps.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {isSigned ? (
           <div className="mt-6 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-5">
@@ -182,7 +232,7 @@ export default function SignDocumentPage() {
           </section>
         ) : null}
 
-        {!isSigned && signatureRequise ? (
+        {!isSigned && !data.refuse_le && signatureRequise ? (
           <section className="mt-6 rounded-xl border border-accent-500/40 bg-accent-500/10 p-6">
             <h2 className="text-base font-semibold text-white">
               Signer le document
@@ -227,6 +277,45 @@ export default function SignDocumentPage() {
                 <CheckCircle2 className="h-4 w-4" />
               )}
               Signer le document
+            </button>
+          </section>
+        ) : null}
+
+        {!isSigned && !data.refuse_le && data.refus_possible ? (
+          <section className="mt-6 rounded-xl border border-rose-500/30 bg-rose-500/5 p-6">
+            <h2 className="text-base font-semibold text-white">
+              Vous refusez la modification ?
+            </h2>
+            <p className="mt-1 text-sm text-white/70">
+              Vous disposez d&apos;un (1) mois après la réception de
+              l&apos;avis pour répondre. Sans réponse dans ce délai,
+              vous serez réputé avoir accepté les modifications.
+            </p>
+            <div className="mt-4">
+              <label htmlFor="refus_motif" className="text-xs text-white/70">
+                Motif (optionnel)
+              </label>
+              <textarea
+                id="refus_motif"
+                value={refusMotif}
+                onChange={(e) => setRefusMotif(e.target.value)}
+                rows={2}
+                placeholder="Ex. l'augmentation me semble trop élevée…"
+                className="mt-1 w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder:text-white/40 focus:border-rose-400 focus:outline-none"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={refuser}
+              disabled={refusing}
+              className="mt-4 inline-flex items-center gap-2 rounded-lg border border-rose-500/50 bg-rose-500/15 px-5 py-3 text-sm font-bold text-rose-200 hover:bg-rose-500/25 disabled:opacity-60"
+            >
+              {refusing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <XCircle className="h-4 w-4" />
+              )}
+              Je refuse la modification
             </button>
           </section>
         ) : null}
