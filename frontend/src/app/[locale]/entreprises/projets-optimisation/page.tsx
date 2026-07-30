@@ -1054,7 +1054,7 @@ function BudgetSection({
                   colSpan={3}
                   className={`${GRP_FIN} rounded-t-lg px-2 pb-1 pt-1.5 text-center font-semibold`}
                 >
-                  Financement
+                  Suivi de l&apos;argent disponible
                 </th>
                 <th className="pb-1" />
               </tr>
@@ -1958,19 +1958,27 @@ function ObjectifsSection({
                 type="number"
                 step="0.01"
                 defaultValue={revObj || ""}
-                onBlur={(e) =>
+                onBlur={(e) => {
+                  // Mois et année sont la MÊME valeur : on écrit les
+                  // deux pour qu'elles restent d'accord (retour Phil).
+                  const v = Number(e.target.value) || 0;
                   void onPatch(
-                    annuel
-                      ? {
-                          objectif_revenus_annuels:
-                            Number(e.target.value) || null
-                        }
+                    v
+                      ? annuel
+                        ? {
+                            objectif_revenus_annuels: v,
+                            objectif_revenus_mensuels: v / 12
+                          }
+                        : {
+                            objectif_revenus_mensuels: v,
+                            objectif_revenus_annuels: v * 12
+                          }
                       : {
-                          objectif_revenus_mensuels:
-                            Number(e.target.value) || null
+                          objectif_revenus_mensuels: null,
+                          objectif_revenus_annuels: null
                         }
-                  )
-                }
+                  );
+                }}
               />
             </span>
           </div>
@@ -2090,19 +2098,25 @@ function ObjectifsSection({
                 type="number"
                 step="0.01"
                 defaultValue={depObj || ""}
-                onBlur={(e) =>
+                onBlur={(e) => {
+                  const v = Number(e.target.value) || 0;
                   void onPatch(
-                    annuel
-                      ? {
-                          objectif_depenses_annuelles:
-                            Number(e.target.value) || null
-                        }
+                    v
+                      ? annuel
+                        ? {
+                            objectif_depenses_annuelles: v,
+                            objectif_depenses_mensuelles: v / 12
+                          }
+                        : {
+                            objectif_depenses_mensuelles: v,
+                            objectif_depenses_annuelles: v * 12
+                          }
                       : {
-                          objectif_depenses_mensuelles:
-                            Number(e.target.value) || null
+                          objectif_depenses_mensuelles: null,
+                          objectif_depenses_annuelles: null
                         }
-                  )
-                }
+                  );
+                }}
               />
             </span>
           </div>
@@ -2235,14 +2249,23 @@ function ObjectifsSection({
                   className={`h-full rounded-full ${
                     pct >= 100 ? "bg-emerald-500" : "bg-accent-500"
                   }`}
-                  style={{ width: `${Math.min(100, pct)}%` }}
+                  style={{
+                    width: `${pct > 0 ? Math.max(2, Math.min(100, pct)) : 0}%`
+                  }}
                 />
               </div>
               <p
-                className="mt-1 text-[11px]"
-                style={{ color: "var(--qg-text-muted)" }}
+                className={`mt-1 text-[11px] ${
+                  pct >= 100 ? "text-emerald-400" : "text-accent-500"
+                }`}
               >
-                {pct} %{pct >= 100 ? " — objectif atteint ✓" : ""}
+                {pct} %
+                {pct >= 100
+                  ? " — objectif atteint ✓"
+                  : ` — il manque ${fmtVal(
+                      Math.max(0, o.cible - (o.actuel || 0)),
+                      o.unite
+                    )}`}
               </p>
             </div>
           );
