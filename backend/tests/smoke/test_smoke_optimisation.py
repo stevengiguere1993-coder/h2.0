@@ -329,7 +329,7 @@ def test_projet_complet(client, auth_headers, run):
         headers=auth_headers,
     ).json()
     assert "financement_par_ligne" in q5 and "solde_bancaire" in q5
-    assert "rentabilite" in q5  # v9 — présent même sans connexion QBO
+    assert "cashflow" in q5  # v11 — présent même sans connexion QBO
 
     # v10 : enveloppe Budget de détention (dépensé = déficit
     # d'opération). CRUD + validation du mode.
@@ -352,15 +352,6 @@ def test_projet_complet(client, auth_headers, run):
         ).status_code
         == 422
     )
-
-    # v9 : la date de départ du calcul de rentabilité se règle.
-    rd = client.patch(
-        f"/api/v1/optimisation/projets/{pid}",
-        headers=auth_headers,
-        json={"rentabilite_depuis": "2024-01-01"},
-    )
-    assert rd.status_code == 200, rd.text
-    assert rd.json()["rentabilite_depuis"] == "2024-01-01"
 
     # Les comptes se listent par famille (validation du paramètre kind).
     for kind in ("depense", "financement", "banque"):
