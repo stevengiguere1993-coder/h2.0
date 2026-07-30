@@ -115,6 +115,7 @@ class ProjetRead(BaseModel):
     qbo_scope: Optional[str]
     qbo_bank_account_id: Optional[str] = None
     qbo_bank_account_name: Optional[str] = None
+    rentabilite_depuis: Optional[date] = None
     objectif_revenus_mensuels: Optional[float]
     objectif_depenses_mensuelles: Optional[float]
     objectif_revenus_annuels: Optional[float] = None
@@ -154,6 +155,7 @@ class ProjetUpdate(BaseModel):
     qbo_scope: Optional[str] = Field(default=None, max_length=32)
     qbo_bank_account_id: Optional[str] = Field(default=None, max_length=64)
     qbo_bank_account_name: Optional[str] = Field(default=None, max_length=255)
+    rentabilite_depuis: Optional[date] = None
     objectif_revenus_mensuels: Optional[float] = None
     objectif_depenses_mensuelles: Optional[float] = None
     objectif_revenus_annuels: Optional[float] = None
@@ -598,6 +600,9 @@ class QboDepensesOut(BaseModel):
     financement_par_ligne: Dict[int, float] = Field(default_factory=dict)
     #: Solde courant du compte bancaire du projet (None si non choisi).
     solde_bancaire: Optional[float] = None
+    #: Rentabilité de la compagnie depuis ``rentabilite_depuis`` (ou
+    #: depuis la création) : {"revenus", "depenses", "net"}.
+    rentabilite: Optional[Dict[str, float]] = None
     erreur: Optional[str] = None
 
 
@@ -610,7 +615,11 @@ async def qbo_depenses(
     """Dépensé réel par ligne de budget (somme des comptes QBO mappés,
     du début du projet à aujourd'hui). Ne casse jamais : les problèmes
     QBO reviennent dans ``erreur``."""
-    from app.services.qbo_optimisation import depenses_par_compte, solde_compte
+    from app.services.qbo_optimisation import (
+        depenses_par_compte,
+        rentabilite as _rentabilite,
+        solde_compte,
+    )
 
     p = await _projet_or_404(db, projet_id)
     if not p.qbo_scope:
@@ -660,10 +669,24 @@ async def qbo_depenses(
             solde = await solde_compte(p.qbo_scope, p.qbo_bank_account_id)
         except Exception as exc:  # noqa: BLE001 — jamais bloquant
             log.info("solde bancaire projet #%s: %s", projet_id, exc)
+
+    # Rentabilité de la compagnie : depuis la date choisie, sinon depuis
+    # la création du fichier comptable (QBO accepte une date très basse).
+    rent = None
+    try:
+        rent = await _rentabilite(
+            p.qbo_scope,
+            (p.rentabilite_depuis or date(2000, 1, 1)).isoformat(),
+            date.today().isoformat(),
+        )
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        log.info("rentabilité projet #%s: %s", projet_id, exc)
+
     return QboDepensesOut(
         par_ligne=par_ligne,
         financement_par_ligne=financement,
         solde_bancaire=solde,
+        rentabilite=rent,
     )
 
 

@@ -354,6 +354,8 @@ async def ensure_critical_columns() -> None:
         ("optimisation_budget_lignes", "qbo_financement_accounts_json", "TEXT"),
         ("optimisation_budget_lignes", "comptant_disponible", "NUMERIC(12,2)"),
         ("optimisation_negos", "recherche_json", "TEXT"),
+        # v9 : point de départ du calcul de rentabilité de la compagnie.
+        ("optimisation_projets", "rentabilite_depuis", "DATE"),
         # Documents 2026-07-27 (démêlage communications / dossier) :
         # « document courant » du bail et de l'avis de renouvellement
         # (celui qui s'ouvre au clic ; le remplacer archive l'ancien),

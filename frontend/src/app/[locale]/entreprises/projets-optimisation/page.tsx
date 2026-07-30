@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Settings2,
   Target,
+  Scale,
   Trash2,
   TrendingUp,
   Landmark,
@@ -86,6 +87,7 @@ type Projet = {
   qbo_scope: string | null;
   qbo_bank_account_id: string | null;
   qbo_bank_account_name: string | null;
+  rentabilite_depuis: string | null;
   objectif_revenus_mensuels: number | null;
   objectif_depenses_mensuelles: number | null;
   objectif_revenus_annuels: number | null;
@@ -126,6 +128,8 @@ type Recherche = {
   autres?: string;
   notes?: string;
 };
+type Rentabilite = { revenus: number; depenses: number; net: number };
+
 type LocataireDispo = {
   locataire_id: number;
   nom: string;
@@ -253,6 +257,7 @@ export default function ProjetsOptimisationPage() {
   const [qboDep, setQboDep] = useState<Record<number, number>>({});
   const [qboFin, setQboFin] = useState<Record<number, number>>({});
   const [qboSolde, setQboSolde] = useState<number | null>(null);
+  const [qboRent, setQboRent] = useState<Rentabilite | null>(null);
   const [qboErr, setQboErr] = useState<string | null>(null);
   const [qboLoading, setQboLoading] = useState(false);
 
@@ -293,11 +298,13 @@ export default function ProjetsOptimisationPage() {
         par_ligne: Record<number, number>;
         financement_par_ligne: Record<number, number>;
         solde_bancaire: number | null;
+        rentabilite: Rentabilite | null;
         erreur: string | null;
       };
       setQboDep(d.par_ligne || {});
       setQboFin(d.financement_par_ligne || {});
       setQboSolde(d.solde_bancaire ?? null);
+      setQboRent(d.rentabilite ?? null);
       setQboErr(d.erreur || null);
     } catch (e) {
       setQboErr(`Lecture QuickBooks échouée : ${(e as Error).message}`);
@@ -323,6 +330,7 @@ export default function ProjetsOptimisationPage() {
       setQboDep({});
       setQboFin({});
       setQboSolde(null);
+      setQboRent(null);
       setQboErr(null);
       void loadDetail(selId);
       void loadQbo(selId);
@@ -545,6 +553,7 @@ export default function ProjetsOptimisationPage() {
                     qboDep={qboDep}
                     qboFin={qboFin}
                     qboSolde={qboSolde}
+                    qboRent={qboRent}
                     qboErr={qboErr}
                     qboLoading={qboLoading}
                     onRefreshQbo={() => void loadQbo(detail.id)}
@@ -901,6 +910,7 @@ function BudgetSection({
   qboDep,
   qboFin,
   qboSolde,
+  qboRent,
   qboErr,
   qboLoading,
   onRefreshQbo,
@@ -911,6 +921,7 @@ function BudgetSection({
   qboDep: Record<number, number>;
   qboFin: Record<number, number>;
   qboSolde: number | null;
+  qboRent: Rentabilite | null;
   qboErr: string | null;
   qboLoading: boolean;
   onRefreshQbo: () => void;
@@ -994,6 +1005,30 @@ function BudgetSection({
             </span>
             {projet.qbo_bank_account_name ? (
               <span>{projet.qbo_bank_account_name}</span>
+            ) : null}
+            {qboRent ? (
+              <span
+                className="inline-flex items-center gap-1"
+                title={`Revenus ${fmtMoney(qboRent.revenus)} − dépenses ${fmtMoney(
+                  qboRent.depenses
+                )} depuis ${
+                  projet.rentabilite_depuis || "la création de la compagnie"
+                }`}
+              >
+                <Scale className="h-3 w-3" />
+                Rentabilité{" "}
+                {projet.rentabilite_depuis
+                  ? `depuis le ${projet.rentabilite_depuis}`
+                  : "depuis la création"}
+                <strong
+                  className={`tabular-nums ${
+                    qboRent.net < 0 ? "text-rose-400" : "text-emerald-400"
+                  }`}
+                >
+                  {qboRent.net > 0 ? "+" : ""}
+                  {fmtMoney(qboRent.net)}
+                </strong>
+              </span>
             ) : null}
           </p>
         </div>
@@ -1705,6 +1740,30 @@ function BudgetSettingsModal({
         {status?.connected ? (
           <>
             <BankAccountPicker projet={projet} onPatch={onPatchProjet} />
+            <div className="mt-3">
+              <label className="label text-[10px] uppercase">
+                Rentabilité de la compagnie — depuis le
+              </label>
+              <input
+                type="date"
+                className="input"
+                defaultValue={projet.rentabilite_depuis || ""}
+                onBlur={(e) =>
+                  void onPatchProjet({
+                    rentabilite_depuis: e.target.value || null
+                  })
+                }
+              />
+              <p
+                className="mt-1 text-[10px]"
+                style={{ color: "var(--qg-text-muted)" }}
+              >
+                Revenus moins dépenses de toute la compagnie sur la
+                période — laisse vide pour partir de sa création. Le
+                résultat s&apos;affiche en haut du budget (rouge = elle a
+                coûté plus qu&apos;elle n&apos;a rapporté).
+              </p>
+            </div>
             <label className="label mt-3 text-[10px] uppercase">
               Catégories du plan comptable à suivre
             </label>
