@@ -11,7 +11,10 @@ Construction : il consomme ``get_qbo(scope)`` en lecture seule.
 """
 from __future__ import annotations
 
+import json
 import logging
+import unicodedata
+from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
@@ -38,11 +41,23 @@ _ACCOUNT_TYPES_FINANCEMENT = (
 #: Comptes bancaires (solde courant affiché sur le budget).
 _ACCOUNT_TYPES_BANQUE = ("Bank",)
 
+#: Compte d'hypothèque du cashflow (capital = passif long terme).
+_ACCOUNT_TYPES_HYPOTHEQUE = ("Long Term Liability",)
+
+#: Avances des actionnaires — passif (dû à l'actionnaire) ou équité.
+_ACCOUNT_TYPES_AVANCES = (
+    "Other Current Liability",
+    "Long Term Liability",
+    "Equity",
+)
+
 #: kind exposé par l'API → familles de comptes.
 _KINDS = {
     "depense": _ACCOUNT_TYPES,
     "financement": _ACCOUNT_TYPES_FINANCEMENT,
     "banque": _ACCOUNT_TYPES_BANQUE,
+    "hypotheque": _ACCOUNT_TYPES_HYPOTHEQUE,
+    "avances": _ACCOUNT_TYPES_AVANCES,
 }
 
 
@@ -277,10 +292,178 @@ def _comptes_par_colonne(
         _comptes_par_colonne(sous, out, section_ici)
 
 
+def _soldes_par_compte_colonnes(
+    node: Any, out: Dict[str, Dict[str, Any]]
+) -> None:
+    """Collecte les lignes de détail d'un BILAN mensuel :
+    {account_id: {"nom", "vals": [solde de fin de chaque colonne]}}."""
+    if isinstance(node, list):
+        for r in node:
+            _soldes_par_compte_colonnes(r, out)
+        return
+    if not isinstance(node, dict):
+        return
+    cols = node.get("ColData")
+    if (
+        isinstance(cols, list)
+        and len(cols) > 1
+        and node.get("type") == "Data"
+        and cols[0].get("id")
+    ):
+        vals: List[float] = []
+        for cell in cols[1:]:
+            brut = (
+                (cell.get("value") or "0")
+                .replace(",", "")
+                .replace("$", "")
+                .strip()
+            )
+            try:
+                vals.append(float(brut) if brut else 0.0)
+            except ValueError:
+                vals.append(0.0)
+        out[str(cols[0].get("id"))] = {
+            "nom": (cols[0].get("value") or "").strip(),
+            "vals": vals,
+        }
+    sous = (node.get("Rows") or {}).get("Row")
+    if sous:
+        _soldes_par_compte_colonnes(sous, out)
+
+
+def _assembler_avances(
+    titres: List[str],
+    series: Dict[str, Dict[str, Any]],
+    selection: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    """Avances des actionnaires : pour chaque compte suivi, le solde
+    courant et le flux mensuel (variation du solde de bilan). ``titres``
+    inclut le mois de RÉFÉRENCE en tête — le 1er mois affiché est donc
+    titres[1] et sa variation = vals[1] − vals[0]."""
+    comptes: List[Dict[str, Any]] = []
+    total = 0.0
+    for c in selection:
+        cid = str(c.get("id"))
+        entry = series.get(cid) or {}
+        nom = entry.get("nom") or c.get("name") or cid
+        vals: List[float] = entry.get("vals") or []
+        mois = [
+            {
+                "mois": titres[i],
+                "variation": round(vals[i] - vals[i - 1], 2),
+                "solde": round(vals[i], 2),
+            }
+            for i in range(1, min(len(titres), len(vals)))
+        ]
+        solde = round(vals[-1], 2) if vals else 0.0
+        total += solde
+        comptes.append(
+            {"id": cid, "nom": nom, "solde": solde, "mois": mois}
+        )
+    comptes.sort(key=lambda x: -abs(float(x["solde"])))
+    return {"comptes": comptes, "total": round(total, 2)}
+
+
+async def _bilan_mensuel(
+    scope: str,
+    date_debut: Optional[str],
+    date_fin: Optional[str],
+) -> tuple:
+    """Rapport BalanceSheet ventilé PAR MOIS, demandé un mois avant
+    ``date_debut`` pour disposer d'une colonne de référence (sans elle,
+    la variation du 1er mois serait incalculable). → (titres, series).
+    Lecture seule."""
+    from app.integrations.quickbooks import get_qbo
+
+    qbo = get_qbo(scope)
+    if not await _ready(qbo):
+        raise RuntimeError(
+            f"QuickBooks n'est pas connecté pour « {scope} »."
+        )
+    params: Dict[str, str] = {
+        "accounting_method": "Accrual",
+        "summarize_column_by": "Month",
+    }
+    if date_debut:
+        d = date.fromisoformat(date_debut)
+        ref = (d.replace(day=1) - timedelta(days=1)).replace(day=1)
+        params["start_date"] = ref.isoformat()
+    if date_fin:
+        params["end_date"] = date_fin
+    report = await qbo.report("BalanceSheet", **params)
+    colonnes = (report.get("Columns") or {}).get("Column") or []
+    titres = [
+        (c.get("ColTitle") or "").strip() or f"Mois {i}"
+        for i, c in enumerate(colonnes[1:], start=1)
+    ]
+    series: Dict[str, Dict[str, Any]] = {}
+    _soldes_par_compte_colonnes(
+        report.get("Rows", {}).get("Row") or [], series
+    )
+    # Certains fichiers ajoutent une colonne « Total » finale — on la
+    # jette (un bilan n'a pas de total de période).
+    if titres and titres[-1].lower() in ("total", "totaux"):
+        titres = titres[:-1]
+        for e in series.values():
+            e["vals"] = e["vals"][: len(titres)]
+    return titres, series
+
+
+def _norm(s: str) -> str:
+    """minuscules sans accents — pour matcher « actionnaire »."""
+    return "".join(
+        c
+        for c in unicodedata.normalize("NFD", (s or "").lower())
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+async def avances_actionnaires(
+    scope: str,
+    date_debut: Optional[str],
+    date_fin: Optional[str],
+    accounts_json: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Encadré « Avances des actionnaires » : solde courant + flux de
+    changement mensuel de chaque compte suivi. Sélection manuelle via
+    ``accounts_json`` ([{"id","name"}]) sinon auto-détection par nom
+    (« actionnaire » / « shareholder ») dans le passif et l'équité."""
+    selection: List[Dict[str, str]] = []
+    auto = True
+    if accounts_json:
+        try:
+            brut = json.loads(accounts_json)
+        except Exception:  # noqa: BLE001 — JSON invalide = auto
+            brut = []
+        selection = [
+            {"id": str(c.get("id")), "name": str(c.get("name") or "")}
+            for c in brut
+            if isinstance(c, dict) and c.get("id")
+        ]
+        auto = not selection
+    if not selection:
+        plan = await lister_comptes_depense(scope, "avances")
+        selection = [
+            {"id": c["id"], "name": c["name"]}
+            for c in plan
+            if "actionnaire" in _norm(c["fully_qualified_name"])
+            or "shareholder" in _norm(c["fully_qualified_name"])
+        ]
+        auto = True
+    if not selection:
+        return {"comptes": [], "total": 0.0, "selection": [], "auto": True}
+    titres, series = await _bilan_mensuel(scope, date_debut, date_fin)
+    out = _assembler_avances(titres, series, selection)
+    out["selection"] = [c["id"] for c in selection]
+    out["auto"] = auto
+    return out
+
+
 def _assembler_cashflow(
     titres: List[str],
     groupes: Dict[str, List[float]],
     comptes: Optional[List[Dict[str, Any]]] = None,
+    hypotheque: Optional[List[float]] = None,
 ) -> Dict[str, Any]:
     """Combine les colonnes mensuelles du P&L en lignes de cashflow :
     ``titres`` = libellés de colonnes SANS la première (une par mois,
@@ -298,8 +481,14 @@ def _assembler_cashflow(
     revenus = _serie("Income", "OtherIncome")
     depenses = _serie("Expenses", "COGS", "OtherExpenses")
     net = groupes.get("NetIncome")
+    hyp = [0.0] * n
+    for i in range(min(n, len(hypotheque or []))):
+        hyp[i] = float((hypotheque or [])[i])
+    # Écart = revenus − dépenses − hypothèque (capital remboursé, lu
+    # du bilan — le P&L ne voit que les intérêts).
     ecarts = [
         (net[i] if net and i < len(net) else revenus[i] - depenses[i])
+        - hyp[i]
         for i in range(n)
     ]
     def _details(i: int) -> List[Dict[str, Any]]:
@@ -319,6 +508,7 @@ def _assembler_cashflow(
             "mois": titres[i],
             "revenus": round(revenus[i], 2),
             "depenses": round(depenses[i], 2),
+            "hypotheque": round(hyp[i], 2),
             "ecart": round(ecarts[i], 2),
             "details": _details(i),
         }
@@ -327,6 +517,7 @@ def _assembler_cashflow(
     total = {
         "revenus": round(revenus[-1], 2) if n else 0.0,
         "depenses": round(depenses[-1], 2) if n else 0.0,
+        "hypotheque": round(hyp[-1], 2) if n else 0.0,
         "ecart": round(ecarts[-1], 2) if n else 0.0,
         "details": _details(n - 1) if n else [],
     }
@@ -337,6 +528,7 @@ async def cashflow_mensuel(
     scope: str,
     date_debut: Optional[str],
     date_fin: Optional[str],
+    hypotheque_account_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Cashflow d'opération PAR MOIS (revenus, dépenses, écart) lu du
     rapport ProfitAndLoss ventilé mensuellement + total de période.
@@ -369,7 +561,29 @@ async def cashflow_mensuel(
     _comptes_par_colonne(
         report.get("Rows", {}).get("Row") or [], comptes
     )
-    return _assembler_cashflow(titres, groupes, comptes)
+
+    # Colonne Hypothèque : baisse mensuelle du compte de passif choisi
+    # (capital remboursé), lue du bilan et alignée À DROITE sur les
+    # mois du P&L (les deux rapports couvrent la même période).
+    hyp: Optional[List[float]] = None
+    if hypotheque_account_id:
+        try:
+            _, series = await _bilan_mensuel(scope, date_debut, date_fin)
+            entry = series.get(str(hypotheque_account_id))
+            vals = (entry or {}).get("vals") or []
+            variations = [
+                vals[i - 1] - vals[i] for i in range(1, len(vals))
+            ]
+            nb_mois = max(0, len(titres) - 1)
+            hyp = [0.0] * nb_mois
+            m = min(nb_mois, len(variations))
+            for j in range(m):
+                hyp[nb_mois - 1 - j] = variations[len(variations) - 1 - j]
+            hyp.append(sum(hyp))  # colonne Total
+        except Exception as exc:  # noqa: BLE001 — cashflow sans hyp
+            log.info("hypothèque cashflow (%s): %s", scope, exc)
+            hyp = None
+    return _assembler_cashflow(titres, groupes, comptes, hyp)
 
 
 async def rentabilite(
