@@ -69,6 +69,7 @@ class BudgetLigneRead(BaseModel):
     qbo_accounts_json: Optional[str]
     qbo_financement_accounts_json: Optional[str] = None
     comptant_disponible: Optional[float] = None
+    mode: Optional[str] = None
     position: int
 
 
@@ -168,6 +169,10 @@ class BudgetLigneCreate(BaseModel):
     nom: str = Field(..., min_length=1, max_length=255)
     budget_montant: float = 0
     qbo_accounts_json: Optional[str] = Field(default=None, max_length=20_000)
+    #: "deficit_operation" = enveloppe Budget de détention.
+    mode: Optional[str] = Field(
+        default=None, pattern=r"^(comptes|deficit_operation)$"
+    )
 
 
 class BudgetLigneUpdate(BaseModel):
@@ -544,6 +549,7 @@ async def create_budget_ligne(
         nom=data.nom.strip(),
         budget_montant=data.budget_montant,
         qbo_accounts_json=data.qbo_accounts_json,
+        mode=data.mode,
         position=nb,
     )
     db.add(ligne)
@@ -653,10 +659,29 @@ async def qbo_depenses(
             float(totaux.get(str(c.get("id")), 0.0)) for c in comptes
         )
 
+    # Rentabilité de la compagnie : depuis la date choisie, sinon depuis
+    # la création du fichier comptable (QBO accepte une date très basse).
+    # Sert aussi aux enveloppes « Budget de détention » ci-dessous.
+    rent = None
+    try:
+        rent = await _rentabilite(
+            p.qbo_scope,
+            (p.rentabilite_depuis or date(2000, 1, 1)).isoformat(),
+            date.today().isoformat(),
+        )
+    except Exception as exc:  # noqa: BLE001 — jamais bloquant
+        log.info("rentabilité projet #%s: %s", projet_id, exc)
+
     par_ligne: Dict[int, float] = {}
     financement: Dict[int, float] = {}
     for ligne in lignes:
-        par_ligne[ligne.id] = round(_somme(ligne.qbo_accounts_json), 2)
+        if ligne.mode == "deficit_operation":
+            # Budget de détention : dépensé = déficit d'opération de la
+            # compagnie (0 si elle est rentable).
+            if rent is not None:
+                par_ligne[ligne.id] = round(max(0.0, -rent["net"]), 2)
+        else:
+            par_ligne[ligne.id] = round(_somme(ligne.qbo_accounts_json), 2)
         # Les entrées d'argent sortent tantôt en crédit (négatif) tantôt
         # en positif selon le type de compte → on garde la magnitude.
         financement[ligne.id] = round(
@@ -669,18 +694,6 @@ async def qbo_depenses(
             solde = await solde_compte(p.qbo_scope, p.qbo_bank_account_id)
         except Exception as exc:  # noqa: BLE001 — jamais bloquant
             log.info("solde bancaire projet #%s: %s", projet_id, exc)
-
-    # Rentabilité de la compagnie : depuis la date choisie, sinon depuis
-    # la création du fichier comptable (QBO accepte une date très basse).
-    rent = None
-    try:
-        rent = await _rentabilite(
-            p.qbo_scope,
-            (p.rentabilite_depuis or date(2000, 1, 1)).isoformat(),
-            date.today().isoformat(),
-        )
-    except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        log.info("rentabilité projet #%s: %s", projet_id, exc)
 
     return QboDepensesOut(
         par_ligne=par_ligne,
