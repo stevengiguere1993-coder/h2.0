@@ -193,6 +193,113 @@ def _groupes_pnl(node: Any, out: Dict[str, float]) -> None:
         _groupes_pnl(sous, out)
 
 
+def _groupes_pnl_colonnes(
+    node: Any, out: Dict[str, List[float]]
+) -> None:
+    """Comme ``_groupes_pnl`` mais garde TOUTES les colonnes du Summary
+    (rapport mensuel : une valeur par mois + le total en dernier)."""
+    if isinstance(node, list):
+        for r in node:
+            _groupes_pnl_colonnes(r, out)
+        return
+    if not isinstance(node, dict):
+        return
+    groupe = node.get("group")
+    somme = (node.get("Summary") or {}).get("ColData")
+    if groupe and isinstance(somme, list) and len(somme) > 1:
+        vals: List[float] = []
+        for cell in somme[1:]:  # [0] = libellé (« Total Income »…)
+            brut = (
+                (cell.get("value") or "0")
+                .replace(",", "")
+                .replace("$", "")
+                .strip()
+            )
+            try:
+                vals.append(float(brut) if brut else 0.0)
+            except ValueError:
+                vals.append(0.0)
+        out[str(groupe)] = vals
+    sous = (node.get("Rows") or {}).get("Row")
+    if sous:
+        _groupes_pnl_colonnes(sous, out)
+
+
+def _assembler_cashflow(
+    titres: List[str], groupes: Dict[str, List[float]]
+) -> Dict[str, Any]:
+    """Combine les colonnes mensuelles du P&L en lignes de cashflow :
+    ``titres`` = libellés de colonnes SANS la première (une par mois,
+    la dernière étant « Total »)."""
+    n = len(titres)
+
+    def _serie(*cles: str) -> List[float]:
+        out = [0.0] * n
+        for cle in cles:
+            vals = groupes.get(cle) or []
+            for i in range(min(n, len(vals))):
+                out[i] += vals[i]
+        return out
+
+    revenus = _serie("Income", "OtherIncome")
+    depenses = _serie("Expenses", "COGS", "OtherExpenses")
+    net = groupes.get("NetIncome")
+    ecarts = [
+        (net[i] if net and i < len(net) else revenus[i] - depenses[i])
+        for i in range(n)
+    ]
+    mois = [
+        {
+            "mois": titres[i],
+            "revenus": round(revenus[i], 2),
+            "depenses": round(depenses[i], 2),
+            "ecart": round(ecarts[i], 2),
+        }
+        for i in range(n - 1)  # la dernière colonne est le total
+    ]
+    total = {
+        "revenus": round(revenus[-1], 2) if n else 0.0,
+        "depenses": round(depenses[-1], 2) if n else 0.0,
+        "ecart": round(ecarts[-1], 2) if n else 0.0,
+    }
+    return {"mois": mois, "total": total}
+
+
+async def cashflow_mensuel(
+    scope: str,
+    date_debut: Optional[str],
+    date_fin: Optional[str],
+) -> Dict[str, Any]:
+    """Cashflow d'opération PAR MOIS (revenus, dépenses, écart) lu du
+    rapport ProfitAndLoss ventilé mensuellement + total de période.
+    Lecture seule."""
+    from app.integrations.quickbooks import get_qbo
+
+    qbo = get_qbo(scope)
+    if not await _ready(qbo):
+        raise RuntimeError(
+            f"QuickBooks n'est pas connecté pour « {scope} »."
+        )
+    params: Dict[str, str] = {
+        "accounting_method": "Accrual",
+        "summarize_column_by": "Month",
+    }
+    if date_debut:
+        params["start_date"] = date_debut
+    if date_fin:
+        params["end_date"] = date_fin
+    report = await qbo.report("ProfitAndLoss", **params)
+
+    colonnes = (report.get("Columns") or {}).get("Column") or []
+    titres = [
+        (c.get("ColTitle") or "").strip() or f"Mois {i}"
+        for i, c in enumerate(colonnes[1:], start=1)  # [0] = libellés
+    ]
+    groupes: Dict[str, List[float]] = {}
+    _groupes_pnl_colonnes(report.get("Rows", {}).get("Row") or [], groupes)
+    return _assembler_cashflow(titres, groupes)
+
+
 async def rentabilite(
     scope: str,
     date_debut: Optional[str],

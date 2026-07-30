@@ -116,7 +116,6 @@ class ProjetRead(BaseModel):
     qbo_scope: Optional[str]
     qbo_bank_account_id: Optional[str] = None
     qbo_bank_account_name: Optional[str] = None
-    rentabilite_depuis: Optional[date] = None
     objectif_revenus_mensuels: Optional[float]
     objectif_depenses_mensuelles: Optional[float]
     objectif_revenus_annuels: Optional[float] = None
@@ -156,7 +155,6 @@ class ProjetUpdate(BaseModel):
     qbo_scope: Optional[str] = Field(default=None, max_length=32)
     qbo_bank_account_id: Optional[str] = Field(default=None, max_length=64)
     qbo_bank_account_name: Optional[str] = Field(default=None, max_length=255)
-    rentabilite_depuis: Optional[date] = None
     objectif_revenus_mensuels: Optional[float] = None
     objectif_depenses_mensuelles: Optional[float] = None
     objectif_revenus_annuels: Optional[float] = None
@@ -606,9 +604,10 @@ class QboDepensesOut(BaseModel):
     financement_par_ligne: Dict[int, float] = Field(default_factory=dict)
     #: Solde courant du compte bancaire du projet (None si non choisi).
     solde_bancaire: Optional[float] = None
-    #: Rentabilité de la compagnie depuis ``rentabilite_depuis`` (ou
-    #: depuis la création) : {"revenus", "depenses", "net"}.
-    rentabilite: Optional[Dict[str, float]] = None
+    #: Cashflow d'opération PAR MOIS depuis l'ouverture du projet :
+    #: {"mois": [{"mois", "revenus", "depenses", "ecart"}], "total": …}.
+    #: Le déficit du total nourrit l'enveloppe Budget de détention.
+    cashflow: Optional[Dict[str, object]] = None
     erreur: Optional[str] = None
 
 
@@ -622,8 +621,8 @@ async def qbo_depenses(
     du début du projet à aujourd'hui). Ne casse jamais : les problèmes
     QBO reviennent dans ``erreur``."""
     from app.services.qbo_optimisation import (
+        cashflow_mensuel,
         depenses_par_compte,
-        rentabilite as _rentabilite,
         solde_compte,
     )
 
@@ -659,27 +658,27 @@ async def qbo_depenses(
             float(totaux.get(str(c.get("id")), 0.0)) for c in comptes
         )
 
-    # Rentabilité de la compagnie : depuis la date choisie, sinon depuis
-    # la création du fichier comptable (QBO accepte une date très basse).
-    # Sert aussi aux enveloppes « Budget de détention » ci-dessous.
-    rent = None
+    # Cashflow d'opération mois par mois depuis l'OUVERTURE du projet
+    # (date_debut). Le déficit du total nourrit la Détention ci-dessous.
+    cashflow = None
     try:
-        rent = await _rentabilite(
+        cashflow = await cashflow_mensuel(
             p.qbo_scope,
-            (p.rentabilite_depuis or date(2000, 1, 1)).isoformat(),
+            (p.date_debut or date(2000, 1, 1)).isoformat(),
             date.today().isoformat(),
         )
     except Exception as exc:  # noqa: BLE001 — jamais bloquant
-        log.info("rentabilité projet #%s: %s", projet_id, exc)
+        log.info("cashflow projet #%s: %s", projet_id, exc)
 
     par_ligne: Dict[int, float] = {}
     financement: Dict[int, float] = {}
     for ligne in lignes:
         if ligne.mode == "deficit_operation":
-            # Budget de détention : dépensé = déficit d'opération de la
-            # compagnie (0 si elle est rentable).
-            if rent is not None:
-                par_ligne[ligne.id] = round(max(0.0, -rent["net"]), 2)
+            # Budget de détention : dépensé = déficit du cashflow (0 si
+            # le total des écarts est positif).
+            if cashflow is not None:
+                ecart_total = float(cashflow["total"]["ecart"])
+                par_ligne[ligne.id] = round(max(0.0, -ecart_total), 2)
         else:
             par_ligne[ligne.id] = round(_somme(ligne.qbo_accounts_json), 2)
         # Les entrées d'argent sortent tantôt en crédit (négatif) tantôt
@@ -699,7 +698,7 @@ async def qbo_depenses(
         par_ligne=par_ligne,
         financement_par_ligne=financement,
         solde_bancaire=solde,
-        rentabilite=rent,
+        cashflow=cashflow,
     )
 
 
