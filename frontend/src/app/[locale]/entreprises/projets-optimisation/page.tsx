@@ -88,7 +88,6 @@ type Projet = {
   qbo_scope: string | null;
   qbo_bank_account_id: string | null;
   qbo_bank_account_name: string | null;
-  rentabilite_depuis: string | null;
   objectif_revenus_mensuels: number | null;
   objectif_depenses_mensuelles: number | null;
   objectif_revenus_annuels: number | null;
@@ -129,7 +128,16 @@ type Recherche = {
   autres?: string;
   notes?: string;
 };
-type Rentabilite = { revenus: number; depenses: number; net: number };
+type CashflowMois = {
+  mois: string;
+  revenus: number;
+  depenses: number;
+  ecart: number;
+};
+type Cashflow = {
+  mois: CashflowMois[];
+  total: { revenus: number; depenses: number; ecart: number };
+};
 
 type LocataireDispo = {
   locataire_id: number;
@@ -258,7 +266,7 @@ export default function ProjetsOptimisationPage() {
   const [qboDep, setQboDep] = useState<Record<number, number>>({});
   const [qboFin, setQboFin] = useState<Record<number, number>>({});
   const [qboSolde, setQboSolde] = useState<number | null>(null);
-  const [qboRent, setQboRent] = useState<Rentabilite | null>(null);
+  const [qboCashflow, setQboCashflow] = useState<Cashflow | null>(null);
   const [qboErr, setQboErr] = useState<string | null>(null);
   const [qboLoading, setQboLoading] = useState(false);
 
@@ -299,13 +307,13 @@ export default function ProjetsOptimisationPage() {
         par_ligne: Record<number, number>;
         financement_par_ligne: Record<number, number>;
         solde_bancaire: number | null;
-        rentabilite: Rentabilite | null;
+        cashflow: Cashflow | null;
         erreur: string | null;
       };
       setQboDep(d.par_ligne || {});
       setQboFin(d.financement_par_ligne || {});
       setQboSolde(d.solde_bancaire ?? null);
-      setQboRent(d.rentabilite ?? null);
+      setQboCashflow(d.cashflow ?? null);
       setQboErr(d.erreur || null);
     } catch (e) {
       setQboErr(`Lecture QuickBooks échouée : ${(e as Error).message}`);
@@ -331,7 +339,7 @@ export default function ProjetsOptimisationPage() {
       setQboDep({});
       setQboFin({});
       setQboSolde(null);
-      setQboRent(null);
+      setQboCashflow(null);
       setQboErr(null);
       void loadDetail(selId);
       void loadQbo(selId);
@@ -549,21 +557,27 @@ export default function ProjetsOptimisationPage() {
                   onDelete={deleteProjet}
                 />
                 <div className="grid min-w-0 grid-cols-1 items-start gap-5 xl:grid-cols-[3fr_2fr]">
-                  <BudgetSection
-                    projet={detail}
-                    qboDep={qboDep}
-                    qboFin={qboFin}
-                    qboSolde={qboSolde}
-                    qboRent={qboRent}
-                    qboErr={qboErr}
-                    qboLoading={qboLoading}
-                    onRefreshQbo={() => void loadQbo(detail.id)}
-                    onPatchProjet={patchProjet}
-                    onChanged={() => {
-                      void loadDetail(detail.id);
-                      void loadQbo(detail.id);
-                    }}
-                  />
+                  <div className="min-w-0 space-y-5">
+                    <BudgetSection
+                      projet={detail}
+                      qboDep={qboDep}
+                      qboFin={qboFin}
+                      qboSolde={qboSolde}
+                      qboErr={qboErr}
+                      qboLoading={qboLoading}
+                      onRefreshQbo={() => void loadQbo(detail.id)}
+                      onPatchProjet={patchProjet}
+                      onChanged={() => {
+                        void loadDetail(detail.id);
+                        void loadQbo(detail.id);
+                      }}
+                    />
+                    <CashflowSection
+                      projet={detail}
+                      cashflow={qboCashflow}
+                      loading={qboLoading}
+                    />
+                  </div>
                   <ObjectifsSection projet={detail} onPatch={patchProjet} />
                 </div>
                 <NegosSection
@@ -911,7 +925,6 @@ function BudgetSection({
   qboDep,
   qboFin,
   qboSolde,
-  qboRent,
   qboErr,
   qboLoading,
   onRefreshQbo,
@@ -922,7 +935,6 @@ function BudgetSection({
   qboDep: Record<number, number>;
   qboFin: Record<number, number>;
   qboSolde: number | null;
-  qboRent: Rentabilite | null;
   qboErr: string | null;
   qboLoading: boolean;
   onRefreshQbo: () => void;
@@ -1006,30 +1018,6 @@ function BudgetSection({
             </span>
             {projet.qbo_bank_account_name ? (
               <span>{projet.qbo_bank_account_name}</span>
-            ) : null}
-            {qboRent ? (
-              <span
-                className="inline-flex items-center gap-1"
-                title={`Revenus ${fmtMoney(qboRent.revenus)} − dépenses ${fmtMoney(
-                  qboRent.depenses
-                )} depuis ${
-                  projet.rentabilite_depuis || "la création de la compagnie"
-                }`}
-              >
-                <Scale className="h-3 w-3" />
-                Rentabilité{" "}
-                {projet.rentabilite_depuis
-                  ? `depuis le ${projet.rentabilite_depuis}`
-                  : "depuis la création"}
-                <strong
-                  className={`tabular-nums ${
-                    qboRent.net < 0 ? "text-rose-400" : "text-emerald-400"
-                  }`}
-                >
-                  {qboRent.net > 0 ? "+" : ""}
-                  {fmtMoney(qboRent.net)}
-                </strong>
-              </span>
             ) : null}
           </p>
         </div>
@@ -1153,12 +1141,10 @@ function BudgetSection({
                         <span
                           className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] font-normal"
                           style={{ color: "var(--qg-text-muted)" }}
-                          title={`Le dépensé de cette enveloppe = le déficit d'opération de la compagnie (revenus − dépenses) depuis ${
-                            projet.rentabilite_depuis || "sa création"
-                          } — 0 si elle est rentable.`}
+                          title="Le dépensé de cette enveloppe = le déficit du cashflow (total des écarts de l'encadré Cashflow) depuis l'ouverture du projet — 0 si le cashflow est positif."
                         >
                           <Scale className="h-2.5 w-2.5" />
-                          déficit d&apos;opération
+                          déficit du cashflow
                         </span>
                       ) : null}
                     </td>
@@ -1754,30 +1740,6 @@ function BudgetSettingsModal({
           <>
             <BankAccountPicker projet={projet} onPatch={onPatchProjet} />
             <DetentionToggle projet={projet} onChanged={onChanged} />
-            <div className="mt-3">
-              <label className="label text-[10px] uppercase">
-                Rentabilité de la compagnie — depuis le
-              </label>
-              <input
-                type="date"
-                className="input"
-                defaultValue={projet.rentabilite_depuis || ""}
-                onBlur={(e) =>
-                  void onPatchProjet({
-                    rentabilite_depuis: e.target.value || null
-                  })
-                }
-              />
-              <p
-                className="mt-1 text-[10px]"
-                style={{ color: "var(--qg-text-muted)" }}
-              >
-                Revenus moins dépenses de toute la compagnie sur la
-                période — laisse vide pour partir de sa création. Le
-                résultat s&apos;affiche en haut du budget (rouge = elle a
-                coûté plus qu&apos;elle n&apos;a rapporté).
-              </p>
-            </div>
             <label className="label mt-3 text-[10px] uppercase">
               Catégories du plan comptable à suivre
             </label>
@@ -2003,6 +1965,146 @@ function BankAccountPicker({
         Son solde courant s&apos;affiche en haut du budget.
       </p>
     </div>
+  );
+}
+
+// ─── Cashflow mensuel depuis l'ouverture du projet ─────────────
+
+function CashflowSection({
+  projet,
+  cashflow,
+  loading
+}: {
+  projet: Projet;
+  cashflow: Cashflow | null;
+  loading: boolean;
+}) {
+  return (
+    <section
+      className="min-w-0 rounded-xl border p-4"
+      style={{
+        borderColor: "var(--qg-border)",
+        backgroundColor: "var(--qg-card-bg)"
+      }}
+    >
+      <h3
+        className="flex items-center gap-1.5 text-sm font-semibold"
+        style={{ color: "var(--qg-text)" }}
+      >
+        <Scale className="h-4 w-4 text-accent-500" />
+        Cashflow
+        <span
+          className="text-xs font-normal"
+          style={{ color: "var(--qg-text-muted)" }}
+        >
+          par mois depuis l&apos;ouverture du projet
+          {projet.date_debut ? ` (${projet.date_debut})` : ""}
+        </span>
+      </h3>
+
+      {loading && !cashflow ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+        </div>
+      ) : !cashflow ? (
+        <p className="mt-3 text-xs" style={{ color: "var(--qg-text-muted)" }}>
+          Connecte le QuickBooks de l&apos;INC (⚙ de la section Budget)
+          pour voir les revenus, dépenses et écarts mois par mois.
+        </p>
+      ) : (
+        <div className="mt-3 max-h-[380px] overflow-y-auto overflow-x-auto pr-1">
+          <table className="w-full min-w-[420px] text-sm">
+            <thead
+              className="sticky top-0"
+              style={{ backgroundColor: "var(--qg-card-bg)" }}
+            >
+              <tr
+                className="text-left text-[10px] uppercase tracking-wider"
+                style={{ color: "var(--qg-text-muted)" }}
+              >
+                <th className="pb-2 pr-2">Mois</th>
+                <th className="pb-2 pr-2 text-right">Revenus</th>
+                <th className="pb-2 pr-2 text-right">Dépenses</th>
+                <th className="pb-2 text-right">Écart</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cashflow.mois.map((m) => (
+                <tr
+                  key={m.mois}
+                  className="border-t"
+                  style={{ borderColor: "var(--qg-border-soft)" }}
+                >
+                  <td
+                    className="py-1.5 pr-2 text-[12px]"
+                    style={{ color: "var(--qg-text)" }}
+                  >
+                    {m.mois}
+                  </td>
+                  <td
+                    className="py-1.5 pr-2 text-right tabular-nums"
+                    style={{ color: "var(--qg-text)" }}
+                  >
+                    {fmtMoney(m.revenus)}
+                  </td>
+                  <td
+                    className="py-1.5 pr-2 text-right tabular-nums"
+                    style={{ color: "var(--qg-text)" }}
+                  >
+                    {fmtMoney(m.depenses)}
+                  </td>
+                  <td
+                    className={`py-1.5 text-right font-semibold tabular-nums ${
+                      m.ecart < 0 ? "text-rose-400" : "text-emerald-400"
+                    }`}
+                  >
+                    {m.ecart > 0 ? "+" : ""}
+                    {fmtMoney(m.ecart)}
+                  </td>
+                </tr>
+              ))}
+              <tr
+                className="border-t font-semibold"
+                style={{ borderColor: "var(--qg-border)" }}
+              >
+                <td className="py-2 pr-2" style={{ color: "var(--qg-text)" }}>
+                  Total
+                </td>
+                <td
+                  className="py-2 pr-2 text-right tabular-nums"
+                  style={{ color: "var(--qg-text)" }}
+                >
+                  {fmtMoney(cashflow.total.revenus)}
+                </td>
+                <td
+                  className="py-2 pr-2 text-right tabular-nums"
+                  style={{ color: "var(--qg-text)" }}
+                >
+                  {fmtMoney(cashflow.total.depenses)}
+                </td>
+                <td
+                  className={`py-2 text-right tabular-nums ${
+                    cashflow.total.ecart < 0
+                      ? "text-rose-400"
+                      : "text-emerald-400"
+                  }`}
+                >
+                  {cashflow.total.ecart > 0 ? "+" : ""}
+                  {fmtMoney(cashflow.total.ecart)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p
+            className="mt-2 text-[10px]"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            Le déficit du total nourrit le « Total dépensé » de
+            l&apos;enveloppe Budget de détention.
+          </p>
+        </div>
+      )}
+    </section>
   );
 }
 
