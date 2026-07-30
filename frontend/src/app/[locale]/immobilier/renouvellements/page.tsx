@@ -12,6 +12,7 @@ import {
   Loader2,
   Mail,
   Search,
+  Trash2,
   Upload
 } from "lucide-react";
 
@@ -425,6 +426,40 @@ export default function RenouvellementsPage() {
     }
   }
 
+  // Supprimer un avis (et ses documents non signés) : la ligne
+  // redevient « à préparer » — retour Phil 2026-07-30. Le miroir
+  // existe côté Documents : supprimer le document annule aussi l'avis.
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  async function supprimerAvis(r: RenouvellementOverview) {
+    if (!r.renouvellement_id) return;
+    if (
+      !window.confirm(
+        `Supprimer l'avis de renouvellement de ${r.locataire_nom} ?
+
+Le document d'avis lié sera supprimé aussi et la ligne redeviendra « à préparer ».`
+      )
+    )
+      return;
+    setDeletingId(r.bail_id);
+    setMsg(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/renouvellements/${r.renouvellement_id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      setMsg("Avis supprimé — la ligne est de retour « à préparer ».");
+      void reload();
+    } catch (e) {
+      setMsg(`Suppression : ${(e as Error).message}`);
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   // « Scanner & envoyer » (batch) retiré — demande Phil 2026-07-10 :
   // aucun envoi de masse, chaque avis part via son bouton, vérifié.
 
@@ -515,11 +550,14 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
       }
       const d = (await res.json()) as {
         courriel_envoye: boolean;
+        erreur_envoi?: string | null;
       };
       setMsg(
         d.courriel_envoye
           ? "Avis créé et courriel envoyé au locataire."
-          : "Avis créé. Courriel non envoyé (locataire sans email ou Microsoft Graph non configuré)."
+          : `Avis créé, mais courriel NON parti : ${
+              d.erreur_envoi || "raison inconnue"
+            }`
       );
       void reload();
     } catch (e) {
@@ -806,6 +844,22 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                             Avis
                           </button>
                         ) : null}
+                        {r.renouvellement_id != null &&
+                        !r.avis_doc_signed_at ? (
+                          <button
+                            type="button"
+                            title="Supprimer l'avis (et son document) — la ligne redevient « à préparer »"
+                            disabled={deletingId === r.bail_id}
+                            onClick={() => void supprimerAvis(r)}
+                            className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-1.5 text-rose-300 transition hover:bg-rose-500/20 disabled:opacity-50"
+                          >
+                            {deletingId === r.bail_id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        ) : null}
                         <ImportAvisButton
                           renouvellementId={r.renouvellement_id}
                           bailId={r.bail_id}
@@ -911,16 +965,33 @@ function PrepareRenouvellementModal({
     setPct(String(p.pct));
   }
 
-  // Calcul du nouveau loyer en preview
+  // Nouveau loyer : quel que soit le mode (%, $ ou absolu), TOUJOURS
+  // arrondi au dollar SUPÉRIEUR (retour Phil 2026-07-30 :
+  // 1 044,26 $ → 1 045 $). Le backend applique le même arrondi.
   const courant = row.bail_loyer_mensuel;
-  const nouveau =
+  const nouveauBrut =
     mode === "absolu"
       ? Number(absolu) || 0
       : mode === "pct"
       ? courant * (1 + (Number(pct) || 0) / 100)
       : courant + (Number(montant) || 0);
+  const nouveau = Math.ceil(nouveauBrut - 1e-9);
   const delta = nouveau - courant;
   const deltaPct = courant > 0 ? (delta / courant) * 100 : 0;
+
+  // Période reconduite (art. 1941 C.c.Q.) : lendemain de la fin du
+  // bail → même jour un an plus tard — suit le bail, pas le calendrier
+  // 1er juillet / 30 juin.
+  const renouvDebut = (() => {
+    const d = new Date(row.bail_date_fin + "T00:00:00");
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().slice(0, 10);
+  })();
+  const renouvFin = (() => {
+    const d = new Date(row.bail_date_fin + "T00:00:00");
+    d.setFullYear(d.getFullYear() + 1);
+    return d.toISOString().slice(0, 10);
+  })();
 
   function buildBody(forPreview: boolean) {
     const body: Record<string, unknown> = {
@@ -931,12 +1002,10 @@ function PrepareRenouvellementModal({
     if (forPreview) {
       // L'endpoint TAL accepte les mêmes champs nouveau_loyer etc.
     }
-    if (mode === "absolu" && absolu.trim()) {
-      body.nouveau_loyer = Number(absolu);
-    } else if (mode === "pct" && pct.trim()) {
-      body.hausse_pct = Number(pct);
-    } else if (mode === "montant" && montant.trim()) {
-      body.hausse_montant = Number(montant);
+    // Le PDF coche TOUJOURS la 1re case (« sera augmenté à X $ ») —
+    // on envoie le nouveau loyer FINAL (arrondi), jamais la hausse.
+    if (nouveau > 0) {
+      body.nouveau_loyer = nouveau;
     }
     return body;
   }
@@ -945,16 +1014,7 @@ function PrepareRenouvellementModal({
     setPreviewing(true);
     setErr(null);
     try {
-      const body = {
-        ...buildBody(true),
-        // L'endpoint /tal/avis_modification.pdf attend les mêmes shapes
-        nouveau_loyer:
-          mode === "absolu"
-            ? Number(absolu)
-            : mode === "pct"
-            ? courant * (1 + (Number(pct) || 0) / 100)
-            : courant + (Number(montant) || 0)
-      };
+      const body = buildBody(true);
       const res = await authedFetch(
         `/api/v1/immobilier/baux/${row.bail_id}/tal/avis_modification.pdf`,
         { method: "POST", body: JSON.stringify(body) }
@@ -985,11 +1045,16 @@ function PrepareRenouvellementModal({
         const t = await res.text();
         throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
       }
-      const d = (await res.json()) as { courriel_envoye: boolean };
+      const d = (await res.json()) as {
+        courriel_envoye: boolean;
+        erreur_envoi?: string | null;
+      };
       onSent(
         d.courriel_envoye
           ? "Avis envoyé au locataire (BCC + accusé de lecture)."
-          : "Avis créé. Courriel non envoyé (locataire sans email ou Microsoft Graph non configuré)."
+          : `Avis créé, mais courriel NON parti : ${
+              d.erreur_envoi || "raison inconnue"
+            }`
       );
     } catch (e) {
       setErr((e as Error).message);
@@ -1047,6 +1112,14 @@ function PrepareRenouvellementModal({
               </p>
             </div>
           </div>
+          <p className="-mt-2 text-[11px] text-white/45">
+            Arrondi au dollar supérieur — le PDF indique toujours
+            « votre loyer sera augmenté à {fmtCurrency(nouveau)} »
+            (jamais la hausse en % ou en $). Renouvellement proposé :
+            du <b className="text-white/70">{renouvDebut}</b> au{" "}
+            <b className="text-white/70">{renouvFin}</b> (le lendemain
+            de la fin du bail, pour 12 mois).
+          </p>
 
           {/* Presets */}
           <div>
@@ -1393,6 +1466,42 @@ function Releves31Tab() {
     }
   }
 
+  // Annuler un relevé : supprime la copie PDF liée et la ligne
+  // redevient « à produire » (retour Phil 2026-07-30).
+  async function supprimerReleve(row: Releve31Row) {
+    if (
+      !window.confirm(
+        `Annuler le relevé 31 ${row.annee} de ${
+          row.locataire_nom || "ce locataire"
+        } ?
+
+La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
+      )
+    )
+      return;
+    setBusyId(row.logement_id);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/releves31/${row.annee}/${row.logement_id}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      setNumDraft((d) => {
+        const n = { ...d };
+        delete n[row.logement_id];
+        return n;
+      });
+      setFlash("Relevé annulé — la ligne est de retour « à produire ».");
+      await load();
+    } catch (e) {
+      setErr(`Suppression : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   const anneesChoix = (() => {
     const now = new Date().getFullYear();
     return [now, now - 1, now - 2];
@@ -1684,6 +1793,17 @@ function Releves31Tab() {
                           <Mail className="h-3 w-3" />
                           {r.statut === "remis" ? "Renvoyer" : "Envoyer"}
                         </button>
+                        {traite ? (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void supprimerReleve(r)}
+                            className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-1.5 text-rose-300 transition hover:bg-rose-500/20 disabled:opacity-50"
+                            title="Annuler ce relevé — supprime la copie PDF et remet la ligne « à produire »"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        ) : null}
                       </span>
                     </td>
                   </tr>

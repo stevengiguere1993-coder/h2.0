@@ -44,7 +44,11 @@ from app.services.automation_state import (
     get_automation_config,
     set_automation_config,
 )
-from app.services.bail_renouvellement import send_renouvellement_for_bail
+from app.services.bail_renouvellement import (
+    arrondir_loyer,
+    fin_reconduite,
+    send_renouvellement_for_bail,
+)
 from app.services.tal_forms import (
     GABARIT_VARIABLES,
     GABARITS_DEFAUT,
@@ -432,14 +436,26 @@ async def _build_ctx_from_bail(
             if ent is not None:
                 locateur_nom = ent.name
 
-    # Fin de renouvellement par défaut : même durée que le bail courant.
+    # Fin de renouvellement par défaut : art. 1941 C.c.Q. — un bail de
+    # 12 mois se reconduit 12 mois (même jour un an plus tard, que le
+    # bail soit du 1er juillet ou non) ; plus court = même durée.
+    # (L'ancien calcul en jours décalait la date sur le PDF.)
     nouvelle_fin = params.nouvelle_date_fin
-    if (
-        nouvelle_fin is None
-        and bail.date_fin is not None
-        and bail.date_debut is not None
-    ):
-        nouvelle_fin = bail.date_fin + (bail.date_fin - bail.date_debut) + timedelta(days=1)
+    if nouvelle_fin is None and bail.date_fin is not None:
+        nouvelle_fin = fin_reconduite(bail.date_debut, bail.date_fin)
+
+    # Avis de modification : le PDF coche TOUJOURS la 1re case (« votre
+    # loyer actuel de X $ sera augmenté à Y $ ») — une hausse en % ou
+    # en $ est convertie en NOUVEAU LOYER, arrondi au dollar supérieur
+    # (retour Phil 2026-07-30).
+    nouveau_loyer_final = params.nouveau_loyer
+    courant_ = float(bail.loyer_mensuel or 0)
+    if nouveau_loyer_final is None and params.hausse_pct is not None:
+        nouveau_loyer_final = courant_ * (1 + params.hausse_pct / 100.0)
+    elif nouveau_loyer_final is None and params.hausse_montant is not None:
+        nouveau_loyer_final = courant_ + params.hausse_montant
+    if nouveau_loyer_final is not None:
+        nouveau_loyer_final = arrondir_loyer(nouveau_loyer_final)
 
     return TalContext(
         locateur_nom=locateur_nom,
@@ -463,10 +479,14 @@ async def _build_ctx_from_bail(
             if bail.depot_garantie is not None
             else None
         ),
-        modif_mode=params.modif_mode,
-        nouveau_loyer=params.nouveau_loyer,
-        hausse_montant=params.hausse_montant,
-        hausse_pct=params.hausse_pct,
+        modif_mode=(
+            "nouveau_loyer"
+            if nouveau_loyer_final is not None
+            else params.modif_mode
+        ),
+        nouveau_loyer=nouveau_loyer_final,
+        hausse_montant=None,
+        hausse_pct=None,
         nouvelle_date_debut=params.nouvelle_date_debut
         or (bail.date_fin + timedelta(days=1) if bail.date_fin else None),
         nouvelle_date_fin=nouvelle_fin,
@@ -578,15 +598,18 @@ async def envoyer_renouvellement(
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
 
-    # Calcul du nouveau loyer selon le mode choisi
+    # Calcul du nouveau loyer selon le mode choisi — TOUJOURS arrondi
+    # au dollar supérieur (retour Phil 2026-07-30).
     courant = float(bail.loyer_mensuel) if bail.loyer_mensuel else 0.0
     nouveau = payload.nouveau_loyer
     if nouveau is None and payload.hausse_pct is not None:
-        nouveau = round(courant * (1 + payload.hausse_pct / 100.0), 2)
+        nouveau = courant * (1 + payload.hausse_pct / 100.0)
     elif nouveau is None and payload.hausse_montant is not None:
-        nouveau = round(courant + payload.hausse_montant, 2)
+        nouveau = courant + payload.hausse_montant
+    if nouveau is not None:
+        nouveau = arrondir_loyer(nouveau)
 
-    obj, sent = await send_renouvellement_for_bail(
+    obj, sent, raison = await send_renouvellement_for_bail(
         db,
         bail,
         nouveau_loyer=nouveau,
@@ -601,11 +624,58 @@ async def envoyer_renouvellement(
     return EnvoyerRenouvellementResult(
         renouvellement_id=obj.id,
         courriel_envoye=sent,
+        erreur_envoi=None if sent else raison,
         avis_envoye_le=obj.avis_envoye_le,
         nouveau_loyer=float(obj.nouveau_loyer) if obj.nouveau_loyer else None,
         nouvelle_date_debut=obj.nouvelle_date_debut,
         nouvelle_date_fin=obj.nouvelle_date_fin,
     )
+
+
+@router.delete(
+    "/renouvellements/{renouvellement_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_renouvellement(
+    renouvellement_id: int, db: DBSession, user: CurrentUser
+) -> None:
+    """Supprime un avis de renouvellement ET les documents d'avis du
+    cycle (non signés) : la ligne redevient « à préparer » dans Suivis
+    annuels. Miroir de DELETE /documents/{id} — retour Phil 2026-07-30.
+    Refusé (409) si l'avis a été signé par le locataire."""
+    _require_volet(user)
+    r = await db.get(BailRenouvellement, renouvellement_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="Avis introuvable.")
+    # Documents d'avis du CYCLE COURANT (créés depuis l'envoi de cet
+    # avis) — ceux des années passées ne sont pas touchés.
+    docs = (
+        await db.execute(
+            select(ImmDocument).where(
+                ImmDocument.bail_id == r.bail_id,
+                ImmDocument.type == "avis_modification",
+            )
+        )
+    ).scalars().all()
+    du_cycle = [
+        d
+        for d in docs
+        if d.created_at is None
+        or r.avis_envoye_le is None
+        or d.created_at.date() >= r.avis_envoye_le
+    ]
+    if any(d.signed_at is not None for d in du_cycle):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "L'avis a été SIGNÉ par le locataire — il ne peut plus "
+                "être supprimé."
+            ),
+        )
+    for d in du_cycle:
+        await db.delete(d)
+    await db.delete(r)
+    await db.commit()
 
 
 # « scan-batch » (envoi en LOT des avis par défaut) retiré — demande

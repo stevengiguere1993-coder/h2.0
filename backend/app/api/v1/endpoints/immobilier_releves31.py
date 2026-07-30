@@ -293,6 +293,37 @@ async def update_releve31(
     )
 
 
+@router.delete(
+    "/releves31/{annee}/{logement_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_releve31(
+    annee: int, logement_id: int, db: DBSession, user: CurrentUser
+) -> None:
+    """Annule le suivi d'un relevé 31 : la copie PDF liée est supprimée
+    et la ligne redevient « à produire » (retour Phil 2026-07-30 —
+    miroir de DELETE /documents/{id})."""
+    _require_volet(user)
+    obj = (
+        await db.execute(
+            select(Releve31).where(
+                Releve31.annee == annee,
+                Releve31.logement_id == logement_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if obj is None:
+        return  # déjà « à produire »
+    if obj.document_id:
+        from app.models.immobilier import ImmDocument
+
+        doc = await db.get(ImmDocument, obj.document_id)
+        if doc is not None and doc.signed_at is None:
+            await db.delete(doc)
+    await db.delete(obj)
+    await db.commit()
+
+
 @router.post(
     "/releves31/{annee}/{logement_id}/pdf", response_model=Releve31Row
 )

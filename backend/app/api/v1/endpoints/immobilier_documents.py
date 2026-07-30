@@ -313,9 +313,11 @@ async def delete_document(
         )
     ).scalars().all()
     for r in renous:
-        if r.status == "propose" and r.nouveau_loyer is None:
-            # Cycle jamais répondu ni chiffré : l'avis supprimé annule le
-            # cycle — la ligne redevient « à envoyer ».
+        if r.status == "propose":
+            # Cycle encore PROPOSÉ (même chiffré) : supprimer l'avis
+            # annule le cycle — la ligne redevient « à préparer »
+            # (retour Phil 2026-07-30). Un cycle accepté/refusé/négocié
+            # garde son historique, on ne fait que dé-pointer.
             await db.delete(r)
         else:
             r.document_id = None
