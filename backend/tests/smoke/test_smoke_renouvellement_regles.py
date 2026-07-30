@@ -63,6 +63,25 @@ def test_pdf_toujours_case_nouveau_loyer():
     assert "Indiquer le nouveau loyer" in text
 
 
+def test_fenetre_reconduit_regles():
+    """Un cycle « reconduit » n'est pas un avis envoyé : loin de la
+    fin, la ligne est « reconduit » (verte) ; quand la fenêtre du
+    prochain cycle s'ouvre, le suivi normal reprend."""
+    from app.services.locatif_suivis import SuivisConfig
+
+    cfg = SuivisConfig()
+    # Loin de la fin (delta 700 j), reconduit → hors_fenetre à la base,
+    # l'overview le transforme en « reconduit ».
+    assert cfg.fenetre_renouvellement(700, avis_envoye=False) == (
+        "hors_fenetre"
+    )
+    # Fenêtre rouverte (delta 120 j) : le suivi reprend (« à envoyer »).
+    assert cfg.fenetre_renouvellement(120, avis_envoye=False) in (
+        "a_envoyer",
+        "imminente",
+    )
+
+
 def test_suppression_liee_endpoints(client, auth_headers):
     """Les suppressions liées répondent proprement (pas de 500) même
     sur des cibles inexistantes."""

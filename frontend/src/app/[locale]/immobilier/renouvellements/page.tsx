@@ -32,7 +32,13 @@ type RenouvellementOverview = {
   bail_date_fin: string;
   bail_loyer_mensuel: number;
   jours_avant_fin: number;
-  fenetre: "echu" | "imminente" | "a_envoyer" | "envoye" | "hors_fenetre";
+  fenetre:
+    | "echu"
+    | "imminente"
+    | "a_envoyer"
+    | "envoye"
+    | "reconduit"
+    | "hors_fenetre";
   avis_envoye_le?: string | null;
   nouveau_loyer?: number | null;
   renouvellement_status?: string | null;
@@ -360,6 +366,7 @@ const FENETRE_LABELS: Record<RenouvellementOverview["fenetre"], string> = {
   imminente: "Imminente (< 3 mois)",
   a_envoyer: "À envoyer",
   envoye: "Avis envoyé",
+  reconduit: "Reconduit tel quel",
   hors_fenetre: "Hors fenêtre"
 };
 
@@ -368,8 +375,13 @@ const FENETRE_TONE: Record<RenouvellementOverview["fenetre"], string> = {
   imminente: "badge-rose",
   a_envoyer: "badge-amber",
   envoye: "badge-emerald",
+  reconduit: "badge-emerald",
   hors_fenetre: "badge-neutral"
 };
+
+//: Lignes « réglées » (vertes, en bas de liste) : avis envoyé ou bail
+//: reconduit tel quel.
+const FENETRES_REGLEES = new Set(["envoye", "reconduit"]);
 
 function fmtCurrency(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -432,9 +444,14 @@ export default function RenouvellementsPage() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   async function supprimerAvis(r: RenouvellementOverview) {
     if (!r.renouvellement_id) return;
+    const estReconduction = r.renouvellement_status === "reconduit";
     if (
       !window.confirm(
-        `Supprimer l'avis de renouvellement de ${r.locataire_nom} ?
+        estReconduction
+          ? `Annuler la reconduction du bail de ${r.locataire_nom} ?
+
+La date de fin du bail reviendra à ce qu'elle était et la ligne redeviendra « à préparer ».`
+          : `Supprimer l'avis de renouvellement de ${r.locataire_nom} ?
 
 Le document d'avis lié sera supprimé aussi et la ligne redeviendra « à préparer ».`
       )
@@ -451,7 +468,11 @@ Le document d'avis lié sera supprimé aussi et la ligne redeviendra « à prép
         const t = await res.text();
         throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
       }
-      setMsg("Avis supprimé — la ligne est de retour « à préparer ».");
+      setMsg(
+        estReconduction
+          ? "Reconduction annulée — la date de fin du bail est remise."
+          : "Avis supprimé — la ligne est de retour « à préparer »."
+      );
       void reload();
     } catch (e) {
       setMsg(`Suppression : ${(e as Error).message}`);
@@ -579,8 +600,9 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
   const filtered = (list || []).filter((r) => {
     if (immeubleFilter !== "all" && r.immeuble_id !== immeubleFilter)
       return false;
-    if (filter === "todo" && r.fenetre === "envoye") return false;
-    if (filter === "envoye" && r.fenetre !== "envoye") return false;
+    if (filter === "todo" && FENETRES_REGLEES.has(r.fenetre)) return false;
+    if (filter === "envoye" && !FENETRES_REGLEES.has(r.fenetre))
+      return false;
     if (search.trim()) {
       const q = search.toLowerCase();
       return (
@@ -594,7 +616,9 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
   // Les avis déjà envoyés (verts) descendent en bas de la liste — le
   // travail à faire reste en haut. Ordre backend conservé dans chaque groupe.
   const sorted = [...filtered].sort(
-    (a, b) => Number(a.fenetre === "envoye") - Number(b.fenetre === "envoye")
+    (a, b) =>
+      Number(FENETRES_REGLEES.has(a.fenetre)) -
+      Number(FENETRES_REGLEES.has(b.fenetre))
   );
 
   return (
@@ -735,7 +759,7 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                   <tr
                     key={r.bail_id}
                     className={
-                      r.fenetre === "envoye"
+                      FENETRES_REGLEES.has(r.fenetre)
                         ? "bg-emerald-500/10 hover:bg-emerald-500/15"
                         : r.fenetre === "echu"
                           ? "bg-rose-500/10 hover:bg-rose-500/15"
@@ -806,7 +830,11 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                       >
                         {FENETRE_LABELS[r.fenetre]}
                       </span>
-                      {r.avis_envoye_le ? (
+                      {r.fenetre === "reconduit" ? (
+                        <div className="mt-1 text-[10px] text-white/40">
+                          le {r.avis_envoye_le} · même loyer
+                        </div>
+                      ) : r.avis_envoye_le ? (
                         <div className="mt-1 text-[10px] text-white/40">
                           envoyé le {r.avis_envoye_le}
                           {r.nouveau_loyer != null
@@ -874,7 +902,7 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                           <Mail className="h-3.5 w-3.5" />
                           Préparer
                         </button>
-                        {r.fenetre !== "envoye" ? (
+                        {!FENETRES_REGLEES.has(r.fenetre) ? (
                           <button
                             type="button"
                             title="Pas de hausse cette année : le bail s'étire d'un an tel quel, sans avis (reconduction tacite)"
