@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Building2,
   Calendar,
@@ -128,15 +128,26 @@ type Recherche = {
   autres?: string;
   notes?: string;
 };
+type CashflowDetail = {
+  nom: string;
+  type: "revenu" | "depense";
+  montant: number;
+};
 type CashflowMois = {
   mois: string;
   revenus: number;
   depenses: number;
   ecart: number;
+  details: CashflowDetail[];
 };
 type Cashflow = {
   mois: CashflowMois[];
-  total: { revenus: number; depenses: number; ecart: number };
+  total: {
+    revenus: number;
+    depenses: number;
+    ecart: number;
+    details: CashflowDetail[];
+  };
 };
 
 type LocataireDispo = {
@@ -1979,6 +1990,53 @@ function CashflowSection({
   cashflow: Cashflow | null;
   loading: boolean;
 }) {
+  //: Mois dépliés (détail par compte). "total" = la ligne Total.
+  const [ouverts, setOuverts] = useState<Set<string>>(new Set());
+
+  function basculer(cle: string) {
+    setOuverts((prev) => {
+      const next = new Set(prev);
+      if (next.has(cle)) next.delete(cle);
+      else next.add(cle);
+      return next;
+    });
+  }
+
+  function LigneDetails({ details }: { details: CashflowDetail[] }) {
+    if (details.length === 0) return null;
+    return (
+      <tr>
+        <td colSpan={4} className="pb-2">
+          <div
+            className="ml-3 space-y-0.5 border-l pl-3"
+            style={{ borderColor: "var(--qg-border-soft)" }}
+          >
+            {details.map((d, i) => (
+              <div
+                key={i}
+                className="flex items-center justify-between gap-2 text-[11px]"
+              >
+                <span style={{ color: "var(--qg-text-muted)" }}>
+                  {d.nom}
+                </span>
+                <span
+                  className={`tabular-nums ${
+                    d.type === "revenu"
+                      ? "text-emerald-400"
+                      : "text-rose-400"
+                  }`}
+                >
+                  {d.type === "revenu" ? "+" : "−"}
+                  {fmtMoney(Math.abs(d.montant))}
+                </span>
+              </div>
+            ))}
+          </div>
+        </td>
+      </tr>
+    );
+  }
+
   return (
     <section
       className="min-w-0 rounded-xl border p-4"
@@ -2030,45 +2088,67 @@ function CashflowSection({
             </thead>
             <tbody>
               {cashflow.mois.map((m) => (
-                <tr
-                  key={m.mois}
-                  className="border-t"
-                  style={{ borderColor: "var(--qg-border-soft)" }}
-                >
-                  <td
-                    className="py-1.5 pr-2 text-[12px]"
-                    style={{ color: "var(--qg-text)" }}
+                <React.Fragment key={m.mois}>
+                  <tr
+                    className="cursor-pointer border-t hover:bg-accent-500/5"
+                    style={{ borderColor: "var(--qg-border-soft)" }}
+                    onClick={() => basculer(m.mois)}
+                    title="Cliquer pour voir le détail par compte"
                   >
-                    {m.mois}
-                  </td>
-                  <td
-                    className="py-1.5 pr-2 text-right tabular-nums"
-                    style={{ color: "var(--qg-text)" }}
-                  >
-                    {fmtMoney(m.revenus)}
-                  </td>
-                  <td
-                    className="py-1.5 pr-2 text-right tabular-nums"
-                    style={{ color: "var(--qg-text)" }}
-                  >
-                    {fmtMoney(m.depenses)}
-                  </td>
-                  <td
-                    className={`py-1.5 text-right font-semibold tabular-nums ${
-                      m.ecart < 0 ? "text-rose-400" : "text-emerald-400"
-                    }`}
-                  >
-                    {m.ecart > 0 ? "+" : ""}
-                    {fmtMoney(m.ecart)}
-                  </td>
-                </tr>
+                    <td
+                      className="py-1.5 pr-2 text-[12px]"
+                      style={{ color: "var(--qg-text)" }}
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        {ouverts.has(m.mois) ? (
+                          <ChevronDown className="h-3 w-3 opacity-50" />
+                        ) : (
+                          <ChevronRight className="h-3 w-3 opacity-50" />
+                        )}
+                        {m.mois}
+                      </span>
+                    </td>
+                    <td
+                      className="py-1.5 pr-2 text-right tabular-nums"
+                      style={{ color: "var(--qg-text)" }}
+                    >
+                      {fmtMoney(m.revenus)}
+                    </td>
+                    <td
+                      className="py-1.5 pr-2 text-right tabular-nums"
+                      style={{ color: "var(--qg-text)" }}
+                    >
+                      {fmtMoney(m.depenses)}
+                    </td>
+                    <td
+                      className={`py-1.5 text-right font-semibold tabular-nums ${
+                        m.ecart < 0 ? "text-rose-400" : "text-emerald-400"
+                      }`}
+                    >
+                      {m.ecart > 0 ? "+" : ""}
+                      {fmtMoney(m.ecart)}
+                    </td>
+                  </tr>
+                  {ouverts.has(m.mois) ? (
+                    <LigneDetails details={m.details || []} />
+                  ) : null}
+                </React.Fragment>
               ))}
               <tr
-                className="border-t font-semibold"
+                className="cursor-pointer border-t font-semibold hover:bg-accent-500/5"
                 style={{ borderColor: "var(--qg-border)" }}
+                onClick={() => basculer("total")}
+                title="Cliquer pour voir le détail par compte sur toute la période"
               >
                 <td className="py-2 pr-2" style={{ color: "var(--qg-text)" }}>
-                  Total
+                  <span className="inline-flex items-center gap-1">
+                    {ouverts.has("total") ? (
+                      <ChevronDown className="h-3 w-3 opacity-50" />
+                    ) : (
+                      <ChevronRight className="h-3 w-3 opacity-50" />
+                    )}
+                    Total
+                  </span>
                 </td>
                 <td
                   className="py-2 pr-2 text-right tabular-nums"
@@ -2093,6 +2173,9 @@ function CashflowSection({
                   {fmtMoney(cashflow.total.ecart)}
                 </td>
               </tr>
+              {ouverts.has("total") ? (
+                <LigneDetails details={cashflow.total.details || []} />
+              ) : null}
             </tbody>
           </table>
           <p
@@ -2100,7 +2183,13 @@ function CashflowSection({
             style={{ color: "var(--qg-text-muted)" }}
           >
             Le déficit du total nourrit le « Total dépensé » de
-            l&apos;enveloppe Budget de détention.
+            l&apos;enveloppe Budget de détention. Source : rapport
+            Profits et pertes de QuickBooks (comptabilité
+            d&apos;exercice) — clique un mois pour voir le détail par
+            compte. ⚠️ Le CAPITAL remboursé sur l&apos;hypothèque et les
+            achats capitalisés n&apos;y figurent pas (ce sont des
+            mouvements de bilan) ; seuls les intérêts comptent en
+            dépense.
           </p>
         </div>
       )}

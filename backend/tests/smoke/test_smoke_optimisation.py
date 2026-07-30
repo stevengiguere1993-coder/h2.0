@@ -94,6 +94,112 @@ def test_resume_pnl_rentabilite():
     assert out["NetIncome"] == -10000.0
 
 
+def test_cashflow_mensuel_assemblage():
+    """Le P&L ventilé par mois devient un cashflow lisible : une ligne
+    par mois (revenus / dépenses / écart + détail par compte) et un
+    total dont le déficit nourrit l'enveloppe Budget de détention."""
+    from app.services.qbo_optimisation import (
+        _assembler_cashflow,
+        _comptes_par_colonne,
+        _groupes_pnl_colonnes,
+    )
+
+    rapport = [
+        {
+            "group": "Income",
+            "Rows": {
+                "Row": [
+                    {
+                        "type": "Data",
+                        "ColData": [
+                            {"value": "Revenus de loyers", "id": "4"},
+                            {"value": "1,000.00"},
+                            {"value": "2,000.00"},
+                            {"value": "3,000.00"},
+                        ],
+                    }
+                ]
+            },
+            "Summary": {
+                "ColData": [
+                    {"value": "Total Income"},
+                    {"value": "1,000.00"},
+                    {"value": "2,000.00"},
+                    {"value": "3,000.00"},
+                ]
+            },
+        },
+        {
+            "group": "Expenses",
+            "Rows": {
+                "Row": [
+                    {
+                        "type": "Data",
+                        "ColData": [
+                            {"value": "Intérêts hypothécaires", "id": "61"},
+                            {"value": "4,000.00"},
+                            {"value": "1,500.00"},
+                            {"value": "5,500.00"},
+                        ],
+                    }
+                ]
+            },
+            "Summary": {
+                "ColData": [
+                    {"value": "Total Expenses"},
+                    {"value": "4,000.00"},
+                    {"value": "1,500.00"},
+                    {"value": "5,500.00"},
+                ]
+            },
+        },
+        {
+            "group": "NetIncome",
+            "Summary": {
+                "ColData": [
+                    {"value": "Net Income"},
+                    {"value": "-3,000.00"},
+                    {"value": "500.00"},
+                    {"value": "-2,500.00"},
+                ]
+            },
+        },
+    ]
+    groupes: dict[str, list[float]] = {}
+    _groupes_pnl_colonnes(rapport, groupes)
+    comptes: list[dict] = []
+    _comptes_par_colonne(rapport, comptes)
+    cf = _assembler_cashflow(
+        ["Jul 2024", "Aug 2024", "Total"], groupes, comptes
+    )
+
+    assert len(cf["mois"]) == 2
+    assert cf["mois"][0]["revenus"] == 1000.0
+    assert cf["mois"][0]["depenses"] == 4000.0
+    assert cf["mois"][0]["ecart"] == -3000.0
+    assert cf["mois"][1]["ecart"] == 500.0
+    assert cf["total"] == {
+        "revenus": 3000.0,
+        "depenses": 5500.0,
+        "ecart": -2500.0,
+        "details": cf["total"]["details"],
+    }
+    # Détail par compte : le loyer (revenu) puis l'intérêt (dépense) —
+    # exactement ce que Phil veut voir en dépliant un mois.
+    d0 = cf["mois"][0]["details"]
+    assert d0[0] == {
+        "nom": "Revenus de loyers", "type": "revenu", "montant": 1000.0
+    }
+    assert d0[1] == {
+        "nom": "Intérêts hypothécaires",
+        "type": "depense",
+        "montant": 4000.0,
+    }
+    assert cf["total"]["details"][1]["montant"] == 5500.0
+    # Détention : max(0, −écart total) = 2 500 $ de budget grugé.
+    assert max(0.0, -cf["total"]["ecart"]) == 2500.0
+
+
 def test_qbo_scope_inc(client, auth_headers):
     """Les scopes dynamiques « inc:{entreprise_id} » sont acceptés par le
     flux de connexion QBO (un fichier QuickBooks par INC)."""
