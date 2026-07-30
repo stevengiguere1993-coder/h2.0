@@ -109,6 +109,10 @@ class EnvoyerRenouvellementRequest(BaseModel):
 class EnvoyerRenouvellementResult(BaseModel):
     renouvellement_id: int
     courriel_envoye: bool
+    #: Raison précise quand le courriel n'est PAS parti (locataire sans
+    #: courriel, Graph non configuré, erreur d'envoi…) — affichée à
+    #: l'utilisateur au lieu d'un échec silencieux.
+    erreur_envoi: Optional[str] = None
     avis_envoye_le: date
     nouveau_loyer: Optional[float] = None
     nouvelle_date_debut: Optional[date] = None
