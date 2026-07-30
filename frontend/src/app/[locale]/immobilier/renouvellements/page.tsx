@@ -51,6 +51,13 @@ type RenouvellementOverview = {
   avis_doc_envoye_le?: string | null;
   avis_doc_ouvert_le?: string | null;
   avis_doc_signed_at?: string | null;
+  // v3 — réponse du locataire sur le cycle courant + deadlines légales.
+  reponse?: "attente" | "accepte" | "repute_accepte" | "refuse" | null;
+  reponse_le?: string | null;
+  deadline_reponse?: string | null;
+  deadline_fixation?: string | null;
+  refus_motif?: string | null;
+  applique_le?: string | null;
   assurance_confirmee_le?: string | null;
 };
 
@@ -379,9 +386,16 @@ const FENETRE_TONE: Record<RenouvellementOverview["fenetre"], string> = {
   hors_fenetre: "badge-neutral"
 };
 
-//: Lignes « réglées » (vertes, en bas de liste) : avis envoyé ou bail
-//: reconduit tel quel.
+//: Lignes « réglées » (avis envoyé ou bail reconduit) — en bas de
+//: liste, sauf REFUS (rouge, tout en haut : 1 mois pour la fixation).
 const FENETRES_REGLEES = new Set(["envoye", "reconduit"]);
+
+function rangLigne(r: RenouvellementOverview): number {
+  if (r.reponse === "refuse") return -1; // urgent — fixation TAL
+  if (r.reponse === "attente") return 1; // jaune, sous le travail à faire
+  if (FENETRES_REGLEES.has(r.fenetre)) return 2; // verts en bas
+  return 0;
+}
 
 function fmtCurrency(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -588,6 +602,66 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
     }
   }
 
+  async function reponseManuelle(
+    r: RenouvellementOverview,
+    statut: "accepte" | "refuse"
+  ) {
+    if (!r.renouvellement_id) return;
+    if (
+      !window.confirm(
+        statut === "accepte"
+          ? `Marquer l'avis de ${r.locataire_nom} comme ACCEPTÉ ?\n\nLe nouveau loyer sera appliqué au bail à la date du renouvellement.`
+          : `Marquer l'avis de ${r.locataire_nom} comme REFUSÉ ?\n\nLa ligne passera en rouge — tu as 1 mois pour demander la fixation au TAL, sinon le bail continue aux anciennes conditions.`
+      )
+    )
+      return;
+    setMsg(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/renouvellements/${r.renouvellement_id}`,
+        { method: "PATCH", body: JSON.stringify({ status: statut }) }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      void reload();
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  }
+
+  async function entente(r: RenouvellementOverview) {
+    if (!r.renouvellement_id) return;
+    const brut = window.prompt(
+      `Loyer convenu avec ${r.locataire_nom} ($/mois) — l'entente remplace le refus :`,
+      String(r.nouveau_loyer ?? r.bail_loyer_mensuel)
+    );
+    if (brut == null) return;
+    const montant = Math.ceil(Number(brut));
+    if (!Number.isFinite(montant) || montant <= 0) {
+      setMsg("Montant invalide.");
+      return;
+    }
+    setMsg(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/renouvellements/${r.renouvellement_id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            status: "accepte",
+            nouveau_loyer: montant
+          })
+        }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setMsg(
+        `Entente enregistrée : ${montant} $/mois — appliquée au bail à la date du renouvellement.`
+      );
+      void reload();
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  }
+
   // Immeubles distincts présents dans les rows chargées (pour le select).
   const immeubles = useMemo(() => {
     const m = new Map<number, string>();
@@ -615,11 +689,7 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
   });
   // Les avis déjà envoyés (verts) descendent en bas de la liste — le
   // travail à faire reste en haut. Ordre backend conservé dans chaque groupe.
-  const sorted = [...filtered].sort(
-    (a, b) =>
-      Number(FENETRES_REGLEES.has(a.fenetre)) -
-      Number(FENETRES_REGLEES.has(b.fenetre))
-  );
+  const sorted = [...filtered].sort((a, b) => rangLigne(a) - rangLigne(b));
 
   return (
     <>
@@ -759,11 +829,15 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                   <tr
                     key={r.bail_id}
                     className={
-                      FENETRES_REGLEES.has(r.fenetre)
-                        ? "bg-emerald-500/10 hover:bg-emerald-500/15"
-                        : r.fenetre === "echu"
-                          ? "bg-rose-500/10 hover:bg-rose-500/15"
-                          : "hover:bg-brand-950/50"
+                      r.reponse === "refuse"
+                        ? "bg-rose-500/15 hover:bg-rose-500/20"
+                        : r.reponse === "attente"
+                          ? "bg-amber-500/10 hover:bg-amber-500/15"
+                          : FENETRES_REGLEES.has(r.fenetre)
+                            ? "bg-emerald-500/10 hover:bg-emerald-500/15"
+                            : r.fenetre === "echu"
+                              ? "bg-rose-500/10 hover:bg-rose-500/15"
+                              : "hover:bg-brand-950/50"
                     }
                   >
                     <td className="px-4 py-2.5">
@@ -826,10 +900,52 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                     </td>
                     <td className="px-4 py-2.5">
                       <span
-                        className={`badge ${FENETRE_TONE[r.fenetre]}`}
+                        className={`badge ${
+                          r.reponse === "refuse"
+                            ? "badge-rose"
+                            : r.reponse === "attente"
+                              ? "badge-amber"
+                              : r.reponse
+                                ? "badge-emerald"
+                                : FENETRE_TONE[r.fenetre]
+                        }`}
                       >
-                        {FENETRE_LABELS[r.fenetre]}
+                        {r.reponse === "refuse"
+                          ? `Refusé${r.reponse_le ? ` le ${r.reponse_le}` : ""}`
+                          : r.reponse === "attente"
+                            ? "Avis envoyé — attente de réponse"
+                            : r.reponse === "accepte"
+                              ? `Accepté${r.reponse_le ? ` le ${r.reponse_le}` : ""}`
+                              : r.reponse === "repute_accepte"
+                                ? "Réputé accepté (1 mois sans réponse)"
+                                : FENETRE_LABELS[r.fenetre]}
                       </span>
+                      {r.reponse === "refuse" && r.deadline_fixation ? (
+                        <div className="mt-1 text-[10px] font-bold text-rose-300">
+                          Fixation TAL avant le {r.deadline_fixation} —
+                          sinon le bail continue aux anciennes
+                          conditions
+                        </div>
+                      ) : null}
+                      {r.reponse === "attente" && r.deadline_reponse ? (
+                        <div className="mt-1 text-[10px] text-amber-200/80">
+                          réponse due le {r.deadline_reponse} — sans
+                          réponse, réputé accepté
+                        </div>
+                      ) : null}
+                      {r.refus_motif ? (
+                        <div
+                          className="mt-0.5 max-w-[260px] truncate text-[10px] text-white/40"
+                          title={r.refus_motif}
+                        >
+                          Motif : {r.refus_motif}
+                        </div>
+                      ) : null}
+                      {r.applique_le ? (
+                        <div className="mt-0.5 text-[10px] text-emerald-300/80">
+                          Nouveau loyer appliqué au bail le {r.applique_le}
+                        </div>
+                      ) : null}
                       {r.fenetre === "reconduit" ? (
                         <div className="mt-1 text-[10px] text-white/40">
                           le {r.avis_envoye_le} · même loyer
@@ -855,7 +971,12 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                         </div>
                       ) : r.avis_doc_envoye_le ? (
                         <div className="mt-0.5 text-[10px] text-white/40">
-                          Courriel non ouvert
+                          Courriel envoyé — non ouvert
+                        </div>
+                      ) : r.document_id && r.fenetre === "envoye" ? (
+                        <div className="mt-0.5 text-[10px] font-semibold text-amber-300">
+                          Courriel NON parti — ouvre l&apos;avis et
+                          renvoie-le
                         </div>
                       ) : null}
                     </td>
@@ -894,14 +1015,50 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                           hasDoc={r.document_id != null}
                           onDone={() => void reload()}
                         />
-                        <button
-                          type="button"
-                          onClick={() => setPrepFor(r)}
-                          className="btn-secondary btn-sm"
-                        >
-                          <Mail className="h-3.5 w-3.5" />
-                          Préparer
-                        </button>
+                        {!FENETRES_REGLEES.has(r.fenetre) ? (
+                          <button
+                            type="button"
+                            onClick={() => setPrepFor(r)}
+                            className="btn-secondary btn-sm"
+                          >
+                            <Mail className="h-3.5 w-3.5" />
+                            Préparer
+                          </button>
+                        ) : null}
+                        {r.reponse === "attente" && r.renouvellement_id ? (
+                          <>
+                            <button
+                              type="button"
+                              title="Le locataire a accepté (téléphone, papier…) — saisie manuelle"
+                              onClick={() =>
+                                void reponseManuelle(r, "accepte")
+                              }
+                              className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20"
+                            >
+                              Accepté
+                            </button>
+                            <button
+                              type="button"
+                              title="Le locataire a refusé (téléphone, papier…) — saisie manuelle"
+                              onClick={() =>
+                                void reponseManuelle(r, "refuse")
+                              }
+                              className="inline-flex items-center gap-1 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2 py-1.5 text-xs font-semibold text-rose-300 hover:bg-rose-500/20"
+                            >
+                              Refusé
+                            </button>
+                          </>
+                        ) : null}
+                        {r.reponse === "refuse" && r.renouvellement_id ? (
+                          <button
+                            type="button"
+                            title="Entente trouvée avec le locataire — saisir le loyer convenu (souvent une hausse réduite)"
+                            onClick={() => void entente(r)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20"
+                          >
+                            Entente ($)
+                          </button>
+                        ) : null}
                         {!FENETRES_REGLEES.has(r.fenetre) ? (
                           <button
                             type="button"
@@ -918,6 +1075,8 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                             Reconduire tel quel
                           </button>
                         ) : null}
+                        {!FENETRES_REGLEES.has(r.fenetre) ||
+                        r.reponse === "refuse" ? (
                         <button
                           type="button"
                           title="Le bail ne sera PAS renouvelé — ouvrir un dossier de relocation dans Locations"
@@ -932,6 +1091,7 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                           )}
                           Non renouvelé
                         </button>
+                        ) : null}
                       </span>
                     </td>
                   </tr>

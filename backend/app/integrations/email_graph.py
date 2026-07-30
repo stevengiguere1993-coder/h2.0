@@ -84,6 +84,7 @@ class GraphMailer:
         internal: bool = False,
         from_email: Optional[str] = None,
         from_name: Optional[str] = None,
+        request_read_receipt: bool = False,
     ) -> None:
         """``from_email`` doit être une boîte du tenant M365 (Graph refuse
         sinon) ; ``from_name`` change seulement le nom affiché — utile pour
@@ -141,6 +142,13 @@ class GraphMailer:
             },
             "saveToSentItems": True,
         }
+        if request_read_receipt:
+            # Accusé de lecture Outlook — « envoi certifié » des avis.
+            # ⚠️ Ce paramètre était passé par bail_renouvellement.py sans
+            # exister ici → TypeError silencieux : AUCUN avis n'est
+            # jamais parti (cause du « je ne l'ai jamais reçu », Phil
+            # 2026-07-30).
+            msg["message"]["isReadReceiptRequested"] = True
         if cc:
             msg["message"]["ccRecipients"] = [
                 {"emailAddress": {"address": a}} for a in cc

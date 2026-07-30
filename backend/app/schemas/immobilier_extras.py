@@ -152,6 +152,17 @@ class RenouvellementOverview(BaseModel):
     avis_doc_envoye_le: Optional[datetime] = None
     avis_doc_ouvert_le: Optional[datetime] = None
     avis_doc_signed_at: Optional[datetime] = None
+    # v3 (2026-07-30) — réponse du locataire sur le cycle COURANT :
+    # attente | accepte | repute_accepte | refuse (None = pas d'avis en
+    # cours). Deadlines légales : réponse = avis + 1 mois (art. 1945) ;
+    # fixation TAL = refus + 1 mois (art. 1947).
+    reponse: Optional[str] = None
+    reponse_le: Optional[date] = None
+    deadline_reponse: Optional[date] = None
+    deadline_fixation: Optional[date] = None
+    refus_motif: Optional[str] = None
+    #: Date où le nouveau loyer/la période ont été reportés sur le bail.
+    applique_le: Optional[date] = None
     # Assurance locataire : dernière confirmation (> 12 mois = à refaire).
     assurance_confirmee_le: Optional[date] = None
 

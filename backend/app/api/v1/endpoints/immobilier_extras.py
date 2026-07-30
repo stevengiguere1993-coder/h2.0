@@ -695,6 +695,18 @@ class ReconduireResult(BaseModel):
     nouvelle_date_fin: date
 
 
+def _plus_un_mois(d: date) -> date:
+    """Même jour le mois suivant — le délai légal « d'un mois »
+    (art. 1945 / 1947 C.c.Q.) ; 31 → dernier jour d'un mois court."""
+    y, m = (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
+    for day in (d.day, 30, 29, 28):
+        try:
+            return date(y, m, day)
+        except ValueError:
+            continue
+    return date(y, m, 28)
+
+
 def _plus_un_an(d: date) -> date:
     """Même jour l'année suivante (29 février → 28 février)."""
     try:
@@ -749,6 +761,64 @@ async def reconduire_bail(
         bail_id=bail_id,
         ancienne_date_fin=ancienne,
         nouvelle_date_fin=bail.date_fin,
+    )
+
+
+class RenouvellementPatchIn(BaseModel):
+    #: Réponse saisie à la MAIN (appel, papier) ou entente négociée.
+    status: Optional[str] = Field(
+        default=None,
+        pattern=r"^(propose|accepte|refuse|en_negociation)$",
+    )
+    nouveau_loyer: Optional[float] = Field(default=None, ge=0)
+    refus_motif: Optional[str] = Field(default=None, max_length=2000)
+
+
+class RenouvellementPatchOut(BaseModel):
+    id: int
+    status: str
+    nouveau_loyer: Optional[float] = None
+    reponse_le: Optional[date] = None
+
+
+@router.patch(
+    "/renouvellements/{renouvellement_id}",
+    response_model=RenouvellementPatchOut,
+)
+async def patch_renouvellement(
+    renouvellement_id: int,
+    payload: RenouvellementPatchIn,
+    db: DBSession,
+    user: CurrentUser,
+) -> RenouvellementPatchOut:
+    """Réponse du locataire saisie manuellement, ou ENTENTE négociée
+    (montant révisé — souvent à la baisse) : le loyer convenu sera
+    reporté sur le bail à la date effective du renouvellement."""
+    _require_volet(user)
+    r = await db.get(BailRenouvellement, renouvellement_id)
+    if r is None:
+        raise HTTPException(
+            status_code=404, detail="Renouvellement introuvable."
+        )
+    data = payload.model_dump(exclude_unset=True)
+    if data.get("status"):
+        r.status = data["status"]
+        if r.status in ("accepte", "refuse"):
+            r.reponse_le = date.today()
+    if data.get("nouveau_loyer") is not None:
+        r.nouveau_loyer = data["nouveau_loyer"]
+        # Montant révisé → (re)reporté sur le bail à la date effective.
+        r.applique_le = None
+    if "refus_motif" in data:
+        r.refus_motif = data["refus_motif"]
+    await db.commit()
+    return RenouvellementPatchOut(
+        id=r.id,
+        status=r.status,
+        nouveau_loyer=(
+            float(r.nouveau_loyer) if r.nouveau_loyer is not None else None
+        ),
+        reponse_le=r.reponse_le,
     )
 
 
@@ -872,6 +942,7 @@ async def renouvellements_overview(
             last_doc_by_bail[d.bail_id] = d
 
     out: List[RenouvellementOverview] = []
+    dirty = False
     for b in bails:
         logement = log_by_id.get(b.logement_id)
         immeuble = (
@@ -880,15 +951,64 @@ async def renouvellements_overview(
         locataire = loc_by_id.get(b.locataire_id)
         last_ren = last_ren_by_bail.get(b.id)
 
+        # v3 (2026-07-30) — machine à états du renouvellement.
+        # « Cycle courant » = même borne que l'idempotence d'envoi : un
+        # avis d'un cycle PASSÉ ne compte plus (la ligne redevient « à
+        # envoyer » quand la fenêtre suivante s'ouvre).
+        reconduit = last_ren is not None and last_ren.status == "reconduit"
+        courant = (
+            last_ren is not None
+            and not reconduit
+            and last_ren.avis_envoye_le
+            >= b.date_fin - timedelta(days=200)
+        )
+        reponse = None
+        deadline_reponse = None
+        deadline_fixation = None
+        if courant:
+            deadline_reponse = _plus_un_mois(last_ren.avis_envoye_le)
+            if last_ren.status == "propose" and today > deadline_reponse:
+                # Art. 1945 C.c.Q. : sans réponse dans le mois de la
+                # réception, le locataire est réputé avoir ACCEPTÉ.
+                last_ren.status = "repute_accepte"
+                last_ren.reponse_le = deadline_reponse
+                dirty = True
+            if last_ren.status in ("accepte", "repute_accepte") and (
+                last_ren.applique_le is None
+                and last_ren.nouvelle_date_debut is not None
+                and last_ren.nouvelle_date_debut <= today
+            ):
+                # Application au bail À LA DATE EFFECTIVE — lazy, à la
+                # consultation (pas de cron ; rien ne part au locataire).
+                if last_ren.nouveau_loyer is not None:
+                    b.loyer_mensuel = last_ren.nouveau_loyer
+                if (
+                    last_ren.nouvelle_date_fin is not None
+                    and last_ren.nouvelle_date_fin > b.date_fin
+                ):
+                    b.date_fin = last_ren.nouvelle_date_fin
+                last_ren.applique_le = today
+                dirty = True
+            if last_ren.status == "refuse":
+                reponse = "refuse"
+                if last_ren.reponse_le is not None:
+                    # Art. 1947 : 1 mois pour demander la fixation au
+                    # TAL, sinon le bail se renouvelle aux ANCIENNES
+                    # conditions.
+                    deadline_fixation = _plus_un_mois(last_ren.reponse_le)
+            elif last_ren.status == "accepte":
+                reponse = "accepte"
+            elif last_ren.status == "repute_accepte":
+                reponse = "repute_accepte"
+            else:  # propose / en_negociation
+                reponse = "attente"
+
         delta = (b.date_fin - today).days
         # Fenêtre « à envoyer » = jusqu'à N mois avant la fin (réglable,
-        # défaut 6). Retour Phil 2026-07-28. Une RECONDUCTION tacite ne
-        # compte pas comme un avis envoyé : la ligne s'affiche
-        # « Reconduit tel quel » (vert) jusqu'à l'ouverture de la
-        # fenêtre du prochain cycle, où le suivi normal reprend.
-        reconduit = last_ren is not None and last_ren.status == "reconduit"
+        # défaut 6). Une reconduction tacite ou un avis du cycle courant
+        # règlent la ligne ; sinon le suivi normal reprend.
         fenetre = suivis_cfg.fenetre_renouvellement(
-            delta, avis_envoye=last_ren is not None and not reconduit
+            delta, avis_envoye=courant
         )
         if reconduit and fenetre == "hors_fenetre":
             fenetre = "reconduit"
@@ -935,11 +1055,20 @@ async def renouvellements_overview(
                     if b.id in last_doc_by_bail
                     else None
                 ),
+                reponse=reponse,
+                reponse_le=last_ren.reponse_le if courant else None,
+                deadline_reponse=deadline_reponse,
+                deadline_fixation=deadline_fixation,
+                refus_motif=last_ren.refus_motif if courant else None,
+                applique_le=last_ren.applique_le if courant else None,
                 assurance_confirmee_le=(
                     locataire.assurance_confirmee_le if locataire else None
                 ),
             )
         )
+    if dirty:
+        # Transitions « réputé accepté » + applications au bail.
+        await db.commit()
     return out
 
 
