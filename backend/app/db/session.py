@@ -358,6 +358,11 @@ async def ensure_critical_columns() -> None:
         ("optimisation_projets", "rentabilite_depuis", "DATE"),
         # v10 : enveloppe « Budget de détention » (mode de la ligne).
         ("optimisation_budget_lignes", "mode", "VARCHAR(24)"),
+        # v13 : compte d'hypothèque du cashflow + comptes des avances
+        # des actionnaires.
+        ("optimisation_projets", "qbo_hypotheque_account_id", "VARCHAR(64)"),
+        ("optimisation_projets", "qbo_hypotheque_account_name", "VARCHAR(255)"),
+        ("optimisation_projets", "avances_accounts_json", "TEXT"),
         # Documents 2026-07-27 (démêlage communications / dossier) :
         # « document courant » du bail et de l'avis de renouvellement
         # (celui qui s'ouvre au clic ; le remplacer archive l'ancien),
