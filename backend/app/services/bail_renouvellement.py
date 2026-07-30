@@ -23,6 +23,7 @@ Stratégie :
 from __future__ import annotations
 
 import logging
+import math
 import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -51,6 +52,29 @@ log = logging.getLogger(__name__)
 # Hausse par défaut suggérée si on ne peut pas la calculer (utilisé
 # quand l'utilisateur déclenche depuis l'UI sans préciser).
 DEFAULT_SUGGESTED_HIKE_PCT = 0.0  # neutre — l'utilisateur saisit
+
+
+def arrondir_loyer(montant: float) -> float:
+    """Nouveau loyer TOUJOURS arrondi au dollar SUPÉRIEUR (retour Phil
+    2026-07-30 : 1 044,26 $ → 1 045 $). L'epsilon absorbe le bruit des
+    flottants (1050.0000001 ne devient pas 1051)."""
+    return float(math.ceil(round(montant, 2) - 1e-9))
+
+
+def fin_reconduite(
+    date_debut: Optional[date], date_fin: date
+) -> date:
+    """Fin de la période RECONDUITE (art. 1941 C.c.Q.) : un bail de
+    12 mois se reconduit pour 12 mois → même jour un an plus tard, peu
+    importe que le bail soit du 1er juillet au 30 juin ou non ; un bail
+    plus court se reconduit pour la MÊME durée."""
+    duree = (date_fin - date_debut).days if date_debut else 365
+    if duree >= 360:
+        try:
+            return date_fin.replace(year=date_fin.year + 1)
+        except ValueError:  # 29 février
+            return date_fin.replace(year=date_fin.year + 1, day=28)
+    return date_fin + timedelta(days=duree + 1)
 
 
 @dataclass
@@ -147,10 +171,12 @@ async def send_renouvellement_for_bail(
     force: bool = False,
     request_read_receipt: bool = False,
     bcc_to_sender: bool = True,
-) -> tuple[BailRenouvellement, bool]:
+) -> tuple[BailRenouvellement, bool, Optional[str]]:
     """Crée le renouvellement (si nécessaire) et envoie le PDF par courriel.
 
-    Returns: (renouvellement, courriel_envoye_bool).
+    Returns: (renouvellement, courriel_envoye, raison_si_non_envoye) —
+    la raison remonte jusqu'à l'UI (retour Phil 2026-07-30 : « je ne
+    l'ai jamais reçu », l'échec était silencieux).
     Idempotent : si un renouvellement actif existe déjà pour ce cycle et
     ``force=False``, on ne le redouble pas — on le retourne tel quel.
     """
@@ -159,7 +185,8 @@ async def send_renouvellement_for_bail(
 
     existing = await _existing_renouvellement_active(db, bail)
     if existing is not None and not force:
-        return existing, False
+        return existing, False, "Un avis existe déjà pour ce cycle."
+
 
     # Crée le renouvellement
     obj = BailRenouvellement(
@@ -168,7 +195,14 @@ async def send_renouvellement_for_bail(
         nouveau_loyer=nouveau_loyer,
         nouvelle_date_debut=nouvelle_date_debut
         or (bail.date_fin + timedelta(days=1) if bail.date_fin else None),
-        nouvelle_date_fin=nouvelle_date_fin,
+        # Défaut légal : reconduction de 12 mois (même jour un an plus
+        # tard) — plus de champ vide sur le PDF.
+        nouvelle_date_fin=nouvelle_date_fin
+        or (
+            fin_reconduite(bail.date_debut, bail.date_fin)
+            if bail.date_fin
+            else None
+        ),
         status=BailRenouvellementStatus.PROPOSE.value,
         notes=motif,
     )
@@ -181,8 +215,9 @@ async def send_renouvellement_for_bail(
     # envoyé/ouvert/signé sur la page Renouvellements — retour Phil
     # 2026-07-20, point 11) + envoi courriel avec lien de consultation.
     sent = False
+    raison: Optional[str] = None
     ctx = await _build_tal_context_for_bail(
-        db, bail, nouveau_loyer, obj.nouvelle_date_debut, nouvelle_date_fin
+        db, bail, nouveau_loyer, obj.nouvelle_date_debut, obj.nouvelle_date_fin
     )
     if motif:
         ctx.motif_modification = motif
@@ -239,9 +274,16 @@ async def send_renouvellement_for_bail(
             bail.id,
         )
 
-    if ctx.locataire_email:
+    if not ctx.locataire_email:
+        raison = "Le locataire n'a pas de courriel dans sa fiche."
+    else:
         mailer = GraphMailer()
-        if mailer.ready:
+        if not mailer.ready:
+            raison = (
+                "Microsoft 365 (Graph) n'est pas configuré — "
+                "courriel impossible."
+            )
+        else:
             try:
                 from app.services.public_links import public_base
 
@@ -256,7 +298,11 @@ async def send_renouvellement_for_bail(
                 body_html = _render_email_body(ctx, url)
                 # « Envoi certifié » : BCC à l'expéditeur pour archive +
                 # demande d'accusé de lecture (read receipt) Outlook.
-                bcc = [mailer.sender] if bcc_to_sender and mailer.sender else None
+                bcc = (
+                    [mailer.sender]
+                    if bcc_to_sender and mailer.sender
+                    else None
+                )
                 await mailer.send(
                     to=[ctx.locataire_email],
                     subject=subject,
@@ -275,12 +321,13 @@ async def send_renouvellement_for_bail(
                 if doc is not None:
                     doc.envoye_le = datetime.now(timezone.utc)
                     doc.envoye_a = ctx.locataire_email[:320]
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                raison = f"Envoi Microsoft Graph échoué : {exc}"[:300]
                 log.exception(
                     "Échec envoi email renouvellement bail %s", bail.id
                 )
 
-    return obj, sent
+    return obj, sent, raison
 
 
 def _render_email_body(ctx: TalContext, url: Optional[str] = None) -> str:
