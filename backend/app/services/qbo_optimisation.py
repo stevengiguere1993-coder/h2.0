@@ -225,8 +225,62 @@ def _groupes_pnl_colonnes(
         _groupes_pnl_colonnes(sous, out)
 
 
+#: Sections du P&L → sens du montant dans le cashflow.
+_SECTIONS_REVENUS = {"Income", "OtherIncome"}
+_SECTIONS_DEPENSES = {"Expenses", "COGS", "OtherExpenses"}
+
+
+def _comptes_par_colonne(
+    node: Any,
+    out: List[Dict[str, Any]],
+    section: Optional[str] = None,
+) -> None:
+    """Collecte les lignes de DÉTAIL (une par compte) d'un P&L mensuel :
+    [{"nom", "type": "revenu"|"depense", "vals": [une valeur par
+    colonne]}]. La section (Income, Expenses…) se propage en descendant
+    l'arborescence."""
+    if isinstance(node, list):
+        for r in node:
+            _comptes_par_colonne(r, out, section)
+        return
+    if not isinstance(node, dict):
+        return
+    section_ici = node.get("group") or section
+    cols = node.get("ColData")
+    if isinstance(cols, list) and len(cols) > 1 and node.get("type") == "Data":
+        if section_ici in _SECTIONS_REVENUS or section_ici in _SECTIONS_DEPENSES:
+            vals: List[float] = []
+            for cell in cols[1:]:
+                brut = (
+                    (cell.get("value") or "0")
+                    .replace(",", "")
+                    .replace("$", "")
+                    .strip()
+                )
+                try:
+                    vals.append(float(brut) if brut else 0.0)
+                except ValueError:
+                    vals.append(0.0)
+            nom = (cols[0].get("value") or "").strip()
+            if nom and any(abs(v) >= 0.005 for v in vals):
+                out.append(
+                    {
+                        "nom": nom,
+                        "type": "revenu"
+                        if section_ici in _SECTIONS_REVENUS
+                        else "depense",
+                        "vals": vals,
+                    }
+                )
+    sous = (node.get("Rows") or {}).get("Row")
+    if sous:
+        _comptes_par_colonne(sous, out, section_ici)
+
+
 def _assembler_cashflow(
-    titres: List[str], groupes: Dict[str, List[float]]
+    titres: List[str],
+    groupes: Dict[str, List[float]],
+    comptes: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Combine les colonnes mensuelles du P&L en lignes de cashflow :
     ``titres`` = libellés de colonnes SANS la première (une par mois,
@@ -248,12 +302,25 @@ def _assembler_cashflow(
         (net[i] if net and i < len(net) else revenus[i] - depenses[i])
         for i in range(n)
     ]
+    def _details(i: int) -> List[Dict[str, Any]]:
+        """Comptes non nuls de la colonne ``i`` — revenus d'abord."""
+        out: List[Dict[str, Any]] = []
+        for c in comptes or []:
+            v = c["vals"][i] if i < len(c["vals"]) else 0.0
+            if abs(v) >= 0.005:
+                out.append(
+                    {"nom": c["nom"], "type": c["type"], "montant": round(v, 2)}
+                )
+        out.sort(key=lambda x: (x["type"] != "revenu", -abs(x["montant"])))
+        return out
+
     mois = [
         {
             "mois": titres[i],
             "revenus": round(revenus[i], 2),
             "depenses": round(depenses[i], 2),
             "ecart": round(ecarts[i], 2),
+            "details": _details(i),
         }
         for i in range(n - 1)  # la dernière colonne est le total
     ]
@@ -261,6 +328,7 @@ def _assembler_cashflow(
         "revenus": round(revenus[-1], 2) if n else 0.0,
         "depenses": round(depenses[-1], 2) if n else 0.0,
         "ecart": round(ecarts[-1], 2) if n else 0.0,
+        "details": _details(n - 1) if n else [],
     }
     return {"mois": mois, "total": total}
 
@@ -297,7 +365,11 @@ async def cashflow_mensuel(
     ]
     groupes: Dict[str, List[float]] = {}
     _groupes_pnl_colonnes(report.get("Rows", {}).get("Row") or [], groupes)
-    return _assembler_cashflow(titres, groupes)
+    comptes: List[Dict[str, Any]] = []
+    _comptes_par_colonne(
+        report.get("Rows", {}).get("Row") or [], comptes
+    )
+    return _assembler_cashflow(titres, groupes, comptes)
 
 
 async def rentabilite(
