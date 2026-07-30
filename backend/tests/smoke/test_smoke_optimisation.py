@@ -59,6 +59,41 @@ def test_walk_rows_pnl():
     assert totals["81"] == 1000.0
 
 
+def test_resume_pnl_rentabilite():
+    """Les totaux de section d'un ProfitAndLoss donnent la rentabilité :
+    revenus, dépenses et résultat net (négatif = perte)."""
+    from app.services.qbo_optimisation import _groupes_pnl
+
+    rapport = [
+        {
+            "group": "Income",
+            "Summary": {
+                "ColData": [{"value": "Total Income"}, {"value": "40,000.00"}]
+            },
+        },
+        {
+            "group": "Expenses",
+            "Summary": {
+                "ColData": [
+                    {"value": "Total Expenses"},
+                    {"value": "50,000.00"},
+                ]
+            },
+        },
+        {
+            "group": "NetIncome",
+            "Summary": {
+                "ColData": [{"value": "Net Income"}, {"value": "-10,000.00"}]
+            },
+        },
+    ]
+    out: dict[str, float] = {}
+    _groupes_pnl(rapport, out)
+    assert out["Income"] == 40000.0
+    assert out["Expenses"] == 50000.0
+    assert out["NetIncome"] == -10000.0
+
+
 def test_qbo_scope_inc(client, auth_headers):
     """Les scopes dynamiques « inc:{entreprise_id} » sont acceptés par le
     flux de connexion QBO (un fichier QuickBooks par INC)."""
@@ -294,6 +329,16 @@ def test_projet_complet(client, auth_headers, run):
         headers=auth_headers,
     ).json()
     assert "financement_par_ligne" in q5 and "solde_bancaire" in q5
+    assert "rentabilite" in q5  # v9 — présent même sans connexion QBO
+
+    # v9 : la date de départ du calcul de rentabilité se règle.
+    rd = client.patch(
+        f"/api/v1/optimisation/projets/{pid}",
+        headers=auth_headers,
+        json={"rentabilite_depuis": "2024-01-01"},
+    )
+    assert rd.status_code == 200, rd.text
+    assert rd.json()["rentabilite_depuis"] == "2024-01-01"
 
     # Les comptes se listent par famille (validation du paramètre kind).
     for kind in ("depense", "financement", "banque"):
