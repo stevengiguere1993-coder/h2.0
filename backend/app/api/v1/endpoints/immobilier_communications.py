@@ -553,7 +553,10 @@ async def envoyer(
                     f"{imm.address}, {lg.numero}" if lg.numero else imm.address
                 ),
                 "logement": lg.numero or "",
-                "locateur": locateurs.get(imm.id) or "",
+                # Retour Phil 2026-07-30 : {locateur} = le « De qui »
+                # (ex. « Kyle Brown - Gestion locative ») — l'INC reste
+                # le repli si aucun nom d'expéditeur n'est configuré.
+                "locateur": from_name or locateurs.get(imm.id) or "",
             }
             sujet = _remplir_libre(payload.sujet or "", variables)
             corps = _remplir_libre(payload.corps or "", variables)
@@ -645,6 +648,9 @@ class CommunicationRow(BaseModel):
     statut: str
     erreur: Optional[str] = None
     created_by_email: Optional[str] = None
+    #: Nom du profil Kratos de l'auteur (prénom/nom) — None si son
+    #: profil n'a pas de nom ; l'UI retombe alors sur le courriel.
+    created_by_nom: Optional[str] = None
     created_at: Optional[datetime] = None
 
 
@@ -683,4 +689,24 @@ async def list_communications(
             ).limit(limit)
         )
     ).scalars().all()
-    return [CommunicationRow.model_validate(r, from_attributes=True) for r in rows]
+
+    # « Par » : le nom du profil Kratos plutôt que le courriel brut,
+    # quand la personne a renseigné prénom/nom.
+    from app.models.user import User
+
+    emails = {r.created_by_email for r in rows if r.created_by_email}
+    noms: Dict[str, str] = {}
+    if emails:
+        urows = (
+            await db.execute(select(User).where(User.email.in_(emails)))
+        ).scalars().all()
+        for u in urows:
+            if u.first_name or u.last_name:
+                noms[u.email] = u.display_name
+
+    out: List[CommunicationRow] = []
+    for r in rows:
+        row = CommunicationRow.model_validate(r, from_attributes=True)
+        row.created_by_nom = noms.get(r.created_by_email or "")
+        out.append(row)
+    return out

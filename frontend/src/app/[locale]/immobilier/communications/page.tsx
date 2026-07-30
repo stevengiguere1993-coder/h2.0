@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Building2,
@@ -98,8 +98,13 @@ type AuditRow = {
   reply_to?: string | null;
   statut: string;
   created_by_email?: string | null;
+  created_by_nom?: string | null;
   created_at?: string | null;
 };
+
+//: Corps de départ du message libre — {locateur} (le « De qui », ex.
+//: « Kyle Brown - Gestion locative ») sert de signature ; effaçable.
+const TEMPLATE_LIBRE = "Bonjour {locataire},\n\n\n\n{locateur}";
 
 const TYPES = [
   {
@@ -162,7 +167,25 @@ export default function CommunicationsPage() {
   const [accesPlage, setAccesPlage] = useState("");
   const [accesMotif, setAccesMotif] = useState("");
   const [sujet, setSujet] = useState("");
-  const [corps, setCorps] = useState("");
+  const [corps, setCorps] = useState(TEMPLATE_LIBRE);
+  const corpsRef = useRef<HTMLTextAreaElement | null>(null);
+
+  //: Insère {variable} là où est le curseur dans le texte du message.
+  const insererVariable = (v: string) => {
+    const tag = `{${v}}`;
+    const el = corpsRef.current;
+    if (!el) {
+      setCorps((c) => c + tag);
+      return;
+    }
+    const debut = el.selectionStart ?? el.value.length;
+    const fin = el.selectionEnd ?? debut;
+    setCorps(el.value.slice(0, debut) + tag + el.value.slice(fin));
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(debut + tag.length, debut + tag.length);
+    });
+  };
 
   // De qui — piloté par les PROFILS (l'expéditeur libre vit dans les
   // réglages, édité via la modale « Gérer les profils »).
@@ -444,6 +467,20 @@ export default function CommunicationsPage() {
         throw new Error((d && (d.detail || d.message)) || `Erreur ${r.status}`);
       }
       setResultat(d as EnvoiResultat);
+      // Envoi parti → on remet la page à neuf (à qui, quoi) ; le
+      // résumé vert reste affiché et le « De qui » est conservé.
+      setImmSel(new Set());
+      setLocSel(new Map());
+      setType("rappel_paiement");
+      setSujet("");
+      setCorps(TEMPLATE_LIBRE);
+      setAccesDate("");
+      setAccesPlage("");
+      setAccesMotif("");
+      const auj = new Date();
+      setMois(
+        `${auj.getFullYear()}-${String(auj.getMonth() + 1).padStart(2, "0")}`
+      );
       await loadAudit();
     } catch (e: any) {
       setErr(e?.message || "Envoi impossible");
@@ -803,6 +840,7 @@ export default function CommunicationsPage() {
                   className="input w-full"
                 />
                 <textarea
+                  ref={corpsRef}
                   value={corps}
                   onChange={(e) => setCorps(e.target.value)}
                   rows={6}
@@ -811,11 +849,27 @@ export default function CommunicationsPage() {
                   }
                   className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white outline-none transition focus:border-accent-500"
                 />
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs text-white/45">Insérer :</span>
+                  {["locataire", "adresse", "logement", "locateur"].map(
+                    (v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => insererVariable(v)}
+                        className="rounded-md border border-brand-800 bg-brand-950 px-2 py-0.5 font-mono text-[11px] text-white/70 transition hover:border-accent-500/60 hover:text-white"
+                        title="Insérer à la position du curseur"
+                      >
+                        {`{${v}}`}
+                      </button>
+                    )
+                  )}
+                </div>
                 <p className="text-xs text-white/45">
-                  Variables remplacées pour chaque locataire :{" "}
-                  <code className="text-white/60">
-                    {"{locataire} {adresse} {logement} {locateur}"}
-                  </code>
+                  Chaque variable est remplacée pour chaque locataire.{" "}
+                  <code className="text-white/60">{"{locateur}"}</code> ={" "}
+                  le nom du « De qui » (ex. Kyle Brown - Gestion
+                  locative) — c&apos;est la signature de base.
                 </p>
               </div>
             )}
@@ -1154,8 +1208,11 @@ export default function CommunicationsPage() {
                       <td className="max-w-[260px] truncate px-3 py-2 text-white/70">
                         {r.sujet}
                       </td>
-                      <td className="px-3 py-2 text-white/50">
-                        {r.created_by_email || "—"}
+                      <td
+                        className="px-3 py-2 text-white/50"
+                        title={r.created_by_email || undefined}
+                      >
+                        {r.created_by_nom || r.created_by_email || "—"}
                       </td>
                       <td className="px-3 py-2 text-right">
                         <button
