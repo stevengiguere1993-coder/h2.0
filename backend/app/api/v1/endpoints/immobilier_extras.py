@@ -672,6 +672,12 @@ async def delete_renouvellement(
                 "être supprimé."
             ),
         )
+    # Annuler une RECONDUCTION tacite remet aussi la date de fin du
+    # bail (elle avait été étirée d'un an).
+    if r.status == "reconduit" and r.nouvelle_date_debut is not None:
+        bail = await db.get(Bail, r.bail_id)
+        if bail is not None:
+            bail.date_fin = r.nouvelle_date_debut - timedelta(days=1)
     for d in du_cycle:
         await db.delete(d)
     await db.delete(r)
@@ -707,7 +713,7 @@ async def reconduire_bail(
     (retour Phil 2026-07-28 : « une année je ne les augmente pas, le bail
     s'étire tout seul »). Ne touche ni la date de début (l'historique des
     soldes en dépend), ni le loyer, ni les inclusions — seulement la date
-    de fin, +1 an. La ligne sort du suivi des renouvellements."""
+    de fin, +1 an. La ligne reste dans le suivi, marquée « reconduit »."""
     _require_volet(user)
     bail = await db.get(Bail, bail_id)
     if bail is None:
@@ -719,6 +725,21 @@ async def reconduire_bail(
         )
     ancienne = bail.date_fin
     bail.date_fin = _plus_un_an(bail.date_fin)
+    # Trace de la reconduction (retour Phil 2026-07-30 : « il a juste
+    # disparu de la liste ») : un cycle status « reconduit » garde la
+    # ligne visible, en vert, même loyer + nouvelle date. La poubelle
+    # de la ligne annule la reconduction (date remise).
+    db.add(
+        BailRenouvellement(
+            bail_id=bail.id,
+            avis_envoye_le=date.today(),
+            nouveau_loyer=bail.loyer_mensuel,
+            nouvelle_date_debut=ancienne + timedelta(days=1),
+            nouvelle_date_fin=bail.date_fin,
+            status="reconduit",
+            notes="Reconduction tacite — même loyer, sans avis.",
+        )
+    )
     await db.commit()
     log.info(
         "Bail %s reconduit tel quel par %s : %s → %s",
@@ -738,14 +759,14 @@ async def reconduire_bail(
 async def renouvellements_overview(
     db: DBSession, user: CurrentUser
 ) -> List[RenouvellementOverview]:
-    """Liste les baux actifs dont la fin tombe dans les 12 prochains mois,
-    avec leur statut de renouvellement actuel."""
+    """Liste TOUS les baux actifs avec leur statut de renouvellement
+    (retour Phil 2026-07-30 : tous les locataires restent visibles —
+    un bail reconduit ou dont la fin est loin apparaît quand même)."""
     _require_volet(user)
     from app.services.locatif_suivis import get_suivis
 
     suivis_cfg = await get_suivis()
     today = date.today()
-    horizon = today + timedelta(days=365)
 
     # Gestion externe : les renouvellements relèvent du gestionnaire
     # tiers → exclu (isnot(True) couvre les NULL legacy).
@@ -761,7 +782,6 @@ async def renouvellements_overview(
                 and_(
                     Bail.status == BailStatus.ACTIF.value,
                     Bail.date_fin >= today - timedelta(days=365),
-                    Bail.date_fin <= horizon,
                     Immeuble.gestion_externe.isnot(True),
                     # Baux AU MOIS : reconduction auto, jamais d'avis —
                     # hors du suivi (retour Phil 2026-07-28).
@@ -862,10 +882,16 @@ async def renouvellements_overview(
 
         delta = (b.date_fin - today).days
         # Fenêtre « à envoyer » = jusqu'à N mois avant la fin (réglable,
-        # défaut 6). Retour Phil 2026-07-28.
+        # défaut 6). Retour Phil 2026-07-28. Une RECONDUCTION tacite ne
+        # compte pas comme un avis envoyé : la ligne s'affiche
+        # « Reconduit tel quel » (vert) jusqu'à l'ouverture de la
+        # fenêtre du prochain cycle, où le suivi normal reprend.
+        reconduit = last_ren is not None and last_ren.status == "reconduit"
         fenetre = suivis_cfg.fenetre_renouvellement(
-            delta, avis_envoye=last_ren is not None
+            delta, avis_envoye=last_ren is not None and not reconduit
         )
+        if reconduit and fenetre == "hors_fenetre":
+            fenetre = "reconduit"
 
         out.append(
             RenouvellementOverview(
