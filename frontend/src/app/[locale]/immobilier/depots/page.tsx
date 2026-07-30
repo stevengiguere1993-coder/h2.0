@@ -128,6 +128,25 @@ export default function DepotsPage() {
     });
   }, [data, search, statutFilter, immeubleFilter]);
 
+  //: Les tuiles du haut suivent les FILTRES (retour Phil 2026-07-30) :
+  //: filtrer un immeuble ou un locataire recalcule à rendre / détenu.
+  const stats = useMemo(() => {
+    let aRendre = 0;
+    let nbARendre = 0;
+    let detenu = 0;
+    for (const r of filteredRows) {
+      if (r.statut === "a_rendre") {
+        aRendre += r.montant;
+        nbARendre += 1;
+      } else if (r.statut === "detenu") {
+        detenu += r.montant;
+      }
+    }
+    return { aRendre, nbARendre, detenu };
+  }, [filteredRows]);
+  const filtreActif =
+    search.trim() !== "" || statutFilter !== "all" || immeubleFilter !== "all";
+
   return (
     <>
       <ImmobilierTopbar
@@ -146,8 +165,10 @@ export default function DepotsPage() {
               Dépôts de garantie
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
-              Ce que tu détiens (baux actifs) et ce qu&apos;il faut rendre
-              (baux terminés). Pour ne jamais oublier un remboursement.
+              Ce que tu détiens et ce qu&apos;il faut rendre. Un dépôt
+              passe « à rendre » quand le logement a été remis en
+              location à quelqu&apos;un d&apos;autre — pas juste parce
+              que le bail est fini.
             </p>
           </div>
         </header>
@@ -156,30 +177,32 @@ export default function DepotsPage() {
           <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-rose-200">
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider opacity-80">
               <AlertTriangle className="h-3.5 w-3.5" /> À rendre
+              {filtreActif ? " (filtré)" : ""}
             </div>
             <div className="mt-1 text-3xl font-bold">
-              {money(data?.total_a_rendre ?? 0)}
+              {money(stats.aRendre)}
             </div>
             <div className="text-[11px] opacity-70">
-              {data?.nb_a_rendre ?? 0} bail
-              {(data?.nb_a_rendre ?? 0) > 1 ? "s" : ""} terminé
-              {(data?.nb_a_rendre ?? 0) > 1 ? "s" : ""}
+              {stats.nbARendre} logement
+              {stats.nbARendre > 1 ? "s" : ""} reloué
+              {stats.nbARendre > 1 ? "s" : ""} — ancien locataire à
+              rembourser
             </div>
           </div>
           <div className="rounded-2xl border border-violet-500/30 bg-violet-500/5 p-4 text-violet-200">
             <div className="text-[11px] font-semibold uppercase tracking-wider opacity-80">
-              Détenus (baux actifs)
+              Détenus{filtreActif ? " (filtré)" : ""}
             </div>
             <div className="mt-1 text-3xl font-bold">
-              {money(data?.total_detenu ?? 0)}
+              {money(stats.detenu)}
             </div>
           </div>
           <div className="rounded-2xl border border-white/15 bg-white/5 p-4 text-white/70">
             <div className="text-[11px] font-semibold uppercase tracking-wider opacity-80">
-              Total au portefeuille
+              Total{filtreActif ? " (filtré)" : " au portefeuille"}
             </div>
             <div className="mt-1 text-3xl font-bold">
-              {money((data?.total_detenu ?? 0) + (data?.total_a_rendre ?? 0))}
+              {money(stats.detenu + stats.aRendre)}
             </div>
           </div>
         </div>
@@ -247,7 +270,7 @@ export default function DepotsPage() {
         ) : null}
 
         <div className="mt-4 overflow-x-auto rounded-2xl border border-brand-800">
-          <table className="w-full min-w-[720px] text-sm">
+          <table className="w-full min-w-[800px] text-sm">
             <thead>
               <tr className="border-b border-brand-800 bg-brand-900 text-left text-[11px] uppercase tracking-wider text-white/45">
                 <th className="px-3 py-2.5 font-semibold">Locataire</th>
@@ -255,19 +278,20 @@ export default function DepotsPage() {
                 <th className="px-3 py-2.5 font-semibold">Période</th>
                 <th className="px-3 py-2.5 text-right font-semibold">Dépôt</th>
                 <th className="px-3 py-2.5 text-right font-semibold">Statut</th>
+                <th className="px-3 py-2.5 text-right font-semibold">Rendu</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="px-3 py-10 text-center text-white/50">
+                  <td colSpan={6} className="px-3 py-10 text-center text-white/50">
                     <Loader2 className="mr-1 inline h-4 w-4 animate-spin" />{" "}
                     Chargement…
                   </td>
                 </tr>
               ) : !data || filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-3 py-12 text-center text-white/50">
+                  <td colSpan={6} className="px-3 py-12 text-center text-white/50">
                     {data && data.rows.length > 0
                       ? "Aucun dépôt correspondant aux filtres."
                       : "Aucun dépôt de garantie enregistré."}
@@ -278,7 +302,11 @@ export default function DepotsPage() {
                   <tr
                     key={r.bail_id}
                     className={`border-b border-brand-800/60 hover:bg-brand-900/40 ${
-                      r.statut === "a_rendre" ? "bg-rose-500/[0.04]" : ""
+                      r.statut === "a_rendre"
+                        ? "bg-rose-500/[0.04]"
+                        : r.statut === "rendu"
+                          ? "bg-emerald-500/[0.05]"
+                          : ""
                     }`}
                   >
                     <td className="px-3 py-2.5">
@@ -342,44 +370,10 @@ export default function DepotsPage() {
                     </td>
                     <td className="px-3 py-2.5 text-right">
                       {r.statut === "a_rendre" ? (
-                        <span className="inline-flex items-center gap-2">
-                          <span className="badge badge-rose">À rendre</span>
-                          <button
-                            type="button"
-                            title="Le dépôt a été remboursé au locataire"
-                            onClick={async () => {
-                              const today = new Date()
-                                .toISOString()
-                                .slice(0, 10);
-                              const ok = await patchBail(r.bail_id, {
-                                depot_rendu_le: today
-                              });
-                              if (ok) void load();
-                            }}
-                            className="rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/20"
-                          >
-                            <Check className="mr-1 inline h-3 w-3" />
-                            Marquer rendu
-                          </button>
-                        </span>
+                        <span className="badge badge-rose">À rendre</span>
                       ) : r.statut === "rendu" ? (
-                        <span className="inline-flex items-center gap-2">
-                          <span className="badge badge-emerald">
-                            Rendu{r.depot_rendu_le ? ` le ${r.depot_rendu_le}` : ""}
-                          </span>
-                          <button
-                            type="button"
-                            title="Annuler — le dépôt n'a pas été rendu"
-                            onClick={async () => {
-                              const ok = await patchBail(r.bail_id, {
-                                depot_rendu_le: null
-                              });
-                              if (ok) void load();
-                            }}
-                            className="rounded-md border border-white/10 px-1.5 py-1 text-white/50 hover:text-white"
-                          >
-                            <RotateCcw className="h-3 w-3" />
-                          </button>
+                        <span className="badge badge-emerald">
+                          Rendu{r.depot_rendu_le ? ` le ${r.depot_rendu_le}` : ""}
                         </span>
                       ) : r.statut === "aucun" ? (
                         <span className="badge border border-white/10 text-white/50">
@@ -387,6 +381,57 @@ export default function DepotsPage() {
                         </span>
                       ) : (
                         <span className="badge badge-violet">Détenu</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-right">
+                      {r.statut === "detenu" || r.statut === "a_rendre" ? (
+                        <button
+                          type="button"
+                          title="Marquer le dépôt comme remboursé au locataire"
+                          onClick={async () => {
+                            if (
+                              !window.confirm(
+                                `Marquer le dépôt de ${
+                                  r.locataire_name || "ce locataire"
+                                } (${money(r.montant)}) comme RENDU ?\n\nLa ligne passera en vert avec la date d'aujourd'hui.`
+                              )
+                            )
+                              return;
+                            const today = new Date()
+                              .toISOString()
+                              .slice(0, 10);
+                            const ok = await patchBail(r.bail_id, {
+                              depot_rendu_le: today
+                            });
+                            if (ok) void load();
+                          }}
+                          className="rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/20"
+                        >
+                          <Check className="mr-1 inline h-3 w-3" />
+                          Rendu
+                        </button>
+                      ) : r.statut === "rendu" ? (
+                        <button
+                          type="button"
+                          title="Annuler — le dépôt n'a pas été rendu"
+                          onClick={async () => {
+                            if (
+                              !window.confirm(
+                                "Annuler ? Le dépôt redeviendra détenu."
+                              )
+                            )
+                              return;
+                            const ok = await patchBail(r.bail_id, {
+                              depot_rendu_le: null
+                            });
+                            if (ok) void load();
+                          }}
+                          className="rounded-md border border-white/10 px-1.5 py-1 text-white/50 hover:text-white"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                        </button>
+                      ) : (
+                        <span className="text-white/25">—</span>
                       )}
                     </td>
                   </tr>
