@@ -116,6 +116,9 @@ class ProjetRead(BaseModel):
     qbo_scope: Optional[str]
     qbo_bank_account_id: Optional[str] = None
     qbo_bank_account_name: Optional[str] = None
+    qbo_hypotheque_account_id: Optional[str] = None
+    qbo_hypotheque_account_name: Optional[str] = None
+    avances_accounts_json: Optional[str] = None
     objectif_revenus_mensuels: Optional[float]
     objectif_depenses_mensuelles: Optional[float]
     objectif_revenus_annuels: Optional[float] = None
@@ -155,6 +158,15 @@ class ProjetUpdate(BaseModel):
     qbo_scope: Optional[str] = Field(default=None, max_length=32)
     qbo_bank_account_id: Optional[str] = Field(default=None, max_length=64)
     qbo_bank_account_name: Optional[str] = Field(default=None, max_length=255)
+    qbo_hypotheque_account_id: Optional[str] = Field(
+        default=None, max_length=64
+    )
+    qbo_hypotheque_account_name: Optional[str] = Field(
+        default=None, max_length=255
+    )
+    avances_accounts_json: Optional[str] = Field(
+        default=None, max_length=20_000
+    )
     objectif_revenus_mensuels: Optional[float] = None
     objectif_depenses_mensuelles: Optional[float] = None
     objectif_revenus_annuels: Optional[float] = None
@@ -608,6 +620,8 @@ class QboDepensesOut(BaseModel):
     #: {"mois": [{"mois", "revenus", "depenses", "ecart"}], "total": …}.
     #: Le déficit du total nourrit l'enveloppe Budget de détention.
     cashflow: Optional[Dict[str, object]] = None
+    #: True si un compte d'hypothèque est choisi (colonne affichée).
+    hypotheque_configuree: bool = False
     erreur: Optional[str] = None
 
 
@@ -666,6 +680,7 @@ async def qbo_depenses(
             p.qbo_scope,
             (p.date_debut or date(2000, 1, 1)).isoformat(),
             date.today().isoformat(),
+            hypotheque_account_id=p.qbo_hypotheque_account_id,
         )
     except Exception as exc:  # noqa: BLE001 — jamais bloquant
         log.info("cashflow projet #%s: %s", projet_id, exc)
@@ -674,11 +689,11 @@ async def qbo_depenses(
     financement: Dict[int, float] = {}
     for ligne in lignes:
         if ligne.mode == "deficit_operation":
-            # Budget de détention : dépensé = déficit du cashflow (0 si
-            # le total des écarts est positif).
+            # Budget de détention : dépensé = l'écart TOTAL du cashflow,
+            # signé — un déficit gruge le budget, un surplus le remonte.
             if cashflow is not None:
                 ecart_total = float(cashflow["total"]["ecart"])
-                par_ligne[ligne.id] = round(max(0.0, -ecart_total), 2)
+                par_ligne[ligne.id] = round(-ecart_total, 2)
         else:
             par_ligne[ligne.id] = round(_somme(ligne.qbo_accounts_json), 2)
         # Les entrées d'argent sortent tantôt en crédit (négatif) tantôt
@@ -699,6 +714,7 @@ async def qbo_depenses(
         financement_par_ligne=financement,
         solde_bancaire=solde,
         cashflow=cashflow,
+        hypotheque_configuree=bool(p.qbo_hypotheque_account_id),
     )
 
 
@@ -712,7 +728,8 @@ async def qbo_comptes(
     _: CurrentUser,
     scope: str = Query(...),
     kind: str = Query(
-        default="depense", pattern=r"^(depense|financement|banque)$"
+        default="depense",
+        pattern=r"^(depense|financement|banque|hypotheque|avances)$",
     ),
 ) -> QboComptesOut:
     """Plan comptable de la connexion ``scope``, par famille :
@@ -725,6 +742,47 @@ async def qbo_comptes(
     except Exception as exc:  # noqa: BLE001
         return QboComptesOut(erreur=str(exc))
     return QboComptesOut(comptes=comptes)
+
+
+class QboAvancesOut(BaseModel):
+    #: [{"id","nom","solde","mois":[{"mois","variation","solde"}]}]
+    comptes: List[Dict[str, object]] = Field(default_factory=list)
+    total: float = 0.0
+    #: Ids effectivement suivis (sélection manuelle ou auto-détectée).
+    selection: List[str] = Field(default_factory=list)
+    #: True = auto-détection par nom (aucun choix manuel enregistré).
+    auto: bool = True
+    erreur: Optional[str] = None
+
+
+@router.get(
+    "/projets/{projet_id}/qbo-avances", response_model=QboAvancesOut
+)
+async def qbo_avances(
+    projet_id: int, db: DBSession, _: CurrentUser
+) -> QboAvancesOut:
+    """Avances des actionnaires du projet : solde + flux mensuel de
+    chaque compte (variation du bilan). Ne casse jamais : les problèmes
+    QBO reviennent dans ``erreur``."""
+    from app.services.qbo_optimisation import avances_actionnaires
+
+    p = await _projet_or_404(db, projet_id)
+    if not p.qbo_scope:
+        return QboAvancesOut(
+            erreur="Aucune connexion QuickBooks choisie pour ce projet "
+            "(réglages du budget)."
+        )
+    try:
+        d = await avances_actionnaires(
+            p.qbo_scope,
+            (p.date_debut or date(2000, 1, 1)).isoformat(),
+            date.today().isoformat(),
+            p.avances_accounts_json,
+        )
+    except Exception as exc:  # noqa: BLE001 — message propre à l'UI
+        log.info("qbo-avances projet #%s: %s", projet_id, exc)
+        return QboAvancesOut(erreur=str(exc))
+    return QboAvancesOut(**d)
 
 
 # ── Négociations ─────────────────────────────────────────────────

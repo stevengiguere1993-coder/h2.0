@@ -65,6 +65,21 @@ class OptimisationProjet(Base, TimestampUpdateMixin):
     qbo_bank_account_name: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
+    #: Compte d'HYPOTHÈQUE (passif long terme) : sa baisse mensuelle
+    #: (capital remboursé) devient la colonne « Hypothèque » du
+    #: cashflow. Colonnes additives.
+    qbo_hypotheque_account_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    qbo_hypotheque_account_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    #: Comptes suivis par l'encadré « Avances des actionnaires »
+    #: ([{"id","name"}]). NULL = auto-détection par nom. Colonne
+    #: additive.
+    avances_accounts_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
 
     #: Point de départ du calcul de rentabilité de la compagnie
     #: (revenus − dépenses lus de QuickBooks). Vide = depuis la

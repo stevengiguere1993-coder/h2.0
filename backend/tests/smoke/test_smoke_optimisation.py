@@ -181,6 +181,7 @@ def test_cashflow_mensuel_assemblage():
     assert cf["total"] == {
         "revenus": 3000.0,
         "depenses": 5500.0,
+        "hypotheque": 0.0,
         "ecart": -2500.0,
         "details": cf["total"]["details"],
     }
@@ -196,8 +197,98 @@ def test_cashflow_mensuel_assemblage():
         "montant": 4000.0,
     }
     assert cf["total"]["details"][1]["montant"] == 5500.0
-    # Détention : max(0, −écart total) = 2 500 $ de budget grugé.
-    assert max(0.0, -cf["total"]["ecart"]) == 2500.0
+    # Détention v13 : dépensé = −écart total, SIGNÉ (un surplus
+    # redonnerait du budget).
+    assert -cf["total"]["ecart"] == 2500.0
+
+    # v13 : colonne Hypothèque (capital remboursé, lu du bilan) —
+    # l'écart devient revenus − dépenses − hypothèque.
+    cf2 = _assembler_cashflow(
+        ["Jul 2024", "Aug 2024", "Total"],
+        groupes,
+        comptes,
+        [500.0, 500.0, 1000.0],
+    )
+    assert cf2["mois"][0]["hypotheque"] == 500.0
+    assert cf2["mois"][0]["ecart"] == -3500.0  # -3000 - 500
+    assert cf2["mois"][1]["ecart"] == 0.0  # 500 - 500
+    assert cf2["total"]["hypotheque"] == 1000.0
+    assert cf2["total"]["ecart"] == -3500.0
+    assert -cf2["total"]["ecart"] == 3500.0  # Détention
+
+
+def test_bilan_mensuel_et_avances():
+    """Le BILAN ventilé par mois donne, par compte, la série des soldes
+    de fin de mois. Les avances des actionnaires en tirent le solde et
+    le flux mensuel ; l'hypothèque du cashflow, le capital remboursé.
+    La 1re colonne est un mois de RÉFÉRENCE (demandé un mois avant le
+    début du projet) : elle rend la variation du 1er mois calculable."""
+    from app.services.qbo_optimisation import (
+        _assembler_avances,
+        _soldes_par_compte_colonnes,
+    )
+
+    bilan = [
+        {
+            "group": "Liabilities",
+            "Rows": {
+                "Row": [
+                    {
+                        "type": "Data",
+                        "ColData": [
+                            {
+                                "value": "Avances des actionnaires — Steven",
+                                "id": "70",
+                            },
+                            {"value": "1,000.00"},
+                            {"value": "6,000.00"},
+                            {"value": "6,000.00"},
+                        ],
+                    },
+                    {
+                        "type": "Data",
+                        "ColData": [
+                            {"value": "Hypothèque 8900", "id": "88"},
+                            {"value": "300,000.00"},
+                            {"value": "299,500.00"},
+                            {"value": "299,000.00"},
+                        ],
+                    },
+                ]
+            },
+        }
+    ]
+    series: dict[str, dict] = {}
+    _soldes_par_compte_colonnes(bilan, series)
+    assert series["70"]["vals"] == [1000.0, 6000.0, 6000.0]
+    assert series["88"]["nom"] == "Hypothèque 8900"
+
+    # Avances : titres[0] = mois de référence, jeté des lignes.
+    av = _assembler_avances(
+        ["Dec 2025", "Jan 2026", "Feb 2026"],
+        series,
+        [{"id": "70", "name": "Avances des actionnaires — Steven"}],
+    )
+    assert len(av["comptes"]) == 1
+    c = av["comptes"][0]
+    assert c["solde"] == 6000.0
+    assert c["mois"] == [
+        {"mois": "Jan 2026", "variation": 5000.0, "solde": 6000.0},
+        {"mois": "Feb 2026", "variation": 0.0, "solde": 6000.0},
+    ]
+    assert av["total"] == 6000.0
+
+    # Hypothèque : la BAISSE du passif = le capital remboursé du mois.
+    vals = series["88"]["vals"]
+    variations = [vals[i - 1] - vals[i] for i in range(1, len(vals))]
+    assert variations == [500.0, 500.0]
+
+    # Compte inconnu de la sélection manuelle → solde 0, aucun mois.
+    vide = _assembler_avances(
+        ["Dec 2025", "Jan 2026"], series, [{"id": "999", "name": "X"}]
+    )
+    assert vide["comptes"][0]["solde"] == 0.0
+    assert vide["comptes"][0]["mois"] == []
 
 
 def test_qbo_scope_inc(client, auth_headers):
@@ -429,6 +520,30 @@ def test_projet_complet(client, auth_headers, run):
     assert float(o5.json()["objectif_revenus_annuels"]) == 24000.0
     assert o5.json()["qbo_bank_account_name"] == "Compte projet"
 
+    # v13 : compte d'hypothèque + comptes d'avances (roundtrip).
+    v13 = client.patch(
+        f"/api/v1/optimisation/projets/{pid}",
+        headers=auth_headers,
+        json={
+            "qbo_hypotheque_account_id": "88",
+            "qbo_hypotheque_account_name": "Hypothèque 8900",
+            "avances_accounts_json": json.dumps(
+                [{"id": "70", "name": "Avances des actionnaires"}]
+            ),
+        },
+    )
+    assert v13.status_code == 200, v13.text
+    assert v13.json()["qbo_hypotheque_account_name"] == "Hypothèque 8900"
+    assert "70" in (v13.json()["avances_accounts_json"] or "")
+
+    # Avances sans connexion QBO → erreur PROPRE, pas de 500.
+    av = client.get(
+        f"/api/v1/optimisation/projets/{pid}/qbo-avances",
+        headers=auth_headers,
+    )
+    assert av.status_code == 200, av.text
+    assert av.json()["erreur"]
+
     # La réponse QBO expose les 3 blocs même sans connexion (erreur propre).
     q5 = client.get(
         f"/api/v1/optimisation/projets/{pid}/qbo-depenses",
@@ -436,6 +551,7 @@ def test_projet_complet(client, auth_headers, run):
     ).json()
     assert "financement_par_ligne" in q5 and "solde_bancaire" in q5
     assert "cashflow" in q5  # v11 — présent même sans connexion QBO
+    assert "hypotheque_configuree" in q5  # v13
 
     # v10 : enveloppe Budget de détention (dépensé = déficit
     # d'opération). CRUD + validation du mode.
@@ -460,7 +576,9 @@ def test_projet_complet(client, auth_headers, run):
     )
 
     # Les comptes se listent par famille (validation du paramètre kind).
-    for kind in ("depense", "financement", "banque"):
+    for kind in (
+        "depense", "financement", "banque", "hypotheque", "avances"
+    ):
         assert (
             client.get(
                 f"/api/v1/optimisation/qbo-comptes?scope=immobilier&kind={kind}",

@@ -17,6 +17,7 @@ import {
   Scale,
   Trash2,
   TrendingUp,
+  HandCoins,
   Landmark,
   Search,
   UserPlus,
@@ -88,6 +89,9 @@ type Projet = {
   qbo_scope: string | null;
   qbo_bank_account_id: string | null;
   qbo_bank_account_name: string | null;
+  qbo_hypotheque_account_id: string | null;
+  qbo_hypotheque_account_name: string | null;
+  avances_accounts_json: string | null;
   objectif_revenus_mensuels: number | null;
   objectif_depenses_mensuelles: number | null;
   objectif_revenus_annuels: number | null;
@@ -137,6 +141,7 @@ type CashflowMois = {
   mois: string;
   revenus: number;
   depenses: number;
+  hypotheque: number;
   ecart: number;
   details: CashflowDetail[];
 };
@@ -145,9 +150,24 @@ type Cashflow = {
   total: {
     revenus: number;
     depenses: number;
+    hypotheque: number;
     ecart: number;
     details: CashflowDetail[];
   };
+};
+type AvanceMois = { mois: string; variation: number; solde: number };
+type AvanceCompte = {
+  id: string;
+  nom: string;
+  solde: number;
+  mois: AvanceMois[];
+};
+type Avances = {
+  comptes: AvanceCompte[];
+  total: number;
+  selection: string[];
+  auto: boolean;
+  erreur: string | null;
 };
 
 type LocataireDispo = {
@@ -278,6 +298,7 @@ export default function ProjetsOptimisationPage() {
   const [qboFin, setQboFin] = useState<Record<number, number>>({});
   const [qboSolde, setQboSolde] = useState<number | null>(null);
   const [qboCashflow, setQboCashflow] = useState<Cashflow | null>(null);
+  const [qboHypCfg, setQboHypCfg] = useState(false);
   const [qboErr, setQboErr] = useState<string | null>(null);
   const [qboLoading, setQboLoading] = useState(false);
 
@@ -319,12 +340,14 @@ export default function ProjetsOptimisationPage() {
         financement_par_ligne: Record<number, number>;
         solde_bancaire: number | null;
         cashflow: Cashflow | null;
+        hypotheque_configuree?: boolean;
         erreur: string | null;
       };
       setQboDep(d.par_ligne || {});
       setQboFin(d.financement_par_ligne || {});
       setQboSolde(d.solde_bancaire ?? null);
       setQboCashflow(d.cashflow ?? null);
+      setQboHypCfg(!!d.hypotheque_configuree);
       setQboErr(d.erreur || null);
     } catch (e) {
       setQboErr(`Lecture QuickBooks échouée : ${(e as Error).message}`);
@@ -351,6 +374,7 @@ export default function ProjetsOptimisationPage() {
       setQboFin({});
       setQboSolde(null);
       setQboCashflow(null);
+      setQboHypCfg(false);
       setQboErr(null);
       void loadDetail(selId);
       void loadQbo(selId);
@@ -586,6 +610,7 @@ export default function ProjetsOptimisationPage() {
                     <CashflowSection
                       projet={detail}
                       cashflow={qboCashflow}
+                      hypCfg={qboHypCfg}
                       loading={qboLoading}
                     />
                   </div>
@@ -595,6 +620,7 @@ export default function ProjetsOptimisationPage() {
                   projet={detail}
                   onChanged={() => void loadDetail(detail.id)}
                 />
+                <AvancesSection projet={detail} onPatch={patchProjet} />
               </div>
             ) : null}
 
@@ -1152,10 +1178,10 @@ function BudgetSection({
                         <span
                           className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] font-normal"
                           style={{ color: "var(--qg-text-muted)" }}
-                          title="Le dépensé de cette enveloppe = le déficit du cashflow (total des écarts de l'encadré Cashflow) depuis l'ouverture du projet — 0 si le cashflow est positif."
+                          title="Le dépensé de cette enveloppe = l'écart total de l'encadré Cashflow depuis l'ouverture du projet, positif ou négatif (un surplus redonne du budget)."
                         >
                           <Scale className="h-2.5 w-2.5" />
-                          déficit du cashflow
+                          écart du cashflow
                         </span>
                       ) : null}
                     </td>
@@ -1750,6 +1776,7 @@ function BudgetSettingsModal({
         {status?.connected ? (
           <>
             <BankAccountPicker projet={projet} onPatch={onPatchProjet} />
+            <HypothequePicker projet={projet} onPatch={onPatchProjet} />
             <DetentionToggle projet={projet} onChanged={onChanged} />
             <label className="label mt-3 text-[10px] uppercase">
               Catégories du plan comptable à suivre
@@ -1900,9 +1927,10 @@ function DetentionToggle({
             className="block text-[10px]"
             style={{ color: "var(--qg-text-muted)" }}
           >
-            Une ligne du budget dont le dépensé = le déficit
-            d&apos;opération de la compagnie (revenus − dépenses). Ex. :
-            50 000 $ de budget, 10 000 $ de déficit → il reste 40 000 $.
+            Une ligne du budget dont le dépensé = l&apos;écart total
+            de l&apos;encadré Cashflow, positif ou négatif. Ex. :
+            50 000 $ de budget, 10 000 $ de déficit → il reste
+            40 000 $ ; un surplus fait remonter le budget.
           </span>
         </span>
       </label>
@@ -1979,15 +2007,88 @@ function BankAccountPicker({
   );
 }
 
+// ─── Compte d'hypothèque (colonne Hypothèque du cashflow) ──────
+
+function HypothequePicker({
+  projet,
+  onPatch
+}: {
+  projet: Projet;
+  onPatch: (p: Record<string, unknown>) => Promise<void>;
+}) {
+  const [comptes, setComptes] = useState<QboCompte[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/optimisation/qbo-comptes?scope=${encodeURIComponent(
+            projet.qbo_scope || `inc:${projet.entreprise_id}`
+          )}&kind=hypotheque`
+        );
+        if (!r.ok) return;
+        const d = (await r.json()) as { comptes: QboCompte[] };
+        setComptes(d.comptes || []);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [projet.qbo_scope, projet.entreprise_id]);
+
+  return (
+    <div className="mt-3">
+      <label className="label text-[10px] uppercase">
+        Compte d&apos;hypothèque (passif long terme)
+      </label>
+      {loading ? (
+        <div className="flex items-center gap-2 py-1">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-accent-500" />
+        </div>
+      ) : (
+        <select
+          className="input"
+          value={projet.qbo_hypotheque_account_id || ""}
+          onChange={(e) => {
+            const id = e.target.value;
+            const c = comptes.find((x) => x.id === id);
+            void onPatch({
+              qbo_hypotheque_account_id: id || null,
+              qbo_hypotheque_account_name: c ? c.name : null
+            });
+          }}
+        >
+          <option value="">— aucun —</option>
+          {comptes.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.fully_qualified_name}
+            </option>
+          ))}
+        </select>
+      )}
+      <p
+        className="mt-1 text-[10px]"
+        style={{ color: "var(--qg-text-muted)" }}
+      >
+        Sa baisse mensuelle (capital remboursé) devient la colonne
+        « Hypothèque » du cashflow — l&apos;écart devient revenus −
+        dépenses − hypothèque.
+      </p>
+    </div>
+  );
+}
+
 // ─── Cashflow mensuel depuis l'ouverture du projet ─────────────
 
 function CashflowSection({
   projet,
   cashflow,
+  hypCfg,
   loading
 }: {
   projet: Projet;
   cashflow: Cashflow | null;
+  hypCfg: boolean;
   loading: boolean;
 }) {
   //: Mois dépliés (détail par compte). "total" = la ligne Total.
@@ -2006,7 +2107,7 @@ function CashflowSection({
     if (details.length === 0) return null;
     return (
       <tr>
-        <td colSpan={4} className="pb-2">
+        <td colSpan={hypCfg ? 5 : 4} className="pb-2">
           <div
             className="ml-3 space-y-0.5 border-l pl-3"
             style={{ borderColor: "var(--qg-border-soft)" }}
@@ -2071,7 +2172,11 @@ function CashflowSection({
         </p>
       ) : (
         <div className="mt-3 max-h-[380px] overflow-y-auto overflow-x-auto pr-1">
-          <table className="w-full min-w-[420px] text-sm">
+          <table
+            className={`w-full ${
+              hypCfg ? "min-w-[520px]" : "min-w-[420px]"
+            } text-sm`}
+          >
             <thead
               className="sticky top-0"
               style={{ backgroundColor: "var(--qg-card-bg)" }}
@@ -2083,6 +2188,9 @@ function CashflowSection({
                 <th className="pb-2 pr-2">Mois</th>
                 <th className="pb-2 pr-2 text-right">Revenus</th>
                 <th className="pb-2 pr-2 text-right">Dépenses</th>
+                {hypCfg ? (
+                  <th className="pb-2 pr-2 text-right">Hypothèque</th>
+                ) : null}
                 <th className="pb-2 text-right">Écart</th>
               </tr>
             </thead>
@@ -2120,6 +2228,14 @@ function CashflowSection({
                     >
                       {fmtMoney(m.depenses)}
                     </td>
+                    {hypCfg ? (
+                      <td
+                        className="py-1.5 pr-2 text-right tabular-nums"
+                        style={{ color: "var(--qg-text)" }}
+                      >
+                        {fmtMoney(m.hypotheque || 0)}
+                      </td>
+                    ) : null}
                     <td
                       className={`py-1.5 text-right font-semibold tabular-nums ${
                         m.ecart < 0 ? "text-rose-400" : "text-emerald-400"
@@ -2162,6 +2278,14 @@ function CashflowSection({
                 >
                   {fmtMoney(cashflow.total.depenses)}
                 </td>
+                {hypCfg ? (
+                  <td
+                    className="py-2 pr-2 text-right tabular-nums"
+                    style={{ color: "var(--qg-text)" }}
+                  >
+                    {fmtMoney(cashflow.total.hypotheque || 0)}
+                  </td>
+                ) : null}
                 <td
                   className={`py-2 text-right tabular-nums ${
                     cashflow.total.ecart < 0
@@ -2182,18 +2306,425 @@ function CashflowSection({
             className="mt-2 text-[10px]"
             style={{ color: "var(--qg-text-muted)" }}
           >
-            Le déficit du total nourrit le « Total dépensé » de
-            l&apos;enveloppe Budget de détention. Source : rapport
-            Profits et pertes de QuickBooks (comptabilité
-            d&apos;exercice) — clique un mois pour voir le détail par
-            compte. ⚠️ Le CAPITAL remboursé sur l&apos;hypothèque et les
-            achats capitalisés n&apos;y figurent pas (ce sont des
-            mouvements de bilan) ; seuls les intérêts comptent en
-            dépense.
+            L&apos;écart total (positif ou négatif) se reflète dans le
+            « Total dépensé » de l&apos;enveloppe Budget de détention.
+            Source : rapport Profits et pertes de QuickBooks
+            (comptabilité d&apos;exercice) — clique un mois pour voir le
+            détail par compte.{" "}
+            {hypCfg ? (
+              <>
+                La colonne Hypothèque = capital remboursé chaque mois
+                (baisse du compte{" "}
+                {projet.qbo_hypotheque_account_name || "choisi"}, lue du
+                bilan) ; écart = revenus − dépenses − hypothèque.
+              </>
+            ) : (
+              <>
+                ⚠️ Le CAPITAL remboursé sur l&apos;hypothèque n&apos;y
+                figure pas — choisis le compte d&apos;hypothèque dans les
+                réglages ⚙ du Budget pour l&apos;ajouter en colonne.
+              </>
+            )}
           </p>
         </div>
       )}
     </section>
+  );
+}
+
+// ─── Avances des actionnaires (soldes + flux mensuel QBO) ──────
+
+function AvancesSection({
+  projet,
+  onPatch
+}: {
+  projet: Projet;
+  onPatch: (p: Record<string, unknown>) => Promise<void>;
+}) {
+  const [data, setData] = useState<Avances | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [ouverts, setOuverts] = useState<Set<string>>(new Set());
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/optimisation/projets/${projet.id}/qbo-avances`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setData((await r.json()) as Avances);
+    } catch (e) {
+      setData({
+        comptes: [],
+        total: 0,
+        selection: [],
+        auto: true,
+        erreur: `Lecture QuickBooks échouée : ${(e as Error).message}`
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [projet.id]);
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load, projet.avances_accounts_json]);
+
+  function basculer(id: string) {
+    setOuverts((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  return (
+    <section
+      className="min-w-0 rounded-xl border p-4"
+      style={{
+        borderColor: "var(--qg-border)",
+        backgroundColor: "var(--qg-card-bg)"
+      }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <h3
+          className="flex items-center gap-1.5 text-sm font-semibold"
+          style={{ color: "var(--qg-text)" }}
+        >
+          <HandCoins className="h-4 w-4 text-accent-500" />
+          Avances des actionnaires
+          <span
+            className="text-xs font-normal"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            soldes et mouvements lus dans QuickBooks
+          </span>
+        </h3>
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          className="btn-ghost btn-sm"
+          title="Choisir les comptes d'avances suivis"
+        >
+          <Settings2 className="h-4 w-4" />
+        </button>
+      </div>
+
+      {loading && !data ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+        </div>
+      ) : data?.erreur ? (
+        <p className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          {data.erreur}
+        </p>
+      ) : data && data.comptes.length === 0 ? (
+        <p className="mt-3 text-xs" style={{ color: "var(--qg-text-muted)" }}>
+          Aucun compte d&apos;avance d&apos;actionnaire détecté dans le
+          plan comptable (nom contenant « actionnaire »). Utilise ⚙
+          ci-dessus pour choisir les comptes à suivre.
+        </p>
+      ) : data ? (
+        <div className="mt-3 space-y-2">
+          {data.comptes.map((c) => (
+            <div
+              key={c.id}
+              className="rounded-lg border"
+              style={{ borderColor: "var(--qg-border-soft)" }}
+            >
+              <button
+                type="button"
+                onClick={() => basculer(c.id)}
+                className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-accent-500/5"
+              >
+                <span
+                  className="inline-flex items-center gap-1.5 text-[13px] font-medium"
+                  style={{ color: "var(--qg-text)" }}
+                >
+                  {ouverts.has(c.id) ? (
+                    <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+                  ) : (
+                    <ChevronRight className="h-3.5 w-3.5 opacity-50" />
+                  )}
+                  {c.nom}
+                </span>
+                <span
+                  className="text-sm font-semibold tabular-nums"
+                  style={{ color: "var(--qg-text)" }}
+                >
+                  {fmtMoney(c.solde)}
+                </span>
+              </button>
+              {ouverts.has(c.id) ? (
+                c.mois.length === 0 ? (
+                  <p
+                    className="px-3 pb-2 text-[11px]"
+                    style={{ color: "var(--qg-text-muted)" }}
+                  >
+                    Aucun mouvement sur la période du projet.
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto px-3 pb-2">
+                    <table className="w-full min-w-[320px] text-[12px]">
+                      <thead>
+                        <tr
+                          className="text-left text-[10px] uppercase tracking-wider"
+                          style={{ color: "var(--qg-text-muted)" }}
+                        >
+                          <th className="pb-1 pr-2">Mois</th>
+                          <th className="pb-1 pr-2 text-right">
+                            Variation
+                          </th>
+                          <th className="pb-1 text-right">Solde</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {c.mois.map((m) => (
+                          <tr
+                            key={m.mois}
+                            className="border-t"
+                            style={{
+                              borderColor: "var(--qg-border-soft)"
+                            }}
+                          >
+                            <td
+                              className="py-1 pr-2"
+                              style={{ color: "var(--qg-text)" }}
+                            >
+                              {m.mois}
+                            </td>
+                            <td
+                              className={`py-1 pr-2 text-right tabular-nums ${
+                                m.variation > 0
+                                  ? "text-emerald-400"
+                                  : m.variation < 0
+                                    ? "text-rose-400"
+                                    : ""
+                              }`}
+                              style={
+                                m.variation === 0
+                                  ? { color: "var(--qg-text-muted)" }
+                                  : undefined
+                              }
+                            >
+                              {m.variation > 0 ? "+" : ""}
+                              {fmtMoney(m.variation)}
+                            </td>
+                            <td
+                              className="py-1 text-right tabular-nums"
+                              style={{ color: "var(--qg-text)" }}
+                            >
+                              {fmtMoney(m.solde)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              ) : null}
+            </div>
+          ))}
+          <div
+            className="flex items-center justify-between border-t px-1 pt-2 text-sm font-semibold"
+            style={{
+              borderColor: "var(--qg-border)",
+              color: "var(--qg-text)"
+            }}
+          >
+            <span>Total des avances</span>
+            <span className="tabular-nums">{fmtMoney(data.total)}</span>
+          </div>
+          <p
+            className="text-[10px]"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            Lecture seule du bilan QuickBooks — variation positive =
+            l&apos;actionnaire a avancé de l&apos;argent, négative = la
+            compagnie a remboursé. Clique un compte pour le flux mois
+            par mois.
+          </p>
+        </div>
+      ) : null}
+
+      {settingsOpen ? (
+        <AvancesSettingsModal
+          projet={projet}
+          selection={data?.selection || []}
+          auto={data?.auto ?? true}
+          onPatch={onPatch}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={() => void load()}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function AvancesSettingsModal({
+  projet,
+  selection,
+  auto,
+  onPatch,
+  onClose,
+  onSaved
+}: {
+  projet: Projet;
+  selection: string[];
+  auto: boolean;
+  onPatch: (p: Record<string, unknown>) => Promise<void>;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [comptes, setComptes] = useState<QboCompte[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [sel, setSel] = useState<Set<string>>(() => new Set(selection));
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/optimisation/qbo-comptes?scope=${encodeURIComponent(
+            projet.qbo_scope || `inc:${projet.entreprise_id}`
+          )}&kind=avances`
+        );
+        if (!r.ok) return;
+        const d = (await r.json()) as { comptes: QboCompte[] };
+        setComptes(d.comptes || []);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [projet.qbo_scope, projet.entreprise_id]);
+
+  async function save() {
+    setSaving(true);
+    try {
+      const list = comptes
+        .filter((c) => sel.has(c.id))
+        .map((c) => ({ id: c.id, name: c.name }));
+      await onPatch({ avances_accounts_json: JSON.stringify(list) });
+      onSaved();
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function revenirAuto() {
+    setSaving(true);
+    try {
+      await onPatch({ avances_accounts_json: null });
+      onSaved();
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[80vh] w-full max-w-lg flex-col rounded-2xl border p-4"
+        style={{
+          borderColor: "var(--qg-border)",
+          backgroundColor: "var(--qg-card-bg)"
+        }}
+      >
+        <h3
+          className="text-sm font-semibold"
+          style={{ color: "var(--qg-text)" }}
+        >
+          Comptes d&apos;avances des actionnaires
+        </h3>
+        <p
+          className="mt-1 text-[11px]"
+          style={{ color: "var(--qg-text-muted)" }}
+        >
+          {auto
+            ? "Auto-détection active : les comptes de passif/équité dont le nom contient « actionnaire ». Coche pour choisir toi-même."
+            : "Sélection manuelle enregistrée pour ce projet."}
+        </p>
+        {loading ? (
+          <div className="flex items-center justify-center py-6">
+            <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+          </div>
+        ) : comptes.length === 0 ? (
+          <p
+            className="mt-3 text-xs"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            Aucun compte de passif ou d&apos;équité dans ce fichier
+            QuickBooks (ou connexion manquante).
+          </p>
+        ) : (
+          <div className="mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1">
+            {comptes.map((c) => (
+              <label
+                key={c.id}
+                className="flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1 text-[12px] hover:bg-accent-500/10"
+                style={{ color: "var(--qg-text)" }}
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={sel.has(c.id)}
+                  onChange={(e) =>
+                    setSel((prev) => {
+                      const next = new Set(prev);
+                      if (e.target.checked) next.add(c.id);
+                      else next.delete(c.id);
+                      return next;
+                    })
+                  }
+                />
+                <span>
+                  {c.fully_qualified_name}
+                  <span
+                    className="ml-1 text-[10px]"
+                    style={{ color: "var(--qg-text-muted)" }}
+                  >
+                    ({c.account_type})
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
+        <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+          {!auto ? (
+            <button
+              type="button"
+              onClick={() => void revenirAuto()}
+              disabled={saving}
+              className="btn-ghost btn-sm disabled:opacity-50"
+            >
+              Revenir à l&apos;auto-détection
+            </button>
+          ) : null}
+          <button type="button" onClick={onClose} className="btn-ghost btn-sm">
+            Fermer
+          </button>
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={saving || comptes.length === 0}
+            className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Enregistrer ({sel.size})
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
