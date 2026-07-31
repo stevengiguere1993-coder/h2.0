@@ -20,7 +20,6 @@ import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 import {
   BailDocActions,
-  BailSignature,
   TalFormDropdown
 } from "@/components/immobilier/tal-avis";
 
@@ -843,10 +842,11 @@ export default function BauxPage() {
                                 </button>
                               )}
                             </div>
-                            {/* ── Groupe 2 — Documents (avis + signature) ── */}
+                            {/* ── Groupe 2 — Documents (avis). L'ENVOI du
+                                bail pour signature se fait depuis la page
+                                Locations (section « Baux envoyés »). ── */}
                             <div className="inline-flex items-center gap-1.5 rounded-xl border border-brand-700 px-1.5 py-1">
                               <TalFormDropdown bailId={r.bail_id} />
-                              <BailSignature bailId={r.bail_id} />
                             </div>
                             {/* ── Groupe 3 — Bail (import / voir) ── */}
                             <div className="inline-flex items-center gap-1.5 rounded-xl border border-brand-700 px-1.5 py-1">
