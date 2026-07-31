@@ -712,6 +712,11 @@ async def delete_renouvellement(
 # avec un contenu vérifié. Rien d'automatique ni de masse.
 
 
+class ReconduireIn(BaseModel):
+    #: Date de fin choisie — défaut : même jour un an plus tard.
+    nouvelle_date_fin: Optional[date] = None
+
+
 class ReconduireResult(BaseModel):
     bail_id: int
     ancienne_date_fin: date
@@ -742,7 +747,10 @@ def _plus_un_an(d: date) -> date:
     "/baux/{bail_id}/reconduire", response_model=ReconduireResult
 )
 async def reconduire_bail(
-    bail_id: int, db: DBSession, user: CurrentUser
+    bail_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    payload: Optional[ReconduireIn] = None,
 ) -> ReconduireResult:
     """RECONDUCTION TACITE : le bail s'étire d'un an tel quel, sans avis
     (retour Phil 2026-07-28 : « une année je ne les augmente pas, le bail
@@ -759,7 +767,14 @@ async def reconduire_bail(
             detail="Seul un bail actif peut être reconduit.",
         )
     ancienne = bail.date_fin
-    bail.date_fin = _plus_un_an(bail.date_fin)
+    voulu = payload.nouvelle_date_fin if payload else None
+    if voulu is not None and voulu <= ancienne:
+        raise HTTPException(
+            status_code=422,
+            detail="La nouvelle date de fin doit être après la fin "
+            "actuelle du bail.",
+        )
+    bail.date_fin = voulu or _plus_un_an(bail.date_fin)
     # Trace de la reconduction (retour Phil 2026-07-30 : « il a juste
     # disparu de la liste ») : un cycle status « reconduit » garde la
     # ligne visible, en vert, même loyer + nouvelle date. La poubelle
@@ -947,6 +962,24 @@ async def renouvellements_overview(
             ):
                 last_ren_by_bail[r.bail_id] = r
 
+    # Dossier de RELOCATION actif (non annulé) par logement : la ligne
+    # est bloquée tant que le dossier vit (retour Phil 2026-07-31).
+    reloc_by_logement: dict = {}
+    if log_by_id:
+        from app.models.immobilier import LocationDossier
+
+        for dossier in (
+            await db.execute(
+                select(LocationDossier).where(
+                    LocationDossier.logement_id.in_(list(log_by_id.keys())),
+                    LocationDossier.statut != "annule",
+                )
+            )
+        ).scalars().all():
+            cur = reloc_by_logement.get(dossier.logement_id)
+            if cur is None or dossier.id > cur.id:
+                reloc_by_logement[dossier.logement_id] = dossier
+
     # Dernier DOCUMENT d'avis (TAL-806) par bail → suivi envoyé/ouvert/
     # signé directement sur la page Renouvellements (retour Phil
     # 2026-07-20, point 11). Tri ascendant → le plus récent écrase.
@@ -1014,7 +1047,14 @@ async def renouvellements_overview(
                     b.date_fin = last_ren.nouvelle_date_fin
                 last_ren.applique_le = today
                 dirty = True
-            if last_ren.status == "refuse":
+                # Cycle réglé et appliqué : dès CE rendu, la ligne
+                # repart sur le suivi normal de la nouvelle période.
+                courant = False
+                reponse = None
+                deadline_reponse = None
+            if not courant:
+                pass  # appliqué à l'instant — suivi normal repris
+            elif last_ren.status == "refuse":
                 reponse = "refuse"
                 if last_ren.reponse_le is not None:
                     # Art. 1947 : 1 mois pour demander la fixation au
@@ -1096,11 +1136,16 @@ async def renouvellements_overview(
                 nouvelle_date_fin=(
                     last_ren.nouvelle_date_fin if courant else None
                 ),
-                reponse_le=last_ren.reponse_le if courant else None,
+                reponse_le=last_ren.reponse_le if last_ren else None,
                 deadline_reponse=deadline_reponse,
                 deadline_fixation=deadline_fixation,
                 refus_motif=last_ren.refus_motif if courant else None,
-                applique_le=last_ren.applique_le if courant else None,
+                applique_le=last_ren.applique_le if last_ren else None,
+                relocation_dossier_id=(
+                    reloc_by_logement[b.logement_id].id
+                    if b.logement_id in reloc_by_logement
+                    else None
+                ),
                 assurance_confirmee_le=(
                     locataire.assurance_confirmee_le if locataire else None
                 ),
