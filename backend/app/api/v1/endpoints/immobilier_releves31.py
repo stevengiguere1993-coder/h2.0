@@ -396,6 +396,156 @@ async def upload_releve31_pdf(
     )
 
 
+
+
+def _pdf_copie_releve31(
+    annee: int,
+    numero: str,
+    locataire_nom: str,
+    adresse: str,
+    logement_numero: str,
+    loyer_mensuel,
+) -> bytes:
+    """Copie d'information du relevé 31, générée automatiquement — le
+    NUMÉRO officiel vient de Revenu Québec (collé par le staff). Sert de
+    copie remise au locataire ; l'import manuel permet de la remplacer
+    par le PDF officiel de RQ (retour Phil 2026-07-31)."""
+    import io as _io
+
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas as _canvas
+
+    buf = _io.BytesIO()
+    c = _canvas.Canvas(buf, pagesize=letter)
+    _w, h = letter
+    x = 25 * mm
+    y = h - 30 * mm
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(x, y, f"Relevé 31 — {annee}")
+    y -= 7 * mm
+    c.setFont("Helvetica", 10)
+    c.drawString(
+        x, y, "Renseignements sur l'occupation d'un logement — copie du locataire"
+    )
+    y -= 4 * mm
+    c.setLineWidth(0.8)
+    c.line(x, y, _w - 25 * mm, y)
+    y -= 12 * mm
+
+    def ligne(label: str, valeur: str, gras: bool = False) -> None:
+        nonlocal y
+        c.setFont("Helvetica", 10)
+        c.setFillGray(0.35)
+        c.drawString(x, y, label)
+        c.setFillGray(0.0)
+        c.setFont("Helvetica-Bold" if gras else "Helvetica", 12)
+        c.drawString(x + 72 * mm, y, valeur)
+        y -= 10 * mm
+
+    ligne("Numéro du relevé (RQ)", numero, gras=True)
+    ligne("Année d'imposition", str(annee))
+    ligne("Locataire (bénéficiaire)", locataire_nom or "—")
+    ligne("Adresse du logement", adresse or "—")
+    ligne("Logement", str(logement_numero or "—"))
+    if loyer_mensuel is not None:
+        ligne("Loyer mensuel au 31 déc.", f"{float(loyer_mensuel):,.2f} $".replace(",", " "))
+    ligne("Locateur", "Horizon Services Immobiliers")
+
+    y -= 4 * mm
+    c.setFont("Helvetica", 9)
+    c.setFillGray(0.35)
+    for t in (
+        "Ce numéro de relevé a été attribué par Revenu Québec lors de la production",
+        "du relevé 31. Reportez-le dans votre déclaration de revenus (crédit d'impôt",
+        "pour solidarité).",
+    ):
+        c.drawString(x, y, t)
+        y -= 5 * mm
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+@router.post(
+    "/releves31/{annee}/{logement_id}/generer", response_model=Releve31Row
+)
+async def generer_releve31_pdf(
+    annee: int, logement_id: int, db: DBSession, user: CurrentUser
+) -> Releve31Row:
+    """Génère AUTOMATIQUEMENT la copie PDF du relevé (numéro officiel
+    déjà collé) et la classe comme document courant — plus besoin
+    d'importer un fichier pour pouvoir l'envoyer au locataire."""
+    _require_volet(user)
+    obj = await _upsert(db, annee, logement_id)
+    if not (obj.numero_releve or "").strip():
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Colle d'abord le numéro du relevé (émis par Revenu "
+                "Québec) — la copie se génère avec."
+            ),
+        )
+    dec31 = date(annee, 12, 31)
+    bail = (
+        await db.execute(
+            select(Bail).where(
+                Bail.logement_id == logement_id,
+                Bail.date_debut <= dec31,
+                Bail.date_fin >= dec31,
+                Bail.status != BailStatus.PROPOSE.value,
+            ).order_by(Bail.date_debut.desc())
+        )
+    ).scalars().first()
+    locataire = (
+        await db.get(Locataire, bail.locataire_id) if bail else None
+    )
+    lg = await db.get(Logement, logement_id)
+    im = await db.get(Immeuble, lg.immeuble_id) if lg else None
+    adresse = (
+        f"{im.address}, {im.city}" if im and im.city else
+        (im.address if im else "")
+    )
+    pdf = _pdf_copie_releve31(
+        annee,
+        obj.numero_releve.strip(),
+        locataire.full_name if locataire else "",
+        adresse,
+        lg.numero if lg else "",
+        float(bail.loyer_mensuel) if bail and bail.loyer_mensuel else None,
+    )
+
+    from app.api.v1.endpoints.immobilier_documents import save_document
+
+    doc = await save_document(
+        db,
+        bail_id=bail.id if bail else None,
+        locataire_id=bail.locataire_id if bail else None,
+        immeuble_id=obj.immeuble_id,
+        doc_type="releve31",
+        titre=f"Relevé 31 — {annee}",
+        params={"annee": annee, "logement_id": logement_id},
+        pdf=pdf,
+        created_by_email=getattr(user, "email", None),
+    )
+    doc.remplace_document_id = obj.document_id
+    obj.document_id = doc.id
+    obj.bail_id = bail.id if bail else None
+    obj.locataire_id = bail.locataire_id if bail else None
+    if obj.statut == "a_produire":
+        obj.statut = "produit"
+    await db.commit()
+    await db.refresh(obj)
+    return Releve31Row(
+        annee=annee,
+        logement_id=logement_id,
+        statut=obj.statut,
+        numero_releve=obj.numero_releve,
+        notes=obj.notes,
+        document_id=obj.document_id,
+    )
+
+
 class Releve31LocataireRow(BaseModel):
     annee: int
     logement_id: int
