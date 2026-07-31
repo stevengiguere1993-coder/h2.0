@@ -86,6 +86,7 @@ type AssuranceRow = {
   logement_id: number | null;
   logement_numero: string | null;
   assurance_confirmee_le: string | null;
+  derniere_demande_le?: string | null;
   statut: "ok" | "a_reconfirmer" | "jamais";
 };
 
@@ -317,7 +318,13 @@ function AssurancesTab() {
                       <span className={`badge ${badge}`}>{label}</span>
                       {r.assurance_confirmee_le ? (
                         <div className="mt-0.5 text-[10px] text-white/40">
-                          dernière : {r.assurance_confirmee_le}
+                          Confirmée le {r.assurance_confirmee_le}
+                        </div>
+                      ) : null}
+                      {r.derniere_demande_le ? (
+                        <div className="mt-0.5 text-[10px] text-sky-300/80">
+                          Demande envoyée le{" "}
+                          {fmtDateTime(r.derniere_demande_le)}
                         </div>
                       ) : null}
                     </td>

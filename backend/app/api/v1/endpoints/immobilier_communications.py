@@ -68,6 +68,34 @@ router = APIRouter(
 TYPES_ENVOYABLES = tuple(GABARITS_DEFAUT.keys()) + ("libre",)
 
 _REGLAGES_KEY = "immo.communications"
+
+
+async def expediteur_defaut() -> tuple:
+    """(from_email, from_name, reply_to) du PROFIL PAR DÉFAUT des
+    Communications — réutilisé par la demande de preuve d'assurance
+    (retour Phil 2026-07-31 : « faudrait que ça soit pareil à
+    Communications »). Repli sur les défauts plats, puis (None, None,
+    None) = boîte système."""
+    try:
+        cfg = await get_automation_config(_REGLAGES_KEY) or {}
+    except Exception:  # noqa: BLE001 — fail-safe
+        cfg = {}
+    profils = cfg.get("profils") or []
+    defaut = str(cfg.get("profil_defaut") or "")
+    prof = next(
+        (p for p in profils if p.get("label") == defaut), None
+    )
+    if prof:
+        return (
+            str(prof.get("from_email") or "").strip() or None,
+            str(prof.get("from_name") or "").strip() or None,
+            str(prof.get("reply_to") or "").strip() or None,
+        )
+    return (
+        str(cfg.get("from_email") or "").strip() or None,
+        str(cfg.get("from_name") or "").strip() or None,
+        str(cfg.get("reply_to") or "").strip() or None,
+    )
 _MAX_DESTINATAIRES = 500
 
 
