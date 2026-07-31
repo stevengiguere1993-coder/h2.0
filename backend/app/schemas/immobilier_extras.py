@@ -181,6 +181,9 @@ class RenouvellementOverview(BaseModel):
     #: Date où le nouveau loyer/la période ont été reportés sur le bail.
     applique_le: Optional[date] = None
     # Assurance locataire : dernière confirmation (> 12 mois = à refaire).
+    #: Dossier de relocation ACTIF du logement (non annulé) — la ligne
+    #: est bloquée tant qu'il existe.
+    relocation_dossier_id: Optional[int] = None
     assurance_confirmee_le: Optional[date] = None
 
 

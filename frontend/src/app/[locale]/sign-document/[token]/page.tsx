@@ -305,7 +305,9 @@ export default function SignDocumentPage() {
             </div>
             <div className="mt-4">
               <label className="text-xs text-white/70">
-                Signature tracée (optionnel)
+                {data.choix_requis
+                  ? "Signature (tracez-la avec la souris ou le doigt — obligatoire)"
+                  : "Signature tracée (optionnel)"}
               </label>
               <div className="mt-1">
                 <SignaturePad onChange={setSignatureDataUrl} />
@@ -320,7 +322,7 @@ export default function SignDocumentPage() {
               disabled={
                 submitting ||
                 !signName.trim() ||
-                (data.choix_requis ? !choix : false)
+                (data.choix_requis ? !choix || !signatureDataUrl : false)
               }
               className="mt-5 inline-flex items-center gap-2 rounded-lg bg-accent-500 px-5 py-3 text-sm font-bold text-brand-950 hover:bg-accent-400 disabled:opacity-60"
             >
