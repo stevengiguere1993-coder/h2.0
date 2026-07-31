@@ -544,6 +544,9 @@ class ConvertirRequest(BaseModel):
     """Tout est prérempli côté UI mais MODIFIABLE avant confirmation —
     rien ne se crée sans l'accord explicite de l'usager."""
 
+    #: Locataire EXISTANT (déjà client) — si fourni, AUCUNE fiche n'est
+    #: créée : le bail s'attache à sa fiche (pas de doublon).
+    locataire_id: Optional[int] = None
     locataire_nom: str = Field(..., min_length=2, max_length=255)
     locataire_email: Optional[str] = Field(default=None, max_length=320)
     locataire_phone: Optional[str] = Field(default=None, max_length=50)
@@ -596,21 +599,24 @@ async def convertir_dossier(
             status.HTTP_409_CONFLICT,
             "Un locataire a déjà été créé pour ce dossier.",
         )
-    if payload.date_naissance is None:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "La date de naissance est obligatoire.",
-        )
-    if not (payload.locataire_email or "").strip():
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Le courriel du locataire est obligatoire.",
-        )
-    if not (payload.locataire_phone or "").strip():
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Le téléphone du locataire est obligatoire.",
-        )
+    # Identité obligatoire seulement à la CRÉATION d'une fiche — un
+    # locataire existant garde la sienne.
+    if payload.locataire_id is None:
+        if payload.date_naissance is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "La date de naissance est obligatoire.",
+            )
+        if not (payload.locataire_email or "").strip():
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Le courriel du locataire est obligatoire.",
+            )
+        if not (payload.locataire_phone or "").strip():
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Le téléphone du locataire est obligatoire.",
+            )
     if payload.date_fin <= payload.date_debut:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -649,21 +655,37 @@ async def convertir_dossier(
             lignes.append(f"Notes du candidat : {retenu.notes.strip()}")
         notes_locataire = "\n".join(lignes)
 
-    locataire = Locataire(
-        full_name=payload.locataire_nom.strip(),
-        email=(payload.locataire_email or "").strip() or None,
-        phone=(payload.locataire_phone or "").strip() or None,
-        date_naissance=payload.date_naissance,
-        nas_last4=(payload.nas_last4 or "").strip() or None,
-        ancienne_adresse=(payload.ancienne_adresse or "").strip() or None,
-        employeur=(payload.employeur or "").strip() or None,
-        revenu_annuel=payload.revenu_annuel,
-        notes=notes_locataire,
-    )
-    locataire.created_at = now
-    locataire.updated_at = now
-    db.add(locataire)
-    await db.flush()
+    if payload.locataire_id is not None:
+        # Déjà client : on réutilise SA fiche (historique conservé,
+        # pas de doublon) — la trace d'enquête s'ajoute à ses notes.
+        locataire = await db.get(Locataire, payload.locataire_id)
+        if locataire is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                "Locataire existant introuvable.",
+            )
+        if notes_locataire:
+            locataire.notes = (
+                (locataire.notes + "\n\n") if locataire.notes else ""
+            ) + notes_locataire
+        locataire.updated_at = now
+    else:
+        locataire = Locataire(
+            full_name=payload.locataire_nom.strip(),
+            email=(payload.locataire_email or "").strip() or None,
+            phone=(payload.locataire_phone or "").strip() or None,
+            date_naissance=payload.date_naissance,
+            nas_last4=(payload.nas_last4 or "").strip() or None,
+            ancienne_adresse=(payload.ancienne_adresse or "").strip()
+            or None,
+            employeur=(payload.employeur or "").strip() or None,
+            revenu_annuel=payload.revenu_annuel,
+            notes=notes_locataire,
+        )
+        locataire.created_at = now
+        locataire.updated_at = now
+        db.add(locataire)
+        await db.flush()
 
     bail = Bail(
         logement_id=dossier.logement_id,
