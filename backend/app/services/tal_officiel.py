@@ -392,18 +392,41 @@ def fill_official_pdf(
         writer.update_page_form_field_values(page, values)
 
     # VERROUILLE tous les champs (retour Phil 2026-07-31 : « le
-    # locataire peut changer les infos dans le PDF ») — le formulaire
-    # rempli devient lecture seule dans les visionneuses.
+    # locataire peut changer les infos dans le PDF ») — descend l'arbre
+    # AcroForm complet (parents + Kids) ET les annotations de chaque
+    # page : la 2e page restait éditable quand le champ vivait au
+    # niveau du document plutôt que du widget.
     from pypdf.generic import NameObject, NumberObject
 
+    def _lock(obj) -> None:
+        try:
+            obj = obj.get_object()
+            ff = int(obj.get("/Ff", 0))
+            obj[NameObject("/Ff")] = NumberObject(ff | 1)
+            for kid in obj.get("/Kids") or []:
+                _lock(kid)
+        except Exception:  # noqa: BLE001 — objet exotique, on continue
+            pass
+
+    try:
+        acro = writer._root_object.get("/AcroForm")  # noqa: SLF001
+        if acro is not None:
+            for f in acro.get_object().get("/Fields") or []:
+                _lock(f)
+    except Exception:  # noqa: BLE001
+        log.exception("Verrouillage AcroForm impossible")
     for page in writer.pages:
-        for ref in page.get("/Annots") or []:
+        annots = page.get("/Annots")
+        try:
+            annots = annots.get_object() if annots is not None else []
+        except Exception:  # noqa: BLE001
+            annots = []
+        for ref in annots or []:
             try:
                 obj = ref.get_object()
                 if obj.get("/Subtype") == "/Widget":
-                    ff = int(obj.get("/Ff", 0))
-                    obj[NameObject("/Ff")] = NumberObject(ff | 1)
-            except Exception:  # noqa: BLE001 — annotation exotique
+                    _lock(obj)
+            except Exception:  # noqa: BLE001
                 continue
 
     out = io.BytesIO()
