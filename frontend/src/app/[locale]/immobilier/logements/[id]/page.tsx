@@ -22,6 +22,7 @@ import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import {
   AuMoisToggle,
+  ResilierBailButton,
   BailDocActions,
   BailSignature,
   DocumentsSection,
@@ -740,6 +741,10 @@ export default function LogementDetailPage({
                       <AuMoisToggle
                         bailId={bailActif.id}
                         auMois={!!bailActif.au_mois}
+                        onChanged={() => void loadDossier()}
+                      />
+                      <ResilierBailButton
+                        bailId={bailActif.id}
                         onChanged={() => void loadDossier()}
                       />
                       <TalFormDropdown bailId={bailActif.id} />

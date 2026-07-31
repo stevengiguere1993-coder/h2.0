@@ -24,6 +24,7 @@ type PublicDocument = {
   choix?: string | null;
   repute_accepte_le?: string | null;
   copie_envoyee?: boolean | null;
+  copie_erreur?: string | null;
   company_name: string;
   company_email: string;
 };
@@ -217,7 +218,9 @@ export default function SignDocumentPage() {
                     : ""}
                   .{" "}
                   {data.copie_envoyee === false
-                    ? "L'envoi de votre copie par courriel a échoué — écrivez-nous pour la recevoir."
+                    ? `L'envoi de votre copie par courriel a échoué${
+                        data.copie_erreur ? ` (${data.copie_erreur})` : ""
+                      } — écrivez-nous pour la recevoir.`
                     : "Une copie signée vous a été transmise par courriel."}{" "}
                   Merci !
                 </p>
