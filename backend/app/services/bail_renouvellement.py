@@ -146,19 +146,48 @@ async def _build_tal_context_for_bail(
     )
 
 
+def est_cycle_courant(
+    r: BailRenouvellement, date_fin: Optional[date], today: date
+) -> bool:
+    """Un cycle est COURANT tant que le renouvellement qu'il vise n'est
+    pas commencé (``nouvelle_date_debut`` future). Repli sur l'ancienne
+    borne (avis dans les ~6,5 mois précédant la fin) pour les vieux
+    cycles sans dates. Fix « pas jaune » 2026-07-31 : un avis envoyé
+    TÔT (ex. bail reconduit jusqu'en 2028) restait invisible."""
+    if r.status == "reconduit":
+        return False
+    if (
+        r.status in ("accepte", "repute_accepte")
+        and r.applique_le is None
+    ):
+        # Accepté mais pas encore reporté sur le bail : le cycle reste
+        # courant jusqu'à l'application (lazy, à la consultation) —
+        # sinon un cycle dont la date effective vient de passer ne
+        # serait JAMAIS appliqué.
+        return True
+    if r.nouvelle_date_debut is not None:
+        return r.nouvelle_date_debut > today
+    if date_fin is None:
+        return True
+    return r.avis_envoye_le >= date_fin - timedelta(days=200)
+
+
 async def _existing_renouvellement_active(
     db: AsyncSession, bail: Bail
 ) -> Optional[BailRenouvellement]:
     """Renouvellement déjà créé pour le cycle courant ?"""
-    cutoff = bail.date_fin - timedelta(days=200) if bail.date_fin else None
-    q = select(BailRenouvellement).where(
-        BailRenouvellement.bail_id == bail.id
-    )
-    if cutoff:
-        q = q.where(BailRenouvellement.avis_envoye_le >= cutoff)
-    return (
-        await db.execute(q.order_by(BailRenouvellement.avis_envoye_le.desc()))
-    ).scalars().first()
+    today = date.today()
+    rows = (
+        await db.execute(
+            select(BailRenouvellement)
+            .where(BailRenouvellement.bail_id == bail.id)
+            .order_by(BailRenouvellement.avis_envoye_le.desc())
+        )
+    ).scalars().all()
+    for r in rows:
+        if est_cycle_courant(r, bail.date_fin, today):
+            return r
+    return None
 
 
 async def send_renouvellement_for_bail(
@@ -171,7 +200,10 @@ async def send_renouvellement_for_bail(
     force: bool = False,
     request_read_receipt: bool = False,
     bcc_to_sender: bool = True,
-) -> tuple[BailRenouvellement, bool, Optional[str]]:
+    locataire_nom: Optional[str] = None,
+    logement_adresse: Optional[str] = None,
+    loyer_actuel: Optional[float] = None,
+) -> tuple[BailRenouvellement, bool, Optional[str], Optional[str]]:
     """Crée le renouvellement (si nécessaire) et envoie le PDF par courriel.
 
     Returns: (renouvellement, courriel_envoye, raison_si_non_envoye) —
@@ -185,7 +217,7 @@ async def send_renouvellement_for_bail(
 
     existing = await _existing_renouvellement_active(db, bail)
     if existing is not None and not force:
-        return existing, False, "Un avis existe déjà pour ce cycle."
+        return existing, False, "Un avis existe déjà pour ce cycle.", None
 
 
     # Crée le renouvellement
@@ -221,6 +253,17 @@ async def send_renouvellement_for_bail(
     )
     if motif:
         ctx.motif_modification = motif
+    # Overrides de la modal « Préparer » (retour Phil 2026-07-31 : tout
+    # est pré-rempli mais modifiable) — l'adresse saisie remplace le
+    # trio adresse/numéro/ville assemblé.
+    if locataire_nom:
+        ctx.locataire_nom = locataire_nom
+    if logement_adresse:
+        ctx.logement_adresse = logement_adresse
+        ctx.logement_numero = None
+        ctx.logement_ville = None
+    if loyer_actuel is not None:
+        ctx.bail_loyer_mensuel = float(loyer_actuel)
 
     # PDF modèle remplacé par l'utilisateur, s'il y en a un.
     template_bytes = None
@@ -277,10 +320,12 @@ async def send_renouvellement_for_bail(
             bail.id,
         )
 
+    expediteur: Optional[str] = None
     if not ctx.locataire_email:
         raison = "Le locataire n'a pas de courriel dans sa fiche."
     else:
         mailer = GraphMailer()
+        expediteur = mailer.sender or None
         if not mailer.ready:
             raison = (
                 "Microsoft 365 (Graph) n'est pas configuré — "
@@ -330,7 +375,7 @@ async def send_renouvellement_for_bail(
                     "Échec envoi email renouvellement bail %s", bail.id
                 )
 
-    return obj, sent, raison
+    return obj, sent, raison, expediteur
 
 
 def _render_email_body(ctx: TalContext, url: Optional[str] = None) -> str:
@@ -353,13 +398,15 @@ def _render_email_body(ctx: TalContext, url: Optional[str] = None) -> str:
     <p>Vous trouverez ci-joint l'avis officiel de modification de votre bail
     pour le logement situé au <b>{adresse}</b>.</p>
     {bloc_lien}
-    <p>Vous pouvez accepter (signer) ou refuser la modification directement
-    depuis le lien ci-dessus.</p>
+    <p>Vous pouvez répondre directement depuis le lien ci-dessus :
+    accepter les modifications, annoncer votre départ à la fin du bail,
+    ou refuser les modifications et renouveler votre bail. La dernière
+    page du document ci-joint reprend ces trois choix.</p>
     <p>Vous disposez d'un délai d'un (1) mois à compter de la réception du
     présent avis pour répondre. À défaut de réponse, vous serez réputé avoir
     accepté les modifications proposées.</p>
     <p>N'hésitez pas à nous contacter pour toute question.</p>
-    <p>Cordialement,<br/>{ctx.locateur_nom or 'Le locateur'}</p>
+    <p>Cordialement,<br/>Horizon Services Immobiliers</p>
     """.strip()
 
 

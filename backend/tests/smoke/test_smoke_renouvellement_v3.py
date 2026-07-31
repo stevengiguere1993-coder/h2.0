@@ -207,3 +207,126 @@ def test_refus_impossible_sur_document_sans_cycle(client, auth_headers, run):
         "/api/v1/public/documents/tok-v3-acces/refuser", json={}
     )
     assert r.status_code == 400, r.text
+
+
+# ─── v4 : page « Réponse du locataire » + cycle courant ──────────────
+
+
+def _nb_pages(pdf_bytes: bytes) -> int:
+    import io
+
+    from pypdf import PdfReader
+
+    return len(PdfReader(io.BytesIO(pdf_bytes)).pages)
+
+
+def test_page_reponse_ajoutee_au_tal806():
+    """Le TAL-806 généré par Kratos porte une 3e page « Réponse du
+    locataire » (3 choix) — le formulaire officiel n'en a pas."""
+    from datetime import date
+
+    from app.services.tal_forms import TalContext, generate_tal_pdf
+
+    ctx = TalContext(
+        locateur_nom="9520-8955 Québec inc.",
+        locataire_nom="Philippe Meuser",
+        logement_adresse="9085, Avenue Millen",
+        logement_numero="1",
+        logement_ville="Montréal",
+        bail_date_debut=date(2026, 7, 1),
+        bail_date_fin=date(2027, 6, 30),
+        bail_loyer_mensuel=1400.0,
+        modif_mode="nouveau_loyer",
+        nouveau_loyer=1442.0,
+        nouvelle_date_debut=date(2027, 7, 1),
+        nouvelle_date_fin=date(2028, 6, 30),
+        date_emission=date(2026, 7, 31),
+    )
+    pdf = generate_tal_pdf("avis_modification", ctx)
+    assert _nb_pages(pdf) == 3  # 2 pages TAL + page réponse
+
+
+def test_estampillage_page_reponse():
+    """La réponse en ligne remplace la page vierge par la version
+    estampillée (X sur le choix, date, note d'horodatage) — le nombre
+    de pages ne change pas ; un vieil avis 2 pages la reçoit en plus."""
+    from app.services.tal_officiel import (
+        estampiller_page_reponse,
+        page_reponse_locataire,
+    )
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+
+    # PDF « avis » factice de 2 pages (comme un avis d'avant la v4).
+    w = PdfWriter()
+    p1 = PdfReader(io.BytesIO(page_reponse_locataire())).pages[0]
+    w.add_page(p1)
+    w.add_page(p1)
+    deux_pages = io.BytesIO()
+    w.write(deux_pages)
+
+    stamped = estampiller_page_reponse(
+        deux_pages.getvalue(),
+        locataire_nom="Philippe Meuser",
+        choix="refuse",
+        signature_png=None,
+        signe_le_txt="2026-07-31 14:02 EDT",
+        ip="203.0.113.7",
+    )
+    assert _nb_pages(stamped) == 3  # ajoutée (vieil avis sans page)
+
+    stamped2 = estampiller_page_reponse(
+        stamped,
+        locataire_nom="Philippe Meuser",
+        choix="accepte",
+        signature_png=None,
+        signe_le_txt="2026-07-31 14:05 EDT",
+        ip=None,
+    )
+    assert _nb_pages(stamped2) == 3  # remplacée (avis v4, 3 pages)
+
+
+def test_cycle_courant_v4():
+    """Un avis qui vise un renouvellement FUTUR est courant même si la
+    fin du bail est loin (fix « pas jaune » : bail reconduit jusqu'en
+    2028, avis envoyé aujourd'hui)."""
+    from datetime import date
+
+    from app.models.immobilier import BailRenouvellement
+    from app.services.bail_renouvellement import est_cycle_courant
+
+    today = date(2026, 7, 31)
+    r = BailRenouvellement(
+        bail_id=1,
+        avis_envoye_le=today,
+        nouvelle_date_debut=date(2028, 7, 1),
+        status="propose",
+    )
+    # Bail dont la fin est à ~700 jours : l'ancienne borne (fin − 200 j)
+    # l'excluait — il est bien COURANT.
+    assert est_cycle_courant(r, date(2028, 6, 30), today) is True
+
+    # Cycle accepté mais PAS ENCORE appliqué au bail : reste courant
+    # même après la date effective (l'application est lazy).
+    r2 = BailRenouvellement(
+        bail_id=1,
+        avis_envoye_le=date(2025, 3, 1),
+        nouvelle_date_debut=date(2025, 7, 1),
+        status="accepte",
+    )
+    assert est_cycle_courant(r2, date(2026, 6, 30), today) is True
+
+    # Une fois APPLIQUÉ, le cycle passé n'est plus courant — la ligne
+    # repart sur le suivi normal de la nouvelle période.
+    r2.applique_le = date(2025, 7, 1)
+    assert est_cycle_courant(r2, date(2026, 6, 30), today) is False
+
+    # Une reconduction tacite n'est jamais un avis courant.
+    r3 = BailRenouvellement(
+        bail_id=1,
+        avis_envoye_le=today,
+        nouvelle_date_debut=date(2027, 7, 1),
+        status="reconduit",
+    )
+    assert est_cycle_courant(r3, date(2027, 6, 30), today) is False

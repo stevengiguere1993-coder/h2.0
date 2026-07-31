@@ -19,6 +19,9 @@ type PublicDocument = {
   // Avis de modification du bail : refus possible en ligne (1 mois).
   refus_possible?: boolean;
   refuse_le?: string | null;
+  // v4 — avis de modification : la signature exige un choix.
+  choix_requis?: boolean;
+  choix?: string | null;
   company_name: string;
   company_email: string;
 };
@@ -37,6 +40,7 @@ export default function SignDocumentPage() {
   const [submitting, setSubmitting] = useState(false);
   const [refusMotif, setRefusMotif] = useState("");
   const [refusing, setRefusing] = useState(false);
+  const [choix, setChoix] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -76,7 +80,8 @@ export default function SignDocumentPage() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             name: signName.trim(),
-            signature_image_data_url: signatureDataUrl
+            signature_image_data_url: signatureDataUrl,
+            choix: choix || undefined
           })
         }
       );
@@ -180,7 +185,13 @@ export default function SignDocumentPage() {
             <div className="flex items-center gap-3">
               <CheckCircle2 className="h-6 w-6 text-emerald-300" />
               <div>
-                <p className="font-semibold text-white">Document signé</p>
+                <p className="font-semibold text-white">
+                  {data.choix === "refuse"
+                    ? "Réponse enregistrée — modifications refusées"
+                    : data.choix === "quitte"
+                      ? "Réponse enregistrée — départ à la fin du bail"
+                      : "Document signé"}
+                </p>
                 <p className="text-sm text-emerald-200">
                   Signé par {data.signed_by_name}
                   {data.signed_at
@@ -235,12 +246,49 @@ export default function SignDocumentPage() {
         {!isSigned && !data.refuse_le && signatureRequise ? (
           <section className="mt-6 rounded-xl border border-accent-500/40 bg-accent-500/10 p-6">
             <h2 className="text-base font-semibold text-white">
-              Signer le document
+              {data.choix_requis ? "Votre réponse" : "Signer le document"}
             </h2>
             <p className="mt-1 text-sm text-white/70">
-              En signant, vous confirmez avoir pris connaissance du document
-              ci-dessus.
+              {data.choix_requis
+                ? "Choisissez votre réponse (comme sur la dernière page du document), puis signez. Vous disposez d'un (1) mois après la réception de l'avis — sans réponse, vous serez réputé avoir accepté."
+                : "En signant, vous confirmez avoir pris connaissance du document ci-dessus."}
             </p>
+            {data.choix_requis ? (
+              <div className="mt-4 space-y-2">
+                {[
+                  {
+                    v: "accepte",
+                    t: "J'accepte le renouvellement du bail avec ses modifications."
+                  },
+                  {
+                    v: "quitte",
+                    t: "Je ne renouvelle pas mon bail et je quitterai le logement à la fin du bail."
+                  },
+                  {
+                    v: "refuse",
+                    t: "Je refuse les modifications proposées et je renouvelle mon bail."
+                  }
+                ].map((o) => (
+                  <label
+                    key={o.v}
+                    className={`flex cursor-pointer items-start gap-3 rounded-lg border px-4 py-3 text-sm transition ${
+                      choix === o.v
+                        ? "border-accent-500 bg-accent-500/10 text-white"
+                        : "border-brand-800 bg-brand-950 text-white/75 hover:border-brand-700"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="choix"
+                      checked={choix === o.v}
+                      onChange={() => setChoix(o.v)}
+                      className="mt-0.5 h-4 w-4 accent-[#d89b3c]"
+                    />
+                    {o.t}
+                  </label>
+                ))}
+              </div>
+            ) : null}
             <div className="mt-4">
               <label htmlFor="sign_name" className="text-xs text-white/70">
                 Nom complet (signature)
@@ -268,7 +316,11 @@ export default function SignDocumentPage() {
             <button
               type="button"
               onClick={signer}
-              disabled={submitting || !signName.trim()}
+              disabled={
+                submitting ||
+                !signName.trim() ||
+                (data.choix_requis ? !choix : false)
+              }
               className="mt-5 inline-flex items-center gap-2 rounded-lg bg-accent-500 px-5 py-3 text-sm font-bold text-brand-950 hover:bg-accent-400 disabled:opacity-60"
             >
               {submitting ? (
@@ -276,12 +328,17 @@ export default function SignDocumentPage() {
               ) : (
                 <CheckCircle2 className="h-4 w-4" />
               )}
-              Signer le document
+              {data.choix_requis
+                ? "Signer ma réponse"
+                : "Signer le document"}
             </button>
           </section>
         ) : null}
 
-        {!isSigned && !data.refuse_le && data.refus_possible ? (
+        {!isSigned &&
+        !data.refuse_le &&
+        data.refus_possible &&
+        !data.choix_requis ? (
           <section className="mt-6 rounded-xl border border-rose-500/30 bg-rose-500/5 p-6">
             <h2 className="text-base font-semibold text-white">
               Vous refusez la modification ?
