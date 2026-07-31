@@ -532,6 +532,16 @@ async def generate_bail_tal_pdf(
         raise HTTPException(status_code=404, detail="Bail introuvable.")
 
     ctx = await _build_ctx_from_bail(db, bail, payload)
+    # Overrides de la fiche de préparation (retour Phil 2026-07-31) :
+    # nom, adresse complète et loyer actuel modifiables.
+    if payload.locataire_nom:
+        ctx.locataire_nom = payload.locataire_nom
+    if payload.logement_adresse:
+        ctx.logement_adresse = payload.logement_adresse
+        ctx.logement_numero = None
+        ctx.logement_ville = None
+    if payload.loyer_actuel is not None:
+        ctx.bail_loyer_mensuel = float(payload.loyer_actuel)
     ov = await _template_override(db, form_type, with_blob=True)
     pdf_bytes = generate_tal_pdf(
         form_type,
@@ -599,8 +609,13 @@ async def envoyer_renouvellement(
         raise HTTPException(status_code=404, detail="Bail introuvable.")
 
     # Calcul du nouveau loyer selon le mode choisi — TOUJOURS arrondi
-    # au dollar supérieur (retour Phil 2026-07-30).
-    courant = float(bail.loyer_mensuel) if bail.loyer_mensuel else 0.0
+    # au dollar supérieur (retour Phil 2026-07-30). Le loyer actuel
+    # peut être corrigé depuis la fiche (retour Phil 2026-07-31).
+    courant = (
+        float(payload.loyer_actuel)
+        if payload.loyer_actuel is not None
+        else (float(bail.loyer_mensuel) if bail.loyer_mensuel else 0.0)
+    )
     nouveau = payload.nouveau_loyer
     if nouveau is None and payload.hausse_pct is not None:
         nouveau = courant * (1 + payload.hausse_pct / 100.0)
@@ -609,7 +624,7 @@ async def envoyer_renouvellement(
     if nouveau is not None:
         nouveau = arrondir_loyer(nouveau)
 
-    obj, sent, raison = await send_renouvellement_for_bail(
+    obj, sent, raison, expediteur = await send_renouvellement_for_bail(
         db,
         bail,
         nouveau_loyer=nouveau,
@@ -619,12 +634,16 @@ async def envoyer_renouvellement(
         force=payload.force,
         request_read_receipt=payload.request_read_receipt,
         bcc_to_sender=payload.bcc_to_sender,
+        locataire_nom=payload.locataire_nom,
+        logement_adresse=payload.logement_adresse,
+        loyer_actuel=payload.loyer_actuel,
     )
     await db.commit()
     return EnvoyerRenouvellementResult(
         renouvellement_id=obj.id,
         courriel_envoye=sent,
         erreur_envoi=None if sent else raison,
+        expediteur=expediteur,
         avis_envoye_le=obj.avis_envoye_le,
         nouveau_loyer=float(obj.nouveau_loyer) if obj.nouveau_loyer else None,
         nouvelle_date_debut=obj.nouvelle_date_debut,
@@ -768,7 +787,7 @@ class RenouvellementPatchIn(BaseModel):
     #: Réponse saisie à la MAIN (appel, papier) ou entente négociée.
     status: Optional[str] = Field(
         default=None,
-        pattern=r"^(propose|accepte|refuse|en_negociation)$",
+        pattern=r"^(propose|accepte|refuse|en_negociation|depart)$",
     )
     nouveau_loyer: Optional[float] = Field(default=None, ge=0)
     refus_motif: Optional[str] = Field(default=None, max_length=2000)
@@ -955,12 +974,11 @@ async def renouvellements_overview(
         # « Cycle courant » = même borne que l'idempotence d'envoi : un
         # avis d'un cycle PASSÉ ne compte plus (la ligne redevient « à
         # envoyer » quand la fenêtre suivante s'ouvre).
+        from app.services.bail_renouvellement import est_cycle_courant
+
         reconduit = last_ren is not None and last_ren.status == "reconduit"
-        courant = (
-            last_ren is not None
-            and not reconduit
-            and last_ren.avis_envoye_le
-            >= b.date_fin - timedelta(days=200)
+        courant = last_ren is not None and est_cycle_courant(
+            last_ren, b.date_fin, today
         )
         reponse = None
         deadline_reponse = None
@@ -1000,6 +1018,10 @@ async def renouvellements_overview(
                 reponse = "accepte"
             elif last_ren.status == "repute_accepte":
                 reponse = "repute_accepte"
+            elif last_ren.status == "depart":
+                # Le locataire a répondu « je quitterai à la fin du
+                # bail » — ouvrir un dossier de relocation.
+                reponse = "depart"
             else:  # propose / en_negociation
                 reponse = "attente"
 
@@ -1018,6 +1040,11 @@ async def renouvellements_overview(
                 bail_id=b.id,
                 immeuble_id=immeuble.id if immeuble else 0,
                 immeuble_name=immeuble.name if immeuble else "—",
+                immeuble_adresse=(
+                    f"{immeuble.address}, {immeuble.city}"
+                    if immeuble and immeuble.city
+                    else (immeuble.address if immeuble else None)
+                ),
                 logement_id=logement.id if logement else None,
                 logement_numero=logement.numero if logement else "—",
                 locataire_id=locataire.id if locataire else None,

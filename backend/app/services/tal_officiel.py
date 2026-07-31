@@ -396,6 +396,189 @@ def fill_official_pdf(
     return out.getvalue()
 
 
+#: Les 3 réponses possibles à un avis de modification (art. 1945
+#: C.c.Q.) — reproduites sur la page « Réponse du locataire » ajoutée
+#: au TAL-806 (le formulaire officiel n'a pas de section réponse).
+CHOIX_REPONSE = [
+    (
+        "accepte",
+        "J'accepte le renouvellement du bail avec ses modifications.",
+    ),
+    (
+        "quitte",
+        "Je ne renouvelle pas mon bail et je quitterai le logement à "
+        "la fin du bail.",
+    ),
+    (
+        "refuse",
+        "Je refuse les modifications proposées et je renouvelle mon "
+        "bail.",
+    ),
+]
+
+
+def page_reponse_locataire(
+    locataire_nom: Optional[str] = None,
+    choix: Optional[str] = None,
+    signature_png: Optional[bytes] = None,
+    signe_le_txt: Optional[str] = None,
+    ip: Optional[str] = None,
+) -> bytes:
+    """Page « Réponse du locataire » (reportlab, format lettre) —
+    VIERGE quand jointe à l'avis envoyé, ESTAMPILLÉE (X sur le choix,
+    signature, date, note d'horodatage) à la réponse en ligne. Le
+    locataire ne peut rien modifier d'autre : la page est une image
+    figée dans le PDF, pas un formulaire."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas as _rl_canvas
+
+    buf = io.BytesIO()
+    c = _rl_canvas.Canvas(buf, pagesize=letter)
+    w, h = letter
+    y = h - 80
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(60, y, "Réponse du locataire")
+    c.setDash(2, 3)
+    c.setLineWidth(0.8)
+    c.line(60, y - 8, w - 60, y - 8)
+    c.setDash()
+    y -= 55
+
+    for cle, texte in CHOIX_REPONSE:
+        cx, cy = 76, y + 4
+        c.setLineWidth(1.4)
+        c.setStrokeColorRGB(0.72, 0.12, 0.12)
+        c.circle(cx, cy, 10)
+        if choix == cle:
+            c.setFillColorRGB(0, 0, 0)
+            c.setFont("Helvetica-Bold", 12)
+            c.drawCentredString(cx, cy - 4, "X")
+        c.setFillColorRGB(0, 0, 0)
+        c.setFont("Helvetica", 11)
+        c.drawString(98, y, texte)
+        y -= 46
+
+    y -= 40
+    if signature_png:
+        try:
+            img = ImageReader(io.BytesIO(signature_png))
+            c.drawImage(
+                img,
+                235,
+                y - 6,
+                width=180,
+                height=54,
+                mask="auto",
+                preserveAspectRatio=True,
+                anchor="sw",
+            )
+        except Exception:  # noqa: BLE001 — la ligne signée reste valide
+            log.exception("Image de signature illisible — ignorée")
+    c.setStrokeColorRGB(0, 0, 0)
+    c.setLineWidth(0.8)
+    c.line(60, y - 10, 195, y - 10)
+    c.line(225, y - 10, 480, y - 10)
+    if signe_le_txt:
+        c.setFont("Helvetica", 10)
+        c.drawString(62, y - 4, signe_le_txt.split(" ")[0])
+    c.setFont("Helvetica", 8.5)
+    c.setFillColorRGB(0.4, 0.4, 0.4)
+    c.drawString(60, y - 22, "Date")
+    c.setFillColorRGB(0, 0, 0)
+    c.setFont("Helvetica", 10)
+    nom = (locataire_nom or "").strip()
+    c.drawString(225, y - 22, f"{nom} " if nom else "")
+    c.setFillColorRGB(0.4, 0.4, 0.4)
+    c.setFont("Helvetica", 8.5)
+    c.drawString(225 + (len(nom) * 5.2 if nom else 0), y - 22, "(Locataire)")
+
+    if signe_le_txt:
+        c.setFillColorRGB(0.38, 0.38, 0.38)
+        c.setFont("Helvetica", 7.5)
+        c.drawString(
+            60,
+            64,
+            f"Réponse signée électroniquement le {signe_le_txt}"
+            + (f" — adresse IP {ip}" if ip else ""),
+        )
+        c.drawString(
+            60,
+            54,
+            "Transmise au locataire par courriel avec suivi d'envoi, "
+            "d'ouverture et de signature (Kratos / Horizon Services "
+            "Immobiliers).",
+        )
+        c.drawString(
+            60,
+            44,
+            "Signature électronique au sens de la Loi concernant le cadre "
+            "juridique des technologies de l'information (RLRQ, c. C-1.1) "
+            "et de l'art. 2827 C.c.Q.",
+        )
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def ajouter_page_reponse(
+    pdf_bytes: bytes, locataire_nom: Optional[str] = None
+) -> bytes:
+    """Ajoute la page « Réponse du locataire » VIERGE à la fin de
+    l'avis TAL-806 (le formulaire officiel n'en a pas)."""
+    from pypdf import PdfReader, PdfWriter
+
+    page = page_reponse_locataire(locataire_nom=locataire_nom)
+    writer = PdfWriter()
+    writer.append(PdfReader(io.BytesIO(pdf_bytes)))
+    writer.append(PdfReader(io.BytesIO(page)))
+    try:
+        writer.set_need_appearances_writer(True)
+    except Exception:  # noqa: BLE001 — selon la version de pypdf
+        pass
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def estampiller_page_reponse(
+    pdf_bytes: bytes,
+    locataire_nom: Optional[str],
+    choix: str,
+    signature_png: Optional[bytes],
+    signe_le_txt: str,
+    ip: Optional[str],
+) -> bytes:
+    """Remplace la page réponse VIERGE (dernière page, si l'avis en a
+    une — ≥ 3 pages) par la version ESTAMPILLÉE : X sur le choix,
+    signature, date, note d'horodatage. Un avis généré avant la v4
+    (2 pages) reçoit simplement la page signée en plus."""
+    from pypdf import PdfReader, PdfWriter
+
+    page = page_reponse_locataire(
+        locataire_nom=locataire_nom,
+        choix=choix,
+        signature_png=signature_png,
+        signe_le_txt=signe_le_txt,
+        ip=ip,
+    )
+    src = PdfReader(io.BytesIO(pdf_bytes))
+    n = len(src.pages)
+    writer = PdfWriter()
+    if n >= 3:
+        writer.append(src, pages=(0, n - 1))
+    else:
+        writer.append(src)
+    writer.append(PdfReader(io.BytesIO(page)))
+    try:
+        writer.set_need_appearances_writer(True)
+    except Exception:  # noqa: BLE001
+        pass
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
 def validate_template(form_type: str, pdf_bytes: bytes) -> list[str]:
     """Champs requis MANQUANTS dans un PDF modèle de remplacement
     (liste vide = compatible)."""
