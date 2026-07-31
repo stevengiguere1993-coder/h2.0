@@ -212,15 +212,23 @@ function AssurancesTab() {
     }
   }
 
-  const rows = (data?.rows || []).filter((r) => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return true;
-    return `${r.locataire_nom} ${r.immeuble_name || ""} ${
-      r.logement_numero || ""
-    }`
-      .toLowerCase()
-      .includes(needle);
-  });
+  const rows = (data?.rows || [])
+    .filter((r) => {
+      const needle = q.trim().toLowerCase();
+      if (!needle) return true;
+      return `${r.locataire_nom} ${r.immeuble_name || ""} ${
+        r.logement_numero || ""
+      }`
+        .toLowerCase()
+        .includes(needle);
+    })
+    // Ordre (retour Phil 2026-07-31) : à demander (gris) → demande
+    // envoyée (jaunes) → confirmées (vertes). Tri stable.
+    .sort((a, b) => {
+      const rang = (r: AssuranceRow) =>
+        r.statut === "ok" ? 2 : demandeEnCours(r) ? 1 : 0;
+      return rang(a) - rang(b);
+    });
 
   return (
     <div className="mt-4">
@@ -1852,7 +1860,24 @@ function Releves31Tab() {
   }
 
   async function envoyer(row: Releve31Row) {
-    if (!row.document_id) return;
+    // Toujours cliquable : chaque prérequis manquant est EXPLIQUÉ au
+    // clic (un bouton pâle muet = « rien ne se passe », retour Phil).
+    if (!(row.numero_releve || "").trim()) {
+      setErr(
+        "Colle d'abord le numéro du relevé (émis par Revenu Québec) — l'envoi est bloqué sans numéro."
+      );
+      return;
+    }
+    if (!row.document_id) {
+      setErr(
+        "Importe d'abord la copie PDF du relevé (petit bouton d'import à droite de la ligne)."
+      );
+      return;
+    }
+    if (!(row.locataire_email || "").trim()) {
+      setErr("Ajoute d'abord le courriel du locataire (dans sa fiche).");
+      return;
+    }
     if (
       !window.confirm(
         `Envoyer le Relevé 31 ${row.annee} à ${row.locataire_nom || "ce locataire"} par courriel (PDF joint + lien de consultation) ?`
@@ -1944,12 +1969,11 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
       }
       return true;
     })
-    // Retour Phil v4 : les relevés traités (produit / remis) descendent
-    // en bas de la liste, « à produire » reste en haut. Ordre backend
-    // conservé dans chaque groupe (tri stable).
+    // Retour Phil 2026-07-31 : seuls les relevés REMIS descendent en
+    // bas (verts) ; « à produire » et « produit » (numéro collé mais
+    // envoi à faire) restent en haut. Tri stable.
     .sort(
-      (a, b) =>
-        Number(a.statut !== "a_produire") - Number(b.statut !== "a_produire")
+      (a, b) => Number(a.statut === "remis") - Number(b.statut === "remis")
     );
 
   return (
@@ -2091,11 +2115,14 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
                 const st = R31_STATUT[r.statut] || R31_STATUT.a_produire;
                 const busy = busyId === r.logement_id;
                 const traite = r.statut !== "a_produire";
+                // Vert = REMIS seulement (envoyé au locataire) — coller
+                // un numéro ne suffit pas (retour Phil 2026-07-31).
+                const remis = r.statut === "remis";
                 return (
                   <tr
                     key={r.logement_id}
                     className={
-                      traite
+                      remis
                         ? "bg-emerald-500/10 hover:bg-emerald-500/15"
                         : "hover:bg-brand-950/50"
                     }
@@ -2186,6 +2213,16 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
                         <button
                           type="button"
                           disabled={busy}
+                          onClick={() => void envoyer(r)}
+                          className="btn-accent btn-xs disabled:opacity-40"
+                          title="Envoyer la copie au locataire (PDF joint + lien suivi) — numéro de relevé obligatoire"
+                        >
+                          <Mail className="h-3 w-3" />
+                          {r.statut === "remis" ? "Renvoyer" : "Envoyer"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
                           onClick={() => {
                             if (
                               r.document_id &&
@@ -2199,11 +2236,11 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
                             uploadFor.current = r;
                             fileRef.current?.click();
                           }}
-                          className="btn-secondary btn-xs"
+                          className="rounded-lg border border-brand-700 bg-brand-900 p-1.5 text-white/70 transition hover:bg-brand-800 disabled:opacity-50"
                           title={
                             r.document_id
                               ? "Remplacer le relevé courant — l'ancien reste dans les Documents"
-                              : "Téléverser la copie PDF du relevé (émise par Revenu Québec)"
+                              : "Importer la copie PDF du relevé (émise par Revenu Québec)"
                           }
                         >
                           {busy ? (
@@ -2211,30 +2248,6 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
                           ) : (
                             <Upload className="h-3 w-3" />
                           )}
-                          {r.document_id ? "Remplacer" : "Importer"}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={
-                            busy ||
-                            !r.document_id ||
-                            !r.locataire_email ||
-                            !(r.numero_releve || "").trim()
-                          }
-                          onClick={() => void envoyer(r)}
-                          className="btn-accent btn-xs disabled:opacity-40"
-                          title={
-                            !r.document_id
-                              ? "Téléverse d'abord la copie PDF du relevé"
-                              : !(r.numero_releve || "").trim()
-                                ? "Colle d'abord le numéro du relevé (émis par Revenu Québec)"
-                                : !r.locataire_email
-                                  ? "Ajoute d'abord le courriel du locataire"
-                                  : "Envoyer la copie au locataire (PDF joint + lien de consultation suivi)"
-                          }
-                        >
-                          <Mail className="h-3 w-3" />
-                          {r.statut === "remis" ? "Renvoyer" : "Envoyer"}
                         </button>
                         {traite ? (
                           <button

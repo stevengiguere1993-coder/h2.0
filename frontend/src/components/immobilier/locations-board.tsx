@@ -34,7 +34,6 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import {
-  BailSignature,
   TalFormDropdown
 } from "@/components/immobilier/tal-avis";
 
@@ -82,6 +81,8 @@ type Dossier = {
   depot_sortant: number | null;
   depot_sortant_rendu_le: string | null;
   nouveau_bail_id: number | null;
+  nouveau_locataire_id: number | null;
+  gestion_externe?: boolean;
   annonces: Annonce[];
   visites: Visite[];
 };
@@ -99,7 +100,8 @@ const COLUMNS: Array<{ id: string; label: string; dot: string }> = [
   { id: "annonce_publiee", label: "Annonce publiée", dot: "bg-sky-400" },
   { id: "visites", label: "Visite prévue", dot: "bg-violet-400" },
   { id: "candidat_retenu", label: "Candidat retenu", dot: "bg-blue-400" },
-  { id: "bail_envoye", label: "Bail envoyé — à signer", dot: "bg-teal-400" },
+  { id: "bail_a_envoyer", label: "Bail à envoyer", dot: "bg-orange-400" },
+  { id: "bail_envoye", label: "Bail envoyé — à signer", dot: "bg-fuchsia-400" },
   { id: "reloue", label: "Reloué", dot: "bg-emerald-400" }
 ];
 
@@ -108,6 +110,7 @@ const STATUTS_ACTIFS = [
   "annonce_publiee",
   "visites",
   "candidat_retenu",
+  "bail_a_envoyer",
   "bail_envoye"
 ];
 
@@ -169,6 +172,8 @@ export function LocationsBoard({
   const [err, setErr] = useState<string | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [showPickBail, setShowPickBail] = useState(false);
+  const [importBailFor, setImportBailFor] = useState<Dossier | null>(null);
   const [showHistorique, setShowHistorique] = useState(false);
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
@@ -299,8 +304,16 @@ export function LocationsBoard({
         ) : null}
         <button
           type="button"
+          onClick={() => setShowPickBail(true)}
+          className="btn-secondary btn-sm ml-auto"
+          title="Choisis une unité du kanban : sa fiche s'ouvre pour créer le locataire (le bail se fait via la CORPIQ)"
+        >
+          <FileSignature className="h-3.5 w-3.5" /> Créer un nouveau bail
+        </button>
+        <button
+          type="button"
           onClick={() => setShowCreate(true)}
-          className="btn-outline-accent btn-sm ml-auto"
+          className="btn-outline-accent btn-sm"
         >
           <Plus className="h-3.5 w-3.5" /> Nouvelle relocation
         </button>
@@ -337,8 +350,13 @@ export function LocationsBoard({
                   const id = Number(e.dataTransfer.getData("text/plain"));
                   if (!Number.isFinite(id) || id <= 0) return;
                   const d = rows.find((r) => r.id === id);
-                  if (d && d.statut !== col.id)
-                    void patchDossier(id, { statut: col.id });
+                  if (!d || d.statut === col.id) return;
+                  // Reloué = bail signé (CORPIQ) importé OBLIGATOIRE.
+                  if (col.id === "reloue" && d.nouveau_bail_id) {
+                    setImportBailFor(d);
+                    return;
+                  }
+                  void patchDossier(id, { statut: col.id });
                 }}
                 className={`flex w-72 min-w-[288px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 transition ${
                   dragOverCol === col.id
@@ -374,13 +392,6 @@ export function LocationsBoard({
           })}
         </div>
       )}
-
-      {/* Suivi des baux envoyés (issus des conversions) */}
-      <BauxEnvoyesSection
-        immeubleId={immeubleId}
-        overview={data}
-        onMutated={() => void load()}
-      />
 
       {/* Annulés (repliés) */}
       {annules.length > 0 ? (
@@ -421,6 +432,28 @@ export function LocationsBoard({
           onError={setErr}
           onDeleted={() => {
             setOpenId(null);
+            void load();
+          }}
+        />
+      ) : null}
+
+      {showPickBail ? (
+        <PickDossierPourBailModal
+          rows={rows}
+          onClose={() => setShowPickBail(false)}
+          onPick={(id) => {
+            setShowPickBail(false);
+            setOpenId(id);
+          }}
+        />
+      ) : null}
+
+      {importBailFor ? (
+        <ImportBailSigneModal
+          d={importBailFor}
+          onClose={() => setImportBailFor(null)}
+          onDone={() => {
+            setImportBailFor(null);
             void load();
           }}
         />
@@ -779,8 +812,10 @@ function DossierModal({
           </div>
         ) : null}
 
-        {/* Conversion candidat retenu → locataire + bail */}
-        {d.statut !== "reloue" && d.statut !== "annule" ? (
+        {/* Conversion candidat retenu → locataire + bail (CORPIQ) */}
+        {d.nouveau_bail_id == null &&
+        d.statut !== "reloue" &&
+        d.statut !== "annule" ? (
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
             <FileSignature className="h-3.5 w-3.5" />
             {retenu ? (
@@ -799,13 +834,41 @@ function DossierModal({
               Créer le locataire + bail
             </button>
           </div>
+        ) : d.nouveau_bail_id != null && d.statut !== "reloue" ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-orange-400/30 bg-orange-500/10 px-3 py-2 text-xs text-orange-200">
+            <FileSignature className="h-3.5 w-3.5" />
+            Locataire créé — prépare le bail dans la CORPIQ, puis
+            glisse la carte : « Bail à envoyer » → « Bail envoyé » →
+            « Reloué » (import du bail signé obligatoire).
+            {d.nouveau_locataire_id != null ? (
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={
+                  `/immobilier/locataires/${d.nouveau_locataire_id}` as any
+                }
+                className="ml-auto font-semibold underline-offset-2 hover:underline"
+              >
+                Fiche du locataire →
+              </Link>
+            ) : null}
+            <DesistementButton d={d} onDone={onMutated} />
+          </div>
         ) : d.statut === "reloue" && d.nouveau_bail_id ? (
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
-            <Check className="h-3.5 w-3.5" /> Reloué — bail créé.
-            {/* Interconnexion (retour Phil) : générer la trousse/les avis
-                et envoyer pour signature SANS quitter le dossier. */}
+            <Check className="h-3.5 w-3.5" /> Reloué — bail au dossier.
             <TalFormDropdown bailId={d.nouveau_bail_id} />
-            <BailSignature bailId={d.nouveau_bail_id} />
+            {d.nouveau_locataire_id != null ? (
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={
+                  `/immobilier/locataires/${d.nouveau_locataire_id}` as any
+                }
+                className="underline-offset-2 hover:underline"
+              >
+                Fiche du locataire →
+              </Link>
+            ) : null}
+            <DesistementButton d={d} onDone={onMutated} />
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={
@@ -1335,9 +1398,9 @@ function ConvertModal({
   const [phone, setPhone] = useState(prefillPhone);
   const [dateNaissance, setDateNaissance] = useState("");
   const [nas, setNas] = useState("");
+  const [ancienneAdresse, setAncienneAdresse] = useState("");
   const [employeur, setEmployeur] = useState("");
   const [revenu, setRevenu] = useState("");
-  const [envoyerBail, setEnvoyerBail] = useState(Boolean(prefillEmail));
   const [debut, setDebut] = useState(defaultDebut);
   const [fin, setFin] = useState(addMonthsIso(defaultDebut, 12));
   const [loyer, setLoyer] = useState(
@@ -1350,8 +1413,6 @@ function ConvertModal({
     locataire_id: number;
     bail_id: number;
     immeuble_id: number;
-    bail_envoye?: boolean;
-    erreur_envoi?: string | null;
   } | null>(null);
 
   async function submit() {
@@ -1368,13 +1429,13 @@ function ConvertModal({
             locataire_phone: phone.trim() || null,
             date_naissance: dateNaissance || null,
             nas_last4: nas.trim() || null,
+            ancienne_adresse: ancienneAdresse.trim() || null,
             employeur: employeur.trim() || null,
             revenu_annuel: revenu.trim() ? Number(revenu) : null,
             date_debut: debut,
             date_fin: fin,
             loyer_mensuel: Number(loyer),
-            depot_garantie: depot.trim() ? Number(depot) : null,
-            envoyer_bail: envoyerBail
+            depot_garantie: depot.trim() ? Number(depot) : null
           })
         }
       );
@@ -1387,8 +1448,6 @@ function ConvertModal({
           locataire_id: number;
           bail_id: number;
           immeuble_id: number;
-          bail_envoye?: boolean;
-          erreur_envoi?: string | null;
         }
       );
     } catch (e) {
@@ -1417,25 +1476,12 @@ function ConvertModal({
             <p className="flex items-center gap-2 font-semibold text-emerald-300">
               <Check className="h-4 w-4" /> Locataire et bail créés.
             </p>
-            {done.bail_envoye ? (
-              <p className="rounded-lg border border-teal-400/30 bg-teal-500/10 px-3 py-2 text-xs text-teal-200">
-                Bail envoyé pour signature — la carte passe à « Bail
-                envoyé — à signer » et le dossier deviendra « Reloué »
-                automatiquement quand le locataire aura signé.
-              </p>
-            ) : done.erreur_envoi ? (
-              <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-                L&apos;envoi du bail a échoué : {done.erreur_envoi} — tu
-                peux le renvoyer depuis la section « Baux envoyés » sous
-                le kanban.
-              </p>
-            ) : (
-              <p className="text-xs text-white/55">
-                Le bail est en statut « proposé » : envoie-le pour
-                signature depuis la section « Baux envoyés » sous le
-                kanban.
-              </p>
-            )}
+            <p className="rounded-lg border border-orange-400/30 bg-orange-500/10 px-3 py-2 text-xs text-orange-200">
+              La carte passe à « Bail à envoyer » : prépare et envoie
+              le bail via la CORPIQ, glisse la carte à « Bail
+              envoyé », puis importe le bail signé pour passer à
+              « Reloué ».
+            </p>
             <div className="flex flex-col gap-1.5 text-xs">
               <Link
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1443,15 +1489,6 @@ function ConvertModal({
                 className="text-accent-500 hover:underline"
               >
                 Fiche du locataire →
-              </Link>
-              <Link
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={
-                  `/immobilier/immeubles/${done.immeuble_id}?tab=baux&bail=${done.bail_id}` as any
-                }
-                className="text-accent-500 hover:underline"
-              >
-                Voir le bail (surligné) →
               </Link>
             </div>
             <div className="flex justify-end border-t border-brand-800 pt-3">
@@ -1499,7 +1536,7 @@ function ConvertModal({
             </div>
             <div className="grid grid-cols-2 gap-3">
               <label className="text-[11px] font-semibold text-white/60">
-                Date de naissance
+                Date de naissance *
                 <input
                   type="date"
                   value={dateNaissance}
@@ -1521,6 +1558,15 @@ function ConvertModal({
                 />
               </label>
             </div>
+            <label className="text-[11px] font-semibold text-white/60">
+              Ancienne adresse
+              <input
+                value={ancienneAdresse}
+                onChange={(e) => setAncienneAdresse(e.target.value)}
+                placeholder="Adresse actuelle du candidat (avant le déménagement)"
+                className={`${INPUT_CLS} mt-0.5 block w-full`}
+              />
+            </label>
             <div className="grid grid-cols-2 gap-3">
               <label className="text-[11px] font-semibold text-white/60">
                 Employeur
@@ -1587,24 +1633,6 @@ function ConvertModal({
                 />
               </label>
             </div>
-            <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-teal-400/30 bg-teal-500/10 px-3 py-2 text-xs text-teal-200">
-              <input
-                type="checkbox"
-                checked={envoyerBail}
-                onChange={(e) => setEnvoyerBail(e.target.checked)}
-                className="mt-0.5 h-3.5 w-3.5 accent-teal-400"
-              />
-              <span>
-                Envoyer le bail pour signature dès la création (courriel
-                au locataire — la carte passe à « Bail envoyé — à
-                signer »).
-                {envoyerBail && !email.trim() ? (
-                  <span className="block font-semibold text-rose-300">
-                    Courriel du locataire requis pour l&apos;envoi.
-                  </span>
-                ) : null}
-              </span>
-            </label>
             {err ? (
               <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
                 {err}
@@ -1623,11 +1651,11 @@ function ConvertModal({
                 disabled={
                   saving ||
                   !nom.trim() ||
+                  !dateNaissance ||
                   !debut ||
                   !fin ||
                   loyer.trim() === "" ||
-                  Number.isNaN(Number(loyer)) ||
-                  (envoyerBail && !email.trim())
+                  Number.isNaN(Number(loyer))
                 }
                 onClick={() => void submit()}
                 className="btn-accent btn-sm disabled:opacity-60"
@@ -1647,172 +1675,254 @@ function ConvertModal({
   );
 }
 
-// ─── Suivi des baux envoyés (sous le kanban) ────────────────────────────
+// ─── Bail : choix d'unité, import du bail signé, désistement ────────────
 
-type BailEnvoyeRow = {
-  dossier_id: number;
-  dossier_statut: string;
-  bail_id: number;
-  locataire_id: number | null;
-  locataire_nom: string | null;
-  immeuble_id: number;
-  immeuble_name: string;
-  logement_numero: string;
-  loyer_mensuel: number;
-  date_debut: string;
-  date_fin: string;
-  sent_to_email: string | null;
-  sent_at: string | null;
-  signature_opened_at: string | null;
-  signed_at: string | null;
-};
-
-function BauxEnvoyesSection({
-  immeubleId,
-  overview,
-  onMutated
+function PickDossierPourBailModal({
+  rows,
+  onClose,
+  onPick
 }: {
-  immeubleId?: number;
-  overview: Overview | null;
-  onMutated: () => void;
+  rows: Dossier[];
+  onClose: () => void;
+  onPick: (id: number) => void;
 }) {
-  const [rows, setRows] = useState<BailEnvoyeRow[]>([]);
-  const [busyId, setBusyId] = useState<number | null>(null);
+  // Unités éligibles : dossiers actifs SANS bail créé, immeubles gérés
+  // par nous (pas de bail Kratos pour la gestion externe).
+  const eligibles = rows.filter(
+    (d) =>
+      d.nouveau_bail_id == null &&
+      !d.gestion_externe &&
+      d.statut !== "bail_envoye" &&
+      d.statut !== "reloue" &&
+      d.statut !== "annule"
+  );
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="my-8 w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
+            Créer un nouveau bail
+          </h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="p-5">
+          <p className="mb-3 text-xs text-white/55">
+            Choisis l&apos;unité : sa fiche de relocation s&apos;ouvre —
+            crée le locataire depuis le candidat retenu, puis le bail se
+            prépare dans le système de la CORPIQ.
+          </p>
+          {eligibles.length === 0 ? (
+            <p className="rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-xs text-white/50">
+              Aucune unité éligible — les dossiers avec un bail déjà
+              créé, reloués ou en gestion externe sont exclus.
+            </p>
+          ) : (
+            <ul className="divide-y divide-brand-800/60 overflow-hidden rounded-xl border border-brand-800">
+              {eligibles.map((d) => (
+                <li key={d.id}>
+                  <button
+                    type="button"
+                    onClick={() => onPick(d.id)}
+                    className="flex w-full items-center justify-between gap-3 bg-brand-900/60 px-3 py-2.5 text-left text-sm text-white transition hover:bg-brand-900"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-semibold">
+                        {d.immeuble_name} · Log. {d.logement_numero}
+                      </span>
+                      <span className="text-xs text-white/50">
+                        {STATUT_LABEL[d.statut] || d.statut}
+                        {d.loyer_demande != null
+                          ? ` · ${money(d.loyer_demande)}/mois demandé`
+                          : ""}
+                      </span>
+                    </span>
+                    <ChevronRight className="h-4 w-4 flex-shrink-0 text-white/40" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImportBailSigneModal({
+  d,
+  onClose,
+  onDone
+}: {
+  d: Dossier;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [dateEntree, setDateEntree] = useState("");
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const params = new URLSearchParams();
-      if (immeubleId != null) params.set("immeuble_id", String(immeubleId));
-      const r = await authedFetch(
-        `/api/v1/immobilier/locations-baux-envoyes?${params.toString()}`
-      );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setRows((await r.json()) as BailEnvoyeRow[]);
-    } catch (e) {
-      setErr((e as Error).message);
-    }
-  }, [immeubleId]);
-
-  // Recharge quand le kanban se rafraîchit (nouvelle référence overview).
-  useEffect(() => {
-    void load();
-  }, [load, overview]);
-
-  async function envoyer(row: BailEnvoyeRow) {
-    const qui = row.locataire_nom || "ce locataire";
-    const msg = row.sent_at
-      ? `Renvoyer le bail à ${row.sent_to_email || qui} ?`
-      : `Envoyer le bail à ${qui} pour signature en ligne ?`;
-    if (!window.confirm(msg)) return;
-    setBusyId(row.dossier_id);
+  async function importer() {
+    if (!file || !d.nouveau_bail_id) return;
+    setBusy(true);
     setErr(null);
     try {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (dateEntree) fd.append("date_entree", dateEntree);
       const r = await authedFetch(
-        `/api/v1/immobilier/locations/${row.dossier_id}/envoyer-bail`,
-        { method: "POST", body: JSON.stringify({}) }
+        `/api/v1/immobilier/baux/${d.nouveau_bail_id}/document`,
+        { method: "POST", body: fd }
       );
       if (!r.ok) {
         const t = await r.text();
         throw new Error(t.slice(0, 240) || `HTTP ${r.status}`);
       }
-      await load();
-      onMutated();
+      onDone();
     } catch (e) {
       setErr((e as Error).message);
     } finally {
-      setBusyId(null);
+      setBusy(false);
     }
   }
 
-  if (rows.length === 0 && !err) return null;
-
   return (
-    <div className="rounded-xl border border-brand-800 bg-brand-900/60">
-      <div className="flex items-center gap-2 border-b border-brand-800 px-4 py-3">
-        <FileSignature className="h-4 w-4 text-teal-300" />
-        <h3 className="text-sm font-semibold text-white">
-          Baux envoyés — suivi des signatures
-        </h3>
-        <span className="badge badge-neutral">{rows.length}</span>
-      </div>
-      {err ? <p className="px-4 py-2 text-xs text-rose-300">{err}</p> : null}
-      <div className="divide-y divide-brand-800/60">
-        {rows.map((row) => {
-          const statut = row.signed_at
-            ? {
-                cls: "badge badge-emerald",
-                txt: `Signé le ${fmtDateTime(row.signed_at)}`
-              }
-            : row.signature_opened_at
-              ? {
-                  cls: "badge badge-sky",
-                  txt: `Ouvert le ${fmtDateTime(row.signature_opened_at)} — pas signé`
-                }
-              : row.sent_at
-                ? {
-                    cls: "badge badge-amber",
-                    txt: `Envoyé le ${fmtDateTime(row.sent_at)} — jamais ouvert`
-                  }
-                : { cls: "badge badge-neutral", txt: "À envoyer" };
-          return (
-            <div
-              key={row.dossier_id}
-              className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
+    <div
+      className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="my-8 w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-emerald-300">
+            Importer le bail signé
+          </h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="grid gap-3 p-5">
+          <p className="rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
+            Le bail signé (CORPIQ) est obligatoire pour passer à
+            « Reloué » : il devient le bail au dossier — visible dans
+            les Documents et les boutons Bail — et l&apos;appartement
+            est considéré loué par ce locataire.
+          </p>
+          <label className="text-[11px] font-semibold text-white/60">
+            Bail signé (PDF)
+            <input
+              type="file"
+              accept="application/pdf"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="mt-0.5 block w-full text-xs text-white/70 file:mr-2 file:rounded-md file:border-0 file:bg-brand-800 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-white"
+            />
+          </label>
+          <label className="text-[11px] font-semibold text-white/60">
+            Date d&apos;entrée en vigueur (optionnel)
+            <input
+              type="date"
+              value={dateEntree}
+              onChange={(e) => setDateEntree(e.target.value)}
+              className={`${INPUT_CLS} mt-0.5 block w-full`}
+            />
+          </label>
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              {err}
+            </p>
+          ) : null}
+          <div className="flex justify-end gap-2 border-t border-brand-800 pt-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="btn-secondary btn-sm"
             >
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-white">
-                  {row.locataire_nom || "Locataire"}
-                  <span className="ml-2 font-normal text-white/50">
-                    {immeubleId == null ? `${row.immeuble_name} · ` : ""}
-                    Log. {row.logement_numero}
-                  </span>
-                </p>
-                <p className="mt-0.5 text-xs text-white/55">
-                  {money(row.loyer_mensuel)}/mois · du {fmtDate(row.date_debut)}{" "}
-                  au {fmtDate(row.date_fin)}
-                  {row.sent_to_email ? ` · ${row.sent_to_email}` : ""}
-                </p>
-              </div>
-              <span className={statut.cls}>{statut.txt}</span>
-              <div className="flex items-center gap-1.5">
-                {!row.signed_at ? (
-                  <button
-                    type="button"
-                    disabled={busyId === row.dossier_id}
-                    onClick={() => void envoyer(row)}
-                    className="btn-secondary btn-xs"
-                  >
-                    {busyId === row.dossier_id ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : null}
-                    {row.sent_at ? "Renvoyer" : "Envoyer"}
-                  </button>
-                ) : null}
-                {row.locataire_id != null ? (
-                  <Link
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    href={`/immobilier/locataires/${row.locataire_id}` as any}
-                    className="btn-ghost btn-xs"
-                  >
-                    Fiche
-                  </Link>
-                ) : null}
-                <Link
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  href={
-                    `/immobilier/immeubles/${row.immeuble_id}?tab=baux&bail=${row.bail_id}` as any
-                  }
-                  className="btn-ghost btn-xs"
-                >
-                  Bail
-                </Link>
-              </div>
-            </div>
-          );
-        })}
+              Annuler
+            </button>
+            <button
+              type="button"
+              disabled={busy || !file}
+              onClick={() => void importer()}
+              className="btn-accent btn-sm disabled:opacity-60"
+            >
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <FileSignature className="h-4 w-4" />
+              )}
+              Importer — passe à « Reloué »
+            </button>
+          </div>
+        </div>
       </div>
     </div>
+  );
+}
+
+function DesistementButton({
+  d,
+  onDone
+}: {
+  d: Dossier;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function desister() {
+    if (
+      !window.confirm(
+        "Désistement du candidat ?\n\nLe locataire créé et son bail seront SUPPRIMÉS, le dossier reviendra à « Départ confirmé » et le logement reprendra son vrai statut."
+      )
+    )
+      return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/locations/${d.id}/desistement`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${r.status}`);
+      }
+      onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void desister()}
+        title="Le candidat se désiste : supprime le locataire créé et son bail, retour à « Départ confirmé »"
+        className="rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] font-semibold text-rose-300 transition hover:bg-rose-500/20 disabled:opacity-50"
+      >
+        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+        Désistement
+      </button>
+      {err ? (
+        <span className="text-[10px] text-rose-300" title={err}>
+          {err.slice(0, 80)}
+        </span>
+      ) : null}
+    </>
   );
 }
 

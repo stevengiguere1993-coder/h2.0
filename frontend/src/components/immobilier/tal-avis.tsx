@@ -1673,6 +1673,7 @@ export function BailDocActions({
   bailId,
   hasDoc,
   signedAt,
+  allowImportInitial = true,
   onChanged
 }: {
   bailId: number;
@@ -1680,6 +1681,9 @@ export function BailDocActions({
   hasDoc: boolean;
   /** Bail signé en ligne (le PDF régénéré sert de repli). */
   signedAt?: string | null;
+  /** false = pas d'import INITIAL ici (remplacer / voir seulement) —
+   *  le bail initial s'importe depuis le kanban Locations. */
+  allowImportInitial?: boolean;
   onChanged?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -1777,11 +1781,13 @@ export function BailDocActions({
           Bail
         </button>
       ) : null}
-      <ImportDocButton
-        label={hasDoc ? "Remplacer" : "Importer le bail"}
-        busy={busy}
-        onPick={demanderDate}
-      />
+      {hasDoc || allowImportInitial ? (
+        <ImportDocButton
+          label={hasDoc ? "Remplacer" : "Importer le bail"}
+          busy={busy}
+          onPick={demanderDate}
+        />
+      ) : null}
       {err ? (
         <span className="text-[10px] text-rose-300" title={err}>
           {err.slice(0, 60)}

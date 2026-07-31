@@ -45,6 +45,7 @@ type Locataire = {
   phone?: string | null;
   nas_last4?: string | null;
   date_naissance?: string | null;
+  ancienne_adresse?: string | null;
   employeur?: string | null;
   revenu_annuel?: number | null;
   paiement_score?: number | null;
@@ -202,6 +203,7 @@ type IdentityForm = {
   email: string;
   phone: string;
   date_naissance: string;
+  ancienne_adresse: string;
   employeur: string;
   revenu_annuel: string;
   nas_last4: string;
@@ -365,6 +367,7 @@ export default function LocataireDetailPage({
     email: "",
     phone: "",
     date_naissance: "",
+    ancienne_adresse: "",
     employeur: "",
     revenu_annuel: "",
     nas_last4: ""
@@ -455,6 +458,7 @@ export default function LocataireDetailPage({
       email: loc.email ?? "",
       phone: loc.phone ?? "",
       date_naissance: loc.date_naissance ?? "",
+      ancienne_adresse: loc.ancienne_adresse ?? "",
       employeur: loc.employeur ?? "",
       revenu_annuel:
         loc.revenu_annuel != null ? String(loc.revenu_annuel) : "",
@@ -479,6 +483,7 @@ export default function LocataireDetailPage({
         email: form.email.trim() || null,
         phone: form.phone.trim() || null,
         date_naissance: form.date_naissance || null,
+        ancienne_adresse: form.ancienne_adresse.trim() || null,
         employeur: form.employeur.trim() || null,
         revenu_annuel: form.revenu_annuel.trim()
           ? Number(form.revenu_annuel)
@@ -785,6 +790,18 @@ export default function LocataireDetailPage({
                     </div>
                     <div className="flex flex-col gap-1">
                       <label className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+                        Ancienne adresse
+                      </label>
+                      <input
+                        value={form.ancienne_adresse}
+                        onChange={(e) =>
+                          setField("ancienne_adresse", e.target.value)
+                        }
+                        className={INPUT_CLS}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-medium uppercase tracking-wider text-white/50">
                         Employeur
                       </label>
                       <input
@@ -858,6 +875,10 @@ export default function LocataireDetailPage({
                       lecture — ils n'étaient que dans l'en-tête). */}
                   <Row label="Courriel" value={loc.email || "—"} />
                   <Row label="Téléphone" value={loc.phone || "—"} />
+                  <Row
+                    label="Ancienne adresse"
+                    value={loc.ancienne_adresse || "—"}
+                  />
                   <Row label="Employeur" value={loc.employeur || "—"} />
                   <Row label="Revenu annuel" value={money(loc.revenu_annuel)} />
                   <Row

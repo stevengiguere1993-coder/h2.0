@@ -174,6 +174,7 @@ class LocataireBase(BaseModel):
     email: Optional[str] = Field(default=None, max_length=320)
     phone: Optional[str] = Field(default=None, max_length=50)
     nas_last4: Optional[str] = Field(default=None, max_length=4, min_length=4)
+    ancienne_adresse: Optional[str] = Field(default=None, max_length=500)
     date_naissance: Optional[date] = None
     employeur: Optional[str] = Field(default=None, max_length=255)
     revenu_annuel: Optional[float] = Field(default=None, ge=0)
@@ -191,6 +192,7 @@ class LocataireUpdate(BaseModel):
     email: Optional[str] = Field(default=None, max_length=320)
     phone: Optional[str] = Field(default=None, max_length=50)
     nas_last4: Optional[str] = Field(default=None, max_length=4, min_length=4)
+    ancienne_adresse: Optional[str] = Field(default=None, max_length=500)
     date_naissance: Optional[date] = None
     employeur: Optional[str] = Field(default=None, max_length=255)
     revenu_annuel: Optional[float] = Field(default=None, ge=0)
