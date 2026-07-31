@@ -10,8 +10,10 @@ Retour Phil 2026-07-28 : « à partir de quand dans l'année tu switch pour
   du mois ``assurance_bascule_mois`` (défaut janvier). Toute confirmation
   ANTÉRIEURE à la dernière bascule annuelle repasse « à reconfirmer ».
 - **Relevés 31** : jusqu'au mois ``releve31_bascule_mois`` inclus (défaut
-  février), on travaille sur l'année PRÉCÉDENTE ; après, sur l'année
-  courante. (L'échéance légale reste le dernier jour de février.)
+  novembre), on travaille sur l'année PRÉCÉDENTE ; dès le 1er décembre,
+  l'onglet passe à l'année courante et tout repart « à produire »
+  (retour Phil 2026-07-31). (L'échéance légale reste le dernier jour
+  de février.)
 
 Clé de config partagée (``automation_settings``) pour que tous les
 endpoints lisent LES MÊMES fenêtres.
@@ -29,7 +31,7 @@ SUIVIS_KEY = "immo.suivis"
 
 DEFAULT_RENOUVELLEMENT_MOIS_AVANT = 6
 DEFAULT_ASSURANCE_BASCULE_MOIS = 1
-DEFAULT_RELEVE31_BASCULE_MOIS = 2
+DEFAULT_RELEVE31_BASCULE_MOIS = 11
 
 
 @dataclass
