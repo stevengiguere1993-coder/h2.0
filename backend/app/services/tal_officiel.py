@@ -391,6 +391,21 @@ def fill_official_pdf(
     for page in writer.pages:
         writer.update_page_form_field_values(page, values)
 
+    # VERROUILLE tous les champs (retour Phil 2026-07-31 : « le
+    # locataire peut changer les infos dans le PDF ») — le formulaire
+    # rempli devient lecture seule dans les visionneuses.
+    from pypdf.generic import NameObject, NumberObject
+
+    for page in writer.pages:
+        for ref in page.get("/Annots") or []:
+            try:
+                obj = ref.get_object()
+                if obj.get("/Subtype") == "/Widget":
+                    ff = int(obj.get("/Ff", 0))
+                    obj[NameObject("/Ff")] = NumberObject(ff | 1)
+            except Exception:  # noqa: BLE001 — annotation exotique
+                continue
+
     out = io.BytesIO()
     writer.write(out)
     return out.getvalue()
