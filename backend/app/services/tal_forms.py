@@ -488,10 +488,21 @@ def generate_tal_pdf(
     pour les formulaires officiels ; ignoré pour les lettres.
     ``gabarit`` : override {titre, paragraphes} pour les lettres
     (automation_settings ``immo.gabarit.<type>``) ; ignoré sinon."""
-    from app.services.tal_officiel import fill_official_pdf, is_official
+    from app.services.tal_officiel import (
+        ajouter_page_reponse,
+        fill_official_pdf,
+        is_official,
+    )
 
     if is_official(form_type):
-        return fill_official_pdf(form_type, ctx, template_bytes)
+        pdf = fill_official_pdf(form_type, ctx, template_bytes)
+        if form_type == "avis_modification":
+            # Le TAL-806 n'a pas de section réponse — on ajoute la page
+            # « Réponse du locataire » (3 choix, art. 1945 C.c.Q.).
+            pdf = ajouter_page_reponse(
+                pdf, locataire_nom=ctx.locataire_nom
+            )
+        return pdf
 
     if form_type not in GABARITS_DEFAUT:
         raise KeyError(form_type)

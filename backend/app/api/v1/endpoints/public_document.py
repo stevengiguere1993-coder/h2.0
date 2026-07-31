@@ -5,7 +5,9 @@ document locatif (avis TAL, trousse…) via un lien tokenisé
 from __future__ import annotations
 
 import base64
+import logging
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -18,6 +20,8 @@ from sqlalchemy.orm import undefer
 from app.api.deps import DBSession
 from app.models.immobilier import Bail, ImmDocument, Locataire
 from app.services.tal_forms import SIGNATURE_NON_REQUISE
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/public/documents", tags=["public-documents"])
 
@@ -37,6 +41,10 @@ class PublicDocument(BaseModel):
     #: ligne (art. 1945 C.c.Q. : un mois pour répondre).
     refus_possible: bool = False
     refuse_le: Optional[date] = None
+    #: v4 — avis de modification : la signature exige un CHOIX parmi
+    #: accepte / quitte / refuse (page « Réponse du locataire »).
+    choix_requis: bool = False
+    choix: Optional[str] = None
     company_name: str = "Horizon Services Immobiliers"
     company_email: str = "info@immohorizon.com"
 
@@ -45,6 +53,11 @@ class SignDocument(BaseModel):
     name: str = Field(..., min_length=2, max_length=255)
     signature_image_data_url: Optional[str] = Field(
         default=None, max_length=2_000_000
+    )
+    #: v4 — réponse à un avis de modification : accepte | quitte |
+    #: refuse. Requis pour ces avis, ignoré pour le reste.
+    choix: Optional[str] = Field(
+        default=None, pattern=r"^(accepte|quitte|refuse)$"
     )
 
 
@@ -121,14 +134,24 @@ async def _to_public(db: AsyncSession, doc: ImmDocument) -> PublicDocument:
     cycle = await _cycle_du_doc(db, doc)
     refuse_le = None
     refus_possible = False
+    choix_requis = False
+    choix = None
     if cycle is not None:
         if cycle.status == "refuse":
             refuse_le = cycle.reponse_le
+            choix = "refuse"
+        elif cycle.status == "depart":
+            choix = "quitte"
+        elif cycle.status in ("accepte", "repute_accepte") and (
+            doc.signed_at is not None
+        ):
+            choix = "accepte"
         elif doc.signed_at is None and cycle.status in (
             "propose",
             "en_negociation",
         ):
             refus_possible = True
+            choix_requis = True
     return PublicDocument(
         titre=doc.titre,
         type=doc.type,
@@ -139,6 +162,8 @@ async def _to_public(db: AsyncSession, doc: ImmDocument) -> PublicDocument:
         signature_requise=doc.type not in SIGNATURE_NON_REQUISE,
         refus_possible=refus_possible,
         refuse_le=refuse_le,
+        choix_requis=choix_requis,
+        choix=choix,
     )
 
 
@@ -235,17 +260,59 @@ async def public_sign(
     if sig:
         doc.signature_image = sig
         doc.signature_image_content_type = ct
-    # v3 — signer un AVIS DE MODIFICATION = accepter la hausse : le
-    # cycle passe « accepte » (le nouveau loyer sera reporté sur le
-    # bail à la date effective).
+    # v4 — signer un AVIS DE MODIFICATION consigne la RÉPONSE choisie
+    # (page « Réponse du locataire ») : accepte / quitte (départ à la
+    # fin du bail) / refuse (les modifications, et renouvelle). Le PDF
+    # conservé est estampillé — X sur le choix, signature, date, IP.
     cycle = await _cycle_du_doc(db, doc)
     if cycle is not None and cycle.status in (
         "propose",
         "en_negociation",
         "repute_accepte",
     ):
-        cycle.status = "accepte"
+        choix = data.choix or "accepte"
+        cycle.status = {
+            "accepte": "accepte",
+            "quitte": "depart",
+            "refuse": "refuse",
+        }[choix]
         cycle.reponse_le = date.today()
+        try:
+            await _estampiller_pdf(db, doc, choix)
+        except Exception:  # noqa: BLE001 — la réponse prime sur le PDF
+            log.exception(
+                "Estampillage de la page réponse échoué (doc %s)", doc.id
+            )
     await db.commit()
     await db.refresh(doc)
     return await _to_public(db, doc)
+
+
+async def _estampiller_pdf(db, doc: ImmDocument, choix: str) -> None:
+    """Remplace la page « Réponse du locataire » du PDF conservé par la
+    version estampillée (choix coché, signature, date, IP) — le
+    locataire ne peut modifier aucune autre partie du document."""
+    from sqlalchemy.orm import undefer
+
+    from app.services.tal_officiel import estampiller_page_reponse
+
+    d2 = (
+        await db.execute(
+            select(ImmDocument)
+            .options(undefer(ImmDocument.pdf_blob))
+            .where(ImmDocument.id == doc.id)
+        )
+    ).scalar_one()
+    if not d2.pdf_blob:
+        return
+    quand = datetime.now(timezone.utc).astimezone(
+        ZoneInfo("America/Toronto")
+    )
+    d2.pdf_blob = estampiller_page_reponse(
+        d2.pdf_blob,
+        locataire_nom=doc.signed_by_name,
+        choix=choix,
+        signature_png=doc.signature_image,
+        signe_le_txt=quand.strftime("%Y-%m-%d %H:%M %Z"),
+        ip=doc.signature_ip,
+    )

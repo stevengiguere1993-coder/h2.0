@@ -24,6 +24,7 @@ type RenouvellementOverview = {
   bail_id: number;
   immeuble_id: number;
   immeuble_name: string;
+  immeuble_adresse?: string | null;
   logement_id?: number | null;
   logement_numero: string;
   locataire_id?: number | null;
@@ -52,7 +53,13 @@ type RenouvellementOverview = {
   avis_doc_ouvert_le?: string | null;
   avis_doc_signed_at?: string | null;
   // v3 — réponse du locataire sur le cycle courant + deadlines légales.
-  reponse?: "attente" | "accepte" | "repute_accepte" | "refuse" | null;
+  reponse?:
+    | "attente"
+    | "accepte"
+    | "repute_accepte"
+    | "refuse"
+    | "depart"
+    | null;
   reponse_le?: string | null;
   deadline_reponse?: string | null;
   deadline_fixation?: string | null;
@@ -392,6 +399,7 @@ const FENETRES_REGLEES = new Set(["envoye", "reconduit"]);
 
 function rangLigne(r: RenouvellementOverview): number {
   if (r.reponse === "refuse") return -1; // urgent — fixation TAL
+  if (r.reponse === "depart") return -1; // départ annoncé — relocation
   if (r.reponse === "attente") return 1; // jaune, sous le travail à faire
   if (FENETRES_REGLEES.has(r.fenetre)) return 2; // verts en bas
   return 0;
@@ -831,7 +839,7 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                     className={
                       r.reponse === "refuse"
                         ? "bg-rose-500/15 hover:bg-rose-500/20"
-                        : r.reponse === "attente"
+                        : r.reponse === "attente" || r.reponse === "depart"
                           ? "bg-amber-500/10 hover:bg-amber-500/15"
                           : FENETRES_REGLEES.has(r.fenetre)
                             ? "bg-emerald-500/10 hover:bg-emerald-500/15"
@@ -903,7 +911,8 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                         className={`badge ${
                           r.reponse === "refuse"
                             ? "badge-rose"
-                            : r.reponse === "attente"
+                            : r.reponse === "attente" ||
+                                r.reponse === "depart"
                               ? "badge-amber"
                               : r.reponse
                                 ? "badge-emerald"
@@ -912,19 +921,27 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                       >
                         {r.reponse === "refuse"
                           ? `Refusé${r.reponse_le ? ` le ${r.reponse_le}` : ""}`
-                          : r.reponse === "attente"
-                            ? "Avis envoyé — attente de réponse"
-                            : r.reponse === "accepte"
-                              ? `Accepté${r.reponse_le ? ` le ${r.reponse_le}` : ""}`
-                              : r.reponse === "repute_accepte"
-                                ? "Réputé accepté (1 mois sans réponse)"
-                                : FENETRE_LABELS[r.fenetre]}
+                          : r.reponse === "depart"
+                            ? `Départ annoncé${r.reponse_le ? ` le ${r.reponse_le}` : ""}`
+                            : r.reponse === "attente"
+                              ? "Avis envoyé — attente de réponse"
+                              : r.reponse === "accepte"
+                                ? `Accepté${r.reponse_le ? ` le ${r.reponse_le}` : ""}`
+                                : r.reponse === "repute_accepte"
+                                  ? "Réputé accepté (1 mois sans réponse)"
+                                  : FENETRE_LABELS[r.fenetre]}
                       </span>
                       {r.reponse === "refuse" && r.deadline_fixation ? (
                         <div className="mt-1 text-[10px] font-bold text-rose-300">
                           Fixation TAL avant le {r.deadline_fixation} —
                           sinon le bail continue aux anciennes
                           conditions
+                        </div>
+                      ) : null}
+                      {r.reponse === "depart" ? (
+                        <div className="mt-1 text-[10px] text-amber-200/80">
+                          Le locataire quitte à la fin du bail — ouvre
+                          un dossier de relocation (« Non renouvelé »)
                         </div>
                       ) : null}
                       {r.reponse === "attente" && r.deadline_reponse ? (
@@ -960,23 +977,30 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                       ) : null}
                       {/* Suivi du document d'avis (TAL-806) :
                           envoyé → ouvert → signé. */}
-                      {r.avis_doc_signed_at ? (
-                        <div className="mt-0.5 text-[10px] font-semibold text-emerald-300">
-                          Signé le {fmtDateTime(r.avis_doc_signed_at)}
-                        </div>
-                      ) : r.avis_doc_ouvert_le ? (
-                        <div className="mt-0.5 text-[10px] text-sky-300">
-                          Ouvert le {fmtDateTime(r.avis_doc_ouvert_le)} —
-                          pas encore signé
-                        </div>
-                      ) : r.avis_doc_envoye_le ? (
+                      {/* Suivi EMPILÉ (retour Phil 2026-07-31) :
+                          chaque étape atteinte, avec sa date. */}
+                      {r.avis_doc_envoye_le ? (
                         <div className="mt-0.5 text-[10px] text-white/40">
-                          Courriel envoyé — non ouvert
+                          Courriel envoyé le{" "}
+                          {fmtDateTime(r.avis_doc_envoye_le)}
                         </div>
                       ) : r.document_id && r.fenetre === "envoye" ? (
                         <div className="mt-0.5 text-[10px] font-semibold text-amber-300">
                           Courriel NON parti — ouvre l&apos;avis et
                           renvoie-le
+                        </div>
+                      ) : null}
+                      {r.avis_doc_ouvert_le ? (
+                        <div className="mt-0.5 text-[10px] text-sky-300">
+                          Ouvert le {fmtDateTime(r.avis_doc_ouvert_le)}
+                          {!r.avis_doc_signed_at
+                            ? " — pas encore signé"
+                            : ""}
+                        </div>
+                      ) : null}
+                      {r.avis_doc_signed_at ? (
+                        <div className="mt-0.5 text-[10px] font-semibold text-emerald-300">
+                          Signé le {fmtDateTime(r.avis_doc_signed_at)}
                         </div>
                       ) : null}
                     </td>
@@ -1076,7 +1100,8 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                           </button>
                         ) : null}
                         {!FENETRES_REGLEES.has(r.fenetre) ||
-                        r.reponse === "refuse" ? (
+                        r.reponse === "refuse" ||
+                        r.reponse === "depart" ? (
                         <button
                           type="button"
                           title="Le bail ne sera PAS renouvelé — ouvrir un dossier de relocation dans Locations"
@@ -1142,6 +1167,17 @@ function PrepareRenouvellementModal({
   const [pct, setPct] = useState("3.0");
   const [montant, setMontant] = useState("25");
   const [motif, setMotif] = useState("");
+  // Sections de l'avis, PRÉ-REMPLIES mais modifiables (retour Phil
+  // 2026-07-31) — ce qui est saisi ici part tel quel dans le PDF.
+  const [nomLoc, setNomLoc] = useState(row.locataire_nom || "");
+  const [adresse, setAdresse] = useState(
+    `${row.immeuble_adresse || row.immeuble_name}${
+      row.logement_numero ? `, ${row.logement_numero}` : ""
+    }`
+  );
+  const [loyerActuel, setLoyerActuel] = useState(
+    String(row.bail_loyer_mensuel)
+  );
   const [certifie, setCertifie] = useState(true);
   const [sending, setSending] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -1156,7 +1192,7 @@ function PrepareRenouvellementModal({
   // Nouveau loyer : quel que soit le mode (%, $ ou absolu), TOUJOURS
   // arrondi au dollar SUPÉRIEUR (retour Phil 2026-07-30 :
   // 1 044,26 $ → 1 045 $). Le backend applique le même arrondi.
-  const courant = row.bail_loyer_mensuel;
+  const courant = Number(loyerActuel) || row.bail_loyer_mensuel;
   const nouveauBrut =
     mode === "absolu"
       ? Number(absolu) || 0
@@ -1170,22 +1206,28 @@ function PrepareRenouvellementModal({
   // Période reconduite (art. 1941 C.c.Q.) : lendemain de la fin du
   // bail → même jour un an plus tard — suit le bail, pas le calendrier
   // 1er juillet / 30 juin.
-  const renouvDebut = (() => {
+  const [renouvDebut, setRenouvDebut] = useState(() => {
     const d = new Date(row.bail_date_fin + "T00:00:00");
     d.setDate(d.getDate() + 1);
     return d.toISOString().slice(0, 10);
-  })();
-  const renouvFin = (() => {
+  });
+  const [renouvFin, setRenouvFin] = useState(() => {
     const d = new Date(row.bail_date_fin + "T00:00:00");
     d.setFullYear(d.getFullYear() + 1);
     return d.toISOString().slice(0, 10);
-  })();
+  });
 
   function buildBody(forPreview: boolean) {
     const body: Record<string, unknown> = {
       motif: motif.trim() || null,
       request_read_receipt: certifie,
-      bcc_to_sender: certifie
+      bcc_to_sender: certifie,
+      // Sections modifiables de l'avis — parties telles quelles au PDF.
+      locataire_nom: nomLoc.trim() || null,
+      logement_adresse: adresse.trim() || null,
+      loyer_actuel: Number(loyerActuel) || null,
+      nouvelle_date_debut: renouvDebut || null,
+      nouvelle_date_fin: renouvFin || null
     };
     if (forPreview) {
       // L'endpoint TAL accepte les mêmes champs nouveau_loyer etc.
@@ -1236,10 +1278,14 @@ function PrepareRenouvellementModal({
       const d = (await res.json()) as {
         courriel_envoye: boolean;
         erreur_envoi?: string | null;
+        expediteur?: string | null;
       };
       onSent(
         d.courriel_envoye
-          ? "Avis envoyé au locataire (BCC + accusé de lecture)."
+          ? `Avis envoyé au locataire${
+              d.expediteur ? ` depuis ${d.expediteur}` : ""
+            } (BCC + accusé de lecture). Rien reçu ? Vérifie ses
+Courriers indésirables.`
           : `Avis créé, mais courriel NON parti : ${
               d.erreur_envoi || "raison inconnue"
             }`
@@ -1308,6 +1354,56 @@ function PrepareRenouvellementModal({
             <b className="text-white/70">{renouvFin}</b> (le lendemain
             de la fin du bail, pour 12 mois).
           </p>
+
+          {/* Sections de l'avis — pré-remplies, modifiables */}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Nom du locataire</label>
+              <input
+                value={nomLoc}
+                onChange={(e) => setNomLoc(e.target.value)}
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="label">Loyer actuel ($/mois)</label>
+              <input
+                type="number"
+                step="1"
+                value={loyerActuel}
+                onChange={(e) => setLoyerActuel(e.target.value)}
+                className="input font-mono"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="label">Adresse du logement loué</label>
+            <input
+              value={adresse}
+              onChange={(e) => setAdresse(e.target.value)}
+              className="input"
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Bail renouvelé du</label>
+              <input
+                type="date"
+                value={renouvDebut}
+                onChange={(e) => setRenouvDebut(e.target.value)}
+                className="input font-mono"
+              />
+            </div>
+            <div>
+              <label className="label">au</label>
+              <input
+                type="date"
+                value={renouvFin}
+                onChange={(e) => setRenouvFin(e.target.value)}
+                className="input font-mono"
+              />
+            </div>
+          </div>
 
           {/* Presets */}
           <div>

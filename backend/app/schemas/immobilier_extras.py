@@ -42,6 +42,10 @@ class TalFormRequest(BaseModel):
     nouvelle_date_debut: Optional[date] = None
     nouvelle_date_fin: Optional[date] = None
     motif: Optional[str] = None  # « Autre(s) modification(s) »
+    # Overrides de la fiche de préparation (pré-remplis, modifiables).
+    locataire_nom: Optional[str] = Field(default=None, max_length=255)
+    logement_adresse: Optional[str] = Field(default=None, max_length=500)
+    loyer_actuel: Optional[float] = Field(default=None, ge=0)
 
     # rappel_paiement (avis de retard — paiement immédiat)
     montant_du: Optional[float] = Field(default=None, ge=0)
@@ -101,6 +105,10 @@ class EnvoyerRenouvellementRequest(BaseModel):
     nouvelle_date_debut: Optional[date] = None
     nouvelle_date_fin: Optional[date] = None
     motif: Optional[str] = None
+    # Overrides de la fiche de préparation (retour Phil 2026-07-31).
+    locataire_nom: Optional[str] = Field(default=None, max_length=255)
+    logement_adresse: Optional[str] = Field(default=None, max_length=500)
+    loyer_actuel: Optional[float] = Field(default=None, ge=0)
     force: bool = False
     request_read_receipt: bool = False
     bcc_to_sender: bool = True
@@ -113,6 +121,9 @@ class EnvoyerRenouvellementResult(BaseModel):
     #: courriel, Graph non configuré, erreur d'envoi…) — affichée à
     #: l'utilisateur au lieu d'un échec silencieux.
     erreur_envoi: Optional[str] = None
+    #: Boîte qui a expédié le courriel — affichée à l'utilisateur
+    #: (« pas reçu ? vérifie les indésirables de … »).
+    expediteur: Optional[str] = None
     avis_envoye_le: date
     nouveau_loyer: Optional[float] = None
     nouvelle_date_debut: Optional[date] = None
@@ -130,6 +141,8 @@ class RenouvellementOverview(BaseModel):
     bail_id: int
     immeuble_id: int
     immeuble_name: str
+    #: Adresse complète (rue, ville) — pré-remplit la fiche Préparer.
+    immeuble_adresse: Optional[str] = None
     logement_id: Optional[int] = None
     logement_numero: str
     locataire_id: Optional[int] = None
