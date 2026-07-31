@@ -58,7 +58,7 @@ def test_valeurs_hors_bornes_ignorees():
     )
     assert c.renouvellement_mois_avant == 6  # défaut
     assert c.assurance_bascule_mois == 1  # défaut
-    assert c.releve31_bascule_mois == 2  # défaut
+    assert c.releve31_bascule_mois == 11  # défaut (bascule au 1er décembre)
 
 
 def test_config_aller_retour(client, auth_headers):

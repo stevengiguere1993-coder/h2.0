@@ -11,6 +11,7 @@ import {
   KeyRound,
   Loader2,
   Mail,
+  RotateCcw,
   Search,
   Trash2,
   Upload
@@ -103,6 +104,17 @@ const ASSU_BADGE: Record<AssuranceRow["statut"], [string, string]> = {
   jamais: ["badge-rose", "Jamais confirmée"]
 };
 
+/** Demande de preuve envoyée et toujours SANS confirmation depuis ?
+ *  → la ligne devient jaune (retour Phil 2026-07-31). */
+function demandeEnCours(r: AssuranceRow): boolean {
+  if (!r.derniere_demande_le) return false;
+  if (!r.assurance_confirmee_le) return true;
+  return (
+    new Date(r.derniere_demande_le) >
+    new Date(`${r.assurance_confirmee_le}T23:59:59`)
+  );
+}
+
 function AssurancesTab() {
   const [data, setData] = useState<AssuranceOverview | null>(null);
   const [q, setQ] = useState("");
@@ -150,6 +162,31 @@ function AssurancesTab() {
     }
   }
 
+  async function retirerConfirmation(row: AssuranceRow) {
+    if (
+      !window.confirm(
+        `Retirer la confirmation d'assurance de ${row.locataire_nom} ? La ligne redeviendra « à confirmer ».`
+      )
+    )
+      return;
+    setBusyId(row.locataire_id);
+    setMsg(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/locataires/${row.locataire_id}/assurance/confirmer`,
+        { method: "DELETE" }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      setMsg(`Confirmation de ${row.locataire_nom} retirée.`);
+      await load();
+    } catch (e) {
+      setErr(`Retrait échoué : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function demander(row: AssuranceRow) {
     if (
       !window.confirm(
@@ -167,6 +204,7 @@ function AssurancesTab() {
       if (!r.ok)
         throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
       setMsg(`Demande de preuve envoyée à ${row.locataire_email}.`);
+      await load();
     } catch (e) {
       setErr(`Envoi échoué : ${(e as Error).message}`);
     } finally {
@@ -275,7 +313,9 @@ function AssurancesTab() {
                     className={
                       r.statut === "ok"
                         ? "bg-emerald-500/10 hover:bg-emerald-500/15"
-                        : "hover:bg-brand-950/50"
+                        : demandeEnCours(r)
+                          ? "bg-amber-500/10 hover:bg-amber-500/15"
+                          : "hover:bg-brand-950/50"
                     }
                   >
                     <td className="px-4 py-2.5">
@@ -360,6 +400,17 @@ function AssurancesTab() {
                         >
                           <CheckCircle2 className="h-3 w-3" /> Confirmer
                         </button>
+                        {r.assurance_confirmee_le ? (
+                          <button
+                            type="button"
+                            onClick={() => void retirerConfirmation(r)}
+                            disabled={busyId === r.locataire_id}
+                            title="Retirer la confirmation (erreur) — la ligne redevient à confirmer"
+                            className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-1.5 text-rose-300 transition hover:bg-rose-500/20 disabled:opacity-50"
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                          </button>
+                        ) : null}
                       </span>
                     </td>
                   </tr>
@@ -2136,6 +2187,15 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
                           type="button"
                           disabled={busy}
                           onClick={() => {
+                            if (
+                              r.document_id &&
+                              !window.confirm(
+                                `Remplacer la copie PDF du relevé courant de ${
+                                  r.locataire_nom || "ce locataire"
+                                } ? L'ancienne restera dans les Documents.`
+                              )
+                            )
+                              return;
                             uploadFor.current = r;
                             fileRef.current?.click();
                           }}
@@ -2155,15 +2215,22 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
                         </button>
                         <button
                           type="button"
-                          disabled={busy || !r.document_id || !r.locataire_email}
+                          disabled={
+                            busy ||
+                            !r.document_id ||
+                            !r.locataire_email ||
+                            !(r.numero_releve || "").trim()
+                          }
                           onClick={() => void envoyer(r)}
                           className="btn-accent btn-xs disabled:opacity-40"
                           title={
                             !r.document_id
                               ? "Téléverse d'abord la copie PDF du relevé"
-                              : !r.locataire_email
-                                ? "Ajoute d'abord le courriel du locataire"
-                                : "Envoyer la copie au locataire (PDF joint + lien de consultation suivi)"
+                              : !(r.numero_releve || "").trim()
+                                ? "Colle d'abord le numéro du relevé (émis par Revenu Québec)"
+                                : !r.locataire_email
+                                  ? "Ajoute d'abord le courriel du locataire"
+                                  : "Envoyer la copie au locataire (PDF joint + lien de consultation suivi)"
                           }
                         >
                           <Mail className="h-3 w-3" />

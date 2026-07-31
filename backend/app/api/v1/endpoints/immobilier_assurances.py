@@ -314,7 +314,7 @@ def _mail_demande_html(
   <p>Bonjour {first},</p>
   {corps}
   <p style="margin:24px 0 0 0;color:#555;font-size:12px">
-    Horizon Services Immobiliers<br>info@immohorizon.com
+    Horizon Services Immobiliers
   </p>
 </div>
 """
