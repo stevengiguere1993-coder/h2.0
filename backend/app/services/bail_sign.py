@@ -42,7 +42,7 @@ def _body_html(bail: Bail, locataire_name: str, url: str) -> str:
   </p>
   <p style="margin:0 0 16px 0;font-size:12px;color:#555">Ou copiez ce lien : {url}</p>
   <p style="margin:24px 0 0 0;color:#555;font-size:12px">
-    Horizon Services Immobiliers<br>info@immohorizon.com
+    Horizon Services Immobiliers
   </p>
 </div>
 """

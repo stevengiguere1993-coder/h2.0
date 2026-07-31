@@ -346,7 +346,7 @@ async def put_demarrage_config(
 class SuivisConfigIn(BaseModel):
     renouvellement_mois_avant: int = 6
     assurance_bascule_mois: int = 1
-    releve31_bascule_mois: int = 2
+    releve31_bascule_mois: int = 11
     #: Inclure les baux au mois (chambres) dans le suivi des assurances.
     assurance_inclut_au_mois: bool = False
 

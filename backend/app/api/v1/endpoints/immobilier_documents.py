@@ -385,7 +385,7 @@ def _mail_html(titre: str, locataire_name: str, url: str) -> str:
   </p>
   <p style="margin:0 0 16px 0;font-size:12px;color:#555">Ou copiez ce lien : {url}</p>
   <p style="margin:24px 0 0 0;color:#555;font-size:12px">
-    Horizon Services Immobiliers<br>info@immohorizon.com
+    Horizon Services Immobiliers
   </p>
 </div>
 """
@@ -515,7 +515,7 @@ def _mail_html_piece_jointe(
   {ligne_extra}
   {bloc_lien}
   <p style="margin:24px 0 0 0;color:#555;font-size:12px">
-    Horizon Services Immobiliers<br>info@immohorizon.com
+    Horizon Services Immobiliers
   </p>
 </div>
 """
@@ -546,6 +546,25 @@ async def envoyer_courriel(
         raise HTTPException(status_code=404, detail="Document introuvable.")
 
     locataire, dest = await _resolve_destinataire(db, d, payload.email)
+
+    # Un relevé 31 ne part JAMAIS sans son numéro officiel (émis par
+    # Revenu Québec à la production) — retour Phil 2026-07-31.
+    if d.type == "releve31":
+        from app.models.immobilier import Releve31
+
+        rel = (
+            await db.execute(
+                select(Releve31).where(Releve31.document_id == d.id)
+            )
+        ).scalars().first()
+        if rel is not None and not (rel.numero_releve or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Colle d'abord le numéro du relevé (émis par "
+                    "Revenu Québec) avant de l'envoyer au locataire."
+                ),
+            )
 
     # Lien de consultation tokenisé (page publique SANS bloc signature
     # pour ces types) → l'ouverture est horodatée comme pour une
