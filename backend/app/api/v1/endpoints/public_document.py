@@ -45,6 +45,12 @@ class PublicDocument(BaseModel):
     #: accepte / quitte / refuse (page « Réponse du locataire »).
     choix_requis: bool = False
     choix: Optional[str] = None
+    #: v7 — délai d'un mois écoulé sans réponse : réputé accepté, le
+    #: document reste consultable mais la signature est fermée.
+    repute_accepte_le: Optional[date] = None
+    #: v7 — la copie signée vient d'être transmise par courriel (posé
+    #: seulement dans la réponse du POST /signer).
+    copie_envoyee: Optional[bool] = None
     company_name: str = "Horizon Services Immobiliers"
     company_email: str = "info@immohorizon.com"
 
@@ -120,6 +126,17 @@ async def _cycle_du_doc(db: AsyncSession, doc: ImmDocument):
                 )
             )
         ).scalars().first()
+    # Art. 1945 C.c.Q. : un mois sans réponse = réputé accepté. La
+    # transition se fait aussi ICI (le locataire peut ouvrir le lien
+    # avant que le staff consulte la page Suivis annuels).
+    if r is not None and r.status == "propose":
+        from app.api.v1.endpoints.immobilier_extras import _plus_un_mois
+
+        deadline = _plus_un_mois(r.avis_envoye_le)
+        if date.today() > deadline:
+            r.status = "repute_accepte"
+            r.reponse_le = deadline
+            await db.commit()
     return r
 
 
@@ -136,7 +153,10 @@ async def _to_public(db: AsyncSession, doc: ImmDocument) -> PublicDocument:
     refus_possible = False
     choix_requis = False
     choix = None
+    repute_accepte_le = None
     if cycle is not None:
+        if cycle.status == "repute_accepte":
+            repute_accepte_le = cycle.reponse_le
         if cycle.status == "refuse":
             refuse_le = cycle.reponse_le
             choix = "refuse"
@@ -164,6 +184,7 @@ async def _to_public(db: AsyncSession, doc: ImmDocument) -> PublicDocument:
         refuse_le=refuse_le,
         choix_requis=choix_requis,
         choix=choix,
+        repute_accepte_le=repute_accepte_le,
     )
 
 
@@ -249,6 +270,22 @@ async def public_sign(
             status.HTTP_400_BAD_REQUEST,
             detail="Ce document ne requiert pas de signature.",
         )
+    # v7 — après le délai d'un mois, le locataire est réputé avoir
+    # accepté : la signature est fermée (le document reste consultable).
+    cycle_avant = await _cycle_du_doc(db, doc)
+    if (
+        doc.type == "avis_modification"
+        and cycle_avant is not None
+        and cycle_avant.status == "repute_accepte"
+    ):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Le délai de réponse d'un (1) mois est écoulé — vous "
+                "êtes réputé avoir accepté les modifications (art. 1945 "
+                "C.c.Q.). La signature n'est plus possible."
+            ),
+        )
     doc.signed_at = datetime.now(timezone.utc)
     doc.signed_by_name = data.name.strip()[:255]
     raw_ip = request.headers.get("x-forwarded-for") or (
@@ -264,11 +301,10 @@ async def public_sign(
     # (page « Réponse du locataire ») : accepte / quitte (départ à la
     # fin du bail) / refuse (les modifications, et renouvelle). Le PDF
     # conservé est estampillé — X sur le choix, signature, date, IP.
-    cycle = await _cycle_du_doc(db, doc)
+    cycle = cycle_avant
     if cycle is not None and cycle.status in (
         "propose",
         "en_negociation",
-        "repute_accepte",
     ):
         choix = data.choix or "accepte"
         cycle.status = {
@@ -277,23 +313,69 @@ async def public_sign(
             "refuse": "refuse",
         }[choix]
         cycle.reponse_le = date.today()
+        if choix == "quitte":
+            # Le locataire annonce OFFICIELLEMENT son départ : même
+            # effet que « Non renouvelé » — un dossier de relocation
+            # s'ouvre (la ligne devient mauve, actions bloquées).
+            try:
+                await _ouvrir_dossier_relocation(db, doc)
+            except Exception:  # noqa: BLE001 — la réponse prime
+                log.exception(
+                    "Ouverture du dossier de relocation échouée "
+                    "(doc %s)", doc.id
+                )
         try:
             await _estampiller_pdf(db, doc, choix)
         except Exception:  # noqa: BLE001 — la réponse prime sur le PDF
             log.exception(
                 "Estampillage de la page réponse échoué (doc %s)", doc.id
             )
+    await db.commit()
+    await db.refresh(doc)
+    # Copie signée transmise APRÈS le commit — le résultat est affiché
+    # au locataire (retour Phil : « je ne la reçois toujours pas »,
+    # l'échec était invisible).
+    copie_ok = False
+    if doc.type == "avis_modification":
         try:
-            # Copie signée transmise au locataire (retour Phil
-            # 2026-07-31) — best effort, jamais bloquant.
             await _envoyer_copie_signee(db, doc)
+            copie_ok = True
         except Exception:  # noqa: BLE001
             log.exception(
                 "Envoi de la copie signée échoué (doc %s)", doc.id
             )
-    await db.commit()
-    await db.refresh(doc)
-    return await _to_public(db, doc)
+    pub = await _to_public(db, doc)
+    pub.copie_envoyee = copie_ok
+    return pub
+
+
+async def _ouvrir_dossier_relocation(db, doc: ImmDocument) -> None:
+    """Réponse « je quitte » signée → dossier de relocation (comme le
+    bouton « Non renouvelé »), s'il n'y en a pas déjà un d'actif."""
+    from app.models.immobilier import LocationDossier
+
+    if not doc.bail_id:
+        return
+    bail = await db.get(Bail, doc.bail_id)
+    if bail is None or not bail.logement_id:
+        return
+    existant = (
+        await db.execute(
+            select(LocationDossier).where(
+                LocationDossier.logement_id == bail.logement_id,
+                LocationDossier.statut.notin_(["annule", "reloue"]),
+            )
+        )
+    ).scalars().first()
+    if existant is not None:
+        return
+    db.add(
+        LocationDossier(
+            logement_id=bail.logement_id,
+            bail_id=bail.id,
+            statut="avis_recu",
+        )
+    )
 
 
 async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
@@ -319,11 +401,11 @@ async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
     nom = (locataire.full_name if locataire else "") or "Madame, Monsieur"
     await mailer.send(
         to=[dest],
-        subject="Votre réponse signée — avis de modification du bail",
+        subject="Merci d'avoir signé — votre copie de l'avis",
         html_body=(
             f"<p>Bonjour {nom},</p>"
-            "<p>Voici la copie signée de votre réponse à l'avis de "
-            "modification du bail — conservez-la pour vos dossiers.</p>"
+            "<p>Merci d'avoir signé ! Voici votre version signée de "
+            "l'avis — conservez-la pour vos dossiers.</p>"
             "<p>Cordialement,<br/>Horizon Services Immobiliers</p>"
         ),
         attachments=[

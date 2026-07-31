@@ -662,6 +662,21 @@ Nouvelle date de fin :`,
     }
   }
 
+  //: Une action de préparation sur une ligne déjà réglée demande
+  //: confirmation (retour Phil 2026-07-31 : boutons toujours visibles,
+  //: alerte si déjà envoyé / déjà accepté).
+  function confirmerMalgreEtat(r: RenouvellementOverview): boolean {
+    if (r.reponse === "attente")
+      return window.confirm(
+        "⚠️ Un avis est déjà ENVOYÉ et en attente de réponse.\n\nContinuer quand même ? (Le nouveau geste remplacera le cycle en cours.)"
+      );
+    if (r.reponse === "accepte" || r.reponse === "repute_accepte")
+      return window.confirm(
+        "⚠️ Le renouvellement a déjà été ACCEPTÉ.\n\nContinuer quand même ?"
+      );
+    return true;
+  }
+
   // Entente après un refus = on ENVOIE UN NOUVEL AVIS avec le prix
   // convenu (même fiche que « Préparer », envoi forcé malgré le cycle
   // refusé) — retour Phil 2026-07-31.
@@ -1040,8 +1055,8 @@ Nouvelle date de fin :`,
                     <td className="px-4 py-2.5 text-right">
                       {r.relocation_dossier_id ? (
                         <div className="text-right text-[11px] text-white/60">
-                          Actions bloquées — supprime ou annule le
-                          dossier de location pour agir.
+                          Actions bloquées — supprime le dossier de
+                          location pour agir.
                           <Link
                             // eslint-disable-next-line @typescript-eslint/no-explicit-any
                             href={"/immobilier/locations" as any}
@@ -1051,52 +1066,13 @@ Nouvelle date de fin :`,
                           </Link>
                         </div>
                       ) : (
-                      <span className="inline-flex items-center gap-1.5">
-                        {r.document_id ? (
-                          <button
-                            type="button"
-                            onClick={() => void ouvrirDoc(r.document_id!)}
-                            className="btn-secondary btn-sm"
-                            title="Ouvrir l'avis de renouvellement courant (PDF)"
-                          >
-                            <FileDown className="h-3.5 w-3.5" />
-                            Avis
-                          </button>
-                        ) : null}
-                        {r.renouvellement_id != null ? (
-                          <button
-                            type="button"
-                            title="Supprimer l'avis (et son document) — la ligne redevient « à préparer »"
-                            disabled={deletingId === r.bail_id}
-                            onClick={() => void supprimerAvis(r)}
-                            className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-1.5 text-rose-300 transition hover:bg-rose-500/20 disabled:opacity-50"
-                          >
-                            {deletingId === r.bail_id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5" />
-                            )}
-                          </button>
-                        ) : null}
-                        <ImportAvisButton
-                          renouvellementId={r.renouvellement_id}
-                          bailId={r.bail_id}
-                          hasDoc={r.document_id != null}
-                          onDone={() => void reload()}
-                        />
-                        {!FENETRES_REGLEES.has(r.fenetre) ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPrepForce(false);
-                              setPrepFor(r);
-                            }}
-                            className="btn-secondary btn-sm"
-                          >
-                            <Mail className="h-3.5 w-3.5" />
-                            Préparer
-                          </button>
-                        ) : null}
+                      <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                        {/* Ordre (retour Phil 2026-07-31) : réponses
+                            manuelles d'abord, puis Préparer /
+                            Reconduire / Non renouvelé (toujours, avec
+                            confirmation si déjà envoyé ou accepté),
+                            puis Avis, Remplacer (icône) et la poubelle
+                            en DERNIER. */}
                         {r.reponse === "attente" && r.renouvellement_id ? (
                           <>
                             <button
@@ -1134,30 +1110,43 @@ Nouvelle date de fin :`,
                             Entente ($)
                           </button>
                         ) : null}
-                        {!FENETRES_REGLEES.has(r.fenetre) ? (
-                          <button
-                            type="button"
-                            title="Pas de hausse cette année : le bail s'étire d'un an tel quel, sans avis (reconduction tacite)"
-                            disabled={reconduireId === r.bail_id}
-                            onClick={() => void reconduire(r)}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                          >
-                            {reconduireId === r.bail_id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                            )}
-                            Reconduire tel quel
-                          </button>
-                        ) : null}
-                        {!FENETRES_REGLEES.has(r.fenetre) ||
-                        r.reponse === "refuse" ||
-                        r.reponse === "depart" ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!confirmerMalgreEtat(r)) return;
+                            setPrepForce(!!r.reponse);
+                            setPrepFor(r);
+                          }}
+                          className="btn-secondary btn-sm"
+                        >
+                          <Mail className="h-3.5 w-3.5" />
+                          Préparer
+                        </button>
+                        <button
+                          type="button"
+                          title="Pas de hausse cette année : le bail s'étire tel quel, sans avis (reconduction tacite)"
+                          disabled={reconduireId === r.bail_id}
+                          onClick={() => {
+                            if (!confirmerMalgreEtat(r)) return;
+                            void reconduire(r);
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                        >
+                          {reconduireId === r.bail_id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                          )}
+                          Reconduire tel quel
+                        </button>
                         <button
                           type="button"
                           title="Le bail ne sera PAS renouvelé — ouvrir un dossier de relocation dans Locations"
                           disabled={relocatingId === r.bail_id}
-                          onClick={() => void nonRenouvele(r.bail_id)}
+                          onClick={() => {
+                            if (!confirmerMalgreEtat(r)) return;
+                            void nonRenouvele(r.bail_id);
+                          }}
                           className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
                         >
                           {relocatingId === r.bail_id ? (
@@ -1167,6 +1156,38 @@ Nouvelle date de fin :`,
                           )}
                           Non renouvelé
                         </button>
+                        {r.document_id ? (
+                          <button
+                            type="button"
+                            onClick={() => void ouvrirDoc(r.document_id!)}
+                            className="btn-secondary btn-sm"
+                            title="Ouvrir l'avis de renouvellement courant (PDF)"
+                          >
+                            <FileDown className="h-3.5 w-3.5" />
+                            Avis
+                          </button>
+                        ) : null}
+                        <ImportAvisButton
+                          row={r}
+                          renouvellementId={r.renouvellement_id}
+                          bailId={r.bail_id}
+                          hasDoc={r.document_id != null}
+                          onDone={() => void reload()}
+                        />
+                        {r.renouvellement_id != null ? (
+                          <button
+                            type="button"
+                            title="Supprimer l'avis (et son document) — la ligne redevient « à préparer »"
+                            disabled={deletingId === r.bail_id}
+                            onClick={() => void supprimerAvis(r)}
+                            className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-1.5 text-rose-300 transition hover:bg-rose-500/20 disabled:opacity-50"
+                          >
+                            {deletingId === r.bail_id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                          </button>
                         ) : null}
                       </span>
                       )}
@@ -2171,11 +2192,13 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
  *  nouveau devient celui qui s'ouvre au clic, l'ancien reste dans les
  *  Documents (retour Phil 2026-07-27). */
 function ImportAvisButton({
+  row,
   renouvellementId,
   bailId,
   hasDoc,
   onDone
 }: {
+  row: RenouvellementOverview;
   /** Cycle existant → remplace son avis courant. */
   renouvellementId?: number | null;
   /** Pas encore de cycle → l'import en crée un (avis déjà envoyé papier). */
@@ -2183,17 +2206,27 @@ function ImportAvisButton({
   hasDoc: boolean;
   onDone: () => void;
 }) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [loyer, setLoyer] = useState(
+    row.nouveau_loyer != null ? String(row.nouveau_loyer) : ""
+  );
+  const [dDebut, setDDebut] = useState(() => {
+    if (row.nouvelle_date_debut) return row.nouvelle_date_debut;
+    const d = new Date(row.bail_date_fin + "T00:00:00");
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().slice(0, 10);
+  });
+  const [dFin, setDFin] = useState(() => {
+    if (row.nouvelle_date_fin) return row.nouvelle_date_fin;
+    const d = new Date(row.bail_date_fin + "T00:00:00");
+    d.setFullYear(d.getFullYear() + 1);
+    return d.toISOString().slice(0, 10);
+  });
   const [busy, setBusy] = useState(false);
 
-  async function pick(file: File) {
-    if (
-      hasDoc &&
-      !window.confirm(
-        "Remplacer l'avis courant par un PDF EXTERNE (scanné/reçu) ?\n\nL'ancien reste conservé dans les Documents.\n\nPour refaire un NOUVEL avis Kratos à la place : supprime l'avis (poubelle) puis « Préparer »."
-      )
-    )
-      return;
+  async function envoyer() {
+    if (!file) return;
     setBusy(true);
     try {
       const fd = new FormData();
@@ -2201,6 +2234,11 @@ function ImportAvisButton({
       if (renouvellementId == null && bailId != null) {
         fd.append("bail_id", String(bailId));
       }
+      // Les infos de l'avis importé sont reportées sur le suivi —
+      // comme dans « Préparer » (retour Phil 2026-07-31).
+      if (loyer.trim()) fd.append("nouveau_loyer", loyer.trim());
+      if (dDebut) fd.append("nouvelle_date_debut", dDebut);
+      if (dFin) fd.append("nouvelle_date_fin", dFin);
       const r = await authedFetch(
         renouvellementId != null
           ? `/api/v1/immobilier/renouvellements/${renouvellementId}/document`
@@ -2213,6 +2251,8 @@ function ImportAvisButton({
           (d && (d.detail || d.message)) || `HTTP ${r.status}`
         );
       }
+      setOpen(false);
+      setFile(null);
       onDone();
     } catch (e) {
       window.alert(`Import échoué : ${(e as Error).message}`);
@@ -2223,35 +2263,104 @@ function ImportAvisButton({
 
   return (
     <>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="application/pdf,image/jpeg,image/png"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) void pick(f);
-          e.target.value = "";
-        }}
-      />
       <button
         type="button"
         className="btn-secondary btn-sm"
         disabled={busy}
         title={
           hasDoc
-            ? "Remplacer l'avis courant (l'ancien reste dans les Documents)"
-            : "Importer l'avis signé/reçu"
+            ? "Remplacer l'avis courant par un PDF externe (l'ancien reste dans les Documents)"
+            : "Importer un avis externe (papier/scanné)"
         }
-        onClick={() => inputRef.current?.click()}
+        onClick={() => setOpen(true)}
       >
-        {busy ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : (
-          <Upload className="h-3.5 w-3.5" />
-        )}
-        {hasDoc ? "Remplacer" : "Importer"}
+        <Upload className="h-3.5 w-3.5" />
       </button>
+      {open ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => setOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 p-5 shadow-2xl"
+          >
+            <h3 className="text-sm font-bold uppercase tracking-wider text-accent-500">
+              {hasDoc
+                ? "Remplacer l'avis (PDF externe)"
+                : "Importer un avis externe"}
+            </h3>
+            <p className="mt-1 text-[11px] text-white/50">
+              Le PDF importé devient l&apos;avis courant et les infos
+              ci-dessous sont reportées sur le suivi. Pour refaire un
+              avis Kratos : poubelle puis « Préparer ».
+            </p>
+            <div className="mt-3 space-y-3">
+              <input
+                type="file"
+                accept="application/pdf,image/jpeg,image/png"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                className="block w-full text-xs text-white/70"
+              />
+              <div>
+                <label className="label">
+                  Nouveau loyer sur l&apos;avis ($/mois)
+                </label>
+                <input
+                  type="number"
+                  step="1"
+                  value={loyer}
+                  onChange={(e) => setLoyer(e.target.value)}
+                  className="input w-full font-mono"
+                  placeholder="ex. 1450"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Renouvelé du</label>
+                  <input
+                    type="date"
+                    value={dDebut}
+                    onChange={(e) => setDDebut(e.target.value)}
+                    className="input w-full font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="label">au</label>
+                  <input
+                    type="date"
+                    value={dFin}
+                    onChange={(e) => setDFin(e.target.value)}
+                    className="input w-full font-mono"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="btn-secondary btn-sm"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={() => void envoyer()}
+                disabled={busy || !file}
+                className="btn-accent btn-sm disabled:opacity-50"
+              >
+                {busy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Upload className="h-3.5 w-3.5" />
+                )}
+                Importer
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

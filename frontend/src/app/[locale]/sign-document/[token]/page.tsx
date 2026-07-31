@@ -22,6 +22,8 @@ type PublicDocument = {
   // v4 — avis de modification : la signature exige un choix.
   choix_requis?: boolean;
   choix?: string | null;
+  repute_accepte_le?: string | null;
+  copie_envoyee?: boolean | null;
   company_name: string;
   company_email: string;
 };
@@ -180,6 +182,22 @@ export default function SignDocumentPage() {
           </div>
         ) : null}
 
+        {!isSigned && data.repute_accepte_le ? (
+          <div className="mt-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-5">
+            <p className="font-semibold text-white">
+              Délai de réponse écoulé — modifications réputées acceptées
+            </p>
+            <p className="mt-1 text-sm text-amber-100">
+              Le délai d&apos;un (1) mois prévu par la loi (art. 1945
+              C.c.Q.) s&apos;est écoulé le {data.repute_accepte_le} sans
+              réponse : vous êtes réputé avoir accepté les modifications
+              proposées. Le document reste consultable ci-dessous, mais
+              la signature n&apos;est plus possible. Pour toute
+              question, écrivez-nous.
+            </p>
+          </div>
+        ) : null}
+
         {isSigned ? (
           <div className="mt-6 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-5">
             <div className="flex items-center gap-3">
@@ -197,8 +215,11 @@ export default function SignDocumentPage() {
                   {data.signed_at
                     ? ` le ${new Date(data.signed_at).toLocaleString("fr-CA")}`
                     : ""}
-                  . Une copie signée vous a été transmise par
-                  courriel. Merci !
+                  .{" "}
+                  {data.copie_envoyee === false
+                    ? "L'envoi de votre copie par courriel a échoué — écrivez-nous pour la recevoir."
+                    : "Une copie signée vous a été transmise par courriel."}{" "}
+                  Merci !
                 </p>
               </div>
             </div>
@@ -244,7 +265,10 @@ export default function SignDocumentPage() {
           </section>
         ) : null}
 
-        {!isSigned && !data.refuse_le && signatureRequise ? (
+        {!isSigned &&
+        !data.refuse_le &&
+        !data.repute_accepte_le &&
+        signatureRequise ? (
           <section className="mt-6 rounded-xl border border-accent-500/40 bg-accent-500/10 p-6">
             <h2 className="text-base font-semibold text-white">
               {data.choix_requis ? "Votre réponse" : "Signer le document"}

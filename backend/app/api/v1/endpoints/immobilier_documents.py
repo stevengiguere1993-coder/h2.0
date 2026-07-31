@@ -766,6 +766,9 @@ async def upload_renouvellement_document(
     db: DBSession,
     user: CurrentUser,
     file: UploadFile = File(...),
+    nouveau_loyer: Optional[str] = Form(None),
+    nouvelle_date_debut: Optional[str] = Form(None),
+    nouvelle_date_fin: Optional[str] = Form(None),
 ) -> DocumentRead:
     """Importe (ou remplace) l'avis de renouvellement courant. L'ancien
     reste au dossier."""
@@ -790,9 +793,36 @@ async def upload_renouvellement_document(
         remplace_document_id=ancien,
     )
     r.document_id = obj.id
+    _appliquer_infos_avis(
+        r, nouveau_loyer, nouvelle_date_debut, nouvelle_date_fin
+    )
     await db.commit()
     await db.refresh(obj)
     return _doc_read(obj)
+
+
+def _appliquer_infos_avis(
+    r, nouveau_loyer, nouvelle_date_debut, nouvelle_date_fin
+) -> None:
+    """Reporte sur le cycle les infos de l'avis IMPORTÉ (retour Phil
+    2026-07-31 : « je devrais pouvoir écrire les infos qui sont sur
+    l'avis que j'importe ») — champs vides ignorés."""
+    from datetime import date as _d
+
+    if nouveau_loyer and str(nouveau_loyer).strip():
+        try:
+            r.nouveau_loyer = float(str(nouveau_loyer).strip())
+        except ValueError:
+            pass
+    for champ, brut in (
+        ("nouvelle_date_debut", nouvelle_date_debut),
+        ("nouvelle_date_fin", nouvelle_date_fin),
+    ):
+        if brut and str(brut).strip():
+            try:
+                setattr(r, champ, _d.fromisoformat(str(brut).strip()))
+            except ValueError:
+                pass
 
 
 @router.post("/renouvellements/importer", response_model=DocumentRead)
@@ -801,6 +831,9 @@ async def importer_avis_pour_bail(
     user: CurrentUser,
     bail_id: int = Form(...),
     file: UploadFile = File(...),
+    nouveau_loyer: Optional[str] = Form(None),
+    nouvelle_date_debut: Optional[str] = Form(None),
+    nouvelle_date_fin: Optional[str] = Form(None),
 ) -> DocumentRead:
     """Importe un avis de renouvellement pour un bail SANS cycle en cours
     (ex. avis papier envoyé avant Kratos) : crée le renouvellement
@@ -833,6 +866,9 @@ async def importer_avis_pour_bail(
         logement_id=bail.logement_id,
     )
     r.document_id = obj.id
+    _appliquer_infos_avis(
+        r, nouveau_loyer, nouvelle_date_debut, nouvelle_date_fin
+    )
     await db.commit()
     await db.refresh(obj)
     log.info(
