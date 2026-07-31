@@ -389,6 +389,9 @@ async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
     sa preuve à lui, annoncée sur la page publique."""
     from sqlalchemy.orm import undefer
 
+    from app.api.v1.endpoints.immobilier_documents import (
+        _resolve_destinataire,
+    )
     from app.integrations.email_graph import EmailAttachment, GraphMailer
 
     locataire, dest = await _resolve_destinataire(db, doc, None)
