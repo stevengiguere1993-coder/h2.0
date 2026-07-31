@@ -51,6 +51,9 @@ class PublicDocument(BaseModel):
     #: v7 — la copie signée vient d'être transmise par courriel (posé
     #: seulement dans la réponse du POST /signer).
     copie_envoyee: Optional[bool] = None
+    #: v8 — raison de l'échec d'envoi de la copie (déboguer le « je ne
+    #: la reçois pas » de Phil).
+    copie_erreur: Optional[str] = None
     company_name: str = "Horizon Services Immobiliers"
     company_email: str = "info@immohorizon.com"
 
@@ -336,16 +339,19 @@ async def public_sign(
     # au locataire (retour Phil : « je ne la reçois toujours pas »,
     # l'échec était invisible).
     copie_ok = False
+    copie_err: Optional[str] = None
     if doc.type == "avis_modification":
         try:
             await _envoyer_copie_signee(db, doc)
             copie_ok = True
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            copie_err = str(exc)[:200]
             log.exception(
                 "Envoi de la copie signée échoué (doc %s)", doc.id
             )
     pub = await _to_public(db, doc)
     pub.copie_envoyee = copie_ok
+    pub.copie_erreur = copie_err
     return pub
 
 
@@ -387,8 +393,10 @@ async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
 
     locataire, dest = await _resolve_destinataire(db, doc, None)
     mailer = GraphMailer()
-    if not mailer.ready or not dest:
-        return
+    if not mailer.ready:
+        raise RuntimeError("Microsoft Graph n'est pas configuré.")
+    if not dest:
+        raise RuntimeError("Le locataire n'a pas de courriel.")
     d2 = (
         await db.execute(
             select(ImmDocument)
@@ -397,7 +405,7 @@ async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
         )
     ).scalar_one()
     if not d2.pdf_blob:
-        return
+        raise RuntimeError("PDF signé introuvable.")
     nom = (locataire.full_name if locataire else "") or "Madame, Monsieur"
     await mailer.send(
         to=[dest],

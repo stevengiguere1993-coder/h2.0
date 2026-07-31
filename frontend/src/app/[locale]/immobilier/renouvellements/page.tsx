@@ -401,11 +401,16 @@ const FENETRE_TONE: Record<RenouvellementOverview["fenetre"], string> = {
 const FENETRES_REGLEES = new Set(["envoye", "reconduit"]);
 
 function rangLigne(r: RenouvellementOverview): number {
-  if (r.reponse === "refuse") return -1; // urgent — fixation TAL
-  if (r.reponse === "depart") return -1; // départ annoncé — relocation
-  if (r.reponse === "attente") return 1; // jaune, sous le travail à faire
-  if (FENETRES_REGLEES.has(r.fenetre)) return 2; // verts en bas
-  return 0;
+  // Ordre voulu (retour Phil 2026-07-31) : ROUGE (action requise) →
+  // GRIS (à envoyer) → JAUNE (attente) → MAUVE/ORANGE (départs) →
+  // VERT (réglés).
+  if (r.reponse === "refuse") return 0; // rouge — fixation TAL
+  if (r.fenetre === "echu" && !r.reponse) return 0; // rouge — date
+  if (r.relocation_dossier_id) return 3; // mauve — en relocation
+  if (r.reponse === "depart") return 3; // orange — départ annoncé
+  if (r.reponse === "attente") return 2; // jaune
+  if (FENETRES_REGLEES.has(r.fenetre) || r.reponse) return 4; // verts
+  return 1; // gris — à préparer
 }
 
 function fmtCurrency(n: number | null | undefined): string {
@@ -1117,7 +1122,7 @@ Nouvelle date de fin :`,
                             setPrepForce(!!r.reponse);
                             setPrepFor(r);
                           }}
-                          className="btn-secondary btn-sm"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-2.5 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/30 hover:text-white"
                         >
                           <Mail className="h-3.5 w-3.5" />
                           Préparer
@@ -1160,7 +1165,7 @@ Nouvelle date de fin :`,
                           <button
                             type="button"
                             onClick={() => void ouvrirDoc(r.document_id!)}
-                            className="btn-secondary btn-sm"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-2.5 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/30 hover:text-white"
                             title="Ouvrir l'avis de renouvellement courant (PDF)"
                           >
                             <FileDown className="h-3.5 w-3.5" />
@@ -2224,6 +2229,9 @@ function ImportAvisButton({
     return d.toISOString().slice(0, 10);
   });
   const [busy, setBusy] = useState(false);
+  //: Un avis importé est le plus souvent DÉJÀ signé (papier) → il
+  //: arrive vert « Accepté » (retour Phil 2026-07-31), décochable.
+  const [dejaSigne, setDejaSigne] = useState(true);
 
   async function envoyer() {
     if (!file) return;
@@ -2239,6 +2247,7 @@ function ImportAvisButton({
       if (loyer.trim()) fd.append("nouveau_loyer", loyer.trim());
       if (dDebut) fd.append("nouvelle_date_debut", dDebut);
       if (dFin) fd.append("nouvelle_date_fin", dFin);
+      if (dejaSigne) fd.append("deja_accepte", "true");
       const r = await authedFetch(
         renouvellementId != null
           ? `/api/v1/immobilier/renouvellements/${renouvellementId}/document`
@@ -2265,7 +2274,7 @@ function ImportAvisButton({
     <>
       <button
         type="button"
-        className="btn-secondary btn-sm"
+        className="inline-flex items-center rounded-lg border border-white/15 bg-brand-950 p-1.5 text-white/70 transition hover:border-white/30 hover:text-white"
         disabled={busy}
         title={
           hasDoc
@@ -2315,6 +2324,22 @@ function ImportAvisButton({
                   placeholder="ex. 1450"
                 />
               </div>
+              <label className="flex cursor-pointer items-start gap-2 text-xs text-white/80">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={dejaSigne}
+                  onChange={(e) => setDejaSigne(e.target.checked)}
+                />
+                <span>
+                  Avis déjà signé/accepté par le locataire
+                  <span className="block text-[10px] text-white/45">
+                    Coché : la ligne arrive verte « Accepté ». Décoche
+                    si l&apos;avis est envoyé mais SANS réponse encore
+                    (ligne jaune).
+                  </span>
+                </span>
+              </label>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="label">Renouvelé du</label>
