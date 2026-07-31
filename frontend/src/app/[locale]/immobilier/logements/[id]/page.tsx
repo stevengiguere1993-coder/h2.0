@@ -57,6 +57,7 @@ type DossierBail = {
   signed_at: string | null;
   document_id?: number | null;
   au_mois?: boolean | null;
+  relocation_statut?: string | null;
 };
 
 type DossierBon = {
@@ -738,6 +739,19 @@ export default function LogementDetailPage({
                         {BAIL_STATUS_LABEL[bailActif.status] ??
                           bailActif.status}
                       </span>
+                      {bailActif.relocation_statut ? (
+                        <span
+                          className={`badge ${
+                            bailActif.relocation_statut === "bail_envoye"
+                              ? "badge-violet"
+                              : "badge-amber"
+                          }`}
+                        >
+                          {bailActif.relocation_statut === "bail_envoye"
+                            ? "Bail envoyé — à signer"
+                            : "Bail à envoyer"}
+                        </span>
+                      ) : null}
                       <AuMoisToggle
                         bailId={bailActif.id}
                         auMois={!!bailActif.au_mois}
@@ -812,9 +826,21 @@ export default function LogementDetailPage({
                           </td>
                           <td className="py-2.5 pr-3 text-right">
                             <span
-                              className={`badge ${BAIL_STATUS_BADGE[b.status] || "badge-neutral"}`}
+                              className={`badge ${
+                                b.relocation_statut === "bail_envoye"
+                                  ? "badge-violet"
+                                  : b.relocation_statut
+                                    ? "badge-amber"
+                                    : BAIL_STATUS_BADGE[b.status] ||
+                                      "badge-neutral"
+                              }`}
                             >
-                              {BAIL_STATUS_LABEL[b.status] ?? b.status}
+                              {b.relocation_statut === "bail_envoye"
+                                ? "Bail envoyé — à signer"
+                                : b.relocation_statut
+                                  ? "Bail à envoyer"
+                                  : (BAIL_STATUS_LABEL[b.status] ??
+                                    b.status)}
                             </span>
                           </td>
                           <td className="py-2.5 text-right">

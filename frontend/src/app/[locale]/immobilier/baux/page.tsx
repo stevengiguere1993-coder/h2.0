@@ -52,6 +52,11 @@ type Row = {
   solde_total?: number;
   nb_relances: number;
   derniere_relance_le: string | null;
+  // Prochain locataire (transition) — bail futur / en préparation.
+  prochain_nom?: string | null;
+  prochain_loyer?: number | null;
+  prochain_debut?: string | null;
+  prochain_statut?: string | null;
 };
 
 type Overview = {
@@ -96,6 +101,12 @@ function fmtDateShort(iso: string): string {
   });
 }
 
+const RELOC_LABEL: Record<string, string> = {
+  bail_a_envoyer: "bail à envoyer",
+  bail_envoye: "bail envoyé — à signer",
+  a_venir: "à venir"
+};
+
 function fmtMoney(n: number): string {
   return `${Math.round(n).toLocaleString("fr-CA")} $`;
 }
@@ -124,6 +135,67 @@ function currentMonth(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+/** Options de correction d'un paiement — mêmes choix que la saisie
+ *  (retour Phil 2026-07-31 : « Corriger » ne doit plus juste annuler
+ *  et faire perdre la ligne). */
+function CorrectionOptions({
+  r,
+  busy,
+  onMontant,
+  onComplet,
+  onRetirer,
+  onClose
+}: {
+  r: Row;
+  busy: boolean;
+  onMontant: () => void;
+  onComplet: () => void;
+  onRetirer: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onMontant}
+        title="Ressaisir le montant réellement reçu (remplace les paiements du mois)"
+        className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[11px] font-semibold text-sky-300 hover:bg-sky-500/20 disabled:opacity-50"
+      >
+        Corriger le montant
+      </button>
+      {r.etat !== "paye" ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onComplet}
+          title="Remplacer par un paiement complet du mois"
+          className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+        >
+          Payé au complet
+        </button>
+      ) : null}
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onRetirer}
+        title="Retirer les paiements du mois — la ligne redevient impayée"
+        className="rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[11px] font-semibold text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+      >
+        Retirer
+      </button>
+      <button
+        type="button"
+        onClick={onClose}
+        title="Fermer"
+        className="px-1 text-[11px] text-white/40 hover:text-white/70"
+      >
+        ×
+      </button>
+    </span>
+  );
+}
+
 export default function BauxPage() {
   const { currentEntrepriseId } = useImmobilierLayout();
   const [mois, setMois] = useState(currentMonth());
@@ -132,6 +204,7 @@ export default function BauxPage() {
   const [error, setError] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<number | null>(null);
   const [relancingId, setRelancingId] = useState<number | null>(null);
+  const [correctingId, setCorrectingId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [echeances, setEcheances] = useState<EcheanceData | null>(null);
   const [search, setSearch] = useState("");
@@ -306,27 +379,79 @@ export default function BauxPage() {
     }
   }
 
-  // Erreur de saisie : annule TOUS les paiements du mois pour ce bail —
-  // le mois redevient impayé, on ressaisit le bon montant.
-  async function corrigerPaiement(row: Row) {
+  // « Corriger » ouvre les OPTIONS (retour Phil 2026-07-31) : corriger
+  // le montant, marquer payé au complet, ou retirer — sans perdre la
+  // ligne ni devoir la retrouver.
+  async function supprimerPaiementsMois(row: Row): Promise<void> {
+    const r = await authedFetch(
+      `/api/v1/immobilier/baux/${row.bail_id}/paiements-mois?mois=${mois}`,
+      { method: "DELETE" }
+    );
+    if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+  }
+
+  async function retirerPaiement(row: Row) {
     if (
       !window.confirm(
-        `Annuler le paiement de ${row.locataire_name || "ce locataire"} pour ${mois} (${fmtMoney(row.montant_paye ?? 0)} reçu) ?\nLe mois redeviendra impayé — tu pourras ressaisir le bon montant.`
+        `Retirer le paiement de ${row.locataire_name || "ce locataire"} pour ${mois} (${fmtMoney(row.montant_paye ?? 0)} reçu) ?\nLe mois redeviendra impayé.`
       )
     )
       return;
     setPayingId(row.bail_id);
     try {
-      const r = await authedFetch(
-        `/api/v1/immobilier/baux/${row.bail_id}/paiements-mois?mois=${mois}`,
-        { method: "DELETE" }
-      );
-      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
-      flash("Paiement annulé — ressaisis le bon montant.");
+      await supprimerPaiementsMois(row);
+      flash("Paiement retiré — le mois est de retour impayé.");
+      setCorrectingId(null);
       await load();
     } catch (e) {
       setError(`Annulation échouée : ${(e as Error).message}`);
     } finally {
+      setPayingId(null);
+    }
+  }
+
+  async function corrigerMontant(row: Row) {
+    const saisie = window.prompt(
+      `Montant RÉELLEMENT reçu de ${row.locataire_name || "ce locataire"} pour ${mois} ?\n(Enregistré : ${fmtMoney(row.montant_paye ?? 0)} — dû du mois : ${fmtMoney(duMois(row))})`,
+      ""
+    );
+    if (saisie == null) return;
+    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(montant) || montant < 0) {
+      setError("Montant invalide.");
+      return;
+    }
+    setPayingId(row.bail_id);
+    try {
+      await supprimerPaiementsMois(row);
+      setCorrectingId(null);
+      if (montant > 0) {
+        await enregistrerPaiement(row, Math.round(montant * 100) / 100);
+      } else {
+        flash("Paiements du mois retirés.");
+        await load();
+        setPayingId(null);
+      }
+    } catch (e) {
+      setError(`Correction échouée : ${(e as Error).message}`);
+      setPayingId(null);
+    }
+  }
+
+  async function payeAuComplet(row: Row) {
+    if (
+      !window.confirm(
+        `Remplacer par un paiement COMPLET (${fmtMoney(duMois(row))}) pour ${mois} ?`
+      )
+    )
+      return;
+    setPayingId(row.bail_id);
+    try {
+      await supprimerPaiementsMois(row);
+      setCorrectingId(null);
+      await enregistrerPaiement(row, duMois(row));
+    } catch (e) {
+      setError(`Correction échouée : ${(e as Error).message}`);
       setPayingId(null);
     }
   }
@@ -716,6 +841,20 @@ export default function BauxPage() {
                             </span>
                           )
                         ) : null}
+                        {r.prochain_nom ? (
+                          <div className="mt-0.5 text-[10px] font-normal text-orange-300/90">
+                            Prochain : {r.prochain_nom}
+                            {r.prochain_loyer != null
+                              ? ` · ${fmtMoney(r.prochain_loyer)}`
+                              : ""}
+                            {r.prochain_debut
+                              ? ` dès le ${r.prochain_debut}`
+                              : ""}
+                            {" — "}
+                            {RELOC_LABEL[r.prochain_statut || ""] ||
+                              "à venir"}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-white">
                         {fmtMoney(r.loyer_mensuel)}
@@ -819,23 +958,45 @@ export default function BauxPage() {
                                     Relancer
                                   </button>
                                   {(r.montant_paye ?? 0) > 0 ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => void corrigerPaiement(r)}
-                                      disabled={payingId === r.bail_id}
-                                      title="Erreur de saisie ? Annule les paiements du mois pour ressaisir"
-                                      className="px-1 text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
-                                    >
-                                      Corriger
-                                    </button>
+                                    correctingId === r.bail_id ? (
+                                      <CorrectionOptions
+                                        r={r}
+                                        busy={payingId === r.bail_id}
+                                        onMontant={() => void corrigerMontant(r)}
+                                        onComplet={() => void payeAuComplet(r)}
+                                        onRetirer={() => void retirerPaiement(r)}
+                                        onClose={() => setCorrectingId(null)}
+                                      />
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setCorrectingId(r.bail_id)
+                                        }
+                                        disabled={payingId === r.bail_id}
+                                        title="Corriger le paiement : montant, complet, ou retrait"
+                                        className="px-1 text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                                      >
+                                        Corriger
+                                      </button>
+                                    )
                                   ) : null}
                                 </>
+                              ) : correctingId === r.bail_id ? (
+                                <CorrectionOptions
+                                  r={r}
+                                  busy={payingId === r.bail_id}
+                                  onMontant={() => void corrigerMontant(r)}
+                                  onComplet={() => void payeAuComplet(r)}
+                                  onRetirer={() => void retirerPaiement(r)}
+                                  onClose={() => setCorrectingId(null)}
+                                />
                               ) : (
                                 <button
                                   type="button"
-                                  onClick={() => void corrigerPaiement(r)}
+                                  onClick={() => setCorrectingId(r.bail_id)}
                                   disabled={payingId === r.bail_id}
-                                  title="Erreur de saisie ? Annule les paiements du mois pour ressaisir"
+                                  title="Corriger le paiement : montant, complet, ou retrait"
                                   className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/60 transition hover:text-rose-300 disabled:opacity-50"
                                 >
                                   Corriger
