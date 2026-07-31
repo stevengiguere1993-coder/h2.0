@@ -156,6 +156,11 @@ def est_cycle_courant(
     TÔT (ex. bail reconduit jusqu'en 2028) restait invisible."""
     if r.status == "reconduit":
         return False
+    if r.status in ("propose", "en_negociation"):
+        # Avis envoyé, réponse attendue : TOUJOURS courant — même si la
+        # période visée commence aujourd'hui ou est passée (retour Phil
+        # 2026-07-31 : avis 2026→2027 sur bail 2028 restait gris).
+        return True
     if (
         r.status in ("accepte", "repute_accepte")
         and r.applique_le is None

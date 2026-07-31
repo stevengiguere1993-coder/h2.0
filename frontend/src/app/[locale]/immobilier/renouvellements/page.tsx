@@ -42,6 +42,8 @@ type RenouvellementOverview = {
     | "hors_fenetre";
   avis_envoye_le?: string | null;
   nouveau_loyer?: number | null;
+  nouvelle_date_debut?: string | null;
+  nouvelle_date_fin?: string | null;
   renouvellement_status?: string | null;
   //: Dernier cycle (cible de l'import d'avis).
   renouvellement_id?: number | null;
@@ -482,8 +484,18 @@ Le document d'avis lié sera supprimé aussi et la ligne redeviendra « à prép
     setDeletingId(r.bail_id);
     setMsg(null);
     try {
+      const force = !!r.avis_doc_signed_at;
+      if (
+        force &&
+        !window.confirm(
+          "⚠️ Cet avis a été SIGNÉ par le locataire.\n\nLe supprimer efface aussi la preuve de signature. Vraiment continuer ?"
+        )
+      )
+        return;
       const res = await authedFetch(
-        `/api/v1/immobilier/renouvellements/${r.renouvellement_id}`,
+        `/api/v1/immobilier/renouvellements/${r.renouvellement_id}${
+          force ? "?force=true" : ""
+        }`,
         { method: "DELETE" }
       );
       if (!res.ok) {
@@ -893,13 +905,34 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                         {r.locataire_email || "(pas d'email)"}
                       </div>
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-xs text-white/80">
-                      {fmtCurrency(r.bail_loyer_mensuel)}
+                    <td className="px-4 py-2.5 text-right font-mono text-xs">
+                      <div className="font-bold text-white">
+                        {fmtCurrency(r.bail_loyer_mensuel)}
+                      </div>
+                      {r.reponse &&
+                      !r.applique_le &&
+                      r.nouveau_loyer != null &&
+                      r.reponse !== "refuse" ? (
+                        <div className="text-[10px] text-accent-500">
+                          → {fmtCurrency(r.nouveau_loyer)}
+                          {r.nouvelle_date_debut
+                            ? ` dès le ${r.nouvelle_date_debut}`
+                            : ""}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-4 py-2.5 text-right">
-                      <div className="font-mono text-xs text-white">
+                      <div className="font-mono text-xs font-bold text-white">
                         {r.bail_date_fin}
                       </div>
+                      {r.reponse &&
+                      !r.applique_le &&
+                      r.nouvelle_date_fin &&
+                      r.reponse !== "refuse" ? (
+                        <div className="font-mono text-[10px] text-accent-500">
+                          → {r.nouvelle_date_fin}
+                        </div>
+                      ) : null}
                       <div className="text-[10px] text-white/40">
                         {r.jours_avant_fin < 0
                           ? `échu depuis ${-r.jours_avant_fin}j`
@@ -939,13 +972,13 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                         </div>
                       ) : null}
                       {r.reponse === "depart" ? (
-                        <div className="mt-1 text-[10px] text-amber-200/80">
+                        <div className="mt-1 text-[10px] font-medium text-white/70">
                           Le locataire quitte à la fin du bail — ouvre
                           un dossier de relocation (« Non renouvelé »)
                         </div>
                       ) : null}
                       {r.reponse === "attente" && r.deadline_reponse ? (
-                        <div className="mt-1 text-[10px] text-amber-200/80">
+                        <div className="mt-1 text-[10px] font-medium text-white/70">
                           réponse due le {r.deadline_reponse} — sans
                           réponse, réputé accepté
                         </div>
@@ -959,7 +992,7 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                         </div>
                       ) : null}
                       {r.applique_le ? (
-                        <div className="mt-0.5 text-[10px] text-emerald-300/80">
+                        <div className="mt-0.5 text-[10px] font-medium text-white/70">
                           Nouveau loyer appliqué au bail le {r.applique_le}
                         </div>
                       ) : null}
@@ -1017,8 +1050,7 @@ La fin du bail passera du ${r.bail_date_fin} au même jour l'an prochain.`
                             Avis
                           </button>
                         ) : null}
-                        {r.renouvellement_id != null &&
-                        !r.avis_doc_signed_at ? (
+                        {r.renouvellement_id != null ? (
                           <button
                             type="button"
                             title="Supprimer l'avis (et son document) — la ligne redevient « à préparer »"
@@ -2131,7 +2163,7 @@ function ImportAvisButton({
     if (
       hasDoc &&
       !window.confirm(
-        "Remplacer l'avis de renouvellement ? L'ancien reste conservé dans les Documents — seul celui qui s'ouvre au clic change."
+        "Remplacer l'avis courant par un PDF EXTERNE (scanné/reçu) ?\n\nL'ancien reste conservé dans les Documents.\n\nPour refaire un NOUVEL avis Kratos à la place : supprime l'avis (poubelle) puis « Préparer »."
       )
     )
       return;

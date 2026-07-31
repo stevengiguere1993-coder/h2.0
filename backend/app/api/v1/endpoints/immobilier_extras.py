@@ -656,7 +656,10 @@ async def envoyer_renouvellement(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_renouvellement(
-    renouvellement_id: int, db: DBSession, user: CurrentUser
+    renouvellement_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    force: bool = False,
 ) -> None:
     """Supprime un avis de renouvellement ET les documents d'avis du
     cycle (non signés) : la ligne redevient « à préparer » dans Suivis
@@ -683,12 +686,13 @@ async def delete_renouvellement(
         or r.avis_envoye_le is None
         or d.created_at.date() >= r.avis_envoye_le
     ]
-    if any(d.signed_at is not None for d in du_cycle):
+    if any(d.signed_at is not None for d in du_cycle) and not force:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "L'avis a été SIGNÉ par le locataire — il ne peut plus "
-                "être supprimé."
+                "L'avis a été SIGNÉ par le locataire — repasse avec "
+                "force=true pour le supprimer malgré tout (la preuve "
+                "de signature sera perdue)."
             ),
         )
     # Annuler une RECONDUCTION tacite remet aussi la date de fin du
@@ -1000,9 +1004,12 @@ async def renouvellements_overview(
                 # consultation (pas de cron ; rien ne part au locataire).
                 if last_ren.nouveau_loyer is not None:
                     b.loyer_mensuel = last_ren.nouveau_loyer
+                # La période de l'AVIS remplace celle du bail, même si
+                # elle la RACCOURCIT (retour Phil 2026-07-31 : avis
+                # jusqu'en 2027 sur un bail qui allait jusqu'en 2028).
                 if (
                     last_ren.nouvelle_date_fin is not None
-                    and last_ren.nouvelle_date_fin > b.date_fin
+                    and last_ren.nouvelle_date_fin != b.date_fin
                 ):
                     b.date_fin = last_ren.nouvelle_date_fin
                 last_ren.applique_le = today
@@ -1083,6 +1090,12 @@ async def renouvellements_overview(
                     else None
                 ),
                 reponse=reponse,
+                nouvelle_date_debut=(
+                    last_ren.nouvelle_date_debut if courant else None
+                ),
+                nouvelle_date_fin=(
+                    last_ren.nouvelle_date_fin if courant else None
+                ),
                 reponse_le=last_ren.reponse_le if courant else None,
                 deadline_reponse=deadline_reponse,
                 deadline_fixation=deadline_fixation,
