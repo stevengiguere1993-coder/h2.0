@@ -4,6 +4,7 @@ bail via un lien tokenisé `/bail/{token}`."""
 from __future__ import annotations
 
 import base64
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -13,7 +14,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DBSession
-from app.models.immobilier import Bail, Immeuble, Logement, Locataire
+from app.models.immobilier import (
+    Bail,
+    Immeuble,
+    Locataire,
+    LocationDossier,
+    LocationDossierStatut,
+    Logement,
+)
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/public/baux", tags=["public-baux"])
 
@@ -112,6 +122,10 @@ async def _to_public(db: AsyncSession, bail: Bail) -> PublicBail:
 @router.get("/{token}", response_model=PublicBail)
 async def public_read(token: str, db: DBSession) -> PublicBail:
     bail = await _load(db, token)
+    # Suivi « ouvert » : première consultation de la page publique.
+    if bail.sent_at is not None and bail.signature_opened_at is None:
+        bail.signature_opened_at = datetime.now(timezone.utc)
+        await db.flush()
     return await _to_public(db, bail)
 
 
@@ -144,6 +158,35 @@ async def public_accept(
     # Génère le PDF du bail signé et le classe automatiquement dans le
     # Drive de l'immeuble (best-effort — n'échoue jamais la signature).
     await _archive_signed_bail(db, bail)
+
+    # Dossier de relocation attaché à ce bail → « reloué » dès la
+    # signature (best-effort — n'échoue jamais la signature).
+    try:
+        dossier = (
+            (
+                await db.execute(
+                    select(LocationDossier).where(
+                        LocationDossier.nouveau_bail_id == bail.id,
+                        LocationDossier.statut.notin_(
+                            [
+                                LocationDossierStatut.RELOUE.value,
+                                LocationDossierStatut.ANNULE.value,
+                            ]
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if dossier is not None:
+            dossier.statut = LocationDossierStatut.RELOUE.value
+            if dossier.reloue_le is None:
+                dossier.reloue_le = datetime.now(timezone.utc).date()
+            dossier.updated_at = datetime.now(timezone.utc)
+            await db.flush()
+    except Exception:  # pragma: no cover — best-effort
+        log.exception("Transition du dossier de relocation après signature")
 
     return await _to_public(db, bail)
 

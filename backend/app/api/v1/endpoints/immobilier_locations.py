@@ -42,6 +42,8 @@ from app.models.immobilier import (
     LogementStatus,
 )
 
+from app.services.bail_sign import BailSendError, send_bail_for_signature
+
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/immobilier", tags=["immobilier-locations"])
@@ -51,6 +53,7 @@ STATUTS_ACTIFS = {
     LocationDossierStatut.ANNONCE_PUBLIEE.value,
     LocationDossierStatut.VISITES.value,
     LocationDossierStatut.CANDIDAT_RETENU.value,
+    LocationDossierStatut.BAIL_ENVOYE.value,
 }
 
 STATUTS_VALIDES = {s.value for s in LocationDossierStatut}
@@ -525,16 +528,23 @@ class ConvertirRequest(BaseModel):
     locataire_nom: str = Field(..., min_length=2, max_length=255)
     locataire_email: Optional[str] = Field(default=None, max_length=320)
     locataire_phone: Optional[str] = Field(default=None, max_length=50)
+    date_naissance: Optional[date] = None
+    nas_last4: Optional[str] = Field(default=None, max_length=4)
+    employeur: Optional[str] = Field(default=None, max_length=255)
+    revenu_annuel: Optional[float] = Field(default=None, ge=0)
     date_debut: date
     date_fin: date
     loyer_mensuel: float = Field(..., ge=0)
     depot_garantie: Optional[float] = Field(default=None, ge=0)
+    envoyer_bail: bool = False
 
 
 class ConvertirResult(BaseModel):
     locataire_id: int
     bail_id: int
     immeuble_id: int
+    bail_envoye: bool = False
+    erreur_envoi: Optional[str] = None
 
 
 @router.post(
@@ -549,14 +559,20 @@ async def convertir_dossier(
     user: CurrentUser,
 ) -> ConvertirResult:
     """Le candidat retenu devient LOCATAIRE avec son BAIL (statut
-    « proposé » — l'envoi pour signature se fait depuis l'onglet Baux &
-    locataires). Le dossier passe à « reloué » et le logement à
-    « réservé » (occupé quand le bail commencera)."""
+    « proposé »). Le dossier reste « candidat retenu » tant que le bail
+    n'est pas parti ; si `envoyer_bail` est vrai, le bail est envoyé
+    tout de suite pour signature et le dossier passe à « bail envoyé ».
+    Le passage à « reloué » se fait à la SIGNATURE du bail. Le logement
+    devient « réservé » (occupé quand le bail commencera)."""
     _require_volet(user)
     dossier = await _dossier_or_404(db, dossier_id)
-    if dossier.statut == LocationDossierStatut.RELOUE.value:
+    if dossier.statut in (
+        LocationDossierStatut.RELOUE.value,
+        LocationDossierStatut.BAIL_ENVOYE.value,
+    ):
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "Ce dossier est déjà reloué."
+            status.HTTP_409_CONFLICT,
+            "Un bail existe déjà pour ce dossier (envoyé ou signé).",
         )
     if payload.date_fin <= payload.date_debut:
         raise HTTPException(
@@ -596,10 +612,25 @@ async def convertir_dossier(
             lignes.append(f"Notes du candidat : {retenu.notes.strip()}")
         notes_locataire = "\n".join(lignes)
 
+    # Emploi/revenus déclarés à la conversion → notes de la fiche
+    # (pas de colonnes dédiées pour l'instant).
+    extras = []
+    if (payload.employeur or "").strip():
+        extras.append(f"Employeur : {payload.employeur.strip()}")
+    if payload.revenu_annuel is not None:
+        montant = f"{payload.revenu_annuel:,.0f}".replace(",", " ")
+        extras.append(f"Revenu annuel déclaré : {montant} $")
+    if extras:
+        notes_locataire = (
+            (notes_locataire + "\n") if notes_locataire else ""
+        ) + "\n".join(extras)
+
     locataire = Locataire(
         full_name=payload.locataire_nom.strip(),
         email=(payload.locataire_email or "").strip() or None,
         phone=(payload.locataire_phone or "").strip() or None,
+        date_naissance=payload.date_naissance,
+        nas_last4=(payload.nas_last4 or "").strip() or None,
         notes=notes_locataire,
     )
     locataire.created_at = now
@@ -621,20 +652,165 @@ async def convertir_dossier(
     db.add(bail)
     await db.flush()
 
-    dossier.statut = LocationDossierStatut.RELOUE.value
-    dossier.reloue_le = now.date()
     dossier.nouveau_bail_id = bail.id
     dossier.updated_at = now
     # Réservé = bail signé/à signer pas encore commencé (le passage à
     # « occupé » suit le cycle normal du bail).
     lg.status = LogementStatus.RESERVE.value
+    immeuble_id = lg.immeuble_id
 
+    # Envoi immédiat pour signature (optionnel) : « bail envoyé » ;
+    # sinon le dossier reste « candidat retenu » et l'envoi se fait
+    # depuis la section « Baux envoyés » sous le kanban. Le passage à
+    # « reloué » arrive à la signature (public_bail).
+    bail_envoye = False
+    erreur_envoi = None
+    if payload.envoyer_bail:
+        try:
+            await send_bail_for_signature(db, bail.id)
+            dossier.statut = LocationDossierStatut.BAIL_ENVOYE.value
+            bail_envoye = True
+        except BailSendError as exc:
+            erreur_envoi = str(exc)
+
+    locataire_id = locataire.id
+    bail_id = bail.id
     await db.commit()
     return ConvertirResult(
-        locataire_id=locataire.id,
-        bail_id=bail.id,
-        immeuble_id=lg.immeuble_id,
+        locataire_id=locataire_id,
+        bail_id=bail_id,
+        immeuble_id=immeuble_id,
+        bail_envoye=bail_envoye,
+        erreur_envoi=erreur_envoi,
     )
+
+
+# ─── Suivi des baux envoyés (sous le kanban) ────────────────────────────
+
+
+class BailEnvoyeRow(BaseModel):
+    dossier_id: int
+    dossier_statut: str
+    bail_id: int
+    locataire_id: Optional[int] = None
+    locataire_nom: Optional[str] = None
+    immeuble_id: int
+    immeuble_name: str
+    logement_numero: str
+    loyer_mensuel: float
+    date_debut: date
+    date_fin: date
+    sent_to_email: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    signature_opened_at: Optional[datetime] = None
+    signed_at: Optional[datetime] = None
+
+
+def _bail_envoye_row(dossier, bail, locataire, lg, imm) -> BailEnvoyeRow:
+    return BailEnvoyeRow(
+        dossier_id=dossier.id,
+        dossier_statut=dossier.statut,
+        bail_id=bail.id,
+        locataire_id=locataire.id if locataire else None,
+        locataire_nom=locataire.full_name if locataire else None,
+        immeuble_id=imm.id if imm else 0,
+        immeuble_name=imm.name if imm else "",
+        logement_numero=lg.numero if lg else "",
+        loyer_mensuel=float(bail.loyer_mensuel),
+        date_debut=bail.date_debut,
+        date_fin=bail.date_fin,
+        sent_to_email=bail.sent_to_email,
+        sent_at=bail.sent_at,
+        signature_opened_at=bail.signature_opened_at,
+        signed_at=bail.signed_at,
+    )
+
+
+@router.get("/locations-baux-envoyes", response_model=List[BailEnvoyeRow])
+async def baux_envoyes(
+    db: DBSession,
+    user: CurrentUser,
+    immeuble_id: Optional[int] = None,
+) -> List[BailEnvoyeRow]:
+    """Baux issus d'une conversion de candidat : à envoyer, envoyés (suivi
+    ouvert/signé) et signés. Alimente la section sous le kanban — l'envoi
+    des baux se fait ICI, plus depuis Baux & paiements."""
+    _require_volet(user)
+    q = (
+        select(LocationDossier, Bail, Locataire, Logement, Immeuble)
+        .join(Bail, Bail.id == LocationDossier.nouveau_bail_id)
+        .join(Locataire, Locataire.id == Bail.locataire_id, isouter=True)
+        .join(Logement, Logement.id == LocationDossier.logement_id)
+        .join(Immeuble, Immeuble.id == Logement.immeuble_id)
+        .where(
+            LocationDossier.statut != LocationDossierStatut.ANNULE.value
+        )
+        .order_by(LocationDossier.updated_at.desc())
+    )
+    if immeuble_id is not None:
+        q = q.where(Logement.immeuble_id == immeuble_id)
+    rows = (await db.execute(q)).all()
+    visible = await visible_immeuble_ids(db, user)
+    out: List[BailEnvoyeRow] = []
+    for dossier, bail, locataire, lg, imm in rows:
+        if visible is not None and imm.id not in visible:
+            continue
+        out.append(_bail_envoye_row(dossier, bail, locataire, lg, imm))
+    # Non signés d'abord (à envoyer, puis envoyés) ; signés à la fin.
+    out.sort(key=lambda r: (r.signed_at is not None, r.sent_at is None))
+    return out
+
+
+class EnvoyerBailRequest(BaseModel):
+    email: Optional[str] = Field(default=None, max_length=320)
+
+
+@router.post(
+    "/locations/{dossier_id}/envoyer-bail", response_model=BailEnvoyeRow
+)
+async def envoyer_bail_dossier(
+    dossier_id: int,
+    payload: EnvoyerBailRequest,
+    db: DBSession,
+    user: CurrentUser,
+) -> BailEnvoyeRow:
+    """Envoie (ou renvoie) le bail créé à la conversion pour signature en
+    ligne, puis passe le dossier à « bail envoyé »."""
+    _require_volet(user)
+    dossier = await _dossier_or_404(db, dossier_id)
+    if dossier.nouveau_bail_id is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Aucun bail créé pour ce dossier — convertis d'abord le candidat.",
+        )
+    bail = await db.get(Bail, dossier.nouveau_bail_id)
+    if bail is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bail introuvable.")
+    if bail.signed_at is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Ce bail est déjà signé."
+        )
+    to = (
+        [payload.email.strip()]
+        if (payload.email or "").strip()
+        else None
+    )
+    try:
+        await send_bail_for_signature(db, bail.id, to=to)
+    except BailSendError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, str(exc)
+        ) from exc
+    if dossier.statut != LocationDossierStatut.RELOUE.value:
+        dossier.statut = LocationDossierStatut.BAIL_ENVOYE.value
+    dossier.updated_at = _now()
+    await db.commit()
+    await db.refresh(bail)
+    await db.refresh(dossier)
+    locataire = await db.get(Locataire, bail.locataire_id)
+    lg = await db.get(Logement, dossier.logement_id)
+    imm = await db.get(Immeuble, lg.immeuble_id) if lg else None
+    return _bail_envoye_row(dossier, bail, locataire, lg, imm)
 
 
 # ─── Annonces ───────────────────────────────────────────────────────────
