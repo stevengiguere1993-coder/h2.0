@@ -42,8 +42,6 @@ from app.models.immobilier import (
     LogementStatus,
 )
 
-from app.services.bail_sign import BailSendError, send_bail_for_signature
-
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/immobilier", tags=["immobilier-locations"])
@@ -53,6 +51,7 @@ STATUTS_ACTIFS = {
     LocationDossierStatut.ANNONCE_PUBLIEE.value,
     LocationDossierStatut.VISITES.value,
     LocationDossierStatut.CANDIDAT_RETENU.value,
+    LocationDossierStatut.BAIL_A_ENVOYER.value,
     LocationDossierStatut.BAIL_ENVOYE.value,
 }
 
@@ -163,6 +162,8 @@ class DossierRow(BaseModel):
     depot_sortant_rendu_le: Optional[date] = None
     # Bail créé par la conversion « candidat retenu → bail » (lien).
     nouveau_bail_id: Optional[int] = None
+    nouveau_locataire_id: Optional[int] = None
+    gestion_externe: bool = False
     annonces: List[AnnonceRead] = Field(default_factory=list)
     visites: List[VisiteRead] = Field(default_factory=list)
     created_at: Optional[datetime] = None
@@ -238,6 +239,10 @@ async def _to_row(db, d: LocationDossier) -> DossierRow:
             .order_by(LocationVisite.quand.asc().nulls_last())
         )
     ).scalars().all()
+    nouveau_locataire_id = None
+    if d.nouveau_bail_id:
+        nb = await db.get(Bail, d.nouveau_bail_id)
+        nouveau_locataire_id = nb.locataire_id if nb else None
     return DossierRow(
         id=d.id,
         logement_id=d.logement_id,
@@ -259,6 +264,8 @@ async def _to_row(db, d: LocationDossier) -> DossierRow:
         depot_sortant=depot_sortant,
         depot_sortant_rendu_le=depot_sortant_rendu_le,
         nouveau_bail_id=d.nouveau_bail_id,
+        nouveau_locataire_id=nouveau_locataire_id,
+        gestion_externe=bool(im.gestion_externe) if im else False,
         annonces=[AnnonceRead.model_validate(a) for a in annonces],
         visites=[VisiteRead.model_validate(v) for v in visites],
         created_at=d.created_at,
@@ -492,9 +499,18 @@ async def update_dossier(
         )
     for k, v in data.items():
         setattr(obj, k, v)
-    # Passage à « reloué » : date automatique + le logement redevient
-    # occupé (interconnexion — le nouveau bail se crée sur le logement).
+    # Passage à « reloué » : quand un bail a été créé pour ce dossier,
+    # le bail SIGNÉ (CORPIQ) doit être importé d'abord — il devient le
+    # bail au dossier partout (retour Phil 2026-07-31).
     if data.get("statut") == LocationDossierStatut.RELOUE.value:
+        if obj.nouveau_bail_id is not None:
+            nb = await db.get(Bail, obj.nouveau_bail_id)
+            if nb is not None and nb.document_id is None:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "Importe d'abord le bail signé — le dossier "
+                    "passera à « Reloué » automatiquement.",
+                )
         if obj.reloue_le is None:
             obj.reloue_le = _now().date()
         lg = await db.get(Logement, obj.logement_id)
@@ -530,21 +546,19 @@ class ConvertirRequest(BaseModel):
     locataire_phone: Optional[str] = Field(default=None, max_length=50)
     date_naissance: Optional[date] = None
     nas_last4: Optional[str] = Field(default=None, max_length=4)
+    ancienne_adresse: Optional[str] = Field(default=None, max_length=500)
     employeur: Optional[str] = Field(default=None, max_length=255)
     revenu_annuel: Optional[float] = Field(default=None, ge=0)
     date_debut: date
     date_fin: date
     loyer_mensuel: float = Field(..., ge=0)
     depot_garantie: Optional[float] = Field(default=None, ge=0)
-    envoyer_bail: bool = False
 
 
 class ConvertirResult(BaseModel):
     locataire_id: int
     bail_id: int
     immeuble_id: int
-    bail_envoye: bool = False
-    erreur_envoi: Optional[str] = None
 
 
 @router.post(
@@ -559,20 +573,30 @@ async def convertir_dossier(
     user: CurrentUser,
 ) -> ConvertirResult:
     """Le candidat retenu devient LOCATAIRE avec son BAIL (statut
-    « proposé »). Le dossier reste « candidat retenu » tant que le bail
-    n'est pas parti ; si `envoyer_bail` est vrai, le bail est envoyé
-    tout de suite pour signature et le dossier passe à « bail envoyé ».
-    Le passage à « reloué » se fait à la SIGNATURE du bail. Le logement
-    devient « réservé » (occupé quand le bail commencera)."""
+    « proposé »). Le dossier passe à « bail à envoyer » : le bail se
+    prépare et s'envoie dans le système de la CORPIQ (hors Kratos),
+    puis la carte se glisse à « bail envoyé ». Le passage à « reloué »
+    exige l'IMPORT du bail signé. Le logement devient « réservé »
+    (occupé quand le bail commencera)."""
     _require_volet(user)
     dossier = await _dossier_or_404(db, dossier_id)
-    if dossier.statut in (
-        LocationDossierStatut.RELOUE.value,
-        LocationDossierStatut.BAIL_ENVOYE.value,
+    if (
+        dossier.statut
+        in (
+            LocationDossierStatut.RELOUE.value,
+            LocationDossierStatut.BAIL_ENVOYE.value,
+            LocationDossierStatut.BAIL_A_ENVOYER.value,
+        )
+        or dossier.nouveau_bail_id is not None
     ):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Un bail existe déjà pour ce dossier (envoyé ou signé).",
+            "Un locataire a déjà été créé pour ce dossier.",
+        )
+    if payload.date_naissance is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "La date de naissance est obligatoire.",
         )
     if payload.date_fin <= payload.date_debut:
         raise HTTPException(
@@ -612,25 +636,15 @@ async def convertir_dossier(
             lignes.append(f"Notes du candidat : {retenu.notes.strip()}")
         notes_locataire = "\n".join(lignes)
 
-    # Emploi/revenus déclarés à la conversion → notes de la fiche
-    # (pas de colonnes dédiées pour l'instant).
-    extras = []
-    if (payload.employeur or "").strip():
-        extras.append(f"Employeur : {payload.employeur.strip()}")
-    if payload.revenu_annuel is not None:
-        montant = f"{payload.revenu_annuel:,.0f}".replace(",", " ")
-        extras.append(f"Revenu annuel déclaré : {montant} $")
-    if extras:
-        notes_locataire = (
-            (notes_locataire + "\n") if notes_locataire else ""
-        ) + "\n".join(extras)
-
     locataire = Locataire(
         full_name=payload.locataire_nom.strip(),
         email=(payload.locataire_email or "").strip() or None,
         phone=(payload.locataire_phone or "").strip() or None,
         date_naissance=payload.date_naissance,
         nas_last4=(payload.nas_last4 or "").strip() or None,
+        ancienne_adresse=(payload.ancienne_adresse or "").strip() or None,
+        employeur=(payload.employeur or "").strip() or None,
+        revenu_annuel=payload.revenu_annuel,
         notes=notes_locataire,
     )
     locataire.created_at = now
@@ -659,19 +673,9 @@ async def convertir_dossier(
     lg.status = LogementStatus.RESERVE.value
     immeuble_id = lg.immeuble_id
 
-    # Envoi immédiat pour signature (optionnel) : « bail envoyé » ;
-    # sinon le dossier reste « candidat retenu » et l'envoi se fait
-    # depuis la section « Baux envoyés » sous le kanban. Le passage à
-    # « reloué » arrive à la signature (public_bail).
-    bail_envoye = False
-    erreur_envoi = None
-    if payload.envoyer_bail:
-        try:
-            await send_bail_for_signature(db, bail.id)
-            dossier.statut = LocationDossierStatut.BAIL_ENVOYE.value
-            bail_envoye = True
-        except BailSendError as exc:
-            erreur_envoi = str(exc)
+    # Le bail se prépare et s'envoie dans le système CORPIQ (hors
+    # Kratos) : la carte passe à « bail à envoyer ».
+    dossier.statut = LocationDossierStatut.BAIL_A_ENVOYER.value
 
     locataire_id = locataire.id
     bail_id = bail.id
@@ -680,137 +684,121 @@ async def convertir_dossier(
         locataire_id=locataire_id,
         bail_id=bail_id,
         immeuble_id=immeuble_id,
-        bail_envoye=bail_envoye,
-        erreur_envoi=erreur_envoi,
     )
 
 
-# ─── Suivi des baux envoyés (sous le kanban) ────────────────────────────
-
-
-class BailEnvoyeRow(BaseModel):
-    dossier_id: int
-    dossier_statut: str
-    bail_id: int
-    locataire_id: Optional[int] = None
-    locataire_nom: Optional[str] = None
-    immeuble_id: int
-    immeuble_name: str
-    logement_numero: str
-    loyer_mensuel: float
-    date_debut: date
-    date_fin: date
-    sent_to_email: Optional[str] = None
-    sent_at: Optional[datetime] = None
-    signature_opened_at: Optional[datetime] = None
-    signed_at: Optional[datetime] = None
-
-
-def _bail_envoye_row(dossier, bail, locataire, lg, imm) -> BailEnvoyeRow:
-    return BailEnvoyeRow(
-        dossier_id=dossier.id,
-        dossier_statut=dossier.statut,
-        bail_id=bail.id,
-        locataire_id=locataire.id if locataire else None,
-        locataire_nom=locataire.full_name if locataire else None,
-        immeuble_id=imm.id if imm else 0,
-        immeuble_name=imm.name if imm else "",
-        logement_numero=lg.numero if lg else "",
-        loyer_mensuel=float(bail.loyer_mensuel),
-        date_debut=bail.date_debut,
-        date_fin=bail.date_fin,
-        sent_to_email=bail.sent_to_email,
-        sent_at=bail.sent_at,
-        signature_opened_at=bail.signature_opened_at,
-        signed_at=bail.signed_at,
-    )
-
-
-@router.get("/locations-baux-envoyes", response_model=List[BailEnvoyeRow])
-async def baux_envoyes(
-    db: DBSession,
-    user: CurrentUser,
-    immeuble_id: Optional[int] = None,
-) -> List[BailEnvoyeRow]:
-    """Baux issus d'une conversion de candidat : à envoyer, envoyés (suivi
-    ouvert/signé) et signés. Alimente la section sous le kanban — l'envoi
-    des baux se fait ICI, plus depuis Baux & paiements."""
-    _require_volet(user)
-    q = (
-        select(LocationDossier, Bail, Locataire, Logement, Immeuble)
-        .join(Bail, Bail.id == LocationDossier.nouveau_bail_id)
-        .join(Locataire, Locataire.id == Bail.locataire_id, isouter=True)
-        .join(Logement, Logement.id == LocationDossier.logement_id)
-        .join(Immeuble, Immeuble.id == Logement.immeuble_id)
-        .where(
-            LocationDossier.statut != LocationDossierStatut.ANNULE.value
-        )
-        .order_by(LocationDossier.updated_at.desc())
-    )
-    if immeuble_id is not None:
-        q = q.where(Logement.immeuble_id == immeuble_id)
-    rows = (await db.execute(q)).all()
-    visible = await visible_immeuble_ids(db, user)
-    out: List[BailEnvoyeRow] = []
-    for dossier, bail, locataire, lg, imm in rows:
-        if visible is not None and imm.id not in visible:
-            continue
-        out.append(_bail_envoye_row(dossier, bail, locataire, lg, imm))
-    # Non signés d'abord (à envoyer, puis envoyés) ; signés à la fin.
-    out.sort(key=lambda r: (r.signed_at is not None, r.sent_at is None))
-    return out
-
-
-class EnvoyerBailRequest(BaseModel):
-    email: Optional[str] = Field(default=None, max_length=320)
+# ─── Désistement du candidat converti ───────────────────────────────────
 
 
 @router.post(
-    "/locations/{dossier_id}/envoyer-bail", response_model=BailEnvoyeRow
+    "/locations/{dossier_id}/desistement", response_model=DossierRow
 )
-async def envoyer_bail_dossier(
-    dossier_id: int,
-    payload: EnvoyerBailRequest,
-    db: DBSession,
-    user: CurrentUser,
-) -> BailEnvoyeRow:
-    """Envoie (ou renvoie) le bail créé à la conversion pour signature en
-    ligne, puis passe le dossier à « bail envoyé »."""
+async def desistement_candidat(
+    dossier_id: int, db: DBSession, user: CurrentUser
+) -> DossierRow:
+    """Le candidat converti se désiste : le bail créé (et le locataire,
+    s'il n'a aucun autre bail) est SUPPRIMÉ, le dossier revient à
+    « Départ confirmé » et le logement reprend son vrai statut (occupé
+    si le locataire sortant est encore en place, vacant sinon)."""
     _require_volet(user)
+    from app.models.immobilier import (
+        BailRenouvellement,
+        BailStatus,
+        ImmDocument,
+        LocataireCommunication,
+        PaiementLoyer,
+    )
+
     dossier = await _dossier_or_404(db, dossier_id)
     if dossier.nouveau_bail_id is None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Aucun bail créé pour ce dossier — convertis d'abord le candidat.",
+            "Aucun locataire converti sur ce dossier.",
         )
     bail = await db.get(Bail, dossier.nouveau_bail_id)
-    if bail is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bail introuvable.")
-    if bail.signed_at is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Ce bail est déjà signé."
-        )
-    to = (
-        [payload.email.strip()]
-        if (payload.email or "").strip()
-        else None
-    )
-    try:
-        await send_bail_for_signature(db, bail.id, to=to)
-    except BailSendError as exc:
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, str(exc)
-        ) from exc
-    if dossier.statut != LocationDossierStatut.RELOUE.value:
-        dossier.statut = LocationDossierStatut.BAIL_ENVOYE.value
+    locataire_id = bail.locataire_id if bail else None
+    if bail is not None:
+        paiements = (
+            await db.execute(
+                select(PaiementLoyer).where(
+                    PaiementLoyer.bail_id == bail.id
+                )
+            )
+        ).scalars().all()
+        if paiements:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Des paiements sont déjà enregistrés sur ce bail — "
+                "retire-les avant le désistement.",
+            )
+        for doc in (
+            await db.execute(
+                select(ImmDocument).where(ImmDocument.bail_id == bail.id)
+            )
+        ).scalars().all():
+            await db.delete(doc)
+        for r in (
+            await db.execute(
+                select(BailRenouvellement).where(
+                    BailRenouvellement.bail_id == bail.id
+                )
+            )
+        ).scalars().all():
+            await db.delete(r)
+        await db.delete(bail)
+    if locataire_id is not None:
+        autres = (
+            await db.execute(
+                select(Bail).where(
+                    Bail.locataire_id == locataire_id,
+                    Bail.id != dossier.nouveau_bail_id,
+                )
+            )
+        ).scalars().all()
+        if not autres:
+            lo = await db.get(Locataire, locataire_id)
+            if lo is not None:
+                for c in (
+                    await db.execute(
+                        select(LocataireCommunication).where(
+                            LocataireCommunication.locataire_id
+                            == locataire_id
+                        )
+                    )
+                ).scalars().all():
+                    await db.delete(c)
+                for doc in (
+                    await db.execute(
+                        select(ImmDocument).where(
+                            ImmDocument.locataire_id == locataire_id
+                        )
+                    )
+                ).scalars().all():
+                    await db.delete(doc)
+                await db.delete(lo)
+    dossier.nouveau_bail_id = None
+    dossier.reloue_le = None
+    dossier.statut = LocationDossierStatut.AVIS_RECU.value
     dossier.updated_at = _now()
-    await db.commit()
-    await db.refresh(bail)
-    await db.refresh(dossier)
-    locataire = await db.get(Locataire, bail.locataire_id)
     lg = await db.get(Logement, dossier.logement_id)
-    imm = await db.get(Immeuble, lg.immeuble_id) if lg else None
-    return _bail_envoye_row(dossier, bail, locataire, lg, imm)
+    if lg is not None:
+        actif = (
+            await db.execute(
+                select(Bail).where(
+                    Bail.logement_id == lg.id,
+                    Bail.status == BailStatus.ACTIF.value,
+                    Bail.date_fin >= _now().date(),
+                )
+            )
+        ).scalars().first()
+        lg.status = (
+            LogementStatus.OCCUPE.value
+            if actif
+            else LogementStatus.VACANT.value
+        )
+    await db.commit()
+    obj = await _dossier_or_404(db, dossier_id)
+    return await _to_row(db, obj)
 
 
 # ─── Annonces ───────────────────────────────────────────────────────────

@@ -327,6 +327,10 @@ class Locataire(Base, TimestampUpdateMixin):
     )
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     nas_last4: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
+    # Adresse précédente (demandée à la conversion d'un candidat).
+    ancienne_adresse: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )
 
     date_naissance: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     employeur: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -459,6 +463,7 @@ class LocationDossierStatut(str, Enum):
     ANNONCE_PUBLIEE = "annonce_publiee"  # l'annonce est en ligne
     VISITES = "visites"                  # visites en cours
     CANDIDAT_RETENU = "candidat_retenu"  # candidat choisi, bail à signer
+    BAIL_A_ENVOYER = "bail_a_envoyer"    # locataire créé — bail à faire (CORPIQ)
     BAIL_ENVOYE = "bail_envoye"          # bail envoyé — attente de signature
     RELOUE = "reloue"                    # nouveau bail signé
     ANNULE = "annule"                    # départ annulé / logement retiré
