@@ -99,6 +99,7 @@ const COLUMNS: Array<{ id: string; label: string; dot: string }> = [
   { id: "annonce_publiee", label: "Annonce publiée", dot: "bg-sky-400" },
   { id: "visites", label: "Visite prévue", dot: "bg-violet-400" },
   { id: "candidat_retenu", label: "Candidat retenu", dot: "bg-blue-400" },
+  { id: "bail_envoye", label: "Bail envoyé — à signer", dot: "bg-teal-400" },
   { id: "reloue", label: "Reloué", dot: "bg-emerald-400" }
 ];
 
@@ -106,7 +107,8 @@ const STATUTS_ACTIFS = [
   "avis_recu",
   "annonce_publiee",
   "visites",
-  "candidat_retenu"
+  "candidat_retenu",
+  "bail_envoye"
 ];
 
 const STATUT_LABEL: Record<string, string> = Object.fromEntries(
@@ -372,6 +374,13 @@ export function LocationsBoard({
           })}
         </div>
       )}
+
+      {/* Suivi des baux envoyés (issus des conversions) */}
+      <BauxEnvoyesSection
+        immeubleId={immeubleId}
+        overview={data}
+        onMutated={() => void load()}
+      />
 
       {/* Annulés (repliés) */}
       {annules.length > 0 ? (
@@ -1324,6 +1333,11 @@ function ConvertModal({
   const [nom, setNom] = useState(candidat.candidat_nom);
   const [email, setEmail] = useState(prefillEmail);
   const [phone, setPhone] = useState(prefillPhone);
+  const [dateNaissance, setDateNaissance] = useState("");
+  const [nas, setNas] = useState("");
+  const [employeur, setEmployeur] = useState("");
+  const [revenu, setRevenu] = useState("");
+  const [envoyerBail, setEnvoyerBail] = useState(Boolean(prefillEmail));
   const [debut, setDebut] = useState(defaultDebut);
   const [fin, setFin] = useState(addMonthsIso(defaultDebut, 12));
   const [loyer, setLoyer] = useState(
@@ -1336,6 +1350,8 @@ function ConvertModal({
     locataire_id: number;
     bail_id: number;
     immeuble_id: number;
+    bail_envoye?: boolean;
+    erreur_envoi?: string | null;
   } | null>(null);
 
   async function submit() {
@@ -1350,10 +1366,15 @@ function ConvertModal({
             locataire_nom: nom.trim(),
             locataire_email: email.trim() || null,
             locataire_phone: phone.trim() || null,
+            date_naissance: dateNaissance || null,
+            nas_last4: nas.trim() || null,
+            employeur: employeur.trim() || null,
+            revenu_annuel: revenu.trim() ? Number(revenu) : null,
             date_debut: debut,
             date_fin: fin,
             loyer_mensuel: Number(loyer),
-            depot_garantie: depot.trim() ? Number(depot) : null
+            depot_garantie: depot.trim() ? Number(depot) : null,
+            envoyer_bail: envoyerBail
           })
         }
       );
@@ -1366,6 +1387,8 @@ function ConvertModal({
           locataire_id: number;
           bail_id: number;
           immeuble_id: number;
+          bail_envoye?: boolean;
+          erreur_envoi?: string | null;
         }
       );
     } catch (e) {
@@ -1392,14 +1415,27 @@ function ConvertModal({
         {done ? (
           <div className="space-y-3 p-5 text-sm text-white/80">
             <p className="flex items-center gap-2 font-semibold text-emerald-300">
-              <Check className="h-4 w-4" /> Locataire et bail créés — dossier
-              reloué.
+              <Check className="h-4 w-4" /> Locataire et bail créés.
             </p>
-            <p className="text-xs text-white/55">
-              Le bail est en statut « proposé » : envoie-le pour signature
-              depuis Baux &amp; locataires (bouton de signature sur la ligne
-              du bail).
-            </p>
+            {done.bail_envoye ? (
+              <p className="rounded-lg border border-teal-400/30 bg-teal-500/10 px-3 py-2 text-xs text-teal-200">
+                Bail envoyé pour signature — la carte passe à « Bail
+                envoyé — à signer » et le dossier deviendra « Reloué »
+                automatiquement quand le locataire aura signé.
+              </p>
+            ) : done.erreur_envoi ? (
+              <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                L&apos;envoi du bail a échoué : {done.erreur_envoi} — tu
+                peux le renvoyer depuis la section « Baux envoyés » sous
+                le kanban.
+              </p>
+            ) : (
+              <p className="text-xs text-white/55">
+                Le bail est en statut « proposé » : envoie-le pour
+                signature depuis la section « Baux envoyés » sous le
+                kanban.
+              </p>
+            )}
             <div className="flex flex-col gap-1.5 text-xs">
               <Link
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1415,7 +1451,7 @@ function ConvertModal({
                 }
                 className="text-accent-500 hover:underline"
               >
-                Voir le bail (surligné) et l&apos;envoyer pour signature →
+                Voir le bail (surligné) →
               </Link>
             </div>
             <div className="flex justify-end border-t border-brand-800 pt-3">
@@ -1457,6 +1493,51 @@ function ConvertModal({
                 <input
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
+                  className={`${INPUT_CLS} mt-0.5 block w-full`}
+                />
+              </label>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-[11px] font-semibold text-white/60">
+                Date de naissance
+                <input
+                  type="date"
+                  value={dateNaissance}
+                  onChange={(e) => setDateNaissance(e.target.value)}
+                  className={`${INPUT_CLS} mt-0.5 block w-full`}
+                />
+              </label>
+              <label className="text-[11px] font-semibold text-white/60">
+                NAS (4 derniers chiffres)
+                <input
+                  inputMode="numeric"
+                  maxLength={4}
+                  value={nas}
+                  onChange={(e) =>
+                    setNas(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))
+                  }
+                  placeholder="Optionnel"
+                  className={`${INPUT_CLS} mt-0.5 block w-full`}
+                />
+              </label>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-[11px] font-semibold text-white/60">
+                Employeur
+                <input
+                  value={employeur}
+                  onChange={(e) => setEmployeur(e.target.value)}
+                  placeholder="Optionnel"
+                  className={`${INPUT_CLS} mt-0.5 block w-full`}
+                />
+              </label>
+              <label className="text-[11px] font-semibold text-white/60">
+                Revenu annuel ($)
+                <input
+                  inputMode="decimal"
+                  value={revenu}
+                  onChange={(e) => setRevenu(e.target.value)}
+                  placeholder="Optionnel"
                   className={`${INPUT_CLS} mt-0.5 block w-full`}
                 />
               </label>
@@ -1506,6 +1587,24 @@ function ConvertModal({
                 />
               </label>
             </div>
+            <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-teal-400/30 bg-teal-500/10 px-3 py-2 text-xs text-teal-200">
+              <input
+                type="checkbox"
+                checked={envoyerBail}
+                onChange={(e) => setEnvoyerBail(e.target.checked)}
+                className="mt-0.5 h-3.5 w-3.5 accent-teal-400"
+              />
+              <span>
+                Envoyer le bail pour signature dès la création (courriel
+                au locataire — la carte passe à « Bail envoyé — à
+                signer »).
+                {envoyerBail && !email.trim() ? (
+                  <span className="block font-semibold text-rose-300">
+                    Courriel du locataire requis pour l&apos;envoi.
+                  </span>
+                ) : null}
+              </span>
+            </label>
             {err ? (
               <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
                 {err}
@@ -1527,7 +1626,8 @@ function ConvertModal({
                   !debut ||
                   !fin ||
                   loyer.trim() === "" ||
-                  Number.isNaN(Number(loyer))
+                  Number.isNaN(Number(loyer)) ||
+                  (envoyerBail && !email.trim())
                 }
                 onClick={() => void submit()}
                 className="btn-accent btn-sm disabled:opacity-60"
@@ -1542,6 +1642,175 @@ function ConvertModal({
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Suivi des baux envoyés (sous le kanban) ────────────────────────────
+
+type BailEnvoyeRow = {
+  dossier_id: number;
+  dossier_statut: string;
+  bail_id: number;
+  locataire_id: number | null;
+  locataire_nom: string | null;
+  immeuble_id: number;
+  immeuble_name: string;
+  logement_numero: string;
+  loyer_mensuel: number;
+  date_debut: string;
+  date_fin: string;
+  sent_to_email: string | null;
+  sent_at: string | null;
+  signature_opened_at: string | null;
+  signed_at: string | null;
+};
+
+function BauxEnvoyesSection({
+  immeubleId,
+  overview,
+  onMutated
+}: {
+  immeubleId?: number;
+  overview: Overview | null;
+  onMutated: () => void;
+}) {
+  const [rows, setRows] = useState<BailEnvoyeRow[]>([]);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      if (immeubleId != null) params.set("immeuble_id", String(immeubleId));
+      const r = await authedFetch(
+        `/api/v1/immobilier/locations-baux-envoyes?${params.toString()}`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setRows((await r.json()) as BailEnvoyeRow[]);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }, [immeubleId]);
+
+  // Recharge quand le kanban se rafraîchit (nouvelle référence overview).
+  useEffect(() => {
+    void load();
+  }, [load, overview]);
+
+  async function envoyer(row: BailEnvoyeRow) {
+    const qui = row.locataire_nom || "ce locataire";
+    const msg = row.sent_at
+      ? `Renvoyer le bail à ${row.sent_to_email || qui} ?`
+      : `Envoyer le bail à ${qui} pour signature en ligne ?`;
+    if (!window.confirm(msg)) return;
+    setBusyId(row.dossier_id);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/locations/${row.dossier_id}/envoyer-bail`,
+        { method: "POST", body: JSON.stringify({}) }
+      );
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${r.status}`);
+      }
+      await load();
+      onMutated();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  if (rows.length === 0 && !err) return null;
+
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900/60">
+      <div className="flex items-center gap-2 border-b border-brand-800 px-4 py-3">
+        <FileSignature className="h-4 w-4 text-teal-300" />
+        <h3 className="text-sm font-semibold text-white">
+          Baux envoyés — suivi des signatures
+        </h3>
+        <span className="badge badge-neutral">{rows.length}</span>
+      </div>
+      {err ? <p className="px-4 py-2 text-xs text-rose-300">{err}</p> : null}
+      <div className="divide-y divide-brand-800/60">
+        {rows.map((row) => {
+          const statut = row.signed_at
+            ? {
+                cls: "badge badge-emerald",
+                txt: `Signé le ${fmtDateTime(row.signed_at)}`
+              }
+            : row.signature_opened_at
+              ? {
+                  cls: "badge badge-sky",
+                  txt: `Ouvert le ${fmtDateTime(row.signature_opened_at)} — pas signé`
+                }
+              : row.sent_at
+                ? {
+                    cls: "badge badge-amber",
+                    txt: `Envoyé le ${fmtDateTime(row.sent_at)} — jamais ouvert`
+                  }
+                : { cls: "badge badge-neutral", txt: "À envoyer" };
+          return (
+            <div
+              key={row.dossier_id}
+              className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-white">
+                  {row.locataire_nom || "Locataire"}
+                  <span className="ml-2 font-normal text-white/50">
+                    {immeubleId == null ? `${row.immeuble_name} · ` : ""}
+                    Log. {row.logement_numero}
+                  </span>
+                </p>
+                <p className="mt-0.5 text-xs text-white/55">
+                  {money(row.loyer_mensuel)}/mois · du {fmtDate(row.date_debut)}{" "}
+                  au {fmtDate(row.date_fin)}
+                  {row.sent_to_email ? ` · ${row.sent_to_email}` : ""}
+                </p>
+              </div>
+              <span className={statut.cls}>{statut.txt}</span>
+              <div className="flex items-center gap-1.5">
+                {!row.signed_at ? (
+                  <button
+                    type="button"
+                    disabled={busyId === row.dossier_id}
+                    onClick={() => void envoyer(row)}
+                    className="btn-secondary btn-xs"
+                  >
+                    {busyId === row.dossier_id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : null}
+                    {row.sent_at ? "Renvoyer" : "Envoyer"}
+                  </button>
+                ) : null}
+                {row.locataire_id != null ? (
+                  <Link
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    href={`/immobilier/locataires/${row.locataire_id}` as any}
+                    className="btn-ghost btn-xs"
+                  >
+                    Fiche
+                  </Link>
+                ) : null}
+                <Link
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={
+                    `/immobilier/immeubles/${row.immeuble_id}?tab=baux&bail=${row.bail_id}` as any
+                  }
+                  className="btn-ghost btn-xs"
+                >
+                  Bail
+                </Link>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

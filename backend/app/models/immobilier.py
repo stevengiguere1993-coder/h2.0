@@ -459,6 +459,7 @@ class LocationDossierStatut(str, Enum):
     ANNONCE_PUBLIEE = "annonce_publiee"  # l'annonce est en ligne
     VISITES = "visites"                  # visites en cours
     CANDIDAT_RETENU = "candidat_retenu"  # candidat choisi, bail à signer
+    BAIL_ENVOYE = "bail_envoye"          # bail envoyé — attente de signature
     RELOUE = "reloue"                    # nouveau bail signé
     ANNULE = "annule"                    # départ annulé / logement retiré
 
@@ -668,6 +669,10 @@ class Bail(Base, TimestampUpdateMixin):
         String(320), nullable=True
     )
     sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Première ouverture de la page publique /sign-bail (suivi « ouvert »).
+    signature_opened_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     signed_at: Mapped[Optional[datetime]] = mapped_column(
