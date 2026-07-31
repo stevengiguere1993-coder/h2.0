@@ -853,6 +853,7 @@ export default function BauxPage() {
                               <BailDocActions
                                 bailId={r.bail_id}
                                 hasDoc={r.document_id != null}
+                                allowImportInitial={false}
                                 onChanged={() => void load()}
                               />
                             </div>

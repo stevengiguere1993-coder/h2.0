@@ -767,6 +767,52 @@ async def upload_bail_document(
         remplace_document_id=ancien,
     )
     bail.document_id = obj.id
+    # Bail signé importé : un bail « proposé » devient ACTIF, et le
+    # dossier de relocation lié passe à « Reloué » — partout, le
+    # logement est considéré loué par ce locataire (retour Phil
+    # 2026-07-31).
+    if bail.status == "propose":
+        bail.status = "actif"
+    try:
+        from app.models.immobilier import (
+            LocationDossier,
+            LocationDossierStatut,
+            Logement,
+            LogementStatus,
+        )
+
+        dossier_reloc = (
+            (
+                await db.execute(
+                    select(LocationDossier).where(
+                        LocationDossier.nouveau_bail_id == bail.id,
+                        LocationDossier.statut.notin_(
+                            [
+                                LocationDossierStatut.RELOUE.value,
+                                LocationDossierStatut.ANNULE.value,
+                            ]
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if dossier_reloc is not None:
+            dossier_reloc.statut = LocationDossierStatut.RELOUE.value
+            if dossier_reloc.reloue_le is None:
+                dossier_reloc.reloue_le = _now().date()
+            lg = await db.get(Logement, dossier_reloc.logement_id)
+            if lg is not None:
+                lg.status = (
+                    LogementStatus.OCCUPE.value
+                    if bail.date_debut and bail.date_debut <= _now().date()
+                    else LogementStatus.RESERVE.value
+                )
+    except Exception:  # noqa: BLE001 — best-effort
+        log.exception(
+            "Transition relocation après import du bail %s", bail_id
+        )
     await db.commit()
     await db.refresh(obj)
     log.info(
