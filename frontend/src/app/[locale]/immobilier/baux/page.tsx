@@ -749,6 +749,7 @@ export default function BauxPage() {
                     <th className="px-3 py-2.5">État</th>
                     <th className="px-3 py-2.5">Locataire</th>
                     <th className="px-3 py-2.5">Immeuble · log.</th>
+                    <th className="px-3 py-2.5">Statut</th>
                     <th className="px-3 py-2.5 text-right">Loyer</th>
                     <th className="px-3 py-2.5 text-right">Solde dû</th>
                     <th className="px-3 py-2.5 text-right">Payé le</th>
@@ -853,6 +854,22 @@ export default function BauxPage() {
                             {" — "}
                             {RELOC_LABEL[r.prochain_statut || ""] ||
                               "à venir"}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span className="badge badge-emerald">Actif</span>
+                        {r.prochain_statut ? (
+                          <div className="mt-0.5">
+                            <span
+                              className={`badge ${
+                                r.prochain_statut === "bail_envoye"
+                                  ? "badge-violet"
+                                  : "badge-amber"
+                              }`}
+                            >
+                              {RELOC_LABEL[r.prochain_statut] || "proposé"}
+                            </span>
                           </div>
                         ) : null}
                       </td>
@@ -1009,15 +1026,19 @@ export default function BauxPage() {
                             <div className="inline-flex items-center gap-1.5 rounded-xl border border-brand-700 px-1.5 py-1">
                               <TalFormDropdown bailId={r.bail_id} />
                             </div>
-                            {/* ── Groupe 3 — Bail (import / voir) ── */}
-                            <div className="inline-flex items-center gap-1.5 rounded-xl border border-brand-700 px-1.5 py-1">
-                              <BailDocActions
-                                bailId={r.bail_id}
-                                hasDoc={r.document_id != null}
-                                allowImportInitial={false}
-                                onChanged={() => void load()}
-                              />
-                            </div>
+                            {/* ── Groupe 3 — Bail (voir / remplacer) —
+                                masqué tant qu'aucun bail n'est importé
+                                (la « pilule vide », retour Phil). ── */}
+                            {r.document_id != null ? (
+                              <div className="inline-flex items-center gap-1.5 rounded-xl border border-brand-700 px-1.5 py-1">
+                                <BailDocActions
+                                  bailId={r.bail_id}
+                                  hasDoc
+                                  allowImportInitial={false}
+                                  onChanged={() => void load()}
+                                />
+                              </div>
+                            ) : null}
                           </div>
                           {r.nb_relances > 0 ? (
                             <span className="text-[10px] text-white/40">
