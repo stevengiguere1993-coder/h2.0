@@ -846,9 +846,9 @@ function DossierModal({
                 href={
                   `/immobilier/locataires/${d.nouveau_locataire_id}` as any
                 }
-                className="ml-auto font-semibold underline-offset-2 hover:underline"
+                className="ml-auto rounded-md border border-orange-400/40 bg-orange-500/15 px-2 py-1 text-[11px] font-semibold text-orange-200 hover:bg-orange-500/25"
               >
-                Fiche du locataire →
+                Fiche du locataire
               </Link>
             ) : null}
             <DesistementButton d={d} onDone={onMutated} />
@@ -863,9 +863,9 @@ function DossierModal({
                 href={
                   `/immobilier/locataires/${d.nouveau_locataire_id}` as any
                 }
-                className="underline-offset-2 hover:underline"
+                className="rounded-md border border-emerald-400/40 bg-emerald-500/15 px-2 py-1 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/25"
               >
-                Fiche du locataire →
+                Fiche du locataire
               </Link>
             ) : null}
             <DesistementButton d={d} onDone={onMutated} />
@@ -1023,6 +1023,7 @@ function DossierModal({
                 <CandidatRow
                   key={v.id}
                   v={v}
+                  bailCree={d.nouveau_bail_id != null}
                   onApi={api}
                 />
               ))}
@@ -1087,7 +1088,9 @@ function DossierModal({
             onClick={async () => {
               if (
                 window.confirm(
-                  "Supprimer DÉFINITIVEMENT ce dossier de relocation (annonces et visites incluses) ? Pour garder une trace, utilise plutôt « Annuler »."
+                  d.nouveau_bail_id != null
+                    ? "⚠️ Supprimer DÉFINITIVEMENT ce dossier ?\n\nLe LOCATAIRE créé à la conversion et son bail seront SUPPRIMÉS eux aussi (annonces et visites incluses)."
+                    : "Supprimer DÉFINITIVEMENT ce dossier de relocation (annonces et visites incluses) ? Pour garder une trace, utilise plutôt « Annuler »."
                 )
               ) {
                 if (await api(`/${d.id}`, "DELETE")) onDeleted();
@@ -1153,9 +1156,13 @@ function TriCheck({
 
 function CandidatRow({
   v,
+  bailCree,
   onApi
 }: {
   v: Visite;
+  /** Un locataire a été créé depuis ce dossier — le candidat retenu
+   *  ne se dé-retient plus (passer par « Désistement »). */
+  bailCree?: boolean;
   onApi: (
     path: string,
     method: string,
@@ -1263,15 +1270,18 @@ function CandidatRow({
         />
         <button
           type="button"
+          disabled={!!(v.retenu && bailCree)}
           title={
-            v.retenu
-              ? "Ne plus retenir ce candidat"
-              : "Retenir ce candidat pour le logement (fait avancer le dossier)"
+            v.retenu && bailCree
+              ? "Locataire déjà créé — passe par « Désistement » pour annuler"
+              : v.retenu
+                ? "Ne plus retenir ce candidat"
+                : "Retenir ce candidat pour le logement (fait avancer le dossier)"
           }
           onClick={() =>
             void onApi(`/visites/${v.id}`, "PATCH", { retenu: !v.retenu })
           }
-          className={`ml-auto rounded-md border px-2 py-0.5 text-[10px] font-semibold ${
+          className={`ml-auto rounded-md border px-2 py-0.5 text-[10px] font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
             v.retenu
               ? "border-blue-400/40 bg-blue-500/15 text-blue-200"
               : "border-white/10 text-white/50 hover:bg-brand-800 hover:text-white"
@@ -1486,9 +1496,9 @@ function ConvertModal({
               <Link
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 href={`/immobilier/locataires/${done.locataire_id}` as any}
-                className="text-accent-500 hover:underline"
+                className="inline-flex w-fit items-center rounded-md border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1 font-semibold text-emerald-200 hover:bg-emerald-500/25"
               >
-                Fiche du locataire →
+                Fiche du locataire
               </Link>
             </div>
             <div className="flex justify-end border-t border-brand-800 pt-3">
@@ -1517,7 +1527,7 @@ function ConvertModal({
             </label>
             <div className="grid grid-cols-2 gap-3">
               <label className="text-[11px] font-semibold text-white/60">
-                Courriel
+                Courriel *
                 <input
                   type="email"
                   value={email}
@@ -1526,7 +1536,7 @@ function ConvertModal({
                 />
               </label>
               <label className="text-[11px] font-semibold text-white/60">
-                Téléphone
+                Téléphone *
                 <input
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
@@ -1651,6 +1661,8 @@ function ConvertModal({
                 disabled={
                   saving ||
                   !nom.trim() ||
+                  !email.trim() ||
+                  !phone.trim() ||
                   !dateNaissance ||
                   !debut ||
                   !fin ||
@@ -1882,7 +1894,7 @@ function DesistementButton({
   async function desister() {
     if (
       !window.confirm(
-        "Désistement du candidat ?\n\nLe locataire créé et son bail seront SUPPRIMÉS, le dossier reviendra à « Départ confirmé » et le logement reprendra son vrai statut."
+        "⚠️ Désistement du candidat ?\n\nCeci va SUPPRIMER LA FICHE DU LOCATAIRE créé et son bail. Le dossier reviendra à « Départ confirmé » et le logement reprendra son vrai statut."
       )
     )
       return;
