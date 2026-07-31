@@ -20,12 +20,12 @@ locataire une fois par année. Kratos fournit :
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.integrations.email_graph import get_mailer
@@ -75,6 +75,9 @@ class AssuranceRow(BaseModel):
     logement_numero: Optional[str] = None
     assurance_confirmee_le: Optional[date] = None
     statut: str  # "ok" | "a_reconfirmer" | "jamais"
+    #: Dernière demande de preuve envoyée (Assurances OU
+    #: Communications).
+    derniere_demande_le: Optional[datetime] = None
 
 
 class AssuranceOverview(BaseModel):
@@ -135,6 +138,27 @@ async def assurances_overview(
     from app.services.locatif_suivis import get_suivis
 
     suivis_cfg = await get_suivis()
+
+    # Dernière DEMANDE de preuve par locataire — envoyée depuis l'onglet
+    # Assurances OU la page Communications (type demande_assurance).
+    from app.models.immobilier import ImmCommunication
+
+    demandes: dict = {}
+    if loc_ids:
+        for lid, quand in (
+            await db.execute(
+                select(
+                    ImmCommunication.locataire_id,
+                    func.max(ImmCommunication.created_at),
+                ).where(
+                    ImmCommunication.type == "demande_assurance",
+                    ImmCommunication.locataire_id.in_(list(loc_ids)),
+                    ImmCommunication.statut == "envoye",
+                ).group_by(ImmCommunication.locataire_id)
+            )
+        ).all():
+            demandes[lid] = quand
+
     rows: List[AssuranceRow] = []
     for b in baux:
         lg = log_by_id.get(b.logement_id)
@@ -159,6 +183,7 @@ async def assurances_overview(
                 logement_numero=lg.numero if lg else None,
                 assurance_confirmee_le=lo.assurance_confirmee_le,
                 statut=_statut(lo.assurance_confirmee_le, suivis_cfg),
+                derniere_demande_le=demandes.get(lo.id),
             )
         )
     # À traiter en premier : jamais confirmées, puis à reconfirmer, OK en bas.
@@ -319,18 +344,29 @@ async def demander_preuve_assurance(
         "locateur": "Horizon Services Immobiliers",
         "adresse": await _adresse_locataire(db, lo.id),
     }
+    # MÊME expéditeur que la page Communications (profil par défaut :
+    # boîte, nom affiché, reply-to) — retour Phil 2026-07-31.
+    from app.api.v1.endpoints.immobilier_communications import (
+        expediteur_defaut,
+    )
+
+    from_email, from_name, reply_to = await expediteur_defaut()
+    sujet_mail = f"{gabarit['titre']} — Horizon Services Immobiliers"
+    corps_html = _mail_demande_html(
+        lo.full_name,
+        gabarit["titre"],
+        gabarit["paragraphes"],
+        variables,
+    )
     mailer = get_mailer()
     try:
         await mailer.send(
             to=[dest],
-            subject=f"{gabarit['titre']} — Horizon Services Immobiliers",
-            html_body=_mail_demande_html(
-                lo.full_name,
-                gabarit["titre"],
-                gabarit["paragraphes"],
-                variables,
-            ),
-            reply_to=mailer.sender,
+            subject=sujet_mail,
+            html_body=corps_html,
+            reply_to=reply_to,
+            from_email=from_email,
+            from_name=from_name,
         )
     except Exception as exc:  # noqa: BLE001 — réseau/Graph
         log.exception("Demande d'assurance au locataire %s échouée", lo.id)
@@ -346,5 +382,31 @@ async def demander_preuve_assurance(
             auteur=getattr(user, "email", None),
         )
     )
+    # Trace d'audit UNIFIÉE avec la page Communications : la date de la
+    # dernière demande s'affiche dans l'onglet Assurances.
+    try:
+        import uuid as _uuid
+
+        from app.models.immobilier import ImmCommunication
+
+        db.add(
+            ImmCommunication(
+                group_id=str(_uuid.uuid4()),
+                type="demande_assurance",
+                sujet=sujet_mail,
+                corps=corps_html,
+                locataire_id=lo.id,
+                locataire_nom=lo.full_name,
+                destinataire_email=dest,
+                from_email=from_email,
+                from_name=from_name,
+                reply_to=reply_to,
+                statut="envoye",
+                created_by_email=getattr(user, "email", None),
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+    except Exception:  # noqa: BLE001 — l'audit ne bloque pas l'envoi
+        log.exception("Audit imm_communications échoué")
     await db.commit()
     return AssuranceDemandeResult(locataire_id=lo.id, envoye_a=dest)
