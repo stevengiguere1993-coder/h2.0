@@ -1910,6 +1910,26 @@ async def delete_logement(
     await db.commit()
 
 
+async def _relocation_par_bail(db, bail_ids) -> dict:
+    """bail_id -> statut du dossier de relocation lié (kanban
+    Locations), tant que pas « reloué » — affiché partout où on voit
+    les baux (retour Phil 2026-07-31)."""
+    ids = [i for i in bail_ids if i]
+    if not ids:
+        return {}
+    from app.models.immobilier import LocationDossier
+
+    rows = (
+        await db.execute(
+            select(LocationDossier).where(
+                LocationDossier.nouveau_bail_id.in_(ids),
+                LocationDossier.statut.notin_(["annule", "reloue"]),
+            )
+        )
+    ).scalars().all()
+    return {d.nouveau_bail_id: d.statut for d in rows}
+
+
 @router.get(
     "/logements/{logement_id}/dossier", response_model=LogementDossier
 )
@@ -1945,6 +1965,7 @@ async def logement_dossier(
         ).scalars().all():
             loc_by_id[loc.id] = loc
 
+    reloc_par_bail = await _relocation_par_bail(db, [b.id for b in baux])
     dossier_baux = []
     for b in baux:
         loc = loc_by_id.get(b.locataire_id)
@@ -1962,6 +1983,7 @@ async def logement_dossier(
                 date_debut=b.date_debut,
                 date_fin=b.date_fin,
                 status=b.status,
+                relocation_statut=reloc_par_bail.get(b.id),
                 document_url=b.document_url,
                 signed_at=b.signed_at,
                 document_id=b.document_id,
@@ -2210,6 +2232,7 @@ async def locataire_dossier(
         ).scalars().all():
             imm_by_id[im.id] = im
 
+    reloc_par_bail = await _relocation_par_bail(db, [b.id for b in baux])
     dossier_baux = []
     for b in baux:
         lg = log_by_id.get(b.logement_id)
@@ -2229,6 +2252,7 @@ async def locataire_dossier(
                     else None
                 ),
                 status=b.status,
+                relocation_statut=reloc_par_bail.get(b.id),
                 document_id=b.document_id,
                 signed_at=b.signed_at,
                 au_mois=b.au_mois,
@@ -3288,6 +3312,13 @@ class LoyerOverviewRow(BaseModel):
     solde_total: float = 0.0
     nb_relances: int = 0
     derniere_relance_le: Optional[date] = None
+    #: Prochain locataire (transition) : bail futur ou en préparation
+    #: sur le même logement — affiché en petit sous la ligne, avec le
+    #: statut du kanban Locations (retour Phil 2026-07-31).
+    prochain_nom: Optional[str] = None
+    prochain_loyer: Optional[float] = None
+    prochain_debut: Optional[date] = None
+    prochain_statut: Optional[str] = None
 
 
 class LoyerOverview(BaseModel):
@@ -3371,11 +3402,18 @@ async def loyers_overview(
     ).scalars().all()
     log_by_id = {l.id: l for l in logements}
 
+    # Un bail actif qui COMMENCE APRÈS le mois affiché (import du bail
+    # signé pendant la transition) n'a rien à collecter ce mois-ci —
+    # il apparaît en « Prochain » sous la ligne du bail courant.
+    month_end = (
+        month_start.replace(day=28) + timedelta(days=4)
+    ).replace(day=1) - timedelta(days=1)
     baux = (
         await db.execute(
             select(Bail).where(
                 Bail.logement_id.in_(list(log_by_id.keys())),
                 Bail.status == BailStatus.ACTIF.value,
+                Bail.date_debut <= month_end,
             )
         )
     ).scalars().all()
@@ -3448,6 +3486,56 @@ async def loyers_overview(
         ).all():
             frais_total_by_bail[bid] = float(total or 0)
 
+    # « Prochain locataire » pendant la transition (retour Phil
+    # 2026-07-31) : bail futur (date_debut > aujourd'hui) ou en
+    # préparation (« proposé », relocation CORPIQ) sur le même
+    # logement — le plus proche par date de début.
+    prochains: dict = {}
+    if log_by_id:
+        from sqlalchemy import or_
+
+        futurs = (
+            await db.execute(
+                select(Bail)
+                .where(
+                    Bail.logement_id.in_(list(log_by_id.keys())),
+                    or_(
+                        Bail.date_debut > today,
+                        Bail.status == BailStatus.PROPOSE.value,
+                    ),
+                )
+                .order_by(Bail.date_debut.asc())
+            )
+        ).scalars().all()
+        deja = set(bail_ids)
+        futurs = [fb for fb in futurs if fb.id not in deja]
+        reloc_fut = await _relocation_par_bail(
+            db, [fb.id for fb in futurs]
+        )
+        fut_loc_ids = {
+            fb.locataire_id for fb in futurs if fb.locataire_id
+        }
+        fut_locs = {}
+        if fut_loc_ids:
+            for loc in (
+                await db.execute(
+                    select(Locataire).where(
+                        Locataire.id.in_(list(fut_loc_ids))
+                    )
+                )
+            ).scalars().all():
+                fut_locs[loc.id] = loc
+        for fb in futurs:
+            if fb.logement_id in prochains:
+                continue
+            floc = fut_locs.get(fb.locataire_id)
+            prochains[fb.logement_id] = {
+                "nom": floc.full_name if floc else None,
+                "loyer": float(fb.loyer_mensuel or 0),
+                "debut": fb.date_debut,
+                "statut": reloc_fut.get(fb.id, "a_venir"),
+            }
+
     def _mois_echus(b: Bail) -> int:
         """Nombre de 1ers de mois couverts par le bail jusqu'au mois
         affiché inclus (borné à aujourd'hui) — pour le solde cumulatif.
@@ -3518,9 +3606,14 @@ async def loyers_overview(
         solde = max(0.0, solde)
         total_solde_du += solde
 
+        pro = prochains.get(b.logement_id) if b.logement_id else None
         rows.append(
             LoyerOverviewRow(
                 bail_id=b.id,
+                prochain_nom=pro["nom"] if pro else None,
+                prochain_loyer=pro["loyer"] if pro else None,
+                prochain_debut=pro["debut"] if pro else None,
+                prochain_statut=pro["statut"] if pro else None,
                 immeuble_id=imm.id,
                 immeuble_name=imm.name,
                 logement_id=(

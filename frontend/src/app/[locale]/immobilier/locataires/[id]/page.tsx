@@ -71,6 +71,7 @@ type DossierBail = {
   document_id?: number | null;
   signed_at?: string | null;
   au_mois?: boolean | null;
+  relocation_statut?: string | null;
 };
 
 type DossierPaiement = {
@@ -1175,6 +1176,19 @@ export default function LocataireDetailPage({
                               >
                                 {BAIL_STATUS_LABEL[b.status] ?? b.status}
                               </span>
+                              {b.relocation_statut ? (
+                                <span
+                                  className={`badge ${
+                                    b.relocation_statut === "bail_envoye"
+                                      ? "badge-violet"
+                                      : "badge-amber"
+                                  }`}
+                                >
+                                  {b.relocation_statut === "bail_envoye"
+                                    ? "Bail envoyé — à signer"
+                                    : "Bail à envoyer"}
+                                </span>
+                              ) : null}
                               {b.status === "actif" ? (
                                 <button
                                   type="button"
