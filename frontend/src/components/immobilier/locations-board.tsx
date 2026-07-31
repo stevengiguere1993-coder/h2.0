@@ -1009,23 +1009,6 @@ function DossierModal({
 
         {/* Pied de fiche : actions destructives discrètes */}
         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-brand-800 pt-3">
-          {d.statut !== "annule" && d.statut !== "reloue" ? (
-            <button
-              type="button"
-              title="Le logement ne se reloue plus pour l'instant — le dossier est CONSERVÉ dans la section Annulés (historique des annonces et visites)"
-              onClick={() => {
-                if (
-                  window.confirm(
-                    "Annuler la relocation ? Le dossier reste conservé dans la section Annulés (avec ses annonces et visites)."
-                  )
-                )
-                  void onPatch({ statut: "annule" });
-              }}
-              className="text-xs text-white/40 hover:text-white/70"
-            >
-              Annuler (garder la trace)
-            </button>
-          ) : null}
           <button
             type="button"
             title="Efface DÉFINITIVEMENT le dossier, ses annonces et ses visites — pour un dossier créé par erreur"
