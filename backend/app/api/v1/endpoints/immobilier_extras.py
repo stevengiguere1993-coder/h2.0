@@ -860,6 +860,77 @@ async def patch_renouvellement(
     )
 
 
+class ResilierIn(BaseModel):
+    #: Date de fin convenue (entente de départ) ou constatée
+    #: (déguerpissement).
+    date_fin: date
+    ouvrir_relocation: bool = True
+
+
+class ResilierResult(BaseModel):
+    bail_id: int
+    date_fin: date
+    statut: str
+    relocation_ouverte: bool = False
+
+
+@router.post("/baux/{bail_id}/resilier", response_model=ResilierResult)
+async def resilier_bail(
+    bail_id: int,
+    payload: ResilierIn,
+    db: DBSession,
+    user: CurrentUser,
+) -> ResilierResult:
+    """RÉSILIATION avant terme (entente de départ, déguerpissement —
+    art. 1975 C.c.Q.) : le bail passe « résilié » à la date convenue,
+    l'historique des paiements est conservé, et un dossier de
+    relocation s'ouvre au besoin (retour Phil 2026-07-31 : « pouvoir
+    le résilier — dans la section bail »)."""
+    _require_volet(user)
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        raise HTTPException(status_code=404, detail="Bail introuvable.")
+    if bail.status != BailStatus.ACTIF.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Seul un bail actif peut être résilié.",
+        )
+    bail.status = BailStatus.RESILIE.value
+    bail.date_fin = payload.date_fin
+    reloc = False
+    if payload.ouvrir_relocation and bail.logement_id:
+        from app.models.immobilier import LocationDossier
+
+        existant = (
+            await db.execute(
+                select(LocationDossier).where(
+                    LocationDossier.logement_id == bail.logement_id,
+                    LocationDossier.statut.notin_(["annule", "reloue"]),
+                )
+            )
+        ).scalars().first()
+        if existant is None:
+            db.add(
+                LocationDossier(
+                    logement_id=bail.logement_id,
+                    bail_id=bail.id,
+                    statut="avis_recu",
+                )
+            )
+            reloc = True
+    await db.commit()
+    log.info(
+        "Bail %s résilié au %s par %s",
+        bail_id, payload.date_fin, user.email,
+    )
+    return ResilierResult(
+        bail_id=bail_id,
+        date_fin=payload.date_fin,
+        statut="resilie",
+        relocation_ouverte=reloc,
+    )
+
+
 @router.get(
     "/renouvellements/overview",
     response_model=List[RenouvellementOverview],

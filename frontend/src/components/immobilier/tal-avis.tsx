@@ -1599,6 +1599,76 @@ export function AuMoisToggle({
   );
 }
 
+export function ResilierBailButton({
+  bailId,
+  onChanged
+}: {
+  bailId: number;
+  onChanged?: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function resilier() {
+    const brut = window.prompt(
+      "Résilier le bail avant terme (entente de départ, déguerpissement…).\n\nDate de fin du bail (AAAA-MM-JJ) :",
+      new Date().toISOString().slice(0, 10)
+    );
+    if (brut == null) return;
+    const dateFin = brut.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFin)) {
+      window.alert("Date invalide — format AAAA-MM-JJ.");
+      return;
+    }
+    const ouvrirReloc = window.confirm(
+      "Ouvrir aussi un dossier de relocation dans Locations ?\n\nOK = oui (recommandé) · Annuler = non"
+    );
+    if (
+      !window.confirm(
+        `Confirmer la RÉSILIATION du bail au ${dateFin} ?\n\nLe bail passera « résilié » — paiements et historique conservés.`
+      )
+    )
+      return;
+    setBusy(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/resilier`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            date_fin: dateFin,
+            ouvrir_relocation: ouvrirReloc
+          })
+        }
+      );
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        throw new Error(
+          (d && (d.detail || d.message)) || `HTTP ${r.status}`
+        );
+      }
+      onChanged?.();
+    } catch (e) {
+      window.alert(`Résiliation impossible : ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => void resilier()}
+      title="Mettre fin au bail avant terme (entente de départ, déguerpissement) — statut « résilié », option dossier de relocation"
+      className="inline-flex items-center gap-1 rounded-full border border-rose-500/30 bg-rose-500/5 px-2.5 py-1 text-[11px] font-medium text-rose-300/80 transition hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-50"
+    >
+      Résilier
+    </button>
+  );
+}
+
+
 export function BailDocActions({
   bailId,
   hasDoc,
