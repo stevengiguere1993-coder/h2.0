@@ -2268,7 +2268,23 @@ function BauxTab({
               </tr>
             </thead>
             <tbody className="divide-y divide-brand-800">
-              {list.map((b) => (
+              {[...list]
+                // Groupés par LOGEMENT (retour Phil 2026-07-31 : les
+                // deux baux d'une même unité l'un sous l'autre) —
+                // l'actif d'abord, puis le prochain (proposé/futur).
+                .sort((a, b2) => {
+                  const la = String(logMap.get(a.logement_id) || "");
+                  const lb = String(logMap.get(b2.logement_id) || "");
+                  if (la !== lb)
+                    return la.localeCompare(lb, "fr", { numeric: true });
+                  const ra = a.status === "actif" ? 0 : 1;
+                  const rb = b2.status === "actif" ? 0 : 1;
+                  if (ra !== rb) return ra - rb;
+                  return String(a.date_debut).localeCompare(
+                    String(b2.date_debut)
+                  );
+                })
+                .map((b) => (
                 <tr
                   key={b.id}
                   // Bail ciblé depuis la fiche locataire (?bail=…) :

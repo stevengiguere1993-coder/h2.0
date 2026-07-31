@@ -1409,6 +1409,13 @@ function ConvertModal({
   const [dateNaissance, setDateNaissance] = useState("");
   const [nas, setNas] = useState("");
   const [ancienneAdresse, setAncienneAdresse] = useState("");
+  // Locataire EXISTANT (déjà client) : le bail s'attache à sa fiche.
+  const [modeExistant, setModeExistant] = useState(false);
+  const [locatairesDispo, setLocatairesDispo] = useState<
+    { id: number; full_name: string }[] | null
+  >(null);
+  const [locExistantId, setLocExistantId] = useState<number | null>(null);
+  const [locSearch, setLocSearch] = useState("");
   const [employeur, setEmployeur] = useState("");
   const [revenu, setRevenu] = useState("");
   const [debut, setDebut] = useState(defaultDebut);
@@ -1425,6 +1432,22 @@ function ConvertModal({
     immeuble_id: number;
   } | null>(null);
 
+  useEffect(() => {
+    if (!modeExistant || locatairesDispo !== null) return;
+    void (async () => {
+      try {
+        const r = await authedFetch("/api/v1/immobilier/locataires");
+        if (r.ok)
+          setLocatairesDispo(
+            (await r.json()) as { id: number; full_name: string }[]
+          );
+        else setLocatairesDispo([]);
+      } catch {
+        setLocatairesDispo([]);
+      }
+    })();
+  }, [modeExistant, locatairesDispo]);
+
   async function submit() {
     setSaving(true);
     setErr(null);
@@ -1434,6 +1457,7 @@ function ConvertModal({
         {
           method: "POST",
           body: JSON.stringify({
+            locataire_id: modeExistant ? locExistantId : null,
             locataire_nom: nom.trim(),
             locataire_email: email.trim() || null,
             locataire_phone: phone.trim() || null,
@@ -1517,6 +1541,76 @@ function ConvertModal({
               Tout est prérempli depuis le dossier — vérifie et ajuste avant
               de confirmer. Rien n&apos;est créé sans ton accord.
             </p>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                onClick={() => setModeExistant(false)}
+                className={`rounded-md border px-2.5 py-1 text-xs font-semibold ${
+                  !modeExistant
+                    ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
+                    : "border-brand-700 text-white/50 hover:bg-brand-900"
+                }`}
+              >
+                Nouveau locataire
+              </button>
+              <button
+                type="button"
+                onClick={() => setModeExistant(true)}
+                className={`rounded-md border px-2.5 py-1 text-xs font-semibold ${
+                  modeExistant
+                    ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
+                    : "border-brand-700 text-white/50 hover:bg-brand-900"
+                }`}
+              >
+                Locataire existant (déjà client)
+              </button>
+            </div>
+            {modeExistant ? (
+              <div className="grid gap-2">
+                <label className="text-[11px] font-semibold text-white/60">
+                  Rechercher le locataire
+                  <input
+                    value={locSearch}
+                    onChange={(e) => setLocSearch(e.target.value)}
+                    placeholder="Nom du locataire déjà client…"
+                    className={`${INPUT_CLS} mt-0.5 block w-full`}
+                  />
+                </label>
+                <div className="max-h-40 overflow-y-auto rounded-lg border border-brand-800">
+                  {(locatairesDispo || [])
+                    .filter((l) =>
+                      l.full_name
+                        .toLowerCase()
+                        .includes(locSearch.toLowerCase())
+                    )
+                    .slice(0, 30)
+                    .map((l) => (
+                      <button
+                        key={l.id}
+                        type="button"
+                        onClick={() => setLocExistantId(l.id)}
+                        className={`block w-full px-3 py-1.5 text-left text-xs ${
+                          locExistantId === l.id
+                            ? "bg-emerald-500/20 font-semibold text-emerald-200"
+                            : "text-white/75 hover:bg-brand-900"
+                        }`}
+                      >
+                        {l.full_name}
+                      </button>
+                    ))}
+                  {locatairesDispo === null ? (
+                    <p className="px-3 py-2 text-xs text-white/40">
+                      Chargement…
+                    </p>
+                  ) : null}
+                </div>
+                <p className="text-[10px] text-white/40">
+                  Le bail s&apos;attachera à sa fiche existante —
+                  historique conservé, aucun doublon.
+                </p>
+              </div>
+            ) : (
+              <>
             <label className="text-[11px] font-semibold text-white/60">
               Nom complet du locataire
               <input
@@ -1598,6 +1692,8 @@ function ConvertModal({
                 />
               </label>
             </div>
+              </>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <label className="text-[11px] font-semibold text-white/60">
                 Début du bail
@@ -1660,10 +1756,12 @@ function ConvertModal({
                 type="button"
                 disabled={
                   saving ||
-                  !nom.trim() ||
-                  !email.trim() ||
-                  !phone.trim() ||
-                  !dateNaissance ||
+                  (modeExistant
+                    ? locExistantId == null
+                    : !nom.trim() ||
+                      !email.trim() ||
+                      !phone.trim() ||
+                      !dateNaissance) ||
                   !debut ||
                   !fin ||
                   loyer.trim() === "" ||

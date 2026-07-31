@@ -1868,11 +1868,34 @@ function Releves31Tab() {
       );
       return;
     }
-    if (!row.document_id) {
-      setErr(
-        "Importe d'abord la copie PDF du relevé (petit bouton d'import à droite de la ligne)."
-      );
-      return;
+    // Pas encore de copie ? Elle se GÉNÈRE automatiquement avec le
+    // numéro officiel (retour Phil 2026-07-31 : « tu l'as pas
+    // déjà ?? ») — l'import manuel sert à la remplacer par le PDF
+    // officiel de Revenu Québec.
+    let docId = row.document_id;
+    if (!docId) {
+      setBusyId(row.logement_id);
+      try {
+        const g = await authedFetch(
+          `/api/v1/immobilier/releves31/${row.annee}/${row.logement_id}/generer`,
+          { method: "POST" }
+        );
+        if (!g.ok)
+          throw new Error(
+            (await g.text()).slice(0, 200) || `HTTP ${g.status}`
+          );
+        const maj = (await g.json()) as Releve31Row;
+        docId = maj.document_id ?? null;
+      } catch (e) {
+        setErr(`Génération de la copie : ${(e as Error).message}`);
+        setBusyId(null);
+        return;
+      }
+      setBusyId(null);
+      if (!docId) {
+        setErr("Génération de la copie impossible — réessaie.");
+        return;
+      }
     }
     if (!(row.locataire_email || "").trim()) {
       setErr("Ajoute d'abord le courriel du locataire (dans sa fiche).");
@@ -1888,7 +1911,7 @@ function Releves31Tab() {
     setErr(null);
     try {
       const r = await authedFetch(
-        `/api/v1/immobilier/documents/${row.document_id}/envoyer-courriel`,
+        `/api/v1/immobilier/documents/${docId}/envoyer-courriel`,
         { method: "POST", body: JSON.stringify({}) }
       );
       if (!r.ok)

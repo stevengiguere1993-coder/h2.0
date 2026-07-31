@@ -327,9 +327,9 @@ export default function LogementDetailPage({
       dossier.baux.find((b) => b.status === "propose") ||
       null
     : null;
-  const bauxHistorique = dossier
-    ? dossier.baux.filter((b) => b.id !== bailActif?.id)
-    : [];
+  // TOUS les baux, y compris l'ACTUEL (retour Phil 2026-07-31 :
+  // « il faudrait qu'il y ait celui présent aussi dedans »).
+  const bauxHistorique = dossier ? dossier.baux : [];
     const maxLoyer = dossier
     ? Math.max(...dossier.historique_loyer.map((p) => p.loyer_mensuel), 1)
     : 1;
@@ -784,7 +784,7 @@ export default function LogementDetailPage({
               </h2>
               {bauxHistorique.length === 0 ? (
                 <p className="text-sm text-white/50">
-                  Aucun bail passé pour ce logement.
+                  Aucun bail pour ce logement.
                 </p>
               ) : (
                 <div className="overflow-x-auto">
