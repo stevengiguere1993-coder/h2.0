@@ -46,7 +46,6 @@ import {
 import { LocationsBoard } from "@/components/immobilier/locations-board";
 import {
   BailDocActions,
-  BailSignature,
   TalFormDropdown
 } from "@/components/immobilier/tal-avis";
 
@@ -2940,10 +2939,9 @@ function BailSignButton({
     );
   }
 
-  // Signature PILOTÉE PAR DOCUMENT (retour Phil 2026-07-17) : le bouton
-  // est grisé tant qu'aucun document n'a été généré via « Générer ▾ » ;
-  // il ouvre ensuite la bibliothèque (voir/modifier/envoyer/suivre).
-  return <BailSignature bailId={bailId} />;
+  // Flux CORPIQ (2026-07-31) : plus d'envoi de bail pour signature
+  // depuis Kratos — la colonne n'affiche que le bail signé.
+  return null;
 }
 
 const HYPO_STATUS: [string, string][] = [

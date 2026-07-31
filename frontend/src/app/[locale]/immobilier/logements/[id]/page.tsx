@@ -24,7 +24,6 @@ import {
   AuMoisToggle,
   ResilierBailButton,
   BailDocActions,
-  BailSignature,
   DocumentsSection,
   TalFormDropdown
 } from "@/components/immobilier/tal-avis";
@@ -762,7 +761,6 @@ export default function LogementDetailPage({
                         onChanged={() => void loadDossier()}
                       />
                       <TalFormDropdown bailId={bailActif.id} />
-                      <BailSignature bailId={bailActif.id} />
                       <BailDocActions
                         bailId={bailActif.id}
                         hasDoc={bailActif.document_id != null}

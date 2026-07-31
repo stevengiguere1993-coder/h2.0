@@ -528,8 +528,11 @@ async def update_dossier(
 async def delete_dossier(
     dossier_id: int, db: DBSession, user: CurrentUser
 ) -> None:
+    """Supprime le dossier — ET le locataire/bail créés à la
+    conversion s'il y en a (retour Phil 2026-07-31)."""
     _require_volet(user)
     obj = await _dossier_or_404(db, dossier_id)
+    await _supprimer_bail_et_locataire_crees(db, obj)
     await db.delete(obj)
     await db.commit()
 
@@ -597,6 +600,16 @@ async def convertir_dossier(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "La date de naissance est obligatoire.",
+        )
+    if not (payload.locataire_email or "").strip():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Le courriel du locataire est obligatoire.",
+        )
+    if not (payload.locataire_phone or "").strip():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Le téléphone du locataire est obligatoire.",
         )
     if payload.date_fin <= payload.date_debut:
         raise HTTPException(
@@ -690,31 +703,20 @@ async def convertir_dossier(
 # ─── Désistement du candidat converti ───────────────────────────────────
 
 
-@router.post(
-    "/locations/{dossier_id}/desistement", response_model=DossierRow
-)
-async def desistement_candidat(
-    dossier_id: int, db: DBSession, user: CurrentUser
-) -> DossierRow:
-    """Le candidat converti se désiste : le bail créé (et le locataire,
-    s'il n'a aucun autre bail) est SUPPRIMÉ, le dossier revient à
-    « Départ confirmé » et le logement reprend son vrai statut (occupé
-    si le locataire sortant est encore en place, vacant sinon)."""
-    _require_volet(user)
+async def _supprimer_bail_et_locataire_crees(db, dossier) -> None:
+    """Supprime le bail créé à la conversion — et le locataire s'il n'a
+    aucun autre bail (avec ses communications et documents). Utilisé par
+    le DÉSISTEMENT et par la SUPPRESSION du dossier (retour Phil
+    2026-07-31 : « delete-le aussi »). 409 si des paiements existent."""
     from app.models.immobilier import (
         BailRenouvellement,
-        BailStatus,
         ImmDocument,
         LocataireCommunication,
         PaiementLoyer,
     )
 
-    dossier = await _dossier_or_404(db, dossier_id)
     if dossier.nouveau_bail_id is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Aucun locataire converti sur ce dossier.",
-        )
+        return
     bail = await db.get(Bail, dossier.nouveau_bail_id)
     locataire_id = bail.locataire_id if bail else None
     if bail is not None:
@@ -729,7 +731,7 @@ async def desistement_candidat(
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 "Des paiements sont déjà enregistrés sur ce bail — "
-                "retire-les avant le désistement.",
+                "retire-les d'abord.",
             )
         for doc in (
             await db.execute(
@@ -777,6 +779,28 @@ async def desistement_candidat(
                     await db.delete(doc)
                 await db.delete(lo)
     dossier.nouveau_bail_id = None
+
+
+@router.post(
+    "/locations/{dossier_id}/desistement", response_model=DossierRow
+)
+async def desistement_candidat(
+    dossier_id: int, db: DBSession, user: CurrentUser
+) -> DossierRow:
+    """Le candidat converti se désiste : le bail créé (et le locataire,
+    s'il n'a aucun autre bail) est SUPPRIMÉ, le dossier revient à
+    « Départ confirmé » et le logement reprend son vrai statut (occupé
+    si le locataire sortant est encore en place, vacant sinon)."""
+    _require_volet(user)
+    from app.models.immobilier import BailStatus
+
+    dossier = await _dossier_or_404(db, dossier_id)
+    if dossier.nouveau_bail_id is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Aucun locataire converti sur ce dossier.",
+        )
+    await _supprimer_bail_et_locataire_crees(db, dossier)
     dossier.reloue_le = None
     dossier.statut = LocationDossierStatut.AVIS_RECU.value
     dossier.updated_at = _now()
