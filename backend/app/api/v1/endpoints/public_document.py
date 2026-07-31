@@ -283,9 +283,57 @@ async def public_sign(
             log.exception(
                 "Estampillage de la page réponse échoué (doc %s)", doc.id
             )
+        try:
+            # Copie signée transmise au locataire (retour Phil
+            # 2026-07-31) — best effort, jamais bloquant.
+            await _envoyer_copie_signee(db, doc)
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "Envoi de la copie signée échoué (doc %s)", doc.id
+            )
     await db.commit()
     await db.refresh(doc)
     return await _to_public(db, doc)
+
+
+async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
+    """Envoie au locataire la version SIGNÉE (estampillée) de l'avis —
+    sa preuve à lui, annoncée sur la page publique."""
+    from sqlalchemy.orm import undefer
+
+    from app.integrations.email_graph import EmailAttachment, GraphMailer
+
+    locataire, dest = await _resolve_destinataire(db, doc, None)
+    mailer = GraphMailer()
+    if not mailer.ready or not dest:
+        return
+    d2 = (
+        await db.execute(
+            select(ImmDocument)
+            .options(undefer(ImmDocument.pdf_blob))
+            .where(ImmDocument.id == doc.id)
+        )
+    ).scalar_one()
+    if not d2.pdf_blob:
+        return
+    nom = (locataire.full_name if locataire else "") or "Madame, Monsieur"
+    await mailer.send(
+        to=[dest],
+        subject="Votre réponse signée — avis de modification du bail",
+        html_body=(
+            f"<p>Bonjour {nom},</p>"
+            "<p>Voici la copie signée de votre réponse à l'avis de "
+            "modification du bail — conservez-la pour vos dossiers.</p>"
+            "<p>Cordialement,<br/>Horizon Services Immobiliers</p>"
+        ),
+        attachments=[
+            EmailAttachment(
+                name="avis-modification-signe.pdf",
+                content_bytes=d2.pdf_blob,
+                content_type="application/pdf",
+            )
+        ],
+    )
 
 
 async def _estampiller_pdf(db, doc: ImmDocument, choix: str) -> None:

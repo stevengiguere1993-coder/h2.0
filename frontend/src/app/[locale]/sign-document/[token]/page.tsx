@@ -197,7 +197,8 @@ export default function SignDocumentPage() {
                   {data.signed_at
                     ? ` le ${new Date(data.signed_at).toLocaleString("fr-CA")}`
                     : ""}
-                  . Merci !
+                  . Une copie signée vous a été transmise par
+                  courriel. Merci !
                 </p>
               </div>
             </div>
@@ -250,7 +251,7 @@ export default function SignDocumentPage() {
             </h2>
             <p className="mt-1 text-sm text-white/70">
               {data.choix_requis
-                ? "Choisissez votre réponse (comme sur la dernière page du document), puis signez. Vous disposez d'un (1) mois après la réception de l'avis — sans réponse, vous serez réputé avoir accepté."
+                ? "Choisissez votre réponse (comme sur la dernière page du document), puis signez. Vous disposez d'un (1) mois après la réception de l'avis — sans réponse, vous serez réputé avoir accepté. Une copie signée vous sera transmise par courriel."
                 : "En signant, vous confirmez avoir pris connaissance du document ci-dessus."}
             </p>
             {data.choix_requis ? (

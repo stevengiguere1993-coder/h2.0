@@ -154,6 +154,10 @@ class RenouvellementOverview(BaseModel):
     fenetre: str  # "echu" | "imminente" | "a_envoyer" | "envoye" | "hors_fenetre"
     avis_envoye_le: Optional[date] = None
     nouveau_loyer: Optional[float] = None
+    #: Période visée par l'avis du cycle courant — le futur loyer/la
+    #: future date s'affichent sous les valeurs actuelles.
+    nouvelle_date_debut: Optional[date] = None
+    nouvelle_date_fin: Optional[date] = None
     renouvellement_status: Optional[str] = None
     #: Dernier cycle de renouvellement (cible du POST …/document).
     renouvellement_id: Optional[int] = None
