@@ -394,3 +394,89 @@ async def upload_releve31_pdf(
         notes=obj.notes,
         document_id=obj.document_id,
     )
+
+
+class Releve31LocataireRow(BaseModel):
+    annee: int
+    logement_id: int
+    logement_numero: Optional[str] = None
+    immeuble_name: Optional[str] = None
+    statut: str
+    numero_releve: Optional[str] = None
+    document_id: Optional[int] = None
+
+
+@router.get(
+    "/locataires/{locataire_id}/releves31",
+    response_model=List[Releve31LocataireRow],
+)
+async def releves31_locataire(
+    locataire_id: int, db: DBSession, user: CurrentUser
+) -> List[Releve31LocataireRow]:
+    """Relevés 31 liés aux logements de CE locataire (années couvertes
+    par ses baux) — section « Relevés 31 » de sa fiche (retour Phil
+    2026-07-31)."""
+    _require_volet(user)
+    from datetime import date as _date
+
+    baux = (
+        await db.execute(
+            select(Bail).where(Bail.locataire_id == locataire_id)
+        )
+    ).scalars().all()
+    if not baux:
+        return []
+    paires = set()
+    log_ids = set()
+    for b in baux:
+        if not b.logement_id or not b.date_debut:
+            continue
+        log_ids.add(b.logement_id)
+        fin = b.date_fin or _date.today()
+        for annee in range(b.date_debut.year, fin.year + 1):
+            paires.add((b.logement_id, annee))
+    if not log_ids:
+        return []
+    rels = (
+        await db.execute(
+            select(Releve31)
+            .where(Releve31.logement_id.in_(list(log_ids)))
+            .order_by(Releve31.annee.desc())
+        )
+    ).scalars().all()
+    rels = [r for r in rels if (r.logement_id, r.annee) in paires]
+    lgs = {
+        lg.id: lg
+        for lg in (
+            await db.execute(
+                select(Logement).where(Logement.id.in_(list(log_ids)))
+            )
+        ).scalars().all()
+    }
+    imm_ids = {lg.immeuble_id for lg in lgs.values() if lg.immeuble_id}
+    imms = {}
+    if imm_ids:
+        imms = {
+            im.id: im
+            for im in (
+                await db.execute(
+                    select(Immeuble).where(Immeuble.id.in_(list(imm_ids)))
+                )
+            ).scalars().all()
+        }
+    out: List[Releve31LocataireRow] = []
+    for r in rels:
+        lg = lgs.get(r.logement_id)
+        im = imms.get(lg.immeuble_id) if lg else None
+        out.append(
+            Releve31LocataireRow(
+                annee=r.annee,
+                logement_id=r.logement_id,
+                logement_numero=lg.numero if lg else None,
+                immeuble_name=im.name if im else None,
+                statut=r.statut,
+                numero_releve=r.numero_releve,
+                document_id=r.document_id,
+            )
+        )
+    return out

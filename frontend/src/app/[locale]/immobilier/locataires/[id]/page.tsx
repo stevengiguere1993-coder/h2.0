@@ -1430,6 +1430,8 @@ export default function LocataireDetailPage({
               </div>
             </section>
 
+            <Releves31Section locataireId={locataireId} />
+
             {/* Assurance locataire — à confirmer chaque année (Steven). */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -2006,6 +2008,115 @@ function LoyersMoisSection({
                   </button>
                 ) : null}
               </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+
+/** Relevés 31 du locataire (occupation au 31 décembre de ses baux) —
+ *  la production/l'envoi se gèrent dans Suivis annuels ; ici on VOIT
+ *  l'état (retour Phil 2026-07-31). */
+function Releves31Section({ locataireId }: { locataireId: number }) {
+  const [rows, setRows] = useState<
+    | {
+        annee: number;
+        logement_numero: string | null;
+        immeuble_name: string | null;
+        statut: string;
+        numero_releve: string | null;
+        document_id: number | null;
+      }[]
+    | null
+  >(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/immobilier/locataires/${locataireId}/releves31`
+        );
+        setRows(r.ok ? await r.json() : []);
+      } catch {
+        setRows([]);
+      }
+    })();
+  }, [locataireId]);
+
+  async function voirPdf(id: number) {
+    const r = await authedFetch(`/api/v1/immobilier/documents/${id}/pdf`);
+    if (!r.ok) return;
+    window.open(URL.createObjectURL(await r.blob()), "_blank");
+  }
+
+  const BADGE: Record<string, string> = {
+    a_produire: "badge-amber",
+    produit: "badge-sky",
+    remis: "badge-emerald"
+  };
+  const LABEL: Record<string, string> = {
+    a_produire: "À produire",
+    produit: "Produit",
+    remis: "Remis"
+  };
+
+  return (
+    <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Relevés 31
+        </h2>
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={"/immobilier/renouvellements" as any}
+          className="text-xs text-accent-500 hover:underline"
+        >
+          Gérer dans Suivis annuels →
+        </Link>
+      </div>
+      {rows === null ? (
+        <p className="text-xs text-white/50">Chargement…</p>
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-white/50">
+          Aucun relevé 31 suivi pour ce locataire. Ils se préparent dans
+          Suivis annuels (onglet Relevés 31), à partir de
+          l&apos;occupation au 31 décembre — le numéro vient de Revenu
+          Québec au moment de produire le relevé.
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          {rows.map((r, i) => (
+            <div
+              key={i}
+              className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2 text-sm"
+            >
+              <span className="font-mono font-bold text-white">
+                {r.annee}
+              </span>
+              <span className="text-white/60">
+                {r.immeuble_name}
+                {r.logement_numero ? ` · ${r.logement_numero}` : ""}
+              </span>
+              <span className={`badge ${BADGE[r.statut] || "badge-neutral"}`}>
+                {LABEL[r.statut] || r.statut}
+              </span>
+              {r.numero_releve ? (
+                <span className="font-mono text-xs text-white/60">
+                  nº {r.numero_releve}
+                </span>
+              ) : null}
+              {r.document_id ? (
+                <button
+                  type="button"
+                  onClick={() => void voirPdf(r.document_id!)}
+                  className="ml-auto text-xs text-accent-500 hover:underline"
+                >
+                  Copie PDF
+                </button>
+              ) : null}
             </div>
           ))}
         </div>
