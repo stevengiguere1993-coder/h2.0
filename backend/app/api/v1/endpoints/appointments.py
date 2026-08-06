@@ -21,6 +21,7 @@ from app.models.employe import Employe
 from app.models.follow_up import FollowUp
 from app.core.config import settings
 from app.services.appointment_mail import (
+    is_deliverable_email,
     resolve_employe_email,
     send_appointment_assignee_invite,
     send_appointment_confirmation,
@@ -300,6 +301,9 @@ async def update_appointment(
         )
 
     old_assignee_id = event.assignee_id
+    old_start = event.start_at
+    old_end = event.end_at
+    old_location = event.location
     if data.start_at is not None:
         event.start_at = data.start_at
     if data.end_at is not None:
@@ -381,6 +385,45 @@ async def update_appointment(
                 )
 
         bg.add_task(_invite_new_assignee, event.assignee_id, event.id)
+
+    # Date/heure ou lieu modifiés → renvoi AUTOMATIQUE de la confirmation
+    # au prospect avec le .ics à jour (même UID : son calendrier remplace
+    # l'ancienne entrée). Avant, seul le bouton manuel « Renvoyer la
+    # confirmation » couvrait ce cas et le prospect restait sur l'ancienne
+    # heure si on l'oubliait.
+    prospect_facing_change = (
+        event.start_at != old_start
+        or event.end_at != old_end
+        or (event.location or None) != (old_location or None)
+    )
+    if prospect_facing_change:
+
+        async def _resend_confirmation(ev_id: int) -> None:
+            from app.db.session import AsyncSessionLocal
+
+            async with AsyncSessionLocal() as fresh_db:
+                ev = (
+                    await fresh_db.execute(
+                        select(AgendaEvent).where(AgendaEvent.id == ev_id)
+                    )
+                ).scalar_one_or_none()
+                if ev is None or ev.contact_request_id is None:
+                    return
+                pr = (
+                    await fresh_db.execute(
+                        select(ContactRequest).where(
+                            ContactRequest.id == ev.contact_request_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                if pr is None or not is_deliverable_email(pr.email):
+                    return
+                ok = await send_appointment_confirmation(pr, ev)
+                if ok:
+                    ev.confirmation_sent_at = datetime.now(timezone.utc)
+                    await fresh_db.commit()
+
+        bg.add_task(_resend_confirmation, event.id)
 
     out = AppointmentRead.model_validate(event)
     out.assignee_invite_warning = patch_warning

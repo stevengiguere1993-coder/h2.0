@@ -1055,6 +1055,25 @@ async def _book_chosen_slot(
     except Exception as exc:  # noqa: BLE001
         log.warning("Booking notif failed: %s", exc)
 
+    # Courriels automatiques — même flux que le endpoint /appointments :
+    # confirmation .ics au prospect (si courriel réel, pas le placeholder
+    # @telephonie.local) + invitation agenda du propriétaire.
+    try:
+        cr = (
+            await db.execute(
+                select(ContactRequest).where(ContactRequest.id == cr_id)
+            )
+        ).scalar_one_or_none()
+        if cr is not None:
+            from app.services.appointment_mail import (
+                send_new_appointment_emails,
+            )
+
+            await send_new_appointment_emails(cr, event)
+            await db.flush()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Booking confirmation emails failed: %s", exc)
+
     return True
 
 
@@ -3701,7 +3720,11 @@ async def _commit_lead_outcome(
             contact_request_id=cr.id,
         )
         db.add(ev)
-        cr.kanban_column = "rdv_pris"
+        # kanban_column=None : la carte suit son statut. « rdv_pris »
+        # n'existait dans aucune colonne du board (la vraie clé est
+        # « rdv_prevu ») — la carte retombait dans la colonne fallback
+        # sans le bon titre.
+        cr.kanban_column = None
         if cr.status in (_CRS.NEW.value, _CRS.CONTACTED.value):
             cr.status = _CRS.RDV_PREVU.value
         await db.flush()
@@ -3709,6 +3732,21 @@ async def _commit_lead_outcome(
             "RDV auto-créé : contact=%d agenda=%d at %s",
             cr.id, ev.id, start.isoformat(),
         )
+
+        # Courriels automatiques (confirmation .ics au prospect +
+        # invitation agenda du propriétaire), comme pour un RDV pris
+        # depuis la fiche CRM. Best-effort : n'empêche jamais le commit.
+        try:
+            from app.services.appointment_mail import (
+                send_new_appointment_emails,
+            )
+
+            await send_new_appointment_emails(cr, ev)
+            await db.flush()
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "RDV auto emails failed (cr=%d): %s", cr.id, exc
+            )
 
 
 @router.post(
