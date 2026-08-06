@@ -24,6 +24,7 @@ import {
   CheckCircle2,
   Download,
   Loader2,
+  Paperclip,
   PenLine,
   RotateCcw,
   ShieldCheck,
@@ -54,12 +55,20 @@ type SignerSummary = {
   declined: boolean;
 };
 
+type AttachmentT = {
+  id: number;
+  filename: string;
+  size_bytes: number;
+};
+
 type Info = {
   title: string;
   status: string;
   page_count: number;
   entreprise_name: string | null;
   message: string | null;
+  expires_at: string | null;
+  attachments: AttachmentT[];
   signer_first_name: string;
   signer_last_name: string;
   signer_email: string;
@@ -579,6 +588,44 @@ export default function PublicEsignPage() {
             <p className="whitespace-pre-line text-sm text-slate-700">
               {info.message}
             </p>
+          </div>
+        ) : null}
+
+        {info.expires_at && canSign ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
+            ⏳ Ce lien de signature expire le{" "}
+            {new Date(info.expires_at).toLocaleDateString("fr-CA", {
+              day: "numeric",
+              month: "long",
+              year: "numeric"
+            })}
+            .
+          </div>
+        ) : null}
+
+        {info.attachments.length > 0 ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Annexes consultables
+            </p>
+            <ul className="space-y-1.5">
+              {info.attachments.map((a) => (
+                <li key={a.id}>
+                  <a
+                    href={`${base}/attachments/${a.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-700 hover:underline"
+                  >
+                    <Paperclip className="h-3.5 w-3.5" />
+                    {a.filename}
+                    <span className="text-xs font-normal text-slate-400">
+                      ({(a.size_bytes / 1024 / 1024).toFixed(1)} Mo)
+                    </span>
+                  </a>
+                </li>
+              ))}
+            </ul>
           </div>
         ) : null}
 

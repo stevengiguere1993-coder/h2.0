@@ -620,6 +620,15 @@ async def trigger_all_daily(
     await _safe("facture-reminders", run_facture, details)
     await _safe("appointment-reminders", run_appointment, details)
 
+    # eSign : expiration des documents + relances automatiques des
+    # signataires en attente (gère sa propre session DB).
+    async def _run_esign_reminders():
+        from app.jobs.esign_reminders import run as run_esign
+
+        return await run_esign()
+
+    await _safe("esign-reminders", _run_esign_reminders, details)
+
     # Jobs QG / immobilier (utilisent une session DB managée)
     async def _run_qg_daily_pulse():
         from app.services.qg_daily_pulse import generate_for_all_active

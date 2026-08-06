@@ -42,11 +42,13 @@ from app.api.deps import DBSession
 from app.core.config import settings
 from app.models.entreprise import Entreprise
 from app.models.esign import (
+    EsignAttachment,
     EsignDocument,
     EsignDocumentStatus,
     EsignEvent,
     EsignField,
     EsignFieldKind,
+    EsignObserver,
     EsignSigner,
 )
 from app.services.esign_pdf import (
@@ -101,12 +103,20 @@ class PublicSignerSummary(BaseModel):
     declined: bool
 
 
+class PublicAttachment(BaseModel):
+    id: int
+    filename: str
+    size_bytes: int
+
+
 class PublicEsign(BaseModel):
     title: str
     status: str
     page_count: int
     entreprise_name: Optional[str]
     message: Optional[str]
+    expires_at: Optional[datetime]
+    attachments: List[PublicAttachment]
     signer_first_name: str
     signer_last_name: str
     signer_email: str
@@ -229,6 +239,27 @@ async def _load_by_token(
         raise HTTPException(
             status.HTTP_410_GONE, "Ce document a été annulé par l'émetteur."
         )
+    if doc.status == EsignDocumentStatus.EXPIRE.value:
+        raise HTTPException(
+            status.HTTP_410_GONE,
+            "Ce lien de signature a expiré — contactez l'émetteur du "
+            "document.",
+        )
+    # Expiration « live » : la date peut être dépassée avant le passage
+    # du cron quotidien qui bascule le statut.
+    if (
+        doc.status == EsignDocumentStatus.ENVOYE.value
+        and doc.expires_at is not None
+    ):
+        exp = doc.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp <= datetime.now(timezone.utc):
+            raise HTTPException(
+                status.HTTP_410_GONE,
+                "Ce lien de signature a expiré — contactez l'émetteur du "
+                "document.",
+            )
     return signer, doc
 
 
@@ -302,12 +333,28 @@ async def _to_public(
     def _name(s: EsignSigner) -> str:
         return f"{s.first_name} {s.last_name}".strip()
 
+    attachments = list(
+        (
+            await db.execute(
+                select(EsignAttachment)
+                .where(EsignAttachment.document_id == doc.id)
+                .order_by(EsignAttachment.id)
+            )
+        ).scalars()
+    )
     return PublicEsign(
         title=doc.title,
         status=doc.status,
         page_count=doc.page_count,
         entreprise_name=ent_name,
         message=doc.message,
+        expires_at=doc.expires_at,
+        attachments=[
+            PublicAttachment(
+                id=a.id, filename=a.filename, size_bytes=a.size_bytes
+            )
+            for a in attachments
+        ],
         signer_first_name=signer.first_name,
         signer_last_name=signer.last_name,
         signer_email=signer.email,
@@ -442,6 +489,35 @@ async def esign_pdf(token: str, db: DBSession) -> Response:
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'inline; filename="{doc.filename}"'
+        },
+    )
+
+
+@router.get(
+    "/{token}/attachments/{attachment_id}",
+    summary="Télécharge une annexe consultable",
+)
+async def esign_attachment(
+    token: str, attachment_id: int, db: DBSession
+) -> Response:
+    signer, doc = await _load_by_token(db, token)
+    att = (
+        await db.execute(
+            select(EsignAttachment)
+            .where(
+                EsignAttachment.id == attachment_id,
+                EsignAttachment.document_id == doc.id,
+            )
+            .options(undefer(EsignAttachment.blob))
+        )
+    ).scalar_one_or_none()
+    if att is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Annexe introuvable.")
+    return Response(
+        content=bytes(att.blob),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{att.filename}"'
         },
     )
 
@@ -901,7 +977,8 @@ async def _finalize_document(db: AsyncSession, doc_id: int) -> None:
             doc_id, len(final_pdf),
         )
 
-        # Copies courriel à toutes les parties + créateur du document.
+        # Copies courriel à toutes les parties + créateur du document
+        # + observateurs en copie (V2).
         extra: list[str] = []
         try:
             if doc.created_by_user_id:
@@ -916,6 +993,17 @@ async def _finalize_document(db: AsyncSession, doc_id: int) -> None:
                 ).scalar_one_or_none()
                 if creator_email:
                     extra.append(creator_email)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            observer_emails = (
+                await db.execute(
+                    select(EsignObserver.email).where(
+                        EsignObserver.document_id == doc_id
+                    )
+                )
+            ).scalars().all()
+            extra.extend(observer_emails)
         except Exception:  # noqa: BLE001
             pass
         await send_completion_emails(
