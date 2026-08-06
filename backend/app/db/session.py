@@ -1053,6 +1053,40 @@ async def ensure_contrat_gestion_tables() -> None:
         log.warning("ensure_contrat_gestion_tables failed: %s", exc)
 
 
+async def ensure_esign_tables() -> None:
+    """Crée les tables du module eSign (signature électronique de
+    documents, pôle Gestion d'entreprise) dans leur PROPRE transaction :
+    `esign_documents`, `esign_signers`, `esign_fields`, `esign_events`.
+
+    Voir app/models/esign.py — pattern identique aux autres ensure_*."""
+    import logging
+
+    log = logging.getLogger("db.ensure_esign_tables")
+    try:
+        from app.db.base import Base
+        from app.models.esign import (  # noqa: F401
+            EsignDocument,
+            EsignEvent,
+            EsignField,
+            EsignSigner,
+        )
+
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(
+                    c,
+                    tables=[
+                        EsignDocument.__table__,
+                        EsignSigner.__table__,
+                        EsignField.__table__,
+                        EsignEvent.__table__,
+                    ],
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_esign_tables failed: %s", exc)
+
+
 async def init_db() -> None:
     """
     Initialize database tables.

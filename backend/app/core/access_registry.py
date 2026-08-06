@@ -248,6 +248,8 @@ PAGES: list[PageEntry] = [
        "/entreprises/plan-suivi"),
     _p("entreprises.contacts", "Contacts", "entreprises", "admin",
        "/entreprises/contacts"),
+    _p("entreprises.signature", "Signature", "entreprises", "admin",
+       "/entreprises/signature"),
     _p("entreprises.abonnements", "Abonnements", "entreprises", "admin",
        "/entreprises/abonnements"),
     # ── Investisseurs ──
