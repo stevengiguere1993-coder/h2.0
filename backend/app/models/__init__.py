@@ -76,6 +76,14 @@ from app.models.entreprise_recurrence import (  # noqa: F401
 from app.models.entreprise_tache import EntrepriseTache, TacheStatus  # noqa: F401
 from app.models.entreprise_tache_assignee import EntrepriseTacheAssignee  # noqa: F401
 from app.models.entreprise_tache_immeuble import EntrepriseTacheImmeuble  # noqa: F401
+from app.models.esign import (  # noqa: F401
+    EsignDocument,
+    EsignDocumentStatus,
+    EsignEvent,
+    EsignField,
+    EsignFieldKind,
+    EsignSigner,
+)
 from app.models.lead_analysis import (  # noqa: F401
     LeadAnalysis,
     LeadAnalysisAttachment,
@@ -403,6 +411,12 @@ __all__ = [
     "CadenceStep",
     "RelancePlan",
     "RelanceItem",
+    "EsignDocument",
+    "EsignDocumentStatus",
+    "EsignEvent",
+    "EsignField",
+    "EsignFieldKind",
+    "EsignSigner",
     "User",
     "UserImmeuble",
     "Call",

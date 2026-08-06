@@ -18,6 +18,7 @@ from app.db.session import (
     close_db,
     ensure_contrat_gestion_tables,
     ensure_critical_columns,
+    ensure_esign_tables,
     ensure_immobilier_aux_tables,
     ensure_project_corrections_tables,
     ensure_raci_tables,
@@ -153,6 +154,15 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning(
             "ensure_contrat_gestion_tables failed during startup: %s", exc
+        )
+
+    # Tables du module eSign (signature électronique de documents,
+    # pôle Gestion d'entreprise). Transaction isolée.
+    try:
+        await ensure_esign_tables()
+    except Exception as exc:
+        logger.warning(
+            "ensure_esign_tables failed during startup: %s", exc
         )
 
     # Backfill : crée le projet (+ facture d'acompte DRAFT) pour les

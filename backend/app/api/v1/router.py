@@ -45,6 +45,7 @@ from app.api.v1.endpoints import (
     drive_page_modules,
     employes,
     entreprises,
+    esign,
     extension,
     follow_ups,
     contact,
@@ -110,6 +111,7 @@ from app.api.v1.endpoints import (
     projects,
     public_bail,
     public_document,
+    public_esign,
     public_bon,
     public_contrat_gestion,
     public_devlog_contact,
@@ -280,6 +282,9 @@ api_router.include_router(contract_sign.docs_router)
 api_router.include_router(public_bon.router)
 api_router.include_router(public_bail.router)
 api_router.include_router(public_document.router)
+# eSign public — signature de documents (pôle Gestion d'entreprise).
+# Ne PAS protéger : les signataires externes n'ont pas de compte.
+api_router.include_router(public_esign.router)
 api_router.include_router(public_contrat_gestion.router)
 api_router.include_router(push.router)
 api_router.include_router(appointment_types.router)
@@ -448,6 +453,10 @@ api_router.include_router(rencontres_teams.router)
 api_router.include_router(rencontres.router)
 api_router.include_router(timesheets.router)
 api_router.include_router(ai.router)
+# eSign admin — signature électronique de documents (sidemenu QG →
+# Signature). Prefix statique /esign : pas de collision avec le CRUD
+# /entreprises/{id}.
+api_router.include_router(esign.router, dependencies=DEP_ENTREPRISES)
 api_router.include_router(entreprises.router, dependencies=DEP_ENTREPRISES)
 # entreprise_extras DOIT être registered avant entreprises.router pour que
 # /entreprises/finance/* et /entreprises/value-plans/* matchent avant
