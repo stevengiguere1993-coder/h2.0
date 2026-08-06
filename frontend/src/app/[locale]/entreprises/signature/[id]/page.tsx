@@ -30,8 +30,10 @@ import {
   Download,
   Eye,
   FileText,
+  LayoutTemplate,
   Loader2,
   Mail,
+  Paperclip,
   PenLine,
   Plus,
   Search,
@@ -93,6 +95,18 @@ type EventT = {
   created_at: string;
 };
 
+type Observer = {
+  id: number;
+  name: string;
+  email: string;
+};
+
+type Attachment = {
+  id: number;
+  filename: string;
+  size_bytes: number;
+};
+
 type DocDetail = {
   id: number;
   title: string;
@@ -104,6 +118,8 @@ type DocDetail = {
   use_signing_order: boolean;
   sent_at: string | null;
   completed_at: string | null;
+  expires_at: string | null;
+  reminder_days: number | null;
   created_at: string;
   updated_at: string | null;
   message: string | null;
@@ -112,6 +128,8 @@ type DocDetail = {
   signers: Signer[];
   fields: FieldT[];
   events: EventT[];
+  observers: Observer[];
+  attachments: Attachment[];
 };
 
 type UnifiedContact = {
@@ -158,7 +176,8 @@ const STATUS_LABEL: Record<string, string> = {
   envoye: "En attente de signatures",
   complete: "Signé par toutes les parties",
   refuse: "Refusé",
-  annule: "Annulé"
+  annule: "Annulé",
+  expire: "Expiré"
 };
 
 const STATUS_CLS: Record<string, string> = {
@@ -166,7 +185,8 @@ const STATUS_CLS: Record<string, string> = {
   envoye: "badge-sky",
   complete: "badge-emerald",
   refuse: "badge-rose",
-  annule: "badge-neutral"
+  annule: "badge-neutral",
+  expire: "badge-amber"
 };
 
 const EVENT_LABELS: Record<string, string> = {
@@ -179,7 +199,8 @@ const EVENT_LABELS: Record<string, string> = {
   signe: "Document signé",
   refuse: "Signature refusée",
   complete: "Document complété",
-  annule: "Document annulé"
+  annule: "Document annulé",
+  expire: "Lien de signature expiré"
 };
 
 function fmtDateTime(iso: string | null): string {
@@ -234,6 +255,13 @@ export default function SignatureDocPage() {
   // Modal signataire.
   const [signerModal, setSignerModal] = useState(false);
   const [busySend, setBusySend] = useState(false);
+
+  // V2 : observateurs / annexes / modèle.
+  const [obsName, setObsName] = useState("");
+  const [obsEmail, setObsEmail] = useState("");
+  const [obsBusy, setObsBusy] = useState(false);
+  const [attBusy, setAttBusy] = useState(false);
+  const [tplBusy, setTplBusy] = useState(false);
 
   const isDraft = doc?.status === "brouillon";
 
@@ -488,6 +516,113 @@ export default function SignatureDocPage() {
     if (res.ok) router.push("/entreprises/signature" as any);
   }
 
+  async function saveAsTemplate() {
+    if (!doc) return;
+    setTplBusy(true);
+    setBanner(null);
+    try {
+      await flushSave();
+      const res = await authedFetch(
+        `/api/v1/esign/documents/${docId}/save-as-template`,
+        { method: "POST", body: JSON.stringify({}) }
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        setBanner(
+          typeof body?.detail === "string"
+            ? body.detail
+            : "Enregistrement du modèle échoué."
+        );
+        return;
+      }
+      setBanner(
+        `Modèle « ${body?.title || doc.title} » enregistré — réutilisable ` +
+          "depuis le bouton « Modèles » de la liste."
+      );
+    } finally {
+      setTplBusy(false);
+    }
+  }
+
+  async function addObserver(e: React.FormEvent) {
+    e.preventDefault();
+    if (!obsName.trim() || !obsEmail.trim()) return;
+    setObsBusy(true);
+    try {
+      const res = await authedFetch(
+        `/api/v1/esign/documents/${docId}/observers`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name: obsName.trim(),
+            email: obsEmail.trim()
+          })
+        }
+      );
+      if (res.ok) {
+        setObsName("");
+        setObsEmail("");
+        await load();
+      } else {
+        const body = await res.json().catch(() => null);
+        setBanner(
+          typeof body?.detail === "string"
+            ? body.detail
+            : "Ajout de l'observateur échoué."
+        );
+      }
+    } finally {
+      setObsBusy(false);
+    }
+  }
+
+  async function removeObserver(id: number) {
+    const res = await authedFetch(`/api/v1/esign/observers/${id}`, {
+      method: "DELETE"
+    });
+    if (res.ok) await load();
+  }
+
+  async function uploadAttachment(file: File) {
+    setAttBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await authedFetch(
+        `/api/v1/esign/documents/${docId}/attachments`,
+        { method: "POST", body: fd }
+      );
+      if (res.ok) {
+        await load();
+      } else {
+        const body = await res.json().catch(() => null);
+        setBanner(
+          typeof body?.detail === "string"
+            ? body.detail
+            : "Téléversement de l'annexe échoué."
+        );
+      }
+    } finally {
+      setAttBusy(false);
+    }
+  }
+
+  async function removeAttachment(id: number) {
+    const res = await authedFetch(`/api/v1/esign/attachments/${id}`, {
+      method: "DELETE"
+    });
+    if (res.ok) await load();
+  }
+
+  async function openAttachment(id: number) {
+    const res = await authedFetch(`/api/v1/esign/attachments/${id}/pdf`);
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
   async function openPdf(path: "pdf" | "signed-pdf") {
     const res = await authedFetch(
       `/api/v1/esign/documents/${docId}/${path}`
@@ -601,6 +736,19 @@ export default function SignatureDocPage() {
                 </span>
                 <button
                   type="button"
+                  onClick={() => void saveAsTemplate()}
+                  disabled={tplBusy}
+                  className="btn-secondary btn-sm inline-flex items-center gap-1.5"
+                >
+                  {tplBusy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <LayoutTemplate className="h-3.5 w-3.5" />
+                  )}
+                  Enregistrer comme modèle
+                </button>
+                <button
+                  type="button"
                   onClick={deleteDoc}
                   className="btn-outline-rose btn-sm inline-flex items-center gap-1.5"
                 >
@@ -623,6 +771,20 @@ export default function SignatureDocPage() {
               </>
             ) : (
               <>
+                <button
+                  type="button"
+                  onClick={() => void saveAsTemplate()}
+                  disabled={tplBusy}
+                  className="btn-secondary btn-sm inline-flex items-center gap-1.5"
+                  title="Réutiliser ce document (PDF + zones) comme modèle"
+                >
+                  {tplBusy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <LayoutTemplate className="h-3.5 w-3.5" />
+                  )}
+                  Modèle
+                </button>
                 <button
                   type="button"
                   onClick={() => void openPdf("pdf")}
@@ -745,6 +907,22 @@ export default function SignatureDocPage() {
               {doc.filename} · {doc.page_count} page
               {doc.page_count > 1 ? "s" : ""}
             </span>
+            {doc.expires_at ? (
+              <span
+                className={`text-xs ${
+                  doc.status === "expire"
+                    ? "font-medium text-amber-600"
+                    : "text-[var(--qg-text-muted)]"
+                }`}
+              >
+                ⏳ Expire le{" "}
+                {new Date(doc.expires_at).toLocaleDateString("fr-CA", {
+                  day: "numeric",
+                  month: "short",
+                  year: "numeric"
+                })}
+              </span>
+            ) : null}
           </div>
         </div>
 
@@ -996,6 +1174,221 @@ export default function SignatureDocPage() {
                   placeholder="Ajouté au courriel d'invitation envoyé aux signataires…"
                   className="input w-full text-xs"
                 />
+              </div>
+            ) : null}
+
+            {/* Options d'envoi (brouillon) */}
+            {isDraft ? (
+              <div
+                className="rounded-2xl border p-4"
+                style={{
+                  borderColor: "var(--qg-border)",
+                  backgroundColor: "var(--qg-card-bg)"
+                }}
+              >
+                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--qg-text-soft)]">
+                  Options
+                </h3>
+                <div className="space-y-3">
+                  <div>
+                    <label className="label">
+                      Date limite de signature (optionnel)
+                    </label>
+                    <input
+                      type="date"
+                      defaultValue={
+                        doc.expires_at ? doc.expires_at.slice(0, 10) : ""
+                      }
+                      onChange={(e) =>
+                        void patchDoc({ expires_on: e.target.value })
+                      }
+                      className="input w-full text-xs"
+                    />
+                    <p className="mt-1 text-[10px] text-[var(--qg-text-soft)]">
+                      Passée cette date, les liens de signature sont
+                      désactivés et le document passe en « Expiré ».
+                    </p>
+                  </div>
+                  <div>
+                    <label className="label">Rappels automatiques</label>
+                    <select
+                      value={String(doc.reminder_days ?? 0)}
+                      onChange={(e) =>
+                        void patchDoc({
+                          reminder_days: Number(e.target.value)
+                        })
+                      }
+                      className="input w-full text-xs"
+                    >
+                      <option value="0">Désactivés</option>
+                      <option value="2">Après 2 jours sans action</option>
+                      <option value="3">Après 3 jours sans action</option>
+                      <option value="5">Après 5 jours sans action</option>
+                      <option value="7">Après 7 jours sans action</option>
+                      <option value="14">Après 14 jours sans action</option>
+                    </select>
+                    <p className="mt-1 text-[10px] text-[var(--qg-text-soft)]">
+                      Relance courriel automatique des signataires en
+                      attente (max 3 relances chacun).
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Observateurs en copie */}
+            {(isDraft || doc.observers.length > 0) ? (
+              <div
+                className="rounded-2xl border p-4"
+                style={{
+                  borderColor: "var(--qg-border)",
+                  backgroundColor: "var(--qg-card-bg)"
+                }}
+              >
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--qg-text-soft)]">
+                  Observateurs en copie
+                </h3>
+                <p className="mb-2 text-[10px] text-[var(--qg-text-soft)]">
+                  Ne signent pas — notifiés à l&apos;envoi et reçoivent le
+                  PDF final.
+                </p>
+                {doc.observers.length > 0 ? (
+                  <ul className="mb-2 space-y-1.5">
+                    {doc.observers.map((o) => (
+                      <li
+                        key={o.id}
+                        className="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5"
+                        style={{ borderColor: "var(--qg-border)" }}
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-medium text-[var(--qg-text)]">
+                            {o.name}
+                          </p>
+                          <p className="truncate text-[11px] text-[var(--qg-text-soft)]">
+                            {o.email}
+                          </p>
+                        </div>
+                        {isDraft ? (
+                          <button
+                            type="button"
+                            onClick={() => void removeObserver(o.id)}
+                            className="shrink-0 rounded p-1 text-[var(--qg-text-soft)] hover:text-rose-500"
+                            aria-label="Retirer l'observateur"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {isDraft ? (
+                  <form onSubmit={addObserver} className="space-y-1.5">
+                    <input
+                      value={obsName}
+                      onChange={(e) => setObsName(e.target.value)}
+                      placeholder="Nom"
+                      className="input w-full text-xs"
+                    />
+                    <div className="flex gap-1.5">
+                      <input
+                        type="email"
+                        value={obsEmail}
+                        onChange={(e) => setObsEmail(e.target.value)}
+                        placeholder="Courriel"
+                        className="input w-full text-xs"
+                      />
+                      <button
+                        type="submit"
+                        disabled={
+                          obsBusy || !obsName.trim() || !obsEmail.trim()
+                        }
+                        className="btn-outline-accent btn-xs shrink-0"
+                      >
+                        {obsBusy ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          "Ajouter"
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* Annexes consultables */}
+            {(isDraft || doc.attachments.length > 0) ? (
+              <div
+                className="rounded-2xl border p-4"
+                style={{
+                  borderColor: "var(--qg-border)",
+                  backgroundColor: "var(--qg-card-bg)"
+                }}
+              >
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--qg-text-soft)]">
+                  Annexes consultables
+                </h3>
+                <p className="mb-2 text-[10px] text-[var(--qg-text-soft)]">
+                  PDF joints à titre informatif — visibles par les
+                  signataires, non signés.
+                </p>
+                {doc.attachments.length > 0 ? (
+                  <ul className="mb-2 space-y-1.5">
+                    {doc.attachments.map((a) => (
+                      <li
+                        key={a.id}
+                        className="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5"
+                        style={{ borderColor: "var(--qg-border)" }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => void openAttachment(a.id)}
+                          className="flex min-w-0 items-center gap-1.5 text-left"
+                        >
+                          <Paperclip className="h-3 w-3 shrink-0 text-[var(--qg-accent)]" />
+                          <span className="truncate text-xs text-[var(--qg-text)] hover:underline">
+                            {a.filename}
+                          </span>
+                          <span className="shrink-0 text-[10px] text-[var(--qg-text-soft)]">
+                            {(a.size_bytes / 1024 / 1024).toFixed(1)} Mo
+                          </span>
+                        </button>
+                        {isDraft ? (
+                          <button
+                            type="button"
+                            onClick={() => void removeAttachment(a.id)}
+                            className="shrink-0 rounded p-1 text-[var(--qg-text-soft)] hover:text-rose-500"
+                            aria-label="Retirer l'annexe"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {isDraft ? (
+                  <label className="btn-outline-accent btn-xs inline-flex cursor-pointer items-center gap-1.5">
+                    {attBusy ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Paperclip className="h-3 w-3" />
+                    )}
+                    Ajouter une annexe (PDF)
+                    <input
+                      type="file"
+                      accept="application/pdf"
+                      className="hidden"
+                      disabled={attBusy}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void uploadAttachment(f);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                ) : null}
               </div>
             ) : null}
 

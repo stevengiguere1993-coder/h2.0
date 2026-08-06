@@ -13,10 +13,13 @@ import {
   Eye,
   FileSignature,
   FileText,
+  LayoutTemplate,
   Loader2,
   Mail,
   Plus,
   Search,
+  ShieldCheck,
+  Trash2,
   XCircle
 } from "lucide-react";
 
@@ -57,7 +60,8 @@ const STATUS_LABEL: Record<string, string> = {
   envoye: "En attente",
   complete: "Signé",
   refuse: "Refusé",
-  annule: "Annulé"
+  annule: "Annulé",
+  expire: "Expiré"
 };
 
 const STATUS_CLS: Record<string, string> = {
@@ -65,7 +69,23 @@ const STATUS_CLS: Record<string, string> = {
   envoye: "badge-sky",
   complete: "badge-emerald",
   refuse: "badge-rose",
-  annule: "badge-neutral"
+  annule: "badge-neutral",
+  expire: "badge-amber"
+};
+
+type TemplateRole = { name: string; require_sms_auth: boolean };
+
+type TemplateItem = {
+  id: number;
+  title: string;
+  entreprise_id: number | null;
+  entreprise_name: string | null;
+  filename: string;
+  page_count: number;
+  use_signing_order: boolean;
+  roles: TemplateRole[];
+  field_count: number;
+  created_at: string;
 };
 
 type Tab = "en_cours" | "signes" | "tous";
@@ -140,6 +160,7 @@ export default function SignaturePage() {
   const [entFilter, setEntFilter] = useState<string>("");
 
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadEnt, setUploadEnt] = useState<string>("");
@@ -231,20 +252,30 @@ export default function SignaturePage() {
         greeting="Signature"
         subtitle="Signature électronique de documents"
         rightSlot={
-          <button
-            type="button"
-            onClick={() => {
-              setUploadFile(null);
-              setUploadTitle("");
-              setUploadEnt("");
-              setUploadErr(null);
-              setUploadOpen(true);
-            }}
-            className="btn-accent inline-flex items-center gap-1.5 text-xs"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Nouveau document
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setTemplatesOpen(true)}
+              className="btn-secondary inline-flex items-center gap-1.5 text-xs"
+            >
+              <LayoutTemplate className="h-3.5 w-3.5" />
+              Modèles
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setUploadFile(null);
+                setUploadTitle("");
+                setUploadEnt("");
+                setUploadErr(null);
+                setUploadOpen(true);
+              }}
+              className="btn-accent inline-flex items-center gap-1.5 text-xs"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Nouveau document
+            </button>
+          </div>
         }
       />
 
@@ -421,6 +452,17 @@ export default function SignaturePage() {
         )}
       </div>
 
+      {templatesOpen ? (
+        <TemplatesModal
+          entreprises={entreprises}
+          onClose={() => setTemplatesOpen(false)}
+          onCreated={(id) =>
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            router.push(`/entreprises/signature/${id}` as any)
+          }
+        />
+      ) : null}
+
       {/* Modal téléversement */}
       {uploadOpen ? (
         <div
@@ -536,5 +578,340 @@ export default function SignaturePage() {
         </div>
       ) : null}
     </>
+  );
+}
+
+/* ---------- Modal modèles réutilisables ---------- */
+
+type RoleSignerForm = {
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  require_sms_auth: boolean;
+};
+
+function TemplatesModal({
+  entreprises,
+  onClose,
+  onCreated
+}: {
+  entreprises: { id: number; name: string }[];
+  onClose: () => void;
+  onCreated: (docId: number) => void;
+}) {
+  const [templates, setTemplates] = useState<TemplateItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Étape « utiliser un modèle »
+  const [chosen, setChosen] = useState<TemplateItem | null>(null);
+  const [title, setTitle] = useState("");
+  const [ent, setEnt] = useState<string>("");
+  const [roleSigners, setRoleSigners] = useState<RoleSignerForm[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const loadTemplates = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await authedFetch("/api/v1/esign/templates");
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      setTemplates((await res.json()) as TemplateItem[]);
+    } catch {
+      setErr("Chargement des modèles impossible.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTemplates();
+  }, [loadTemplates]);
+
+  function pick(t: TemplateItem) {
+    setChosen(t);
+    setTitle(t.title.replace(/^Modèle — /, ""));
+    setEnt(t.entreprise_id ? String(t.entreprise_id) : "");
+    setRoleSigners(
+      t.roles.map((r) => ({
+        first_name: "",
+        last_name: "",
+        email: "",
+        phone: "",
+        require_sms_auth: r.require_sms_auth
+      }))
+    );
+    setErr(null);
+  }
+
+  async function removeTemplate(t: TemplateItem) {
+    if (!window.confirm(`Supprimer le modèle « ${t.title} » ?`)) return;
+    const res = await authedFetch(`/api/v1/esign/templates/${t.id}`, {
+      method: "DELETE"
+    });
+    if (res.ok) await loadTemplates();
+  }
+
+  async function createFromTemplate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!chosen) return;
+    for (const rs of roleSigners) {
+      if (rs.require_sms_auth && !rs.phone.trim()) {
+        setErr(
+          "Numéro de téléphone requis pour les signataires avec " +
+            "authentification SMS."
+        );
+        return;
+      }
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        "/api/v1/esign/documents/from-template",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            template_id: chosen.id,
+            title: title.trim() || null,
+            entreprise_id: ent ? Number(ent) : null,
+            signers: roleSigners.map((rs, i) => ({
+              first_name: rs.first_name.trim(),
+              last_name: rs.last_name.trim(),
+              email: rs.email.trim(),
+              phone: rs.phone.trim() || null,
+              require_sms_auth: rs.require_sms_auth,
+              order_index: i
+            }))
+          })
+        }
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        setErr(
+          typeof body?.detail === "string"
+            ? body.detail
+            : `Erreur HTTP ${res.status}`
+        );
+        return;
+      }
+      onCreated((body as { id: number }).id);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={() => !busy && onClose()}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-brand-800 bg-brand-900 p-5"
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-white">
+            {chosen
+              ? `Nouveau document — ${chosen.title}`
+              : "Modèles réutilisables"}
+          </h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
+            ✕
+          </button>
+        </div>
+
+        {err ? <p className="mb-3 text-xs text-rose-400">{err}</p> : null}
+
+        {!chosen ? (
+          loading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+            </div>
+          ) : templates.length === 0 ? (
+            <p className="py-8 text-center text-xs text-white/60">
+              Aucun modèle. Préparez un document (signataires + zones) puis
+              cliquez « Enregistrer comme modèle » dans l&apos;éditeur.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {templates.map((t) => (
+                <li
+                  key={t.id}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-brand-800 px-3 py-2.5"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-medium text-white">
+                      {t.title}
+                    </p>
+                    <p className="truncate text-[11px] text-white/50">
+                      {t.roles.length} signataire
+                      {t.roles.length > 1 ? "s" : ""} · {t.field_count} zone
+                      {t.field_count > 1 ? "s" : ""} · {t.page_count} page
+                      {t.page_count > 1 ? "s" : ""}
+                      {t.entreprise_name ? ` · ${t.entreprise_name}` : ""}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => pick(t)}
+                      className="btn-accent btn-xs"
+                    >
+                      Utiliser
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void removeTemplate(t)}
+                      className="rounded p-1.5 text-white/40 hover:text-rose-400"
+                      aria-label="Supprimer le modèle"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )
+        ) : (
+          <form onSubmit={createFromTemplate} className="space-y-3">
+            <div>
+              <label className="label">Titre du document</label>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                className="input w-full text-xs"
+              />
+            </div>
+            <div>
+              <label className="label">Entreprise concernée</label>
+              <select
+                value={ent}
+                onChange={(e) => setEnt(e.target.value)}
+                className="input w-full text-xs"
+              >
+                <option value="">— Aucune —</option>
+                {entreprises.map((en) => (
+                  <option key={en.id} value={String(en.id)}>
+                    {en.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {chosen.roles.map((role, i) => (
+              <fieldset
+                key={i}
+                className="space-y-2 rounded-lg border border-brand-800 p-3"
+              >
+                <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-white/60">
+                  {role.name}
+                  {roleSigners[i]?.require_sms_auth ? (
+                    <span className="ml-1.5 inline-flex items-center gap-0.5 normal-case text-emerald-400">
+                      <ShieldCheck className="h-3 w-3" /> SMS
+                    </span>
+                  ) : null}
+                </legend>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    value={roleSigners[i]?.first_name || ""}
+                    onChange={(e) =>
+                      setRoleSigners((prev) =>
+                        prev.map((x, j) =>
+                          j === i ? { ...x, first_name: e.target.value } : x
+                        )
+                      )
+                    }
+                    placeholder="Prénom"
+                    required
+                    className="input w-full text-xs"
+                  />
+                  <input
+                    value={roleSigners[i]?.last_name || ""}
+                    onChange={(e) =>
+                      setRoleSigners((prev) =>
+                        prev.map((x, j) =>
+                          j === i ? { ...x, last_name: e.target.value } : x
+                        )
+                      )
+                    }
+                    placeholder="Nom"
+                    required
+                    className="input w-full text-xs"
+                  />
+                </div>
+                <input
+                  type="email"
+                  value={roleSigners[i]?.email || ""}
+                  onChange={(e) =>
+                    setRoleSigners((prev) =>
+                      prev.map((x, j) =>
+                        j === i ? { ...x, email: e.target.value } : x
+                      )
+                    )
+                  }
+                  placeholder="Courriel"
+                  required
+                  className="input w-full text-xs"
+                />
+                <div className="flex items-center gap-2">
+                  <input
+                    type="tel"
+                    value={roleSigners[i]?.phone || ""}
+                    onChange={(e) =>
+                      setRoleSigners((prev) =>
+                        prev.map((x, j) =>
+                          j === i ? { ...x, phone: e.target.value } : x
+                        )
+                      )
+                    }
+                    placeholder="Téléphone"
+                    className="input w-full text-xs"
+                  />
+                  <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-white/70">
+                    <input
+                      type="checkbox"
+                      checked={roleSigners[i]?.require_sms_auth || false}
+                      onChange={(e) =>
+                        setRoleSigners((prev) =>
+                          prev.map((x, j) =>
+                            j === i
+                              ? { ...x, require_sms_auth: e.target.checked }
+                              : x
+                          )
+                        )
+                      }
+                    />
+                    Auth. SMS
+                  </label>
+                </div>
+              </fieldset>
+            ))}
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setChosen(null)}
+                className="btn-secondary btn-sm"
+                disabled={busy}
+              >
+                Retour
+              </button>
+              <button
+                type="submit"
+                disabled={busy}
+                className="btn-accent btn-sm inline-flex items-center gap-1.5"
+              >
+                {busy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : null}
+                Créer le brouillon
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
   );
 }

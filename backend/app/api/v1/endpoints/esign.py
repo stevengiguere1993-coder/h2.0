@@ -17,6 +17,18 @@ Flow :
     POST   /esign/documents/{id}/remind        relance les signataires en attente
     POST   /esign/documents/{id}/cancel        annule le document
 
+V2 :
+    POST   /esign/documents/{id}/observers     ajoute un observateur CC (brouillon)
+    DELETE /esign/observers/{id}               retire un observateur (brouillon)
+    POST   /esign/documents/{id}/attachments   ajoute une annexe PDF (brouillon)
+    DELETE /esign/attachments/{id}             retire une annexe (brouillon)
+    GET    /esign/attachments/{id}/pdf         télécharge une annexe
+    POST   /esign/documents/{id}/save-as-template   snapshot → modèle réutilisable
+    GET    /esign/templates                    liste des modèles
+    GET    /esign/templates/{id}               détail (rôles)
+    DELETE /esign/templates/{id}               supprime un modèle
+    POST   /esign/documents/from-template      instancie un brouillon complet
+
 Registered dans router.py avec DEP_ENTREPRISES ; la page frontend est
 `/entreprises/signature` (clé d'accès `entreprises.signature`).
 """
@@ -25,9 +37,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
-from datetime import datetime, timezone
+from datetime import date as date_type
+from datetime import datetime, time as time_type, timezone
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
@@ -38,12 +53,16 @@ from sqlalchemy.orm import undefer
 from app.api.deps import CurrentUser, DBSession
 from app.models.entreprise import Entreprise
 from app.models.esign import (
+    EsignAttachment,
     EsignDocument,
     EsignDocumentStatus,
     EsignEvent,
     EsignField,
     EsignFieldKind,
+    EsignObserver,
     EsignSigner,
+    EsignTemplate,
+    EsignTemplateField,
 )
 from app.services.esign_pdf import (
     final_pdf_filename,
@@ -53,6 +72,7 @@ from app.services.esign_pdf import (
 from app.services.esign_send import (
     EsignSendError,
     ensure_token,
+    send_observer_notice,
     send_signer_invitation,
     signers_to_invite,
 )
@@ -62,8 +82,11 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/esign", tags=["esign"])
 
 _PDF_MAX_BYTES = 25 * 1024 * 1024
+_ATTACHMENT_MAX_BYTES = 15 * 1024 * 1024
+_ATTACHMENTS_MAX_COUNT = 10
 _FIELD_KINDS = {k.value for k in EsignFieldKind}
 _PAGE_DPI = 130
+_TZ_MONTREAL = ZoneInfo("America/Toronto")
 
 
 # --------------------------- Schemas ---------------------------
@@ -118,6 +141,22 @@ class EventRead(BaseModel):
     created_at: datetime
 
 
+class ObserverRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    email: str
+
+
+class AttachmentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    filename: str
+    size_bytes: int
+
+
 class DocumentListItem(BaseModel):
     id: int
     title: str
@@ -129,6 +168,7 @@ class DocumentListItem(BaseModel):
     use_signing_order: bool
     sent_at: Optional[datetime]
     completed_at: Optional[datetime]
+    expires_at: Optional[datetime]
     created_at: datetime
     updated_at: Optional[datetime]
     signers: List[SignerRead]
@@ -137,9 +177,12 @@ class DocumentListItem(BaseModel):
 class DocumentDetail(DocumentListItem):
     message: Optional[str]
     sha256: Optional[str]
+    reminder_days: Optional[int]
     has_signed_pdf: bool
     fields: List[FieldRead]
     events: List[EventRead]
+    observers: List[ObserverRead]
+    attachments: List[AttachmentRead]
 
 
 class DocumentPatch(BaseModel):
@@ -147,6 +190,45 @@ class DocumentPatch(BaseModel):
     message: Optional[str] = Field(default=None, max_length=5000)
     entreprise_id: Optional[int] = None
     use_signing_order: Optional[bool] = None
+    # V2 — "YYYY-MM-DD" (fin de journée à Montréal) ou "" pour retirer.
+    expires_on: Optional[str] = Field(default=None, max_length=10)
+    # V2 — 1..30 jours, 0 ou null pour désactiver.
+    reminder_days: Optional[int] = Field(default=None, ge=0, le=30)
+
+
+class ObserverCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    email: EmailStr
+
+
+class TemplateRole(BaseModel):
+    name: str
+    require_sms_auth: bool = False
+
+
+class TemplateListItem(BaseModel):
+    id: int
+    title: str
+    entreprise_id: Optional[int]
+    entreprise_name: Optional[str]
+    filename: str
+    page_count: int
+    use_signing_order: bool
+    roles: List[TemplateRole]
+    field_count: int
+    created_at: datetime
+
+
+class SaveTemplateRequest(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=255)
+
+
+class FromTemplateRequest(BaseModel):
+    template_id: int
+    title: Optional[str] = Field(default=None, max_length=255)
+    entreprise_id: Optional[int] = None
+    # Un signataire par rôle du modèle, dans l'ordre.
+    signers: List[SignerCreate]
 
 
 class SignerCreate(BaseModel):
@@ -262,6 +344,7 @@ async def _doc_to_list_item(db, doc: EsignDocument) -> DocumentListItem:
         use_signing_order=doc.use_signing_order,
         sent_at=doc.sent_at,
         completed_at=doc.completed_at,
+        expires_at=doc.expires_at,
         created_at=doc.created_at,
         updated_at=doc.updated_at,
         signers=[
@@ -300,13 +383,34 @@ async def _doc_to_detail(db, doc: EsignDocument) -> DocumentDetail:
             )
         )
     ).scalar_one_or_none() is not None
+    observers = list(
+        (
+            await db.execute(
+                select(EsignObserver)
+                .where(EsignObserver.document_id == doc.id)
+                .order_by(EsignObserver.id)
+            )
+        ).scalars()
+    )
+    attachments = list(
+        (
+            await db.execute(
+                select(EsignAttachment)
+                .where(EsignAttachment.document_id == doc.id)
+                .order_by(EsignAttachment.id)
+            )
+        ).scalars()
+    )
     return DocumentDetail(
         **base.model_dump(),
         message=doc.message,
         sha256=doc.sha256,
+        reminder_days=doc.reminder_days,
         has_signed_pdf=has_signed,
         fields=[FieldRead.model_validate(f) for f in fields],
         events=[EventRead.model_validate(e) for e in events],
+        observers=[ObserverRead.model_validate(o) for o in observers],
+        attachments=[AttachmentRead.model_validate(a) for a in attachments],
     )
 
 
@@ -386,6 +490,7 @@ async def list_documents(
                     EsignDocumentStatus.BROUILLON.value,
                     EsignDocumentStatus.ENVOYE.value,
                     EsignDocumentStatus.REFUSE.value,
+                    EsignDocumentStatus.EXPIRE.value,
                 ]
             )
         )
@@ -433,6 +538,25 @@ async def patch_document(
     if data.use_signing_order is not None:
         _require_draft(doc)
         doc.use_signing_order = bool(data.use_signing_order)
+    if "expires_on" in data.model_fields_set:
+        raw = (data.expires_on or "").strip()
+        if not raw:
+            doc.expires_at = None
+        else:
+            try:
+                d = date_type.fromisoformat(raw)
+            except ValueError as exc:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "Date d'expiration invalide (format AAAA-MM-JJ).",
+                ) from exc
+            # Fin de journée à Montréal → le lien reste valide toute la
+            # journée choisie.
+            doc.expires_at = datetime.combine(
+                d, time_type(23, 59, 59), tzinfo=_TZ_MONTREAL
+            ).astimezone(timezone.utc)
+    if "reminder_days" in data.model_fields_set:
+        doc.reminder_days = data.reminder_days or None
     await db.flush()
     return await _doc_to_detail(db, doc)
 
@@ -708,6 +832,14 @@ async def send_document(
             status.HTTP_409_CONFLICT,
             "Document déjà envoyé — utilisez la relance.",
         )
+    if doc.expires_at is not None and doc.expires_at <= datetime.now(
+        timezone.utc
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "La date d'expiration est déjà passée — corrigez-la avant "
+            "d'envoyer.",
+        )
     signers = await _load_signers(db, doc_id)
     if not signers:
         raise HTTPException(
@@ -764,6 +896,25 @@ async def send_document(
     doc.status = EsignDocumentStatus.ENVOYE.value
     doc.sent_at = datetime.now(timezone.utc)
     await db.flush()
+
+    # Avis aux observateurs en copie (best-effort, non bloquant).
+    observers = list(
+        (
+            await db.execute(
+                select(EsignObserver).where(
+                    EsignObserver.document_id == doc_id
+                )
+            )
+        ).scalars()
+    )
+    signer_names = [
+        f"{s.first_name} {s.last_name}".strip() for s in signers
+    ]
+    for obs in observers:
+        await send_observer_notice(
+            doc, obs.name, obs.email, signer_names, ent_name
+        )
+
     return SendResult(sent=sent, errors=errors)
 
 
@@ -788,6 +939,9 @@ async def remind_document(
     for s in signers_to_invite(doc, signers):
         try:
             await send_signer_invitation(db, doc, s, ent_name, reminder=True)
+            # Une relance manuelle remet à zéro l'horloge des rappels
+            # automatiques du cron.
+            s.last_reminder_at = datetime.now(timezone.utc)
             await _add_event(db, doc, "relance", signer=s, detail=s.email)
             sent += 1
         except EsignSendError as exc:
@@ -820,4 +974,434 @@ async def cancel_document(
     doc.status = EsignDocumentStatus.ANNULE.value
     await db.flush()
     await _add_event(db, doc, "annule", detail=f"par {user.email}")
+    return await _doc_to_detail(db, doc)
+
+
+# --------------------------- Observateurs (V2) ---------------------------
+
+
+@router.post(
+    "/documents/{doc_id}/observers",
+    response_model=ObserverRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Ajoute un observateur en copie (ne signe pas)",
+)
+async def add_observer(
+    doc_id: int, data: ObserverCreate, db: DBSession, user: CurrentUser
+) -> ObserverRead:
+    doc = await _load_doc(db, doc_id)
+    _require_draft(doc)
+    obs = EsignObserver(
+        document_id=doc.id,
+        name=data.name.strip()[:200],
+        email=str(data.email).strip().lower()[:320],
+    )
+    db.add(obs)
+    await db.flush()
+    await db.refresh(obs)
+    return ObserverRead.model_validate(obs)
+
+
+@router.delete(
+    "/observers/{observer_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Retire un observateur (brouillon)",
+)
+async def delete_observer(
+    observer_id: int, db: DBSession, user: CurrentUser
+) -> Response:
+    obs = (
+        await db.execute(
+            select(EsignObserver).where(EsignObserver.id == observer_id)
+        )
+    ).scalar_one_or_none()
+    if obs is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Observateur introuvable."
+        )
+    doc = await _load_doc(db, obs.document_id)
+    _require_draft(doc)
+    await db.delete(obs)
+    await db.flush()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --------------------------- Annexes (V2) ---------------------------
+
+
+@router.post(
+    "/documents/{doc_id}/attachments",
+    response_model=AttachmentRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Ajoute une annexe PDF consultable (non signée)",
+)
+async def add_attachment(
+    doc_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+) -> AttachmentRead:
+    doc = await _load_doc(db, doc_id)
+    _require_draft(doc)
+    ct = (file.content_type or "").lower()
+    if ct != "application/pdf":
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            "Seuls les fichiers PDF sont acceptés en annexe.",
+        )
+    count = (
+        await db.execute(
+            select(EsignAttachment.id).where(
+                EsignAttachment.document_id == doc_id
+            )
+        )
+    ).scalars().all()
+    if len(count) >= _ATTACHMENTS_MAX_COUNT:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Maximum {_ATTACHMENTS_MAX_COUNT} annexes par document.",
+        )
+    blob = await file.read()
+    if not blob:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Fichier vide.")
+    if len(blob) > _ATTACHMENT_MAX_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            "Annexe trop volumineuse (max 15 Mo).",
+        )
+    att = EsignAttachment(
+        document_id=doc.id,
+        filename=(file.filename or "annexe.pdf")[:255],
+        content_type="application/pdf",
+        blob=blob,
+        size_bytes=len(blob),
+    )
+    db.add(att)
+    await db.flush()
+    await db.refresh(att)
+    return AttachmentRead.model_validate(att)
+
+
+@router.delete(
+    "/attachments/{attachment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Retire une annexe (brouillon)",
+)
+async def delete_attachment(
+    attachment_id: int, db: DBSession, user: CurrentUser
+) -> Response:
+    att = (
+        await db.execute(
+            select(EsignAttachment).where(
+                EsignAttachment.id == attachment_id
+            )
+        )
+    ).scalar_one_or_none()
+    if att is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Annexe introuvable.")
+    doc = await _load_doc(db, att.document_id)
+    _require_draft(doc)
+    await db.delete(att)
+    await db.flush()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/attachments/{attachment_id}/pdf",
+    summary="Télécharge une annexe",
+)
+async def attachment_pdf(
+    attachment_id: int, db: DBSession, user: CurrentUser
+) -> Response:
+    att = (
+        await db.execute(
+            select(EsignAttachment)
+            .where(EsignAttachment.id == attachment_id)
+            .options(undefer(EsignAttachment.blob))
+        )
+    ).scalar_one_or_none()
+    if att is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Annexe introuvable.")
+    return Response(
+        content=bytes(att.blob),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{att.filename}"'
+        },
+    )
+
+
+# --------------------------- Modèles (V2) ---------------------------
+
+
+def _parse_roles(tpl: EsignTemplate) -> list[TemplateRole]:
+    try:
+        raw = json.loads(tpl.roles_json or "[]")
+        return [
+            TemplateRole(
+                name=str(r.get("name") or f"Signataire {i + 1}"),
+                require_sms_auth=bool(r.get("require_sms_auth")),
+            )
+            for i, r in enumerate(raw)
+        ]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+async def _template_to_item(
+    db, tpl: EsignTemplate
+) -> TemplateListItem:
+    field_count = len(
+        (
+            await db.execute(
+                select(EsignTemplateField.id).where(
+                    EsignTemplateField.template_id == tpl.id
+                )
+            )
+        ).scalars().all()
+    )
+    return TemplateListItem(
+        id=tpl.id,
+        title=tpl.title,
+        entreprise_id=tpl.entreprise_id,
+        entreprise_name=await _entreprise_name(db, tpl.entreprise_id),
+        filename=tpl.filename,
+        page_count=tpl.page_count,
+        use_signing_order=tpl.use_signing_order,
+        roles=_parse_roles(tpl),
+        field_count=field_count,
+        created_at=tpl.created_at,
+    )
+
+
+@router.post(
+    "/documents/{doc_id}/save-as-template",
+    response_model=TemplateListItem,
+    status_code=status.HTTP_201_CREATED,
+    summary="Enregistre le document (PDF + zones) comme modèle réutilisable",
+)
+async def save_as_template(
+    doc_id: int,
+    data: SaveTemplateRequest,
+    db: DBSession,
+    user: CurrentUser,
+) -> TemplateListItem:
+    doc = await _load_doc(db, doc_id, with_blob=True)
+    signers = await _load_signers(db, doc_id)
+    if not signers:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Ajoutez au moins un signataire avant d'enregistrer un modèle "
+            "(les zones sont liées aux rôles).",
+        )
+    fields = list(
+        (
+            await db.execute(
+                select(EsignField).where(EsignField.document_id == doc_id)
+            )
+        ).scalars()
+    )
+    if not fields:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Placez au moins une zone avant d'enregistrer un modèle.",
+        )
+    role_index_by_signer = {s.id: i for i, s in enumerate(signers)}
+    roles = [
+        {
+            "name": f"Signataire {i + 1}",
+            "require_sms_auth": s.require_sms_auth,
+        }
+        for i, s in enumerate(signers)
+    ]
+    tpl = EsignTemplate(
+        entreprise_id=doc.entreprise_id,
+        created_by_user_id=user.id,
+        title=(data.title or "").strip()[:255] or f"Modèle — {doc.title}",
+        message=doc.message,
+        use_signing_order=doc.use_signing_order,
+        filename=doc.filename,
+        content_type="application/pdf",
+        pdf_blob=bytes(doc.pdf_blob),
+        page_count=doc.page_count,
+        sha256=doc.sha256,
+        roles_json=json.dumps(roles, ensure_ascii=False),
+    )
+    db.add(tpl)
+    await db.flush()
+    for f in fields:
+        db.add(
+            EsignTemplateField(
+                template_id=tpl.id,
+                role_index=role_index_by_signer.get(f.signer_id, 0),
+                kind=f.kind,
+                page=f.page,
+                x=f.x,
+                y=f.y,
+                w=f.w,
+                h=f.h,
+                required=f.required,
+                label=f.label,
+            )
+        )
+    await db.flush()
+    await db.refresh(tpl)
+    return await _template_to_item(db, tpl)
+
+
+@router.get(
+    "/templates",
+    response_model=List[TemplateListItem],
+    summary="Liste des modèles réutilisables",
+)
+async def list_templates(
+    db: DBSession, user: CurrentUser
+) -> List[TemplateListItem]:
+    tpls = list(
+        (
+            await db.execute(
+                select(EsignTemplate).order_by(EsignTemplate.id.desc())
+            )
+        ).scalars()
+    )
+    return [await _template_to_item(db, t) for t in tpls]
+
+
+@router.get(
+    "/templates/{template_id}",
+    response_model=TemplateListItem,
+    summary="Détail d'un modèle (rôles)",
+)
+async def read_template(
+    template_id: int, db: DBSession, user: CurrentUser
+) -> TemplateListItem:
+    tpl = (
+        await db.execute(
+            select(EsignTemplate).where(EsignTemplate.id == template_id)
+        )
+    ).scalar_one_or_none()
+    if tpl is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Modèle introuvable.")
+    return await _template_to_item(db, tpl)
+
+
+@router.delete(
+    "/templates/{template_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Supprime un modèle",
+)
+async def delete_template(
+    template_id: int, db: DBSession, user: CurrentUser
+) -> Response:
+    tpl = (
+        await db.execute(
+            select(EsignTemplate).where(EsignTemplate.id == template_id)
+        )
+    ).scalar_one_or_none()
+    if tpl is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Modèle introuvable.")
+    await db.delete(tpl)
+    await db.flush()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/documents/from-template",
+    response_model=DocumentDetail,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crée un brouillon complet à partir d'un modèle",
+)
+async def create_from_template(
+    data: FromTemplateRequest, db: DBSession, user: CurrentUser
+) -> DocumentDetail:
+    tpl = (
+        await db.execute(
+            select(EsignTemplate)
+            .where(EsignTemplate.id == data.template_id)
+            .options(undefer(EsignTemplate.pdf_blob))
+        )
+    ).scalar_one_or_none()
+    if tpl is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Modèle introuvable.")
+    roles = _parse_roles(tpl)
+    if len(data.signers) != len(roles):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Ce modèle attend {len(roles)} signataire(s) "
+            f"({len(data.signers)} fourni(s)).",
+        )
+    for i, sc in enumerate(data.signers):
+        if sc.require_sms_auth and not (sc.phone or "").strip():
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"Téléphone manquant pour {sc.first_name} {sc.last_name} "
+                "(authentification SMS activée).",
+            )
+
+    doc = EsignDocument(
+        entreprise_id=(
+            data.entreprise_id
+            if data.entreprise_id is not None
+            else tpl.entreprise_id
+        ) or None,
+        created_by_user_id=user.id,
+        title=(data.title or "").strip()[:255] or tpl.title,
+        message=tpl.message,
+        use_signing_order=tpl.use_signing_order,
+        filename=tpl.filename,
+        content_type="application/pdf",
+        pdf_blob=bytes(tpl.pdf_blob),
+        page_count=tpl.page_count,
+        sha256=tpl.sha256,
+    )
+    db.add(doc)
+    await db.flush()
+
+    created_signers: list[EsignSigner] = []
+    for i, sc in enumerate(data.signers):
+        signer = EsignSigner(
+            document_id=doc.id,
+            contact_ref=(sc.contact_ref or None),
+            order_index=i,
+            first_name=sc.first_name.strip()[:100],
+            last_name=sc.last_name.strip()[:100],
+            email=str(sc.email).strip().lower()[:320],
+            phone=(sc.phone or "").strip()[:32] or None,
+            require_sms_auth=sc.require_sms_auth,
+        )
+        db.add(signer)
+        created_signers.append(signer)
+    await db.flush()
+
+    tpl_fields = list(
+        (
+            await db.execute(
+                select(EsignTemplateField).where(
+                    EsignTemplateField.template_id == tpl.id
+                )
+            )
+        ).scalars()
+    )
+    for tf in tpl_fields:
+        idx = min(max(tf.role_index, 0), len(created_signers) - 1)
+        db.add(
+            EsignField(
+                document_id=doc.id,
+                signer_id=created_signers[idx].id,
+                kind=tf.kind,
+                page=tf.page,
+                x=tf.x,
+                y=tf.y,
+                w=tf.w,
+                h=tf.h,
+                required=tf.required,
+                label=tf.label,
+            )
+        )
+    await db.flush()
+    await _add_event(
+        db, doc, "cree",
+        detail=f"depuis le modèle « {tpl.title} » par {user.email}",
+    )
+    await db.refresh(doc)
     return await _doc_to_detail(db, doc)

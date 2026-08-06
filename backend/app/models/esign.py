@@ -47,6 +47,8 @@ class EsignDocumentStatus(str, Enum):
     - complete  : tous les signataires ont signé — « document signé »
     - refuse    : au moins un signataire a refusé
     - annule    : annulé côté admin (liens désactivés)
+    - expire    : date d'expiration dépassée avant signature complète
+                  (marqué par le cron quotidien ; liens désactivés)
     """
 
     BROUILLON = "brouillon"
@@ -54,6 +56,7 @@ class EsignDocumentStatus(str, Enum):
     COMPLETE = "complete"
     REFUSE = "refuse"
     ANNULE = "annule"
+    EXPIRE = "expire"
 
 
 class EsignFieldKind(str, Enum):
@@ -126,6 +129,19 @@ class EsignDocument(Base, TimestampUpdateMixin):
     )
     completed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # ----- V2 -----
+    # Date limite de signature. Passée cette date, le cron quotidien
+    # bascule le document en `expire` et les liens publics renvoient 410.
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Rappels automatiques : nombre de jours sans action avant qu'une
+    # relance courriel parte toute seule (cron quotidien, max 3 par
+    # signataire). NULL = rappels automatiques désactivés.
+    reminder_days: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
     )
 
 
@@ -221,6 +237,14 @@ class EsignSigner(Base, TimestampUpdateMixin):
         mapped_column(LargeBinary, nullable=True)
     )
 
+    # ----- V2 : rappels automatiques (cron quotidien) -----
+    auto_reminder_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_reminder_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
 
 class EsignField(Base, TimestampMixin):
     """Zone posée sur une page du PDF, assignée à un signataire.
@@ -286,3 +310,121 @@ class EsignEvent(Base, TimestampMixin):
     type: Mapped[str] = mapped_column(String(40), nullable=False)
     ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     detail: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+
+class EsignTemplate(Base, TimestampUpdateMixin):
+    """Modèle réutilisable : PDF + zones liées à des RÔLES.
+
+    Créé en un clic depuis un document préparé (« Enregistrer comme
+    modèle »). Les signataires concrets ne sont PAS stockés — chaque
+    zone référence un `role_index` (Signataire 1, 2, …) et
+    `roles_json` décrit les rôles (nom d'affichage + SMS par défaut).
+    À l'utilisation, on fournit un signataire par rôle et le brouillon
+    complet (PDF + zones) est instancié d'un coup.
+    """
+
+    __tablename__ = "esign_templates"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+
+    entreprise_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("entreprises.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    use_signing_order: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="application/pdf"
+    )
+    pdf_blob: Mapped[bytes] = deferred(
+        mapped_column(LargeBinary, nullable=False)
+    )
+    page_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1
+    )
+    sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # JSON : [{"name": "Signataire 1", "require_sms_auth": false}, …]
+    roles_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class EsignTemplateField(Base, TimestampMixin):
+    """Zone d'un modèle — même géométrie qu'`EsignField`, mais liée à
+    un rôle (index) plutôt qu'à un signataire concret."""
+
+    __tablename__ = "esign_template_fields"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+
+    template_id: Mapped[int] = mapped_column(
+        ForeignKey("esign_templates.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role_index: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    page: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    x: Mapped[float] = mapped_column(Float, nullable=False)
+    y: Mapped[float] = mapped_column(Float, nullable=False)
+    w: Mapped[float] = mapped_column(Float, nullable=False)
+    h: Mapped[float] = mapped_column(Float, nullable=False)
+    required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    label: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+
+
+class EsignObserver(Base, TimestampMixin):
+    """Observateur en copie (CC) : ne signe pas, mais est notifié à
+    l'envoi et reçoit le PDF final une fois le document complété."""
+
+    __tablename__ = "esign_observers"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("esign_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+
+
+class EsignAttachment(Base, TimestampMixin):
+    """Annexe consultable (PDF) jointe à l'envoi — non signée, non
+    fusionnée dans le PDF final. Téléchargeable depuis la page publique
+    de chaque signataire."""
+
+    __tablename__ = "esign_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("esign_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="application/pdf"
+    )
+    blob: Mapped[bytes] = deferred(
+        mapped_column(LargeBinary, nullable=False)
+    )
+    size_bytes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )

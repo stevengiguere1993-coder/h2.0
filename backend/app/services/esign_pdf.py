@@ -55,6 +55,7 @@ _EVENT_LABELS = {
     "refuse": "Signature refusée",
     "complete": "Document complété",
     "annule": "Document annulé",
+    "expire": "Lien de signature expiré",
 }
 
 

@@ -85,6 +85,15 @@ def _invitation_body(
         if signer.require_sms_auth
         else ""
     )
+    expiry_note = ""
+    if doc.expires_at is not None:
+        from app.services.esign_pdf import date_fr_ca_long
+
+        expiry_note = (
+            "<p style=\"margin:0 0 16px 0;font-size:13px;color:#b45309\">"
+            f"⏳ Ce lien de signature expire le "
+            f"{date_fr_ca_long(doc.expires_at)}.</p>"
+        )
     return f"""\
 <div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.55;max-width:620px">
   <p style="margin:0 0 16px 0">{salutation}</p>
@@ -102,6 +111,7 @@ def _invitation_body(
     Ou copiez ce lien : {sign_url}
   </p>
   {sms_note}
+  {expiry_note}
   <p style="margin:24px 0 4px 0;color:#555;font-size:12px">
     Horizon Services Immobiliers &middot; immohorizon.com
   </p>
@@ -149,6 +159,56 @@ async def send_signer_invitation(
 
     signer.sent_at = datetime.now(timezone.utc)
     await db.flush()
+
+
+async def send_observer_notice(
+    doc: EsignDocument,
+    observer_name: str,
+    observer_email: str,
+    signer_names: Sequence[str],
+    entreprise_name: Optional[str] = None,
+) -> None:
+    """Notifie un observateur (CC) que le document est parti en
+    signature. Best-effort — ne lève jamais."""
+    mailer = get_mailer()
+    if not mailer.ready:
+        return
+    ent_line = (
+        f"<p style=\"margin:0 0 16px 0\">Émis pour : "
+        f"<strong>{entreprise_name}</strong></p>"
+        if entreprise_name
+        else ""
+    )
+    who = ", ".join(signer_names) or "—"
+    body = f"""\
+<div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.55;max-width:620px">
+  <p style="margin:0 0 16px 0">Bonjour {observer_name},</p>
+  <p style="margin:0 0 16px 0">
+    Vous êtes en copie du document <strong>{doc.title}</strong>, qui
+    vient d'être envoyé pour signature électronique à : {who}.
+  </p>
+  <p style="margin:0 0 16px 0;font-size:13px;color:#555">
+    Aucune action n'est requise de votre part — vous recevrez la
+    version finale signée par courriel une fois le document complété
+    par toutes les parties.
+  </p>
+  <p style="margin:24px 0 4px 0;color:#555;font-size:12px">
+    Horizon Services Immobiliers &middot; immohorizon.com
+  </p>
+</div>
+"""
+    try:
+        await mailer.send(
+            to=[observer_email],
+            subject=f"En copie — document envoyé pour signature : {doc.title}",
+            html_body=body,
+            reply_to=mailer.sender,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "eSign : avis observateur échoué (doc %s → %s)",
+            doc.id, observer_email,
+        )
 
 
 def _completion_body(doc: EsignDocument, recipient_name: str) -> str:
