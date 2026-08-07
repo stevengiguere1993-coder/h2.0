@@ -106,16 +106,26 @@ function InkPad({
   const drawing = useRef(false);
   const last = useRef<{ x: number; y: number } | null>(null);
   const [empty, setEmpty] = useState(true);
+  // Vérité synchrone sur « le pad contient un tracé » — l'état React
+  // peut être en retard d'un rendu quand un trait rapide se termine
+  // (mobile), ce qui faisait rater l'enregistrement dans up().
+  const emptyRef = useRef(true);
+  // Largeur au dernier setup : sur mobile, scroller (barre d'adresse)
+  // ou ouvrir le clavier déclenche un resize de HAUTEUR seulement —
+  // il ne doit JAMAIS effacer la signature en cours.
+  const lastWidthRef = useRef(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const parent = canvas?.parentElement;
     if (!canvas || !parent) return;
-    function resize() {
+
+    function setup(preserveDataUrl: string | null) {
       if (!canvas || !parent) return;
       const dpr = window.devicePixelRatio || 1;
       const w = parent.clientWidth;
       const h = 160;
+      lastWidthRef.current = w;
       canvas.width = Math.floor(w * dpr);
       canvas.height = Math.floor(h * dpr);
       canvas.style.width = `${w}px`;
@@ -128,12 +138,37 @@ function InkPad({
         ctx.lineWidth = 2.2;
         ctx.strokeStyle = "#1e3a8a"; // encre bleu foncé, lisible sur blanc
       }
-      setEmpty(true);
-      onChange(null);
+      if (preserveDataUrl && ctx) {
+        // Rotation / vraie variation de largeur : on redessine le
+        // tracé existant au lieu de le perdre.
+        const img = new Image();
+        img.onload = () => {
+          ctx.drawImage(img, 0, 0, w, h);
+        };
+        img.src = preserveDataUrl;
+      } else {
+        emptyRef.current = true;
+        setEmpty(true);
+        onChange(null);
+      }
     }
-    resize();
-    window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
+
+    setup(null);
+
+    function onResize() {
+      if (!canvas || !parent) return;
+      const w = parent.clientWidth;
+      // Resize de hauteur seule (barre d'adresse mobile, clavier
+      // virtuel) → on ne touche à rien.
+      if (Math.abs(w - lastWidthRef.current) < 2) return;
+      const preserve =
+        !emptyRef.current && canvas.width > 0
+          ? canvas.toDataURL("image/png")
+          : null;
+      setup(preserve);
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
@@ -158,7 +193,10 @@ function InkPad({
     ctx.lineTo(p.x, p.y);
     ctx.stroke();
     last.current = p;
-    if (empty) setEmpty(false);
+    if (emptyRef.current) {
+      emptyRef.current = false;
+      setEmpty(false);
+    }
   }
   function up(e: React.PointerEvent<HTMLCanvasElement>) {
     if (!drawing.current) return;
@@ -166,13 +204,16 @@ function InkPad({
     canvasRef.current?.releasePointerCapture(e.pointerId);
     last.current = null;
     const canvas = canvasRef.current;
-    if (canvas && !empty) onChange(canvas.toDataURL("image/png"));
+    if (canvas && !emptyRef.current) {
+      onChange(canvas.toDataURL("image/png"));
+    }
   }
 
   function clear() {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    emptyRef.current = true;
     setEmpty(true);
     onChange(null);
   }
