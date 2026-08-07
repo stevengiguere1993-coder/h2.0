@@ -3025,6 +3025,43 @@ async def create_bail(
         log_obj.status = LogementStatus.RESERVE.value
         log_obj.updated_at = _now()
 
+    # Interconnexion kanban Locations (v16) : un bail « proposé » crée
+    # ou rattache le dossier de relocation du logement — la page Baux
+    # et le kanban vivent sur la MÊME donnée.
+    if obj.status == BailStatus.PROPOSE.value:
+        await db.flush()
+        from app.models.immobilier import LocationDossier
+
+        dossier = (
+            await db.execute(
+                select(LocationDossier).where(
+                    LocationDossier.logement_id == obj.logement_id,
+                    LocationDossier.statut.notin_(["annule", "reloue"]),
+                )
+            )
+        ).scalars().first()
+        if dossier is None:
+            dossier = LocationDossier(
+                logement_id=obj.logement_id,
+                statut="bail_a_envoyer",
+                notes=(
+                    "Créé automatiquement — bail préparé depuis la "
+                    "page Baux."
+                ),
+            )
+            dossier.created_at = _now()
+            db.add(dossier)
+        if dossier.nouveau_bail_id is None:
+            dossier.nouveau_bail_id = obj.id
+            if dossier.statut in (
+                "avis_recu",
+                "annonce_publiee",
+                "visites",
+                "candidat_retenu",
+            ):
+                dossier.statut = "bail_a_envoyer"
+        dossier.updated_at = _now()
+
     await db.commit()
     await db.refresh(obj)
     return BailRead.model_validate(obj)

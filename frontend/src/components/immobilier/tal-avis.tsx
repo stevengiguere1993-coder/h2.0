@@ -1674,6 +1674,7 @@ export function BailDocActions({
   hasDoc,
   signedAt,
   allowImportInitial = true,
+  compact = false,
   onChanged
 }: {
   bailId: number;
@@ -1684,6 +1685,8 @@ export function BailDocActions({
   /** false = pas d'import INITIAL ici (remplacer / voir seulement) —
    *  le bail initial s'importe depuis le kanban Locations. */
   allowImportInitial?: boolean;
+  /** true = bouton d'import en ICÔNE seule (pages denses). */
+  compact?: boolean;
   onChanged?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -1783,7 +1786,9 @@ export function BailDocActions({
       ) : null}
       {hasDoc || allowImportInitial ? (
         <ImportDocButton
-          label={hasDoc ? "Remplacer" : "Importer le bail"}
+          label={
+            compact ? "" : hasDoc ? "Remplacer" : "Importer le bail"
+          }
           busy={busy}
           onPick={demanderDate}
         />

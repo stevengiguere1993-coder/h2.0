@@ -340,6 +340,52 @@ async def locations_overview(
     if not imm_ids:
         return LocationsOverview()
 
+    # v16 — « toutes les unités libres » : chaque logement VACANT sans
+    # dossier ACTIF obtient son dossier automatiquement — le kanban et
+    # la page Baux vivent sur la même donnée.
+    vacants = (
+        await db.execute(
+            select(Logement).where(
+                Logement.immeuble_id.in_(imm_ids),
+                Logement.status == LogementStatus.VACANT.value,
+            )
+        )
+    ).scalars().all()
+    if vacants:
+        deja = {
+            d.logement_id
+            for d in (
+                await db.execute(
+                    select(LocationDossier).where(
+                        LocationDossier.logement_id.in_(
+                            [lg.id for lg in vacants]
+                        ),
+                        LocationDossier.statut.notin_(
+                            [
+                                LocationDossierStatut.ANNULE.value,
+                                LocationDossierStatut.RELOUE.value,
+                            ]
+                        ),
+                    )
+                )
+            ).scalars().all()
+        }
+        crees = False
+        for lg in vacants:
+            if lg.id in deja:
+                continue
+            nd = LocationDossier(
+                logement_id=lg.id,
+                statut=LocationDossierStatut.AVIS_RECU.value,
+                notes="Créé automatiquement — unité vacante.",
+            )
+            nd.created_at = _now()
+            nd.updated_at = _now()
+            db.add(nd)
+            crees = True
+        if crees:
+            await db.commit()
+
     logement_ids = [
         row[0]
         for row in (
@@ -891,6 +937,14 @@ class SuiviBailRow(BaseModel):
     prochain_loyer: Optional[float] = None
     prochain_document_id: Optional[int] = None
     prochain_statut: Optional[str] = None  # bail_a_envoyer|bail_envoye|a_venir
+    # Dossier de relocation ACTIF du logement (sélecteur de statut
+    # kanban sur la page Baux — même donnée que le kanban).
+    dossier_id: Optional[int] = None
+    dossier_statut: Optional[str] = None
+    # Entente de résiliation envoyée, en attente de signature → ligne
+    # ROUGE sur la page Baux.
+    resiliation_en_cours: bool = False
+    resiliation_date: Optional[date] = None
 
 
 @router.get("/suivi-baux", response_model=List[SuiviBailRow])
@@ -952,6 +1006,39 @@ async def suivi_baux(
             )
         ).scalars().all():
             reloc_by_bail[dsr.nouveau_bail_id] = dsr.statut
+    # Dossier ACTIF par logement (sélecteur de statut, page Baux).
+    dossier_par_log: dict = {}
+    for dsr in (
+        await db.execute(
+            select(LocationDossier).where(
+                LocationDossier.logement_id.in_(log_ids),
+                LocationDossier.statut.notin_(["annule", "reloue"]),
+            )
+        )
+    ).scalars().all() if log_ids else []:
+        dossier_par_log[dsr.logement_id] = dsr
+    # Ententes de résiliation en attente de signature (ligne rouge).
+    resil_by_bail: dict = {}
+    if bail_ids:
+        import json as _json
+
+        from app.models.immobilier import ImmDocument
+
+        for dr in (
+            await db.execute(
+                select(ImmDocument).where(
+                    ImmDocument.bail_id.in_(bail_ids),
+                    ImmDocument.type == "avis_resiliation",
+                    ImmDocument.signed_at.is_(None),
+                    ImmDocument.envoye_le.is_not(None),
+                )
+            )
+        ).scalars().all():
+            try:
+                dfin = _json.loads(dr.params_json or "{}").get("date_fin")
+            except Exception:  # noqa: BLE001
+                dfin = None
+            resil_by_bail[dr.bail_id] = dfin
 
     actifs_par_log: dict = {}
     prochains_par_log: dict = {}
@@ -1003,6 +1090,22 @@ async def suivi_baux(
                 prochain_document_id=p.document_id if p else None,
                 prochain_statut=(
                     reloc_by_bail.get(p.id, "a_venir") if p else None
+                ),
+                dossier_id=(
+                    dossier_par_log[lg.id].id
+                    if lg.id in dossier_par_log
+                    else None
+                ),
+                dossier_statut=(
+                    dossier_par_log[lg.id].statut
+                    if lg.id in dossier_par_log
+                    else None
+                ),
+                resiliation_en_cours=bool(b and b.id in resil_by_bail),
+                resiliation_date=(
+                    date.fromisoformat(resil_by_bail[b.id])
+                    if b and resil_by_bail.get(b.id)
+                    else None
                 ),
             )
         )
