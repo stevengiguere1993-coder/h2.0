@@ -1053,6 +1053,72 @@ async def ensure_contrat_gestion_tables() -> None:
         log.warning("ensure_contrat_gestion_tables failed: %s", exc)
 
 
+async def ensure_esign_tables() -> None:
+    """Crée les tables du module eSign (signature électronique de
+    documents, pôle Gestion d'entreprise) dans leur PROPRE transaction :
+    `esign_documents`, `esign_signers`, `esign_fields`, `esign_events`,
+    plus les tables V2 (`esign_templates`, `esign_template_fields`,
+    `esign_observers`, `esign_attachments`) et les colonnes additives
+    V2 (expiration, rappels automatiques) sur les tables V1 déjà
+    créées en prod.
+
+    Voir app/models/esign.py — pattern identique aux autres ensure_*."""
+    import logging
+
+    from sqlalchemy import text
+
+    log = logging.getLogger("db.ensure_esign_tables")
+    try:
+        from app.db.base import Base
+        from app.models.esign import (  # noqa: F401
+            EsignAttachment,
+            EsignDocument,
+            EsignEvent,
+            EsignField,
+            EsignObserver,
+            EsignSigner,
+            EsignTemplate,
+            EsignTemplateField,
+        )
+
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(
+                    c,
+                    tables=[
+                        EsignDocument.__table__,
+                        EsignSigner.__table__,
+                        EsignField.__table__,
+                        EsignEvent.__table__,
+                        EsignTemplate.__table__,
+                        EsignTemplateField.__table__,
+                        EsignObserver.__table__,
+                        EsignAttachment.__table__,
+                    ],
+                )
+            )
+            # Colonnes V2 additives — create_all n'ALTER jamais une
+            # table existante.
+            for tbl, col, sql_type in (
+                ("esign_documents", "expires_at", "TIMESTAMPTZ"),
+                ("esign_documents", "reminder_days", "INTEGER"),
+                (
+                    "esign_signers",
+                    "auto_reminder_count",
+                    "INTEGER NOT NULL DEFAULT 0",
+                ),
+                ("esign_signers", "last_reminder_at", "TIMESTAMPTZ"),
+            ):
+                await conn.execute(
+                    text(
+                        f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS "
+                        f"{col} {sql_type}"
+                    )
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_esign_tables failed: %s", exc)
+
+
 async def init_db() -> None:
     """
     Initialize database tables.
@@ -1980,6 +2046,7 @@ async def init_db() -> None:
             ("imm_baux", "signature_image_content_type", "VARCHAR(100)"),
             ("imm_baux", "signature_opened_at", "TIMESTAMP WITH TIME ZONE"),
             ("imm_locataires", "ancienne_adresse", "VARCHAR(500)"),
+            ("imm_location_visites", "locataire_id", "INTEGER"),
             # Valeurs par defaut des soumissions devis_dev (juin 2026) :
             # fonctionnalites par defaut (pre-remplissent CHAQUE nouveau
             # module) + taches du charge de projet par defaut (pre-remplies a

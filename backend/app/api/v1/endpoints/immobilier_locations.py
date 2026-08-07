@@ -115,10 +115,14 @@ class VisiteRead(BaseModel):
     enquete_emploi: Optional[bool] = None
     enquete_notes: Optional[str] = None
     retenu: bool = False
+    #: Candidat = locataire existant (déjà client).
+    locataire_id: Optional[int] = None
 
 
 class VisiteCreate(BaseModel):
     quand: Optional[datetime] = None
+    #: Locataire EXISTANT — nom/courriel/téléphone repris de sa fiche.
+    locataire_id: Optional[int] = None
     candidat_nom: str = Field(..., min_length=1, max_length=255)
     candidat_contact: Optional[str] = Field(default=None, max_length=255)
     candidat_email: Optional[str] = Field(default=None, max_length=320)
@@ -599,9 +603,22 @@ async def convertir_dossier(
             status.HTTP_409_CONFLICT,
             "Un locataire a déjà été créé pour ce dossier.",
         )
+    # Candidat retenu déjà LIÉ à un locataire existant → sa fiche est
+    # réutilisée même sans choisir le mode « existant » (zéro doublon).
+    locataire_id_effectif = payload.locataire_id
+    if locataire_id_effectif is None:
+        locataire_id_effectif = (
+            await db.execute(
+                select(LocationVisite.locataire_id).where(
+                    LocationVisite.dossier_id == dossier.id,
+                    LocationVisite.retenu.is_(True),
+                    LocationVisite.locataire_id.is_not(None),
+                )
+            )
+        ).scalars().first()
     # Identité obligatoire seulement à la CRÉATION d'une fiche — un
     # locataire existant garde la sienne.
-    if payload.locataire_id is None:
+    if locataire_id_effectif is None:
         if payload.date_naissance is None:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -655,10 +672,10 @@ async def convertir_dossier(
             lignes.append(f"Notes du candidat : {retenu.notes.strip()}")
         notes_locataire = "\n".join(lignes)
 
-    if payload.locataire_id is not None:
+    if locataire_id_effectif is not None:
         # Déjà client : on réutilise SA fiche (historique conservé,
         # pas de doublon) — la trace d'enquête s'ajoute à ses notes.
-        locataire = await db.get(Locataire, payload.locataire_id)
+        locataire = await db.get(Locataire, locataire_id_effectif)
         if locataire is None:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND,
@@ -932,13 +949,24 @@ async def create_visite(
 ) -> VisiteRead:
     _require_volet(user)
     dossier = await _dossier_or_404(db, dossier_id)
+    lo = None
+    if payload.locataire_id is not None:
+        lo = await db.get(Locataire, payload.locataire_id)
+        if lo is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                "Locataire existant introuvable.",
+            )
     obj = LocationVisite(
         dossier_id=dossier.id,
         quand=payload.quand,
+        locataire_id=payload.locataire_id,
         candidat_nom=payload.candidat_nom.strip(),
         candidat_contact=(payload.candidat_contact or "").strip() or None,
-        candidat_email=(payload.candidat_email or "").strip() or None,
-        candidat_phone=(payload.candidat_phone or "").strip() or None,
+        candidat_email=(payload.candidat_email or "").strip()
+        or (lo.email if lo else None),
+        candidat_phone=(payload.candidat_phone or "").strip()
+        or (lo.phone if lo else None),
         notes=payload.notes,
     )
     obj.created_at = _now()

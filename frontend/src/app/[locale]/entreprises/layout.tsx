@@ -20,6 +20,7 @@ import {
   Contact as ContactIcon,
   CreditCard,
   ExternalLink,
+  FileSignature,
   Grid3x3,
   LayoutGrid,
   Loader2,
@@ -289,6 +290,7 @@ export default function EntreprisesLayout({
     { href: "/entreprises/vision", label: "Vision & Stratégie", icon: BarChart3 },
     { href: "/entreprises/comparatif", label: "Comparatif", icon: BarChart3 },
     { href: "/entreprises/contacts", label: "Contacts", icon: ContactIcon },
+    { href: "/entreprises/signature", label: "Signature", icon: FileSignature },
     ...(vaultAccess
       ? [
           {

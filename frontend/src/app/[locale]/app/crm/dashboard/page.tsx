@@ -59,6 +59,7 @@ type UserRead = {
 const STATUS_LABEL: Record<string, string> = {
   new: "Nouveau",
   contacted: "Contacté",
+  rdv_prevu: "Rendez-vous prévu",
   qualified: "Soumission en préparation",
   quoted: "Soumis",
   won: "Gagné",
@@ -70,9 +71,11 @@ const STATUS_LABEL: Record<string, string> = {
 const STATUS_COLOR: Record<string, string> = {
   new: "bg-blue-500",
   contacted: "bg-violet-500",
+  rdv_prevu: "bg-cyan-500",
   qualified: "bg-amber-500",
   quoted: "bg-pink-500",
   won: "bg-emerald-500",
+  non_qualifie: "bg-slate-500",
   lost: "bg-rose-500",
   spam: "bg-brand-700"
 };
@@ -294,7 +297,7 @@ export default function CrmDashboardPage() {
                         <div className="relative flex-1">
                           <div className="h-5 rounded-md bg-brand-950" />
                           <div
-                            className={`absolute inset-y-0 left-0 rounded-md ${STATUS_COLOR[k]} opacity-80`}
+                            className={`absolute inset-y-0 left-0 rounded-md ${STATUS_COLOR[k] || "bg-slate-500"} opacity-80`}
                             style={{ width: `${pct}%` }}
                           />
                         </div>

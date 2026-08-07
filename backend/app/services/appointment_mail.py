@@ -342,6 +342,42 @@ async def send_appointment_owner_invite(
         return False
 
 
+def is_deliverable_email(email: Optional[str]) -> bool:
+    """Vrai si l'adresse semble réellement joignable.
+
+    Les fiches créées par la téléphonie sans courriel portent un
+    placeholder `tel…@telephonie.local` (voir voice.py) — on ne tente
+    jamais d'envoi vers ces adresses synthétiques.
+    """
+    addr = (email or "").strip().lower()
+    return "@" in addr and not addr.endswith(".local")
+
+
+async def send_new_appointment_emails(
+    prospect: ContactRequest,
+    event: AgendaEvent,
+) -> None:
+    """Courriels automatiques d'un RDV créé HORS du endpoint
+    /appointments (ex. RDV pris au téléphone par Léa) : confirmation au
+    prospect avec .ics (marque `confirmation_sent_at` sur l'event) puis
+    invitation calendrier vers la boîte agenda du propriétaire.
+
+    Best-effort : chaque envoi loggue ses échecs et ne lève jamais —
+    le RDV reste créé même si Graph est indisponible. L'appelant doit
+    flusher/commiter la session pour persister `confirmation_sent_at`.
+    """
+    if is_deliverable_email(prospect.email):
+        ok = await send_appointment_confirmation(prospect, event)
+        if ok:
+            event.confirmation_sent_at = datetime.now(timezone.utc)
+
+    from app.core.config import settings
+
+    owner_email = (settings.appointment_owner_email or "").strip()
+    if owner_email:
+        await send_appointment_owner_invite(owner_email, event, prospect)
+
+
 async def send_appointment_reminder(
     prospect: ContactRequest,
     event: AgendaEvent,

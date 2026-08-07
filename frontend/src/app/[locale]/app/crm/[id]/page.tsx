@@ -57,6 +57,7 @@ type Prospect = {
   locale: string;
   source: string | null;
   status: string;
+  kanban_column: string | null;
   lost_reason: string | null;
   internal_notes: string | null;
   assigned_to_user_id: number | null;
@@ -73,9 +74,15 @@ const STATUS_LABELS: Record<string, string> = {
   qualified: "Soumission en préparation",
   quoted: "Soumission envoyée",
   won: "Soumission acceptée",
+  non_qualifie: "Non qualifié",
   lost: "Soumission refusée",
   spam: "Spam"
 };
+
+// Colonne personnalisée du board CRM (ex. « Moyen terme ») — chargée
+// depuis /api/v1/crm/columns pour que le classement de la fiche liste
+// TOUTES les colonnes, y compris celles créées par l'équipe.
+type CustomColumn = { id: string; label: string };
 
 // Motifs de perte : choisir l'un d'eux classe le lead en « Refusé »
 // (status=lost) tout en gardant la trace du POURQUOI. « Information de
@@ -178,6 +185,31 @@ export default function ProspectDetailPage() {
   const [prospectSoumissions, setProspectSoumissions] = useState<
     ProspectSoumission[]
   >([]);
+  const [customCols, setCustomCols] = useState<CustomColumn[]>([]);
+
+  useEffect(() => {
+    // Colonnes personnalisées du board (partagées par toute l'équipe) —
+    // affichées dans le sélecteur de classement de la fiche.
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch("/api/v1/crm/columns");
+        if (!r.ok) return;
+        const data = (await r.json()) as Array<{
+          key: string;
+          label: string;
+        }>;
+        if (!cancelled) {
+          setCustomCols(data.map((c) => ({ id: c.key, label: c.label })));
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     // Charge la liste des managers/admins pour le menu d'assignation.
@@ -261,10 +293,13 @@ export default function ProspectDetailPage() {
     };
   }, [id]);
 
-  // onChange du <select> de statut. Les options « Refusé » encodent le
-  // motif via « lost::<motif> » ; tout autre statut efface le motif.
+  // onChange du <select> de classement. Les options « Refusé » encodent
+  // le motif via « lost::<motif> » ; les colonnes personnalisées du
+  // board via « col::<clé> » ; tout autre statut efface le motif.
   function onStatusSelect(value: string) {
-    if (value.startsWith("lost::")) {
+    if (value.startsWith("col::")) {
+      void moveToCustomColumn(value.slice("col::".length));
+    } else if (value.startsWith("lost::")) {
       const reason = value.slice("lost::".length);
       updateStatus("lost", reason || null);
     } else {
@@ -279,12 +314,14 @@ export default function ProspectDetailPage() {
     if (!p) return;
     const prev = p;
     const nextLost = newStatus === "lost" ? lostReason : null;
-    setP({ ...p, status: newStatus, lost_reason: nextLost });
+    // kanban_column: null — choisir un statut sort la carte d'une
+    // éventuelle colonne personnalisée (même convention que le board).
+    setP({ ...p, status: newStatus, lost_reason: nextLost, kanban_column: null });
     try {
       const body =
         newStatus === "lost"
-          ? { status: newStatus, lost_reason: lostReason }
-          : { status: newStatus };
+          ? { status: newStatus, lost_reason: lostReason, kanban_column: null }
+          : { status: newStatus, kanban_column: null };
       const res = await authedFetch(`/api/v1/contact/${id}`, {
         method: "PATCH",
         body: JSON.stringify(body)
@@ -293,6 +330,24 @@ export default function ProspectDetailPage() {
     } catch {
       setP(prev);
       setError("Mise à jour du statut échouée.");
+    }
+  }
+
+  // Classe le prospect dans une colonne personnalisée du board (le
+  // statut pipeline reste inchangé, comme un glisser-déposer du board).
+  async function moveToCustomColumn(colId: string) {
+    if (!p) return;
+    const prev = p;
+    setP({ ...p, kanban_column: colId });
+    try {
+      const res = await authedFetch(`/api/v1/contact/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ kanban_column: colId })
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setP(prev);
+      setError("Mise à jour du classement échouée.");
     }
   }
 
@@ -445,7 +500,9 @@ export default function ProspectDetailPage() {
               <div>
                 <h1 className="text-2xl font-bold text-white">{p.name}</h1>
                 <p className="mt-1 text-sm text-accent-500">
-                  {STATUS_LABELS[p.status] || p.status}
+                  {customCols.find((c) => c.id === p.kanban_column)?.label ||
+                    STATUS_LABELS[p.status] ||
+                    p.status}
                   {p.status === "lost" && p.lost_reason
                     ? ` — ${p.lost_reason}`
                     : ""}
@@ -465,7 +522,12 @@ export default function ProspectDetailPage() {
                 <div>
                   <label className="label">Statut</label>
                   <select
-                    value={statusSelectValue(p.status, p.lost_reason)}
+                    value={
+                      p.kanban_column &&
+                      customCols.some((c) => c.id === p.kanban_column)
+                        ? `col::${p.kanban_column}`
+                        : statusSelectValue(p.status, p.lost_reason)
+                    }
                     onChange={(e) => onStatusSelect(e.target.value)}
                     className="input w-56"
                   >
@@ -475,6 +537,7 @@ export default function ProspectDetailPage() {
                     <option value="qualified">Soumission en préparation</option>
                     <option value="quoted">Soumission envoyée</option>
                     <option value="won">Soumission acceptée</option>
+                    <option value="non_qualifie">Non qualifié</option>
                     <optgroup label="Refusé / Perdu">
                       <option value="lost::">Refusé (motif non précisé)</option>
                       {LOSS_REASONS.map((r) => (
@@ -484,6 +547,15 @@ export default function ProspectDetailPage() {
                       ))}
                     </optgroup>
                     <option value="spam">Spam</option>
+                    {customCols.length > 0 ? (
+                      <optgroup label="Colonnes personnalisées">
+                        {customCols.map((c) => (
+                          <option key={c.id} value={`col::${c.id}`}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null}
                   </select>
                 </div>
                 <div>
@@ -1716,6 +1788,7 @@ function AppointmentScheduler({
         throw new Error(await readErrorDetail(res));
       }
       const updated = (await res.json()) as Appointment;
+      const before = past.find((x) => x.id === id);
       setPast((xs) =>
         xs
           .map((x) => (x.id === id ? updated : x))
@@ -1726,6 +1799,20 @@ function AppointmentScheduler({
           )
       );
       cancelEdit();
+      // Le backend renvoie AUTOMATIQUEMENT la confirmation au prospect
+      // quand la plage horaire change — on le dit pour éviter un clic
+      // manuel inutile sur « Renvoyer la confirmation ».
+      if (
+        before &&
+        (new Date(before.start_at).getTime() !==
+          new Date(updated.start_at).getTime() ||
+          (before.end_at ? new Date(before.end_at).getTime() : null) !==
+            (updated.end_at ? new Date(updated.end_at).getTime() : null))
+      ) {
+        setSuccess(
+          "Rendez-vous modifié — la confirmation mise à jour part automatiquement au prospect (.ics inclus)."
+        );
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
