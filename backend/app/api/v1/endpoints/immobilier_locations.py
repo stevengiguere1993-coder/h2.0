@@ -864,6 +864,158 @@ async def desistement_candidat(
     return await _to_row(db, obj)
 
 
+# ─── Page « Baux » (split de Baux & paiements, v15) ─────────────────────
+
+
+class SuiviBailRow(BaseModel):
+    logement_id: int
+    logement_numero: str
+    logement_status: str
+    immeuble_id: int
+    immeuble_name: str
+    # Bail COURANT (actif) — None = ligne grise (à créer / importer).
+    bail_id: Optional[int] = None
+    locataire_id: Optional[int] = None
+    locataire_nom: Optional[str] = None
+    date_debut: Optional[date] = None
+    date_fin: Optional[date] = None
+    loyer_mensuel: Optional[float] = None
+    au_mois: Optional[bool] = None
+    document_id: Optional[int] = None
+    signed_at: Optional[datetime] = None
+    # Prochain bail (proposé / futur) — suivi même signé à l'externe.
+    prochain_bail_id: Optional[int] = None
+    prochain_locataire_id: Optional[int] = None
+    prochain_locataire_nom: Optional[str] = None
+    prochain_date_debut: Optional[date] = None
+    prochain_loyer: Optional[float] = None
+    prochain_document_id: Optional[int] = None
+    prochain_statut: Optional[str] = None  # bail_a_envoyer|bail_envoye|a_venir
+
+
+@router.get("/suivi-baux", response_model=List[SuiviBailRow])
+async def suivi_baux(
+    db: DBSession,
+    user: CurrentUser,
+    immeuble_id: Optional[int] = None,
+) -> List[SuiviBailRow]:
+    """Une ligne par LOGEMENT : verte quand un bail actif est au dossier,
+    grise quand il n'y a aucun bail (créer / importer). Le bail se signe
+    à l'externe (CORPIQ) — le SUIVI vit ici."""
+    _require_volet(user)
+    today = _now().date()
+    imm_q = select(Immeuble).where(
+        Immeuble.is_active.is_(True),
+        Immeuble.gestion_externe.isnot(True),
+    )
+    if immeuble_id is not None:
+        imm_q = imm_q.where(Immeuble.id == immeuble_id)
+    immeubles = {i.id: i for i in (await db.execute(imm_q)).scalars().all()}
+    visible = await visible_immeuble_ids(db, user)
+    if visible is not None:
+        immeubles = {k: v for k, v in immeubles.items() if k in visible}
+    if not immeubles:
+        return []
+    logements = (
+        await db.execute(
+            select(Logement).where(
+                Logement.immeuble_id.in_(list(immeubles.keys()))
+            )
+        )
+    ).scalars().all()
+    log_ids = [lg.id for lg in logements]
+    baux = (
+        await db.execute(
+            select(Bail)
+            .where(Bail.logement_id.in_(log_ids))
+            .order_by(Bail.date_debut.asc())
+        )
+    ).scalars().all() if log_ids else []
+    loc_ids = {b.locataire_id for b in baux if b.locataire_id}
+    locs = {}
+    if loc_ids:
+        for lo in (
+            await db.execute(
+                select(Locataire).where(Locataire.id.in_(list(loc_ids)))
+            )
+        ).scalars().all():
+            locs[lo.id] = lo
+    reloc_by_bail: dict = {}
+    bail_ids = [b.id for b in baux]
+    if bail_ids:
+        for dsr in (
+            await db.execute(
+                select(LocationDossier).where(
+                    LocationDossier.nouveau_bail_id.in_(bail_ids),
+                    LocationDossier.statut.notin_(["annule", "reloue"]),
+                )
+            )
+        ).scalars().all():
+            reloc_by_bail[dsr.nouveau_bail_id] = dsr.statut
+
+    actifs_par_log: dict = {}
+    prochains_par_log: dict = {}
+    for b in baux:
+        if b.status == "actif" and b.date_debut and b.date_debut <= today:
+            cur = actifs_par_log.get(b.logement_id)
+            # Le plus récent des actifs commencés.
+            if cur is None or (b.date_debut > cur.date_debut):
+                actifs_par_log[b.logement_id] = b
+        elif b.status == "propose" or (
+            b.status == "actif" and b.date_debut and b.date_debut > today
+        ):
+            cur = prochains_par_log.get(b.logement_id)
+            if cur is None or (b.date_debut < cur.date_debut):
+                prochains_par_log[b.logement_id] = b
+
+    out: List[SuiviBailRow] = []
+    for lg in logements:
+        im = immeubles.get(lg.immeuble_id)
+        b = actifs_par_log.get(lg.id)
+        p = prochains_par_log.get(lg.id)
+        lo = locs.get(b.locataire_id) if b else None
+        plo = locs.get(p.locataire_id) if p else None
+        out.append(
+            SuiviBailRow(
+                logement_id=lg.id,
+                logement_numero=str(lg.numero or ""),
+                logement_status=lg.status,
+                immeuble_id=im.id if im else 0,
+                immeuble_name=im.name if im else "—",
+                bail_id=b.id if b else None,
+                locataire_id=lo.id if lo else None,
+                locataire_nom=lo.full_name if lo else None,
+                date_debut=b.date_debut if b else None,
+                date_fin=b.date_fin if b else None,
+                loyer_mensuel=(
+                    float(b.loyer_mensuel) if b and b.loyer_mensuel else None
+                ),
+                au_mois=b.au_mois if b else None,
+                document_id=b.document_id if b else None,
+                signed_at=b.signed_at if b else None,
+                prochain_bail_id=p.id if p else None,
+                prochain_locataire_id=plo.id if plo else None,
+                prochain_locataire_nom=plo.full_name if plo else None,
+                prochain_date_debut=p.date_debut if p else None,
+                prochain_loyer=(
+                    float(p.loyer_mensuel) if p and p.loyer_mensuel else None
+                ),
+                prochain_document_id=p.document_id if p else None,
+                prochain_statut=(
+                    reloc_by_bail.get(p.id, "a_venir") if p else None
+                ),
+            )
+        )
+    out.sort(
+        key=lambda r: (
+            r.bail_id is not None,
+            r.immeuble_name,
+            r.logement_numero,
+        )
+    )
+    return out
+
+
 # ─── Annonces ───────────────────────────────────────────────────────────
 
 

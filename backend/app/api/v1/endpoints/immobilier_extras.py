@@ -4,7 +4,7 @@ entreprise propriétaire."""
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
@@ -865,13 +865,138 @@ class ResilierIn(BaseModel):
     #: (déguerpissement).
     date_fin: date
     ouvrir_relocation: bool = True
+    #: v15 — transmettre au locataire un AVIS de fin de bail (lettre
+    #: PDF par courriel) ; False = fin immédiate sans avis.
+    envoyer_avis: bool = False
 
 
 class ResilierResult(BaseModel):
     bail_id: int
     date_fin: date
     statut: str
+    avis_envoye: bool = False
+    avis_erreur: Optional[str] = None
     relocation_ouverte: bool = False
+
+
+
+
+def _pdf_avis_resiliation(
+    locataire_nom: str, adresse: str, logement_numero: str, date_fin: date
+) -> bytes:
+    """Lettre « Avis de fin de bail » (résiliation avant terme convenue —
+    art. 1975 C.c.Q.), générée et transmise par courriel (v15)."""
+    import io as _io
+
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas as _canvas
+
+    buf = _io.BytesIO()
+    c = _canvas.Canvas(buf, pagesize=letter)
+    w, h = letter
+    x = 25 * mm
+    y = h - 30 * mm
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(x, y, "Avis de fin de bail")
+    y -= 6 * mm
+    c.setFont("Helvetica", 10)
+    c.setFillGray(0.35)
+    c.drawString(x, y, "Résiliation de bail — Horizon Services Immobiliers")
+    c.setFillGray(0.0)
+    y -= 4 * mm
+    c.setLineWidth(0.8)
+    c.line(x, y, w - 25 * mm, y)
+    y -= 12 * mm
+    c.setFont("Helvetica", 11)
+    for t in (
+        f"Locataire : {locataire_nom or '—'}",
+        f"Logement : {logement_numero or '—'} — {adresse or '—'}",
+        "",
+        f"Le bail du logement ci-dessus prend fin le {date_fin.isoformat()}.",
+        "",
+        "Le logement devra être libéré et remis en bon état à cette date.",
+        "Le dépôt et les ajustements finaux, s'il y a lieu, seront traités",
+        "après l'état des lieux.",
+        "",
+        "Pour toute question, répondez simplement à ce courriel.",
+        "",
+        "Horizon Services Immobiliers",
+    ):
+        c.drawString(x, y, t)
+        y -= 7 * mm
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+async def _envoyer_avis_resiliation(db, bail, date_fin: date, user) -> bool:
+    """Génère l'avis (PDF au dossier) et l'envoie par courriel au
+    locataire avec l'expéditeur par défaut de Communications."""
+    from app.api.v1.endpoints.immobilier_communications import (
+        expediteur_defaut,
+    )
+    from app.api.v1.endpoints.immobilier_documents import save_document
+    from app.integrations.email_graph import EmailAttachment, get_mailer
+    from app.models.immobilier import Immeuble, Locataire, Logement
+
+    locataire = await db.get(Locataire, bail.locataire_id)
+    if locataire is None or not (locataire.email or "").strip():
+        raise RuntimeError(
+            "Le locataire n'a pas de courriel — avis non transmis."
+        )
+    mailer = get_mailer()
+    if not mailer.ready:
+        raise RuntimeError("Le courriel n'est pas configuré (Graph).")
+    lg = await db.get(Logement, bail.logement_id)
+    im = await db.get(Immeuble, lg.immeuble_id) if lg else None
+    adresse = (
+        f"{im.address}, {im.city}" if im and im.city else
+        (im.address if im else "")
+    )
+    pdf = _pdf_avis_resiliation(
+        locataire.full_name, adresse, lg.numero if lg else "", date_fin
+    )
+    doc = await save_document(
+        db,
+        bail_id=bail.id,
+        locataire_id=locataire.id,
+        immeuble_id=im.id if im else None,
+        doc_type="avis_resiliation",
+        titre=f"Avis de fin de bail — {date_fin.isoformat()}",
+        params={"date_fin": date_fin.isoformat()},
+        pdf=pdf,
+        created_by_email=getattr(user, "email", None),
+    )
+    from_email, from_name, reply_to = await expediteur_defaut()
+    first = (locataire.full_name or "").strip().split(" ")[0] or "Bonjour"
+    await mailer.send(
+        to=[locataire.email.strip()],
+        subject="Avis de fin de bail — Horizon Services Immobiliers",
+        html_body=(
+            '<div style="font-family:Helvetica,Arial,sans-serif;color:#111;'
+            'line-height:1.5;max-width:640px">'
+            f"<p>Bonjour {first},</p>"
+            "<p>Veuillez trouver ci-joint l'avis de fin de votre bail, "
+            f"effective le <strong>{date_fin.isoformat()}</strong>.</p>"
+            "<p>Pour toute question, répondez simplement à ce courriel.</p>"
+            '<p style="margin:24px 0 0 0;color:#555;font-size:12px">'
+            "Horizon Services Immobiliers</p></div>"
+        ),
+        reply_to=reply_to or from_email or mailer.sender,
+        from_email=from_email,
+        from_name=from_name,
+        attachments=[
+            EmailAttachment(
+                name="avis-fin-de-bail.pdf",
+                content_bytes=pdf,
+                content_type="application/pdf",
+            )
+        ],
+    )
+    doc.envoye_le = datetime.now(timezone.utc)
+    doc.envoye_a = locataire.email.strip()[:320]
+    return True
 
 
 @router.post("/baux/{bail_id}/resilier", response_model=ResilierResult)
@@ -918,6 +1043,16 @@ async def resilier_bail(
                 )
             )
             reloc = True
+    avis_envoye = False
+    avis_erreur = None
+    if payload.envoyer_avis:
+        try:
+            avis_envoye = await _envoyer_avis_resiliation(
+                db, bail, payload.date_fin, user
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            avis_erreur = str(exc)[:200]
+            log.exception("Avis de résiliation bail %s", bail_id)
     await db.commit()
     log.info(
         "Bail %s résilié au %s par %s",
@@ -928,6 +1063,8 @@ async def resilier_bail(
         date_fin=payload.date_fin,
         statut="resilie",
         relocation_ouverte=reloc,
+        avis_envoye=avis_envoye,
+        avis_erreur=avis_erreur,
     )
 
 

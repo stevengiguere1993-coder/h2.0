@@ -18,10 +18,6 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
-import {
-  BailDocActions,
-  TalFormDropdown
-} from "@/components/immobilier/tal-avis";
 
 /**
  * Baux & paiements — vue transversale « collection des loyers ».
@@ -564,7 +560,7 @@ export default function BauxPage() {
       <ImmobilierTopbar
         breadcrumbs={[
           { label: "Gestion immobilière", href: "/immobilier" },
-          { label: "Baux & paiements" }
+          { label: "Paiements" }
         ]}
       />
       <div className="p-4 pb-28 lg:p-6 lg:pb-28">
@@ -1020,25 +1016,9 @@ export default function BauxPage() {
                                 </button>
                               )}
                             </div>
-                            {/* ── Groupe 2 — Documents (avis). L'ENVOI du
-                                bail pour signature se fait depuis la page
-                                Locations (section « Baux envoyés »). ── */}
-                            <div className="inline-flex items-center gap-1.5 rounded-xl border border-brand-700 px-1.5 py-1">
-                              <TalFormDropdown bailId={r.bail_id} />
-                            </div>
-                            {/* ── Groupe 3 — Bail (voir / remplacer) —
-                                masqué tant qu'aucun bail n'est importé
-                                (la « pilule vide », retour Phil). ── */}
-                            {r.document_id != null ? (
-                              <div className="inline-flex items-center gap-1.5 rounded-xl border border-brand-700 px-1.5 py-1">
-                                <BailDocActions
-                                  bailId={r.bail_id}
-                                  hasDoc
-                                  allowImportInitial={false}
-                                  onChanged={() => void load()}
-                                />
-                              </div>
-                            ) : null}
+                            {/* Page PAIEMENTS pure (split v15) : les
+                                avis et le bail vivent sur la page
+                                « Baux » du menu. */}
                           </div>
                           {r.nb_relances > 0 ? (
                             <span className="text-[10px] text-white/40">
