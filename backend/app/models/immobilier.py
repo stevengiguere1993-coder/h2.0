@@ -558,6 +558,12 @@ class LocationVisite(Base, TimestampUpdateMixin):
     candidat_phone: Mapped[Optional[str]] = mapped_column(
         String(50), nullable=True
     )
+    # Candidat = LOCATAIRE EXISTANT (déjà client) — la conversion
+    # réutilise sa fiche, aucun doublon. Colonne additive → cf.
+    # ensure_critical_columns (session.py).
+    locataire_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
     # planifiee | faite | absent | annulee
     statut: Mapped[str] = mapped_column(
         String(16), nullable=False, default="planifiee",
