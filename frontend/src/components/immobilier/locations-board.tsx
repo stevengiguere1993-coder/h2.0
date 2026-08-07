@@ -62,6 +62,7 @@ type Visite = {
   enquete_emploi: boolean | null;
   enquete_notes: string | null;
   retenu: boolean;
+  locataire_id?: number | null;
 };
 
 type Dossier = {
@@ -1078,6 +1079,15 @@ function DossierModal({
               <Plus className="h-3.5 w-3.5" /> Ajouter
             </button>
           </div>
+          <PickLocataireExistant
+            onPick={async (lo) => {
+              await api(`/${d.id}/visites`, "POST", {
+                locataire_id: lo.id,
+                candidat_nom: lo.full_name,
+                quand: null
+              });
+            }}
+          />
         </div>
 
         {/* Pied de fiche : actions destructives discrètes */}
@@ -1410,11 +1420,15 @@ function ConvertModal({
   const [nas, setNas] = useState("");
   const [ancienneAdresse, setAncienneAdresse] = useState("");
   // Locataire EXISTANT (déjà client) : le bail s'attache à sa fiche.
-  const [modeExistant, setModeExistant] = useState(false);
+  const [modeExistant, setModeExistant] = useState(
+    candidat.locataire_id != null
+  );
   const [locatairesDispo, setLocatairesDispo] = useState<
     { id: number; full_name: string }[] | null
   >(null);
-  const [locExistantId, setLocExistantId] = useState<number | null>(null);
+  const [locExistantId, setLocExistantId] = useState<number | null>(
+    candidat.locataire_id ?? null
+  );
   const [locSearch, setLocSearch] = useState("");
   const [employeur, setEmployeur] = useState("");
   const [revenu, setRevenu] = useState("");
@@ -1781,6 +1795,93 @@ function ConvertModal({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Candidat = locataire existant (déjà client) ────────────────────────
+
+function PickLocataireExistant({
+  onPick
+}: {
+  onPick: (lo: { id: number; full_name: string }) => Promise<void> | void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [dispo, setDispo] = useState<
+    { id: number; full_name: string }[] | null
+  >(null);
+  const [q, setQ] = useState("");
+
+  useEffect(() => {
+    if (!open || dispo !== null) return;
+    void (async () => {
+      try {
+        const r = await authedFetch("/api/v1/immobilier/locataires");
+        setDispo(
+          r.ok
+            ? ((await r.json()) as { id: number; full_name: string }[])
+            : []
+        );
+      } catch {
+        setDispo([]);
+      }
+    })();
+  }, [open, dispo]);
+
+  if (!open)
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-2 text-xs font-semibold text-accent-500 underline-offset-2 hover:underline"
+      >
+        + Candidat = locataire existant (déjà client)
+      </button>
+    );
+  return (
+    <div className="mt-2 grid gap-1.5 rounded-lg border border-brand-800 bg-brand-950/60 p-2">
+      <div className="flex items-center gap-2">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Rechercher un locataire déjà client…"
+          className={`${INPUT_CLS} flex-1`}
+        />
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="btn-ghost btn-xs"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="max-h-32 overflow-y-auto rounded-md border border-brand-800">
+        {(dispo || [])
+          .filter((l) =>
+            l.full_name.toLowerCase().includes(q.toLowerCase())
+          )
+          .slice(0, 20)
+          .map((l) => (
+            <button
+              key={l.id}
+              type="button"
+              onClick={() => {
+                void onPick(l);
+                setOpen(false);
+              }}
+              className="block w-full px-3 py-1.5 text-left text-xs text-white/75 hover:bg-brand-900"
+            >
+              {l.full_name}
+            </button>
+          ))}
+        {dispo === null ? (
+          <p className="px-3 py-1.5 text-xs text-white/40">Chargement…</p>
+        ) : null}
+      </div>
+      <p className="text-[10px] text-white/40">
+        À la conversion, le bail s&apos;attachera à sa fiche existante —
+        aucun doublon.
+      </p>
     </div>
   );
 }
