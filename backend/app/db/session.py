@@ -3460,6 +3460,18 @@ async def init_db() -> None:
                     "depenses_normalisees",
                 ),
                 (
+                    "autres_normalisations_pct",
+                    1.0,
+                    "Autres normalisations (% des revenus bruts)",
+                    "Provision normalisée pour les autres dépenses "
+                    "d'exploitation, en pourcentage des revenus bruts. "
+                    "Défaut 1 %.",
+                    0.0,
+                    20.0,
+                    0.05,
+                    "depenses_normalisees",
+                ),
+                (
                     "seuil_bascule_bareme_log",
                     12.0,
                     "Seuil de bascule du barème (nb log)",

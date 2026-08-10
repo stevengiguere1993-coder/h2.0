@@ -380,6 +380,15 @@ export default function AnalysesLeadsPage() {
       abandonne: []
     };
     for (const l of filtered) m[l.status]?.push(l);
+    // Les analyses créées le plus récemment en HAUT de chaque
+    // colonne (retour Phil 2026-08-10).
+    for (const k of Object.keys(m) as Lead["status"][]) {
+      m[k].sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() -
+          new Date(a.created_at).getTime()
+      );
+    }
     return m;
   }, [filtered]);
 

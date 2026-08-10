@@ -473,6 +473,7 @@ _DB_KEY_TO_BAREME: dict[str, str] = {
     "wifi_par_log_mois": "wifi_par_log",
     "internet_batiment_mois": "internet_fixe",
     "entretien_thermopompe_an": "thermopompe",
+    "autres_normalisations_pct": "autres_normalisations_pct",
 }
 
 # Clés du barème stockées en BD en pourcentage → fraction (÷100) avant
@@ -480,6 +481,7 @@ _DB_KEY_TO_BAREME: dict[str, str] = {
 _DB_BAREME_PCT_KEYS: set[str] = {
     "gestion_moins_12_pct",
     "gestion_12_log_plus_pct",
+    "autres_normalisations_pct",
 }
 
 
