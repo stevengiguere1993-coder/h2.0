@@ -6,11 +6,12 @@ associés à plusieurs entreprises via EntreprisePartner avec un rôle
 et un pourcentage d'ownership.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -35,6 +36,24 @@ class Entreprise(Base, TimestampUpdateMixin):
     # NEQ (numéro d'entreprise du Québec). Permet le lien avec REQ.
     neq: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True, index=True
+    )
+
+    # Infos légales de la INC (hub fiche entreprise — retour Phil
+    # 2026-08-10). Colonnes → ensure_critical_columns.
+    tps_number: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    tvq_number: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    siege_social: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )
+    date_constitution: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
+    notes_legales: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
     )
 
     # Catégorie : gestion / construction / immobilier / autre.
@@ -121,6 +140,18 @@ class EntreprisePartner(Base):
     )
     partner_email: Mapped[Optional[str]] = mapped_column(
         String(320), nullable=True
+    )
+
+    # Coordonnées d'actionnaire (retour Phil 2026-08-10) — adresse,
+    # date de naissance, téléphone. Colonnes → ensure_critical_columns.
+    partner_adresse: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )
+    partner_naissance: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
+    partner_telephone: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
     )
     partner_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

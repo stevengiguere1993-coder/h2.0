@@ -14,6 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field
 class EntrepriseBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     neq: Optional[str] = Field(default=None, max_length=32)
+    tps_number: Optional[str] = Field(default=None, max_length=32)
+    tvq_number: Optional[str] = Field(default=None, max_length=32)
+    siege_social: Optional[str] = Field(default=None, max_length=500)
+    date_constitution: Optional[date] = None
+    notes_legales: Optional[str] = None
     type: str = Field(default="gestion", max_length=32)
     color_accent: str = Field(default="#7c3aed", pattern=r"^#[0-9a-fA-F]{6}$")
     description: Optional[str] = None
@@ -29,6 +34,11 @@ class EntrepriseCreate(EntrepriseBase):
 class EntrepriseUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     neq: Optional[str] = Field(default=None, max_length=32)
+    tps_number: Optional[str] = Field(default=None, max_length=32)
+    tvq_number: Optional[str] = Field(default=None, max_length=32)
+    siege_social: Optional[str] = Field(default=None, max_length=500)
+    date_constitution: Optional[date] = None
+    notes_legales: Optional[str] = None
     type: Optional[str] = Field(default=None, max_length=32)
     color_accent: Optional[str] = Field(
         default=None, pattern=r"^#[0-9a-fA-F]{6}$"

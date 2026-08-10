@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,6 +16,10 @@ class PartnerBase(BaseModel):
     user_id: Optional[int] = None
     partner_name: Optional[str] = Field(default=None, max_length=255)
     partner_email: Optional[str] = Field(default=None, max_length=320)
+    #: Coordonnées d'actionnaire (retour Phil 2026-08-10).
+    partner_adresse: Optional[str] = Field(default=None, max_length=500)
+    partner_naissance: Optional[date] = None
+    partner_telephone: Optional[str] = Field(default=None, max_length=32)
     partner_notes: Optional[str] = None
     role: str = Field(default="associe", max_length=32)
     ownership_pct: Optional[float] = Field(default=None, ge=0, le=100)
@@ -29,6 +33,9 @@ class PartnerUpdate(BaseModel):
     user_id: Optional[int] = None
     partner_name: Optional[str] = Field(default=None, max_length=255)
     partner_email: Optional[str] = Field(default=None, max_length=320)
+    partner_adresse: Optional[str] = Field(default=None, max_length=500)
+    partner_naissance: Optional[date] = None
+    partner_telephone: Optional[str] = Field(default=None, max_length=32)
     partner_notes: Optional[str] = None
     role: Optional[str] = Field(default=None, max_length=32)
     ownership_pct: Optional[float] = Field(default=None, ge=0, le=100)
