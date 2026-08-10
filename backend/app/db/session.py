@@ -251,6 +251,8 @@ async def ensure_critical_columns() -> None:
         ("bons_travail", "marge_pct", "NUMERIC(5, 2) NOT NULL DEFAULT 0"),
         ("bons_travail", "work_notes", "TEXT"),
         ("bons_travail", "is_urgent", "BOOLEAN NOT NULL DEFAULT false"),
+        # Créateur du bon (2026-08-10) — affiché sur les cartes.
+        ("bons_travail", "created_by_user_id", "INTEGER"),
         (
             "projects",
             "correction_status",
@@ -538,6 +540,30 @@ async def ensure_critical_columns() -> None:
     except Exception as exc:  # noqa: BLE001
         log.warning("backfill bons BON- -> BT- failed: %s", exc)
 
+    # Backfill 2026-08-10 : créateur des bons, recopié du journal
+    # d'audit (seuls les bons créés côté Construction y ont une trace ;
+    # les autres restent NULL et s'affichent sans « créé par »).
+    # Idempotent grâce au IS NULL.
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE bons_travail SET created_by_user_id = a.user_id "
+                    "FROM ("
+                    "  SELECT DISTINCT ON (entity_id) entity_id, user_id "
+                    "  FROM audit_logs "
+                    "  WHERE action = 'bons-travail.created' "
+                    "    AND entity_id IS NOT NULL "
+                    "    AND user_id IS NOT NULL "
+                    "  ORDER BY entity_id, created_at ASC"
+                    ") a "
+                    "WHERE bons_travail.id = a.entity_id "
+                    "AND bons_travail.created_by_user_id IS NULL"
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("backfill bons created_by failed: %s", exc)
+
 
 async def ensure_raci_tables() -> None:
     """Crée les tables RACI dans leur PROPRE transaction.
@@ -590,6 +616,7 @@ async def ensure_immobilier_aux_tables() -> None:
             FactureExterne,
             FactureGestion,
             FraisLocatif,
+            FraisManuelGestion,
             ImmCommunication,
             ImmDocPersoModele,
             ImmDocTemplate,
@@ -622,6 +649,7 @@ async def ensure_immobilier_aux_tables() -> None:
                         PaiementExterne.__table__,
                         FactureExterne.__table__,
                         FactureGestion.__table__,
+                        FraisManuelGestion.__table__,
                     ],
                 )
             )

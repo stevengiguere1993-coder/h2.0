@@ -21,7 +21,8 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
-import { authedFetch } from "@/lib/auth";
+import { authedFetch, hasMinRole } from "@/lib/auth";
+import { useCurrentUser } from "@/hooks/use-current-user";
 
 type QboStatus = {
   connected: boolean;
@@ -207,6 +208,10 @@ export function ConnexionsSection({
 }) {
   const [qbo, setQbo] = useState<QboStatus | null>(null);
   const [loadingQbo, setLoadingQbo] = useState(true);
+  // QuickBooks = admins seulement (retour Phil 2026-08-10) : la carte
+  // de connexion comptable est masquée aux gestionnaires.
+  const { user } = useCurrentUser();
+  const isAdmin = hasMinRole(user, "admin");
 
   useEffect(() => {
     if (scope !== "construction") {
@@ -245,6 +250,7 @@ export function ConnexionsSection({
   const grouped: Record<string, ConnectionDef[]> = {};
   for (const c of CONNECTIONS) {
     if (c.scope !== scope) continue;
+    if (c.id === "qbo" && !isAdmin) continue;
     grouped[c.group] = grouped[c.group] || [];
     grouped[c.group].push(c);
   }
@@ -273,7 +279,9 @@ export function ConnexionsSection({
       </header>
 
       <div className="mt-4 space-y-5">
-        {groupKeys.map((g) => (
+        {groupKeys
+          .filter((g) => (grouped[g] || []).length > 0)
+          .map((g) => (
           <div key={g}>
             <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-white/50">
               {GROUP_LABELS[g]}

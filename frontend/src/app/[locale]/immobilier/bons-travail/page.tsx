@@ -55,6 +55,7 @@ type BonListItem = {
   immeuble_id: number | null;
   logement_id: number | null;
   is_urgent?: boolean;
+  created_by_name?: string | null;
 };
 
 type PhotoMeta = { id: number; caption: string | null; content_type: string };
@@ -70,6 +71,7 @@ type BonDetail = {
   immeuble_id: number | null;
   logement_id: number | null;
   photos: PhotoMeta[];
+  created_by_name?: string | null;
 };
 
 type Column = { id: string; label: string; dot: string };
@@ -761,6 +763,11 @@ export default function BonsTravailPage() {
                             <p className="mt-0.5 truncate font-mono text-[10px] text-white/40">
                               {b.reference}
                             </p>
+                            {b.created_by_name ? (
+                              <p className="mt-0.5 truncate text-[10px] text-white/40">
+                                Créé par {b.created_by_name}
+                              </p>
+                            ) : null}
                           </button>
                         ))
                       )}
@@ -802,6 +809,9 @@ export default function BonsTravailPage() {
                 <p className="mt-1 text-xs text-white/50">
                   {detail.reference} —{" "}
                   {STATUS_LABEL[detail.status] || detail.status}
+                  {detail.created_by_name
+                    ? ` · créé par ${detail.created_by_name}`
+                    : ""}
                 </p>
 
                 <div className="mt-4 space-y-4">

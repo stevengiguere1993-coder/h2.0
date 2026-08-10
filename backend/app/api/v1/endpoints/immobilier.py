@@ -1178,11 +1178,24 @@ async def create_bon_from_immeuble(
         marge_pct=10,
         requires_signature=False,
         is_urgent=bool(payload.is_urgent),
+        created_by_user_id=user.id,
     )
     bon.created_at = _now()
     bon.updated_at = _now()
     db.add(bon)
     await db.flush()
+    # Trace d'audit alignée sur la création côté Construction (sert
+    # aussi au backfill du créateur).
+    from app.services.audit import log_action as _log_action
+
+    await _log_action(
+        db,
+        user=user,
+        action="bons-travail.created",
+        entity_type="bons-travail",
+        entity_id=bon.id,
+        details={"reference": bon.reference, "name": bon.title},
+    )
     # Notifie les gestionnaires (manager+) — comme côté Construction.
     from app.services.notifications import notify_role
 
@@ -1250,6 +1263,8 @@ class _BonAvancementItem(BaseModel):
     immeuble_id: Optional[int] = None
     logement_id: Optional[int] = None
     is_urgent: bool = False
+    #: Qui a créé le bon (retour Phil 2026-08-10).
+    created_by_name: Optional[str] = None
 
 
 @router.get("/bons-travail", response_model=List[_BonAvancementItem])
@@ -1278,6 +1293,17 @@ async def list_gestion_immo_bons(db: DBSession, user: CurrentUser) -> List[_BonA
             await db.execute(select(Client).where(Client.id.in_(client_ids)))
         ).scalars().all()
     } if client_ids else {}
+
+    # Créateurs — noms résolus par lot (même pattern que les clients).
+    creator_ids = {
+        b.created_by_user_id for b in bons if b.created_by_user_id
+    }
+    createurs = {
+        u.id: u.display_name
+        for u in (
+            await db.execute(select(User).where(User.id.in_(creator_ids)))
+        ).scalars().all()
+    } if creator_ids else {}
 
     project_ids = {b.project_id for b in bons if b.project_id}
     projects = {
@@ -1328,6 +1354,11 @@ async def list_gestion_immo_bons(db: DBSession, user: CurrentUser) -> List[_BonA
                 immeuble_id=b.immeuble_id,
                 logement_id=b.logement_id,
                 is_urgent=bool(getattr(b, "is_urgent", False)),
+                created_by_name=(
+                    createurs.get(b.created_by_user_id)
+                    if b.created_by_user_id
+                    else None
+                ),
             )
         )
     return out
@@ -1561,6 +1592,8 @@ class _BonAvancementDetail(BaseModel):
     is_urgent: bool = False
     immeuble_id: Optional[int] = None
     logement_id: Optional[int] = None
+    #: Qui a créé le bon (retour Phil 2026-08-10).
+    created_by_name: Optional[str] = None
 
 
 @router.get("/bons-travail/{bon_id}", response_model=_BonAvancementDetail)
@@ -1586,6 +1619,11 @@ async def get_gestion_immo_bon(
     if bon.client_id:
         c = await db.get(Client, bon.client_id)
         client_name = c.name if c else None
+
+    created_by_name = None
+    if bon.created_by_user_id:
+        u = await db.get(User, bon.created_by_user_id)
+        created_by_name = u.display_name if u else None
 
     proj_summary = None
     phases_out: List[_BonPhaseRead] = []
@@ -1685,6 +1723,7 @@ async def get_gestion_immo_bon(
         is_urgent=bool(getattr(bon, "is_urgent", False)),
         immeuble_id=bon.immeuble_id,
         logement_id=bon.logement_id,
+        created_by_name=created_by_name,
     )
 
 

@@ -286,6 +286,11 @@ def make_crud_router(
                 data.reference = await generate_bt_reference(db)
         crud = GenericCrud(db, model)
         obj = await crud.create(data)
+        # Bon de travail : mémorise QUI l'a créé — affiché sur les
+        # cartes et fiches (retour Phil 2026-08-10).
+        if model is BonTravail and obj.created_by_user_id is None:
+            obj.created_by_user_id = user.id
+            await db.flush()
         # Achat : applique la logique payment_method + due_at apres
         # creation (avant l'autopush QBO pour que QB recoive le bon
         # statut Bill/Purchase).

@@ -31,6 +31,14 @@ type Bon = {
   signed_at: string | null;
   signed_by_name: string | null;
   created_at: string;
+  created_by_user_id?: number | null;
+};
+
+type UserLite = {
+  id: number;
+  email: string;
+  full_name?: string | null;
+  display_name?: string | null;
 };
 
 type Column = { id: string; label: string; dot: string };
@@ -63,6 +71,7 @@ export default function BonsPage() {
   const { onOpenSidebar } = useAppLayout();
   const router = useRouter();
   const [items, setItems] = useState<Bon[]>([]);
+  const [users, setUsers] = useState<UserLite[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -79,6 +88,15 @@ export default function BonsPage() {
         if (!res.ok) throw new Error(`http_${res.status}`);
         const data = (await res.json()) as Bon[];
         if (!cancelled) setItems(data);
+        // Annuaire léger pour afficher « créé par » sur les cartes.
+        try {
+          const ru = await authedFetch("/api/v1/users");
+          if (ru.ok && !cancelled) {
+            setUsers((await ru.json()) as UserLite[]);
+          }
+        } catch {
+          /* noop — la carte s'affiche sans le créateur */
+        }
       } catch {
         if (!cancelled) setError("Impossible de charger les bons de travail.");
       } finally {
@@ -90,6 +108,14 @@ export default function BonsPage() {
       cancelled = true;
     };
   }, []);
+
+  const usersById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const u of users) {
+      m.set(u.id, u.full_name || u.display_name || u.email);
+    }
+    return m;
+  }, [users]);
 
   // Le board ne montre que les bons INTERNES (entretien de nos immeubles).
   // Les bons « construction » signés client restent en legacy ailleurs.
@@ -303,6 +329,10 @@ export default function BonsPage() {
                             </p>
                             <p className="mt-0.5 truncate text-[11px] text-white/40">
                               {b.reference}
+                              {b.created_by_user_id &&
+                              usersById.get(b.created_by_user_id)
+                                ? ` · créé par ${usersById.get(b.created_by_user_id)}`
+                                : ""}
                             </p>
                             <div className="mt-2 flex items-center justify-between text-xs">
                               <span

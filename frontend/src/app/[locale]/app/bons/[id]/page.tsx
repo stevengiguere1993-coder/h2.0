@@ -57,6 +57,7 @@ type Bon = {
   signed_at: string | null;
   signed_by_name: string | null;
   created_at: string;
+  created_by_user_id?: number | null;
 };
 
 type SousTraitant = { id: number; full_name: string };
@@ -764,6 +765,16 @@ export default function BonDetailPage() {
                     >
                       {client.name}
                     </Link>
+                  </p>
+                ) : null}
+                {b.created_by_user_id ? (
+                  <p className="mt-1 text-xs text-white/50">
+                    Créé par{" "}
+                    {users.find((u) => u.id === b.created_by_user_id)
+                      ?.full_name ||
+                      users.find((u) => u.id === b.created_by_user_id)
+                        ?.email ||
+                      `utilisateur #${b.created_by_user_id}`}
                   </p>
                 ) : null}
               </div>

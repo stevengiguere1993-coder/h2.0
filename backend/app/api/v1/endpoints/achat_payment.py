@@ -16,7 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import DBSession, RequireManager
+from app.api.deps import DBSession, RequireAdminOrOwner, RequireManager
 from app.models.achat import Achat, AchatStatus, PaymentMethod
 from app.services.achat_payment import mark_achat_paid
 from app.services.achat_qbo_pull import QboPullError, pull_new_bills_from_qbo
@@ -130,7 +130,9 @@ class QboPullResult(BaseModel):
 )
 async def sync_from_qbo(
     db: DBSession,
-    _: RequireManager,
+    # Import QBO réservé aux admins (retour Phil 2026-08-10) — aligné
+    # sur /qbo/pull-costs et sur la visibilité du bouton côté UI.
+    _: RequireAdminOrOwner,
     since_days: int = 180,
 ) -> QboPullResult:
     """Pull les Bills QB recents qui n'ont pas encore d'Achat

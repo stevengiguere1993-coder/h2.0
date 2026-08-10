@@ -337,6 +337,8 @@ class BonTravailRead(_Base):
     marge_pct: Optional[float] = None
     work_notes: Optional[str] = None
     is_urgent: bool = False
+    #: Créateur du bon (nom résolu côté client via /api/v1/users).
+    created_by_user_id: Optional[int] = None
     sent_to_email: Optional[str]
     sent_at: Optional[datetime]
     signed_at: Optional[datetime]

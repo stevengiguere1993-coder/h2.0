@@ -111,6 +111,12 @@ class BonTravail(Base, TimestampUpdateMixin):
         Boolean, nullable=False, default=False, index=True
     )
 
+    # Qui a créé le bon — affiché sur les cartes/fiches (retour Phil
+    # 2026-08-10). Colonne → ensure_critical_columns.
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
     sent_to_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     signed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
