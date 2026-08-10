@@ -547,6 +547,54 @@ async def update_dossier(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "Statut invalide."
         )
+    # Matrice de transitions (audit 2026-07-31) — le kanban ne peut pas
+    # fabriquer d'états impossibles :
+    nouveau_statut = data.get("statut")
+    if nouveau_statut and nouveau_statut != obj.statut:
+        if (
+            nouveau_statut
+            in (
+                LocationDossierStatut.BAIL_A_ENVOYER.value,
+                LocationDossierStatut.BAIL_ENVOYE.value,
+                LocationDossierStatut.RELOUE.value,
+            )
+            and obj.nouveau_bail_id is None
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Aucun bail créé sur ce dossier — convertis le "
+                "candidat retenu d'abord.",
+            )
+        if obj.statut == LocationDossierStatut.RELOUE.value:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Ce dossier est reloué — pour revenir en arrière, "
+                "passe par la résiliation du bail (page Baux).",
+            )
+        if (
+            obj.statut == LocationDossierStatut.ANNULE.value
+            and nouveau_statut in STATUTS_ACTIFS
+        ):
+            autre = (
+                await db.execute(
+                    select(LocationDossier).where(
+                        LocationDossier.logement_id == obj.logement_id,
+                        LocationDossier.id != obj.id,
+                        LocationDossier.statut.notin_(
+                            [
+                                LocationDossierStatut.ANNULE.value,
+                                LocationDossierStatut.RELOUE.value,
+                            ]
+                        ),
+                    )
+                )
+            ).scalars().first()
+            if autre is not None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "Un autre dossier de relocation est déjà actif "
+                    "sur ce logement.",
+                )
     for k, v in data.items():
         setattr(obj, k, v)
     # Passage à « reloué » : quand un bail a été créé pour ce dossier,
@@ -579,11 +627,17 @@ async def delete_dossier(
     dossier_id: int, db: DBSession, user: CurrentUser
 ) -> None:
     """Supprime le dossier — ET le locataire/bail créés à la
-    conversion s'il y en a (retour Phil 2026-07-31)."""
+    conversion s'il y en a. Un dossier RELOUÉ (bail signé en
+    production) ne supprime QUE la carte : le bail et le locataire
+    restent intacts (audit 2026-07-31)."""
     _require_volet(user)
     obj = await _dossier_or_404(db, dossier_id)
-    await _supprimer_bail_et_locataire_crees(db, obj)
+    logement_id = obj.logement_id
+    if obj.statut != LocationDossierStatut.RELOUE.value:
+        await _supprimer_bail_et_locataire_crees(db, obj)
     await db.delete(obj)
+    await db.flush()
+    await _recaler_statut_logement(db, logement_id)
     await db.commit()
 
 
@@ -635,19 +689,33 @@ async def convertir_dossier(
     exige l'IMPORT du bail signé. Le logement devient « réservé »
     (occupé quand le bail commencera)."""
     _require_volet(user)
-    dossier = await _dossier_or_404(db, dossier_id)
+    # Verrou de ligne (audit 2026-07-31) : deux conversions simultanées
+    # (double-clic) deviennent séquentielles — la seconde frappe la
+    # garde au lieu de créer un doublon.
+    dossier = (
+        await db.execute(
+            select(LocationDossier)
+            .where(LocationDossier.id == dossier_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if dossier is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Dossier introuvable."
+        )
     if (
         dossier.statut
         in (
             LocationDossierStatut.RELOUE.value,
             LocationDossierStatut.BAIL_ENVOYE.value,
             LocationDossierStatut.BAIL_A_ENVOYER.value,
+            LocationDossierStatut.ANNULE.value,
         )
         or dossier.nouveau_bail_id is not None
     ):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Un locataire a déjà été créé pour ce dossier.",
+            "Ce dossier est annulé ou un locataire a déjà été créé.",
         )
     # Candidat retenu déjà LIÉ à un locataire existant → sa fiche est
     # réutilisée même sans choisir le mode « existant » (zéro doublon).
@@ -749,6 +817,7 @@ async def convertir_dossier(
         locataire.updated_at = now
         db.add(locataire)
         await db.flush()
+        dossier.locataire_cree = True
 
     bail = Bail(
         logement_id=dossier.logement_id,
@@ -788,6 +857,31 @@ async def convertir_dossier(
 # ─── Désistement du candidat converti ───────────────────────────────────
 
 
+async def _recaler_statut_logement(db, logement_id: int) -> None:
+    """Statut du logement recalculé d'après ses baux (occupé si un
+    bail actif court encore, vacant sinon) — partagé désistement /
+    suppression de dossier (audit 2026-07-31)."""
+    from app.models.immobilier import BailStatus
+
+    lg = await db.get(Logement, logement_id)
+    if lg is None:
+        return
+    actif = (
+        await db.execute(
+            select(Bail).where(
+                Bail.logement_id == logement_id,
+                Bail.status == BailStatus.ACTIF.value,
+                Bail.date_fin >= _now().date(),
+            )
+        )
+    ).scalars().first()
+    lg.status = (
+        LogementStatus.OCCUPE.value
+        if actif
+        else LogementStatus.VACANT.value
+    )
+
+
 async def _supprimer_bail_et_locataire_crees(db, dossier) -> None:
     """Supprime le bail créé à la conversion — et le locataire s'il n'a
     aucun autre bail (avec ses communications et documents). Utilisé par
@@ -803,6 +897,19 @@ async def _supprimer_bail_et_locataire_crees(db, dossier) -> None:
     if dossier.nouveau_bail_id is None:
         return
     bail = await db.get(Bail, dossier.nouveau_bail_id)
+    # Garde-fou (audit 2026-07-31) : un bail SIGNÉ ou ACTIF ne se rase
+    # jamais par un désistement/une suppression de carte — c'est la
+    # RÉSILIATION qui gère la vraie fin de bail (historique conservé).
+    if bail is not None and (
+        bail.status != "propose"
+        or bail.document_id is not None
+        or bail.signed_at is not None
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Ce bail est signé ou actif — utilise « Mettre fin au "
+            "bail » (page Baux) au lieu du désistement.",
+        )
     locataire_id = bail.locataire_id if bail else None
     if bail is not None:
         paiements = (
@@ -833,6 +940,13 @@ async def _supprimer_bail_et_locataire_crees(db, dossier) -> None:
         ).scalars().all():
             await db.delete(r)
         await db.delete(bail)
+    # La fiche d'un client EXISTANT réutilisée à la conversion n'est
+    # JAMAIS supprimée — seules les fiches créées par la conversion
+    # partent avec le désistement (audit 2026-07-31).
+    if locataire_id is not None and not getattr(
+        dossier, "locataire_cree", False
+    ):
+        locataire_id = None
     if locataire_id is not None:
         autres = (
             await db.execute(

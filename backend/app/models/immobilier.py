@@ -509,6 +509,12 @@ class LocationDossier(Base, TimestampUpdateMixin):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Bail créé par la conversion « candidat retenu → locataire + bail »
     # (colonne ajoutée après création de la table → ensure_critical_columns).
+    # La fiche locataire a été CRÉÉE par la conversion (le désistement
+    # ne supprime jamais la fiche d'un client existant). Colonne
+    # additive → cf. ensure_critical_columns (session.py).
+    locataire_cree: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True
+    )
     nouveau_bail_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("imm_baux.id", ondelete="SET NULL"), nullable=True
     )

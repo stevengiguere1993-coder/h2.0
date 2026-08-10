@@ -607,6 +607,13 @@ async def envoyer_renouvellement(
     bail = await db.get(Bail, bail_id)
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
+    # Garde-fou (audit 2026-07-31) : pas d'avis de renouvellement sur
+    # un bail résilié/terminé/proposé.
+    if bail.status != BailStatus.ACTIF.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Ce bail n'est pas actif — aucun avis à envoyer.",
+        )
 
     # Calcul du nouveau loyer selon le mode choisi — TOUJOURS arrondi
     # au dollar supérieur (retour Phil 2026-07-30). Le loyer actuel
