@@ -181,8 +181,8 @@ def test_titre_bail_avec_date_entree(client, auth_headers, doc_seed, run):
 
 
 def test_suppression_liee_bail(client, auth_headers, doc_seed, run):
-    """Delete du document courant du bail → le bail est dé-pointé
-    (« ils sont reliés »)."""
+    """Garde-fou (audit 2026-07-31) : le PDF courant d'un bail ACTIF ne
+    se supprime pas (409 — il se REMPLACE) ; le pointeur reste intact."""
     bail_id = doc_seed["bail_id"]
     doc_id = _upload(
         client, auth_headers, f"/api/v1/immobilier/baux/{bail_id}/document"
@@ -191,13 +191,13 @@ def test_suppression_liee_bail(client, auth_headers, doc_seed, run):
     d = client.delete(
         f"/api/v1/immobilier/documents/{doc_id}", headers=auth_headers
     )
-    assert d.status_code == 204, d.text
+    assert d.status_code == 409, d.text
 
     async def _check():
         async with TestSessionLocal() as s:
             return (await s.get(Bail, bail_id)).document_id
 
-    assert run(_check()) is None
+    assert run(_check()) == doc_id
 
 
 def test_suppression_liee_renouvellement(client, auth_headers, doc_seed, run):

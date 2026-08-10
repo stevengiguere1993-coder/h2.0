@@ -149,9 +149,28 @@ async def public_accept(
     if sig:
         bail.signature_image = sig
         bail.signature_image_content_type = ct
-    # Un bail proposé qui vient d'être signé devient actif.
+    # Un bail proposé qui vient d'être signé devient actif — sauf si un
+    # bail ACTIF chevauche déjà (audit 2026-07-31) : la signature reste
+    # valide, l'activation attendra que le staff règle le conflit.
     if bail.status == "propose":
-        bail.status = "actif"
+        chevauche = (
+            await db.execute(
+                select(Bail).where(
+                    Bail.logement_id == bail.logement_id,
+                    Bail.id != bail.id,
+                    Bail.status == "actif",
+                    Bail.date_debut <= bail.date_fin,
+                    Bail.date_fin >= bail.date_debut,
+                )
+            )
+        ).scalars().first()
+        if chevauche is None:
+            bail.status = "actif"
+        else:
+            log.warning(
+                "Bail %s signé mais NON activé : chevauchement avec le "
+                "bail %s", bail.id, chevauche.id,
+            )
     await db.flush()
     await db.refresh(bail)
 

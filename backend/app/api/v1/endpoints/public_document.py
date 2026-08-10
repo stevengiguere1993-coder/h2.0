@@ -333,6 +333,42 @@ async def public_sign(
             log.exception(
                 "Estampillage de la page réponse échoué (doc %s)", doc.id
             )
+    # Entente de résiliation SIGNÉE → le bail se résilie à la date
+    # convenue et un dossier de relocation s'ouvre automatiquement
+    # (v16 — la ligne rouge de la page Baux disparaît).
+    if doc.type == "avis_resiliation" and doc.bail_id:
+        try:
+            import json as _json
+
+            params = _json.loads(doc.params_json or "{}")
+            dfin_txt = params.get("date_fin")
+            bail_r = await db.get(Bail, doc.bail_id)
+            if bail_r is not None and bail_r.status == "actif" and dfin_txt:
+                bail_r.status = "resilie"
+                bail_r.date_fin = date.fromisoformat(dfin_txt)
+                from app.models.immobilier import LocationDossier
+
+                existant = (
+                    await db.execute(
+                        select(LocationDossier).where(
+                            LocationDossier.logement_id
+                            == bail_r.logement_id,
+                            LocationDossier.statut.notin_(
+                                ["annule", "reloue"]
+                            ),
+                        )
+                    )
+                ).scalars().first()
+                if existant is None:
+                    db.add(
+                        LocationDossier(
+                            logement_id=bail_r.logement_id,
+                            bail_id=bail_r.id,
+                            statut="avis_recu",
+                        )
+                    )
+        except Exception:  # noqa: BLE001 — best-effort
+            log.exception("Résiliation après signature (doc %s)", doc.id)
     await db.commit()
     await db.refresh(doc)
     # Copie signée transmise APRÈS le commit — le résultat est affiché

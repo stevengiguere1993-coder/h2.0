@@ -885,6 +885,66 @@ async def update_immeuble(
     return _immeuble_to_read(obj)
 
 
+async def _bail_actif_chevauchant(
+    db, logement_id: int, date_debut, date_fin, exclure_bail_id=None
+):
+    """Bail ACTIF du même logement dont les dates chevauchent —
+    JAMAIS deux baux actifs simultanés (audit 2026-07-31)."""
+    q = select(Bail).where(
+        Bail.logement_id == logement_id,
+        Bail.status == BailStatus.ACTIF.value,
+        Bail.date_debut <= date_fin,
+        Bail.date_fin >= date_debut,
+    )
+    if exclure_bail_id is not None:
+        q = q.where(Bail.id != exclure_bail_id)
+    return (await db.execute(q)).scalars().first()
+
+
+async def _recaler_logement_apres_bail(db, logement_id: int) -> None:
+    """Statut du logement recalculé d'après ses baux restants."""
+    lg = await db.get(Logement, logement_id)
+    if lg is None:
+        return
+    actif = (
+        await db.execute(
+            select(Bail).where(
+                Bail.logement_id == logement_id,
+                Bail.status == BailStatus.ACTIF.value,
+            )
+        )
+    ).scalars().first()
+    if actif is not None:
+        lg.status = LogementStatus.OCCUPE.value
+    elif lg.status == LogementStatus.OCCUPE.value:
+        lg.status = LogementStatus.VACANT.value
+    lg.updated_at = _now()
+
+
+async def _recalc_paiement_score(db, bail) -> None:
+    """Score de paiement du locataire recalculé (aussi après une
+    SUPPRESSION de paiements — audit 2026-07-31)."""
+    paiements = (
+        await db.execute(
+            select(PaiementLoyer).where(
+                PaiementLoyer.bail_id == bail.id,
+                PaiementLoyer.mois_couvert >= await get_demarrage(),
+            )
+        )
+    ).scalars().all()
+    locataire = await db.get(Locataire, bail.locataire_id)
+    if locataire is None:
+        return
+    if not paiements:
+        locataire.paiement_score = None
+    else:
+        en_retard = sum(1 for p in paiements if p.en_retard)
+        locataire.paiement_score = max(
+            0, min(100, round((1 - en_retard / len(paiements)) * 100))
+        )
+    locataire.updated_at = _now()
+
+
 @router.delete(
     "/immeubles/{immeuble_id}", status_code=status.HTTP_204_NO_CONTENT
 )
@@ -895,6 +955,26 @@ async def delete_immeuble(
 ) -> None:
     _require_volet(user)
     obj = await _get_immeuble_or_404(db, immeuble_id)
+    # Garde-fou (audit 2026-07-31) : un immeuble avec des baux ou des
+    # paiements ne se supprime pas — la cascade raserait tout
+    # l'historique financier. Désactive-le plutôt (is_active=False).
+    nb_baux = (
+        await db.execute(
+            select(func.count(Bail.id))
+            .select_from(Bail)
+            .join(Logement, Logement.id == Bail.logement_id)
+            .where(Logement.immeuble_id == immeuble_id)
+        )
+    ).scalar_one()
+    if nb_baux:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Cet immeuble a {nb_baux} bail(aux) et leur historique "
+                "de paiements — supprime d'abord les baux, ou désactive "
+                "l'immeuble au lieu de le supprimer."
+            ),
+        )
     await db.delete(obj)
     await db.commit()
 
@@ -1906,6 +1986,23 @@ async def delete_logement(
     obj = await db.get(Logement, logement_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Logement introuvable.")
+    # Garde-fou (audit 2026-07-31) : la cascade effacerait baux et
+    # paiements — l'UI attendait déjà ce 409.
+    nb_baux = (
+        await db.execute(
+            select(func.count(Bail.id)).where(
+                Bail.logement_id == logement_id
+            )
+        )
+    ).scalar_one()
+    if nb_baux:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Ce logement a {nb_baux} bail(aux) — supprime-les "
+                "d'abord (leur historique de paiements partirait avec)."
+            ),
+        )
     await db.delete(obj)
     await db.commit()
 
@@ -2183,12 +2280,64 @@ async def delete_locataire(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 f"Ce locataire a {len(baux)} bail(aux) — supprimer aussi "
-                "ses baux, paiements et documents ? (force=true)"
+                "ses baux et documents ? (force=true)"
             ),
         )
+    # Garde-fou (audit 2026-07-31) : même sous force, l'historique de
+    # PAIEMENTS ne se rase pas — même règle que le désistement.
+    if baux:
+        nb_paiements = (
+            await db.execute(
+                select(func.count(PaiementLoyer.id)).where(
+                    PaiementLoyer.bail_id.in_([b.id for b in baux])
+                )
+            )
+        ).scalar_one()
+        if nb_paiements:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"{nb_paiements} paiement(s) sont enregistrés sur "
+                    "ses baux — retire-les d'abord (l'historique "
+                    "financier ne se supprime pas en bloc)."
+                ),
+            )
+    from app.models.immobilier import LocationDossier, LocationVisite
+
+    bail_ids = [b.id for b in baux]
+    logement_ids = {b.logement_id for b in baux if b.logement_id}
+    # Dossiers de relocation pointant ces baux : régressés (sinon
+    # statut kanban fantôme après le SET NULL de la FK).
+    if bail_ids:
+        for dsr in (
+            await db.execute(
+                select(LocationDossier).where(
+                    LocationDossier.nouveau_bail_id.in_(bail_ids)
+                )
+            )
+        ).scalars().all():
+            if dsr.statut in (
+                "bail_a_envoyer", "bail_envoye", "reloue",
+            ):
+                dsr.statut = "avis_recu"
+            dsr.reloue_le = None
+            dsr.updated_at = _now()
+    # Visites liées à cette fiche : dé-pointées (sinon 404 à la
+    # prochaine conversion du candidat).
+    for v in (
+        await db.execute(
+            select(LocationVisite).where(
+                LocationVisite.locataire_id == locataire_id
+            )
+        )
+    ).scalars().all():
+        v.locataire_id = None
     for b in baux:
         await db.delete(b)
     await db.delete(obj)
+    await db.flush()
+    for lg_id in logement_ids:
+        await _recaler_logement_apres_bail(db, lg_id)
     await db.commit()
 
 
@@ -3011,6 +3160,24 @@ async def create_bail(
     loc_obj = await db.get(Locataire, payload.locataire_id)
     if loc_obj is None:
         raise HTTPException(status_code=404, detail="Locataire introuvable.")
+    if payload.status not in {s.value for s in BailStatus}:
+        raise HTTPException(
+            status_code=422, detail="Statut de bail invalide."
+        )
+    # Jamais deux baux ACTIFS qui se chevauchent (audit 2026-07-31).
+    if payload.status == BailStatus.ACTIF.value:
+        chev = await _bail_actif_chevauchant(
+            db, payload.logement_id, payload.date_debut, payload.date_fin
+        )
+        if chev is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Un bail ACTIF chevauche ces dates sur ce logement "
+                    f"(fin le {chev.date_fin}) — termine-le d'abord ou "
+                    "corrige les dates."
+                ),
+            )
 
     obj = Bail(**payload.model_dump())
     obj.created_at = _now()
@@ -3024,6 +3191,43 @@ async def create_bail(
     elif obj.status == BailStatus.PROPOSE.value:
         log_obj.status = LogementStatus.RESERVE.value
         log_obj.updated_at = _now()
+
+    # Interconnexion kanban Locations (v16) : un bail « proposé » crée
+    # ou rattache le dossier de relocation du logement — la page Baux
+    # et le kanban vivent sur la MÊME donnée.
+    if obj.status == BailStatus.PROPOSE.value:
+        await db.flush()
+        from app.models.immobilier import LocationDossier
+
+        dossier = (
+            await db.execute(
+                select(LocationDossier).where(
+                    LocationDossier.logement_id == obj.logement_id,
+                    LocationDossier.statut.notin_(["annule", "reloue"]),
+                )
+            )
+        ).scalars().first()
+        if dossier is None:
+            dossier = LocationDossier(
+                logement_id=obj.logement_id,
+                statut="bail_a_envoyer",
+                notes=(
+                    "Créé automatiquement — bail préparé depuis la "
+                    "page Baux."
+                ),
+            )
+            dossier.created_at = _now()
+            db.add(dossier)
+        if dossier.nouveau_bail_id is None:
+            dossier.nouveau_bail_id = obj.id
+            if dossier.statut in (
+                "avis_recu",
+                "annonce_publiee",
+                "visites",
+                "candidat_retenu",
+            ):
+                dossier.statut = "bail_a_envoyer"
+        dossier.updated_at = _now()
 
     await db.commit()
     await db.refresh(obj)
@@ -3042,7 +3246,41 @@ async def update_bail(
     if obj is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
     old_status = obj.status
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if "status" in data and data["status"] != old_status:
+        if data["status"] not in {s.value for s in BailStatus}:
+            raise HTTPException(
+                status_code=422, detail="Statut de bail invalide."
+            )
+        if (
+            data["status"] == BailStatus.ACTIF.value
+            and old_status == BailStatus.PROPOSE.value
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Un bail proposé s'active par l'IMPORT du bail "
+                    "signé (page Baux) — le circuit met aussi à jour "
+                    "le kanban et le logement."
+                ),
+            )
+        if data["status"] == BailStatus.ACTIF.value:
+            chev = await _bail_actif_chevauchant(
+                db,
+                obj.logement_id,
+                data.get("date_debut", obj.date_debut),
+                data.get("date_fin", obj.date_fin),
+                exclure_bail_id=obj.id,
+            )
+            if chev is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "Un bail ACTIF chevauche ces dates sur ce "
+                        f"logement (fin le {chev.date_fin})."
+                    ),
+                )
+    for k, v in data.items():
         setattr(obj, k, v)
     obj.updated_at = _now()
 
@@ -3054,6 +3292,16 @@ async def update_bail(
         log_obj = await db.get(Logement, obj.logement_id)
         if log_obj is not None:
             log_obj.status = LogementStatus.VACANT.value
+            log_obj.updated_at = _now()
+    elif (
+        old_status != BailStatus.ACTIF.value
+        and obj.status == BailStatus.ACTIF.value
+    ):
+        # Réactivation (termine→actif) : le logement redevient occupé
+        # (audit 2026-07-31).
+        log_obj = await db.get(Logement, obj.logement_id)
+        if log_obj is not None:
+            log_obj.status = LogementStatus.OCCUPE.value
             log_obj.updated_at = _now()
 
     await db.commit()
@@ -3067,11 +3315,70 @@ async def delete_bail(
     db: DBSession,
     user: Annotated[User, Depends(require_capability("bail.delete"))],
 ) -> None:
+    """Supprime un bail SAISI PAR ERREUR. Garde-fous (audit
+    2026-07-31) : refuse si des paiements/frais existent ou si le
+    dépôt de garantie n'a pas été rendu ; recale le logement et le
+    dossier de relocation lié. Pour une vraie fin de bail : la
+    résiliation (page Baux → « Mettre fin au bail »)."""
     _require_volet(user)
     obj = await db.get(Bail, bail_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
+    nb_paiements = (
+        await db.execute(
+            select(func.count(PaiementLoyer.id)).where(
+                PaiementLoyer.bail_id == bail_id
+            )
+        )
+    ).scalar_one()
+    nb_frais = (
+        await db.execute(
+            select(func.count(FraisLocatif.id)).where(
+                FraisLocatif.bail_id == bail_id
+            )
+        )
+    ).scalar_one()
+    if nb_paiements or nb_frais:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Ce bail a {nb_paiements} paiement(s) et {nb_frais} "
+                "frais — retire-les d'abord, ou utilise la résiliation "
+                "pour une vraie fin de bail (l'historique est conservé)."
+            ),
+        )
+    if (
+        obj.depot_garantie is not None
+        and float(obj.depot_garantie) > 0
+        and obj.depot_rendu_le is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Le dépôt de garantie de ce bail n'a pas été rendu — "
+                "règle-le dans la page Dépôts avant de supprimer."
+            ),
+        )
+    # Recalages AVANT la suppression : dossier de relocation lié
+    # régressé (plus de bail = retour « candidat retenu ») et statut
+    # du logement recalculé.
+    from app.models.immobilier import LocationDossier
+
+    for dsr in (
+        await db.execute(
+            select(LocationDossier).where(
+                LocationDossier.nouveau_bail_id == bail_id
+            )
+        )
+    ).scalars().all():
+        if dsr.statut in ("bail_a_envoyer", "bail_envoye", "reloue"):
+            dsr.statut = "candidat_retenu"
+        dsr.reloue_le = None
+        dsr.updated_at = _now()
+    logement_id = obj.logement_id
     await db.delete(obj)
+    await db.flush()
+    await _recaler_logement_apres_bail(db, logement_id)
     await db.commit()
 
 
@@ -3117,6 +3424,16 @@ async def create_paiement(
     bail = await db.get(Bail, payload.bail_id)
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
+    # Garde-fou (audit 2026-07-31) : pas de paiement sur un bail
+    # proposé/résilié/terminé — la ligne serait invisible partout.
+    if bail.status != BailStatus.ACTIF.value:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Ce bail n'est pas actif — un paiement ne peut être "
+                "enregistré que sur un bail actif."
+            ),
+        )
 
     async def _du_restant(mois: date) -> float:
         """Loyer + frais du mois − paiements déjà enregistrés."""
@@ -3159,6 +3476,14 @@ async def create_paiement(
     # montant aberrant ne crée pas des années de paiements).
     for _ in range(36):
         if montant_total <= 0.005:
+            break
+        # Le trop-payé ne déborde JAMAIS après la fin du bail (audit
+        # 2026-07-31) : le reliquat se colle au dernier mois du bail.
+        if (
+            not bail.au_mois
+            and bail.date_fin
+            and mois > bail.date_fin.replace(day=1)
+        ):
             break
         restant = await _du_restant(mois)
         if restant <= 0:
@@ -3243,12 +3568,20 @@ async def delete_paiement(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def annuler_paiements_mois(
-    bail_id: int, mois: str, db: DBSession, user: CurrentUser
+    bail_id: int,
+    mois: str,
+    db: DBSession,
+    user: Annotated[
+        User, Depends(require_capability("paiement_loyer.delete"))
+    ],
 ) -> None:
     """Annule TOUS les paiements d'un mois pour un bail (correction d'une
-    erreur de saisie — retour Steven 2026-07-22). Le mois redevient
-    impayé ; on ressaisit ensuite le bon montant."""
+    erreur de saisie — retour Steven 2026-07-22). Même capability que la
+    suppression unitaire (audit 2026-07-31)."""
     _require_volet(user)
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        raise HTTPException(status_code=404, detail="Bail introuvable.")
     try:
         month_start = datetime.strptime(mois + "-01", "%Y-%m-%d").date()
     except ValueError:
@@ -3265,6 +3598,8 @@ async def annuler_paiements_mois(
     ).scalars().all()
     for r in rows:
         await db.delete(r)
+    await db.flush()
+    await _recalc_paiement_score(db, bail)
     await db.commit()
 
 
@@ -3712,6 +4047,13 @@ async def create_frais(
     bail = await db.get(Bail, bail_id)
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
+    # Garde-fou (audit 2026-07-31) : un frais sur un bail non actif
+    # serait invisible dans toutes les vues (dette jamais réclamée).
+    if bail.status != BailStatus.ACTIF.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Un frais ne s'ajoute que sur un bail actif.",
+        )
     obj = FraisLocatif(
         bail_id=bail_id,
         mois_couvert=payload.mois_couvert.replace(day=1),
