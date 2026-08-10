@@ -1,15 +1,14 @@
 "use client";
 
 /**
- * Page « Baux » — split de l'ancienne « Baux & paiements » (v15).
+ * Page « Baux » — split de l'ancienne « Baux & paiements » (v15/v16).
  * Une ligne par LOGEMENT, façon Suivis annuels :
+ *   - ROUGE : entente de résiliation envoyée, signature attendue ;
  *   - VERTE : bail actif au dossier (PDF importé) ;
  *   - ambre : bail actif mais document à importer ;
  *   - grise : aucun bail — « Créer un nouveau bail » ou importer.
- * Le bail se SIGNE à l'externe (CORPIQ) : ici vit le SUIVI (statuts
- * « bail à envoyer / envoyé / au dossier »), la fin de bail (avis de
- * résiliation ou fin immédiate → relocation), le remplacement du PDF
- * et la suppression.
+ * Interconnectée au kanban Locations : le sélecteur de statut modifie
+ * le MÊME dossier de relocation (changer ici = changer là-bas).
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -50,13 +49,23 @@ type Row = {
   prochain_loyer: number | null;
   prochain_document_id: number | null;
   prochain_statut: string | null;
+  dossier_id: number | null;
+  dossier_statut: string | null;
+  resiliation_en_cours: boolean;
+  resiliation_date: string | null;
 };
 
-const RELOC_LABEL: Record<string, string> = {
-  bail_a_envoyer: "Bail à envoyer",
-  bail_envoye: "Bail envoyé — à signer",
-  a_venir: "À venir"
-};
+// Mêmes étapes que le kanban Locations — même donnée, changer ici
+// change là-bas (et vice-versa).
+const KANBAN_STATUTS: Array<{ id: string; label: string }> = [
+  { id: "avis_recu", label: "Départ confirmé" },
+  { id: "annonce_publiee", label: "Annonce publiée" },
+  { id: "visites", label: "Visite prévue" },
+  { id: "candidat_retenu", label: "Candidat retenu" },
+  { id: "bail_a_envoyer", label: "Bail à envoyer" },
+  { id: "bail_envoye", label: "Bail envoyé — à signer" },
+  { id: "reloue", label: "Reloué" }
+];
 
 function money(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -74,6 +83,7 @@ export default function SuiviBauxPage() {
   const [search, setSearch] = useState("");
   const [finBailFor, setFinBailFor] = useState<Row | null>(null);
   const [creerFor, setCreerFor] = useState<Row | null>(null);
+  const [statutBusy, setStatutBusy] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -89,6 +99,28 @@ export default function SuiviBauxPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function changerStatut(r: Row, statut: string) {
+    if (!r.dossier_id || statut === r.dossier_statut) return;
+    setStatutBusy(r.dossier_id);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/locations/${r.dossier_id}`,
+        { method: "PATCH", body: JSON.stringify({ statut }) }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      setFlash("Statut mis à jour — le kanban Locations est synchronisé.");
+      await load();
+    } catch (e) {
+      setErr(`Changement de statut : ${(e as Error).message}`);
+    } finally {
+      setStatutBusy(null);
+    }
+  }
 
   async function supprimerBail(r: Row) {
     if (!r.bail_id) return;
@@ -134,12 +166,21 @@ export default function SuiviBauxPage() {
           .includes(q)
       );
     }
-    return list;
+    // Rouges (résiliation en cours) en premier, puis sans bail, puis le
+    // reste — ordre backend conservé (tri stable).
+    return [...list].sort(
+      (a, b) =>
+        Number(b.resiliation_en_cours) - Number(a.resiliation_en_cours) ||
+        Number(a.bail_id != null) - Number(b.bail_id != null)
+    );
   }, [rows, fImmeuble, search]);
 
   const nbSansBail = (rows || []).filter((r) => r.bail_id == null).length;
   const nbADocumenter = (rows || []).filter(
     (r) => r.bail_id != null && r.document_id == null
+  ).length;
+  const nbResiliations = (rows || []).filter(
+    (r) => r.resiliation_en_cours
   ).length;
 
   return (
@@ -150,11 +191,12 @@ export default function SuiviBauxPage() {
           <p className="font-semibold text-white">Comment ça marche</p>
           <p className="mt-1">
             Le bail se prépare et se signe dans le système de la CORPIQ —
-            ici vit le SUIVI : crée le bail (ou depuis une relocation),
-            importe le PDF signé (il devient actif), remplace-le au
-            besoin, et mets fin au bail (avis de résiliation ou fin
-            immédiate — ça ouvre une relocation). Les paiements vivent
-            dans la page Paiements.
+            ici vit le SUIVI, connecté au kanban Locations (changer le
+            statut ici le change là-bas). Crée le bail, importe le PDF
+            signé (il devient actif), et mets fin au bail : l&apos;entente
+            de résiliation part pour signature en ligne (ligne ROUGE
+            jusqu&apos;à la signature, puis résiliation et relocation
+            automatiques) ou fin immédiate sans avis.
           </p>
         </div>
 
@@ -189,8 +231,17 @@ export default function SuiviBauxPage() {
                   {" "}
                   ·{" "}
                   <span className="text-amber-300">
-                    {nbADocumenter} bail{nbADocumenter > 1 ? "s" : ""} à
-                    importer
+                    {nbADocumenter} PDF à importer
+                  </span>
+                </>
+              ) : null}
+              {nbResiliations > 0 ? (
+                <>
+                  {" "}
+                  ·{" "}
+                  <span className="text-rose-300">
+                    {nbResiliations} résiliation
+                    {nbResiliations > 1 ? "s" : ""} en cours
                   </span>
                 </>
               ) : null}
@@ -220,7 +271,7 @@ export default function SuiviBauxPage() {
           </p>
         ) : (
           <div className="overflow-x-auto rounded-2xl border border-brand-800 bg-brand-900">
-            <table className="w-full min-w-[1080px] text-left text-sm">
+            <table className="w-full min-w-[1140px] text-left text-sm">
               <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
                 <tr>
                   <th className="px-4 py-2.5">Immeuble · logt</th>
@@ -239,11 +290,13 @@ export default function SuiviBauxPage() {
                     <tr
                       key={r.logement_id}
                       className={
-                        actifAuDossier
-                          ? "bg-emerald-500/10 hover:bg-emerald-500/15"
-                          : r.bail_id != null
-                            ? "bg-amber-500/5 hover:bg-amber-500/10"
-                            : "hover:bg-brand-950/50"
+                        r.resiliation_en_cours
+                          ? "bg-rose-500/10 hover:bg-rose-500/15"
+                          : actifAuDossier
+                            ? "bg-emerald-500/10 hover:bg-emerald-500/15"
+                            : r.bail_id != null
+                              ? "bg-amber-500/5 hover:bg-amber-500/10"
+                              : "hover:bg-brand-950/50"
                       }
                     >
                       <td className="px-4 py-2.5">
@@ -301,7 +354,14 @@ export default function SuiviBauxPage() {
                         {money(r.loyer_mensuel)}
                       </td>
                       <td className="px-4 py-2.5">
-                        {r.bail_id == null ? (
+                        {r.resiliation_en_cours ? (
+                          <span className="badge badge-rose">
+                            Résiliation en cours — signature attendue
+                            {r.resiliation_date
+                              ? ` (fin le ${r.resiliation_date})`
+                              : ""}
+                          </span>
+                        ) : r.bail_id == null ? (
                           <span className="badge badge-neutral">
                             Aucun bail
                           </span>
@@ -314,24 +374,24 @@ export default function SuiviBauxPage() {
                             Actif — PDF à importer
                           </span>
                         )}
-                        {r.prochain_bail_id != null ? (
-                          <div className="mt-0.5">
-                            <span
-                              className={`badge ${
-                                r.prochain_statut === "bail_envoye"
-                                  ? "badge-violet"
-                                  : r.prochain_document_id != null
-                                    ? "badge-emerald"
-                                    : "badge-amber"
-                              }`}
+                        {r.dossier_id != null &&
+                        r.dossier_statut != null ? (
+                          <div className="mt-1">
+                            <select
+                              value={r.dossier_statut}
+                              disabled={statutBusy === r.dossier_id}
+                              onChange={(e) =>
+                                void changerStatut(r, e.target.value)
+                              }
+                              title="Étape du kanban Locations — changer ici le change là-bas"
+                              className={`${INPUT_CLS} w-full max-w-[190px] disabled:opacity-50`}
                             >
-                              {r.prochain_document_id != null
-                                ? "Prochain : bail au dossier"
-                                : `Prochain : ${
-                                    RELOC_LABEL[r.prochain_statut || ""] ||
-                                    "à venir"
-                                  }`}
-                            </span>
+                              {KANBAN_STATUTS.map((s) => (
+                                <option key={s.id} value={s.id}>
+                                  {s.label}
+                                </option>
+                              ))}
+                            </select>
                           </div>
                         ) : null}
                       </td>
@@ -339,19 +399,30 @@ export default function SuiviBauxPage() {
                         <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
                           {r.bail_id != null ? (
                             <>
-                              <button
-                                type="button"
-                                onClick={() => setFinBailFor(r)}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
-                              >
-                                Mettre fin au bail
-                              </button>
+                              {!r.resiliation_en_cours ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setFinBailFor(r)}
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
+                                >
+                                  Mettre fin au bail
+                                </button>
+                              ) : null}
                               <BailDocActions
                                 bailId={r.bail_id}
                                 hasDoc={r.document_id != null}
                                 signedAt={r.signed_at}
+                                compact
                                 onChanged={() => void load()}
                               />
+                              <button
+                                type="button"
+                                onClick={() => setCreerFor(r)}
+                                title="Préparer un NOUVEAU bail sur ce logement (prochain locataire)"
+                                className="rounded-lg border border-brand-700 bg-brand-900 p-1.5 text-white/70 transition hover:bg-brand-800"
+                              >
+                                <Plus className="h-3 w-3" />
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => void supprimerBail(r)}
@@ -375,6 +446,7 @@ export default function SuiviBauxPage() {
                                 <BailDocActions
                                   bailId={r.prochain_bail_id}
                                   hasDoc={r.prochain_document_id != null}
+                                  compact
                                   onChanged={() => void load()}
                                 />
                               ) : null}
@@ -424,7 +496,7 @@ export default function SuiviBauxPage() {
   );
 }
 
-// ─── Mettre fin au bail (avis de résiliation OU fin immédiate) ──────────
+// ─── Mettre fin au bail (entente signée en ligne OU fin immédiate) ──────
 
 function FinBailModal({
   r,
@@ -437,7 +509,6 @@ function FinBailModal({
 }) {
   const [dateFin, setDateFin] = useState("");
   const [mode, setMode] = useState<"avis" | "immediat">("avis");
-  const [ouvrirReloc, setOuvrirReloc] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -452,7 +523,7 @@ function FinBailModal({
           method: "POST",
           body: JSON.stringify({
             date_fin: dateFin,
-            ouvrir_relocation: ouvrirReloc,
+            ouvrir_relocation: true,
             envoyer_avis: mode === "avis"
           })
         }
@@ -462,18 +533,19 @@ function FinBailModal({
         throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
       }
       const d = (await res.json()) as {
-        avis_envoye?: boolean;
-        avis_erreur?: string | null;
+        statut?: string;
         relocation_ouverte?: boolean;
       };
-      let msg = `Bail terminé au ${dateFin}.`;
-      if (mode === "avis") {
-        msg += d.avis_envoye
-          ? " Avis de résiliation envoyé au locataire."
-          : ` ⚠️ Avis NON envoyé : ${d.avis_erreur || "erreur"}.`;
+      if (d.statut === "resiliation_en_cours") {
+        onDone(
+          "Entente de résiliation envoyée pour signature — la ligne reste ROUGE jusqu'à la signature, puis le bail se résilie et la relocation s'ouvre automatiquement."
+        );
+      } else {
+        let msg = `Bail terminé au ${dateFin}.`;
+        if (d.relocation_ouverte)
+          msg += " Dossier de relocation ouvert automatiquement.";
+        onDone(msg);
       }
-      if (d.relocation_ouverte) msg += " Dossier de relocation ouvert.";
-      onDone(msg);
     } catch (e) {
       setErr((e as Error).message);
       setBusy(false);
@@ -521,10 +593,12 @@ function FinBailModal({
               />
               <span>
                 <span className="font-semibold text-white">
-                  Envoyer un avis de résiliation
+                  Entente de résiliation SIGNÉE en ligne
                 </span>{" "}
-                — lettre PDF transmise au locataire par courriel et
-                classée au dossier.
+                — le locataire reçoit l&apos;entente par courriel et la
+                signe (suivi d&apos;ouverture et de signature). Le bail
+                reste actif (ligne ROUGE) jusqu&apos;à la signature, puis
+                se résilie à la date choisie.
               </span>
             </label>
             <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 px-3 py-2 text-xs text-white/75">
@@ -536,22 +610,18 @@ function FinBailModal({
               />
               <span>
                 <span className="font-semibold text-white">
-                  Mettre fin sans avis
+                  Fin immédiate sans avis
                 </span>{" "}
                 — déguerpissement, entente verbale : le bail se termine à
                 la date choisie, rien n&apos;est envoyé.
               </span>
             </label>
           </div>
-          <label className="flex cursor-pointer items-center gap-2 text-xs text-white/70">
-            <input
-              type="checkbox"
-              checked={ouvrirReloc}
-              onChange={(e) => setOuvrirReloc(e.target.checked)}
-              className="h-3.5 w-3.5"
-            />
-            Ouvrir un dossier de relocation (kanban Locations)
-          </label>
+          <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+            ⚠️ Un dossier de relocation s&apos;ouvrira AUTOMATIQUEMENT
+            dans le kanban Locations (dès maintenant en fin immédiate, à
+            la signature pour l&apos;entente).
+          </p>
           {err ? (
             <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
               {err}
@@ -572,7 +642,9 @@ function FinBailModal({
               className="btn-accent btn-sm disabled:opacity-60"
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Confirmer la fin du bail
+              {mode === "avis"
+                ? "Envoyer l'entente pour signature"
+                : "Mettre fin au bail"}
             </button>
           </div>
         </div>
@@ -581,7 +653,7 @@ function FinBailModal({
   );
 }
 
-// ─── Créer un nouveau bail (logement sans bail) ─────────────────────────
+// ─── Créer un nouveau bail ──────────────────────────────────────────────
 
 function CreerBailModal({
   r,
@@ -688,8 +760,9 @@ function CreerBailModal({
         <div className="grid gap-3 p-5">
           <p className="text-xs text-white/60">
             {r.immeuble_name} · Log. {r.logement_numero} — le bail sera
-            « proposé » : importe ensuite le PDF signé (CORPIQ) pour le
-            rendre actif.
+            « proposé » et la carte apparaît au kanban Locations
+            (« Bail à envoyer ») : importe ensuite le PDF signé (CORPIQ)
+            pour le rendre actif.
           </p>
           <div className="flex gap-1.5">
             <button

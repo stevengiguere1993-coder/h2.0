@@ -8,7 +8,9 @@ type Point = { x: number; y: number };
 /**
  * A lightweight signature pad that captures a drawn signature and
  * exposes it as a PNG data URL via `onChange`. No external dependency,
- * handles touch, mouse and pen input. Clears on orientation/size change.
+ * handles touch, mouse and pen input. Le tracé SURVIT aux resize de
+ * hauteur seule (barre d'adresse / clavier virtuel mobile) et est
+ * redessiné quand la largeur change vraiment (rotation).
  */
 export function SignaturePad({
   onChange,
@@ -24,6 +26,10 @@ export function SignaturePad({
   const drawingRef = useRef(false);
   const lastRef = useRef<Point | null>(null);
   const [empty, setEmpty] = useState(true);
+  // Vérité synchrone (l'état React peut être en retard d'un rendu à la
+  // fin d'un trait rapide sur mobile — onUp raterait l'enregistrement).
+  const emptyRef = useRef(true);
+  const lastWidthRef = useRef(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -31,11 +37,12 @@ export function SignaturePad({
     const parent = canvas.parentElement;
     if (!parent) return;
 
-    function resize() {
+    function setup(preserveDataUrl: string | null) {
       if (!canvas || !parent) return;
       const dpr = window.devicePixelRatio || 1;
       const w = parent.clientWidth;
       const h = height;
+      lastWidthRef.current = w;
       canvas.width = Math.floor(w * dpr);
       canvas.height = Math.floor(h * dpr);
       canvas.style.width = `${w}px`;
@@ -48,13 +55,36 @@ export function SignaturePad({
         ctx.lineWidth = 2;
         ctx.strokeStyle = "#ffffff";
       }
-      setEmpty(true);
-      onChange(null);
+      if (preserveDataUrl && ctx) {
+        const img = new Image();
+        img.onload = () => {
+          ctx.drawImage(img, 0, 0, w, h);
+        };
+        img.src = preserveDataUrl;
+      } else {
+        emptyRef.current = true;
+        setEmpty(true);
+        onChange(null);
+      }
     }
 
-    resize();
-    window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
+    setup(null);
+
+    function onResize() {
+      if (!canvas || !parent) return;
+      // Resize de hauteur seule (mobile : barre d'adresse qui se
+      // rétracte au scroll, clavier virtuel) → ne JAMAIS effacer la
+      // signature en cours.
+      if (Math.abs(parent.clientWidth - lastWidthRef.current) < 2) return;
+      const preserve =
+        !emptyRef.current && canvas.width > 0
+          ? canvas.toDataURL("image/png")
+          : null;
+      setup(preserve);
+    }
+
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
     // onChange purposely omitted — we reset only on real viewport changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [height]);
@@ -86,7 +116,10 @@ export function SignaturePad({
     ctx.lineTo(p.x, p.y);
     ctx.stroke();
     lastRef.current = p;
-    if (empty) setEmpty(false);
+    if (emptyRef.current) {
+      emptyRef.current = false;
+      setEmpty(false);
+    }
   }
   function onUp(e: React.PointerEvent<HTMLCanvasElement>) {
     if (!drawingRef.current) return;
@@ -94,7 +127,9 @@ export function SignaturePad({
     const canvas = canvasRef.current;
     canvas?.releasePointerCapture(e.pointerId);
     lastRef.current = null;
-    if (canvas && !empty) onChange(canvas.toDataURL("image/png"));
+    if (canvas && !emptyRef.current) {
+      onChange(canvas.toDataURL("image/png"));
+    }
   }
 
   function clear() {
@@ -103,6 +138,7 @@ export function SignaturePad({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    emptyRef.current = true;
     setEmpty(true);
     onChange(null);
   }

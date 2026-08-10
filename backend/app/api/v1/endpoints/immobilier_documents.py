@@ -300,6 +300,25 @@ async def delete_document(
 
     from app.models.immobilier import BailRenouvellement, Releve31
 
+    # Garde-fou (audit 2026-07-31) : le PDF courant d'un bail ACTIF ne
+    # se supprime pas — il se REMPLACE (l'activation venait de lui).
+    if d.type == "bail":
+        proprietaire = (
+            await db.execute(
+                select(Bail).where(
+                    Bail.document_id == doc_id,
+                    Bail.status == "actif",
+                )
+            )
+        ).scalars().first()
+        if proprietaire is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Ce PDF est le bail courant d'un bail ACTIF — "
+                    "utilise « Remplacer » pour le corriger."
+                ),
+            )
     await db.execute(
         _update(Bail)
         .where(Bail.document_id == doc_id)
@@ -772,6 +791,29 @@ async def upload_bail_document(
     # logement est considéré loué par ce locataire (retour Phil
     # 2026-07-31).
     if bail.status == "propose":
+        # Jamais deux baux ACTIFS qui se chevauchent sur le même
+        # logement (audit 2026-07-31).
+        chevauche = (
+            await db.execute(
+                select(Bail).where(
+                    Bail.logement_id == bail.logement_id,
+                    Bail.id != bail.id,
+                    Bail.status == "actif",
+                    Bail.date_debut <= bail.date_fin,
+                    Bail.date_fin >= bail.date_debut,
+                )
+            )
+        ).scalars().first()
+        if chevauche is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Un bail ACTIF chevauche ces dates sur ce logement "
+                    f"(fin le {chevauche.date_fin}) — termine-le "
+                    "(résiliation) ou corrige les dates du nouveau "
+                    "bail avant d'importer."
+                ),
+            )
         bail.status = "actif"
     try:
         from app.models.immobilier import (

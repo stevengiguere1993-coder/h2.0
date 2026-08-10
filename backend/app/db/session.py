@@ -2047,6 +2047,7 @@ async def init_db() -> None:
             ("imm_baux", "signature_opened_at", "TIMESTAMP WITH TIME ZONE"),
             ("imm_locataires", "ancienne_adresse", "VARCHAR(500)"),
             ("imm_location_visites", "locataire_id", "INTEGER"),
+            ("imm_location_dossiers", "locataire_cree", "BOOLEAN"),
             # Valeurs par defaut des soumissions devis_dev (juin 2026) :
             # fonctionnalites par defaut (pre-remplissent CHAQUE nouveau
             # module) + taches du charge de projet par defaut (pre-remplies a

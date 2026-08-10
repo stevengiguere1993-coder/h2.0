@@ -607,6 +607,13 @@ async def envoyer_renouvellement(
     bail = await db.get(Bail, bail_id)
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
+    # Garde-fou (audit 2026-07-31) : pas d'avis de renouvellement sur
+    # un bail résilié/terminé/proposé.
+    if bail.status != BailStatus.ACTIF.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Ce bail n'est pas actif — aucun avis à envoyer.",
+        )
 
     # Calcul du nouveau loyer selon le mode choisi — TOUJOURS arrondi
     # au dollar supérieur (retour Phil 2026-07-30). Le loyer actuel
@@ -884,8 +891,9 @@ class ResilierResult(BaseModel):
 def _pdf_avis_resiliation(
     locataire_nom: str, adresse: str, logement_numero: str, date_fin: date
 ) -> bytes:
-    """Lettre « Avis de fin de bail » (résiliation avant terme convenue —
-    art. 1975 C.c.Q.), générée et transmise par courriel (v15)."""
+    """« Entente de résiliation de bail » (résiliation d'un commun
+    accord — art. 1971 C.c.Q.) : PDF transmis pour SIGNATURE EN LIGNE
+    avec suivi d'ouverture (v16)."""
     import io as _io
 
     from reportlab.lib.pagesizes import letter
@@ -898,11 +906,13 @@ def _pdf_avis_resiliation(
     x = 25 * mm
     y = h - 30 * mm
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(x, y, "Avis de fin de bail")
+    c.drawString(x, y, "Entente de résiliation de bail")
     y -= 6 * mm
     c.setFont("Helvetica", 10)
     c.setFillGray(0.35)
-    c.drawString(x, y, "Résiliation de bail — Horizon Services Immobiliers")
+    c.drawString(
+        x, y, "Résiliation d'un commun accord — Horizon Services Immobiliers"
+    )
     c.setFillGray(0.0)
     y -= 4 * mm
     c.setLineWidth(0.8)
@@ -913,13 +923,16 @@ def _pdf_avis_resiliation(
         f"Locataire : {locataire_nom or '—'}",
         f"Logement : {logement_numero or '—'} — {adresse or '—'}",
         "",
-        f"Le bail du logement ci-dessus prend fin le {date_fin.isoformat()}.",
+        "Les parties conviennent de mettre fin au bail du logement",
+        f"ci-dessus le {date_fin.isoformat()} (résiliation d'un commun",
+        "accord — art. 1971 C.c.Q.).",
         "",
         "Le logement devra être libéré et remis en bon état à cette date.",
         "Le dépôt et les ajustements finaux, s'il y a lieu, seront traités",
         "après l'état des lieux.",
         "",
-        "Pour toute question, répondez simplement à ce courriel.",
+        "La signature du locataire se fait EN LIGNE via le lien reçu par",
+        "courriel — elle vaut acceptation de la présente entente.",
         "",
         "Horizon Services Immobiliers",
     ):
@@ -930,24 +943,23 @@ def _pdf_avis_resiliation(
     return buf.getvalue()
 
 
-async def _envoyer_avis_resiliation(db, bail, date_fin: date, user) -> bool:
-    """Génère l'avis (PDF au dossier) et l'envoie par courriel au
-    locataire avec l'expéditeur par défaut de Communications."""
-    from app.api.v1.endpoints.immobilier_communications import (
-        expediteur_defaut,
+async def _envoyer_entente_resiliation(db, bail, date_fin: date, user) -> bool:
+    """Génère l'ENTENTE de résiliation (PDF au dossier, date de fin
+    dans les params) et l'envoie pour SIGNATURE EN LIGNE — suivi
+    d'ouverture et de signature comme les avis de renouvellement. À la
+    signature, public_document résilie le bail et ouvre la relocation."""
+    from app.api.v1.endpoints.immobilier_documents import (
+        EnvoyerSignatureRequest,
+        envoyer_signature,
+        save_document,
     )
-    from app.api.v1.endpoints.immobilier_documents import save_document
-    from app.integrations.email_graph import EmailAttachment, get_mailer
     from app.models.immobilier import Immeuble, Locataire, Logement
 
     locataire = await db.get(Locataire, bail.locataire_id)
     if locataire is None or not (locataire.email or "").strip():
         raise RuntimeError(
-            "Le locataire n'a pas de courriel — avis non transmis."
+            "Le locataire n'a pas de courriel — entente non transmise."
         )
-    mailer = get_mailer()
-    if not mailer.ready:
-        raise RuntimeError("Le courriel n'est pas configuré (Graph).")
     lg = await db.get(Logement, bail.logement_id)
     im = await db.get(Immeuble, lg.immeuble_id) if lg else None
     adresse = (
@@ -963,39 +975,19 @@ async def _envoyer_avis_resiliation(db, bail, date_fin: date, user) -> bool:
         locataire_id=locataire.id,
         immeuble_id=im.id if im else None,
         doc_type="avis_resiliation",
-        titre=f"Avis de fin de bail — {date_fin.isoformat()}",
+        titre=f"Entente de résiliation — fin le {date_fin.isoformat()}",
         params={"date_fin": date_fin.isoformat()},
         pdf=pdf,
         created_by_email=getattr(user, "email", None),
     )
-    from_email, from_name, reply_to = await expediteur_defaut()
-    first = (locataire.full_name or "").strip().split(" ")[0] or "Bonjour"
-    await mailer.send(
-        to=[locataire.email.strip()],
-        subject="Avis de fin de bail — Horizon Services Immobiliers",
-        html_body=(
-            '<div style="font-family:Helvetica,Arial,sans-serif;color:#111;'
-            'line-height:1.5;max-width:640px">'
-            f"<p>Bonjour {first},</p>"
-            "<p>Veuillez trouver ci-joint l'avis de fin de votre bail, "
-            f"effective le <strong>{date_fin.isoformat()}</strong>.</p>"
-            "<p>Pour toute question, répondez simplement à ce courriel.</p>"
-            '<p style="margin:24px 0 0 0;color:#555;font-size:12px">'
-            "Horizon Services Immobiliers</p></div>"
-        ),
-        reply_to=reply_to or from_email or mailer.sender,
-        from_email=from_email,
-        from_name=from_name,
-        attachments=[
-            EmailAttachment(
-                name="avis-fin-de-bail.pdf",
-                content_bytes=pdf,
-                content_type="application/pdf",
-            )
-        ],
+    await db.flush()
+    # Envoi pour SIGNATURE (page publique + suivi ouvert/signé).
+    await envoyer_signature(
+        doc_id=doc.id,
+        payload=EnvoyerSignatureRequest(),
+        db=db,
+        user=user,
     )
-    doc.envoye_le = datetime.now(timezone.utc)
-    doc.envoye_a = locataire.email.strip()[:320]
     return True
 
 
@@ -1020,6 +1012,33 @@ async def resilier_bail(
             status_code=400,
             detail="Seul un bail actif peut être résilié.",
         )
+    # v16 — mode ENTENTE : rien ne se résilie tout de suite. L'entente
+    # part pour signature en ligne ; la page Baux passe la ligne en
+    # ROUGE « résiliation en cours » ; à la signature du locataire, le
+    # bail se résilie à la date convenue et la relocation s'ouvre
+    # (hook public_document).
+    if payload.envoyer_avis:
+        try:
+            await _envoyer_entente_resiliation(
+                db, bail, payload.date_fin, user
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Envoi de l'entente échoué : {exc}",
+            )
+        await db.commit()
+        log.info(
+            "Entente de résiliation envoyée (bail %s, fin %s) par %s",
+            bail_id, payload.date_fin, user.email,
+        )
+        return ResilierResult(
+            bail_id=bail_id,
+            date_fin=payload.date_fin,
+            statut="resiliation_en_cours",
+            relocation_ouverte=False,
+            avis_envoye=True,
+        )
     bail.status = BailStatus.RESILIE.value
     bail.date_fin = payload.date_fin
     reloc = False
@@ -1043,16 +1062,6 @@ async def resilier_bail(
                 )
             )
             reloc = True
-    avis_envoye = False
-    avis_erreur = None
-    if payload.envoyer_avis:
-        try:
-            avis_envoye = await _envoyer_avis_resiliation(
-                db, bail, payload.date_fin, user
-            )
-        except Exception as exc:  # noqa: BLE001 — best-effort
-            avis_erreur = str(exc)[:200]
-            log.exception("Avis de résiliation bail %s", bail_id)
     await db.commit()
     log.info(
         "Bail %s résilié au %s par %s",
@@ -1063,8 +1072,6 @@ async def resilier_bail(
         date_fin=payload.date_fin,
         statut="resilie",
         relocation_ouverte=reloc,
-        avis_envoye=avis_envoye,
-        avis_erreur=avis_erreur,
     )
 
 
