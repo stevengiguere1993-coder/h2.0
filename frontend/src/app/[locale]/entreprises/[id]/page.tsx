@@ -48,6 +48,12 @@ type Entreprise = {
   monday_board_id: string | null;
   monday_board_name: string | null;
   is_parent_company?: boolean;
+  neq?: string | null;
+  tps_number?: string | null;
+  tvq_number?: string | null;
+  siege_social?: string | null;
+  date_constitution?: string | null;
+  notes_legales?: string | null;
 };
 
 type Tache = {
@@ -493,6 +499,9 @@ export default function EntrepriseDetailPage() {
 
         {/* Immobilier — portefeuille détenu par cette entreprise */}
         <EntrepriseImmobilierSection entrepriseId={ent.id} />
+
+        {/* Informations légales de la INC (hub — retour Phil 2026-08-10) */}
+        <LegalInfoSection ent={ent} onSaved={() => void load()} />
 
         {/* Partenaires + parts de détention */}
         <PartnersSection entrepriseId={ent.id} />
@@ -1102,6 +1111,208 @@ function ImmoKpi({
 }
 
 
+// ─── Informations légales de la INC (hub fiche entreprise) ─────────────
+
+function LegalInfoSection({
+  ent,
+  onSaved
+}: {
+  ent: Entreprise;
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [neq, setNeq] = useState("");
+  const [tps, setTps] = useState("");
+  const [tvq, setTvq] = useState("");
+  const [siege, setSiege] = useState("");
+  const [constitution, setConstitution] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function openEdit() {
+    setNeq(ent.neq || "");
+    setTps(ent.tps_number || "");
+    setTvq(ent.tvq_number || "");
+    setSiege(ent.siege_social || "");
+    setConstitution(ent.date_constitution || "");
+    setNotes(ent.notes_legales || "");
+    setErr(null);
+    setEditing(true);
+  }
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(`/api/v1/entreprises/${ent.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          neq: neq.trim() || null,
+          tps_number: tps.trim() || null,
+          tvq_number: tvq.trim() || null,
+          siege_social: siege.trim() || null,
+          date_constitution: constitution || null,
+          notes_legales: notes.trim() || null
+        })
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      setEditing(false);
+      onSaved();
+    } catch (e2) {
+      setErr((e2 as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const rows: Array<[string, string | null | undefined]> = [
+    ["NEQ", ent.neq],
+    ["Numéro TPS", ent.tps_number],
+    ["Numéro TVQ", ent.tvq_number],
+    ["Siège social", ent.siege_social],
+    ["Date de constitution", ent.date_constitution]
+  ];
+
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+            Informations légales
+          </h2>
+          <p className="mt-0.5 text-[11px] text-white/50">
+            NEQ, taxes, siège social — tout ce qui est relié à la INC
+            et qui n&apos;est pas un document.
+          </p>
+        </div>
+        {!editing ? (
+          <button
+            type="button"
+            onClick={openEdit}
+            className="btn-secondary btn-sm"
+          >
+            <Pencil className="h-3.5 w-3.5" /> Modifier
+          </button>
+        ) : null}
+      </div>
+
+      {!editing ? (
+        <>
+          <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
+            {rows.map(([label, value]) => (
+              <div key={label}>
+                <dt className="text-[11px] uppercase tracking-wide text-white/45">
+                  {label}
+                </dt>
+                <dd className="text-sm font-medium text-white">
+                  {value || "—"}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          {ent.notes_legales ? (
+            <p className="mt-3 whitespace-pre-wrap text-xs text-white/60">
+              {ent.notes_legales}
+            </p>
+          ) : null}
+        </>
+      ) : (
+        <form onSubmit={save} className="grid gap-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div>
+              <label className="label">NEQ</label>
+              <input
+                value={neq}
+                onChange={(e) => setNeq(e.target.value)}
+                className="input"
+                placeholder="ex. 1234567890"
+              />
+            </div>
+            <div>
+              <label className="label">Numéro TPS</label>
+              <input
+                value={tps}
+                onChange={(e) => setTps(e.target.value)}
+                className="input"
+                placeholder="ex. 123456789 RT0001"
+              />
+            </div>
+            <div>
+              <label className="label">Numéro TVQ</label>
+              <input
+                value={tvq}
+                onChange={(e) => setTvq(e.target.value)}
+                className="input"
+                placeholder="ex. 1234567890 TQ0001"
+              />
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Siège social</label>
+              <input
+                value={siege}
+                onChange={(e) => setSiege(e.target.value)}
+                className="input"
+                placeholder="Adresse complète du siège social"
+              />
+            </div>
+            <div>
+              <label className="label">Date de constitution</label>
+              <input
+                type="date"
+                value={constitution}
+                onChange={(e) => setConstitution(e.target.value)}
+                className="input"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="label">Autres infos légales</label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              className="input"
+              placeholder="Régime, fin d'année financière, actions émises, conventions…"
+            />
+          </div>
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {err}
+            </p>
+          ) : null}
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setEditing(false)}
+              className="btn-secondary text-sm"
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
+            >
+              {saving ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                "Enregistrer"
+              )}
+            </button>
+          </div>
+        </form>
+      )}
+    </section>
+  );
+}
+
 const PARTNER_ROLES = [
   { value: "associe", label: "Associé" },
   { value: "administrateur", label: "Administrateur" },
@@ -1121,6 +1332,9 @@ type Partner = {
   partner_notes?: string | null;
   partner_name?: string | null;
   partner_email?: string | null;
+  partner_adresse?: string | null;
+  partner_naissance?: string | null;
+  partner_telephone?: string | null;
 };
 
 function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
@@ -1221,6 +1435,21 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
                     <span className="ml-2 text-emerald-300">· compte portail</span>
                   ) : null}
                 </p>
+                {p.partner_adresse ||
+                p.partner_telephone ||
+                p.partner_naissance ? (
+                  <p className="text-[11px] text-white/50">
+                    {[
+                      p.partner_adresse,
+                      p.partner_telephone,
+                      p.partner_naissance
+                        ? `né(e) le ${p.partner_naissance}`
+                        : null
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                ) : null}
                 {p.partner_notes ? (
                   <p className="mt-1 text-[11px] text-white/60">{p.partner_notes}</p>
                 ) : null}
@@ -1292,6 +1521,13 @@ function PartnerModal({
   const [partnerEmail, setPartnerEmail] = useState(
     existing?.partner_email || ""
   );
+  const [adresse, setAdresse] = useState(existing?.partner_adresse || "");
+  const [naissance, setNaissance] = useState(
+    existing?.partner_naissance || ""
+  );
+  const [telephone, setTelephone] = useState(
+    existing?.partner_telephone || ""
+  );
   const [role, setRole] = useState(existing?.role || "associe");
   const [pct, setPct] = useState(
     existing?.ownership_pct != null ? String(existing.ownership_pct) : ""
@@ -1310,6 +1546,9 @@ function PartnerModal({
         role,
         partner_name: partnerName.trim() || null,
         partner_email: partnerEmail.trim() || null,
+        partner_adresse: adresse.trim() || null,
+        partner_naissance: naissance || null,
+        partner_telephone: telephone.trim() || null,
         partner_notes: notes.trim() || null,
         ownership_pct: pct.trim() ? Number(pct) : null
       };
@@ -1374,6 +1613,35 @@ function PartnerModal({
                   </option>
                 ))}
               </select>
+            </div>
+          </div>
+          <div>
+            <label className="label">Adresse</label>
+            <input
+              value={adresse}
+              onChange={(e) => setAdresse(e.target.value)}
+              className="input"
+              placeholder="Adresse personnelle complète"
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Date de naissance</label>
+              <input
+                type="date"
+                value={naissance}
+                onChange={(e) => setNaissance(e.target.value)}
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="label">Téléphone</label>
+              <input
+                value={telephone}
+                onChange={(e) => setTelephone(e.target.value)}
+                className="input"
+                placeholder="ex. 514 555-0199"
+              />
             </div>
           </div>
           <div>

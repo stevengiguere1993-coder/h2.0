@@ -444,6 +444,16 @@ async def ensure_critical_columns() -> None:
             "mandataire_open_count",
             "INTEGER NOT NULL DEFAULT 0",
         ),
+        # Hub fiche entreprise (2026-08-10) : infos légales de la INC
+        # + coordonnées des partenaires/actionnaires.
+        ("entreprises", "tps_number", "VARCHAR(32)"),
+        ("entreprises", "tvq_number", "VARCHAR(32)"),
+        ("entreprises", "siege_social", "VARCHAR(500)"),
+        ("entreprises", "date_constitution", "DATE"),
+        ("entreprises", "notes_legales", "TEXT"),
+        ("entreprise_partners", "partner_adresse", "VARCHAR(500)"),
+        ("entreprise_partners", "partner_naissance", "DATE"),
+        ("entreprise_partners", "partner_telephone", "VARCHAR(32)"),
     )
     for table, column, col_type in critical_columns:
         try:
