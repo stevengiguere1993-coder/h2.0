@@ -339,7 +339,7 @@ export function DepensesNormaliseesSection() {
       icon={Calculator}
       iconClass="bg-accent-500/15 text-accent-500"
       title="Dépenses normalisées (SCHL)"
-      subtitle="Barème SCHL : conciergerie, entretien, gestion, wifi/internet, thermopompe, seuil 12 log, taux d'inoccupation."
+      subtitle="Barème SCHL : conciergerie, entretien, gestion, wifi/internet, thermopompe, autres normalisations (% revenus), seuil 12 log, taux d'inoccupation."
       loading={loading}
       error={error}
       highlight

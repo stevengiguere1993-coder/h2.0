@@ -40,6 +40,9 @@ BAREME: Dict[str, float] = {
     "wifi_par_log":    5.0,
     "internet_fixe":   120.0,
     "thermopompe":     190.0,
+    # Août 2026 — « Autres normalisations » : % des revenus bruts
+    # (défaut 1 %), paramétrable comme le reste du barème.
+    "autres_normalisations_pct": 0.01,
 }
 
 # Seuil de bascule du barème des dépenses normalisées (concierge +
@@ -435,6 +438,10 @@ class DepensesBreakdown:
     wifi: float
     thermopompes: float
     autres: float
+    #: Août 2026 — « Autres normalisations » (% des revenus bruts,
+    #: défaut 1 %). Champ avec défaut pour rester compatible avec
+    #: tout appel existant du dataclass.
+    autres_normalisations: float = 0.0
 
     @property
     def total(self) -> float:
@@ -443,6 +450,7 @@ class DepensesBreakdown:
             + self.assurances + self.energie + self.concierge
             + self.entretien + self.gestion + self.wifi
             + self.thermopompes + self.autres
+            + self.autres_normalisations
         )
 
 
@@ -506,6 +514,13 @@ def compute_depenses_for_scenario(
         else bareme["gestion_gte12"]
     )
     gestion = gestion_pct * revenus_totaux
+    # « Autres normalisations » : même assiette que la gestion (% des
+    # revenus bruts). ``.get`` garde le moteur robuste si un override
+    # partiel omettait la clé.
+    autres_normalisations = (
+        float(bareme.get("autres_normalisations_pct", 0.01))
+        * revenus_totaux
+    )
 
     if is_refi:
         energie = energie_base * (1.0 - reduction_energie_pct)
@@ -537,6 +552,7 @@ def compute_depenses_for_scenario(
         wifi=wifi,
         thermopompes=thermopompes,
         autres=depenses_autres,
+        autres_normalisations=autres_normalisations,
     )
 
 

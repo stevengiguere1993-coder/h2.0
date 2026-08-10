@@ -2651,6 +2651,7 @@ type DepensesBreakdown = {
   wifi: number;
   thermopompes: number;
   autres: number;
+  autres_normalisations?: number;
 };
 
 type ScenarioResult = {
@@ -4066,6 +4067,7 @@ const DEPENSES_LABELS: Array<[keyof DepensesBreakdown, string]> = [
   ["gestion", "Gestion"],
   ["wifi", "WiFi"],
   ["thermopompes", "Thermopompes (APH)"],
+  ["autres_normalisations", "Autres normalisations (% × revenus)"],
   ["autres", "Autres dépenses"]
 ];
 
