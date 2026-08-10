@@ -2094,6 +2094,59 @@ function CashflowSection({
   //: Mois dépliés (détail par compte). "total" = la ligne Total.
   const [ouverts, setOuverts] = useState<Set<string>>(new Set());
 
+  //: Filtre par année (retour Phil 2026-08-10). "" = toute la période.
+  //: Les libellés de mois viennent de QuickBooks (« Jul 2025 ») —
+  //: l'année s'extrait du libellé.
+  const [annee, setAnnee] = useState("");
+  const annees = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (cashflow?.mois || []).map(
+            (m) => /(\d{4})/.exec(m.mois)?.[1] || ""
+          )
+        )
+      )
+        .filter(Boolean)
+        .sort()
+        .reverse(),
+    [cashflow]
+  );
+  //: Vue filtrée : mois retenus + ligne Total RECALCULÉE côté client
+  //: (le total du backend couvre toute la période).
+  const vue = useMemo((): Cashflow | null => {
+    if (!cashflow) return null;
+    if (!annee) return cashflow;
+    const mois = cashflow.mois.filter(
+      (m) => (/(\d{4})/.exec(m.mois)?.[1] || "") === annee
+    );
+    const somme = (f: (m: CashflowMois) => number) =>
+      Math.round(mois.reduce((a, m) => a + f(m), 0) * 100) / 100;
+    const parCompte = new Map<string, CashflowDetail>();
+    for (const m of mois) {
+      for (const d of m.details || []) {
+        const cle = `${d.type}|${d.nom}`;
+        const cur = parCompte.get(cle);
+        if (cur) {
+          cur.montant =
+            Math.round((cur.montant + d.montant) * 100) / 100;
+        } else {
+          parCompte.set(cle, { ...d });
+        }
+      }
+    }
+    return {
+      mois,
+      total: {
+        revenus: somme((m) => m.revenus),
+        depenses: somme((m) => m.depenses),
+        hypotheque: somme((m) => m.hypotheque || 0),
+        ecart: somme((m) => m.ecart),
+        details: Array.from(parCompte.values())
+      }
+    };
+  }, [cashflow, annee]);
+
   function basculer(cle: string) {
     setOuverts((prev) => {
       const next = new Set(prev);
@@ -2146,26 +2199,44 @@ function CashflowSection({
         backgroundColor: "var(--qg-card-bg)"
       }}
     >
-      <h3
-        className="flex items-center gap-1.5 text-sm font-semibold"
-        style={{ color: "var(--qg-text)" }}
-      >
-        <Scale className="h-4 w-4 text-accent-500" />
-        Cashflow
-        <span
-          className="text-xs font-normal"
-          style={{ color: "var(--qg-text-muted)" }}
+      <div className="flex items-center justify-between gap-2">
+        <h3
+          className="flex items-center gap-1.5 text-sm font-semibold"
+          style={{ color: "var(--qg-text)" }}
         >
-          par mois depuis l&apos;ouverture du projet
-          {projet.date_debut ? ` (${projet.date_debut})` : ""}
-        </span>
-      </h3>
+          <Scale className="h-4 w-4 text-accent-500" />
+          Cashflow
+          <span
+            className="text-xs font-normal"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            par mois depuis l&apos;ouverture du projet
+            {projet.date_debut ? ` (${projet.date_debut})` : ""}
+          </span>
+        </h3>
+        {annees.length > 1 ? (
+          <select
+            className="input"
+            style={{ width: "auto" }}
+            value={annee}
+            onChange={(e) => setAnnee(e.target.value)}
+            title="Filtrer le cashflow par année"
+          >
+            <option value="">Toutes les années</option>
+            {annees.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+        ) : null}
+      </div>
 
       {loading && !cashflow ? (
         <div className="flex items-center justify-center py-8">
           <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
         </div>
-      ) : !cashflow ? (
+      ) : !cashflow || !vue ? (
         <p className="mt-3 text-xs" style={{ color: "var(--qg-text-muted)" }}>
           Connecte le QuickBooks de l&apos;INC (⚙ de la section Budget)
           pour voir les revenus, dépenses et écarts mois par mois.
@@ -2195,7 +2266,7 @@ function CashflowSection({
               </tr>
             </thead>
             <tbody>
-              {cashflow.mois.map((m) => (
+              {vue.mois.map((m) => (
                 <React.Fragment key={m.mois}>
                   <tr
                     className="cursor-pointer border-t hover:bg-accent-500/5"
@@ -2270,35 +2341,35 @@ function CashflowSection({
                   className="py-2 pr-2 text-right tabular-nums"
                   style={{ color: "var(--qg-text)" }}
                 >
-                  {fmtMoney(cashflow.total.revenus)}
+                  {fmtMoney(vue.total.revenus)}
                 </td>
                 <td
                   className="py-2 pr-2 text-right tabular-nums"
                   style={{ color: "var(--qg-text)" }}
                 >
-                  {fmtMoney(cashflow.total.depenses)}
+                  {fmtMoney(vue.total.depenses)}
                 </td>
                 {hypCfg ? (
                   <td
                     className="py-2 pr-2 text-right tabular-nums"
                     style={{ color: "var(--qg-text)" }}
                   >
-                    {fmtMoney(cashflow.total.hypotheque || 0)}
+                    {fmtMoney(vue.total.hypotheque || 0)}
                   </td>
                 ) : null}
                 <td
                   className={`py-2 text-right tabular-nums ${
-                    cashflow.total.ecart < 0
+                    vue.total.ecart < 0
                       ? "text-rose-400"
                       : "text-emerald-400"
                   }`}
                 >
-                  {cashflow.total.ecart > 0 ? "+" : ""}
-                  {fmtMoney(cashflow.total.ecart)}
+                  {vue.total.ecart > 0 ? "+" : ""}
+                  {fmtMoney(vue.total.ecart)}
                 </td>
               </tr>
               {ouverts.has("total") ? (
-                <LigneDetails details={cashflow.total.details || []} />
+                <LigneDetails details={vue.total.details || []} />
               ) : null}
             </tbody>
           </table>
@@ -2306,6 +2377,9 @@ function CashflowSection({
             className="mt-2 text-[10px]"
             style={{ color: "var(--qg-text-muted)" }}
           >
+            {annee
+              ? `Année ${annee} — la ligne Total est recalculée sur les mois affichés. `
+              : ""}
             L&apos;écart total (positif ou négatif) se reflète dans le
             « Total dépensé » de l&apos;enveloppe Budget de détention.
             Source : rapport Profits et pertes de QuickBooks
@@ -2345,6 +2419,23 @@ function AvancesSection({
   const [loading, setLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ouverts, setOuverts] = useState<Set<string>>(new Set());
+
+  //: Filtre par année (retour Phil 2026-08-10). "" = toute la période.
+  const [annee, setAnnee] = useState("");
+  const annees = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (data?.comptes || []).flatMap((c) =>
+            c.mois.map((m) => /(\d{4})/.exec(m.mois)?.[1] || "")
+          )
+        )
+      )
+        .filter(Boolean)
+        .sort()
+        .reverse(),
+    [data]
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2403,14 +2494,32 @@ function AvancesSection({
             soldes et mouvements lus dans QuickBooks
           </span>
         </h3>
-        <button
-          type="button"
-          onClick={() => setSettingsOpen(true)}
-          className="btn-ghost btn-sm"
-          title="Choisir les comptes d'avances suivis"
-        >
-          <Settings2 className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-2">
+          {annees.length > 1 ? (
+            <select
+              className="input"
+              style={{ width: "auto" }}
+              value={annee}
+              onChange={(e) => setAnnee(e.target.value)}
+              title="Filtrer les mouvements par année"
+            >
+              <option value="">Toutes les années</option>
+              {annees.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            className="btn-ghost btn-sm"
+            title="Choisir les comptes d'avances suivis"
+          >
+            <Settings2 className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {loading && !data ? (
@@ -2429,7 +2538,13 @@ function AvancesSection({
         </p>
       ) : data ? (
         <div className="mt-3 space-y-2">
-          {data.comptes.map((c) => (
+          {data.comptes.map((c) => {
+            const moisAffiches = annee
+              ? c.mois.filter(
+                  (m) => (/(\d{4})/.exec(m.mois)?.[1] || "") === annee
+                )
+              : c.mois;
+            return (
             <div
               key={c.id}
               className="rounded-lg border"
@@ -2459,12 +2574,14 @@ function AvancesSection({
                 </span>
               </button>
               {ouverts.has(c.id) ? (
-                c.mois.length === 0 ? (
+                moisAffiches.length === 0 ? (
                   <p
                     className="px-3 pb-2 text-[11px]"
                     style={{ color: "var(--qg-text-muted)" }}
                   >
-                    Aucun mouvement sur la période du projet.
+                    {annee
+                      ? `Aucun mouvement en ${annee}.`
+                      : "Aucun mouvement sur la période du projet."}
                   </p>
                 ) : (
                   <div className="overflow-x-auto px-3 pb-2">
@@ -2482,7 +2599,7 @@ function AvancesSection({
                         </tr>
                       </thead>
                       <tbody>
-                        {c.mois.map((m) => (
+                        {moisAffiches.map((m) => (
                           <tr
                             key={m.mois}
                             className="border-t"
@@ -2527,7 +2644,8 @@ function AvancesSection({
                 )
               ) : null}
             </div>
-          ))}
+            );
+          })}
           <div
             className="flex items-center justify-between border-t px-1 pt-2 text-sm font-semibold"
             style={{

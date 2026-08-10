@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Building2,
   Check,
@@ -45,7 +45,7 @@ type Transaction = {
   facturable: boolean;
   facturable_des?: string | null;
   dossier_id?: number | null;
-  //: Identifiant local d'un frais manuel (brouillon côté client).
+  //: Id du frais manuel persisté (table imm_frais_manuels_gestion).
   uid?: number;
 };
 
@@ -96,7 +96,7 @@ type PanierLigne = {
   mois?: string;
   dossier_id?: number;
   libelle?: string;
-  //: uid du brouillon de frais manuel (retiré de la liste une fois facturé).
+  //: id BD du frais manuel persisté (consommé par la facturation).
   manuelUid?: number;
   label: string;
   revenus: number;
@@ -153,17 +153,14 @@ export default function FacturationImmoPage() {
   const [panier, setPanier] = useState<PanierLigne[]>([]);
   const [creating, setCreating] = useState(false);
 
-  // Frais manuels (bouton à droite des filtres) : des BROUILLONS locaux
-  // qui apparaissent comme transactions dans la carte du client — même
-  // principe qu'un frais de gestion (« Ajouter » → panier).
+  // Frais manuels (bouton à droite des filtres) : PERSISTÉS côté
+  // serveur (retour Phil 2026-08-10) — ils restent dans la carte du
+  // client même après avoir quitté la page, jusqu'à facturation.
   const [manuelOpen, setManuelOpen] = useState(false);
   const [manuelImmeuble, setManuelImmeuble] = useState("");
   const [manuelLibelle, setManuelLibelle] = useState("");
   const [manuelMontant, setManuelMontant] = useState("");
-  const [fraisManuels, setFraisManuels] = useState<
-    { uid: number; immeuble_id: number; libelle: string; montant: number }[]
-  >([]);
-  const manuelSeq = useRef(0);
+  const [manuelSaving, setManuelSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -263,9 +260,10 @@ export default function FacturationImmoPage() {
     ]);
   };
 
-  /** Crée un BROUILLON de frais manuel — il apparaît dans la carte du
-   *  client, prêt à être ajouté à la facture comme les autres. */
-  const ajouterFraisManuel = () => {
+  /** Enregistre le frais manuel côté serveur — il apparaît dans la
+   *  carte du client (et y RESTE même après un rechargement), prêt à
+   *  être ajouté à la facture comme les autres. */
+  const ajouterFraisManuel = async () => {
     const row = (data?.rows || []).find(
       (r) => String(r.immeuble_id) === manuelImmeuble
     );
@@ -284,46 +282,53 @@ export default function FacturationImmoPage() {
       return;
     }
     setMsg(null);
-    manuelSeq.current += 1;
-    setFraisManuels((prev) => [
-      ...prev,
-      {
-        uid: manuelSeq.current,
-        immeuble_id: row.immeuble_id,
-        libelle,
-        montant
+    setManuelSaving(true);
+    try {
+      const r = await authedFetch(
+        "/api/v1/immobilier/frais-gestion/frais-manuels",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            immeuble_id: row.immeuble_id,
+            libelle,
+            montant
+          })
+        }
+      );
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        throw new Error(
+          (d && (d.detail || d.message)) || `Erreur ${r.status}`
+        );
       }
-    ]);
-    setManuelLibelle("");
-    setManuelMontant("");
-    setManuelOpen(false);
+      setManuelLibelle("");
+      setManuelMontant("");
+      setManuelOpen(false);
+      await load();
+    } catch (e: any) {
+      setMsg({
+        ok: false,
+        text: e?.message || "Enregistrement du frais impossible"
+      });
+    } finally {
+      setManuelSaving(false);
+    }
   };
 
-  const supprimerFraisManuel = (uid: number) => {
-    setFraisManuels((prev) => prev.filter((f) => f.uid !== uid));
+  const supprimerFraisManuel = async (uid: number) => {
     retirerDuPanier(`m-${uid}`);
+    await authedFetch(
+      `/api/v1/immobilier/frais-gestion/frais-manuels/${uid}`,
+      { method: "DELETE" }
+    );
+    await load();
   };
-
-  const manuelsDe = (row: Row): Transaction[] =>
-    fraisManuels
-      .filter((f) => f.immeuble_id === row.immeuble_id)
-      .map((f) => ({
-        mois: "",
-        label: f.libelle,
-        revenus: 0,
-        montant: f.montant,
-        type: "manuel" as const,
-        facturable: true,
-        uid: f.uid
-      }));
 
   const toutAjouter = (rows: Row[]) => {
     for (const row of rows) {
       for (const tx of row.a_facturer || []) {
         if (tx.facturable) ajouterAuPanier(row, tx);
-      }
-      for (const tx of manuelsDe(row)) {
-        ajouterAuPanier(row, tx);
       }
     }
   };
@@ -375,6 +380,8 @@ export default function FacturationImmoPage() {
               dossier_id:
                 l.kind === "relocation" ? l.dossier_id : undefined,
               libelle: l.kind === "manuel" ? l.libelle : undefined,
+              frais_manuel_id:
+                l.kind === "manuel" ? l.manuelUid : undefined,
               montant: num(l.montant)
             }))
           })
@@ -390,15 +397,6 @@ export default function FacturationImmoPage() {
           ? `Facture du mois ${d.doc_number ? `#${d.doc_number} ` : ""}démarrée dans QuickBooks pour ${panierClient.name} : ${d.nb_lignes} ligne${d.nb_lignes > 1 ? "s" : ""}, ${money(d.total)} + taxes. Elle reste ouverte — les prochains frais du mois s'y ajouteront.`
           : `${d.nb_lignes} ligne${d.nb_lignes > 1 ? "s" : ""} (${money(d.total)} + taxes) ajoutée${d.nb_lignes > 1 ? "s" : ""} à la facture du mois ${d.doc_number ? `#${d.doc_number} ` : ""}de ${panierClient.name} dans QuickBooks.`
       });
-      // Les brouillons de frais manuels facturés disparaissent des cartes.
-      const factures = panier
-        .filter((l) => l.kind === "manuel" && l.manuelUid != null)
-        .map((l) => l.manuelUid as number);
-      if (factures.length) {
-        setFraisManuels((prev) =>
-          prev.filter((f) => !factures.includes(f.uid))
-        );
-      }
       viderPanier();
       await load();
     } catch (e: any) {
@@ -460,9 +458,8 @@ export default function FacturationImmoPage() {
   );
   const filtresActifs = Boolean(filtreClient || filtreImmeuble);
 
-  const totalSolde =
-    actifs.reduce((a, r) => a + (r.solde || 0), 0) +
-    fraisManuels.reduce((a, f) => a + f.montant, 0);
+  // Le solde serveur inclut désormais les frais manuels persistés.
+  const totalSolde = actifs.reduce((a, r) => a + (r.solde || 0), 0);
   const totalEnCours = actifs.reduce((a, r) => a + (r.a_venir || 0), 0);
 
   const dansPanier = (row: Row, tx: Transaction) =>
@@ -762,10 +759,16 @@ export default function FacturationImmoPage() {
               />
             </div>
             <button
-              className="btn-accent btn-xs"
-              onClick={ajouterFraisManuel}
+              className="btn-accent btn-xs disabled:opacity-50"
+              disabled={manuelSaving}
+              onClick={() => void ajouterFraisManuel()}
             >
-              <Plus className="h-3.5 w-3.5" /> Créer le frais
+              {manuelSaving ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Plus className="h-3.5 w-3.5" />
+              )}{" "}
+              Créer le frais
             </button>
           </div>
         )}
@@ -786,15 +789,13 @@ export default function FacturationImmoPage() {
             ) : (
               <div className="grid gap-4 lg:grid-cols-2">
                 {clientsAffiches.map(([clientId, grp]) => {
-                  const txs = grp.rows.flatMap((row) => [
-                    ...(row.a_facturer || []).map((tx) => ({ row, tx })),
-                    ...manuelsDe(row).map((tx) => ({ row, tx }))
-                  ]);
-                  const soldeClient =
-                    grp.rows.reduce((a, r) => a + (r.solde || 0), 0) +
-                    txs
-                      .filter(({ tx }) => tx.type === "manuel")
-                      .reduce((a, { tx }) => a + tx.montant, 0);
+                  const txs = grp.rows.flatMap((row) =>
+                    (row.a_facturer || []).map((tx) => ({ row, tx }))
+                  );
+                  const soldeClient = grp.rows.reduce(
+                    (a, r) => a + (r.solde || 0),
+                    0
+                  );
                   const enCoursClient = grp.rows.reduce(
                     (a, r) => a + (r.a_venir || 0),
                     0
@@ -961,7 +962,9 @@ export default function FacturationImmoPage() {
                                           className="rounded-lg p-1.5 text-white/40 transition hover:bg-rose-500/10 hover:text-rose-400"
                                           title="Supprimer ce frais manuel"
                                           onClick={() =>
-                                            supprimerFraisManuel(tx.uid!)
+                                            void supprimerFraisManuel(
+                                              tx.uid!
+                                            )
                                           }
                                         >
                                           <Trash2 className="h-3.5 w-3.5" />

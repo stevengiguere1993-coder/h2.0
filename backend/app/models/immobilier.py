@@ -1304,6 +1304,32 @@ class FactureGestion(Base):
     )
 
 
+class FraisManuelGestion(Base):
+    """Frais MANUEL de gestion EN ATTENTE de facturation (page
+    /immobilier/frais-gestion, retour Phil 2026-08-10) : saisi pendant
+    le mois, il persiste jusqu'à son ajout à la facture QuickBooks —
+    il devient alors une ligne ``FactureGestion`` (type 'manuel') et
+    la ligne d'attente est supprimée. Nouvelle table →
+    ensure_immobilier_aux_tables.
+    """
+
+    __tablename__ = "imm_frais_manuels_gestion"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    immeuble_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_immeubles.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    libelle: Mapped[str] = mapped_column(String(255), nullable=False)
+    montant: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class FactureExterne(Base, TimestampUpdateMixin):
     """FACTURE PONCTUELLE d'un immeuble en gestion externe (retour Phil
     2026-07-22, pt 11) : ex. la compagnie de gestion refacture 350 $ de

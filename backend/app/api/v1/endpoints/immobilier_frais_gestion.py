@@ -32,6 +32,7 @@ from app.models.automation_setting import AutomationSetting
 from app.models.immobilier import (
     Bail,
     FactureGestion,
+    FraisManuelGestion,
     Immeuble,
     LocationDossier,
     Logement,
@@ -323,6 +324,20 @@ async def overview(
     # Retour Phil 2026-07-23 : le mois EN COURS est VISIBLE (badge) mais
     # ne se facture qu'à partir du 1er du mois suivant — d'autres loyers
     # peuvent encore rentrer.
+    # Frais MANUELS en attente (persistés — retour Phil 2026-08-10) :
+    # saisis pendant le mois, ils restent affichés dans la carte du
+    # client jusqu'à leur facturation.
+    manuels_par_immeuble: Dict[int, list] = {}
+    for fm_row in (
+        await db.execute(
+            select(FraisManuelGestion).order_by(
+                FraisManuelGestion.created_at
+            )
+        )
+    ).scalars().all():
+        manuels_par_immeuble.setdefault(
+            int(fm_row.immeuble_id), []
+        ).append(fm_row)
     premier_mois_courant = datetime.now(timezone.utc).date().replace(day=1)
     if premier_mois_courant.month == 12:
         prochain_mois = premier_mois_courant.replace(
@@ -443,6 +458,29 @@ async def overview(
                         "facturable": True,
                         "facturable_des": None,
                         "dossier_id": dossier.id,
+                    }
+                )
+            # Frais manuels persistés de l'immeuble — facturables tout
+            # de suite (uid = id BD, consommé par facturer-groupe).
+            for fm in manuels_par_immeuble.get(imm.id, []):
+                mnt_fm = round(float(fm.montant or 0.0), 2)
+                if mnt_fm <= 0:
+                    continue
+                solde += mnt_fm
+                manques.append(
+                    {
+                        "mois": (
+                            fm.created_at.date().isoformat()
+                            if fm.created_at
+                            else premier_mois_courant.isoformat()
+                        ),
+                        "label": fm.libelle,
+                        "revenus": 0.0,
+                        "montant": mnt_fm,
+                        "type": "manuel",
+                        "facturable": True,
+                        "facturable_des": None,
+                        "uid": fm.id,
                     }
                 )
             manques.sort(key=lambda x: x["mois"])
@@ -757,6 +795,78 @@ async def facturer(
     )
 
 
+# ── Frais manuels persistés (retour Phil 2026-08-10) ──────────────────
+
+
+class FraisManuelIn(BaseModel):
+    immeuble_id: int
+    libelle: str = Field(min_length=1, max_length=255)
+    montant: float = Field(gt=0)
+
+
+class FraisManuelOut(BaseModel):
+    id: int
+    immeuble_id: int
+    libelle: str
+    montant: float
+
+
+@router.post("/frais-manuels", response_model=FraisManuelOut)
+async def creer_frais_manuel(
+    payload: FraisManuelIn, db: DBSession, user: CurrentUser
+) -> FraisManuelOut:
+    """Enregistre un frais manuel EN ATTENTE : il reste affiché dans
+    la carte du client (même après avoir quitté la page) jusqu'à son
+    ajout à une facture."""
+    if not await user_has_capability(db, user, "frais_gestion.facturer"):
+        raise HTTPException(
+            status_code=403, detail="Réservé aux gestionnaires"
+        )
+    imm = await db.get(Immeuble, payload.immeuble_id)
+    if not imm:
+        raise HTTPException(status_code=404, detail="Immeuble introuvable")
+    lib = payload.libelle.strip()
+    if not lib:
+        raise HTTPException(
+            status_code=422, detail="Décris le frais (libellé vide)."
+        )
+    fm = FraisManuelGestion(
+        immeuble_id=imm.id,
+        libelle=lib,
+        montant=round(float(payload.montant), 2),
+        created_by_user_id=user.id,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(fm)
+    await db.commit()
+    await db.refresh(fm)
+    return FraisManuelOut(
+        id=fm.id,
+        immeuble_id=fm.immeuble_id,
+        libelle=fm.libelle,
+        montant=float(fm.montant),
+    )
+
+
+@router.delete("/frais-manuels/{frais_id}")
+async def supprimer_frais_manuel(
+    frais_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    """Supprime un frais manuel en attente (jamais facturé)."""
+    if not await user_has_capability(db, user, "frais_gestion.facturer"):
+        raise HTTPException(
+            status_code=403, detail="Réservé aux gestionnaires"
+        )
+    fm = await db.get(FraisManuelGestion, frais_id)
+    if not fm:
+        raise HTTPException(
+            status_code=404, detail="Frais manuel introuvable"
+        )
+    await db.delete(fm)
+    await db.commit()
+    return {"ok": True}
+
+
 class LigneGroupeIn(BaseModel):
     immeuble_id: int
     #: Ligne « gestion » : 1er du mois de revenus facturé. Absent pour
@@ -766,6 +876,8 @@ class LigneGroupeIn(BaseModel):
     dossier_id: Optional[int] = None
     #: Ligne « manuel » : description libre du frais.
     libelle: Optional[str] = Field(default=None, max_length=255)
+    #: Ligne « manuel » persistée : id du frais en attente à consommer.
+    frais_manuel_id: Optional[int] = None
     #: Montant FINAL de la ligne — modifiable à la main dans le panier.
     montant: float = Field(gt=0)
 
@@ -848,6 +960,7 @@ async def facturer_groupe(
     details: List[Dict[str, Any]] = []
     vus: set = set()
     vus_dossiers: set = set()
+    vus_manuels: set = set()
     for ligne in payload.lignes:
         imm = await db.get(Immeuble, ligne.immeuble_id)
         if not imm:
@@ -926,6 +1039,36 @@ async def facturer_groupe(
                     status_code=422,
                     detail="Décris le frais manuel (libellé vide).",
                 )
+            # Frais manuel PERSISTÉ : vérifier qu'il existe encore (pas
+            # déjà facturé depuis un autre onglet) — il sera supprimé à
+            # la persistance de la facture.
+            fm = None
+            if ligne.frais_manuel_id is not None:
+                if ligne.frais_manuel_id in vus_manuels:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Ce frais manuel est déjà dans la facture.",
+                    )
+                vus_manuels.add(ligne.frais_manuel_id)
+                fm = await db.get(
+                    FraisManuelGestion, ligne.frais_manuel_id
+                )
+                if fm is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Ce frais manuel a déjà été facturé ou "
+                            "supprimé — recharge la page."
+                        ),
+                    )
+                if int(fm.immeuble_id) != imm.id:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "Ce frais manuel n'appartient pas à "
+                            f"« {imm.name} »."
+                        ),
+                    )
             details.append(
                 {
                     "imm": imm,
@@ -937,6 +1080,7 @@ async def facturer_groupe(
                     "dossier_id": None,
                     "libelle": lib,
                     "pct": 0.0,
+                    "frais_manuel": fm,
                 }
             )
             continue
@@ -1110,6 +1254,9 @@ async def facturer_groupe(
                 created_at=now,
             )
         )
+        # Frais manuel persisté consommé → retiré de la liste d'attente.
+        if d.get("frais_manuel") is not None:
+            await db.delete(d["frais_manuel"])
     await db.commit()
     log.info(
         "Facture mensuelle QBO %s %s — %d lignes (%.2f $)",

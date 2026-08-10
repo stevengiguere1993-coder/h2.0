@@ -12,7 +12,8 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { SearchSelect } from "@/components/search-select";
 import { useAppLayout } from "../layout";
-import { authedFetch } from "@/lib/auth";
+import { authedFetch, hasMinRole } from "@/lib/auth";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import { Link } from "@/i18n/navigation";
 import { projectLabel } from "@/lib/project";
 
@@ -120,6 +121,10 @@ function fmtDate(iso: string | null): string {
 
 export default function AchatsPage() {
   const { onOpenSidebar } = useAppLayout();
+  // Boutons QuickBooks réservés aux admins (retour Phil 2026-08-10) —
+  // les gestionnaires ne voient rien de la connexion/import QBO.
+  const { user } = useCurrentUser();
+  const isAdmin = hasMinRole(user, "admin");
   const [items, setItems] = useState<Achat[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
@@ -367,20 +372,22 @@ export default function AchatsPage() {
         searchPlaceholder="Référence, description…"
         rightSlot={
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={pullFromQbo}
-              disabled={pulling}
-              className="btn-secondary btn-sm disabled:opacity-50"
-              title="Importer dans Kratos les factures fournisseur saisies directement dans QuickBooks"
-            >
-              {pulling ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <CloudDownload className="h-4 w-4" />
-              )}
-              Importer de QB
-            </button>
+            {isAdmin ? (
+              <button
+                type="button"
+                onClick={pullFromQbo}
+                disabled={pulling}
+                className="btn-secondary btn-sm disabled:opacity-50"
+                title="Importer dans Kratos les factures fournisseur saisies directement dans QuickBooks"
+              >
+                {pulling ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <CloudDownload className="h-4 w-4" />
+                )}
+                Importer de QB
+              </button>
+            ) : null}
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/app/achats/new" as any}
