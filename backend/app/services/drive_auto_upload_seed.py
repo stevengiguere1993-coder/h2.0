@@ -120,6 +120,20 @@ _DEFAULT_RULES: list[dict[str, Any]] = [
             "l'immeuble."
         ),
     },
+    {
+        "name": "Document locatif signé → Immeuble",
+        "document_type": "document_locatif",
+        "entity_type": "Immeuble",
+        "subfolder_path_template": "Documents locatifs",
+        "file_name_template": "{titre}.pdf",
+        "overwrite_strategy": "keep_both",
+        "active": True,
+        "description": (
+            "Dépose le PDF signé (avis, consentements, documents "
+            "personnalisés) dans « Documents locatifs » du Drive de "
+            "l'immeuble."
+        ),
+    },
 ]
 
 

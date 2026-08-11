@@ -369,6 +369,49 @@ async def public_sign(
                     )
         except Exception:  # noqa: BLE001 — best-effort
             log.exception("Résiliation après signature (doc %s)", doc.id)
+    # Drive ↔ documents locatifs (v17b) : dépose la copie SIGNÉE dans le
+    # Drive de l'immeuble (règle auto-upload document_locatif/Immeuble)
+    # — best-effort, jamais bloquant. L'id Drive est retenu pour mettre
+    # la copie à la corbeille si le document est supprimé de Kratos.
+    try:
+        immeuble_id = doc.immeuble_id
+        if immeuble_id is None and doc.bail_id:
+            from app.models.immobilier import Logement
+
+            bail_d = await db.get(Bail, doc.bail_id)
+            lg_d = (
+                await db.get(Logement, bail_d.logement_id)
+                if bail_d is not None
+                else None
+            )
+            immeuble_id = lg_d.immeuble_id if lg_d else None
+        if immeuble_id is not None:
+            from app.services.drive_auto_upload_dispatcher import (
+                dispatch_auto_upload,
+            )
+
+            d_pdf = (
+                await db.execute(
+                    select(ImmDocument)
+                    .options(undefer(ImmDocument.pdf_blob))
+                    .where(ImmDocument.id == doc.id)
+                )
+            ).scalar_one()
+            if d_pdf.pdf_blob:
+                res = await dispatch_auto_upload(
+                    document_type="document_locatif",
+                    entity_type="Immeuble",
+                    entity_id=immeuble_id,
+                    user_id=None,
+                    file_bytes=d_pdf.pdf_blob,
+                    db=db,
+                    template_vars={"titre": doc.titre or "Document"},
+                    mime_type="application/pdf",
+                )
+                if res:
+                    doc.drive_file_id = res.get("id")
+    except Exception:  # noqa: BLE001 — la signature prime sur le Drive
+        log.exception("Dépôt Drive après signature échoué (doc %s)", doc.id)
     await db.commit()
     await db.refresh(doc)
     # Copie signée transmise APRÈS le commit — le résultat est affiché

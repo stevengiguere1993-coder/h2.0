@@ -380,6 +380,8 @@ async def ensure_critical_columns() -> None:
          "VARCHAR(16) NOT NULL DEFAULT 'genere'"),
         ("imm_documents", "filename", "VARCHAR(255)"),
         ("imm_documents", "remplace_document_id", "INTEGER"),
+        # Drive ↔ documents locatifs (v17b) : copie Drive du PDF signé.
+        ("imm_documents", "drive_file_id", "VARCHAR(128)"),
         # Locations v2 2026-07 : enquêtes de prélocation + candidat retenu
         # sur les visites (table créée au déploiement précédent SANS ces
         # colonnes → additif obligatoire ici).

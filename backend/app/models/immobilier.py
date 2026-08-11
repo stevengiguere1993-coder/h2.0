@@ -1165,6 +1165,12 @@ class ImmDocument(Base, TimestampUpdateMixin):
     signature_image_content_type: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
     )
+    #: Copie Drive du document (dépôt auto à la signature) — supprimée
+    #: en corbeille avec le document. Nouvelle colonne →
+    #: ensure_critical_columns.
+    drive_file_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
 
 
 class Releve31(Base, TimestampUpdateMixin):

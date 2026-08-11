@@ -179,6 +179,10 @@ const TAL_FORMS: {
     label: "Avis d'accès au logement",
     avecParams: true,
     sansSignature: true
+  },
+  {
+    code: "consentement_communications",
+    label: "Consentement communications électroniques"
   }
 ];
 
@@ -1101,7 +1105,13 @@ export function DocsList({
   }
 
   async function supprimer(d: BailDocument) {
-    if (!window.confirm(`Supprimer « ${d.titre} » ?`)) return;
+    if (
+      !window.confirm(
+        `Supprimer « ${d.titre} » ? (sa copie dans le Drive, s'il y en ` +
+          `a une, sera mise à la corbeille)`
+      )
+    )
+      return;
     setBusyId(d.id);
     setErr(null);
     try {

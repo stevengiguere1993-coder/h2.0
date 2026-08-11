@@ -848,6 +848,21 @@ async def convertir_dossier(
     locataire_id = locataire.id
     bail_id = bail.id
     await db.commit()
+
+    # Consentement aux communications électroniques (v17b) : généré et
+    # envoyé pour signature best-effort — un échec (courriel, PDF) ne
+    # bloque jamais la conversion.
+    try:
+        from app.api.v1.endpoints.immobilier_extras import (
+            envoyer_consentement_communications,
+        )
+
+        await envoyer_consentement_communications(db, bail_id, user)
+    except Exception:  # noqa: BLE001 — la conversion prime
+        log.exception(
+            "Envoi du consentement communications échoué (bail %s)", bail_id
+        )
+
     return ConvertirResult(
         locataire_id=locataire_id,
         bail_id=bail_id,

@@ -122,6 +122,12 @@ _TAL_LABELS = {
         "du locataire — s'envoie depuis Suivis annuels → Assurances. Le "
         "titre du gabarit = l'objet du courriel.",
     ),
+    "consentement_communications": (
+        "Consentement communications électroniques",
+        "Consentement du locataire à recevoir avis et documents par "
+        "courriel (RLRQ, c. C-1.1) — envoyé pour signature en ligne à "
+        "la création du bail.",
+    ),
 }
 
 
@@ -582,6 +588,53 @@ async def generate_bail_tal_pdf(
             "Content-Disposition": f'attachment; filename="{filename}"'
         },
     )
+
+
+async def envoyer_consentement_communications(db, bail_id: int, user) -> bool:
+    """Consentement aux communications électroniques (v17b) : génère le
+    PDF du gabarit pour le bail, l'archive au dossier puis l'envoie pour
+    SIGNATURE EN LIGNE si le locataire a un courriel. Appelé best-effort
+    à la création d'un bail (create_bail, convertir_dossier) — le
+    document est COMMITTÉ avant l'envoi pour survivre à un courriel en
+    échec (envoyer_signature commit lui-même et peut lever 502)."""
+    from app.api.v1.endpoints.immobilier_documents import (
+        EnvoyerSignatureRequest,
+        envoyer_signature,
+        save_document,
+    )
+
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        return False
+    ctx = await _build_ctx_from_bail(db, bail, TalFormRequest())
+    pdf = generate_tal_pdf(
+        "consentement_communications",
+        ctx,
+        gabarit=await _gabarit_override("consentement_communications"),
+    )
+    logement = await db.get(Logement, bail.logement_id)
+    label, _desc = _TAL_LABELS["consentement_communications"]
+    doc = await save_document(
+        db,
+        bail_id=bail.id,
+        locataire_id=bail.locataire_id,
+        immeuble_id=logement.immeuble_id if logement else None,
+        doc_type="consentement_communications",
+        titre=label,
+        params={},
+        pdf=pdf,
+        created_by_email=getattr(user, "email", None),
+    )
+    await db.commit()
+    locataire = await db.get(Locataire, bail.locataire_id)
+    if locataire is not None and (locataire.email or "").strip():
+        await envoyer_signature(
+            doc_id=doc.id,
+            payload=EnvoyerSignatureRequest(),
+            db=db,
+            user=user,
+        )
+    return True
 
 
 # ─── Renouvellements ──────────────────────────────────────────────────
