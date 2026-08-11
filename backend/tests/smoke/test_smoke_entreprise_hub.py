@@ -225,6 +225,29 @@ def test_inc_liee_comme_actionnaire(client, auth_headers):
     ).json()
     assert partners[0]["partner_neq"] == "9990001112"
 
+    # Sens INVERSE : le courriel saisi sur la ligne « actionnaire »
+    # remonte sur la FICHE de la holding (qui n'en avait pas).
+    client.patch(
+        f"/api/v1/entreprises/partners/{pa['id']}",
+        headers=auth_headers,
+        json={"partner_email": "info@holding-interco.com"},
+    )
+    ents2 = client.get(
+        "/api/v1/entreprises", headers=auth_headers
+    ).json()
+    hold = next(e for e in ents2 if e["id"] == holding)
+    assert hold["contact_email"] == "info@holding-interco.com"
+
+    # La fiche de la holding liste ses PARTICIPATIONS (sens inverse).
+    parts = client.get(
+        f"/api/v1/entreprises/{holding}/participations",
+        headers=auth_headers,
+    ).json()
+    assert any(
+        x["entreprise_id"] == filiale and x["ownership_pct"] == 100
+        for x in parts
+    )
+
     # Garde-fou : une compagnie ne peut pas être actionnaire d'elle-même.
     r2 = client.post(
         "/api/v1/entreprises/partners",

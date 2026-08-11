@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
@@ -56,7 +57,8 @@ async def _hydrate_partner(db, p: EntreprisePartner) -> PartnerRead:
         u = await db.get(User, p.user_id)
         out.display_email = u.email if u else None
     # Personne morale LIÉE à une de nos INCs : la fiche de la INC est la
-    # source de vérité (nom, NEQ, siège social) — pas de double saisie.
+    # source de vérité (nom, NEQ, siège social, contact) — pas de double
+    # saisie.
     if p.partner_entreprise_id:
         ent_liee = await db.get(Entreprise, p.partner_entreprise_id)
         if ent_liee is not None:
@@ -67,8 +69,40 @@ async def _hydrate_partner(db, p: EntreprisePartner) -> PartnerRead:
                 getattr(ent_liee, "siege_social", None)
                 or out.partner_adresse
             )
+            out.partner_email = (
+                getattr(ent_liee, "contact_email", None) or out.partner_email
+            )
+            out.partner_telephone = (
+                getattr(ent_liee, "contact_telephone", None)
+                or out.partner_telephone
+            )
+            out.display_email = out.partner_email
             out.is_personne_morale = True
     return out
+
+
+async def _remonter_contact_vers_fiche(
+    db, partner: EntreprisePartner
+) -> None:
+    """Sens INVERSE de l'interconnexion (retour Phil 2026-08-10) : les
+    coordonnées saisies sur une ligne « INC actionnaire » remontent sur
+    la FICHE de la INC quand celle-ci ne les a pas encore (fill-only —
+    on n'écrase jamais une fiche déjà remplie)."""
+    if not partner.partner_entreprise_id:
+        return
+    ent = await db.get(Entreprise, partner.partner_entreprise_id)
+    if ent is None:
+        return
+    if partner.partner_email and not getattr(ent, "contact_email", None):
+        ent.contact_email = partner.partner_email
+    if partner.partner_telephone and not getattr(
+        ent, "contact_telephone", None
+    ):
+        ent.contact_telephone = partner.partner_telephone
+    if partner.partner_adresse and not getattr(ent, "siege_social", None):
+        ent.siege_social = partner.partner_adresse
+    if partner.partner_neq and not ent.neq:
+        ent.neq = partner.partner_neq
 
 
 # ─── Partners ──────────────────────────────────────────────────────────
@@ -122,11 +156,62 @@ async def partners_annuaire(
             is_personne_morale=True,
             partner_neq=ent.neq,
             partner_adresse=getattr(ent, "siege_social", None),
+            partner_email=getattr(ent, "contact_email", None),
+            partner_telephone=getattr(ent, "contact_telephone", None),
             partner_entreprise_id=ent.id,
         )
         entry.display_name = ent.name
+        entry.display_email = entry.partner_email
         out.append(entry)
     return out
+
+
+class ParticipationRead(BaseModel):
+    """Une compagnie DONT cette INC est actionnaire (sens inverse de la
+    liste des partenaires)."""
+
+    entreprise_id: int
+    entreprise_name: str
+    ownership_pct: Optional[float] = None
+    role: str = "associe"
+
+
+@router.get(
+    "/{entreprise_id}/participations",
+    response_model=List[ParticipationRead],
+)
+async def list_participations(
+    entreprise_id: int, db: DBSession, user: CurrentUser
+) -> List[ParticipationRead]:
+    """Les compagnies dont CETTE INC est actionnaire (lignes partenaires
+    liées via partner_entreprise_id) — affichées sur sa fiche."""
+    _require_volet(user)
+    rows = (
+        await db.execute(
+            select(EntreprisePartner, Entreprise)
+            .join(
+                Entreprise,
+                Entreprise.id == EntreprisePartner.entreprise_id,
+            )
+            .where(
+                EntreprisePartner.partner_entreprise_id == entreprise_id
+            )
+            .order_by(Entreprise.name.asc())
+        )
+    ).all()
+    return [
+        ParticipationRead(
+            entreprise_id=ent.id,
+            entreprise_name=ent.name,
+            ownership_pct=(
+                float(p.ownership_pct)
+                if p.ownership_pct is not None
+                else None
+            ),
+            role=p.role or "associe",
+        )
+        for p, ent in rows
+    ]
 
 
 @router.get(
@@ -190,6 +275,9 @@ async def create_partner(
             obj.partner_name = cible.name
     db.add(obj)
     await db.flush()
+    # Coordonnées saisies ici → remontées sur la fiche de la INC liée
+    # si elle ne les a pas (interconnexion dans les deux sens).
+    await _remonter_contact_vers_fiche(db, obj)
     await db.refresh(obj)
     return await _hydrate_partner(db, obj)
 
@@ -277,6 +365,9 @@ async def update_partner(
         for s in await _memes_personnes(db, obj, old_name):
             for k, v in identity_changes.items():
                 setattr(s, k, v)
+    # Coordonnées saisies ici → remontées sur la fiche de la INC liée
+    # si elle ne les a pas (interconnexion dans les deux sens).
+    await _remonter_contact_vers_fiche(db, obj)
     await db.flush()
     await db.refresh(obj)
     return await _hydrate_partner(db, obj)

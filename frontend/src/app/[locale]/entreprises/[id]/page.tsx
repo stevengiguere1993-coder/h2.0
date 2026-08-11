@@ -60,6 +60,8 @@ type Entreprise = {
   fin_annee_financiere?: string | null;
   clicsequr_details?: string | null;
   notes_legales?: string | null;
+  contact_email?: string | null;
+  contact_telephone?: string | null;
 };
 
 type Tache = {
@@ -1138,6 +1140,8 @@ function LegalInfoSection({
   const [regime, setRegime] = useState("");
   const [finAnnee, setFinAnnee] = useState("");
   const [clicsequr, setClicsequr] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactTel, setContactTel] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1154,6 +1158,8 @@ function LegalInfoSection({
     setRegime(ent.regime_constitution || "");
     setFinAnnee(ent.fin_annee_financiere || "");
     setClicsequr(ent.clicsequr_details || "");
+    setContactEmail(ent.contact_email || "");
+    setContactTel(ent.contact_telephone || "");
     setNotes(ent.notes_legales || "");
     setErr(null);
     setEditing(true);
@@ -1178,6 +1184,8 @@ function LegalInfoSection({
           regime_constitution: regime.trim() || null,
           fin_annee_financiere: finAnnee.trim() || null,
           clicsequr_details: clicsequr.trim() || null,
+          contact_email: contactEmail.trim() || null,
+          contact_telephone: contactTel.trim() || null,
           notes_legales: notes.trim() || null
         })
       });
@@ -1202,6 +1210,8 @@ function LegalInfoSection({
     ["Numéro TVQ", ent.tvq_number],
     ["CNESST", ent.cnesst_number],
     ["Siège social", ent.siege_social],
+    ["Courriel", ent.contact_email],
+    ["Téléphone", ent.contact_telephone],
     ["Date de constitution", ent.date_constitution],
     ["Régime de constitution", ent.regime_constitution],
     ["Fin d'année financière", ent.fin_annee_financiere]
@@ -1360,6 +1370,27 @@ function LegalInfoSection({
               />
             </div>
           </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Courriel de la compagnie</label>
+              <input
+                type="email"
+                value={contactEmail}
+                onChange={(e) => setContactEmail(e.target.value)}
+                className="input"
+                placeholder="ex. info@compagnie.com"
+              />
+            </div>
+            <div>
+              <label className="label">Téléphone de la compagnie</label>
+              <input
+                value={contactTel}
+                onChange={(e) => setContactTel(e.target.value)}
+                className="input"
+                placeholder="ex. 514 555-0100"
+              />
+            </div>
+          </div>
           <div>
             <label className="label">clicSÉQUR Entreprises</label>
             <textarea
@@ -1439,8 +1470,15 @@ type Partner = {
   partner_entreprise_id?: number | null;
 };
 
+type Participation = {
+  entreprise_id: number;
+  entreprise_name: string;
+  ownership_pct?: number | null;
+};
+
 function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
   const [list, setList] = useState<Partner[] | null>(null);
+  const [participations, setParticipations] = useState<Participation[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
 
@@ -1449,6 +1487,17 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
       `/api/v1/entreprises/${entrepriseId}/partners`
     );
     if (res.ok) setList((await res.json()) as Partner[]);
+    // Sens inverse : les compagnies dont CETTE INC est actionnaire.
+    try {
+      const rp = await authedFetch(
+        `/api/v1/entreprises/${entrepriseId}/participations`
+      );
+      if (rp.ok) {
+        setParticipations((await rp.json()) as Participation[]);
+      }
+    } catch {
+      /* noop */
+    }
   }
   useEffect(() => {
     void reload();
@@ -1607,6 +1656,32 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
           ))}
         </ul>
       )}
+
+      {participations.length > 0 ? (
+        <div className="mt-4 border-t border-brand-800 pt-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
+            Cette compagnie est actionnaire de
+          </p>
+          <ul className="mt-2 flex flex-wrap gap-2">
+            {participations.map((pa) => (
+              <li key={pa.entreprise_id}>
+                <Link
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={`/entreprises/${pa.entreprise_id}` as any}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-brand-800 bg-brand-950 px-3 py-1.5 text-xs font-medium text-white transition hover:border-accent-500"
+                >
+                  {pa.entreprise_name}
+                  {pa.ownership_pct != null ? (
+                    <span className="font-bold text-violet-300">
+                      {Number(pa.ownership_pct).toFixed(0)}%
+                    </span>
+                  ) : null}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {showAdd ? (
         <PartnerModal

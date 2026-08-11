@@ -9,7 +9,6 @@ import {
 import { usePathname } from "next/navigation";
 import {
   ArrowDownAZ,
-  BarChart3,
   Brain,
   Briefcase,
   TrendingUp,
@@ -287,8 +286,10 @@ export default function EntreprisesLayout({
       label: "Distribution des tâches",
       icon: Grid3x3
     },
-    { href: "/entreprises/vision", label: "Vision & Stratégie", icon: BarChart3 },
-    { href: "/entreprises/comparatif", label: "Comparatif", icon: BarChart3 },
+    // « Vision & Stratégie » et « Comparatif » retirés du menu (retour
+    // Phil 2026-08-10 : pas besoin pour le moment). Les pages existent
+    // toujours par URL directe — remettre les entrées ici pour les
+    // réactiver.
     { href: "/entreprises/contacts", label: "Contacts", icon: ContactIcon },
     { href: "/entreprises/signature", label: "Signature", icon: FileSignature },
     ...(vaultAccess
