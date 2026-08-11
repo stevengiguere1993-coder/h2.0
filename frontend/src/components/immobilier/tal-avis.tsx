@@ -10,10 +10,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  CheckCircle2,
   Eye,
   FileDown,
-  FileSignature,
   Loader2,
   Mail,
   Pencil,
@@ -1013,91 +1011,6 @@ function TalAvisModal({
   );
 }
 
-/** Bouton « Envoyer pour signature » PILOTÉ PAR DOCUMENT (retour Phil
- * 2026-07-17) : grisé tant qu'aucun document n'a été généré pour le
- * bail ; sinon ouvre la bibliothèque des documents (voir / modifier /
- * envoyer / supprimer, avec états envoyé·ouvert·signé). */
-export function BailSignature({ bailId }: { bailId: number }) {
-  const [docs, setDocs] = useState<BailDocument[] | null>(null);
-  const [open, setOpen] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      const r = await authedFetch(
-        `/api/v1/immobilier/baux/${bailId}/documents`
-      );
-      if (r.ok) setDocs((await r.json()) as BailDocument[]);
-    } catch {
-      /* silencieux */
-    }
-  }, [bailId]);
-
-  useEffect(() => {
-    void load();
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as { bailId?: number };
-      if (detail?.bailId === bailId) void load();
-    };
-    window.addEventListener(DOCS_EVENT, handler);
-    return () => window.removeEventListener(DOCS_EVENT, handler);
-  }, [bailId, load]);
-
-  const n = docs?.length ?? 0;
-  const signe = (docs || []).some((d) => d.signed_at);
-  const envoye = !signe && (docs || []).some((d) => d.envoye_le);
-  // Tous les documents du bail sont « sans signature » (avis de retard,
-  // accès) → le bouton parle d'envoi par courriel, pas de signature.
-  const tousCourriel =
-    n > 0 && (docs || []).every((d) => SANS_SIGNATURE.has(d.type));
-
-  return (
-    <>
-      <button
-        type="button"
-        disabled={n === 0}
-        onClick={() => setOpen(true)}
-        title={
-          n === 0
-            ? "Génère d'abord un document (Générer ▾) — le bouton s'activera"
-            : `${n} document${n > 1 ? "s" : ""} — ouvrir la bibliothèque`
-        }
-        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-65 ${
-          signe
-            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-            : envoye
-              ? "border-sky-400/40 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20"
-              : "border-accent-500/40 bg-accent-500/10 text-accent-500 hover:bg-accent-500/20"
-        }`}
-      >
-        {signe ? (
-          <>
-            <CheckCircle2 className="h-3.5 w-3.5" /> Signé
-          </>
-        ) : envoye ? (
-          <>
-            <Mail className="h-3.5 w-3.5" /> Envoyé — suivre
-          </>
-        ) : tousCourriel ? (
-          <>
-            <Mail className="h-3.5 w-3.5" /> Envoyer par courriel
-          </>
-        ) : (
-          <>
-            <FileSignature className="h-3.5 w-3.5" /> Envoyer pour signature
-          </>
-        )}
-      </button>
-      {open ? (
-        <DocumentsModal
-          docs={docs || []}
-          onClose={() => setOpen(false)}
-          onChanged={() => void load()}
-        />
-      ) : null}
-    </>
-  );
-}
-
 const TYPES_AVEC_PARAMS = new Set(
   TAL_FORMS.filter((t) => t.avecParams).map((t) => t.code)
 );
@@ -1344,52 +1257,6 @@ export function DocsList({
           onGenerated={onChanged}
         />
       ) : null}
-    </div>
-  );
-}
-
-/** Bibliothèque des documents d'un bail (modale ouverte par le bouton
- * « Envoyer pour signature »). */
-function DocumentsModal({
-  docs,
-  onClose,
-  onChanged
-}: {
-  docs: BailDocument[];
-  onClose: () => void;
-  onChanged: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
-      <div className="my-8 w-full max-w-2xl rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
-            Documents du bail
-          </h2>
-          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="space-y-3 p-5">
-          <p className="text-xs text-white/50">
-            Chaque génération est conservée ici. « Modifier » rouvre le
-            formulaire prérempli et crée une nouvelle version ; « Envoyer »
-            transmet le document au locataire — signature en ligne avec
-            preuve d&apos;ouverture, ou simple courriel avec PDF joint pour
-            les avis sans signature (retard, accès).
-          </p>
-          <DocsList docs={docs} onChanged={onChanged} />
-          <div className="flex items-center justify-end border-t border-brand-800 pt-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="btn-secondary btn-sm"
-            >
-              Fermer
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

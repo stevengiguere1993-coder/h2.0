@@ -24,8 +24,7 @@ import {
   AuMoisToggle,
   ResilierBailButton,
   BailDocActions,
-  DocumentsSection,
-  TalFormDropdown
+  DocumentsSection
 } from "@/components/immobilier/tal-avis";
 import { ImmobilierTopbar } from "../../layout";
 import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
@@ -760,7 +759,6 @@ export default function LogementDetailPage({
                         bailId={bailActif.id}
                         onChanged={() => void loadDossier()}
                       />
-                      <TalFormDropdown bailId={bailActif.id} />
                       <BailDocActions
                         bailId={bailActif.id}
                         hasDoc={bailActif.document_id != null}

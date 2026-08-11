@@ -7,6 +7,7 @@ import {
   Check,
   ChevronRight,
   Download,
+  FileDown,
   FileText,
   Home,
   Loader2,
@@ -31,8 +32,7 @@ import {
   AuMoisToggle,
   ResilierBailButton,
   BailDocActions,
-  DocumentsSection,
-  TalFormDropdown
+  DocumentsSection
 } from "@/components/immobilier/tal-avis";
 import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
 import { ImmobilierTopbar } from "../../layout";
@@ -61,6 +61,7 @@ type DossierBail = {
   id: number;
   immeuble_id: number;
   immeuble_name: string;
+  logement_id?: number | null;
   logement_numero: string | null;
   date_debut: string;
   date_fin: string;
@@ -83,7 +84,14 @@ type DossierPaiement = {
   en_retard: boolean;
 };
 
-type RenouvellementStatus = "propose" | "accepte" | "refuse" | "en_negociation";
+type RenouvellementStatus =
+  | "propose"
+  | "accepte"
+  | "repute_accepte"
+  | "refuse"
+  | "depart"
+  | "reconduit"
+  | "en_negociation";
 
 type DossierRenouvellement = {
   id: number;
@@ -97,6 +105,7 @@ type DossierRenouvellement = {
   status: RenouvellementStatus;
   locataire_repondu_le: string | null;
   notes: string | null;
+  document_id?: number | null;
 };
 
 type CommKind = "note" | "appel" | "courriel" | "sms" | "visite" | "autre";
@@ -137,7 +146,10 @@ const RENOUVELLEMENT_STATUS: Record<
 > = {
   propose: { label: "En attente de réponse", badge: "badge-amber" },
   accepte: { label: "Accepté", badge: "badge-emerald" },
+  repute_accepte: { label: "Réputé accepté", badge: "badge-emerald" },
   refuse: { label: "Refusé", badge: "badge-rose" },
+  depart: { label: "Départ annoncé", badge: "badge-rose" },
+  reconduit: { label: "Reconduit", badge: "badge-neutral" },
   en_negociation: { label: "En négociation", badge: "badge-blue" }
 };
 
@@ -451,6 +463,21 @@ export default function LocataireDetailPage({
     }
   }
 
+  // Ouvre un document conservé (l'avis courant) dans un nouvel onglet.
+  async function ouvrirDoc(docId: number) {
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/documents/${docId}/pdf`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const url = URL.createObjectURL(await r.blob());
+      window.open(url, "_blank");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      setError(`Ouverture échouée : ${(e as Error).message}`);
+    }
+  }
+
   function startEdit() {
     if (!loc) return;
     setForm({
@@ -691,6 +718,29 @@ export default function LocataireDetailPage({
                         <Phone className="h-3.5 w-3.5 shrink-0" /> {loc.phone}
                       </span>
                     ) : null}
+                    {(() => {
+                      // Logement du bail ACTIF — lien vers sa fiche.
+                      const bailActif = dossier?.baux.find(
+                        (b) => b.status === "actif"
+                      );
+                      if (!bailActif?.logement_id) return null;
+                      return (
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={
+                            `/immobilier/logements/${bailActif.logement_id}` as any
+                          }
+                          className="inline-flex min-w-0 items-center gap-1 hover:text-accent-500"
+                          title="Ouvrir la fiche du logement"
+                        >
+                          <Home className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">
+                            Logement {bailActif.logement_numero || "—"} —{" "}
+                            {bailActif.immeuble_name}
+                          </span>
+                        </Link>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
@@ -1211,7 +1261,6 @@ export default function LocataireDetailPage({
                                 bailId={b.id}
                                 onChanged={() => void loadDossier()}
                               />
-                              <TalFormDropdown bailId={b.id} />
                               <BailDocActions
                                 bailId={b.id}
                                 hasDoc={b.document_id != null}
@@ -1299,8 +1348,21 @@ export default function LocataireDetailPage({
                             </p>
                           ) : null}
                         </div>
-                        <span className={`badge ${st.badge} shrink-0`}>
-                          {st.label}
+                        <span className="inline-flex shrink-0 items-center gap-1.5">
+                          <span className={`badge ${st.badge}`}>
+                            {st.label}
+                          </span>
+                          {r.document_id != null ? (
+                            <button
+                              type="button"
+                              onClick={() => void ouvrirDoc(r.document_id!)}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-2.5 py-1 text-xs font-semibold text-white/80 transition hover:border-white/30 hover:text-white"
+                              title="Ouvrir l'avis de renouvellement courant (PDF)"
+                            >
+                              <FileDown className="h-3.5 w-3.5" />
+                              Avis
+                            </button>
+                          ) : null}
                         </span>
                       </li>
                     );
