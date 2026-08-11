@@ -468,6 +468,9 @@ async def ensure_critical_columns() -> None:
             "BOOLEAN NOT NULL DEFAULT false",
         ),
         ("entreprise_partners", "partner_neq", "VARCHAR(32)"),
+        # Interconnexion pôle entreprises (2026-08-10) : personne morale
+        # liée à une de NOS INCs (fiche = source de vérité).
+        ("entreprise_partners", "partner_entreprise_id", "INTEGER"),
     )
     for table, column, col_type in critical_columns:
         try:

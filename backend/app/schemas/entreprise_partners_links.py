@@ -24,6 +24,8 @@ class PartnerBase(BaseModel):
     #: date de naissance.
     is_personne_morale: bool = False
     partner_neq: Optional[str] = Field(default=None, max_length=32)
+    #: Personne morale = une de NOS INCs (lien vers sa fiche Kratos).
+    partner_entreprise_id: Optional[int] = None
     partner_notes: Optional[str] = None
     role: str = Field(default="associe", max_length=32)
     ownership_pct: Optional[float] = Field(default=None, ge=0, le=100)
@@ -42,6 +44,7 @@ class PartnerUpdate(BaseModel):
     partner_telephone: Optional[str] = Field(default=None, max_length=32)
     is_personne_morale: Optional[bool] = None
     partner_neq: Optional[str] = Field(default=None, max_length=32)
+    partner_entreprise_id: Optional[int] = None
     partner_notes: Optional[str] = None
     role: Optional[str] = Field(default=None, max_length=32)
     ownership_pct: Optional[float] = Field(default=None, ge=0, le=100)

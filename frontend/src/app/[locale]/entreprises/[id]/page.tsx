@@ -1435,6 +1435,8 @@ type Partner = {
   partner_telephone?: string | null;
   is_personne_morale?: boolean;
   partner_neq?: string | null;
+  //: Personne morale = une de NOS INCs (lien vers sa fiche Kratos).
+  partner_entreprise_id?: number | null;
 };
 
 function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
@@ -1521,14 +1523,27 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-bold text-white">
-                    {p.display_name}
-                  </span>
+                  {p.partner_entreprise_id ? (
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={`/entreprises/${p.partner_entreprise_id}` as any}
+                      className="text-sm font-bold text-accent-400 underline decoration-dotted hover:text-accent-300"
+                      title="Ouvrir la fiche de cette INC"
+                    >
+                      {p.display_name}
+                    </Link>
+                  ) : (
+                    <span className="text-sm font-bold text-white">
+                      {p.display_name}
+                    </span>
+                  )}
                   <span className="badge badge-neutral">
                     {PARTNER_ROLES.find((r) => r.value === p.role)?.label ||
                       p.role}
                   </span>
-                  {p.is_personne_morale ? (
+                  {p.partner_entreprise_id ? (
+                    <span className="badge badge-neutral">INC du groupe</span>
+                  ) : p.is_personne_morale ? (
                     <span className="badge badge-neutral">
                       Personne morale
                     </span>
@@ -1631,6 +1646,11 @@ function PartnerModal({
   );
   const [morale, setMorale] = useState(!!existing?.is_personne_morale);
   const [neqPartner, setNeqPartner] = useState(existing?.partner_neq || "");
+  //: Personne morale liée à une de NOS INCs — sa fiche devient la
+  //: source de vérité (nom, NEQ, adresse).
+  const [linkedEntId, setLinkedEntId] = useState<number | null>(
+    existing?.partner_entreprise_id ?? null
+  );
   //: Annuaire des partenaires déjà saisis (toutes entreprises) —
   //: sert à préremplir sans ressaisir (retour Phil 2026-08-10).
   const [annuaire, setAnnuaire] = useState<Partner[]>([]);
@@ -1677,6 +1697,7 @@ function PartnerModal({
         partner_telephone: telephone.trim() || null,
         is_personne_morale: morale,
         partner_neq: morale ? neqPartner.trim() || null : null,
+        partner_entreprise_id: morale ? linkedEntId : null,
         partner_notes: notes.trim() || null,
         ownership_pct: pct.trim() ? Number(pct) : null
       };
@@ -1719,7 +1740,7 @@ function PartnerModal({
           {!existing && annuaire.length > 0 ? (
             <div>
               <label className="label">
-                Reprendre un partenaire existant
+                Reprendre un partenaire ou une de nos INCs
               </label>
               <select
                 className="input"
@@ -1734,17 +1755,32 @@ function PartnerModal({
                   setTelephone(a.partner_telephone || "");
                   setMorale(!!a.is_personne_morale);
                   setNeqPartner(a.partner_neq || "");
+                  setLinkedEntId(a.partner_entreprise_id ?? null);
                 }}
               >
-                <option value="">
-                  — choisir pour préremplir (déjà saisi ailleurs) —
-                </option>
-                {annuaire.map((a, i) => (
-                  <option key={a.id} value={i}>
-                    {a.display_name}
-                    {a.display_email ? ` (${a.display_email})` : ""}
-                  </option>
-                ))}
+                <option value="">— choisir pour préremplir —</option>
+                {annuaire.some((a) => a.partner_entreprise_id) ? (
+                  <optgroup label="Nos INCs (liées à leur fiche)">
+                    {annuaire.map((a, i) =>
+                      a.partner_entreprise_id ? (
+                        <option key={a.id} value={i}>
+                          {a.display_name}
+                          {a.partner_neq ? ` — NEQ ${a.partner_neq}` : ""}
+                        </option>
+                      ) : null
+                    )}
+                  </optgroup>
+                ) : null}
+                <optgroup label="Partenaires déjà saisis">
+                  {annuaire.map((a, i) =>
+                    a.partner_entreprise_id ? null : (
+                      <option key={a.id} value={i}>
+                        {a.display_name}
+                        {a.display_email ? ` (${a.display_email})` : ""}
+                      </option>
+                    )
+                  )}
+                </optgroup>
               </select>
             </div>
           ) : null}
@@ -1752,11 +1788,21 @@ function PartnerModal({
             <input
               type="checkbox"
               checked={morale}
-              onChange={(e) => setMorale(e.target.checked)}
+              onChange={(e) => {
+                setMorale(e.target.checked);
+                if (!e.target.checked) setLinkedEntId(null);
+              }}
               className="h-4 w-4 accent-violet-500"
             />
             Personne morale (compagnie actionnaire)
           </label>
+          {morale && linkedEntId ? (
+            <p className="rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-[11px] text-white/60">
+              Liée à la fiche de cette INC — le nom, le NEQ et
+              l&apos;adresse suivent automatiquement sa fiche
+              d&apos;entreprise.
+            </p>
+          ) : null}
           <div>
             <label className="label">
               {morale ? "Nom de la compagnie" : "Nom complet"}
