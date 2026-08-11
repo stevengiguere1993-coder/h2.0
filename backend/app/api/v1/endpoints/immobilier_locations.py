@@ -32,6 +32,7 @@ from app.api.deps import CurrentUser, DBSession
 from app.core.permissions import visible_immeuble_ids
 from app.models.immobilier import (
     Bail,
+    BailRenouvellement,
     Immeuble,
     Locataire,
     LocationAnnonce,
@@ -1059,6 +1060,10 @@ class SuiviBailRow(BaseModel):
     # ROUGE sur la page Baux.
     resiliation_en_cours: bool = False
     resiliation_date: Optional[date] = None
+    # Dernier avis de renouvellement du bail actif (pastille + bouton
+    # « Avis » sur la page Baux).
+    renouvellement_status: Optional[str] = None
+    renouvellement_avis_document_id: Optional[int] = None
 
 
 @router.get("/suivi-baux", response_model=List[SuiviBailRow])
@@ -1154,6 +1159,24 @@ async def suivi_baux(
                 dfin = None
             resil_by_bail[dr.bail_id] = dfin
 
+    # Dernier avis de renouvellement par bail (même sémantique que
+    # Suivis annuels : avis_envoye_le le plus récent, ex-æquo par id).
+    last_ren_by_bail: dict = {}
+    if bail_ids:
+        for r in (
+            await db.execute(
+                select(BailRenouvellement).where(
+                    BailRenouvellement.bail_id.in_(bail_ids)
+                )
+            )
+        ).scalars().all():
+            cur = last_ren_by_bail.get(r.bail_id)
+            if cur is None or (r.avis_envoye_le, r.id) > (
+                cur.avis_envoye_le,
+                cur.id,
+            ):
+                last_ren_by_bail[r.bail_id] = r
+
     actifs_par_log: dict = {}
     prochains_par_log: dict = {}
     for b in baux:
@@ -1219,6 +1242,16 @@ async def suivi_baux(
                 resiliation_date=(
                     date.fromisoformat(resil_by_bail[b.id])
                     if b and resil_by_bail.get(b.id)
+                    else None
+                ),
+                renouvellement_status=(
+                    last_ren_by_bail[b.id].status
+                    if b and b.id in last_ren_by_bail
+                    else None
+                ),
+                renouvellement_avis_document_id=(
+                    last_ren_by_bail[b.id].document_id
+                    if b and b.id in last_ren_by_bail
                     else None
                 ),
             )

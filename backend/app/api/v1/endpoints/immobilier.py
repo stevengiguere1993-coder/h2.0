@@ -2430,6 +2430,7 @@ async def locataire_dossier(
                 id=b.id,
                 immeuble_id=(im.id if im else 0),
                 immeuble_name=(im.name if im else "—"),
+                logement_id=(lg.id if lg else None),
                 logement_numero=(lg.numero if lg else None),
                 date_debut=b.date_debut,
                 date_fin=b.date_fin,
@@ -2507,6 +2508,7 @@ async def locataire_dossier(
                     status=r.status,
                     locataire_repondu_le=r.locataire_repondu_le,
                     notes=r.notes,
+                    document_id=r.document_id,
                 )
             )
 
@@ -3183,7 +3185,33 @@ async def list_baux_for_immeuble(
             .order_by(Bail.date_debut.desc())
         )
     ).scalars().all()
-    return [BailRead.model_validate(r) for r in rows]
+    # Dernier avis de renouvellement par bail (pastille + bouton
+    # « Avis » sur la fiche immeuble) — chargé groupé, une requête.
+    last_ren_by_bail: dict = {}
+    bail_ids = [r.id for r in rows]
+    if bail_ids:
+        for ren in (
+            await db.execute(
+                select(BailRenouvellement).where(
+                    BailRenouvellement.bail_id.in_(bail_ids)
+                )
+            )
+        ).scalars().all():
+            cur = last_ren_by_bail.get(ren.bail_id)
+            if cur is None or (ren.avis_envoye_le, ren.id) > (
+                cur.avis_envoye_le,
+                cur.id,
+            ):
+                last_ren_by_bail[ren.bail_id] = ren
+    out: List[BailRead] = []
+    for r in rows:
+        br = BailRead.model_validate(r)
+        ren = last_ren_by_bail.get(r.id)
+        if ren is not None:
+            br.renouvellement_status = ren.status
+            br.renouvellement_avis_document_id = ren.document_id
+        out.append(br)
+    return out
 
 
 @router.post(

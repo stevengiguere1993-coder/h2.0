@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  FileDown,
   FileSignature,
   Loader2,
   Plus,
@@ -53,6 +54,22 @@ type Row = {
   dossier_statut: string | null;
   resiliation_en_cours: boolean;
   resiliation_date: string | null;
+  renouvellement_status: string | null;
+  renouvellement_avis_document_id: number | null;
+};
+
+// Pastille (NON cliquable) du dernier avis de renouvellement du bail.
+const RENOUVELLEMENT_BADGES: Record<
+  string,
+  { label: string; cls: string }
+> = {
+  propose: { label: "Avis envoyé", cls: "badge-amber" },
+  accepte: { label: "Avis accepté", cls: "badge-emerald" },
+  repute_accepte: { label: "Réputé accepté", cls: "badge-emerald" },
+  refuse: { label: "Avis refusé", cls: "badge-rose" },
+  depart: { label: "Départ annoncé", cls: "badge-rose" },
+  reconduit: { label: "Reconduit", cls: "badge-neutral" },
+  en_negociation: { label: "En négociation", cls: "badge-blue" }
 };
 
 // Mêmes étapes que le kanban Locations — même donnée, changer ici
@@ -142,6 +159,21 @@ export default function SuiviBauxPage() {
       await load();
     } catch (e) {
       setErr(`Suppression : ${(e as Error).message}`);
+    }
+  }
+
+  // Ouvre un document conservé (l'avis courant) dans un nouvel onglet.
+  async function ouvrirDoc(docId: number) {
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/documents/${docId}/pdf`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const url = URL.createObjectURL(await r.blob());
+      window.open(url, "_blank");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      setErr(`Ouverture échouée : ${(e as Error).message}`);
     }
   }
 
@@ -374,6 +406,19 @@ export default function SuiviBauxPage() {
                             Actif — PDF à importer
                           </span>
                         )}
+                        {r.renouvellement_status &&
+                        RENOUVELLEMENT_BADGES[r.renouvellement_status] ? (
+                          <div className="mt-1">
+                            <span
+                              className={`badge ${RENOUVELLEMENT_BADGES[r.renouvellement_status].cls}`}
+                            >
+                              {
+                                RENOUVELLEMENT_BADGES[r.renouvellement_status]
+                                  .label
+                              }
+                            </span>
+                          </div>
+                        ) : null}
                         {r.dossier_id != null &&
                         r.dossier_statut != null ? (
                           <div className="mt-1">
@@ -415,6 +460,21 @@ export default function SuiviBauxPage() {
                                 compact
                                 onChanged={() => void load()}
                               />
+                              {r.renouvellement_avis_document_id != null ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void ouvrirDoc(
+                                      r.renouvellement_avis_document_id!
+                                    )
+                                  }
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-2.5 py-1 text-xs font-semibold text-white/80 transition hover:border-white/30 hover:text-white"
+                                  title="Ouvrir l'avis de renouvellement courant (PDF)"
+                                >
+                                  <FileDown className="h-3.5 w-3.5" />
+                                  Avis
+                                </button>
+                              ) : null}
                               <button
                                 type="button"
                                 onClick={() => setCreerFor(r)}

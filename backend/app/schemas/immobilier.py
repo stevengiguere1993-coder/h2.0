@@ -278,6 +278,10 @@ class BailRead(BailBase):
     #: LE bail courant (imm_documents) — s'ouvre au clic depuis la page
     #: Baux ; « Remplacer le bail » change ce pointeur.
     document_id: Optional[int] = None
+    #: Dernier avis de renouvellement du bail (pastille + bouton
+    #: « Avis ») — rempli par les endpoints qui en ont besoin.
+    renouvellement_status: Optional[str] = None
+    renouvellement_avis_document_id: Optional[int] = None
 
 
 # ─── Hypothèque ─────────────────────────────────────────────────────────
@@ -477,6 +481,7 @@ class DossierBail(BaseModel):
     id: int
     immeuble_id: int
     immeuble_name: str
+    logement_id: Optional[int] = None
     logement_numero: Optional[str] = None
     date_debut: date
     date_fin: date
@@ -534,6 +539,8 @@ class DossierRenouvellement(BaseModel):
     status: str
     locataire_repondu_le: Optional[date] = None
     notes: Optional[str] = None
+    #: L'AVIS courant (imm_documents) — bouton « Avis » de la fiche.
+    document_id: Optional[int] = None
 
 
 class LocataireDossier(BaseModel):
