@@ -52,6 +52,26 @@ class Entreprise(Base, TimestampUpdateMixin):
     date_constitution: Mapped[Optional[date]] = mapped_column(
         Date, nullable=True
     )
+    #: 2e passe (retour Phil 2026-08-10) : identifiants fiscaux
+    #: fédéral/provincial + accès clicSÉQUR + repères de régime.
+    arc_business_number: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    rq_identification_number: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    cnesst_number: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    regime_constitution: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    fin_annee_financiere: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    clicsequr_details: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
     notes_legales: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True
     )
@@ -151,6 +171,15 @@ class EntreprisePartner(Base):
         Date, nullable=True
     )
     partner_telephone: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+
+    #: Personne MORALE (compagnie actionnaire) — la date de naissance
+    #: ne s'applique pas ; le NEQ oui.
+    is_personne_morale: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    partner_neq: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True
     )
     partner_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

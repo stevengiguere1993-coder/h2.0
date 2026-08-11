@@ -20,6 +20,10 @@ class PartnerBase(BaseModel):
     partner_adresse: Optional[str] = Field(default=None, max_length=500)
     partner_naissance: Optional[date] = None
     partner_telephone: Optional[str] = Field(default=None, max_length=32)
+    #: Personne morale (compagnie actionnaire) — NEQ au lieu de la
+    #: date de naissance.
+    is_personne_morale: bool = False
+    partner_neq: Optional[str] = Field(default=None, max_length=32)
     partner_notes: Optional[str] = None
     role: str = Field(default="associe", max_length=32)
     ownership_pct: Optional[float] = Field(default=None, ge=0, le=100)
@@ -36,6 +40,8 @@ class PartnerUpdate(BaseModel):
     partner_adresse: Optional[str] = Field(default=None, max_length=500)
     partner_naissance: Optional[date] = None
     partner_telephone: Optional[str] = Field(default=None, max_length=32)
+    is_personne_morale: Optional[bool] = None
+    partner_neq: Optional[str] = Field(default=None, max_length=32)
     partner_notes: Optional[str] = None
     role: Optional[str] = Field(default=None, max_length=32)
     ownership_pct: Optional[float] = Field(default=None, ge=0, le=100)

@@ -454,6 +454,20 @@ async def ensure_critical_columns() -> None:
         ("entreprise_partners", "partner_adresse", "VARCHAR(500)"),
         ("entreprise_partners", "partner_naissance", "DATE"),
         ("entreprise_partners", "partner_telephone", "VARCHAR(32)"),
+        # 2e passe hub INC (2026-08-10) : identifiants fiscaux +
+        # clicSÉQUR + partenaires personnes morales.
+        ("entreprises", "arc_business_number", "VARCHAR(32)"),
+        ("entreprises", "rq_identification_number", "VARCHAR(32)"),
+        ("entreprises", "cnesst_number", "VARCHAR(32)"),
+        ("entreprises", "regime_constitution", "VARCHAR(64)"),
+        ("entreprises", "fin_annee_financiere", "VARCHAR(32)"),
+        ("entreprises", "clicsequr_details", "TEXT"),
+        (
+            "entreprise_partners",
+            "is_personne_morale",
+            "BOOLEAN NOT NULL DEFAULT false",
+        ),
+        ("entreprise_partners", "partner_neq", "VARCHAR(32)"),
     )
     for table, column, col_type in critical_columns:
         try:

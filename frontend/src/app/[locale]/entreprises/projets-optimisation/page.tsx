@@ -2544,6 +2544,17 @@ function AvancesSection({
                   (m) => (/(\d{4})/.exec(m.mois)?.[1] || "") === annee
                 )
               : c.mois;
+            //: Ligne Total du compte : somme des variations AFFICHÉES
+            //: + solde de FIN de la période affichée — elle suit le
+            //: filtre d'année (retour Phil 2026-08-10).
+            const variationTotale =
+              Math.round(
+                moisAffiches.reduce((a, m) => a + m.variation, 0) * 100
+              ) / 100;
+            const soldeFin =
+              moisAffiches.length > 0
+                ? moisAffiches[moisAffiches.length - 1].solde
+                : null;
             return (
             <div
               key={c.id}
@@ -2638,6 +2649,41 @@ function AvancesSection({
                             </td>
                           </tr>
                         ))}
+                        <tr
+                          className="border-t font-semibold"
+                          style={{ borderColor: "var(--qg-border)" }}
+                        >
+                          <td
+                            className="py-1 pr-2"
+                            style={{ color: "var(--qg-text)" }}
+                          >
+                            Total {annee || "période"}
+                          </td>
+                          <td
+                            className={`py-1 pr-2 text-right tabular-nums ${
+                              variationTotale > 0
+                                ? "text-emerald-400"
+                                : variationTotale < 0
+                                  ? "text-rose-400"
+                                  : ""
+                            }`}
+                            style={
+                              variationTotale === 0
+                                ? { color: "var(--qg-text-muted)" }
+                                : undefined
+                            }
+                          >
+                            {variationTotale > 0 ? "+" : ""}
+                            {fmtMoney(variationTotale)}
+                          </td>
+                          <td
+                            className="py-1 text-right tabular-nums"
+                            style={{ color: "var(--qg-text)" }}
+                            title="Solde à la fin de la période affichée"
+                          >
+                            {soldeFin != null ? fmtMoney(soldeFin) : "—"}
+                          </td>
+                        </tr>
                       </tbody>
                     </table>
                   </div>

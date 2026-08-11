@@ -53,6 +53,12 @@ type Entreprise = {
   tvq_number?: string | null;
   siege_social?: string | null;
   date_constitution?: string | null;
+  arc_business_number?: string | null;
+  rq_identification_number?: string | null;
+  cnesst_number?: string | null;
+  regime_constitution?: string | null;
+  fin_annee_financiere?: string | null;
+  clicsequr_details?: string | null;
   notes_legales?: string | null;
 };
 
@@ -1126,6 +1132,12 @@ function LegalInfoSection({
   const [tvq, setTvq] = useState("");
   const [siege, setSiege] = useState("");
   const [constitution, setConstitution] = useState("");
+  const [arc, setArc] = useState("");
+  const [rq, setRq] = useState("");
+  const [cnesst, setCnesst] = useState("");
+  const [regime, setRegime] = useState("");
+  const [finAnnee, setFinAnnee] = useState("");
+  const [clicsequr, setClicsequr] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1136,6 +1148,12 @@ function LegalInfoSection({
     setTvq(ent.tvq_number || "");
     setSiege(ent.siege_social || "");
     setConstitution(ent.date_constitution || "");
+    setArc(ent.arc_business_number || "");
+    setRq(ent.rq_identification_number || "");
+    setCnesst(ent.cnesst_number || "");
+    setRegime(ent.regime_constitution || "");
+    setFinAnnee(ent.fin_annee_financiere || "");
+    setClicsequr(ent.clicsequr_details || "");
     setNotes(ent.notes_legales || "");
     setErr(null);
     setEditing(true);
@@ -1154,6 +1172,12 @@ function LegalInfoSection({
           tvq_number: tvq.trim() || null,
           siege_social: siege.trim() || null,
           date_constitution: constitution || null,
+          arc_business_number: arc.trim() || null,
+          rq_identification_number: rq.trim() || null,
+          cnesst_number: cnesst.trim() || null,
+          regime_constitution: regime.trim() || null,
+          fin_annee_financiere: finAnnee.trim() || null,
+          clicsequr_details: clicsequr.trim() || null,
           notes_legales: notes.trim() || null
         })
       });
@@ -1172,10 +1196,15 @@ function LegalInfoSection({
 
   const rows: Array<[string, string | null | undefined]> = [
     ["NEQ", ent.neq],
+    ["N° d'entreprise ARC (fédéral)", ent.arc_business_number],
+    ["N° d'identification Revenu Québec", ent.rq_identification_number],
     ["Numéro TPS", ent.tps_number],
     ["Numéro TVQ", ent.tvq_number],
+    ["CNESST", ent.cnesst_number],
     ["Siège social", ent.siege_social],
-    ["Date de constitution", ent.date_constitution]
+    ["Date de constitution", ent.date_constitution],
+    ["Régime de constitution", ent.regime_constitution],
+    ["Fin d'année financière", ent.fin_annee_financiere]
   ];
 
   return (
@@ -1215,6 +1244,16 @@ function LegalInfoSection({
               </div>
             ))}
           </dl>
+          {ent.clicsequr_details ? (
+            <div className="mt-3">
+              <p className="text-[11px] uppercase tracking-wide text-white/45">
+                clicSÉQUR Entreprises
+              </p>
+              <p className="whitespace-pre-wrap text-xs text-white/60">
+                {ent.clicsequr_details}
+              </p>
+            </div>
+          ) : null}
           {ent.notes_legales ? (
             <p className="mt-3 whitespace-pre-wrap text-xs text-white/60">
               {ent.notes_legales}
@@ -1252,6 +1291,35 @@ function LegalInfoSection({
               />
             </div>
           </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div>
+              <label className="label">N° d&apos;entreprise ARC (fédéral)</label>
+              <input
+                value={arc}
+                onChange={(e) => setArc(e.target.value)}
+                className="input"
+                placeholder="ex. 123456789"
+              />
+            </div>
+            <div>
+              <label className="label">N° d&apos;identification Revenu Québec</label>
+              <input
+                value={rq}
+                onChange={(e) => setRq(e.target.value)}
+                className="input"
+                placeholder="ex. 1234567890"
+              />
+            </div>
+            <div>
+              <label className="label">CNESST</label>
+              <input
+                value={cnesst}
+                onChange={(e) => setCnesst(e.target.value)}
+                className="input"
+                placeholder="N° d'employeur CNESST"
+              />
+            </div>
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className="label">Siège social</label>
@@ -1271,6 +1339,36 @@ function LegalInfoSection({
                 className="input"
               />
             </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Régime de constitution</label>
+              <input
+                value={regime}
+                onChange={(e) => setRegime(e.target.value)}
+                className="input"
+                placeholder="ex. Québec (LSAQ) ou Fédéral (LCSA)"
+              />
+            </div>
+            <div>
+              <label className="label">Fin d&apos;année financière</label>
+              <input
+                value={finAnnee}
+                onChange={(e) => setFinAnnee(e.target.value)}
+                className="input"
+                placeholder="ex. 31 décembre"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="label">clicSÉQUR Entreprises</label>
+            <textarea
+              value={clicsequr}
+              onChange={(e) => setClicsequr(e.target.value)}
+              rows={2}
+              className="input"
+              placeholder="Code d'utilisateur, nom d'usager, notes d'accès…"
+            />
           </div>
           <div>
             <label className="label">Autres infos légales</label>
@@ -1335,6 +1433,8 @@ type Partner = {
   partner_adresse?: string | null;
   partner_naissance?: string | null;
   partner_telephone?: string | null;
+  is_personne_morale?: boolean;
+  partner_neq?: string | null;
 };
 
 function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
@@ -1428,6 +1528,11 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
                     {PARTNER_ROLES.find((r) => r.value === p.role)?.label ||
                       p.role}
                   </span>
+                  {p.is_personne_morale ? (
+                    <span className="badge badge-neutral">
+                      Personne morale
+                    </span>
+                  ) : null}
                 </div>
                 <p className="text-[11px] text-white/50">
                   {p.display_email || "—"}
@@ -1442,7 +1547,10 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
                     {[
                       p.partner_adresse,
                       p.partner_telephone,
-                      p.partner_naissance
+                      p.is_personne_morale && p.partner_neq
+                        ? `NEQ ${p.partner_neq}`
+                        : null,
+                      !p.is_personne_morale && p.partner_naissance
                         ? `né(e) le ${p.partner_naissance}`
                         : null
                     ]
@@ -1521,6 +1629,24 @@ function PartnerModal({
   const [partnerEmail, setPartnerEmail] = useState(
     existing?.partner_email || ""
   );
+  const [morale, setMorale] = useState(!!existing?.is_personne_morale);
+  const [neqPartner, setNeqPartner] = useState(existing?.partner_neq || "");
+  //: Annuaire des partenaires déjà saisis (toutes entreprises) —
+  //: sert à préremplir sans ressaisir (retour Phil 2026-08-10).
+  const [annuaire, setAnnuaire] = useState<Partner[]>([]);
+  useEffect(() => {
+    if (existing) return;
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          "/api/v1/entreprises/partners-annuaire"
+        );
+        if (r.ok) setAnnuaire((await r.json()) as Partner[]);
+      } catch {
+        /* noop — le modal marche sans l'annuaire */
+      }
+    })();
+  }, [existing]);
   const [adresse, setAdresse] = useState(existing?.partner_adresse || "");
   const [naissance, setNaissance] = useState(
     existing?.partner_naissance || ""
@@ -1547,8 +1673,10 @@ function PartnerModal({
         partner_name: partnerName.trim() || null,
         partner_email: partnerEmail.trim() || null,
         partner_adresse: adresse.trim() || null,
-        partner_naissance: naissance || null,
+        partner_naissance: morale ? null : naissance || null,
         partner_telephone: telephone.trim() || null,
+        is_personne_morale: morale,
+        partner_neq: morale ? neqPartner.trim() || null : null,
         partner_notes: notes.trim() || null,
         ownership_pct: pct.trim() ? Number(pct) : null
       };
@@ -1580,14 +1708,61 @@ function PartnerModal({
           </h2>
         </div>
         <form onSubmit={submit} className="grid gap-3 p-5">
+          {!existing && annuaire.length > 0 ? (
+            <div>
+              <label className="label">
+                Reprendre un partenaire existant
+              </label>
+              <select
+                className="input"
+                value=""
+                onChange={(e) => {
+                  const a = annuaire[Number(e.target.value)];
+                  if (!a) return;
+                  setPartnerName(a.display_name || a.partner_name || "");
+                  setPartnerEmail(a.partner_email || "");
+                  setAdresse(a.partner_adresse || "");
+                  setNaissance(a.partner_naissance || "");
+                  setTelephone(a.partner_telephone || "");
+                  setMorale(!!a.is_personne_morale);
+                  setNeqPartner(a.partner_neq || "");
+                }}
+              >
+                <option value="">
+                  — choisir pour préremplir (déjà saisi ailleurs) —
+                </option>
+                {annuaire.map((a, i) => (
+                  <option key={a.id} value={i}>
+                    {a.display_name}
+                    {a.display_email ? ` (${a.display_email})` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+          <label className="flex items-center gap-2 text-sm text-white/80">
+            <input
+              type="checkbox"
+              checked={morale}
+              onChange={(e) => setMorale(e.target.checked)}
+              className="h-4 w-4 accent-violet-500"
+            />
+            Personne morale (compagnie actionnaire)
+          </label>
           <div>
-            <label className="label">Nom complet</label>
+            <label className="label">
+              {morale ? "Nom de la compagnie" : "Nom complet"}
+            </label>
             <input
               required={!existing}
               value={partnerName}
               onChange={(e) => setPartnerName(e.target.value)}
               className="input"
-              placeholder="ex. Steven Giguère"
+              placeholder={
+                morale
+                  ? "ex. 9999-8888 Québec inc."
+                  : "ex. Steven Giguère"
+              }
             />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -1621,19 +1796,35 @@ function PartnerModal({
               value={adresse}
               onChange={(e) => setAdresse(e.target.value)}
               className="input"
-              placeholder="Adresse personnelle complète"
+              placeholder={
+                morale
+                  ? "Adresse du siège social"
+                  : "Adresse personnelle complète"
+              }
             />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="label">Date de naissance</label>
-              <input
-                type="date"
-                value={naissance}
-                onChange={(e) => setNaissance(e.target.value)}
-                className="input"
-              />
-            </div>
+            {morale ? (
+              <div>
+                <label className="label">NEQ de la compagnie</label>
+                <input
+                  value={neqPartner}
+                  onChange={(e) => setNeqPartner(e.target.value)}
+                  className="input"
+                  placeholder="ex. 1234567890"
+                />
+              </div>
+            ) : (
+              <div>
+                <label className="label">Date de naissance</label>
+                <input
+                  type="date"
+                  value={naissance}
+                  onChange={(e) => setNaissance(e.target.value)}
+                  className="input"
+                />
+              </div>
+            )}
             <div>
               <label className="label">Téléphone</label>
               <input

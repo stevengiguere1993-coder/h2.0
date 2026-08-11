@@ -61,6 +61,35 @@ async def _hydrate_partner(db, p: EntreprisePartner) -> PartnerRead:
 # ─── Partners ──────────────────────────────────────────────────────────
 
 
+@router.get("/partners-annuaire", response_model=List[PartnerRead])
+async def partners_annuaire(
+    db: DBSession, user: CurrentUser
+) -> List[PartnerRead]:
+    """Annuaire des partenaires déjà saisis (toutes entreprises
+    confondues), dédupliqués — sert à préremplir le modal « Ajouter
+    un partenaire » sans tout ressaisir (retour Phil 2026-08-10)."""
+    _require_volet(user)
+    rows = (
+        await db.execute(
+            select(EntreprisePartner).order_by(EntreprisePartner.id.desc())
+        )
+    ).scalars().all()
+    seen: set = set()
+    out: List[PartnerRead] = []
+    for p in rows:
+        key = (
+            (p.partner_name or "").strip().lower(),
+            (p.partner_email or "").strip().lower(),
+            p.user_id,
+        )
+        if key == ("", "", None) or key in seen:
+            continue
+        seen.add(key)
+        out.append(await _hydrate_partner(db, p))
+    out.sort(key=lambda x: x.display_name.lower())
+    return out
+
+
 @router.get(
     "/{entreprise_id}/partners",
     response_model=List[PartnerRead],
