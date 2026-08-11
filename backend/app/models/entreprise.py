@@ -182,6 +182,14 @@ class EntreprisePartner(Base):
     partner_neq: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True
     )
+
+    #: Personne morale = une de NOS INCs : lien vers sa fiche Kratos.
+    #: Le nom, le NEQ et l'adresse sont alors LUS de la fiche (source de
+    #: vérité — pas de double saisie) et l'organigramme relie les deux
+    #: compagnies. Colonne → ensure_critical_columns.
+    partner_entreprise_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("entreprises.id", ondelete="SET NULL"), nullable=True
+    )
     partner_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     role: Mapped[str] = mapped_column(

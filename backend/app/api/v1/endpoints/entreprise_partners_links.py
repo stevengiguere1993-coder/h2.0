@@ -55,6 +55,19 @@ async def _hydrate_partner(db, p: EntreprisePartner) -> PartnerRead:
     elif p.user_id:
         u = await db.get(User, p.user_id)
         out.display_email = u.email if u else None
+    # Personne morale LIÉE à une de nos INCs : la fiche de la INC est la
+    # source de vérité (nom, NEQ, siège social) — pas de double saisie.
+    if p.partner_entreprise_id:
+        ent_liee = await db.get(Entreprise, p.partner_entreprise_id)
+        if ent_liee is not None:
+            out.display_name = ent_liee.name
+            out.partner_name = ent_liee.name
+            out.partner_neq = ent_liee.neq or out.partner_neq
+            out.partner_adresse = (
+                getattr(ent_liee, "siege_social", None)
+                or out.partner_adresse
+            )
+            out.is_personne_morale = True
     return out
 
 
@@ -77,6 +90,10 @@ async def partners_annuaire(
     seen: set = set()
     out: List[PartnerRead] = []
     for p in rows:
+        # Les lignes liées à une de nos INCs sont couvertes par les
+        # entrées synthétiques ci-dessous (pas de doublon).
+        if p.partner_entreprise_id:
+            continue
         key = (
             (p.partner_name or "").strip().lower(),
             (p.partner_email or "").strip().lower(),
@@ -87,6 +104,28 @@ async def partners_annuaire(
         seen.add(key)
         out.append(await _hydrate_partner(db, p))
     out.sort(key=lambda x: x.display_name.lower())
+    # NOS INCs — utilisables comme actionnaires d'une autre compagnie
+    # (personne morale LIÉE à sa fiche : NEQ/adresse suivent la fiche).
+    # id synthétique négatif : ces entrées ne sont pas des lignes BD.
+    ents = (
+        await db.execute(
+            select(Entreprise)
+            .where(Entreprise.is_active.is_(True))
+            .order_by(Entreprise.name.asc())
+        )
+    ).scalars().all()
+    for ent in ents:
+        entry = PartnerRead(
+            id=-ent.id,
+            entreprise_id=ent.id,
+            partner_name=ent.name,
+            is_personne_morale=True,
+            partner_neq=ent.neq,
+            partner_adresse=getattr(ent, "siege_social", None),
+            partner_entreprise_id=ent.id,
+        )
+        entry.display_name = ent.name
+        out.append(entry)
     return out
 
 
@@ -123,12 +162,32 @@ async def create_partner(
     ent = await db.get(Entreprise, payload.entreprise_id)
     if ent is None:
         raise HTTPException(404, "Entreprise introuvable.")
-    if not payload.user_id and not payload.partner_name:
+    if (
+        not payload.user_id
+        and not payload.partner_name
+        and not payload.partner_entreprise_id
+    ):
         raise HTTPException(
             400,
             "Fournis user_id ou partner_name pour identifier le partenaire.",
         )
+    cible = None
+    if payload.partner_entreprise_id:
+        cible = await db.get(Entreprise, payload.partner_entreprise_id)
+        if cible is None:
+            raise HTTPException(404, "INC liée introuvable.")
+        if cible.id == payload.entreprise_id:
+            raise HTTPException(
+                422,
+                "Une compagnie ne peut pas être actionnaire d'elle-même.",
+            )
     obj = EntreprisePartner(**payload.model_dump())
+    if cible is not None:
+        # Lien vers une de nos INCs : personne morale par définition, et
+        # le nom vient de la fiche si non fourni.
+        obj.is_personne_morale = True
+        if not obj.partner_name:
+            obj.partner_name = cible.name
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
@@ -147,6 +206,7 @@ _IDENTITY_FIELDS = (
     "partner_telephone",
     "is_personne_morale",
     "partner_neq",
+    "partner_entreprise_id",
 )
 
 
@@ -195,6 +255,14 @@ async def update_partner(
     obj = await db.get(EntreprisePartner, partner_id)
     if obj is None:
         raise HTTPException(404, "Partenaire introuvable.")
+    if payload.partner_entreprise_id is not None:
+        if payload.partner_entreprise_id == obj.entreprise_id:
+            raise HTTPException(
+                422,
+                "Une compagnie ne peut pas être actionnaire d'elle-même.",
+            )
+        if await db.get(Entreprise, payload.partner_entreprise_id) is None:
+            raise HTTPException(404, "INC liée introuvable.")
     # Clé d'identité AVANT modification (le nom peut lui-même changer).
     old_name = (obj.partner_name or "").strip().lower()
     data = payload.model_dump(exclude_unset=True)

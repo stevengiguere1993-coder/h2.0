@@ -167,3 +167,68 @@ def test_modification_partenaire_propagee(client, auth_headers):
     assert pb["partner_telephone"] == "438 555-0100"
     # …mais les parts de l'entreprise B n'ont PAS bougé.
     assert float(pb["ownership_pct"]) == 25.0
+
+
+def test_inc_liee_comme_actionnaire(client, auth_headers):
+    """Interconnexion : une de NOS INCs devient actionnaire d'une autre —
+    sa fiche (nom, NEQ, siège) est la source de vérité du partenaire."""
+    def _ent(nom: str, **extra) -> int:
+        return client.post(
+            "/api/v1/entreprises",
+            headers=auth_headers,
+            json={"name": nom, **extra},
+        ).json()["id"]
+
+    holding = _ent(
+        "Holding Interco inc.",
+        neq="1112223334",
+        siege_social="500 boul. Groupe, Montréal",
+    )
+    filiale = _ent("Filiale Interco inc.")
+
+    # L'annuaire propose nos INCs (entrées synthétiques, id négatif).
+    annuaire = client.get(
+        "/api/v1/entreprises/partners-annuaire", headers=auth_headers
+    ).json()
+    inc = next(
+        a for a in annuaire if a.get("partner_entreprise_id") == holding
+    )
+    assert inc["is_personne_morale"] is True
+    assert inc["partner_neq"] == "1112223334"
+
+    # La holding devient actionnaire de la filiale, LIÉE à sa fiche.
+    r = client.post(
+        "/api/v1/entreprises/partners",
+        headers=auth_headers,
+        json={
+            "entreprise_id": filiale,
+            "partner_entreprise_id": holding,
+            "ownership_pct": 100,
+        },
+    )
+    assert r.status_code == 201, r.text
+    pa = r.json()
+    assert pa["display_name"] == "Holding Interco inc."
+    assert pa["partner_neq"] == "1112223334"
+    assert pa["partner_adresse"] == "500 boul. Groupe, Montréal"
+    assert pa["is_personne_morale"] is True
+
+    # La fiche de la holding change → le partenaire reflète le changement
+    # SANS resaisie (source de vérité).
+    client.patch(
+        f"/api/v1/entreprises/{holding}",
+        headers=auth_headers,
+        json={"neq": "9990001112"},
+    )
+    partners = client.get(
+        f"/api/v1/entreprises/{filiale}/partners", headers=auth_headers
+    ).json()
+    assert partners[0]["partner_neq"] == "9990001112"
+
+    # Garde-fou : une compagnie ne peut pas être actionnaire d'elle-même.
+    r2 = client.post(
+        "/api/v1/entreprises/partners",
+        headers=auth_headers,
+        json={"entreprise_id": holding, "partner_entreprise_id": holding},
+    )
+    assert r2.status_code == 422
