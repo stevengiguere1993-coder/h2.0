@@ -652,6 +652,33 @@ async def ensure_critical_columns() -> None:
     except Exception as exc:  # noqa: BLE001
         log.warning("backfill partenaires liés aux INCs failed: %s", exc)
 
+    # Backfill 2026-08-11 (organigramme) : les nœuds « compagnie » créés
+    # à la main avec exactement le nom d'une de nos INCs sont liés à
+    # leur fiche (entreprise_id) → bonne couleur, bouton « Ouvrir la
+    # fiche », plus de faux « compagnie externe ». On ne lie que s'il
+    # n'existe pas déjà un nœud de cette entreprise dans la même
+    # version (pas de doublon silencieux). Idempotent.
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE org_nodes n SET entreprise_id = e.id "
+                    "FROM entreprises e "
+                    "WHERE n.kind = 'company' "
+                    "  AND n.entreprise_id IS NULL "
+                    "  AND LOWER(TRIM(n.label)) = LOWER(TRIM(e.name)) "
+                    "  AND NOT EXISTS ("
+                    "    SELECT 1 FROM org_nodes n2 "
+                    "    WHERE n2.entreprise_id = e.id "
+                    "      AND n2.kind = 'company' "
+                    "      AND COALESCE(n2.version_id, -1) = "
+                    "          COALESCE(n.version_id, -1)"
+                    "  )"
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("backfill org_nodes liés aux INCs failed: %s", exc)
+
 
 async def ensure_raci_tables() -> None:
     """Crée les tables RACI dans leur PROPRE transaction.
