@@ -278,6 +278,10 @@ async def create_partner(
     # Coordonnées saisies ici → remontées sur la fiche de la INC liée
     # si elle ne les a pas (interconnexion dans les deux sens).
     await _remonter_contact_vers_fiche(db, obj)
+    # L'organigramme (version Principal) reflète le nouvel actionnaire.
+    from app.api.v1.endpoints.org_nodes import resync_detention_entreprise
+
+    await resync_detention_entreprise(db, obj.entreprise_id)
     await db.refresh(obj)
     return await _hydrate_partner(db, obj)
 
@@ -368,6 +372,10 @@ async def update_partner(
     # Coordonnées saisies ici → remontées sur la fiche de la INC liée
     # si elle ne les a pas (interconnexion dans les deux sens).
     await _remonter_contact_vers_fiche(db, obj)
+    # L'organigramme (version Principal) reflète la modification.
+    from app.api.v1.endpoints.org_nodes import resync_detention_entreprise
+
+    await resync_detention_entreprise(db, obj.entreprise_id)
     await db.flush()
     await db.refresh(obj)
     return await _hydrate_partner(db, obj)
@@ -383,8 +391,13 @@ async def delete_partner(
     obj = await db.get(EntreprisePartner, partner_id)
     if obj is None:
         raise HTTPException(404, "Partenaire introuvable.")
+    ent_id = obj.entreprise_id
     await db.delete(obj)
     await db.flush()
+    # L'organigramme (version Principal) reflète le retrait.
+    from app.api.v1.endpoints.org_nodes import resync_detention_entreprise
+
+    await resync_detention_entreprise(db, ent_id)
 
 
 # ─── Links externes (drive, sharepoint, dropbox…) ───────────────────────

@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
-from app.models.org_node import OrgNode
+from app.models.org_node import OrgNode, OrgVersion
 
 
 log = logging.getLogger(__name__)
@@ -45,6 +45,11 @@ class OrgNodeRead(BaseModel):
     assignee_user_id: Optional[int]
     assignee_external_name: Optional[str]
     co_owner_node_ids: List[int] = []
+    #: Version d'organigramme (NULL = « Principal »).
+    version_id: Optional[int] = None
+    #: Quotes-parts par détenteur : JSON {"<node_id>": pct} (brut — le
+    #: frontend le parse pour l'afficher sur les flèches).
+    ownership_json: Optional[str] = None
     pos_x: Optional[float] = None
     pos_y: Optional[float] = None
     execution_tier: Optional[str] = None
@@ -71,6 +76,7 @@ class OrgNodeRead(BaseModel):
 class OrgNodeCreate(BaseModel):
     parent_id: Optional[int] = None
     position: Optional[int] = None
+    version_id: Optional[int] = None
     kind: str = Field(default="dept", max_length=16)
     label: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
@@ -105,6 +111,8 @@ class OrgNodeUpdate(BaseModel):
         default=None, max_length=255
     )
     co_owner_node_ids: Optional[List[int]] = None
+    #: Quotes-parts par détenteur : JSON {"<node_id>": pct}.
+    ownership_json: Optional[str] = None
     pos_x: Optional[float] = None
     pos_y: Optional[float] = None
     execution_tier: Optional[str] = None
@@ -117,9 +125,15 @@ async def list_nodes(
     db: DBSession,
     _: CurrentUser,
     entreprise_id: Optional[int] = Query(default=None),
+    version_id: Optional[int] = Query(default=None),
 ) -> List[OrgNodeRead]:
     stmt = (
         select(OrgNode)
+        .where(
+            OrgNode.version_id.is_(None)
+            if version_id is None
+            else OrgNode.version_id == version_id
+        )
         .order_by(OrgNode.parent_id.asc().nulls_first(), OrgNode.position.asc())
     )
     if entreprise_id is not None:
@@ -152,6 +166,7 @@ async def create_node(
     n = OrgNode(
         parent_id=data.parent_id,
         position=pos,
+        version_id=data.version_id,
         kind=kind,
         label=data.label.strip(),
         description=data.description,
@@ -165,6 +180,126 @@ async def create_node(
     await db.commit()
     await db.refresh(n)
     return OrgNodeRead.model_validate(n)
+
+
+# ─── Versions d'organigramme (retour Phil 2026-08-10) ──────────────────
+# Déclarées AVANT /{node_id} pour que « versions » ne soit pas avalé par
+# le paramètre de chemin.
+
+
+class OrgVersionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    created_at: datetime
+
+
+class OrgVersionCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    #: True = copier les nœuds d'une version existante (None = copier la
+    #: version « Principal ») ; False = partir d'une page blanche.
+    copy_nodes: bool = True
+    copy_from_version_id: Optional[int] = None
+
+
+@router.get("/versions", response_model=List[OrgVersionRead])
+async def list_versions(
+    db: DBSession, _: CurrentUser
+) -> List[OrgVersionRead]:
+    rows = (
+        await db.execute(select(OrgVersion).order_by(OrgVersion.id.asc()))
+    ).scalars().all()
+    return [OrgVersionRead.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/versions",
+    response_model=OrgVersionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_version(
+    data: OrgVersionCreate, db: DBSession, _: CurrentUser
+) -> OrgVersionRead:
+    v = OrgVersion(name=data.name.strip())
+    db.add(v)
+    await db.flush()
+    if data.copy_nodes:
+        src = data.copy_from_version_id
+        sources = (
+            await db.execute(
+                select(OrgNode).where(
+                    OrgNode.version_id.is_(None)
+                    if src is None
+                    else OrgNode.version_id == src
+                )
+            )
+        ).scalars().all()
+        # 1er passage : cloner sans les liens (il faut les nouveaux ids).
+        clones: list = []
+        for s in sources:
+            c = OrgNode(
+                version_id=v.id, parent_id=None, position=s.position,
+                kind=s.kind, label=s.label, description=s.description,
+                entreprise_id=s.entreprise_id,
+                assignee_employe_id=s.assignee_employe_id,
+                assignee_user_id=s.assignee_user_id,
+                assignee_external_name=s.assignee_external_name,
+                pos_x=s.pos_x, pos_y=s.pos_y,
+                execution_tier=s.execution_tier, state=s.state,
+                state_note=s.state_note,
+            )
+            db.add(c)
+            clones.append((s, c))
+        await db.flush()
+        mapping = {s.id: c.id for s, c in clones}
+        # 2e passage : re-brancher parents, co-détenteurs et quotes-parts
+        # sur les ids clonés.
+        for s, c in clones:
+            if s.parent_id and s.parent_id in mapping:
+                c.parent_id = mapping[s.parent_id]
+            try:
+                co = json.loads(s.co_owner_node_ids or "[]")
+            except (TypeError, ValueError):
+                co = []
+            co2 = [mapping[int(x)] for x in co if int(x) in mapping]
+            c.co_owner_node_ids = json.dumps(co2) if co2 else None
+            try:
+                own = json.loads(s.ownership_json or "{}")
+            except (TypeError, ValueError):
+                own = {}
+            own2 = {
+                str(mapping[int(k)]): float(pv)
+                for k, pv in own.items()
+                if str(k).lstrip("-").isdigit() and int(k) in mapping
+            }
+            c.ownership_json = json.dumps(own2) if own2 else None
+    await db.commit()
+    await db.refresh(v)
+    return OrgVersionRead.model_validate(v)
+
+
+@router.delete(
+    "/versions/{version_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_version(
+    version_id: int, db: DBSession, _: CurrentUser
+) -> None:
+    v = await db.get(OrgVersion, version_id)
+    if v is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Version introuvable."
+        )
+    # Le FK ondelete=CASCADE n'existe que sur les bases neuves (colonne
+    # additive sans contrainte sur les bases existantes) → suppression
+    # explicite des nœuds de la version.
+    for n in (
+        await db.execute(
+            select(OrgNode).where(OrgNode.version_id == version_id)
+        )
+    ).scalars().all():
+        await db.delete(n)
+    await db.delete(v)
+    await db.commit()
 
 
 @router.get("/{node_id}", response_model=OrgNodeRead)
@@ -207,6 +342,21 @@ async def update_node(
             if int(x) != node_id
         ]
         n.co_owner_node_ids = json.dumps(ids) if ids else None
+    if "ownership_json" in payload:
+        raw = payload.pop("ownership_json")
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if not isinstance(parsed, dict):
+                    raise ValueError("objet attendu")
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "ownership_json invalide (objet JSON attendu).",
+                )
+            n.ownership_json = raw
+        else:
+            n.ownership_json = None
     for k, v in payload.items():
         setattr(n, k, v)
     await db.commit()
@@ -415,11 +565,53 @@ async def import_entreprises(
         "positions du canvas sont conservées. Idempotent."
     ),
 )
-async def sync_detention(db: DBSession, _: CurrentUser) -> List[OrgNodeRead]:
+async def sync_detention(
+    db: DBSession,
+    _: CurrentUser,
+    version_id: Optional[int] = Query(default=None),
+) -> List[OrgNodeRead]:
+    await _sync_detention_impl(db, version_id=version_id)
+    await db.commit()
+    return [
+        OrgNodeRead.model_validate(n) for n in await _all_nodes_sorted(db)
+    ]
+
+
+async def resync_detention_entreprise(db, entreprise_id: int) -> None:
+    """Hook « tout est interconnecté » : resynchronise les arêtes de
+    détention du nœud PRINCIPAL d'une entreprise depuis ses partenaires
+    — appelé à la création d'une entreprise et à la sauvegarde d'un
+    partenaire. Best-effort : ne lève jamais (l'organigramme ne doit
+    jamais bloquer la sauvegarde métier)."""
+    try:
+        await _sync_detention_impl(
+            db, version_id=None, only_entreprise_id=entreprise_id
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "resync organigramme entreprise %s: %s", entreprise_id, exc
+        )
+
+
+async def _sync_detention_impl(
+    db,
+    version_id: Optional[int] = None,
+    only_entreprise_id: Optional[int] = None,
+) -> None:
     from app.models.entreprise import Entreprise, EntreprisePartner
     from app.models.user import User
 
-    nodes = list((await db.execute(select(OrgNode))).scalars().all())
+    nodes = list(
+        (
+            await db.execute(
+                select(OrgNode).where(
+                    OrgNode.version_id.is_(None)
+                    if version_id is None
+                    else OrgNode.version_id == version_id
+                )
+            )
+        ).scalars().all()
+    )
     by_ent = {
         n.entreprise_id: n
         for n in nodes
@@ -447,7 +639,7 @@ async def sync_detention(db: DBSession, _: CurrentUser) -> List[OrgNodeRead]:
             continue
         n = OrgNode(
             parent_id=None, position=next_pos, kind="company",
-            label=e.name, entreprise_id=e.id,
+            label=e.name, entreprise_id=e.id, version_id=version_id,
         )
         db.add(n)
         await db.flush()
@@ -493,8 +685,34 @@ async def sync_detention(db: DBSession, _: CurrentUser) -> List[OrgNodeRead]:
 
     par_detenue: dict = {}
     for p in partners:
+        if (
+            only_entreprise_id is not None
+            and p.entreprise_id != only_entreprise_id
+        ):
+            continue
         if p.entreprise_id in ents_by_id:
             par_detenue.setdefault(p.entreprise_id, []).append(p)
+
+    # Hook ciblé sur une entreprise qui n'a PLUS de partenaires : ses
+    # arêtes de détention disparaissent aussi (les partenaires sont la
+    # source de vérité de la détention).
+    if (
+        only_entreprise_id is not None
+        and only_entreprise_id not in par_detenue
+    ):
+        child = by_ent.get(only_entreprise_id)
+        if child is not None:
+            child.parent_id = None
+            child.co_owner_node_ids = None
+            child.ownership_json = None
+            autres = [
+                ligne
+                for ligne in (child.description or "").splitlines()
+                if not ligne.startswith("Détention : ") and ligne.strip()
+            ]
+            child.description = "\n".join(autres) or None
+        await db.flush()
+        return
 
     for ent_id, plist in par_detenue.items():
         child = by_ent.get(ent_id)
@@ -514,7 +732,7 @@ async def sync_detention(db: DBSession, _: CurrentUser) -> List[OrgNodeRead]:
                 if hn is None:
                     hn = OrgNode(
                         parent_id=None, position=next_pos, kind="person",
-                        label=lbl,
+                        label=lbl, version_id=version_id,
                     )
                     db.add(hn)
                     await db.flush()
@@ -527,6 +745,9 @@ async def sync_detention(db: DBSession, _: CurrentUser) -> List[OrgNodeRead]:
         if not holders:
             continue
         holders.sort(key=lambda t: -t[0])
+        # Quotes-parts par détenteur — affichées SUR les flèches.
+        own_map = {str(hn.id): pct for pct, hn in holders if pct}
+        child.ownership_json = json.dumps(own_map) if own_map else None
         # Ligne « Détention : … » maintenue en tête de description (les
         # notes manuelles en dessous sont conservées).
         detention = " · ".join(
@@ -554,8 +775,7 @@ async def sync_detention(db: DBSession, _: CurrentUser) -> List[OrgNodeRead]:
         ]
         child.co_owner_node_ids = json.dumps(co_ids) if co_ids else None
 
-    await db.commit()
-    return [OrgNodeRead.model_validate(n) for n in await _all_nodes_sorted(db)]
+    await db.flush()
 
 
 @router.post(

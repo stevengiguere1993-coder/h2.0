@@ -275,6 +275,12 @@ async def create_entreprise(
     db.add(e)
     await db.flush()
     await db.refresh(e)
+    # « Tout est interconnecté » (retour Phil 2026-08-10) : la nouvelle
+    # compagnie apparaît automatiquement dans l'organigramme (version
+    # Principal), avec ses liens d'actionnaires si déjà saisis.
+    from app.api.v1.endpoints.org_nodes import resync_detention_entreprise
+
+    await resync_detention_entreprise(db, e.id)
     return EntrepriseRead.model_validate(e)
 
 

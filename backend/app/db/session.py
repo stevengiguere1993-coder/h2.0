@@ -473,6 +473,10 @@ async def ensure_critical_columns() -> None:
         ("entreprise_partners", "partner_entreprise_id", "INTEGER"),
         ("entreprises", "contact_email", "VARCHAR(320)"),
         ("entreprises", "contact_telephone", "VARCHAR(32)"),
+        # Organigramme v2 (2026-08-10) : versions nommées + quotes-parts
+        # de détention par flèche.
+        ("org_nodes", "version_id", "INTEGER"),
+        ("org_nodes", "ownership_json", "TEXT"),
     )
     for table, column, col_type in critical_columns:
         try:

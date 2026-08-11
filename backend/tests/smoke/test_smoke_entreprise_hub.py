@@ -321,3 +321,50 @@ def test_sync_detention_organigramme(client, auth_headers):
         == 1
     )
     assert len([n for n in nodes2 if n["entreprise_id"] == filiale]) == 1
+
+    # Quotes-parts stockées sur le nœud détenu (affichées sur les
+    # flèches du canvas).
+    n_fil2 = next(n for n in nodes2 if n["entreprise_id"] == filiale)
+    import json as _json
+
+    own = _json.loads(n_fil2["ownership_json"] or "{}")
+    n_hold2 = next(n for n in nodes2 if n["entreprise_id"] == holding)
+    assert own.get(str(n_hold2["id"])) == 100.0
+
+
+def test_versions_organigramme(client, auth_headers):
+    """Plusieurs versions d'organigramme : création par copie du
+    Principal, listing filtré, suppression."""
+    r = client.post(
+        "/api/v1/org-nodes/versions",
+        headers=auth_headers,
+        json={"name": "Scénario 2027"},
+    )
+    assert r.status_code == 201, r.text
+    vid = r.json()["id"]
+
+    versions = client.get(
+        "/api/v1/org-nodes/versions", headers=auth_headers
+    ).json()
+    assert any(v["id"] == vid for v in versions)
+
+    nodes_p = client.get("/api/v1/org-nodes", headers=auth_headers).json()
+    nodes_v = client.get(
+        f"/api/v1/org-nodes?version_id={vid}", headers=auth_headers
+    ).json()
+    # La copie reprend tous les nœuds du Principal, isolés dans la
+    # version.
+    assert len(nodes_v) == len(nodes_p)
+    assert all(n["version_id"] == vid for n in nodes_v)
+    assert all(n["version_id"] is None for n in nodes_p)
+
+    d = client.delete(
+        f"/api/v1/org-nodes/versions/{vid}", headers=auth_headers
+    )
+    assert d.status_code == 204
+    assert (
+        client.get(
+            f"/api/v1/org-nodes?version_id={vid}", headers=auth_headers
+        ).json()
+        == []
+    )

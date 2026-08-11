@@ -46,10 +46,37 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, TimestampUpdateMixin
 
 
+class OrgVersion(Base, TimestampUpdateMixin):
+    """Version nommée de l'organigramme (retour Phil 2026-08-10) : on
+    peut garder plusieurs organigrammes en parallèle (actuel, projeté,
+    scénario de restructuration…). Les nœuds avec version_id NULL
+    forment la version « Principal ». Nouvelle table → create_all."""
+
+    __tablename__ = "org_versions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+
+
 class OrgNode(Base, TimestampUpdateMixin):
     __tablename__ = "org_nodes"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+
+    #: Version d'organigramme (NULL = « Principal »). Colonne →
+    #: ensure_critical_columns.
+    version_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("org_versions.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+
+    #: Quotes-parts de détention par détenteur (retour Phil 2026-08-10) :
+    #: JSON {"<node_id du détenteur>": pct}. Affichées SUR les flèches du
+    #: canvas. Colonne → ensure_critical_columns.
+    ownership_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
 
     # Hiérarchie : nœud parent ou racine (NULL = top-level).
     parent_id: Mapped[Optional[int]] = mapped_column(
