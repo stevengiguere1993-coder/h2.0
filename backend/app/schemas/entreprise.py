@@ -27,6 +27,8 @@ class EntrepriseBase(BaseModel):
     fin_annee_financiere: Optional[str] = Field(default=None, max_length=32)
     clicsequr_details: Optional[str] = None
     notes_legales: Optional[str] = None
+    contact_email: Optional[str] = Field(default=None, max_length=320)
+    contact_telephone: Optional[str] = Field(default=None, max_length=32)
     type: str = Field(default="gestion", max_length=32)
     color_accent: str = Field(default="#7c3aed", pattern=r"^#[0-9a-fA-F]{6}$")
     description: Optional[str] = None
@@ -55,6 +57,8 @@ class EntrepriseUpdate(BaseModel):
     fin_annee_financiere: Optional[str] = Field(default=None, max_length=32)
     clicsequr_details: Optional[str] = None
     notes_legales: Optional[str] = None
+    contact_email: Optional[str] = Field(default=None, max_length=320)
+    contact_telephone: Optional[str] = Field(default=None, max_length=32)
     type: Optional[str] = Field(default=None, max_length=32)
     color_accent: Optional[str] = Field(
         default=None, pattern=r"^#[0-9a-fA-F]{6}$"

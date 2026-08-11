@@ -471,6 +471,8 @@ async def ensure_critical_columns() -> None:
         # Interconnexion pôle entreprises (2026-08-10) : personne morale
         # liée à une de NOS INCs (fiche = source de vérité).
         ("entreprise_partners", "partner_entreprise_id", "INTEGER"),
+        ("entreprises", "contact_email", "VARCHAR(320)"),
+        ("entreprises", "contact_telephone", "VARCHAR(32)"),
     )
     for table, column, col_type in critical_columns:
         try:
@@ -590,6 +592,23 @@ async def ensure_critical_columns() -> None:
             )
     except Exception as exc:  # noqa: BLE001
         log.warning("backfill bons created_by failed: %s", exc)
+
+    # Nettoyage 2026-08-10 (retour Phil) : les descriptions « Importée
+    # depuis Monday » héritées de l'ancien import polluent les fiches
+    # d'entreprises — effacées quand la description EST cette mention
+    # (one-shot idempotent, ne touche pas les descriptions manuelles).
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE entreprises SET description = NULL "
+                    "WHERE description ~* "
+                    "'^\\s*importée?s? (automatiquement )?"
+                    "(de|depuis) monday'"
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("nettoyage descriptions Monday failed: %s", exc)
 
 
 async def ensure_raci_tables() -> None:

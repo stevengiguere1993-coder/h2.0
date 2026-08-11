@@ -75,6 +75,14 @@ class Entreprise(Base, TimestampUpdateMixin):
     notes_legales: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True
     )
+    #: Coordonnées de contact de la compagnie (retour Phil 2026-08-10) —
+    #: alimentées aussi depuis la saisie « actionnaire » (fill-only).
+    contact_email: Mapped[Optional[str]] = mapped_column(
+        String(320), nullable=True
+    )
+    contact_telephone: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
 
     # Catégorie : gestion / construction / immobilier / autre.
     # Influence l'icône et certains workflows.
