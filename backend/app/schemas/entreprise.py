@@ -18,6 +18,14 @@ class EntrepriseBase(BaseModel):
     tvq_number: Optional[str] = Field(default=None, max_length=32)
     siege_social: Optional[str] = Field(default=None, max_length=500)
     date_constitution: Optional[date] = None
+    arc_business_number: Optional[str] = Field(default=None, max_length=32)
+    rq_identification_number: Optional[str] = Field(
+        default=None, max_length=32
+    )
+    cnesst_number: Optional[str] = Field(default=None, max_length=32)
+    regime_constitution: Optional[str] = Field(default=None, max_length=64)
+    fin_annee_financiere: Optional[str] = Field(default=None, max_length=32)
+    clicsequr_details: Optional[str] = None
     notes_legales: Optional[str] = None
     type: str = Field(default="gestion", max_length=32)
     color_accent: str = Field(default="#7c3aed", pattern=r"^#[0-9a-fA-F]{6}$")
@@ -38,6 +46,14 @@ class EntrepriseUpdate(BaseModel):
     tvq_number: Optional[str] = Field(default=None, max_length=32)
     siege_social: Optional[str] = Field(default=None, max_length=500)
     date_constitution: Optional[date] = None
+    arc_business_number: Optional[str] = Field(default=None, max_length=32)
+    rq_identification_number: Optional[str] = Field(
+        default=None, max_length=32
+    )
+    cnesst_number: Optional[str] = Field(default=None, max_length=32)
+    regime_constitution: Optional[str] = Field(default=None, max_length=64)
+    fin_annee_financiere: Optional[str] = Field(default=None, max_length=32)
+    clicsequr_details: Optional[str] = None
     notes_legales: Optional[str] = None
     type: Optional[str] = Field(default=None, max_length=32)
     color_accent: Optional[str] = Field(
