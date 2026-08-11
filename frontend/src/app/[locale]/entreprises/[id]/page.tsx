@@ -1706,6 +1706,14 @@ function PartnerModal({
           <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
             {existing ? "Modifier le partenaire" : "Nouveau partenaire"}
           </h2>
+          {existing ? (
+            <p className="mt-1 text-[11px] text-white/50">
+              Les coordonnées (nom, courriel, adresse, naissance,
+              téléphone…) se mettent à jour sur toutes les entreprises où
+              ce partenaire apparaît. Le rôle et les parts restent propres
+              à cette entreprise.
+            </p>
+          ) : null}
         </div>
         <form onSubmit={submit} className="grid gap-3 p-5">
           {!existing && annuaire.length > 0 ? (
