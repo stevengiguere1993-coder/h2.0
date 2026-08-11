@@ -135,6 +135,55 @@ async def create_partner(
     return await _hydrate_partner(db, obj)
 
 
+#: Champs d'IDENTITÉ d'un partenaire — modifiés sur une entreprise, ils
+#: se propagent à TOUTES les entreprises où la même personne apparaît
+#: (retour Phil 2026-08-10). Le rôle, le % de parts et les notes restent
+#: propres à chaque entreprise.
+_IDENTITY_FIELDS = (
+    "partner_name",
+    "partner_email",
+    "partner_adresse",
+    "partner_naissance",
+    "partner_telephone",
+    "is_personne_morale",
+    "partner_neq",
+)
+
+
+async def _memes_personnes(
+    db, obj: EntreprisePartner, old_name: str
+) -> list[EntreprisePartner]:
+    """Les AUTRES lignes partenaires qui représentent la même personne :
+    même compte portail (user_id), sinon même nom (avant modification,
+    insensible à la casse) parmi les partenaires sans compte."""
+    if obj.user_id:
+        return list(
+            (
+                await db.execute(
+                    select(EntreprisePartner).where(
+                        EntreprisePartner.user_id == obj.user_id,
+                        EntreprisePartner.id != obj.id,
+                    )
+                )
+            ).scalars().all()
+        )
+    if not old_name:
+        return []
+    rows = (
+        await db.execute(
+            select(EntreprisePartner).where(
+                EntreprisePartner.user_id.is_(None),
+                EntreprisePartner.id != obj.id,
+            )
+        )
+    ).scalars().all()
+    return [
+        s
+        for s in rows
+        if (s.partner_name or "").strip().lower() == old_name
+    ]
+
+
 @router.patch("/partners/{partner_id}", response_model=PartnerRead)
 async def update_partner(
     partner_id: int,
@@ -146,8 +195,20 @@ async def update_partner(
     obj = await db.get(EntreprisePartner, partner_id)
     if obj is None:
         raise HTTPException(404, "Partenaire introuvable.")
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    # Clé d'identité AVANT modification (le nom peut lui-même changer).
+    old_name = (obj.partner_name or "").strip().lower()
+    data = payload.model_dump(exclude_unset=True)
+    for k, v in data.items():
         setattr(obj, k, v)
+    # Propagation des coordonnées à toutes les entreprises où la même
+    # personne est partenaire.
+    identity_changes = {
+        k: v for k, v in data.items() if k in _IDENTITY_FIELDS
+    }
+    if identity_changes:
+        for s in await _memes_personnes(db, obj, old_name):
+            for k, v in identity_changes.items():
+                setattr(s, k, v)
     await db.flush()
     await db.refresh(obj)
     return await _hydrate_partner(db, obj)

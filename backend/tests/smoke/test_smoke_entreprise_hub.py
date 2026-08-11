@@ -122,3 +122,48 @@ def test_partenaire_morale_et_annuaire(client, auth_headers):
     assert entry["partner_neq"] == "9998887776"
     # Le partenaire du test précédent y est aussi (dédup inter-entreprises).
     assert any(a["partner_name"] == "Alex Actionnaire" for a in annuaire)
+
+
+def test_modification_partenaire_propagee(client, auth_headers):
+    """Retour Phil 2026-08-10 : modifier un partenaire le change PARTOUT
+    où il est utilisé — coordonnées propagées, parts/rôle locaux."""
+    def _ent(nom: str) -> int:
+        return client.post(
+            "/api/v1/entreprises", headers=auth_headers, json={"name": nom}
+        ).json()["id"]
+
+    ent_a, ent_b = _ent("INC Propagation A"), _ent("INC Propagation B")
+    ids = {}
+    for ent_id, pct in ((ent_a, 50), (ent_b, 25)):
+        ids[ent_id] = client.post(
+            "/api/v1/entreprises/partners",
+            headers=auth_headers,
+            json={
+                "entreprise_id": ent_id,
+                "partner_name": "Paula Propagation",
+                "partner_adresse": "1 rue Départ",
+                "ownership_pct": pct,
+            },
+        ).json()["id"]
+
+    # PATCH sur l'entreprise A : adresse + téléphone (+ % local à A).
+    r = client.patch(
+        f"/api/v1/entreprises/partners/{ids[ent_a]}",
+        headers=auth_headers,
+        json={
+            "partner_adresse": "99 rue Arrivée",
+            "partner_telephone": "438 555-0100",
+            "ownership_pct": 60,
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    autres = client.get(
+        f"/api/v1/entreprises/{ent_b}/partners", headers=auth_headers
+    ).json()
+    pb = next(p for p in autres if p["id"] == ids[ent_b])
+    # Coordonnées propagées…
+    assert pb["partner_adresse"] == "99 rue Arrivée"
+    assert pb["partner_telephone"] == "438 555-0100"
+    # …mais les parts de l'entreprise B n'ont PAS bougé.
+    assert float(pb["ownership_pct"]) == 25.0
