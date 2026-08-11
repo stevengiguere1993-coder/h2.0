@@ -18,6 +18,10 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
+import {
+  CorrectionOptions,
+  duMois
+} from "@/components/immobilier/paiements-actions";
 
 /**
  * Baux & paiements — vue transversale « collection des loyers ».
@@ -131,67 +135,6 @@ function currentMonth(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-/** Options de correction d'un paiement — mêmes choix que la saisie
- *  (retour Phil 2026-07-31 : « Corriger » ne doit plus juste annuler
- *  et faire perdre la ligne). */
-function CorrectionOptions({
-  r,
-  busy,
-  onMontant,
-  onComplet,
-  onRetirer,
-  onClose
-}: {
-  r: Row;
-  busy: boolean;
-  onMontant: () => void;
-  onComplet: () => void;
-  onRetirer: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <span className="inline-flex flex-wrap items-center gap-1">
-      <button
-        type="button"
-        disabled={busy}
-        onClick={onMontant}
-        title="Ressaisir le montant réellement reçu (remplace les paiements du mois)"
-        className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[11px] font-semibold text-sky-300 hover:bg-sky-500/20 disabled:opacity-50"
-      >
-        Corriger le montant
-      </button>
-      {r.etat !== "paye" ? (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={onComplet}
-          title="Remplacer par un paiement complet du mois"
-          className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
-        >
-          Payé au complet
-        </button>
-      ) : null}
-      <button
-        type="button"
-        disabled={busy}
-        onClick={onRetirer}
-        title="Retirer les paiements du mois — la ligne redevient impayée"
-        className="rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[11px] font-semibold text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
-      >
-        Retirer
-      </button>
-      <button
-        type="button"
-        onClick={onClose}
-        title="Fermer"
-        className="px-1 text-[11px] text-white/40 hover:text-white/70"
-      >
-        ×
-      </button>
-    </span>
-  );
-}
-
 export default function BauxPage() {
   const { currentEntrepriseId } = useImmobilierLayout();
   const [mois, setMois] = useState(currentMonth());
@@ -287,18 +230,6 @@ export default function BauxPage() {
     } finally {
       setPayingId(null);
     }
-  }
-
-  // DÛ du mois = loyer + frais ponctuels du mois (650 + 20 = 670 —
-  // retour Phil 2026-07-22 : « Marquer payé » doit couvrir les frais).
-  function duMois(row: Row): number {
-    return (
-      Math.round(
-        (row.loyer_mensuel +
-          (row.frais_mois ?? []).reduce((s, f) => s + f.montant, 0)) *
-          100
-      ) / 100
-    );
   }
 
   // Payé AU COMPLET en 1 clic : le restant du mois (loyer + frais −

@@ -22,6 +22,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { FinBailModal } from "@/components/immobilier/fin-bail";
 
 export type BailDocument = {
   id: number;
@@ -1476,72 +1477,55 @@ export function AuMoisToggle({
   );
 }
 
+/**
+ * « Résilier » depuis les fiches (locataire, logement) — simple
+ * DÉCLENCHEUR du MÊME modal que la page Baux (FinBailModal) : 2 modes
+ * visibles partout — entente de résiliation signée en ligne OU fin
+ * immédiate sans avis (directive « miroir bidirectionnel »).
+ */
 export function ResilierBailButton({
   bailId,
-  onChanged
+  locataireNom,
+  immeubleName,
+  logementNumero,
+  onChanged,
+  onMessage
 }: {
   bailId: number;
+  locataireNom?: string | null;
+  immeubleName?: string | null;
+  logementNumero?: string | null;
   onChanged?: () => void;
+  /** Reçoit le message de confirmation (entente envoyée / bail terminé). */
+  onMessage?: (msg: string) => void;
 }) {
-  const [busy, setBusy] = useState(false);
-
-  async function resilier() {
-    const brut = window.prompt(
-      "Résilier le bail avant terme (entente de départ, déguerpissement…).\n\nDate de fin du bail (AAAA-MM-JJ) :",
-      new Date().toISOString().slice(0, 10)
-    );
-    if (brut == null) return;
-    const dateFin = brut.trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFin)) {
-      window.alert("Date invalide — format AAAA-MM-JJ.");
-      return;
-    }
-    const ouvrirReloc = window.confirm(
-      "Ouvrir aussi un dossier de relocation dans Locations ?\n\nOK = oui (recommandé) · Annuler = non"
-    );
-    if (
-      !window.confirm(
-        `Confirmer la RÉSILIATION du bail au ${dateFin} ?\n\nLe bail passera « résilié » — paiements et historique conservés.`
-      )
-    )
-      return;
-    setBusy(true);
-    try {
-      const r = await authedFetch(
-        `/api/v1/immobilier/baux/${bailId}/resilier`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            date_fin: dateFin,
-            ouvrir_relocation: ouvrirReloc
-          })
-        }
-      );
-      if (!r.ok) {
-        const d = await r.json().catch(() => null);
-        throw new Error(
-          (d && (d.detail || d.message)) || `HTTP ${r.status}`
-        );
-      }
-      onChanged?.();
-    } catch (e) {
-      window.alert(`Résiliation impossible : ${(e as Error).message}`);
-    } finally {
-      setBusy(false);
-    }
-  }
+  const [open, setOpen] = useState(false);
 
   return (
-    <button
-      type="button"
-      disabled={busy}
-      onClick={() => void resilier()}
-      title="Mettre fin au bail avant terme (entente de départ, déguerpissement) — statut « résilié », option dossier de relocation"
-      className="inline-flex items-center gap-1 rounded-full border border-rose-500/30 bg-rose-500/5 px-2.5 py-1 text-[11px] font-medium text-rose-300/80 transition hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-50"
-    >
-      Résilier
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        title="Mettre fin au bail — entente de résiliation signée en ligne OU fin immédiate sans avis"
+        className="inline-flex items-center gap-1 rounded-full border border-rose-500/30 bg-rose-500/5 px-2.5 py-1 text-[11px] font-medium text-rose-300/80 transition hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-50"
+      >
+        Résilier
+      </button>
+      {open ? (
+        <FinBailModal
+          bailId={bailId}
+          locataireNom={locataireNom}
+          immeubleName={immeubleName}
+          logementNumero={logementNumero}
+          onClose={() => setOpen(false)}
+          onDone={(msg) => {
+            setOpen(false);
+            onMessage?.(msg);
+            onChanged?.();
+          }}
+        />
+      ) : null}
+    </>
   );
 }
 

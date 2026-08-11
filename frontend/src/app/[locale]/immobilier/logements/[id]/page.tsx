@@ -757,6 +757,10 @@ export default function LogementDetailPage({
                       />
                       <ResilierBailButton
                         bailId={bailActif.id}
+                        locataireNom={bailActif.locataire?.full_name}
+                        immeubleName={dossier?.immeuble.name}
+                        logementNumero={lg.numero}
+                        onMessage={setRelocMsg}
                         onChanged={() => void loadDossier()}
                       />
                       <BailDocActions

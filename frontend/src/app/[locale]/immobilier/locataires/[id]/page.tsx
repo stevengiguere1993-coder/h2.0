@@ -35,6 +35,11 @@ import {
   DocumentsSection
 } from "@/components/immobilier/tal-avis";
 import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
+import {
+  CorrectionOptions,
+  duMois,
+  RENOUVELLEMENT_BADGES
+} from "@/components/immobilier/paiements-actions";
 import { ImmobilierTopbar } from "../../layout";
 
 type Locataire = {
@@ -138,19 +143,6 @@ const BAIL_STATUS_LABEL: Record<string, string> = {
   termine: "Terminé",
   resilie: "Résilié",
   propose: "Proposé"
-};
-
-const RENOUVELLEMENT_STATUS: Record<
-  string,
-  { label: string; badge: string }
-> = {
-  propose: { label: "En attente de réponse", badge: "badge-amber" },
-  accepte: { label: "Accepté", badge: "badge-emerald" },
-  repute_accepte: { label: "Réputé accepté", badge: "badge-emerald" },
-  refuse: { label: "Refusé", badge: "badge-rose" },
-  depart: { label: "Départ annoncé", badge: "badge-rose" },
-  reconduit: { label: "Reconduit", badge: "badge-neutral" },
-  en_negociation: { label: "En négociation", badge: "badge-blue" }
 };
 
 const COMM_KINDS: { value: CommKind; label: string }[] = [
@@ -1259,6 +1251,10 @@ export default function LocataireDetailPage({
                               />
                               <ResilierBailButton
                                 bailId={b.id}
+                                locataireNom={loc?.full_name}
+                                immeubleName={b.immeuble_name}
+                                logementNumero={b.logement_numero}
+                                onMessage={setDepartMsg}
                                 onChanged={() => void loadDossier()}
                               />
                               <BailDocActions
@@ -1299,9 +1295,10 @@ export default function LocataireDetailPage({
               ) : (
                 <ul className="divide-y divide-brand-800/70">
                   {dossier.renouvellements.map((r) => {
-                    const st = RENOUVELLEMENT_STATUS[r.status] ?? {
+                    // Mêmes libellés que la page Baux (constante partagée).
+                    const st = RENOUVELLEMENT_BADGES[r.status] ?? {
                       label: r.status,
-                      badge: "badge-neutral"
+                      cls: "badge-neutral"
                     };
                     return (
                       <li
@@ -1349,7 +1346,7 @@ export default function LocataireDetailPage({
                           ) : null}
                         </div>
                         <span className="inline-flex shrink-0 items-center gap-1.5">
-                          <span className={`badge ${st.badge}`}>
+                          <span className={`badge ${st.cls}`}>
                             {st.label}
                           </span>
                           {r.document_id != null ? (
@@ -1755,12 +1752,15 @@ type LoyerMoisRow = {
   logement_id?: number | null;
   logement_numero: string | null;
   locataire_id: number | null;
+  locataire_name?: string | null;
   loyer_mensuel: number;
   montant_paye: number | null;
   paye_le: string | null;
   etat: string;
   frais_mois?: { id: number; montant: number; libelle: string }[];
   solde_total?: number;
+  nb_relances: number;
+  derniere_relance_le: string | null;
 };
 
 function LoyersMoisSection({
@@ -1777,6 +1777,9 @@ function LoyersMoisSection({
   const [rows, setRows] = useState<LoyerMoisRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [relancingId, setRelancingId] = useState<number | null>(null);
+  const [correctingId, setCorrectingId] = useState<number | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -1828,17 +1831,6 @@ function LoyersMoisSection({
     } finally {
       setBusyId(null);
     }
-  }
-
-  // Dû du mois = loyer + frais ponctuels du mois (retour Phil 2026-07-22).
-  function duMois(row: LoyerMoisRow): number {
-    return (
-      Math.round(
-        (row.loyer_mensuel +
-          (row.frais_mois ?? []).reduce((s, f) => s + f.montant, 0)) *
-          100
-      ) / 100
-    );
   }
 
   async function marquerPaye(row: LoyerMoisRow) {
@@ -1910,25 +1902,108 @@ function LoyersMoisSection({
     }
   }
 
-  async function corriger(row: LoyerMoisRow) {
+  // « Corriger » ouvre les OPTIONS (retour Phil 2026-07-31, mêmes choix
+  // que la page Paiements) : corriger le montant, marquer payé au
+  // complet, ou retirer — sans perdre la ligne.
+  async function supprimerPaiementsMois(row: LoyerMoisRow): Promise<void> {
+    const r = await authedFetch(
+      `/api/v1/immobilier/baux/${row.bail_id}/paiements-mois?mois=${mois}`,
+      { method: "DELETE" }
+    );
+    if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+  }
+
+  async function retirerPaiement(row: LoyerMoisRow) {
     if (
       !window.confirm(
-        `Annuler le paiement de ${mois} (${money(row.montant_paye ?? 0)} reçu) ?\nLe mois redeviendra impayé — tu pourras ressaisir le bon montant.`
+        `Retirer le paiement de ${mois} (${money(row.montant_paye ?? 0)} reçu) ?\nLe mois redeviendra impayé.`
       )
     )
       return;
     setBusyId(row.bail_id);
     try {
-      const r = await authedFetch(
-        `/api/v1/immobilier/baux/${row.bail_id}/paiements-mois?mois=${mois}`,
-        { method: "DELETE" }
-      );
-      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      await supprimerPaiementsMois(row);
+      setInfo("Paiement retiré — le mois est de retour impayé.");
+      setCorrectingId(null);
       await apres();
     } catch (e) {
       setErr(`Annulation échouée : ${(e as Error).message}`);
     } finally {
       setBusyId(null);
+    }
+  }
+
+  async function corrigerMontant(row: LoyerMoisRow) {
+    const saisie = window.prompt(
+      `Montant RÉELLEMENT reçu pour ${mois} ?\n(Enregistré : ${money(row.montant_paye ?? 0)} — dû du mois : ${money(duMois(row))})`,
+      ""
+    );
+    if (saisie == null) return;
+    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(montant) || montant < 0) {
+      setErr("Montant invalide.");
+      return;
+    }
+    setBusyId(row.bail_id);
+    try {
+      await supprimerPaiementsMois(row);
+      setCorrectingId(null);
+      if (montant > 0) {
+        await paiement(row, Math.round(montant * 100) / 100);
+      } else {
+        setInfo("Paiements du mois retirés.");
+        await apres();
+        setBusyId(null);
+      }
+    } catch (e) {
+      setErr(`Correction échouée : ${(e as Error).message}`);
+      setBusyId(null);
+    }
+  }
+
+  async function payeAuComplet(row: LoyerMoisRow) {
+    if (
+      !window.confirm(
+        `Remplacer par un paiement COMPLET (${money(duMois(row))}) pour ${mois} ?`
+      )
+    )
+      return;
+    setBusyId(row.bail_id);
+    try {
+      await supprimerPaiementsMois(row);
+      setCorrectingId(null);
+      await paiement(row, duMois(row));
+    } catch (e) {
+      setErr(`Correction échouée : ${(e as Error).message}`);
+      setBusyId(null);
+    }
+  }
+
+  // Rappel de loyer par courriel — même endpoint/payload que la page
+  // Paiements (« Relancer » partout).
+  async function relancer(row: LoyerMoisRow) {
+    setRelancingId(row.bail_id);
+    setInfo(null);
+    setErr(null);
+    try {
+      const r = await authedFetch("/api/v1/immobilier/loyers/relance", {
+        method: "POST",
+        body: JSON.stringify({ bail_id: row.bail_id, mois })
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      const res = (await r.json()) as {
+        niveau: number;
+        destinataire: string;
+      };
+      setInfo(`Relance ${res.niveau} envoyée à ${res.destinataire}`);
+      await apres();
+    } catch (e) {
+      setErr(`Relance échouée : ${(e as Error).message}`);
+    } finally {
+      setRelancingId(null);
     }
   }
 
@@ -1983,6 +2058,11 @@ function LoyersMoisSection({
       {err ? (
         <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
           {err}
+        </p>
+      ) : null}
+      {info ? (
+        <p className="mb-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          {info}
         </p>
       ) : null}
       {rows === null ? (
@@ -2091,18 +2171,53 @@ function LoyersMoisSection({
                 >
                   + Frais
                 </button>
-                {(r.montant_paye ?? 0) > 0 ? (
+                {r.etat === "retard" || r.etat === "partiel" ? (
                   <button
                     type="button"
-                    onClick={() => void corriger(r)}
-                    disabled={busyId === r.bail_id}
-                    title="Erreur de saisie ? Annule les paiements du mois pour ressaisir"
-                    className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                    onClick={() => void relancer(r)}
+                    disabled={relancingId === r.bail_id}
+                    title="Envoyer un rappel de loyer par courriel au locataire"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
                   >
-                    Corriger
+                    {relancingId === r.bail_id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Mail className="h-3 w-3" />
+                    )}
+                    Relancer
                   </button>
                 ) : null}
+                {(r.montant_paye ?? 0) > 0 ? (
+                  correctingId === r.bail_id ? (
+                    <CorrectionOptions
+                      r={r}
+                      busy={busyId === r.bail_id}
+                      onMontant={() => void corrigerMontant(r)}
+                      onComplet={() => void payeAuComplet(r)}
+                      onRetirer={() => void retirerPaiement(r)}
+                      onClose={() => setCorrectingId(null)}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setCorrectingId(r.bail_id)}
+                      disabled={busyId === r.bail_id}
+                      title="Corriger le paiement : montant, complet, ou retrait"
+                      className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                    >
+                      Corriger
+                    </button>
+                  )
+                ) : null}
               </div>
+              {r.nb_relances > 0 ? (
+                <p className="mt-1 text-[10px] text-white/40">
+                  Relancé {r.nb_relances}×
+                  {r.derniere_relance_le
+                    ? ` · dernière ${r.derniere_relance_le}`
+                    : ""}
+                </p>
+              ) : null}
             </div>
           ))}
         </div>

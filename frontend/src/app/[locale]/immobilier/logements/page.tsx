@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Building2,
   DoorOpen,
   Loader2,
-  Search
+  Plus,
+  Search,
+  X
 } from "lucide-react";
 
 import { Link, useRouter } from "@/i18n/navigation";
@@ -14,6 +16,7 @@ import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 import {
   fmtPieces,
+  LogementFiche,
   type LogementFicheData
 } from "@/components/immobilier/logement-fiche";
 
@@ -78,53 +81,62 @@ export default function LogementsPage() {
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
   const [statutFilter, setStatutFilter] = useState<string>("all");
 
+  // « + Ajouter un logement » (même modale que la fiche immeuble) : on
+  // choisit d'abord l'immeuble, puis la modale LogementFiche s'ouvre.
+  const [chooserOpen, setChooserOpen] = useState(false);
+  const [addImmId, setAddImmId] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
+
   // Clic sur une ligne → page fiche logement (vraie page 360).
   function openFiche(row: Row) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     router.push(`/immobilier/logements/${row.id}` as any);
   }
 
-  useEffect(() => {
-    let cancelled = false;
+  // Jeton anti-course : seul le chargement le plus récent écrit l'état
+  // (changement d'entreprise rapide, rechargement après création).
+  const loadToken = useRef(0);
+  const load = useCallback(async () => {
+    const token = ++loadToken.current;
     setRows(null);
     setError(null);
-    setImmeubleFilter("all");
-    void (async () => {
-      try {
-        const url =
-          currentEntrepriseId != null
-            ? `/api/v1/immobilier/immeubles?entreprise_id=${currentEntrepriseId}`
-            : "/api/v1/immobilier/immeubles";
-        const res = await authedFetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const imms = (await res.json()) as ImmeubleLite[];
-        if (cancelled) return;
-        setImmeubles(imms);
+    try {
+      const url =
+        currentEntrepriseId != null
+          ? `/api/v1/immobilier/immeubles?entreprise_id=${currentEntrepriseId}`
+          : "/api/v1/immobilier/immeubles";
+      const res = await authedFetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const imms = (await res.json()) as ImmeubleLite[];
+      if (token !== loadToken.current) return;
+      setImmeubles(imms);
 
-        const lists = await Promise.all(
-          imms.map(async (imm) => {
-            const r = await authedFetch(
-              `/api/v1/immobilier/immeubles/${imm.id}/logements`
-            );
-            if (!r.ok) return [] as Row[];
-            const logs = (await r.json()) as Logement[];
-            return logs.map((l) => ({
-              ...l,
-              immeuble_name: imm.name,
-              immeuble_gestion_externe: !!imm.gestion_externe
-            }));
-          })
-        );
-        if (cancelled) return;
-        setRows(lists.flat());
-      } catch (err) {
-        if (!cancelled) setError((err as Error).message);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+      const lists = await Promise.all(
+        imms.map(async (imm) => {
+          const r = await authedFetch(
+            `/api/v1/immobilier/immeubles/${imm.id}/logements`
+          );
+          if (!r.ok) return [] as Row[];
+          const logs = (await r.json()) as Logement[];
+          return logs.map((l) => ({
+            ...l,
+            immeuble_name: imm.name,
+            immeuble_gestion_externe: !!imm.gestion_externe
+          }));
+        })
+      );
+      if (token !== loadToken.current) return;
+      setRows(lists.flat());
+    } catch (err) {
+      if (token === loadToken.current)
+        setError((err as Error).message);
+    }
   }, [currentEntrepriseId]);
+
+  useEffect(() => {
+    setImmeubleFilter("all");
+    void load();
+  }, [load]);
 
   const filtered = useMemo(() => {
     if (rows === null) return null;
@@ -151,17 +163,31 @@ export default function LogementsPage() {
       />
 
       <div className="p-4 lg:p-6">
-        <header className="flex items-start gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
-            <DoorOpen className="h-5 w-5" />
-          </span>
-          <div>
-            <h1 className="text-2xl font-bold text-white">Logements</h1>
-            <p className="mt-1 max-w-2xl text-sm text-white/60">
-              Tous les logements du portefeuille, tous immeubles confondus —
-              statut, pièces et loyer demandé en un coup d&apos;œil.
-            </p>
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+              <DoorOpen className="h-5 w-5" />
+            </span>
+            <div>
+              <h1 className="text-2xl font-bold text-white">Logements</h1>
+              <p className="mt-1 max-w-2xl text-sm text-white/60">
+                Tous les logements du portefeuille, tous immeubles confondus —
+                statut, pièces et loyer demandé en un coup d&apos;œil.
+              </p>
+            </div>
           </div>
+          <button
+            type="button"
+            onClick={() => {
+              setAddImmId(
+                immeubleFilter !== "all" ? String(immeubleFilter) : ""
+              );
+              setChooserOpen(true);
+            }}
+            className="btn-outline-accent btn-sm"
+          >
+            <Plus className="h-3.5 w-3.5" /> Ajouter un logement
+          </button>
         </header>
 
         {/* Filtres */}
@@ -296,6 +322,74 @@ export default function LogementsPage() {
         )}
       </div>
 
+      {/* Choix de l'immeuble AVANT la modale de création (la fiche
+          logement a besoin de savoir où le créer). */}
+      {chooserOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setChooserOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <h3 className="text-base font-bold text-white">
+                Ajouter un logement
+              </h3>
+              <button
+                type="button"
+                className="rounded-lg p-1.5 text-white/40 hover:text-white"
+                onClick={() => setChooserOpen(false)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <label className="text-xs font-medium text-white/60">
+              Immeuble
+            </label>
+            <select
+              value={addImmId}
+              onChange={(e) => setAddImmId(e.target.value)}
+              className="input mt-1 w-full"
+            >
+              <option value="">Choisir…</option>
+              {immeubles.map((imm) => (
+                <option key={imm.id} value={String(imm.id)}>
+                  {imm.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={!addImmId}
+              onClick={() => {
+                setChooserOpen(false);
+                setShowCreate(true);
+              }}
+              className="btn-accent btn-sm mt-4 w-full justify-center disabled:opacity-50"
+            >
+              <Plus className="h-4 w-4" /> Continuer
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {showCreate && addImmId ? (
+        <LogementFiche
+          logement={null}
+          immeubleId={Number(addImmId)}
+          onClose={() => setShowCreate(false)}
+          onSaved={() => {
+            setShowCreate(false);
+            void load();
+          }}
+          onDeleted={() => {
+            setShowCreate(false);
+            void load();
+          }}
+        />
+      ) : null}
     </>
   );
 }

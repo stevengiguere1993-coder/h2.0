@@ -17,7 +17,6 @@ import {
   FileSignature,
   KeyRound,
   Loader2,
-  LogOut,
   Mail,
   Pencil,
   Percent,
@@ -45,6 +44,17 @@ import {
 } from "@/components/immobilier/logement-fiche";
 import { LocationsBoard } from "@/components/immobilier/locations-board";
 import { BailDocActions } from "@/components/immobilier/tal-avis";
+import {
+  CorrectionOptions,
+  duMois,
+  RENOUVELLEMENT_BADGES
+} from "@/components/immobilier/paiements-actions";
+import {
+  CreerBailModal,
+  FinBailModal,
+  KANBAN_STATUTS,
+  type SuiviBailRow
+} from "@/components/immobilier/fin-bail";
 
 type Ownership = {
   id: number;
@@ -104,20 +114,6 @@ type Bail = {
   document_id?: number | null;
   renouvellement_status?: string | null;
   renouvellement_avis_document_id?: number | null;
-};
-
-// Pastille (NON cliquable) du dernier avis de renouvellement du bail.
-const RENOUVELLEMENT_BADGES: Record<
-  string,
-  { label: string; cls: string }
-> = {
-  propose: { label: "Avis envoyé", cls: "badge-amber" },
-  accepte: { label: "Avis accepté", cls: "badge-emerald" },
-  repute_accepte: { label: "Réputé accepté", cls: "badge-emerald" },
-  refuse: { label: "Avis refusé", cls: "badge-rose" },
-  depart: { label: "Départ annoncé", cls: "badge-rose" },
-  reconduit: { label: "Reconduit", cls: "badge-neutral" },
-  en_negociation: { label: "En négociation", cls: "badge-blue" }
 };
 
 type Hypotheque = {
@@ -328,23 +324,7 @@ export default function ImmeubleDetailPage({
   const [evaluations, setEvaluations] = useState<Evaluation[] | null>(null);
   const [maintenance, setMaintenance] = useState<Maintenance[] | null>(null);
   const [rollup, setRollup] = useState<RollupImmeuble | null>(null);
-  const [locataires, setLocataires] = useState<
-    { id: number; full_name: string }[]
-  >([]);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    authedFetch("/api/v1/immobilier/locataires")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((d) => {
-        if (!cancelled) setLocataires(Array.isArray(d) ? d : []);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (!immeubleId) return;
@@ -951,41 +931,7 @@ export default function ImmeubleDetailPage({
           {tab === "baux" ? (
             <BauxTab
               immeubleId={immeubleId}
-              list={baux}
-              logements={logements}
-              locataires={locataires}
               highlightBailId={highlightBailId}
-              onDocsChanged={() => {
-                void (async () => {
-                  const bx = await authedFetch(
-                    `/api/v1/immobilier/immeubles/${immeubleId}/baux`
-                  );
-                  if (bx.ok) setBaux((await bx.json()) as Bail[]);
-                })();
-              }}
-              onRelocation={async (b) => {
-                setActionErr(null);
-                const r = await authedFetch(
-                  "/api/v1/immobilier/locations",
-                  {
-                    method: "POST",
-                    body: JSON.stringify({
-                      logement_id: b.logement_id,
-                      bail_id: b.id
-                    })
-                  }
-                );
-                if (!r.ok) {
-                  const t = await r.text();
-                  setActionErr(
-                    t.includes("déjà en cours")
-                      ? "Une relocation est déjà en cours pour ce logement — voir l'onglet Locations."
-                      : t.slice(0, 200) || `HTTP ${r.status}`
-                  );
-                  return;
-                }
-                switchTab("locations");
-              }}
             />
           ) : null}
           {tab === "locations" ? (
@@ -2250,24 +2196,84 @@ function LogementsTab({
 
 function BauxTab({
   immeubleId,
-  list,
-  logements,
-  locataires,
-  highlightBailId,
-  onRelocation,
-  onDocsChanged
+  highlightBailId
 }: {
   immeubleId: number;
-  list: Bail[] | null;
-  logements: Logement[] | null;
-  locataires: { id: number; full_name: string }[];
   highlightBailId: number | null;
-  onRelocation: (b: Bail) => void | Promise<void>;
-  /** Recharge les baux après import/remplacement du bail courant. */
-  onDocsChanged?: () => void;
 }) {
-  const logMap = new Map((logements || []).map((l) => [l.id, l.numero]));
-  const locMap = new Map(locataires.map((l) => [l.id, l.full_name]));
+  // MIROIR de la page Baux (/immobilier/suivi-baux) filtré sur CET
+  // immeuble : mêmes lignes (une PAR LOGEMENT — bail actif + prochain),
+  // mêmes badges français, mêmes actions (directive « miroir
+  // bidirectionnel » : la fiche = la page principale, ni plus ni moins).
+  const [rows, setRows] = useState<SuiviBailRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [finBailFor, setFinBailFor] = useState<SuiviBailRow | null>(null);
+  const [creerFor, setCreerFor] = useState<SuiviBailRow | null>(null);
+  const [statutBusy, setStatutBusy] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/suivi-baux?immeuble_id=${immeubleId}`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setRows((await r.json()) as SuiviBailRow[]);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }, [immeubleId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function changerStatut(r: SuiviBailRow, statut: string) {
+    if (!r.dossier_id || statut === r.dossier_statut) return;
+    setStatutBusy(r.dossier_id);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/locations/${r.dossier_id}`,
+        { method: "PATCH", body: JSON.stringify({ statut }) }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      setFlash("Statut mis à jour — le kanban Locations est synchronisé.");
+      await load();
+    } catch (e) {
+      setErr(`Changement de statut : ${(e as Error).message}`);
+    } finally {
+      setStatutBusy(null);
+    }
+  }
+
+  async function supprimerBail(r: SuiviBailRow) {
+    if (!r.bail_id) return;
+    if (
+      !window.confirm(
+        `⚠️ Supprimer le bail de ${r.locataire_nom || "ce locataire"} (${r.immeuble_name} · ${r.logement_numero}) ?\n\nSes paiements et documents liés seront affectés — pour une fin de bail normale, utilise plutôt « Mettre fin au bail ».`
+      )
+    )
+      return;
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/baux/${r.bail_id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      setFlash("Bail supprimé.");
+      await load();
+    } catch (e) {
+      setErr(`Suppression : ${(e as Error).message}`);
+    }
+  }
 
   // Ouvre un document conservé (l'avis courant) dans un nouvel onglet.
   async function ouvrirDoc(docId: number) {
@@ -2280,160 +2286,354 @@ function BauxTab({
       window.open(url, "_blank");
       window.setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e) {
-      alert(`Ouverture échouée : ${(e as Error).message}`);
+      setErr(`Ouverture échouée : ${(e as Error).message}`);
     }
   }
 
+  // Rouges (résiliation en cours) en premier, puis sans bail, puis le
+  // reste — même tri que la page Baux.
+  const filtres = useMemo(
+    () =>
+      [...(rows || [])].sort(
+        (a, b) =>
+          Number(b.resiliation_en_cours) -
+            Number(a.resiliation_en_cours) ||
+          Number(a.bail_id != null) - Number(b.bail_id != null)
+      ),
+    [rows]
+  );
+
+  const nbSansBail = (rows || []).filter((r) => r.bail_id == null).length;
+  const nbADocumenter = (rows || []).filter(
+    (r) => r.bail_id != null && r.document_id == null
+  ).length;
+  const nbResiliations = (rows || []).filter(
+    (r) => r.resiliation_en_cours
+  ).length;
+
   return (
-    <div className="space-y-4">
-      {list === null ? (
+    <div className="space-y-3">
+      {rows ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs text-white/50">
+            {rows.length} logement{rows.length > 1 ? "s" : ""} ·{" "}
+            <span className="text-white/70">{nbSansBail} sans bail</span>
+            {nbADocumenter > 0 ? (
+              <>
+                {" "}
+                ·{" "}
+                <span className="text-amber-300">
+                  {nbADocumenter} PDF à importer
+                </span>
+              </>
+            ) : null}
+            {nbResiliations > 0 ? (
+              <>
+                {" "}
+                ·{" "}
+                <span className="text-rose-300">
+                  {nbResiliations} résiliation
+                  {nbResiliations > 1 ? "s" : ""} en cours
+                </span>
+              </>
+            ) : null}
+          </span>
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/immobilier/suivi-baux" as any}
+            className="text-xs text-accent-500 hover:underline"
+          >
+            Vue complète →
+          </Link>
+        </div>
+      ) : null}
+
+      {flash ? (
+        <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          {flash}
+        </p>
+      ) : null}
+      {err ? (
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+          {err}
+        </p>
+      ) : null}
+
+      {rows === null ? (
         <Loading />
-      ) : list.length === 0 ? (
-        <Empty msg="Aucun bail." />
+      ) : filtres.length === 0 ? (
+        <Empty msg="Aucun logement dans cet immeuble." />
       ) : (
         <div className="overflow-x-auto rounded-2xl border border-brand-800 bg-brand-900">
-          <table className="w-full min-w-[900px] text-left text-sm">
+          <table className="w-full min-w-[1040px] text-left text-sm">
             <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
               <tr>
                 <th className="px-4 py-2.5">Logement</th>
                 <th className="px-4 py-2.5">Locataire</th>
                 <th className="px-4 py-2.5">Période</th>
                 <th className="px-4 py-2.5 text-right">Loyer/m</th>
-                <th className="px-4 py-2.5">Statut</th>
-                <th className="px-4 py-2.5">Signature</th>
-                <th className="px-4 py-2.5 text-right">Documents TAL</th>
-                <th className="px-4 py-2.5 text-right">Départ</th>
+                <th className="px-4 py-2.5">Suivi</th>
+                <th className="px-4 py-2.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-brand-800">
-              {[...list]
-                // Groupés par LOGEMENT (retour Phil 2026-07-31 : les
-                // deux baux d'une même unité l'un sous l'autre) —
-                // l'actif d'abord, puis le prochain (proposé/futur).
-                .sort((a, b2) => {
-                  const la = String(logMap.get(a.logement_id) || "");
-                  const lb = String(logMap.get(b2.logement_id) || "");
-                  if (la !== lb)
-                    return la.localeCompare(lb, "fr", { numeric: true });
-                  const ra = a.status === "actif" ? 0 : 1;
-                  const rb = b2.status === "actif" ? 0 : 1;
-                  if (ra !== rb) return ra - rb;
-                  return String(a.date_debut).localeCompare(
-                    String(b2.date_debut)
-                  );
-                })
-                .map((b) => (
-                <tr
-                  key={b.id}
-                  // Bail ciblé depuis la fiche locataire (?bail=…) :
-                  // surligné + amené à l'écran.
-                  ref={
-                    b.id === highlightBailId
-                      ? (el) =>
-                          el?.scrollIntoView({
-                            block: "center",
-                            behavior: "smooth"
-                          })
-                      : undefined
-                  }
-                  className={
-                    b.id === highlightBailId
-                      ? "bg-accent-500/10 ring-1 ring-inset ring-accent-500/40"
-                      : ""
-                  }
-                >
-                  <td className="px-4 py-2 font-mono text-xs">
-                    <Link
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      href={
-                        `/immobilier/logements/${b.logement_id}?from=immeuble` as any
-                      }
-                      className="font-medium text-accent-500 hover:underline"
-                      title="Ouvrir la fiche du logement"
-                    >
-                      {logMap.get(b.logement_id) || `#${b.logement_id}`}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-2 text-xs">
-                    <Link
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      href={
-                        `/immobilier/locataires/${b.locataire_id}?from=immeuble&imm=${immeubleId}` as any
-                      }
-                      className="font-medium text-accent-500 hover:underline"
-                    >
-                      {locMap.get(b.locataire_id) ||
-                        `Locataire #${b.locataire_id}`}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-2 text-xs text-white/70">
-                    {b.date_debut} → {b.date_fin}
-                  </td>
-                  <td className="px-4 py-2 text-right font-mono text-xs text-white/80">
-                    {fmtCurrency(b.loyer_mensuel)}
-                  </td>
-                  <td className="px-4 py-2 text-xs">
-                    <StatusBadge status={b.status} />
-                  </td>
-                  <td className="px-4 py-2 text-xs">
-                    <span className="inline-flex flex-wrap items-center gap-1.5">
-                      <BailSignButton bailId={b.id} signed={!!b.signed_at} />
-                      {b.renouvellement_status &&
-                      RENOUVELLEMENT_BADGES[b.renouvellement_status] ? (
-                        <span
-                          className={`badge ${RENOUVELLEMENT_BADGES[b.renouvellement_status].cls}`}
-                        >
-                          {
-                            RENOUVELLEMENT_BADGES[b.renouvellement_status]
-                              .label
-                          }
-                        </span>
-                      ) : null}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2 text-right">
-                    <span className="inline-flex items-center gap-1.5">
-                      {b.renouvellement_avis_document_id != null ? (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void ouvrirDoc(
-                              b.renouvellement_avis_document_id!
-                            )
-                          }
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-2.5 py-1 text-xs font-semibold text-white/80 transition hover:border-white/30 hover:text-white"
-                          title="Ouvrir l'avis de renouvellement courant (PDF)"
-                        >
-                          <FileDown className="h-3.5 w-3.5" />
-                          Avis
-                        </button>
-                      ) : null}
-                      <BailDocActions
-                        bailId={b.id}
-                        hasDoc={b.document_id != null}
-                        signedAt={b.signed_at}
-                        onChanged={onDocsChanged}
-                      />
-                    </span>
-                  </td>
-                  <td className="px-4 py-2 text-right">
-                    {b.status === "actif" ? (
-                      <button
-                        type="button"
-                        title="Le locataire a confirmé son départ — ouvrir un dossier de relocation (onglet Locations)"
-                        onClick={() => void onRelocation(b)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20"
+              {filtres.map((r) => {
+                const actifAuDossier =
+                  r.bail_id != null && r.document_id != null;
+                // Bail ciblé depuis la fiche locataire (?bail=…) :
+                // surligné + amené à l'écran.
+                const hl =
+                  highlightBailId != null &&
+                  (r.bail_id === highlightBailId ||
+                    r.prochain_bail_id === highlightBailId);
+                return (
+                  <tr
+                    key={r.logement_id}
+                    ref={
+                      hl
+                        ? (el) =>
+                            el?.scrollIntoView({
+                              block: "center",
+                              behavior: "smooth"
+                            })
+                        : undefined
+                    }
+                    className={
+                      hl
+                        ? "bg-accent-500/10 ring-1 ring-inset ring-accent-500/40"
+                        : r.resiliation_en_cours
+                          ? "bg-rose-500/10 hover:bg-rose-500/15"
+                          : actifAuDossier
+                            ? "bg-emerald-500/10 hover:bg-emerald-500/15"
+                            : r.bail_id != null
+                              ? "bg-amber-500/5 hover:bg-amber-500/10"
+                              : "hover:bg-brand-950/50"
+                    }
+                  >
+                    <td className="px-4 py-2.5">
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={
+                          `/immobilier/logements/${r.logement_id}?from=immeuble` as any
+                        }
+                        className="font-mono text-xs font-medium text-accent-500 hover:underline"
+                        title="Ouvrir la fiche du logement"
                       >
-                        <LogOut className="h-3 w-3" /> Départ
-                      </button>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
+                        {r.logement_numero || `#${r.logement_id}`}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {r.locataire_id != null ? (
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={
+                            `/immobilier/locataires/${r.locataire_id}?from=immeuble&imm=${immeubleId}` as any
+                          }
+                          className="text-accent-500 hover:underline"
+                        >
+                          {r.locataire_nom || "—"}
+                        </Link>
+                      ) : (
+                        <span className="text-white/40">
+                          {r.bail_id != null ? "—" : "Aucun bail"}
+                        </span>
+                      )}
+                      {r.prochain_locataire_nom ? (
+                        <div className="mt-0.5 text-[10px] text-orange-300/90">
+                          Prochain : {r.prochain_locataire_nom}
+                          {r.prochain_loyer != null
+                            ? ` · ${fmtCurrency(r.prochain_loyer)}`
+                            : ""}
+                          {r.prochain_date_debut
+                            ? ` dès le ${r.prochain_date_debut}`
+                            : ""}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-white/60">
+                      {r.bail_id != null
+                        ? r.au_mois
+                          ? `${r.date_debut} → au mois`
+                          : `${r.date_debut} → ${r.date_fin}`
+                        : "—"}
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono text-xs text-white/80">
+                      {fmtCurrency(r.loyer_mensuel)}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {r.resiliation_en_cours ? (
+                        <span className="badge badge-rose">
+                          Résiliation en cours — signature attendue
+                          {r.resiliation_date
+                            ? ` (fin le ${r.resiliation_date})`
+                            : ""}
+                        </span>
+                      ) : r.bail_id == null ? (
+                        <span className="badge badge-neutral">
+                          Aucun bail
+                        </span>
+                      ) : actifAuDossier ? (
+                        <span className="badge badge-emerald">
+                          Bail au dossier
+                        </span>
+                      ) : (
+                        <span className="badge badge-amber">
+                          Actif — PDF à importer
+                        </span>
+                      )}
+                      {r.renouvellement_status &&
+                      RENOUVELLEMENT_BADGES[r.renouvellement_status] ? (
+                        <div className="mt-1">
+                          <span
+                            className={`badge ${RENOUVELLEMENT_BADGES[r.renouvellement_status].cls}`}
+                          >
+                            {
+                              RENOUVELLEMENT_BADGES[r.renouvellement_status]
+                                .label
+                            }
+                          </span>
+                        </div>
+                      ) : null}
+                      {r.dossier_id != null &&
+                      r.dossier_statut != null ? (
+                        <div className="mt-1">
+                          <select
+                            value={r.dossier_statut}
+                            disabled={statutBusy === r.dossier_id}
+                            onChange={(e) =>
+                              void changerStatut(r, e.target.value)
+                            }
+                            title="Étape du kanban Locations — changer ici le change là-bas"
+                            className="w-full max-w-[190px] rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500 disabled:opacity-50"
+                          >
+                            {KANBAN_STATUTS.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                        {r.bail_id != null ? (
+                          <>
+                            {!r.resiliation_en_cours ? (
+                              <button
+                                type="button"
+                                onClick={() => setFinBailFor(r)}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
+                              >
+                                Mettre fin au bail
+                              </button>
+                            ) : null}
+                            <BailDocActions
+                              bailId={r.bail_id}
+                              hasDoc={r.document_id != null}
+                              signedAt={r.signed_at}
+                              compact
+                              onChanged={() => void load()}
+                            />
+                            {r.renouvellement_avis_document_id != null ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void ouvrirDoc(
+                                    r.renouvellement_avis_document_id!
+                                  )
+                                }
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-2.5 py-1 text-xs font-semibold text-white/80 transition hover:border-white/30 hover:text-white"
+                                title="Ouvrir l'avis de renouvellement courant (PDF)"
+                              >
+                                <FileDown className="h-3.5 w-3.5" />
+                                Avis
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => setCreerFor(r)}
+                              title="Préparer un NOUVEAU bail sur ce logement (prochain locataire)"
+                              className="rounded-lg border border-brand-700 bg-brand-900 p-1.5 text-white/70 transition hover:bg-brand-800"
+                            >
+                              <Plus className="h-3 w-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void supprimerBail(r)}
+                              title="Supprimer ce bail (erreur de saisie) — pour une vraie fin de bail, utilise « Mettre fin au bail »"
+                              className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-1.5 text-rose-300 transition hover:bg-rose-500/20"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setCreerFor(r)}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
+                            >
+                              <Plus className="h-3 w-3" /> Créer un
+                              nouveau bail
+                            </button>
+                            {r.prochain_bail_id != null ? (
+                              <BailDocActions
+                                bailId={r.prochain_bail_id}
+                                hasDoc={r.prochain_document_id != null}
+                                compact
+                                onChanged={() => void load()}
+                              />
+                            ) : null}
+                          </>
+                        )}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
+
+      <p className="text-[11px] text-white/40">
+        Importer le PDF d&apos;un bail « proposé » le rend ACTIF et
+        règle le dossier de relocation lié — partout dans Kratos.
+      </p>
+
+      {finBailFor && finBailFor.bail_id != null ? (
+        <FinBailModal
+          bailId={finBailFor.bail_id}
+          locataireNom={finBailFor.locataire_nom}
+          immeubleName={finBailFor.immeuble_name}
+          logementNumero={finBailFor.logement_numero}
+          onClose={() => setFinBailFor(null)}
+          onDone={(msg) => {
+            setFinBailFor(null);
+            setFlash(msg);
+            void load();
+          }}
+        />
+      ) : null}
+      {creerFor ? (
+        <CreerBailModal
+          logementId={creerFor.logement_id}
+          immeubleName={creerFor.immeuble_name}
+          logementNumero={creerFor.logement_numero}
+          onClose={() => setCreerFor(null)}
+          onDone={(statut) => {
+            setCreerFor(null);
+            setFlash(
+              statut === "actif"
+                ? "Bail créé ACTIF (déjà en vigueur) — importe le PDF signé pour l'avoir au dossier."
+                : "Bail créé (proposé) — importe le PDF signé (CORPIQ) pour le rendre actif."
+            );
+            void load();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -2473,6 +2673,7 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
   const [err, setErr] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<number | null>(null);
   const [relancingId, setRelancingId] = useState<number | null>(null);
+  const [correctingId, setCorrectingId] = useState<number | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -2532,17 +2733,6 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
     } finally {
       setPayingId(null);
     }
-  }
-
-  // Dû du mois = loyer + frais ponctuels du mois (retour Phil 2026-07-22).
-  function duMois(row: LoyerRow): number {
-    return (
-      Math.round(
-        (row.loyer_mensuel +
-          (row.frais_mois ?? []).reduce((s, f) => s + f.montant, 0)) *
-          100
-      ) / 100
-    );
   }
 
   // 1 clic = le restant du mois (loyer + frais − déjà reçu).
@@ -2616,25 +2806,79 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
     }
   }
 
-  // Erreur de saisie : annule tous les paiements du mois pour ce bail.
-  async function corrigerPaiement(row: LoyerRow) {
+  // « Corriger » ouvre les OPTIONS (retour Phil 2026-07-31, mêmes choix
+  // que la page Paiements) : corriger le montant, marquer payé au
+  // complet, ou retirer — sans perdre la ligne.
+  async function supprimerPaiementsMois(row: LoyerRow): Promise<void> {
+    const r = await authedFetch(
+      `/api/v1/immobilier/baux/${row.bail_id}/paiements-mois?mois=${mois}`,
+      { method: "DELETE" }
+    );
+    if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+  }
+
+  async function retirerPaiement(row: LoyerRow) {
     if (
       !window.confirm(
-        `Annuler le paiement de ${row.locataire_name || "ce locataire"} pour ${mois} (${fmtCurrency(row.montant_paye ?? 0)} reçu) ?\nLe mois redeviendra impayé — tu pourras ressaisir le bon montant.`
+        `Retirer le paiement de ${row.locataire_name || "ce locataire"} pour ${mois} (${fmtCurrency(row.montant_paye ?? 0)} reçu) ?\nLe mois redeviendra impayé.`
       )
     )
       return;
     setPayingId(row.bail_id);
     try {
-      const r = await authedFetch(
-        `/api/v1/immobilier/baux/${row.bail_id}/paiements-mois?mois=${mois}`,
-        { method: "DELETE" }
-      );
-      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      await supprimerPaiementsMois(row);
+      setInfo("Paiement retiré — le mois est de retour impayé.");
+      setCorrectingId(null);
       await load();
     } catch (e) {
       setErr(`Annulation échouée : ${(e as Error).message}`);
     } finally {
+      setPayingId(null);
+    }
+  }
+
+  async function corrigerMontant(row: LoyerRow) {
+    const saisie = window.prompt(
+      `Montant RÉELLEMENT reçu de ${row.locataire_name || "ce locataire"} pour ${mois} ?\n(Enregistré : ${fmtCurrency(row.montant_paye ?? 0)} — dû du mois : ${fmtCurrency(duMois(row))})`,
+      ""
+    );
+    if (saisie == null) return;
+    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(montant) || montant < 0) {
+      setErr("Montant invalide.");
+      return;
+    }
+    setPayingId(row.bail_id);
+    try {
+      await supprimerPaiementsMois(row);
+      setCorrectingId(null);
+      if (montant > 0) {
+        await enregistrerPaiement(row, Math.round(montant * 100) / 100);
+      } else {
+        setInfo("Paiements du mois retirés.");
+        await load();
+        setPayingId(null);
+      }
+    } catch (e) {
+      setErr(`Correction échouée : ${(e as Error).message}`);
+      setPayingId(null);
+    }
+  }
+
+  async function payeAuComplet(row: LoyerRow) {
+    if (
+      !window.confirm(
+        `Remplacer par un paiement COMPLET (${fmtCurrency(duMois(row))}) pour ${mois} ?`
+      )
+    )
+      return;
+    setPayingId(row.bail_id);
+    try {
+      await supprimerPaiementsMois(row);
+      setCorrectingId(null);
+      await enregistrerPaiement(row, duMois(row));
+    } catch (e) {
+      setErr(`Correction échouée : ${(e as Error).message}`);
       setPayingId(null);
     }
   }
@@ -2895,7 +3139,7 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                           type="button"
                           onClick={() => void relancer(r)}
                           disabled={relancingId === r.bail_id}
-                          title="Envoyer un courriel de rappel au locataire (manuel)"
+                          title="Envoyer un rappel de loyer par courriel au locataire"
                           className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
                         >
                           {relancingId === r.bail_id ? (
@@ -2903,7 +3147,7 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                           ) : (
                             <Mail className="h-3 w-3" />
                           )}
-                          Rappel courriel
+                          Relancer
                         </button>
                         <button
                           type="button"
@@ -2936,23 +3180,43 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                           + Frais
                         </button>
                         {(r.montant_paye ?? 0) > 0 ? (
-                          <button
-                            type="button"
-                            onClick={() => void corrigerPaiement(r)}
-                            disabled={payingId === r.bail_id}
-                            title="Erreur de saisie ? Annule les paiements du mois pour ressaisir"
-                            className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
-                          >
-                            Corriger
-                          </button>
+                          correctingId === r.bail_id ? (
+                            <CorrectionOptions
+                              r={r}
+                              busy={payingId === r.bail_id}
+                              onMontant={() => void corrigerMontant(r)}
+                              onComplet={() => void payeAuComplet(r)}
+                              onRetirer={() => void retirerPaiement(r)}
+                              onClose={() => setCorrectingId(null)}
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setCorrectingId(r.bail_id)}
+                              disabled={payingId === r.bail_id}
+                              title="Corriger le paiement : montant, complet, ou retrait"
+                              className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                            >
+                              Corriger
+                            </button>
+                          )
                         ) : null}
                       </span>
+                    ) : correctingId === r.bail_id ? (
+                      <CorrectionOptions
+                        r={r}
+                        busy={payingId === r.bail_id}
+                        onMontant={() => void corrigerMontant(r)}
+                        onComplet={() => void payeAuComplet(r)}
+                        onRetirer={() => void retirerPaiement(r)}
+                        onClose={() => setCorrectingId(null)}
+                      />
                     ) : (
                       <button
                         type="button"
-                        onClick={() => void corrigerPaiement(r)}
+                        onClick={() => setCorrectingId(r.bail_id)}
                         disabled={payingId === r.bail_id}
-                        title="Erreur de saisie ? Annule les paiements du mois pour ressaisir"
+                        title="Corriger le paiement : montant, complet, ou retrait"
                         className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
                       >
                         Corriger
@@ -2967,62 +3231,6 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
       )}
     </Section>
   );
-}
-
-function BailSignButton({
-  bailId,
-  signed
-}: {
-  bailId: number;
-  signed: boolean;
-}) {
-  const [dl, setDl] = useState(false);
-
-  async function downloadSigned() {
-    setDl(true);
-    try {
-      const res = await authedFetch(
-        `/api/v1/immobilier/baux/${bailId}/document`
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `bail-${bailId}-signe.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      alert((e as Error).message);
-    } finally {
-      setDl(false);
-    }
-  }
-
-  if (signed) {
-    return (
-      <button
-        type="button"
-        onClick={() => void downloadSigned()}
-        disabled={dl}
-        className="inline-flex w-fit items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50"
-        title="Télécharger le bail signé (PDF)"
-      >
-        {dl ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        ) : (
-          <FileDown className="h-3 w-3" />
-        )}
-        Bail signé (PDF)
-      </button>
-    );
-  }
-
-  // Flux CORPIQ (2026-07-31) : plus d'envoi de bail pour signature
-  // depuis Kratos — la colonne n'affiche que le bail signé.
-  return null;
 }
 
 const HYPO_STATUS: [string, string][] = [
