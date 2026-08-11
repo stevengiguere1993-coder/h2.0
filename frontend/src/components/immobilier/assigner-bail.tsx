@@ -9,8 +9,10 @@
  *   - fiche LOCATAIRE → choisir l'immeuble puis le logement (vacants
  *     mis en avant).
  * Dans les deux cas on saisit loyer + dates (fin par défaut = prochain
- * 30 juin, standard québécois) + dépôt optionnel, et ça CRÉE le bail
- * actif — le logement passe « occupé » automatiquement côté serveur.
+ * 30 juin, standard québécois) + dépôt optionnel, et ça CRÉE le bail.
+ * Statut au choix (aligné sur la page Baux) : « proposé » par défaut
+ * (suivi via le kanban Locations) ou « déjà en vigueur » (actif — le
+ * logement passe « occupé » automatiquement côté serveur).
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -143,6 +145,9 @@ function AssignerBailModal({
   // Bail AU MOIS (chambres) : reconduction auto, jamais d'avis de
   // renouvellement. Pré-coché quand le logement est loué en chambres.
   const [auMois, setAuMois] = useState(Boolean(logementEnChambres));
+  // Statut de création UNIFIÉ (même défaut que la page Baux) : proposé
+  // → suivi via le kanban Locations ; actif → bail déjà signé/en vigueur.
+  const [statut, setStatut] = useState<"propose" | "actif">("propose");
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -247,7 +252,7 @@ function AssignerBailModal({
           depot_garantie: depot.trim()
             ? parseFloat(depot.replace(",", "."))
             : null,
-          status: "actif",
+          status: statut,
           au_mois: auMois
         })
       });
@@ -502,6 +507,39 @@ function AssignerBailModal({
               className="input mt-1 w-full"
             />
           </div>
+        </div>
+
+        <div className="mt-3 grid gap-1.5">
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2">
+            <input
+              type="radio"
+              checked={statut === "propose"}
+              onChange={() => setStatut("propose")}
+              className="mt-0.5"
+            />
+            <span className="text-xs text-white/70">
+              <span className="font-semibold text-white">
+                À faire suivre via Locations (proposé)
+              </span>{" "}
+              — la carte apparaît au kanban (« Bail à envoyer ») ;
+              importe le PDF signé pour rendre le bail actif.
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2">
+            <input
+              type="radio"
+              checked={statut === "actif"}
+              onChange={() => setStatut("actif")}
+              className="mt-0.5"
+            />
+            <span className="text-xs text-white/70">
+              <span className="font-semibold text-white">
+                Ce bail est déjà en vigueur (signé)
+              </span>{" "}
+              — créé directement ACTIF, sans passer par le kanban
+              Locations (le logement passe « occupé »).
+            </span>
+          </label>
         </div>
 
         <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2">
