@@ -405,6 +405,160 @@ async def import_entreprises(
 
 
 @router.post(
+    "/sync-detention",
+    response_model=List[OrgNodeRead],
+    summary=(
+        "Reconstruit la structure de DÉTENTION depuis les partenaires "
+        "des fiches d'entreprises : un nœud par entreprise active et "
+        "par actionnaire externe, parent = plus gros détenteur, autres "
+        "en co-détenteurs, pourcentages dans la description. Les "
+        "positions du canvas sont conservées. Idempotent."
+    ),
+)
+async def sync_detention(db: DBSession, _: CurrentUser) -> List[OrgNodeRead]:
+    from app.models.entreprise import Entreprise, EntreprisePartner
+    from app.models.user import User
+
+    nodes = list((await db.execute(select(OrgNode))).scalars().all())
+    by_ent = {
+        n.entreprise_id: n
+        for n in nodes
+        if n.kind == "company" and n.entreprise_id is not None
+    }
+    persons = {
+        (n.label or "").strip().lower(): n
+        for n in nodes
+        if n.kind == "person"
+    }
+    next_pos = max(
+        (n.position for n in nodes if n.parent_id is None), default=-1
+    ) + 1
+
+    entreprises = (
+        await db.execute(
+            select(Entreprise)
+            .where(Entreprise.is_active.is_(True))
+            .order_by(Entreprise.name.asc())
+        )
+    ).scalars().all()
+    ents_by_id = {e.id: e for e in entreprises}
+    for e in entreprises:
+        if e.id in by_ent:
+            continue
+        n = OrgNode(
+            parent_id=None, position=next_pos, kind="company",
+            label=e.name, entreprise_id=e.id,
+        )
+        db.add(n)
+        await db.flush()
+        by_ent[e.id] = n
+        nodes.append(n)
+        next_pos += 1
+
+    partners = (
+        await db.execute(select(EntreprisePartner))
+    ).scalars().all()
+    user_ids = {p.user_id for p in partners if p.user_id}
+    users = {
+        u.id: u
+        for u in (
+            await db.execute(select(User).where(User.id.in_(user_ids)))
+        ).scalars().all()
+    } if user_ids else {}
+
+    def _holder_label(p: EntreprisePartner) -> str:
+        if p.partner_name:
+            return p.partner_name.strip()
+        if p.user_id and p.user_id in users:
+            return users[p.user_id].display_name
+        return f"Partenaire #{p.id}"
+
+    def _creates_cycle(child: OrgNode, new_parent: OrgNode) -> bool:
+        # Remonte les parents depuis le candidat : si on retombe sur
+        # l'enfant, le rattachement bouclerait l'arbre (ex. détentions
+        # croisées A↔B) — on garde alors le lien en co-détention.
+        all_by_id = {n.id: n for n in nodes}
+        cur: Optional[OrgNode] = new_parent
+        guard = 0
+        while cur is not None and guard < 500:
+            if cur.id == child.id:
+                return True
+            cur = (
+                all_by_id.get(cur.parent_id)
+                if cur.parent_id is not None
+                else None
+            )
+            guard += 1
+        return False
+
+    par_detenue: dict = {}
+    for p in partners:
+        if p.entreprise_id in ents_by_id:
+            par_detenue.setdefault(p.entreprise_id, []).append(p)
+
+    for ent_id, plist in par_detenue.items():
+        child = by_ent.get(ent_id)
+        if child is None:
+            continue
+        holders = []
+        for p in plist:
+            if (
+                p.partner_entreprise_id
+                and p.partner_entreprise_id in by_ent
+            ):
+                hn = by_ent[p.partner_entreprise_id]
+            else:
+                lbl = _holder_label(p)
+                key = lbl.lower()
+                hn = persons.get(key)
+                if hn is None:
+                    hn = OrgNode(
+                        parent_id=None, position=next_pos, kind="person",
+                        label=lbl,
+                    )
+                    db.add(hn)
+                    await db.flush()
+                    persons[key] = hn
+                    nodes.append(hn)
+                    next_pos += 1
+            if hn.id == child.id:
+                continue
+            holders.append((float(p.ownership_pct or 0.0), hn))
+        if not holders:
+            continue
+        holders.sort(key=lambda t: -t[0])
+        # Ligne « Détention : … » maintenue en tête de description (les
+        # notes manuelles en dessous sont conservées).
+        detention = " · ".join(
+            f"{hn.label} {pct:g} %" if pct else hn.label
+            for pct, hn in holders
+        )
+        autres = [
+            ligne
+            for ligne in (child.description or "").splitlines()
+            if not ligne.startswith("Détention : ") and ligne.strip()
+        ]
+        child.description = "\n".join(
+            ["Détention : " + detention] + autres
+        )
+        principal = holders[0][1]
+        co_ids = [hn.id for _, hn in holders[1:]]
+        if not _creates_cycle(child, principal):
+            child.parent_id = principal.id
+        else:
+            co_ids = [principal.id] + co_ids
+        co_ids = [
+            c
+            for c in dict.fromkeys(co_ids)
+            if c != child.parent_id and c != child.id
+        ]
+        child.co_owner_node_ids = json.dumps(co_ids) if co_ids else None
+
+    await db.commit()
+    return [OrgNodeRead.model_validate(n) for n in await _all_nodes_sorted(db)]
+
+
+@router.post(
     "/seed-default",
     response_model=List[OrgNodeRead],
     summary=(

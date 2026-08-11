@@ -232,3 +232,69 @@ def test_inc_liee_comme_actionnaire(client, auth_headers):
         json={"entreprise_id": holding, "partner_entreprise_id": holding},
     )
     assert r2.status_code == 422
+
+
+def test_sync_detention_organigramme(client, auth_headers):
+    """L'organigramme se reconstruit depuis les partenaires : nœud par
+    INC + par investisseur externe, parent = plus gros détenteur, % dans
+    la description. Idempotent."""
+    def _ent(nom: str) -> int:
+        return client.post(
+            "/api/v1/entreprises", headers=auth_headers, json={"name": nom}
+        ).json()["id"]
+
+    holding = _ent("Sync Holding inc.")
+    filiale = _ent("Sync Filiale inc.")
+    client.post(
+        "/api/v1/entreprises/partners",
+        headers=auth_headers,
+        json={
+            "entreprise_id": filiale,
+            "partner_entreprise_id": holding,
+            "ownership_pct": 100,
+        },
+    )
+    client.post(
+        "/api/v1/entreprises/partners",
+        headers=auth_headers,
+        json={
+            "entreprise_id": holding,
+            "partner_name": "Sam Sync",
+            "ownership_pct": 50,
+        },
+    )
+
+    r = client.post(
+        "/api/v1/org-nodes/sync-detention", headers=auth_headers
+    )
+    assert r.status_code == 200, r.text
+    nodes = r.json()
+    n_hold = next(n for n in nodes if n["entreprise_id"] == holding)
+    n_fil = next(n for n in nodes if n["entreprise_id"] == filiale)
+    n_sam = next(
+        n
+        for n in nodes
+        if n["kind"] == "person" and n["label"] == "Sam Sync"
+    )
+    # La filiale est détenue par la holding ; la holding par Sam.
+    assert n_fil["parent_id"] == n_hold["id"]
+    assert "Détention : Sync Holding inc. 100 %" in (
+        n_fil["description"] or ""
+    )
+    assert n_hold["parent_id"] == n_sam["id"]
+
+    # Idempotent : un second sync ne duplique ni nœud ni personne.
+    nodes2 = client.post(
+        "/api/v1/org-nodes/sync-detention", headers=auth_headers
+    ).json()
+    assert (
+        len(
+            [
+                n
+                for n in nodes2
+                if n["kind"] == "person" and n["label"] == "Sam Sync"
+            ]
+        )
+        == 1
+    )
+    assert len([n for n in nodes2 if n["entreprise_id"] == filiale]) == 1
