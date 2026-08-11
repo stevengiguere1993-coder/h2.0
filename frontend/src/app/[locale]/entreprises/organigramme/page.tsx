@@ -160,6 +160,10 @@ export default function OrganigrammePage() {
   const [newTopLabel, setNewTopLabel] = useState("");
   const [seeding, setSeeding] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  //: Périmètre affiché : « complet » (INCs + investisseurs externes)
+  //: ou « internes » (seulement nos compagnies) — retour Phil 2026-08-10.
+  const [scope, setScope] = useState<"complet" | "internes">("complet");
 
   // Vue : tableau « Rôles & responsabilités » (par défaut, lisible),
   // arbre en colonnes (édition fine de la hiérarchie complète) ou
@@ -252,6 +256,25 @@ export default function OrganigrammePage() {
     }
   }
 
+  async function syncDetention() {
+    setSyncing(true);
+    setError(null);
+    try {
+      const r = await authedFetch("/api/v1/org-nodes/sync-detention", {
+        method: "POST"
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(txt.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      setNodes((await r.json()) as OrgNode[]);
+    } catch (e) {
+      setError(`Sync de la détention échoué : ${(e as Error).message}`);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   async function importEntreprises() {
     setImporting(true);
     setError(null);
@@ -278,9 +301,17 @@ export default function OrganigrammePage() {
   const structuralNodes = useMemo(
     () =>
       nodes.filter(
-        (n) => n.kind !== "dept" && n.kind !== "role" && n.kind !== "task"
+        (n) =>
+          n.kind !== "dept" &&
+          n.kind !== "role" &&
+          n.kind !== "task" &&
+          // Vue « Nos INCs » : on cache les personnes physiques et
+          // investisseurs externes — il ne reste que la détention
+          // inter-compagnies (les flèches vers les nœuds cachés sont
+          // sautées par la couche SVG).
+          (scope === "complet" || n.kind !== "person")
       ),
-    [nodes]
+    [nodes, scope]
   );
 
   // Index : parent_id → enfants triés par position (vues canvas + colonnes,
@@ -673,6 +704,51 @@ export default function OrganigrammePage() {
                 )}
                 Importer les entreprises
               </button>
+              <button
+                type="button"
+                onClick={() => void syncDetention()}
+                disabled={syncing}
+                className="btn-secondary btn-sm disabled:opacity-50"
+                title="Reconstruit les liens de détention depuis les « Partenaires & parts » des fiches d'entreprises : chaque INC est reliée à ses actionnaires (nos INCs comme les investisseurs externes), pourcentages inclus. Les positions des bulles sont conservées."
+              >
+                {syncing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Link2 className="h-3.5 w-3.5" />
+                )}
+                Sync détention (partenaires)
+              </button>
+              <div
+                className="ml-auto inline-flex overflow-hidden rounded-lg border"
+                style={{ borderColor: "var(--qg-border)" }}
+                title="Périmètre affiché dans l'organigramme et l'arbre"
+              >
+                {(
+                  [
+                    ["complet", "Complet"],
+                    ["internes", "Nos INCs"]
+                  ] as const
+                ).map(([val, lbl]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setScope(val)}
+                    className="px-3 py-1.5 text-xs font-semibold transition"
+                    style={{
+                      backgroundColor:
+                        scope === val
+                          ? "var(--qg-accent)"
+                          : "var(--qg-card-bg)",
+                      color:
+                        scope === val
+                          ? "var(--qg-accent-ink, #0a0a0b)"
+                          : "var(--qg-text-soft)"
+                    }}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
             </form>
 
             {topLevel.length > 0 && viewMode === "columns" ? (
