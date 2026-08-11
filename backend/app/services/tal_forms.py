@@ -329,6 +329,29 @@ GABARITS_DEFAUT: dict[str, dict] = {
             "d'un autre moment.",
         ],
     },
+    # SIGNABLE (contrairement aux lettres ci-dessus) : envoyé pour
+    # signature en ligne à la création d'un bail — vague locative v17b.
+    "consentement_communications": {
+        "titre": "Consentement aux communications électroniques",
+        "paragraphes": [
+            "Je, {nom_locataire}, locataire du logement {numero_logement} "
+            "situé au {adresse_immeuble}, consens à recevoir par courriel, "
+            "à l'adresse que j'ai fournie au locateur, les avis, documents "
+            "et communications relatifs à mon bail, incluant notamment les "
+            "avis de renouvellement et de modification du bail, les reçus "
+            "et états de compte, ainsi que toute autre communication "
+            "relative à la gestion de mon logement.",
+            "Je comprends que ce consentement est donné conformément à la "
+            "Loi concernant le cadre juridique des technologies de "
+            "l'information (RLRQ, c. C-1.1) et que je peux le retirer en "
+            "tout temps en transmettant un avis écrit au locateur, auquel "
+            "cas les communications me seront transmises par un autre "
+            "moyen permis par la loi.",
+            "Le présent consentement prend effet à la date de sa signature "
+            "et demeure valide pour toute la durée du bail et de ses "
+            "renouvellements.",
+        ],
+    },
 }
 
 #: Variables disponibles par lettre (affichées dans l'éditeur).
@@ -336,6 +359,10 @@ GABARIT_VARIABLES: dict[str, list[str]] = {
     "rappel_paiement": ["mois", "montant", "adresse", "locataire", "locateur"],
     "avis_acces": ["date", "plage", "motif", "adresse", "locataire", "locateur"],
     "demande_assurance": ["adresse", "locataire", "locateur"],
+    "consentement_communications": [
+        "nom_locataire", "numero_logement", "adresse_immeuble",
+        "adresse", "locataire", "locateur",
+    ],
 }
 
 
@@ -357,6 +384,17 @@ def _lettre_variables(form_type: str, ctx: TalContext) -> dict[str, str]:
             "date": _fmt_date(ctx.acces_date),
             "plage": ctx.acces_plage or "durant la journée",
             "motif": _fmt_or(ctx.acces_motif),
+        }
+    if form_type == "consentement_communications":
+        # Adresse de l'IMMEUBLE (sans le numéro d'app, déjà cité à part).
+        parts = [p for p in (ctx.logement_adresse, ctx.logement_ville) if p]
+        return {
+            **communes,
+            "nom_locataire": _fmt_or(ctx.locataire_nom),
+            "numero_logement": _fmt_or(ctx.logement_numero),
+            "adresse_immeuble": (
+                ", ".join(parts) if parts else "[Adresse à compléter]"
+            ),
         }
     return communes
 

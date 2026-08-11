@@ -186,11 +186,19 @@ type Financials = {
   appreciation_pct?: number | null;
 };
 
+type RollupBon = {
+  id: number;
+  titre: string;
+  montant: number;
+  status: string;
+  created_at?: string | null;
+};
 type RollupLogement = {
   logement_id: number | null;
   numero: string | null;
   total: number;
   count: number;
+  bons?: RollupBon[];
 };
 type RollupImmeuble = {
   immeuble_id: number;
@@ -200,6 +208,7 @@ type RollupImmeuble = {
   count: number;
   communs_total: number;
   communs_count?: number;
+  communs_bons?: RollupBon[];
   logements: RollupLogement[];
 };
 
@@ -4995,22 +5004,47 @@ function MaintenanceTab({
         </div>
         {filter === "all" &&
         (rollup.logements.length > 0 || (rollup.communs_count ?? 0) > 0) ? (
-          <div className="mt-3 space-y-1 border-t border-brand-800 pt-3 text-sm">
+          <div className="mt-3 space-y-2 border-t border-brand-800 pt-3 text-sm">
             {rollup.logements.map((l) => (
-              <div
-                key={l.logement_id ?? "communs"}
-                className="flex items-center justify-between text-white/70"
-              >
-                <span>App {l.numero || "—"}</span>
-                <span className="text-white">{fmtCurrency(l.total)}</span>
+              <div key={l.logement_id ?? "communs"}>
+                <div className="text-xs font-medium uppercase tracking-wide text-white/50">
+                  App {l.numero || "—"}
+                </div>
+                {(l.bons ?? []).map((b) => (
+                  <div
+                    key={b.id}
+                    className="flex items-center justify-between gap-3 pl-3 text-xs text-white/50"
+                  >
+                    <span className="truncate">{b.titre}</span>
+                    <span className="shrink-0">{fmtCurrency(b.montant)}</span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between text-white/70">
+                  <span>Total</span>
+                  <span className="text-white">{fmtCurrency(l.total)}</span>
+                </div>
               </div>
             ))}
             {(rollup.communs_count ?? 0) > 0 ? (
-              <div className="flex items-center justify-between text-white/70">
-                <span>Communs / immeuble entier</span>
-                <span className="text-white">
-                  {fmtCurrency(rollup.communs_total)}
-                </span>
+              <div>
+                <div className="text-xs font-medium uppercase tracking-wide text-white/50">
+                  Communs / immeuble entier
+                </div>
+                {(rollup.communs_bons ?? []).map((b) => (
+                  <div
+                    key={b.id}
+                    className="flex items-center justify-between gap-3 pl-3 text-xs text-white/50"
+                  >
+                    <span className="truncate">{b.titre}</span>
+                    <span className="shrink-0">{fmtCurrency(b.montant)}</span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between text-white/70">
+                  <span>Total</span>
+                  <span className="text-white">
+                    {fmtCurrency(rollup.communs_total)}
+                  </span>
+                </div>
               </div>
             ) : null}
           </div>

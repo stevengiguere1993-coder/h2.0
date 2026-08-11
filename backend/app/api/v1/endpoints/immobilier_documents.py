@@ -349,6 +349,23 @@ async def delete_document(
         rel.document_id = None
         if rel.statut in ("produit", "remis"):
             rel.statut = "a_produire"
+    # Drive ↔ documents locatifs (v17b) : la copie Drive du document,
+    # s'il y en a une, part à la CORBEILLE (réversible — jamais de
+    # suppression permanente). Best-effort : Drive down ne bloque pas.
+    if getattr(d, "drive_file_id", None):
+        try:
+            from app.services.drive_api import trash_file
+            from app.services.drive_auto_upload_dispatcher import (
+                resolve_drive_owner_user_id,
+            )
+
+            owner_id = await resolve_drive_owner_user_id(db)
+            if owner_id is not None:
+                await trash_file(owner_id, db, d.drive_file_id)
+        except Exception:  # noqa: BLE001 — la suppression prime
+            log.exception(
+                "Corbeille Drive échouée pour le document %s", doc_id
+            )
     await db.delete(d)
     await db.commit()
 

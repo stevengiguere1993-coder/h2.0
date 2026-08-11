@@ -1365,11 +1365,20 @@ async def list_gestion_immo_bons(db: DBSession, user: CurrentUser) -> List[_BonA
 
 
 # ── Roll-up des dépenses de maintenance (sans profit) ─────────────────────
+class _RollupBon(BaseModel):
+    id: int
+    titre: str
+    montant: float
+    status: str
+    created_at: Optional[datetime] = None
+
+
 class _RollupLogement(BaseModel):
     logement_id: Optional[int]
     numero: Optional[str]
     total: float
     count: int
+    bons: List[_RollupBon] = []
 
 
 class _RollupImmeuble(BaseModel):
@@ -1380,6 +1389,7 @@ class _RollupImmeuble(BaseModel):
     count: int
     communs_total: float
     communs_count: int = 0
+    communs_bons: List[_RollupBon] = []
     logements: List[_RollupLogement]
 
 
@@ -1440,9 +1450,25 @@ async def maintenance_rollup(
         else {}
     )
 
+    def _tri_bons(items: List[_RollupBon]) -> List[_RollupBon]:
+        # Plus récents d'abord (created_at desc, NULL en dernier) — clé
+        # textuelle ISO pour éviter toute comparaison naive/aware.
+        return sorted(
+            items,
+            key=lambda x: x.created_at.isoformat() if x.created_at else "",
+            reverse=True,
+        )
+
     by_imm: dict = {}
     for b in bons:
         amt = float(b.amount) if b.amount is not None else 0.0
+        rb = _RollupBon(
+            id=b.id,
+            titre=b.title,
+            montant=amt,
+            status=b.status,
+            created_at=b.created_at,
+        )
         e = by_imm.setdefault(
             b.immeuble_id,
             {
@@ -1450,6 +1476,7 @@ async def maintenance_rollup(
                 "count": 0,
                 "communs": 0.0,
                 "communs_count": 0,
+                "communs_bons": [],
                 "logs": {},
             },
         )
@@ -1457,13 +1484,15 @@ async def maintenance_rollup(
         e["count"] += 1
         if b.logement_id:
             le = e["logs"].setdefault(
-                b.logement_id, {"total": 0.0, "count": 0}
+                b.logement_id, {"total": 0.0, "count": 0, "bons": []}
             )
             le["total"] += amt
             le["count"] += 1
+            le["bons"].append(rb)
         else:
             e["communs"] += amt
             e["communs_count"] += 1
+            e["communs_bons"].append(rb)
 
     out: List[_RollupImmeuble] = []
     for imm_id, e in by_imm.items():
@@ -1477,6 +1506,7 @@ async def maintenance_rollup(
                 count=e["count"],
                 communs_total=round(e["communs"], 2),
                 communs_count=int(e["communs_count"]),
+                communs_bons=_tri_bons(e["communs_bons"]),
                 logements=[
                     _RollupLogement(
                         logement_id=lid,
@@ -1485,6 +1515,7 @@ async def maintenance_rollup(
                         ),
                         total=round(lv["total"], 2),
                         count=lv["count"],
+                        bons=_tri_bons(lv["bons"]),
                     )
                     for lid, lv in sorted(e["logs"].items())
                 ],
@@ -3298,7 +3329,23 @@ async def create_bail(
 
     await db.commit()
     await db.refresh(obj)
-    return BailRead.model_validate(obj)
+    result = BailRead.model_validate(obj)
+
+    # Consentement aux communications électroniques (v17b) : généré et
+    # envoyé pour signature best-effort — un échec (courriel, PDF) ne
+    # bloque jamais la création du bail.
+    try:
+        from app.api.v1.endpoints.immobilier_extras import (
+            envoyer_consentement_communications,
+        )
+
+        await envoyer_consentement_communications(db, obj.id, user)
+    except Exception:  # noqa: BLE001 — la création prime
+        log.exception(
+            "Envoi du consentement communications échoué (bail %s)", result.id
+        )
+
+    return result
 
 
 @router.patch("/baux/{bail_id}", response_model=BailRead)

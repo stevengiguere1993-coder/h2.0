@@ -51,6 +51,8 @@ _DOCUMENT_TYPES: list[dict[str, str]] = [
     {"key": "nda_signed", "label": "NDA signé (PDF)"},
     {"key": "soumission_pdf", "label": "Soumission Dev Log (PDF)"},
     {"key": "facture_pdf", "label": "Facture Dev Log (PDF)"},
+    {"key": "bail_signe", "label": "Bail signé (PDF)"},
+    {"key": "document_locatif", "label": "Document locatif signé (PDF)"},
 ]
 
 # entity_type reconnus (doivent matcher les DriveEntityLink).
@@ -59,6 +61,7 @@ _ENTITY_TYPES: list[dict[str, str]] = [
     {"key": "DevlogClient", "label": "Client Dev Logiciel"},
     {"key": "DevlogProject", "label": "Projet Dev Logiciel"},
     {"key": "ConstructionProject", "label": "Projet Construction"},
+    {"key": "Immeuble", "label": "Immeuble (Gestion locative)"},
 ]
 
 _OVERWRITE_STRATEGIES: list[dict[str, str]] = [
