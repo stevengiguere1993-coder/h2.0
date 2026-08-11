@@ -100,7 +100,7 @@ from app.models.contrat_gestion import (  # noqa: F401
 )
 from app.models.nda import NDA, NDAStatus  # noqa: F401
 from app.models.offer import Offer, OfferStatus  # noqa: F401
-from app.models.org_node import OrgNode  # noqa: F401
+from app.models.org_node import OrgNode, OrgVersion  # noqa: F401
 from app.models.raci import (  # noqa: F401
     RaciActivity,
     RaciCell,

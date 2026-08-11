@@ -9,53 +9,39 @@ import {
   useState
 } from "react";
 import {
-  Briefcase,
   Building2,
-  ChevronDown,
-  ChevronRight,
   Download,
-  GripVertical,
-  LayoutGrid,
+  ExternalLink,
   Link2,
   Loader2,
   Plus,
-  Save,
   Sparkles,
   Star,
   Trash2,
   User as UserIcon,
-  Table2,
-  UserCog,
   Users,
-  Workflow,
   X
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { Link } from "@/i18n/navigation";
 import { MultiSelectDropdown } from "@/components/multi-select-dropdown";
 import { PageDriveSection } from "@/components/drive/PageDriveSection";
-import { RessourcesDispatchView } from "@/components/ressources-dispatch-view";
-import { RolesResponsibilitiesView } from "@/components/roles-responsibilities-view";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
 
 /**
- * Page Organigramme — inspirée du schéma papier de Steven.
+ * Page Organigramme — canvas libre type Miro, seule vue de la page.
  *
- * Affiche l'arbre des entreprises / départements / rôles / services
- * du groupe en colonnes (top-level), avec sous-nœuds en cascade dans
- * chaque colonne. Chaque nœud :
- *  - kind (company / dept / role / service / task)
- *  - label
- *  - lien optionnel à une entreprise
- *  - assignation (employé interne OU texte externe « Freelance », etc.)
- *  - co-détenteurs (autres entreprises qui possèdent aussi ce nœud)
+ * Bulles déplaçables (INCs Kratos, compagnies externes, personnes)
+ * reliées par des flèches de détention (détenteur → détenu), avec la
+ * quote-part en % affichée sur chaque flèche quand elle est connue
+ * (`ownership_json` du nœud détenu, clé = id du détenteur).
  *
- * Les entreprises s'importent en un clic (« Importer les entreprises »)
- * comme nœuds `company` à plat, puis se réorganisent par glisser-déposer
- * pour bâtir la hiérarchie de détention (qui détient quoi) et de
- * fonction (qui fait quoi) — entreprises et départements/rôles vivent
- * dans le même arbre. Le détenteur principal donne la position dans
- * l'arbre ; les co-détenteurs s'affichent en badges sur la carte.
+ * Les entreprises s'importent en un clic (« Importer les entreprises »),
+ * la détention se reconstruit depuis les fiches (« Sync détention »),
+ * et des VERSIONS de travail (copies indépendantes des nœuds) se créent
+ * depuis le topbar pour tester des scénarios de restructuration sans
+ * toucher au « Principal » (version_id null).
  */
 
 type OrgNode = {
@@ -73,8 +59,20 @@ type OrgNode = {
   pos_x: number | null;
   pos_y: number | null;
   execution_tier: string | null;
+  // Version de l'organigramme à laquelle le nœud appartient
+  // (null = version « Principal »).
+  version_id: number | null;
+  // Quotes-parts de détention de CE nœud : JSON objet
+  // { "<node_id du détenteur>": pourcentage } — affiché sur les flèches.
+  ownership_json: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type OrgVersion = {
+  id: number;
+  name: string;
+  created_at: string;
 };
 
 type Employe = {
@@ -83,19 +81,6 @@ type Employe = {
   email?: string | null;
   role?: string | null;
   active?: boolean;
-};
-
-type DropTarget = { id: number; mode: "into" | "before" };
-
-type Dnd = {
-  dragId: number | null;
-  dropTarget: DropTarget | null;
-  draggedSubtree: Set<number>;
-  onDragStartNode: (id: number) => void;
-  onDragEndNode: () => void;
-  onHover: (t: DropTarget | null) => void;
-  onDrop: () => void;
-  onDropRootEnd: () => void;
 };
 
 const KIND_LABELS: Record<string, { label: string; cls: string }> = {
@@ -150,59 +135,104 @@ const TIER_LABELS: Record<
   }
 };
 
+// ─── Nature des bulles (couleurs du canvas + légende) ────────────
+//
+// La couleur d'une bulle reflète sa NATURE, pas seulement son kind :
+//  • INC Kratos        : company reliée à une fiche entreprise → accent (or)
+//  • Compagnie externe : company manuelle, sans fiche → sky
+//  • Personne          : kind person → violet
+//  • autre             : service partagé, etc. → neutre
+
+type BubbleNature = "inc" | "externe" | "person" | "autre";
+
+function nodeNature(n: OrgNode): BubbleNature {
+  if (n.kind === "person") return "person";
+  if (n.kind === "company")
+    return n.entreprise_id != null ? "inc" : "externe";
+  return "autre";
+}
+
+const NATURE_STYLES: Record<
+  BubbleNature,
+  { label: string; bubbleCls: string; dotCls: string; badgeCls: string }
+> = {
+  inc: {
+    label: "INC Kratos",
+    bubbleCls: "border-accent-400/60 bg-accent-500/10",
+    dotCls: "bg-accent-400",
+    badgeCls: "bg-accent-500/15 text-accent-300 border-accent-500/30"
+  },
+  externe: {
+    label: "Compagnie externe",
+    bubbleCls: "border-sky-400/60 bg-sky-500/10",
+    dotCls: "bg-sky-400",
+    badgeCls: "bg-sky-500/15 text-sky-300 border-sky-500/30"
+  },
+  person: {
+    label: "Personne",
+    bubbleCls: "border-violet-400/60 bg-violet-500/10",
+    dotCls: "bg-violet-400",
+    badgeCls: "bg-violet-500/15 text-violet-300 border-violet-500/30"
+  },
+  autre: {
+    label: "Autre",
+    bubbleCls: "",
+    dotCls: "bg-emerald-400",
+    badgeCls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+  }
+};
+
+// Quotes-parts du nœud DÉTENU : { "<node_id du détenteur>": pct }.
+// Tolérant : JSON invalide ou non-objet → aucune quote-part.
+function parseOwnership(
+  n: OrgNode | null | undefined
+): Record<string, number> {
+  if (!n || !n.ownership_json) return {};
+  try {
+    const o = JSON.parse(n.ownership_json) as unknown;
+    if (o && typeof o === "object" && !Array.isArray(o)) {
+      const out: Record<string, number> = {};
+      for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
+        const num = typeof v === "number" ? v : Number(v);
+        if (!Number.isNaN(num)) out[k] = num;
+      }
+      return out;
+    }
+  } catch {
+    /* silencieux */
+  }
+  return {};
+}
+
+// « 33,33 % » — format québécois, sans zéros traînants.
+function formatPct(p: number): string {
+  const r = Math.round(p * 100) / 100;
+  return `${String(r).replace(".", ",")} %`;
+}
+
 export default function OrganigrammePage() {
   const { entreprises } = useEntreprisesLayout();
   const [nodes, setNodes] = useState<OrgNode[]>([]);
   const [employes, setEmployes] = useState<Employe[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [creatingTop, setCreatingTop] = useState(false);
-  const [newTopLabel, setNewTopLabel] = useState("");
-  const [seeding, setSeeding] = useState(false);
   const [importing, setImporting] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  // Ajout manuel rapide (bandeau) : un seul champ nom, partagé par
+  // les boutons « + Compagnie » et « + Personne ».
+  const [quickLabel, setQuickLabel] = useState("");
+  const [creatingKind, setCreatingKind] = useState<
+    "company" | "person" | null
+  >(null);
   //: Périmètre affiché : « complet » (INCs + investisseurs externes)
   //: ou « internes » (seulement nos compagnies) — retour Phil 2026-08-10.
   const [scope, setScope] = useState<"complet" | "internes">("complet");
 
-  // Vue : tableau « Rôles & responsabilités » (par défaut, lisible),
-  // arbre en colonnes (édition fine de la hiérarchie complète) ou
-  // canvas libre type Miro (bulles déplaçables + flèches, idéal pour
-  // entreprises + investisseurs). Les trois vues partagent les mêmes
-  // données (parent_id / co_owner_node_ids) → toujours synchronisées.
-  const [viewMode, setViewMode] = useState<
-    "canvas" | "columns" | "roles" | "ressources"
-  >("canvas");
-
-  // Zoom de la vue colonnes (le canvas a son propre zoom interne) —
-  // pour une vue plus globale au besoin. Ajustable via les boutons
-  // ou Ctrl/Cmd + molette.
-  const [columnsZoom, setColumnsZoom] = useState(1);
-  const columnsRef = useRef<HTMLDivElement | null>(null);
-
-  // Ctrl/Cmd + molette → zoom de la vue colonnes (molette simple =
-  // défilement normal). Listener non-passif posé à la main car React
-  // attache `onWheel` en passif (preventDefault impossible sinon).
-  useEffect(() => {
-    const el = columnsRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      e.preventDefault();
-      setColumnsZoom((z) =>
-        Math.min(
-          2,
-          Math.max(0.4, Math.round((z - e.deltaY * 0.0015) * 100) / 100)
-        )
-      );
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [viewMode]);
-
-  // État du glisser-déposer.
-  const [dragId, setDragId] = useState<number | null>(null);
-  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  // Versions de l'organigramme : null = « Principal » (les nœuds sans
+  // version_id). Chaque version est une copie indépendante des nœuds —
+  // on y teste une restructuration sans toucher au Principal.
+  const [versionId, setVersionId] = useState<number | null>(null);
+  const [versions, setVersions] = useState<OrgVersion[]>([]);
 
   // Entreprise mère du groupe — sert à mettre en évidence SON nœud
   // dans l'arbre (étoile + bordure accent), plutôt qu'un bandeau
@@ -220,7 +250,11 @@ export default function OrganigrammePage() {
     setLoading(true);
     try {
       const [n, e] = await Promise.all([
-        authedFetch("/api/v1/org-nodes"),
+        authedFetch(
+          `/api/v1/org-nodes${
+            versionId != null ? `?version_id=${versionId}` : ""
+          }`
+        ),
         authedFetch("/api/v1/employes?limit=500")
       ]);
       if (n.ok) setNodes((await n.json()) as OrgNode[]);
@@ -230,29 +264,80 @@ export default function OrganigrammePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [versionId]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  async function seedDefault(force: boolean) {
-    setSeeding(true);
+  const loadVersions = useCallback(async () => {
+    try {
+      const r = await authedFetch("/api/v1/org-nodes/versions");
+      if (r.ok) setVersions((await r.json()) as OrgVersion[]);
+    } catch {
+      /* silencieux — le sélecteur restera sur Principal */
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadVersions();
+  }, [loadVersions]);
+
+  // Nouvelle version = copie des nœuds de la version affichée (le
+  // Principal si aucune n'est sélectionnée), puis bascule dessus.
+  async function createVersion() {
+    const name = window.prompt(
+      "Nom de la nouvelle version (ex. Scénario restructuration 2027)…"
+    );
+    if (!name || !name.trim()) return;
     setError(null);
     try {
-      const r = await authedFetch(
-        `/api/v1/org-nodes/seed-default${force ? "?force=true" : ""}`,
-        { method: "POST" }
-      );
+      const r = await authedFetch("/api/v1/org-nodes/versions", {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          copy_nodes: true,
+          copy_from_version_id: versionId
+        })
+      });
       if (!r.ok) {
         const txt = await r.text();
         throw new Error(txt.slice(0, 200) || `HTTP ${r.status}`);
       }
-      await load();
+      const created = (await r.json()) as OrgVersion;
+      await loadVersions();
+      setVersionId(created.id);
     } catch (e) {
-      setError(`Import échoué : ${(e as Error).message}`);
-    } finally {
-      setSeeding(false);
+      setError(`Création de la version échouée : ${(e as Error).message}`);
+    }
+  }
+
+  async function deleteVersion() {
+    if (versionId == null) return;
+    const v = versions.find((x) => x.id === versionId);
+    if (
+      !window.confirm(
+        `Supprimer la version « ${v ? v.name : versionId} » et tous ses nœuds ? Le Principal n'est pas touché.`
+      )
+    )
+      return;
+    setError(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/org-nodes/versions/${versionId}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok && r.status !== 204) {
+        const txt = await r.text();
+        throw new Error(txt.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      // Retour au Principal — load() suit via la dépendance versionId.
+      setVersionId(null);
+      await loadVersions();
+    } catch (e) {
+      setError(
+        `Suppression de la version échouée : ${(e as Error).message}`
+      );
     }
   }
 
@@ -260,9 +345,13 @@ export default function OrganigrammePage() {
     setSyncing(true);
     setError(null);
     try {
-      const r = await authedFetch("/api/v1/org-nodes/sync-detention", {
-        method: "POST"
-      });
+      // La sync s'applique à la version affichée (Principal si aucune).
+      const r = await authedFetch(
+        `/api/v1/org-nodes/sync-detention${
+          versionId != null ? `?version_id=${versionId}` : ""
+        }`,
+        { method: "POST" }
+      );
       if (!r.ok) {
         const txt = await r.text();
         throw new Error(txt.slice(0, 200) || `HTTP ${r.status}`);
@@ -286,7 +375,9 @@ export default function OrganigrammePage() {
         const txt = await r.text();
         throw new Error(txt.slice(0, 200) || `HTTP ${r.status}`);
       }
-      setNodes((await r.json()) as OrgNode[]);
+      // On recharge plutôt que d'utiliser la réponse : elle correspond
+      // au Principal, pas forcément à la version affichée.
+      await load();
     } catch (e) {
       setError(`Import des entreprises échoué : ${(e as Error).message}`);
     } finally {
@@ -294,10 +385,10 @@ export default function OrganigrammePage() {
     }
   }
 
-  // Sous-ensemble « structurel » : entreprises + investisseurs + nœuds
-  // libres. On exclut explicitement les départements, rôles et tâches
-  // — ils vivent dans les vues « Rôles » et « Ressources » (panneau
-  // de dispatch), pas dans l'arbre d'investissement / le canvas.
+  // Sous-ensemble « structurel » affiché au canvas : entreprises,
+  // personnes et nœuds libres. On exclut les départements, rôles et
+  // tâches (héritage des anciennes vues) — l'organigramme montre la
+  // détention, pas les fonctions.
   const structuralNodes = useMemo(
     () =>
       nodes.filter(
@@ -313,89 +404,6 @@ export default function OrganigrammePage() {
       ),
     [nodes, scope]
   );
-
-  // Index : parent_id → enfants triés par position (vues canvas + colonnes,
-  // donc à partir du sous-ensemble structurel uniquement).
-  const byParent = useMemo(() => {
-    const m = new Map<number | null, OrgNode[]>();
-    for (const n of structuralNodes) {
-      const arr = m.get(n.parent_id) || [];
-      arr.push(n);
-      m.set(n.parent_id, arr);
-    }
-    for (const arr of m.values()) {
-      arr.sort((a, b) => a.position - b.position);
-    }
-    return m;
-  }, [structuralNodes]);
-
-  // Placement dans l'arbre par « détenteur principal » :
-  //  • détenteur principal d'un nœud = son parent_id si défini, sinon
-  //    son 1er co-détenteur. Un nœud n'est une VRAIE racine que s'il
-  //    n'a AUCUN détenteur → une entreprise co-détenue ne flotte
-  //    jamais comme entité distincte.
-  //  • byPrimary   : détenteur principal → nœuds placés sous lui
-  //  • bySecondary : détenteur → nœuds qu'il co-détient sans en être
-  //    le détenteur principal (affichés en « Co-détenu ici »).
-  const { byPrimary, bySecondary } = useMemo(() => {
-    const prim = new Map<number | null, OrgNode[]>();
-    const sec = new Map<number, OrgNode[]>();
-    for (const n of structuralNodes) {
-      const co = n.co_owner_node_ids || [];
-      const primary = n.parent_id ?? (co.length > 0 ? co[0] : null);
-      const pArr = prim.get(primary);
-      if (pArr) pArr.push(n);
-      else prim.set(primary, [n]);
-      const secondaries = n.parent_id != null ? co : co.slice(1);
-      for (const h of secondaries) {
-        const sArr = sec.get(h);
-        if (sArr) sArr.push(n);
-        else sec.set(h, [n]);
-      }
-    }
-    for (const arr of prim.values())
-      arr.sort((a, b) => a.position - b.position);
-    for (const arr of sec.values())
-      arr.sort((a, b) => a.position - b.position);
-    return { byPrimary: prim, bySecondary: sec };
-  }, [structuralNodes]);
-
-  // Racines de l'arbre : les vrais top-level (aucun détenteur) + un
-  // filet de sécurité — si des co-détentions forment un cycle
-  // déconnecté des racines, les nœuds concernés ne seraient sous
-  // personne ; on les rattache comme racines pour qu'ils restent
-  // toujours visibles.
-  const topLevel = useMemo(() => {
-    const roots = byPrimary.get(null) || [];
-    const reachable = new Set<number>();
-    const stack = roots.map((r) => r.id);
-    while (stack.length) {
-      const id = stack.pop() as number;
-      if (reachable.has(id)) continue;
-      reachable.add(id);
-      for (const c of byPrimary.get(id) || []) stack.push(c.id);
-    }
-    const orphans = structuralNodes.filter(
-      (n) => !reachable.has(n.id)
-    );
-    return orphans.length > 0 ? [...roots, ...orphans] : roots;
-  }, [byPrimary, structuralNodes]);
-
-  // Sous-arbre du nœud en cours de glissement — on l'exclut des cibles
-  // de dépôt valides (un nœud ne peut pas atterrir sur lui-même ni
-  // sur un de ses descendants).
-  const draggedSubtree = useMemo(() => {
-    const s = new Set<number>();
-    if (dragId == null) return s;
-    const stack = [dragId];
-    while (stack.length) {
-      const cur = stack.pop() as number;
-      if (s.has(cur)) continue;
-      s.add(cur);
-      for (const c of byParent.get(cur) || []) stack.push(c.id);
-    }
-    return s;
-  }, [dragId, byParent]);
 
   async function moveNode(
     id: number,
@@ -417,58 +425,10 @@ export default function OrganigrammePage() {
     }
   }
 
-  function handleDrop() {
-    const dId = dragId;
-    const dt = dropTarget;
-    setDragId(null);
-    setDropTarget(null);
-    if (dId == null || !dt || dt.id === dId) return;
-    if (draggedSubtree.has(dt.id)) return;
-    const target = nodes.find((n) => n.id === dt.id);
-    if (!target) return;
-
-    if (dt.mode === "into") {
-      const kids = (byParent.get(dt.id) || []).filter((n) => n.id !== dId);
-      void moveNode(dId, dt.id, kids.length);
-    } else {
-      // Insère avant `target`, sous le même parent. La position est
-      // l'index de `target` dans la fratrie une fois le nœud déplacé
-      // retiré (le backend recalcule de toute façon).
-      const sibs = (byParent.get(target.parent_id) || []).filter(
-        (n) => n.id !== dId
-      );
-      const idx = sibs.findIndex((n) => n.id === target.id);
-      void moveNode(dId, target.parent_id, idx < 0 ? sibs.length : idx);
-    }
-  }
-
-  function handleDropRootEnd() {
-    const dId = dragId;
-    setDragId(null);
-    setDropTarget(null);
-    if (dId == null) return;
-    const roots = (byParent.get(null) || []).filter((n) => n.id !== dId);
-    void moveNode(dId, null, roots.length);
-  }
-
-  const dnd: Dnd = {
-    dragId,
-    dropTarget,
-    draggedSubtree,
-    onDragStartNode: (id) => setDragId(id),
-    onDragEndNode: () => {
-      setDragId(null);
-      setDropTarget(null);
-    },
-    onHover: (t) => setDropTarget(t),
-    onDrop: handleDrop,
-    onDropRootEnd: handleDropRootEnd
-  };
-
   async function createNode(
     parent_id: number | null,
     label: string,
-    kind = "dept",
+    kind = "company",
     extra?: { description?: string | null; execution_tier?: string | null }
   ) {
     if (!label.trim()) return;
@@ -479,6 +439,9 @@ export default function OrganigrammePage() {
           parent_id,
           label: label.trim(),
           kind,
+          // Chaque création atterrit dans la version affichée
+          // (null = Principal).
+          version_id: versionId,
           ...(extra?.description ? { description: extra.description } : {}),
           ...(extra?.execution_tier
             ? { execution_tier: extra.execution_tier }
@@ -537,14 +500,16 @@ export default function OrganigrammePage() {
     }
   }
 
-  async function submitTop(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setCreatingTop(true);
+  // Ajout manuel rapide : compagnie manuelle/externe (company SANS
+  // entreprise_id) ou personne physique — à la racine du canvas.
+  async function quickCreate(kind: "company" | "person") {
+    if (!quickLabel.trim() || creatingKind != null) return;
+    setCreatingKind(kind);
     try {
-      await createNode(null, newTopLabel, "dept");
-      setNewTopLabel("");
+      const created = await createNode(null, quickLabel, kind);
+      if (created) setQuickLabel("");
     } finally {
-      setCreatingTop(false);
+      setCreatingKind(null);
     }
   }
 
@@ -557,88 +522,47 @@ export default function OrganigrammePage() {
             Organigramme
           </span>
         }
-        subtitle="Entreprises & investisseurs (structure du groupe) — voir les rôles et le dispatch des ressources dans les onglets dédiés"
+        subtitle="Structure de détention du groupe — compagnies, personnes et quotes-parts, avec versions de travail"
         rightSlot={
-          <div
-            className="inline-flex overflow-hidden rounded-lg border"
-            style={{ borderColor: "var(--qg-border)" }}
-          >
+          <div className="flex items-center gap-2">
+            {/* Sélecteur de version — « Principal » = version officielle,
+                les autres sont des scénarios de travail indépendants. */}
+            <select
+              value={versionId != null ? String(versionId) : ""}
+              onChange={(e) =>
+                setVersionId(e.target.value ? Number(e.target.value) : null)
+              }
+              className="input"
+              style={{ width: "auto" }}
+              title="Version affichée de l'organigramme"
+            >
+              <option value="">Principal</option>
+              {versions.map((v) => (
+                <option key={v.id} value={String(v.id)}>
+                  {v.name}
+                </option>
+              ))}
+            </select>
             <button
               type="button"
-              onClick={() => setViewMode("canvas")}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition"
-              style={{
-                backgroundColor:
-                  viewMode === "canvas"
-                    ? "var(--qg-accent)"
-                    : "var(--qg-card-bg)",
-                color:
-                  viewMode === "canvas"
-                    ? "var(--qg-accent-ink, #0a0a0b)"
-                    : "var(--qg-text-soft)"
-              }}
-              title="Canvas libre — organigramme entreprises + investisseurs"
+              onClick={() => void createVersion()}
+              className="btn-secondary btn-sm inline-flex items-center gap-1"
+              title="Crée une nouvelle version — copie des nœuds de la version affichée"
             >
-              <Workflow className="h-3.5 w-3.5" />
-              Organigramme
+              <Plus className="h-3.5 w-3.5" />
+              Nouvelle version
             </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("columns")}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition"
-              style={{
-                backgroundColor:
-                  viewMode === "columns"
-                    ? "var(--qg-accent)"
-                    : "var(--qg-card-bg)",
-                color:
-                  viewMode === "columns"
-                    ? "var(--qg-accent-ink, #0a0a0b)"
-                    : "var(--qg-text-soft)"
-              }}
-              title="Arbre des entreprises + investisseurs en colonnes (édition hiérarchie)"
-            >
-              <LayoutGrid className="h-3.5 w-3.5" />
-              Arbre complet
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("roles")}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition"
-              style={{
-                backgroundColor:
-                  viewMode === "roles"
-                    ? "var(--qg-accent)"
-                    : "var(--qg-card-bg)",
-                color:
-                  viewMode === "roles"
-                    ? "var(--qg-accent-ink, #0a0a0b)"
-                    : "var(--qg-text-soft)"
-              }}
-              title="Tableau des rôles + responsabilités (dispatch)"
-            >
-              <Table2 className="h-3.5 w-3.5" />
-              Rôles
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("ressources")}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition"
-              style={{
-                backgroundColor:
-                  viewMode === "ressources"
-                    ? "var(--qg-accent)"
-                    : "var(--qg-card-bg)",
-                color:
-                  viewMode === "ressources"
-                    ? "var(--qg-accent-ink, #0a0a0b)"
-                    : "var(--qg-text-soft)"
-              }}
-              title="Dispatch des rôles par employé — voir la charge et les disponibilités"
-            >
-              <UserCog className="h-3.5 w-3.5" />
-              Ressources
-            </button>
+            {versionId != null ? (
+              <button
+                type="button"
+                onClick={() => void deleteVersion()}
+                className="btn-secondary btn-sm inline-flex items-center text-rose-400 hover:bg-rose-500/10"
+                title="Supprimer cette version"
+                aria-label="Supprimer cette version"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
           </div>
         }
       />
@@ -662,9 +586,8 @@ export default function OrganigrammePage() {
           </div>
         ) : (
           <>
-            {/* Bandeau de création + import des entreprises */}
-            <form
-              onSubmit={submitTop}
+            {/* Bandeau : ajout manuel rapide + import des entreprises */}
+            <div
               className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border p-3"
               style={{
                 borderColor: "var(--qg-border)",
@@ -673,22 +596,45 @@ export default function OrganigrammePage() {
             >
               <Plus className="h-4 w-4 text-accent-500" />
               <input
-                value={newTopLabel}
-                onChange={(e) => setNewTopLabel(e.target.value)}
-                placeholder="Nouvelle branche (ex. Construction, Dev logiciel, Gestion Immo, Prospection, Comptabilité…)"
+                value={quickLabel}
+                onChange={(e) => setQuickLabel(e.target.value)}
+                onKeyDown={(e) => {
+                  // Entrée = ajout compagnie (le cas le plus fréquent).
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void quickCreate("company");
+                  }
+                }}
+                placeholder="Nom de la compagnie ou de la personne à ajouter…"
                 className="input flex-1 min-w-[220px] text-sm"
               />
               <button
-                type="submit"
-                disabled={creatingTop || !newTopLabel.trim()}
+                type="button"
+                onClick={() => void quickCreate("company")}
+                disabled={creatingKind != null || !quickLabel.trim()}
                 className="btn-accent inline-flex items-center gap-1 text-xs disabled:opacity-50"
+                title="Ajoute une compagnie manuelle / externe (sans fiche Kratos — bulle bleue)"
               >
-                {creatingTop ? (
+                {creatingKind === "company" ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
                 ) : (
-                  <Plus className="h-3 w-3" />
+                  <Building2 className="h-3 w-3" />
                 )}
-                Ajouter
+                + Compagnie
+              </button>
+              <button
+                type="button"
+                onClick={() => void quickCreate("person")}
+                disabled={creatingKind != null || !quickLabel.trim()}
+                className="btn-secondary btn-sm inline-flex items-center gap-1 disabled:opacity-50"
+                title="Ajoute une personne physique (actionnaire, investisseur — bulle violette)"
+              >
+                {creatingKind === "person" ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <UserIcon className="h-3.5 w-3.5" />
+                )}
+                + Personne
               </button>
               <button
                 type="button"
@@ -721,7 +667,7 @@ export default function OrganigrammePage() {
               <div
                 className="ml-auto inline-flex overflow-hidden rounded-lg border"
                 style={{ borderColor: "var(--qg-border)" }}
-                title="Périmètre affiché dans l'organigramme et l'arbre"
+                title="Périmètre affiché dans l'organigramme"
               >
                 {(
                   [
@@ -749,23 +695,11 @@ export default function OrganigrammePage() {
                   </button>
                 ))}
               </div>
-            </form>
+            </div>
 
-            {topLevel.length > 0 && viewMode === "columns" ? (
+            {structuralNodes.length > 0 ? (
               <p
-                className="mb-4 text-[11px]"
-                style={{ color: "var(--qg-text-soft)" }}
-              >
-                Glisse une carte <strong>sur</strong> une autre (n&apos;importe
-                où dans sa colonne) pour qu&apos;elle en devienne l&apos;enfant
-                — changement de détenteur. Glisse <strong>entre deux</strong>{" "}
-                cartes pour les réordonner. Plusieurs détenteurs ? Ouvre la
-                carte (chevron) → <strong>Co-détenteurs</strong>.
-              </p>
-            ) : null}
-            {topLevel.length > 0 && viewMode === "canvas" ? (
-              <p
-                className="mb-3 text-[11px]"
+                className="mb-2 text-[11px]"
                 style={{ color: "var(--qg-text-soft)" }}
               >
                 Déplace les bulles — elles s&apos;aimantent à la grille
@@ -775,13 +709,32 @@ export default function OrganigrammePage() {
                   style={{ backgroundColor: "var(--qg-accent)" }}
                 />{" "}
                 d&apos;une bulle vers une autre pour créer une flèche de
-                détention. Survole une flèche pour la supprimer. Chaque
-                détenteur — principal ou co-détenteur, même minoritaire —
-                est un propriétaire à part entière.
+                détention — la quote-part (%) est demandée au passage et
+                s&apos;affiche sur la flèche. Survole une flèche pour la
+                supprimer. Clique une bulle pour ouvrir son panneau
+                (détenteurs, participations, fiche).
               </p>
             ) : null}
 
-            {topLevel.length === 0 ? (
+            {/* Légende des couleurs de bulles */}
+            {structuralNodes.length > 0 ? (
+              <div
+                className="mb-3 flex flex-wrap items-center gap-4 text-[11px]"
+                style={{ color: "var(--qg-text-soft)" }}
+              >
+                {(["inc", "externe", "person"] as const).map((k) => (
+                  <span key={k} className="inline-flex items-center gap-1.5">
+                    <span
+                      aria-hidden
+                      className={`inline-block h-2.5 w-2.5 rounded-full ${NATURE_STYLES[k].dotCls}`}
+                    />
+                    {NATURE_STYLES[k].label}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+
+            {structuralNodes.length === 0 ? (
               <div
                 className="rounded-2xl border border-dashed p-6 text-center text-sm"
                 style={{
@@ -805,126 +758,20 @@ export default function OrganigrammePage() {
                     )}
                     Importer les entreprises
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void seedDefault(false)}
-                    disabled={seeding}
-                    className="btn-secondary btn-sm disabled:opacity-50"
-                    title="Crée la structure de départ basée sur ton carnet (Construction, Dev logiciel, Gestion Immo, Prospection, Dev Immo / Aguci, Comptabilité + rôles et tâches)"
-                  >
-                    {seeding ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Save className="h-3.5 w-3.5" />
-                    )}
-                    Importer le canevas du carnet
-                  </button>
                 </div>
                 <span
                   className="mt-2 block text-[10px]"
                   style={{ color: "var(--qg-text-soft)" }}
                 >
-                  ou ajoute manuellement une branche ci-dessus
+                  ou ajoute une compagnie / personne via le bandeau
+                  ci-dessus
                 </span>
               </div>
-            ) : viewMode === "roles" ? (
-              <>
-                <p
-                  className="mb-3 text-[11px]"
-                  style={{ color: "var(--qg-text-soft)" }}
-                >
-                  Liste tous les rôles du groupe. Filtre par pôle / statut
-                  / tier, ou cherche par nom. Sélectionne une ligne pour
-                  attribuer le titulaire et éditer ses responsabilités
-                  (anciennement « tâches » du seed canonique). Bascule
-                  sur <strong>Organigramme</strong> pour la vue canvas
-                  des entreprises + investisseurs.
-                </p>
-                <RolesResponsibilitiesView
-                  nodes={nodes}
-                  employes={employes}
-                  onPatch={patchNode}
-                  onDelete={deleteNode}
-                  onCreate={createNode}
-                />
-              </>
-            ) : viewMode === "ressources" ? (
-              <>
-                <p
-                  className="mb-3 text-[11px]"
-                  style={{ color: "var(--qg-text-soft)" }}
-                >
-                  Vue inverse : qui tient quoi. Liste des employés
-                  triés par charge (rouge = ≥ 4 rôles), sélectionne pour
-                  voir leur portefeuille et libérer des rôles. Le
-                  panneau « Rôles à pourvoir » en bas permet d&apos;attribuer
-                  les vacants à l&apos;employé sélectionné en un clic.
-                </p>
-                <RessourcesDispatchView
-                  nodes={nodes}
-                  employes={employes}
-                  onPatch={patchNode}
-                />
-              </>
-            ) : viewMode === "columns" ? (
-              <>
-                <div className="mb-2 flex justify-end">
-                  <ZoomControl
-                    zoom={columnsZoom}
-                    setZoom={setColumnsZoom}
-                  />
-                </div>
-                <div
-                  ref={columnsRef}
-                  className="flex items-stretch gap-1 overflow-x-auto pb-4"
-                  style={{ zoom: columnsZoom }}
-                >
-                {topLevel.map((n) => (
-                  <div key={n.id} className="flex items-stretch">
-                    <DropBar targetId={n.id} dnd={dnd} vertical />
-                    <ColumnView
-                      node={n}
-                      byPrimary={byPrimary}
-                      bySecondary={bySecondary}
-                      allNodes={nodes}
-                      entreprises={entreprises}
-                      employes={employes}
-                      parentEntId={parentEntId}
-                      dnd={dnd}
-                      onCreate={createNode}
-                      onPatch={patchNode}
-                      onDelete={deleteNode}
-                    />
-                  </div>
-                ))}
-                {/* Zone de dépôt finale : ramène un nœud à la racine. */}
-                {dragId != null ? (
-                  <div
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      dnd.onHover(null);
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      dnd.onDropRootEnd();
-                    }}
-                    className="flex w-[150px] shrink-0 items-center justify-center rounded-xl border border-dashed text-center text-[11px]"
-                    style={{
-                      borderColor: "var(--qg-accent)",
-                      color: "var(--qg-text-soft)"
-                    }}
-                  >
-                    Déposer ici →<br />racine du groupe
-                  </div>
-                ) : null}
-                </div>
-              </>
             ) : (
               <CanvasView
-                /* Vue canvas = organigramme structurel : seulement les
-                   entreprises et investisseurs. Les départements, rôles
-                   et responsabilités vivent dans les onglets « Rôles »
-                   et « Ressources ». */
+                /* Canvas = organigramme structurel : seulement les
+                   compagnies et les personnes (les anciens nœuds
+                   dept / role / task sont filtrés). */
                 nodes={structuralNodes}
                 entreprises={entreprises}
                 employes={employes}
@@ -942,46 +789,7 @@ export default function OrganigrammePage() {
   );
 }
 
-// ─── Barre de dépôt fine (réordonner / re-parenter) ──────────────
-
-function DropBar({
-  targetId,
-  dnd,
-  vertical
-}: {
-  targetId: number;
-  dnd: Dnd;
-  vertical?: boolean;
-}) {
-  if (dnd.dragId == null) return null;
-  if (dnd.draggedSubtree.has(targetId)) {
-    // Place-holder neutre : garde l'espacement sans être droppable.
-    return <div className={vertical ? "w-1 shrink-0" : "h-1.5"} />;
-  }
-  const active =
-    dnd.dropTarget?.id === targetId && dnd.dropTarget.mode === "before";
-  return (
-    <div
-      onDragOver={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!active) dnd.onHover({ id: targetId, mode: "before" });
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        dnd.onDrop();
-      }}
-      className={vertical ? "w-2 shrink-0" : "h-2"}
-      style={{
-        backgroundColor: active ? "var(--qg-accent)" : "transparent",
-        borderRadius: 4
-      }}
-    />
-  );
-}
-
-// ─── Contrôle de zoom (vues colonnes & canvas) ───────────────────
+// ─── Contrôle de zoom (canvas) ───────────────────────────────────
 
 function ZoomControl({
   zoom,
@@ -1037,273 +845,6 @@ function ZoomControl({
   );
 }
 
-// ─── Une colonne = une branche top-level + son arbre ─────────────
-
-function ColumnView({
-  node,
-  byPrimary,
-  bySecondary,
-  allNodes,
-  entreprises,
-  employes,
-  parentEntId,
-  dnd,
-  onCreate,
-  onPatch,
-  onDelete
-}: {
-  node: OrgNode;
-  byPrimary: Map<number | null, OrgNode[]>;
-  bySecondary: Map<number, OrgNode[]>;
-  allNodes: OrgNode[];
-  entreprises: Array<{ id: number; name: string }>;
-  employes: Employe[];
-  parentEntId: number | null;
-  dnd: Dnd;
-  onCreate: (
-    parent_id: number | null,
-    label: string,
-    kind?: string,
-    extra?: { description?: string | null; execution_tier?: string | null }
-  ) => Promise<OrgNode | undefined>;
-  onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
-  onDelete: (id: number) => Promise<void>;
-}) {
-  // La colonne entière est une grande cible de dépôt « dans cette
-  // entreprise » : déposer n'importe où dans la carte (hors d'un
-  // sous-nœud précis, qui lui stoppe la propagation) re-parente le
-  // nœud glissé sous la racine de la colonne. Rend le glisser-déposer
-  // d'une entreprise vers une autre beaucoup plus facile.
-  const colDroppable =
-    dnd.dragId != null && !dnd.draggedSubtree.has(node.id);
-  const isColTarget =
-    dnd.dropTarget?.id === node.id && dnd.dropTarget.mode === "into";
-
-  return (
-    <div
-      onDragOver={(e) => {
-        if (!colDroppable) return;
-        e.preventDefault();
-        if (!isColTarget) dnd.onHover({ id: node.id, mode: "into" });
-      }}
-      onDrop={(e) => {
-        if (!colDroppable) return;
-        e.preventDefault();
-        dnd.onDrop();
-      }}
-      className="w-[300px] shrink-0 rounded-xl border p-3 transition"
-      style={{
-        borderColor: isColTarget ? "var(--qg-accent)" : "var(--qg-border)",
-        backgroundColor: "var(--qg-card-bg)",
-        boxShadow: isColTarget
-          ? "0 0 0 2px var(--qg-accent) inset"
-          : "none"
-      }}
-    >
-      <NodeRow
-        node={node}
-        allNodes={allNodes}
-        entreprises={entreprises}
-        employes={employes}
-        parentEntId={parentEntId}
-        dnd={dnd}
-        onCreate={onCreate}
-        onPatch={onPatch}
-        onDelete={onDelete}
-        depth={0}
-      />
-      <Children
-        parentId={node.id}
-        byPrimary={byPrimary}
-        bySecondary={bySecondary}
-        ancestors={new Set([node.id])}
-        allNodes={allNodes}
-        entreprises={entreprises}
-        employes={employes}
-        parentEntId={parentEntId}
-        dnd={dnd}
-        onCreate={onCreate}
-        onPatch={onPatch}
-        onDelete={onDelete}
-        depth={1}
-      />
-    </div>
-  );
-}
-
-function Children({
-  parentId,
-  byPrimary,
-  bySecondary,
-  ancestors,
-  allNodes,
-  entreprises,
-  employes,
-  parentEntId,
-  dnd,
-  onCreate,
-  onPatch,
-  onDelete,
-  depth
-}: {
-  parentId: number;
-  byPrimary: Map<number | null, OrgNode[]>;
-  bySecondary: Map<number, OrgNode[]>;
-  ancestors: Set<number>;
-  allNodes: OrgNode[];
-  entreprises: Array<{ id: number; name: string }>;
-  employes: Employe[];
-  parentEntId: number | null;
-  dnd: Dnd;
-  onCreate: (
-    parent_id: number | null,
-    label: string,
-    kind?: string,
-    extra?: { description?: string | null; execution_tier?: string | null }
-  ) => Promise<OrgNode | undefined>;
-  onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
-  onDelete: (id: number) => Promise<void>;
-  depth: number;
-}) {
-  // Nœuds dont CE nœud est le détenteur principal (placement de base
-  // dans l'arbre) ET nœuds qu'il co-détient sans en être le principal
-  // (« Co-détenu ici »). La détention multiple reste visible comme de
-  // vraies cartes, et une entité co-détenue n'apparaît jamais comme
-  // racine distincte.
-  const directChildren = byPrimary.get(parentId) || [];
-  const directIds = new Set(directChildren.map((c) => c.id));
-  const coDetained = (bySecondary.get(parentId) || []).filter(
-    (c) => !directIds.has(c.id)
-  );
-
-  const [adding, setAdding] = useState(false);
-  const [newLabel, setNewLabel] = useState("");
-  const defaultKind = depth >= 2 ? "task" : "role";
-
-  async function submitChild() {
-    if (!newLabel.trim()) return;
-    await onCreate(parentId, newLabel, defaultKind);
-    setNewLabel("");
-    setAdding(false);
-  }
-
-  function renderNode(c: OrgNode, coDetainedHere: boolean) {
-    // Garde anti-boucle : si le nœud est déjà un ancêtre de cette
-    // branche (co-détentions croisées), on l'affiche sans redescendre.
-    const alreadyShown = ancestors.has(c.id);
-    // Vrai enfant direct (parent_id pointe ici) → barre de dépôt pour
-    // réordonner. Un nœud placé ici via sa 1re co-détention (faute de
-    // parent_id) reste une carte normale, mais sans barre de dépôt.
-    const realChild = c.parent_id === parentId;
-    return (
-      <div key={c.id}>
-        {coDetainedHere ? (
-          <div
-            className="mb-0.5 inline-flex items-center gap-0.5 text-[9px] font-semibold uppercase tracking-wide"
-            style={{ color: "var(--qg-text-soft)" }}
-          >
-            <Link2 className="h-2.5 w-2.5" />
-            Co-détenu ici
-          </div>
-        ) : realChild ? (
-          <DropBar targetId={c.id} dnd={dnd} />
-        ) : null}
-        <NodeRow
-          node={c}
-          allNodes={allNodes}
-          entreprises={entreprises}
-          employes={employes}
-          parentEntId={parentEntId}
-          dnd={dnd}
-          onCreate={onCreate}
-          onPatch={onPatch}
-          onDelete={onDelete}
-          depth={depth}
-        />
-        {alreadyShown ? (
-          <div
-            className="ml-3 mt-0.5 text-[10px] italic"
-            style={{ color: "var(--qg-text-soft)" }}
-          >
-            ↑ déjà déployé plus haut dans cette branche
-          </div>
-        ) : (
-          <Children
-            parentId={c.id}
-            byPrimary={byPrimary}
-            bySecondary={bySecondary}
-            ancestors={new Set(ancestors).add(c.id)}
-            allNodes={allNodes}
-            entreprises={entreprises}
-            employes={employes}
-            parentEntId={parentEntId}
-            dnd={dnd}
-            onCreate={onCreate}
-            onPatch={onPatch}
-            onDelete={onDelete}
-            depth={depth + 1}
-          />
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className="mt-2 space-y-1.5"
-      style={{
-        paddingLeft: depth > 0 ? "0.75rem" : 0,
-        borderLeft:
-          depth > 0 ? `2px solid var(--qg-border-soft)` : "none"
-      }}
-    >
-      {directChildren.map((c) => renderNode(c, false))}
-      {coDetained.map((c) => renderNode(c, true))}
-      {adding ? (
-        <div className="flex items-center gap-1">
-          <input
-            autoFocus
-            value={newLabel}
-            onChange={(e) => setNewLabel(e.target.value)}
-            placeholder={
-              defaultKind === "task"
-                ? "Nouvelle tâche…"
-                : "Nouveau rôle / sous-département…"
-            }
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void submitChild();
-              else if (e.key === "Escape") {
-                setAdding(false);
-                setNewLabel("");
-              }
-            }}
-            onBlur={() => {
-              if (!newLabel.trim()) setAdding(false);
-            }}
-            className="input flex-1 text-[11px]"
-          />
-          <button
-            type="button"
-            onClick={() => void submitChild()}
-            className="rounded p-1 text-accent-400 hover:bg-accent-500/10"
-          >
-            <Plus className="h-3 w-3" />
-          </button>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-white/40 hover:text-accent-400"
-        >
-          <Plus className="h-2.5 w-2.5" />
-          Ajouter sous-élément
-        </button>
-      )}
-    </div>
-  );
-}
-
 type RoleSuggestion = {
   label: string;
   kind: string;
@@ -1311,10 +852,9 @@ type RoleSuggestion = {
   execution_tier: string | null;
 };
 
-// Bloc d'édition partagé par la vue colonnes et le panneau du canvas :
-// type, entreprise liée (fiche), niveau d'exécution, co-détenteurs,
-// responsable, description. Entièrement piloté par onPatch — donc les
-// deux vues restent synchronisées.
+// Bloc d'édition du panneau latéral du canvas : type, entreprise liée
+// (fiche), niveau d'exécution, co-détenteurs, responsable,
+// description. Entièrement piloté par onPatch.
 function NodeEditorBlock({
   node,
   allNodes,
@@ -1688,267 +1228,14 @@ function RoleSuggestionsPanel({
   );
 }
 
-function NodeRow({
-  node,
-  allNodes,
-  entreprises,
-  employes,
-  parentEntId,
-  dnd,
-  onCreate,
-  onPatch,
-  onDelete,
-  depth
-}: {
-  node: OrgNode;
-  allNodes: OrgNode[];
-  entreprises: Array<{ id: number; name: string }>;
-  employes: Employe[];
-  parentEntId: number | null;
-  dnd: Dnd;
-  onCreate: (
-    parent_id: number | null,
-    label: string,
-    kind?: string,
-    extra?: { description?: string | null; execution_tier?: string | null }
-  ) => Promise<OrgNode | undefined>;
-  onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
-  onDelete: (id: number) => Promise<void>;
-  depth: number;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [label, setLabel] = useState(node.label);
-  // Toute la carte est saisissable pour le drag — SAUF quand on est en
-  // train d'éditer le libellé (sinon on ne pourrait plus sélectionner
-  // le texte du champ).
-  const [labelFocused, setLabelFocused] = useState(false);
-
-  useEffect(() => {
-    setLabel(node.label);
-  }, [node.label]);
-
-  const kindInfo = KIND_LABELS[node.kind] || KIND_LABELS.role;
-  const assigneeEmploye = node.assignee_employe_id
-    ? employes.find((e) => e.id === node.assignee_employe_id)
-    : null;
-  const entreprise = node.entreprise_id
-    ? entreprises.find((e) => e.id === node.entreprise_id)
-    : null;
-
-  // Entreprise mère du groupe — mise en évidence dans l'arbre.
-  const isParentCompany =
-    node.kind === "company" &&
-    parentEntId != null &&
-    node.entreprise_id === parentEntId;
-
-  // Co-détenteurs : qui détient AUSSI ce nœud (en plus du détenteur
-  // principal = parent dans l'arbre). Les entités que CE nœud
-  // co-détient, elles, sont affichées comme de vraies cartes nichées
-  // sous lui (cf. composant Children) — plus besoin d'un badge.
-  const coOwnerIds = node.co_owner_node_ids || [];
-  const coOwnerNodes = coOwnerIds
-    .map((id) => allNodes.find((n) => n.id === id))
-    .filter((n): n is OrgNode => Boolean(n));
-  const tierInfo = node.execution_tier
-    ? TIER_LABELS[node.execution_tier]
-    : null;
-
-  const isDragging = dnd.dragId === node.id;
-  const isIntoTarget =
-    dnd.dropTarget?.id === node.id && dnd.dropTarget.mode === "into";
-  const droppable =
-    dnd.dragId != null && !dnd.draggedSubtree.has(node.id);
-
-  return (
-    <div
-      draggable={!labelFocused}
-      onDragStart={(e) => {
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", String(node.id));
-        dnd.onDragStartNode(node.id);
-      }}
-      onDragEnd={() => dnd.onDragEndNode()}
-      onDragOver={(e) => {
-        if (!droppable) return;
-        e.preventDefault();
-        e.stopPropagation();
-        if (!isIntoTarget) dnd.onHover({ id: node.id, mode: "into" });
-      }}
-      onDrop={(e) => {
-        if (!droppable) return;
-        e.preventDefault();
-        e.stopPropagation();
-        dnd.onDrop();
-      }}
-      className={`rounded-md border px-2 py-1.5 transition ${
-        labelFocused ? "" : "cursor-grab active:cursor-grabbing"
-      }`}
-      style={{
-        borderColor: isIntoTarget
-          ? "var(--qg-accent)"
-          : isParentCompany
-            ? "var(--qg-accent)"
-            : "var(--qg-border-soft)",
-        backgroundColor: isIntoTarget
-          ? "var(--qg-bg-alt)"
-          : "var(--qg-bg-alt, transparent)",
-        boxShadow: isIntoTarget
-          ? "0 0 0 1px var(--qg-accent) inset"
-          : "none",
-        opacity: isDragging ? 0.4 : 1,
-        fontSize: depth === 0 ? "13px" : "12px"
-      }}
-    >
-      <div className="flex items-start gap-1.5">
-        <span
-          aria-hidden
-          title="Glisser pour déplacer / re-parenter"
-          className="mt-0.5 text-white/30"
-        >
-          {isParentCompany ? (
-            <Star className="h-3.5 w-3.5 text-accent-400" />
-          ) : (
-            <GripVertical className="h-3.5 w-3.5" />
-          )}
-        </span>
-        <span
-          className={`mt-0.5 rounded-full border px-1.5 py-0 text-[9px] font-bold uppercase ${kindInfo.cls}`}
-        >
-          {kindInfo.label}
-        </span>
-        <input
-          value={label}
-          draggable={false}
-          onFocus={() => setLabelFocused(true)}
-          onChange={(e) => setLabel(e.target.value)}
-          onBlur={() => {
-            setLabelFocused(false);
-            if (label.trim() && label !== node.label) {
-              void onPatch(node.id, { label: label.trim() });
-            }
-          }}
-          className="flex-1 bg-transparent text-sm font-semibold focus:outline-none"
-          style={{ color: "var(--qg-text)" }}
-        />
-        <button
-          type="button"
-          onClick={() => setEditing((v) => !v)}
-          className="rounded p-0.5 text-white/40 hover:text-accent-400"
-          title="Plus d'options"
-        >
-          {editing ? (
-            <ChevronDown className="h-3 w-3" />
-          ) : (
-            <ChevronRight className="h-3 w-3" />
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={() => void onDelete(node.id)}
-          className="rounded p-0.5 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
-          title="Supprimer"
-        >
-          <Trash2 className="h-3 w-3" />
-        </button>
-      </div>
-
-      {/* Badges info compacts */}
-      <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px]">
-        {isParentCompany ? (
-          <span
-            className="inline-flex items-center gap-0.5 rounded px-1 py-0 font-semibold"
-            style={{
-              backgroundColor: "var(--qg-accent)",
-              color: "var(--qg-accent-ink, #0a0a0b)"
-            }}
-            title="Entreprise mère du groupe"
-          >
-            <Star className="h-2.5 w-2.5" />
-            Entreprise mère
-          </span>
-        ) : null}
-        {entreprise ? (
-          <span
-            className="inline-flex items-center gap-0.5 rounded px-1 py-0"
-            style={{
-              backgroundColor: "var(--qg-bg-alt)",
-              color: "var(--qg-text-muted)"
-            }}
-            title="Entreprise liée"
-          >
-            <Building2 className="h-2.5 w-2.5" />
-            {entreprise.name}
-          </span>
-        ) : null}
-        {tierInfo ? (
-          <span
-            className={`inline-flex items-center rounded border px-1 py-0 font-semibold ${tierInfo.cls}`}
-            title="Niveau d'exécution — qui doit prendre ça en charge"
-          >
-            {tierInfo.label}
-          </span>
-        ) : null}
-        {assigneeEmploye ? (
-          <span
-            className="inline-flex items-center gap-0.5 rounded bg-accent-500/10 px-1 py-0 text-accent-300"
-            title="Employé responsable"
-          >
-            <UserIcon className="h-2.5 w-2.5" />
-            {assigneeEmploye.full_name}
-          </span>
-        ) : node.assignee_external_name ? (
-          <span
-            className="badge badge-violet"
-            title="Externe (freelance / sous-traitant / partenaire)"
-          >
-            <Briefcase className="h-2.5 w-2.5" />
-            {node.assignee_external_name}
-          </span>
-        ) : null}
-        {coOwnerNodes.length > 0 ? (
-          <span
-            className="badge badge-sky"
-            title="Détenu aussi par ces entités (co-détention)"
-          >
-            <Link2 className="h-2.5 w-2.5" />
-            aussi détenu par {coOwnerNodes.map((n) => n.label).join(", ")}
-          </span>
-        ) : null}
-      </div>
-
-      {/* IA Kratos — suggère les rôles / tâches manquants selon le
-          but de la fiche entreprise (pertinent sur un nœud entreprise). */}
-      {node.kind === "company" ? (
-        <div className="mt-2">
-          <RoleSuggestionsPanel node={node} onCreate={onCreate} />
-        </div>
-      ) : null}
-
-      {/* Bloc édition étendu — partagé avec le panneau du canvas. */}
-      {editing ? (
-        <div className="mt-2">
-          <NodeEditorBlock
-            node={node}
-            allNodes={allNodes}
-            entreprises={entreprises}
-            employes={employes}
-            onPatch={onPatch}
-          />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 // ─── Vue Canvas type Miro ────────────────────────────────────────
 //
 // Bulles positionnables librement (pos_x / pos_y persistés) + flèches
 // de détention auto-tracées (parent_id + co_owner_node_ids), toutes
 // en trait plein — un co-détenteur est un propriétaire à part
-// entière —, avec ajout / suppression manuelle.
-// Le canvas et la vue colonnes partagent les mêmes données : tirer
-// une flèche A→B re-parente B (ou ajoute A en co-détenteur), donc la
-// vue colonnes reflète immédiatement les changements.
+// entière —, avec ajout / suppression manuelle. Tirer une flèche A→B
+// re-parente B (ou ajoute A en co-détenteur) et demande la quote-part,
+// affichée ensuite au milieu de la flèche.
 
 const BUBBLE_W = 210;
 const BUBBLE_H = 66;
@@ -2262,6 +1549,19 @@ function CanvasView({
     if (connect) setConnect(null);
   }
 
+  // Demande la quote-part (%) du nouveau détenteur — vide = sans %.
+  // Accepte « 50 », « 50 % », « 33,33 »…
+  function promptOwnershipPct(): number | null {
+    const raw = window.prompt(
+      "Quote-part (%) de ce détenteur ? (vide = sans %)"
+    );
+    if (raw == null) return null;
+    const cleaned = raw.replace("%", "").replace(",", ".").trim();
+    if (!cleaned) return null;
+    const pct = Number(cleaned);
+    return Number.isNaN(pct) ? null : pct;
+  }
+
   // Finalise une flèche fromId → toId (= « fromId détient toId »).
   function finishConnect(toId: number) {
     if (!connect) return;
@@ -2278,14 +1578,31 @@ function CanvasView({
         (n) => n.parent_id === fromId && n.id !== toId
       );
       void onMove(toId, fromId, siblings.length);
+      const pct = promptOwnershipPct();
+      if (pct != null) {
+        void onPatch(toId, {
+          ownership_json: JSON.stringify({
+            ...parseOwnership(target),
+            [String(fromId)]: pct
+          })
+        });
+      }
     } else if (
       target.parent_id !== fromId &&
       !(target.co_owner_node_ids || []).includes(fromId)
     ) {
       // Détenteur principal déjà défini → co-détention.
-      void onPatch(toId, {
+      const patch: Partial<OrgNode> = {
         co_owner_node_ids: [...(target.co_owner_node_ids || []), fromId]
-      });
+      };
+      const pct = promptOwnershipPct();
+      if (pct != null) {
+        patch.ownership_json = JSON.stringify({
+          ...parseOwnership(target),
+          [String(fromId)]: pct
+        });
+      }
+      void onPatch(toId, patch);
     }
   }
 
@@ -2294,18 +1611,26 @@ function CanvasView({
     toId: number;
     kind: "parent" | "coowner";
   }) {
+    const target = byId.get(a.toId);
+    // Retirer un lien retire aussi la quote-part de ce détenteur.
+    const owns = parseOwnership(target);
+    const hasPct = String(a.fromId) in owns;
+    delete owns[String(a.fromId)];
+    const nextOwnership =
+      Object.keys(owns).length > 0 ? JSON.stringify(owns) : null;
     if (a.kind === "parent") {
       const roots = nodes.filter(
         (n) => n.parent_id == null && n.id !== a.toId
       );
       void onMove(a.toId, null, roots.length);
+      if (hasPct) void onPatch(a.toId, { ownership_json: nextOwnership });
     } else {
-      const target = byId.get(a.toId);
       if (!target) return;
       void onPatch(a.toId, {
         co_owner_node_ids: (target.co_owner_node_ids || []).filter(
           (x) => x !== a.fromId
-        )
+        ),
+        ...(hasPct ? { ownership_json: nextOwnership } : {})
       });
     }
   }
@@ -2398,6 +1723,9 @@ function CanvasView({
               y: (start.y + end.y) / 2
             };
             const hovered = hoverArrow === a.key;
+            // Quote-part du détenteur (fromId) dans le nœud détenu
+            // (toId) — stockée sur le détenu, clé = id du détenteur.
+            const pct = parseOwnership(byId.get(a.toId))[String(a.fromId)];
             return (
               <g key={a.key}>
                 <line
@@ -2427,6 +1755,24 @@ function CanvasView({
                   markerEnd={`url(#org-arrow${hovered ? "-accent" : ""})`}
                   style={{ pointerEvents: "none" }}
                 />
+                {pct != null ? (
+                  // Quote-part au milieu de la flèche — halo card-bg
+                  // (paint-order) pour rester lisible sur le quadrillage.
+                  <text
+                    x={mid.x}
+                    y={mid.y - 8}
+                    textAnchor="middle"
+                    fontSize={10}
+                    fontWeight={600}
+                    fill="var(--qg-text-muted)"
+                    stroke="var(--qg-card-bg)"
+                    strokeWidth={3}
+                    paintOrder="stroke"
+                    style={{ pointerEvents: "none" }}
+                  >
+                    {formatPct(pct)}
+                  </text>
+                ) : null}
                 {hovered ? (
                   <g
                     style={{ pointerEvents: "all", cursor: "pointer" }}
@@ -2548,6 +1894,10 @@ function CanvasBubble({
 }) {
   const [hover, setHover] = useState(false);
   const kindInfo = KIND_LABELS[node.kind] || KIND_LABELS.role;
+  // Couleur de la bulle selon sa NATURE : INC Kratos (accent/or),
+  // compagnie externe (sky), personne (violet) — cf. légende.
+  const nature = nodeNature(node);
+  const natureStyle = NATURE_STYLES[nature];
   const tierInfo = node.execution_tier
     ? TIER_LABELS[node.execution_tier]
     : null;
@@ -2566,17 +1916,20 @@ function CanvasBubble({
       onMouseUp={onMouseUp}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      className="absolute select-none rounded-xl border"
+      className={`absolute select-none rounded-xl border ${natureStyle.bubbleCls}`}
       style={{
         left: x,
         top: y,
         width: BUBBLE_W,
         minHeight: BUBBLE_H,
-        borderColor:
-          selected || isParentCompany
-            ? "var(--qg-accent)"
-            : "var(--qg-border)",
-        backgroundColor: "var(--qg-card-bg)",
+        // Nature « autre » : rendu neutre historique (les natures
+        // colorées passent par les classes Tailwind ci-dessus).
+        ...(nature === "autre"
+          ? {
+              borderColor: "var(--qg-border)",
+              backgroundColor: "var(--qg-card-bg)"
+            }
+          : {}),
         boxShadow: selected
           ? "0 0 0 2px var(--qg-accent), 0 6px 18px -4px rgba(0,0,0,0.4)"
           : hover
@@ -2652,11 +2005,12 @@ function CanvasBubble({
   );
 }
 
-// Panneau d'édition latéral du canvas — s'ouvre au clic sur une bulle.
-// Réutilise le bloc d'édition partagé (type, fiche entreprise, niveau
-// d'exécution, responsable, description) + l'IA Kratos pour les nœuds
-// entreprise. Tout passe par onPatch / onMove → la vue colonnes reste
-// synchronisée.
+// Panneau latéral du canvas — s'ouvre au clic sur une bulle. Affiche
+// la nature (couleurs de la légende), la description (dont la ligne
+// « Détention : … » écrite par la sync), qui DÉTIENT la bulle et ce
+// qu'elle DÉTIENT (avec quotes-parts), le lien vers la fiche
+// entreprise, puis le bloc d'édition complet (renommer / supprimer
+// inclus) + l'IA Kratos pour les nœuds entreprise.
 function CanvasNodeEditor({
   node,
   allNodes,
@@ -2686,7 +2040,31 @@ function CanvasNodeEditor({
     setLabel(node.label);
   }, [node.id, node.label]);
 
-  const kindInfo = KIND_LABELS[node.kind] || KIND_LABELS.role;
+  const natureStyle = NATURE_STYLES[nodeNature(node)];
+
+  // Détenteurs de CE nœud : parent (détenteur principal) +
+  // co-détenteurs, avec leur quote-part depuis ownership_json.
+  const ownership = parseOwnership(node);
+  const ownerIds: number[] = [];
+  if (node.parent_id != null) ownerIds.push(node.parent_id);
+  for (const id of node.co_owner_node_ids || []) {
+    if (!ownerIds.includes(id)) ownerIds.push(id);
+  }
+  const owners = ownerIds
+    .map((id) => allNodes.find((n) => n.id === id))
+    .filter((n): n is OrgNode => Boolean(n))
+    .map((n) => ({ owner: n, pct: ownership[String(n.id)] }));
+
+  // Participations : les nœuds dont CE nœud est parent ou
+  // co-détenteur, avec la quote-part qu'il y détient.
+  const held = allNodes
+    .filter(
+      (m) =>
+        m.id !== node.id &&
+        (m.parent_id === node.id ||
+          (m.co_owner_node_ids || []).includes(node.id))
+    )
+    .map((m) => ({ held: m, pct: parseOwnership(m)[String(node.id)] }));
 
   return (
     <div
@@ -2699,9 +2077,9 @@ function CanvasNodeEditor({
     >
       <div className="flex items-center gap-1.5">
         <span
-          className={`rounded-full border px-1.5 py-0 text-[9px] font-bold uppercase ${kindInfo.cls}`}
+          className={`rounded-full border px-1.5 py-0 text-[9px] font-bold uppercase ${natureStyle.badgeCls}`}
         >
-          {kindInfo.label}
+          {natureStyle.label}
         </span>
         <span
           className="text-[10px]"
@@ -2739,6 +2117,107 @@ function CanvasNodeEditor({
         className="input text-sm font-semibold"
         placeholder="Nom du nœud"
       />
+
+      {node.description ? (
+        <p
+          className="whitespace-pre-line rounded border p-2 text-[11px]"
+          style={{
+            borderColor: "var(--qg-border-soft)",
+            color: "var(--qg-text-muted)"
+          }}
+        >
+          {node.description}
+        </p>
+      ) : null}
+
+      {node.entreprise_id ? (
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={`/entreprises/${node.entreprise_id}` as any}
+          className="btn-secondary btn-sm inline-flex w-fit items-center gap-1"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          Ouvrir la fiche
+        </Link>
+      ) : null}
+
+      {/* Détenue par — les détenteurs de cette bulle + quote-part. */}
+      <div>
+        <p
+          className="text-[9px] font-semibold uppercase tracking-wide"
+          style={{ color: "var(--qg-text-soft)" }}
+        >
+          Détenue par
+        </p>
+        {owners.length === 0 ? (
+          <p
+            className="mt-0.5 text-[11px]"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            Aucun détenteur — bulle racine.
+          </p>
+        ) : (
+          <ul className="mt-0.5 space-y-0.5 text-[11px]">
+            {owners.map(({ owner, pct }) => (
+              <li
+                key={owner.id}
+                className="flex items-center justify-between gap-2 rounded px-1.5 py-0.5"
+                style={{ backgroundColor: "var(--qg-bg-alt, transparent)" }}
+              >
+                <span style={{ color: "var(--qg-text)" }}>
+                  {owner.label}
+                </span>
+                {pct != null ? (
+                  <span
+                    className="shrink-0 font-semibold"
+                    style={{ color: "var(--qg-text-muted)" }}
+                  >
+                    {formatPct(pct)}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Détient — les participations de cette bulle + quote-part. */}
+      <div>
+        <p
+          className="text-[9px] font-semibold uppercase tracking-wide"
+          style={{ color: "var(--qg-text-soft)" }}
+        >
+          Détient
+        </p>
+        {held.length === 0 ? (
+          <p
+            className="mt-0.5 text-[11px]"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            Aucune participation.
+          </p>
+        ) : (
+          <ul className="mt-0.5 space-y-0.5 text-[11px]">
+            {held.map(({ held: h, pct }) => (
+              <li
+                key={h.id}
+                className="flex items-center justify-between gap-2 rounded px-1.5 py-0.5"
+                style={{ backgroundColor: "var(--qg-bg-alt, transparent)" }}
+              >
+                <span style={{ color: "var(--qg-text)" }}>{h.label}</span>
+                {pct != null ? (
+                  <span
+                    className="shrink-0 font-semibold"
+                    style={{ color: "var(--qg-text-muted)" }}
+                  >
+                    {formatPct(pct)}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       <NodeEditorBlock
         key={node.id}
