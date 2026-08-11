@@ -10,12 +10,11 @@ import {
 } from "react";
 import {
   Building2,
-  Download,
   ExternalLink,
+  LayoutGrid,
   Link2,
   Loader2,
   Plus,
-  Sparkles,
   Star,
   Trash2,
   User as UserIcon,
@@ -25,7 +24,6 @@ import {
 
 import { authedFetch } from "@/lib/auth";
 import { Link } from "@/i18n/navigation";
-import { MultiSelectDropdown } from "@/components/multi-select-dropdown";
 import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
 
@@ -37,11 +35,12 @@ import { QGTopbar, useEntreprisesLayout } from "../layout";
  * quote-part en % affichée sur chaque flèche quand elle est connue
  * (`ownership_json` du nœud détenu, clé = id du détenteur).
  *
- * Les entreprises s'importent en un clic (« Importer les entreprises »),
- * la détention se reconstruit depuis les fiches (« Sync détention »),
- * et des VERSIONS de travail (copies indépendantes des nœuds) se créent
- * depuis le topbar pour tester des scénarios de restructuration sans
- * toucher au « Principal » (version_id null).
+ * « Synchroniser avec les fiches » crée les nœuds manquants (nos INCs
+ * et leurs actionnaires) et reconstruit la détention depuis les
+ * « Partenaires & parts » des fiches d'entreprises. Des VERSIONS de
+ * travail (copies indépendantes des nœuds) se créent depuis le topbar
+ * pour tester des scénarios de restructuration sans toucher au
+ * « Principal » (version_id null).
  */
 
 type OrgNode = {
@@ -83,33 +82,6 @@ type Employe = {
   active?: boolean;
 };
 
-const KIND_LABELS: Record<string, { label: string; cls: string }> = {
-  company: {
-    label: "Entreprise",
-    cls: "bg-indigo-500/15 text-indigo-300 border-indigo-500/30"
-  },
-  person: {
-    label: "Personne",
-    cls: "bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/30"
-  },
-  dept: {
-    label: "Département",
-    cls: "bg-violet-500/15 text-violet-300 border-violet-500/30"
-  },
-  role: {
-    label: "Rôle",
-    cls: "bg-sky-500/15 text-sky-300 border-sky-500/30"
-  },
-  task: {
-    label: "Tâche",
-    cls: "bg-amber-500/15 text-amber-300 border-amber-500/30"
-  },
-  service: {
-    label: "Service partagé",
-    cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
-  }
-};
-
 // Niveau d'exécution : qui doit prendre en charge le rôle / la tâche.
 // Aide à voir d'un coup d'œil ce qui doit rester au dirigeant, ce qui
 // est délégable à un adjoint, et ce qui peut passer à l'adjoint
@@ -138,10 +110,14 @@ const TIER_LABELS: Record<
 // ─── Nature des bulles (couleurs du canvas + légende) ────────────
 //
 // La couleur d'une bulle reflète sa NATURE, pas seulement son kind :
-//  • INC Kratos        : company reliée à une fiche entreprise → accent (or)
+//  • INC Kratos        : company reliée à une fiche entreprise → ambre
 //  • Compagnie externe : company manuelle, sans fiche → sky
 //  • Personne          : kind person → violet
 //  • autre             : service partagé, etc. → neutre
+//
+// Couleurs volontairement FRANCHES (bordure /70, fond /15) : d'un
+// coup d'œil on distingue nos INCs, les compagnies externes et les
+// personnes. Le badge au-dessus du nom reprend la même nature.
 
 type BubbleNature = "inc" | "externe" | "person" | "autre";
 
@@ -154,28 +130,38 @@ function nodeNature(n: OrgNode): BubbleNature {
 
 const NATURE_STYLES: Record<
   BubbleNature,
-  { label: string; bubbleCls: string; dotCls: string; badgeCls: string }
+  {
+    label: string;
+    badge: string;
+    bubbleCls: string;
+    dotCls: string;
+    badgeCls: string;
+  }
 > = {
   inc: {
     label: "INC Kratos",
-    bubbleCls: "border-accent-400/60 bg-accent-500/10",
-    dotCls: "bg-accent-400",
-    badgeCls: "bg-accent-500/15 text-accent-300 border-accent-500/30"
+    badge: "INC Kratos",
+    bubbleCls: "border-amber-500/70 bg-amber-500/15",
+    dotCls: "bg-amber-500",
+    badgeCls: "bg-amber-500/20 text-amber-500 border-amber-500/40"
   },
   externe: {
     label: "Compagnie externe",
-    bubbleCls: "border-sky-400/60 bg-sky-500/10",
-    dotCls: "bg-sky-400",
-    badgeCls: "bg-sky-500/15 text-sky-300 border-sky-500/30"
+    badge: "Compagnie",
+    bubbleCls: "border-sky-500/70 bg-sky-500/15",
+    dotCls: "bg-sky-500",
+    badgeCls: "bg-sky-500/20 text-sky-500 border-sky-500/40"
   },
   person: {
     label: "Personne",
-    bubbleCls: "border-violet-400/60 bg-violet-500/10",
-    dotCls: "bg-violet-400",
-    badgeCls: "bg-violet-500/15 text-violet-300 border-violet-500/30"
+    badge: "Personne",
+    bubbleCls: "border-violet-500/70 bg-violet-500/15",
+    dotCls: "bg-violet-500",
+    badgeCls: "bg-violet-500/20 text-violet-500 border-violet-500/40"
   },
   autre: {
     label: "Autre",
+    badge: "Service",
     bubbleCls: "",
     dotCls: "bg-emerald-400",
     badgeCls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
@@ -210,14 +196,53 @@ function formatPct(p: number): string {
   return `${String(r).replace(".", ",")} %`;
 }
 
+// La sync écrit une ligne « Détention : … » en tête de description.
+// Le panneau la montre à part (lecture seule) et n'édite que les
+// notes libres — la ligne est recomposée telle quelle au PATCH.
+function splitDescription(desc: string | null): {
+  detention: string | null;
+  notes: string;
+} {
+  const lines = (desc || "").split("\n");
+  const detention =
+    lines.find((l) => l.startsWith("Détention : ")) || null;
+  const notes = lines
+    .filter((l) => !l.startsWith("Détention : "))
+    .join("\n")
+    .trim();
+  return { detention, notes };
+}
+
+function composeDescription(
+  detention: string | null,
+  notes: string
+): string | null {
+  const parts = [
+    ...(detention ? [detention] : []),
+    ...(notes.trim() ? [notes.trim()] : [])
+  ];
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+// ─── Géométrie du canvas (bulles + grille) ───────────────────────
+// Partagée entre la vue canvas et le rangement automatique
+// (« Réorganiser ») du composant page.
+const BUBBLE_W = 210;
+const BUBBLE_H = 66;
+const CANVAS_PAD = 400;
+// Pas de la grille (= taille du quadrillage de fond). Les bulles
+// s'aimantent dessus → lignes droites, niveaux alignés.
+const GRID = 24;
+const snap = (v: number) => Math.round(v / GRID) * GRID;
+
 export default function OrganigrammePage() {
   const { entreprises } = useEntreprisesLayout();
   const [nodes, setNodes] = useState<OrgNode[]>([]);
   const [employes, setEmployes] = useState<Employe[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [importing, setImporting] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [layouting, setLayouting] = useState(false);
   // Ajout manuel rapide (bandeau) : un seul champ nom, partagé par
   // les boutons « + Compagnie » et « + Personne ».
   const [quickLabel, setQuickLabel] = useState("");
@@ -364,27 +389,6 @@ export default function OrganigrammePage() {
     }
   }
 
-  async function importEntreprises() {
-    setImporting(true);
-    setError(null);
-    try {
-      const r = await authedFetch("/api/v1/org-nodes/import-entreprises", {
-        method: "POST"
-      });
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(txt.slice(0, 200) || `HTTP ${r.status}`);
-      }
-      // On recharge plutôt que d'utiliser la réponse : elle correspond
-      // au Principal, pas forcément à la version affichée.
-      await load();
-    } catch (e) {
-      setError(`Import des entreprises échoué : ${(e as Error).message}`);
-    } finally {
-      setImporting(false);
-    }
-  }
-
   // Sous-ensemble « structurel » affiché au canvas : entreprises,
   // personnes et nœuds libres. On exclut les départements, rôles et
   // tâches (héritage des anciennes vues) — l'organigramme montre la
@@ -428,8 +432,7 @@ export default function OrganigrammePage() {
   async function createNode(
     parent_id: number | null,
     label: string,
-    kind = "company",
-    extra?: { description?: string | null; execution_tier?: string | null }
+    kind = "company"
   ) {
     if (!label.trim()) return;
     try {
@@ -441,11 +444,7 @@ export default function OrganigrammePage() {
           kind,
           // Chaque création atterrit dans la version affichée
           // (null = Principal).
-          version_id: versionId,
-          ...(extra?.description ? { description: extra.description } : {}),
-          ...(extra?.execution_tier
-            ? { execution_tier: extra.execution_tier }
-            : {})
+          version_id: versionId
         })
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -510,6 +509,81 @@ export default function OrganigrammePage() {
       if (created) setQuickLabel("");
     } finally {
       setCreatingKind(null);
+    }
+  }
+
+  // Rangement automatique (« Réorganiser ») : bulles disposées par
+  // COUCHES de détention — niveau 0 = les détenteurs ultimes (aucun
+  // parent ni co-détenteur), puis chaque nœud une rangée sous son
+  // détenteur le plus profond. Les flèches pointent ainsi toutes vers
+  // le bas, sans croisements inutiles.
+  async function autoLayout() {
+    if (layouting) return;
+    if (
+      !window.confirm(
+        "Réorganiser toutes les bulles ? Les positions actuelles seront remplacées."
+      )
+    )
+      return;
+    setLayouting(true);
+    setError(null);
+    try {
+      const list = structuralNodes;
+      const ids = new Set(list.map((n) => n.id));
+      // Détenteurs de chaque nœud : parent + co-détenteurs présents
+      // au canvas (les nœuds hors périmètre sont ignorés).
+      const holdersOf = new Map<number, number[]>();
+      for (const n of list) {
+        const hs: number[] = [];
+        if (n.parent_id != null && ids.has(n.parent_id))
+          hs.push(n.parent_id);
+        for (const co of n.co_owner_node_ids || [])
+          if (ids.has(co) && !hs.includes(co)) hs.push(co);
+        holdersOf.set(n.id, hs);
+      }
+      // Niveaux par propagation : niveau 0 = sans détenteur, sinon
+      // 1 + max(niveau des détenteurs). Le garde-fou (50 passes)
+      // borne les cycles de détention croisée.
+      const level = new Map<number, number>();
+      for (const n of list) level.set(n.id, 0);
+      let changed = true;
+      let guard = 0;
+      while (changed && guard < 50) {
+        changed = false;
+        guard += 1;
+        for (const n of list) {
+          const hs = holdersOf.get(n.id) || [];
+          if (hs.length === 0) continue;
+          const want =
+            1 + Math.max(...hs.map((h) => level.get(h) || 0));
+          if (want !== level.get(n.id)) {
+            level.set(n.id, want);
+            changed = true;
+          }
+        }
+      }
+      // Rangées : tri alphabétique dans chaque niveau, puis grille.
+      const byLevel = new Map<number, OrgNode[]>();
+      for (const n of list) {
+        const lv = level.get(n.id) || 0;
+        const arr = byLevel.get(lv) || [];
+        arr.push(n);
+        byLevel.set(lv, arr);
+      }
+      for (const [lv, arr] of byLevel) {
+        arr.sort((a, b) => a.label.localeCompare(b.label, "fr"));
+        for (let i = 0; i < arr.length; i += 1) {
+          const x = snap(i * (BUBBLE_W + GRID * 2) + GRID);
+          const y = snap(lv * (BUBBLE_H + GRID * 3) + GRID);
+          // PATCH séquentiels — même mécanique de sauvegarde que le
+          // drag d'une bulle.
+          await patchNode(arr[i].id, { pos_x: x, pos_y: y });
+        }
+      }
+      // Recharge : le canvas se re-seed depuis les positions serveur.
+      await load();
+    } finally {
+      setLayouting(false);
     }
   }
 
@@ -586,7 +660,7 @@ export default function OrganigrammePage() {
           </div>
         ) : (
           <>
-            {/* Bandeau : ajout manuel rapide + import des entreprises */}
+            {/* Bandeau : ajout manuel rapide + sync avec les fiches */}
             <div
               className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border p-3"
               style={{
@@ -638,31 +712,31 @@ export default function OrganigrammePage() {
               </button>
               <button
                 type="button"
-                onClick={() => void importEntreprises()}
-                disabled={importing}
-                className="btn-secondary btn-sm disabled:opacity-50"
-                title="Crée un nœud pour chaque entreprise du groupe non encore présente dans l'organigramme. Tu les replaces ensuite par glisser-déposer."
-              >
-                {importing ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Download className="h-3.5 w-3.5" />
-                )}
-                Importer les entreprises
-              </button>
-              <button
-                type="button"
                 onClick={() => void syncDetention()}
                 disabled={syncing}
                 className="btn-secondary btn-sm disabled:opacity-50"
-                title="Reconstruit les liens de détention depuis les « Partenaires & parts » des fiches d'entreprises : chaque INC est reliée à ses actionnaires (nos INCs comme les investisseurs externes), pourcentages inclus. Les positions des bulles sont conservées."
+                title="Crée les bulles manquantes (nos INCs et leurs actionnaires) et reconstruit les liens de détention depuis les « Partenaires & parts » des fiches d'entreprises, pourcentages inclus. Les positions des bulles existantes sont conservées."
               >
                 {syncing ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <Link2 className="h-3.5 w-3.5" />
                 )}
-                Sync détention (partenaires)
+                Synchroniser avec les fiches
+              </button>
+              <button
+                type="button"
+                onClick={() => void autoLayout()}
+                disabled={layouting}
+                className="btn-secondary btn-sm disabled:opacity-50"
+                title="Range automatiquement les bulles par niveaux de détention : les détenteurs ultimes en haut, chaque compagnie sous ses détenteurs. Remplace les positions actuelles."
+              >
+                {layouting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <LayoutGrid className="h-3.5 w-3.5" />
+                )}
+                Réorganiser
               </button>
               <div
                 className="ml-auto inline-flex overflow-hidden rounded-lg border"
@@ -746,17 +820,17 @@ export default function OrganigrammePage() {
                 <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
                   <button
                     type="button"
-                    onClick={() => void importEntreprises()}
-                    disabled={importing}
+                    onClick={() => void syncDetention()}
+                    disabled={syncing}
                     className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
-                    title="Crée un nœud pour chaque entreprise du groupe."
+                    title="Crée une bulle par INC et par actionnaire, avec les liens de détention des fiches d'entreprises."
                   >
-                    {importing ? (
+                    {syncing ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <Download className="h-3.5 w-3.5" />
+                      <Link2 className="h-3.5 w-3.5" />
                     )}
-                    Importer les entreprises
+                    Synchroniser avec les fiches
                   </button>
                 </div>
                 <span
@@ -776,7 +850,6 @@ export default function OrganigrammePage() {
                 entreprises={entreprises}
                 employes={employes}
                 parentEntId={parentEntId}
-                onCreate={createNode}
                 onPatch={patchNode}
                 onMove={moveNode}
                 onDelete={deleteNode}
@@ -845,389 +918,6 @@ function ZoomControl({
   );
 }
 
-type RoleSuggestion = {
-  label: string;
-  kind: string;
-  description: string | null;
-  execution_tier: string | null;
-};
-
-// Bloc d'édition du panneau latéral du canvas : type, entreprise liée
-// (fiche), niveau d'exécution, co-détenteurs, responsable,
-// description. Entièrement piloté par onPatch.
-function NodeEditorBlock({
-  node,
-  allNodes,
-  entreprises,
-  employes,
-  onPatch
-}: {
-  node: OrgNode;
-  allNodes: OrgNode[];
-  entreprises: Array<{ id: number; name: string }>;
-  employes: Employe[];
-  onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
-}) {
-  const [extName, setExtName] = useState(node.assignee_external_name || "");
-  useEffect(() => {
-    setExtName(node.assignee_external_name || "");
-  }, [node.assignee_external_name]);
-
-  const coOwnerIds = node.co_owner_node_ids || [];
-  // Détenteurs possibles : entreprises ET personnes physiques (la
-  // détention n'est pas que sociétale — il y a aussi de la détention
-  // personnelle).
-  const companyOptions = allNodes
-    .filter(
-      (n) =>
-        (n.kind === "company" || n.kind === "person") && n.id !== node.id
-    )
-    .map((n) => ({ id: n.id, label: n.label }));
-
-  return (
-    <div
-      className="space-y-2 rounded border p-2 text-[11px]"
-      style={{
-        borderColor: "var(--qg-border-soft)",
-        backgroundColor: "var(--qg-card-bg)"
-      }}
-    >
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className="text-[9px] uppercase text-white/40">Type</label>
-          <select
-            value={node.kind}
-            onChange={(e) => void onPatch(node.id, { kind: e.target.value })}
-            className="input mt-0.5 text-[11px]"
-          >
-            <option value="company">Entreprise</option>
-            <option value="person">Personne</option>
-            <option value="dept">Département</option>
-            <option value="role">Rôle</option>
-            <option value="task">Tâche</option>
-            <option value="service">Service partagé</option>
-          </select>
-        </div>
-        <div>
-          <label className="text-[9px] uppercase text-white/40">
-            Entreprise liée (fiche)
-          </label>
-          <select
-            value={node.entreprise_id ? String(node.entreprise_id) : ""}
-            onChange={(e) =>
-              void onPatch(node.id, {
-                entreprise_id: e.target.value
-                  ? Number(e.target.value)
-                  : null
-              })
-            }
-            className="input mt-0.5 text-[11px]"
-          >
-            <option value="">Transverse (groupe)</option>
-            {entreprises.map((ent) => (
-              <option key={ent.id} value={String(ent.id)}>
-                {ent.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* Niveau d'exécution — qui doit prendre ça en charge. Aide
-          l'analyse : ce qui reste au dirigeant, ce qui est délégable
-          à un adjoint, ce qui peut passer à l'adjoint virtuel. */}
-      <div>
-        <label className="text-[9px] uppercase text-white/40">
-          Niveau d&apos;exécution — qui doit le faire
-        </label>
-        <div className="mt-0.5 flex gap-1">
-          {(
-            [
-              ["", "Non classé"],
-              ["direction", TIER_LABELS.direction.label],
-              ["adjoint", TIER_LABELS.adjoint.label],
-              ["adjoint_virtuel", TIER_LABELS.adjoint_virtuel.label]
-            ] as const
-          ).map(([val, lbl]) => {
-            const active = (node.execution_tier || "") === val;
-            const info = val ? TIER_LABELS[val] : null;
-            return (
-              <button
-                key={val || "none"}
-                type="button"
-                onClick={() =>
-                  void onPatch(node.id, { execution_tier: val || null })
-                }
-                className={`flex-1 rounded border px-1 py-1 text-[10px] font-semibold transition ${
-                  active && info
-                    ? info.cls
-                    : active
-                      ? "border-white/30 text-white/80"
-                      : "border-transparent text-white/40 hover:text-white/70"
-                }`}
-                style={
-                  !active
-                    ? { backgroundColor: "var(--qg-bg-alt, transparent)" }
-                    : undefined
-                }
-              >
-                {lbl}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Co-détenteurs — une entreprise peut être détenue par
-          plusieurs ; le parent dans l'arbre = détenteur principal. */}
-      <div>
-        <label className="text-[9px] uppercase text-white/40">
-          Co-détenteurs (en plus du parent dans l&apos;arbre)
-        </label>
-        <div className="mt-0.5">
-          <MultiSelectDropdown
-            options={companyOptions}
-            selectedIds={coOwnerIds}
-            onChange={(ids) =>
-              void onPatch(node.id, { co_owner_node_ids: ids })
-            }
-            placeholder="— Aucun co-détenteur —"
-            emptyLabel="Aucune entreprise ni personne dans l'organigramme"
-          />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className="text-[9px] uppercase text-white/40">
-            Employé responsable
-          </label>
-          <select
-            value={
-              node.assignee_employe_id
-                ? String(node.assignee_employe_id)
-                : ""
-            }
-            onChange={(e) =>
-              void onPatch(node.id, {
-                assignee_employe_id: e.target.value
-                  ? Number(e.target.value)
-                  : null,
-                assignee_external_name: e.target.value
-                  ? null
-                  : node.assignee_external_name
-              })
-            }
-            className="input mt-0.5 text-[11px]"
-          >
-            <option value="">— Aucun —</option>
-            {employes.map((emp) => (
-              <option key={emp.id} value={String(emp.id)}>
-                {emp.full_name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="text-[9px] uppercase text-white/40">
-            OU externe (freelance, partenaire)
-          </label>
-          <input
-            value={extName}
-            onChange={(e) => setExtName(e.target.value)}
-            onBlur={() => {
-              if (extName !== (node.assignee_external_name || "")) {
-                void onPatch(node.id, {
-                  assignee_external_name: extName.trim() || null,
-                  assignee_employe_id: extName.trim()
-                    ? null
-                    : node.assignee_employe_id
-                });
-              }
-            }}
-            placeholder="Ex. Freelance, sous-traitant XYZ"
-            className="input mt-0.5 text-[11px]"
-          />
-        </div>
-      </div>
-
-      <div>
-        <label className="text-[9px] uppercase text-white/40">
-          Description / ce que ça fait
-        </label>
-        <textarea
-          key={node.id}
-          defaultValue={node.description || ""}
-          onBlur={(e) => {
-            if (e.target.value !== (node.description || "")) {
-              void onPatch(node.id, {
-                description: e.target.value.trim() || null
-              });
-            }
-          }}
-          rows={2}
-          className="input mt-0.5 text-[11px]"
-          placeholder="Notes, responsabilités, KPIs, ce que ce rôle / cette tâche accomplit..."
-        />
-      </div>
-    </div>
-  );
-}
-
-// Panneau « Générer » (IA Kratos) : suggère les rôles / départements /
-// tâches manquants d'une entreprise selon son but, chacun classé par
-// niveau d'exécution. Partagé entre la vue colonnes et le canvas.
-function RoleSuggestionsPanel({
-  node,
-  onCreate
-}: {
-  node: OrgNode;
-  onCreate: (
-    parent_id: number | null,
-    label: string,
-    kind?: string,
-    extra?: { description?: string | null; execution_tier?: string | null }
-  ) => Promise<OrgNode | undefined>;
-}) {
-  const [suggesting, setSuggesting] = useState(false);
-  const [suggestions, setSuggestions] = useState<RoleSuggestion[] | null>(
-    null
-  );
-  const [suggestError, setSuggestError] = useState<string | null>(null);
-  const [added, setAdded] = useState<Set<string>>(new Set());
-
-  async function generate() {
-    setSuggesting(true);
-    setSuggestError(null);
-    try {
-      const r = await authedFetch(
-        `/api/v1/org-nodes/${node.id}/suggest-roles`,
-        { method: "POST" }
-      );
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(txt.slice(0, 160) || `HTTP ${r.status}`);
-      }
-      setSuggestions((await r.json()) as RoleSuggestion[]);
-      setAdded(new Set());
-    } catch (e) {
-      setSuggestError((e as Error).message);
-      setSuggestions([]);
-    } finally {
-      setSuggesting(false);
-    }
-  }
-
-  async function addOne(s: RoleSuggestion) {
-    setAdded((prev) => new Set(prev).add(s.label));
-    await onCreate(node.id, s.label, s.kind, {
-      description: s.description,
-      execution_tier: s.execution_tier
-    });
-  }
-
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={() => void generate()}
-        disabled={suggesting}
-        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold text-accent-300 hover:bg-accent-500/10 disabled:opacity-50"
-        title="Suggère les rôles / tâches manquants selon le but de cette entreprise"
-      >
-        {suggesting ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        ) : (
-          <Sparkles className="h-3 w-3" />
-        )}
-        {suggestions === null && !suggestError
-          ? "Générer les rôles / tâches manquants"
-          : "Régénérer"}
-      </button>
-
-      {suggestions !== null || suggestError ? (
-        <div
-          className="mt-1.5 rounded border p-2 text-[11px]"
-          style={{
-            borderColor: "var(--qg-border-soft)",
-            backgroundColor: "var(--qg-card-bg)"
-          }}
-        >
-          {suggestError ? (
-            <p className="text-[10px] text-rose-300">{suggestError}</p>
-          ) : null}
-          {suggestions && suggestions.length === 0 && !suggestError ? (
-            <p
-              className="text-[10px]"
-              style={{ color: "var(--qg-text-soft)" }}
-            >
-              Rien de neuf à suggérer — la structure semble déjà couverte.
-            </p>
-          ) : null}
-          <div className="space-y-1">
-            {(suggestions || []).map((s) => {
-              const isAdded = added.has(s.label);
-              const sKind = KIND_LABELS[s.kind] || KIND_LABELS.role;
-              const sTier = s.execution_tier
-                ? TIER_LABELS[s.execution_tier]
-                : null;
-              return (
-                <div
-                  key={s.label}
-                  className="flex items-start gap-1.5 rounded px-1 py-1"
-                  style={{
-                    backgroundColor: "var(--qg-bg-alt, transparent)"
-                  }}
-                >
-                  <span className="mt-0.5 flex shrink-0 flex-col gap-0.5">
-                    <span
-                      className={`rounded-full border px-1 py-0 text-center text-[8px] font-bold uppercase ${sKind.cls}`}
-                    >
-                      {sKind.label}
-                    </span>
-                    {sTier ? (
-                      <span
-                        className={`rounded-full border px-1 py-0 text-center text-[8px] font-bold ${sTier.cls}`}
-                      >
-                        {sTier.short}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span
-                      className="block font-semibold"
-                      style={{ color: "var(--qg-text)" }}
-                    >
-                      {s.label}
-                    </span>
-                    {s.description ? (
-                      <span
-                        className="block text-[10px]"
-                        style={{ color: "var(--qg-text-soft)" }}
-                      >
-                        {s.description}
-                      </span>
-                    ) : null}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void addOne(s)}
-                    disabled={isAdded}
-                    className="mt-0.5 inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold text-accent-300 hover:bg-accent-500/10 disabled:opacity-40"
-                  >
-                    <Plus className="h-2.5 w-2.5" />
-                    {isAdded ? "Ajouté" : "Ajouter"}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 // ─── Vue Canvas type Miro ────────────────────────────────────────
 //
 // Bulles positionnables librement (pos_x / pos_y persistés) + flèches
@@ -1236,14 +926,6 @@ function RoleSuggestionsPanel({
 // entière —, avec ajout / suppression manuelle. Tirer une flèche A→B
 // re-parente B (ou ajoute A en co-détenteur) et demande la quote-part,
 // affichée ensuite au milieu de la flèche.
-
-const BUBBLE_W = 210;
-const BUBBLE_H = 66;
-const CANVAS_PAD = 400;
-// Pas de la grille (= taille du quadrillage de fond). Les bulles
-// s'aimantent dessus → lignes droites, niveaux alignés.
-const GRID = 24;
-const snap = (v: number) => Math.round(v / GRID) * GRID;
 
 type XY = { x: number; y: number };
 
@@ -1265,7 +947,6 @@ function CanvasView({
   entreprises,
   employes,
   parentEntId,
-  onCreate,
   onPatch,
   onMove,
   onDelete
@@ -1274,12 +955,6 @@ function CanvasView({
   entreprises: Array<{ id: number; name: string }>;
   employes: Employe[];
   parentEntId: number | null;
-  onCreate: (
-    parent_id: number | null,
-    label: string,
-    kind?: string,
-    extra?: { description?: string | null; execution_tier?: string | null }
-  ) => Promise<OrgNode | undefined>;
   onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
   onMove: (
     id: number,
@@ -1635,6 +1310,55 @@ function CanvasView({
     }
   }
 
+  // Retire un lien de détention ownerId → nodeId (panneau latéral) —
+  // même logique que la suppression d'une flèche au survol.
+  function removeOwner(nodeId: number, ownerId: number) {
+    const target = byId.get(nodeId);
+    if (!target) return;
+    deleteArrow({
+      fromId: ownerId,
+      toId: nodeId,
+      kind: target.parent_id === ownerId ? "parent" : "coowner"
+    });
+  }
+
+  // Ajoute un détenteur ownerId → nodeId avec sa quote-part (panneau
+  // latéral) — même logique que le tracé d'une flèche : re-parentage
+  // si la bulle n'a pas encore de détenteur principal, sinon
+  // co-détention. La quote-part atterrit dans ownership_json du
+  // nœud détenu (clé = id du détenteur).
+  function addOwner(nodeId: number, ownerId: number, pct: number | null) {
+    if (ownerId === nodeId) return;
+    // Anti-boucle : le détenteur ne peut pas être un descendant.
+    if (subtreeOf(nodeId).has(ownerId)) return;
+    const target = byId.get(nodeId);
+    if (!target) return;
+    const nextOwnership =
+      pct != null
+        ? JSON.stringify({
+            ...parseOwnership(target),
+            [String(ownerId)]: pct
+          })
+        : null;
+    if (target.parent_id == null) {
+      const siblings = nodes.filter(
+        (n) => n.parent_id === ownerId && n.id !== nodeId
+      );
+      void onMove(nodeId, ownerId, siblings.length);
+      if (nextOwnership != null)
+        void onPatch(nodeId, { ownership_json: nextOwnership });
+    } else if (
+      target.parent_id !== ownerId &&
+      !(target.co_owner_node_ids || []).includes(ownerId)
+    ) {
+      const patch: Partial<OrgNode> = {
+        co_owner_node_ids: [...(target.co_owner_node_ids || []), ownerId]
+      };
+      if (nextOwnership != null) patch.ownership_json = nextOwnership;
+      void onPatch(nodeId, patch);
+    }
+  }
+
   const selectedNode =
     selectedId != null
       ? nodes.find((n) => n.id === selectedId) || null
@@ -1762,11 +1486,11 @@ function CanvasView({
                     x={mid.x}
                     y={mid.y - 8}
                     textAnchor="middle"
-                    fontSize={10}
+                    fontSize={11}
                     fontWeight={600}
-                    fill="var(--qg-text-muted)"
+                    fill="var(--qg-text)"
                     stroke="var(--qg-card-bg)"
-                    strokeWidth={3}
+                    strokeWidth={4}
                     paintOrder="stroke"
                     style={{ pointerEvents: "none" }}
                   >
@@ -1854,10 +1578,11 @@ function CanvasView({
           node={selectedNode}
           allNodes={nodes}
           entreprises={entreprises}
-          employes={employes}
-          onCreate={onCreate}
           onPatch={onPatch}
           onDelete={onDelete}
+          onRemoveOwner={removeOwner}
+          onAddOwner={addOwner}
+          onSelect={setSelectedId}
           onClose={() => setSelectedId(null)}
         />
       ) : null}
@@ -1893,9 +1618,8 @@ function CanvasBubble({
   onDelete: () => void;
 }) {
   const [hover, setHover] = useState(false);
-  const kindInfo = KIND_LABELS[node.kind] || KIND_LABELS.role;
-  // Couleur de la bulle selon sa NATURE : INC Kratos (accent/or),
-  // compagnie externe (sky), personne (violet) — cf. légende.
+  // Couleur ET badge de la bulle selon sa NATURE : INC Kratos
+  // (ambre), compagnie externe (sky), personne (violet) — cf. légende.
   const nature = nodeNature(node);
   const natureStyle = NATURE_STYLES[nature];
   const tierInfo = node.execution_tier
@@ -1944,9 +1668,9 @@ function CanvasBubble({
           <Star className="h-3 w-3 shrink-0 text-accent-400" />
         ) : null}
         <span
-          className={`shrink-0 rounded-full border px-1.5 py-0 text-[8px] font-bold uppercase ${kindInfo.cls}`}
+          className={`shrink-0 rounded-full border px-1.5 py-0 text-[8px] font-bold uppercase ${natureStyle.badgeCls}`}
         >
-          {kindInfo.label}
+          {natureStyle.badge}
         </span>
         {tierInfo ? (
           <span
@@ -2005,40 +1729,48 @@ function CanvasBubble({
   );
 }
 
-// Panneau latéral du canvas — s'ouvre au clic sur une bulle. Affiche
-// la nature (couleurs de la légende), la description (dont la ligne
-// « Détention : … » écrite par la sync), qui DÉTIENT la bulle et ce
-// qu'elle DÉTIENT (avec quotes-parts), le lien vers la fiche
-// entreprise, puis le bloc d'édition complet (renommer / supprimer
-// inclus) + l'IA Kratos pour les nœuds entreprise.
+// Panneau latéral du canvas — s'ouvre au clic sur une bulle.
+// Sous-fiche épurée : nature, nom, lien / liaison vers la fiche INC,
+// détenteurs (ajout / retrait avec quotes-parts), participations
+// (cliquables) et notes libres. La ligne « Détention : … » écrite par
+// la sync est montrée à part, en lecture seule.
 function CanvasNodeEditor({
   node,
   allNodes,
   entreprises,
-  employes,
-  onCreate,
   onPatch,
   onDelete,
+  onRemoveOwner,
+  onAddOwner,
+  onSelect,
   onClose
 }: {
   node: OrgNode;
   allNodes: OrgNode[];
   entreprises: Array<{ id: number; name: string }>;
-  employes: Employe[];
-  onCreate: (
-    parent_id: number | null,
-    label: string,
-    kind?: string,
-    extra?: { description?: string | null; execution_tier?: string | null }
-  ) => Promise<OrgNode | undefined>;
   onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
+  onRemoveOwner: (nodeId: number, ownerId: number) => void;
+  onAddOwner: (
+    nodeId: number,
+    ownerId: number,
+    pct: number | null
+  ) => void;
+  onSelect: (id: number) => void;
   onClose: () => void;
 }) {
   const [label, setLabel] = useState(node.label);
   useEffect(() => {
     setLabel(node.label);
   }, [node.id, node.label]);
+
+  // Formulaire « + Ajouter un détenteur » : sélection + quote-part.
+  const [newOwnerId, setNewOwnerId] = useState("");
+  const [newOwnerPct, setNewOwnerPct] = useState("");
+  useEffect(() => {
+    setNewOwnerId("");
+    setNewOwnerPct("");
+  }, [node.id]);
 
   const natureStyle = NATURE_STYLES[nodeNature(node)];
 
@@ -2065,6 +1797,31 @@ function CanvasNodeEditor({
           (m.co_owner_node_ids || []).includes(node.id))
     )
     .map((m) => ({ held: m, pct: parseOwnership(m)[String(node.id)] }));
+
+  // Candidats détenteurs : les autres bulles de la version, hors
+  // détenteurs actuels.
+  const ownerCandidates = allNodes
+    .filter((n) => n.id !== node.id && !ownerIds.includes(n.id))
+    .sort((a, b) => a.label.localeCompare(b.label, "fr"));
+
+  function addOwnerFromForm() {
+    if (!newOwnerId) return;
+    const cleaned = newOwnerPct
+      .replace("%", "")
+      .replace(",", ".")
+      .trim();
+    const pct = cleaned ? Number(cleaned) : NaN;
+    onAddOwner(
+      node.id,
+      Number(newOwnerId),
+      Number.isNaN(pct) ? null : pct
+    );
+    setNewOwnerId("");
+    setNewOwnerPct("");
+  }
+
+  // Notes libres, sans la ligne « Détention : … » (affichée à part).
+  const { detention, notes } = splitDescription(node.description);
 
   return (
     <div
@@ -2118,27 +1875,44 @@ function CanvasNodeEditor({
         placeholder="Nom du nœud"
       />
 
-      {node.description ? (
-        <p
-          className="whitespace-pre-line rounded border p-2 text-[11px]"
-          style={{
-            borderColor: "var(--qg-border-soft)",
-            color: "var(--qg-text-muted)"
-          }}
-        >
-          {node.description}
-        </p>
-      ) : null}
-
-      {node.entreprise_id ? (
-        <Link
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={`/entreprises/${node.entreprise_id}` as any}
-          className="btn-secondary btn-sm inline-flex w-fit items-center gap-1"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          Ouvrir la fiche
-        </Link>
+      {node.kind === "company" ? (
+        node.entreprise_id ? (
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={`/entreprises/${node.entreprise_id}` as any}
+            className="btn-accent inline-flex w-fit items-center gap-1 text-xs"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            Ouvrir la fiche
+          </Link>
+        ) : (
+          <div>
+            <label
+              className="text-[9px] font-semibold uppercase tracking-wide"
+              style={{ color: "var(--qg-text-soft)" }}
+            >
+              Lier à une de nos INCs
+            </label>
+            <select
+              value=""
+              onChange={(e) => {
+                if (e.target.value)
+                  void onPatch(node.id, {
+                    entreprise_id: Number(e.target.value)
+                  });
+              }}
+              className="input mt-0.5 text-[11px]"
+              title="Relie cette compagnie à sa fiche Kratos — la bulle devient une INC Kratos (ambre)"
+            >
+              <option value="">— non liée —</option>
+              {entreprises.map((ent) => (
+                <option key={ent.id} value={String(ent.id)}>
+                  {ent.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )
       ) : null}
 
       {/* Détenue par — les détenteurs de cette bulle + quote-part. */}
@@ -2161,10 +1935,13 @@ function CanvasNodeEditor({
             {owners.map(({ owner, pct }) => (
               <li
                 key={owner.id}
-                className="flex items-center justify-between gap-2 rounded px-1.5 py-0.5"
+                className="flex items-center gap-2 rounded px-1.5 py-0.5"
                 style={{ backgroundColor: "var(--qg-bg-alt, transparent)" }}
               >
-                <span style={{ color: "var(--qg-text)" }}>
+                <span
+                  className="min-w-0 flex-1 truncate"
+                  style={{ color: "var(--qg-text)" }}
+                >
                   {owner.label}
                 </span>
                 {pct != null ? (
@@ -2175,10 +1952,53 @@ function CanvasNodeEditor({
                     {formatPct(pct)}
                   </span>
                 ) : null}
+                <button
+                  type="button"
+                  onClick={() => onRemoveOwner(node.id, owner.id)}
+                  className="shrink-0 rounded p-0.5 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
+                  title={`Retirer ${owner.label} des détenteurs`}
+                  aria-label={`Retirer ${owner.label} des détenteurs`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
               </li>
             ))}
           </ul>
         )}
+        {ownerCandidates.length > 0 ? (
+          <div className="mt-1 flex items-center gap-1">
+            <select
+              value={newOwnerId}
+              onChange={(e) => setNewOwnerId(e.target.value)}
+              className="input min-w-0 flex-1 text-[11px]"
+              title="Choisis la compagnie ou la personne qui détient cette bulle"
+            >
+              <option value="">+ Ajouter un détenteur…</option>
+              {ownerCandidates.map((n) => (
+                <option key={n.id} value={String(n.id)}>
+                  {n.label}
+                </option>
+              ))}
+            </select>
+            <input
+              value={newOwnerPct}
+              onChange={(e) => setNewOwnerPct(e.target.value)}
+              className="input w-14 text-[11px]"
+              placeholder="%"
+              title="Quote-part (%) du détenteur — vide = sans %"
+            />
+            <button
+              type="button"
+              onClick={addOwnerFromForm}
+              disabled={!newOwnerId}
+              className="btn-secondary btn-sm shrink-0 disabled:opacity-50"
+              title="Créer le lien de détention"
+              aria-label="Créer le lien de détention"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {/* Détient — les participations de cette bulle + quote-part. */}
@@ -2199,38 +2019,73 @@ function CanvasNodeEditor({
         ) : (
           <ul className="mt-0.5 space-y-0.5 text-[11px]">
             {held.map(({ held: h, pct }) => (
-              <li
-                key={h.id}
-                className="flex items-center justify-between gap-2 rounded px-1.5 py-0.5"
-                style={{ backgroundColor: "var(--qg-bg-alt, transparent)" }}
-              >
-                <span style={{ color: "var(--qg-text)" }}>{h.label}</span>
-                {pct != null ? (
+              <li key={h.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(h.id)}
+                  className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-0.5 text-left hover:bg-accent-500/10"
+                  style={{
+                    backgroundColor: "var(--qg-bg-alt, transparent)"
+                  }}
+                  title={`Voir ${h.label}`}
+                >
                   <span
-                    className="shrink-0 font-semibold"
-                    style={{ color: "var(--qg-text-muted)" }}
+                    className="min-w-0 flex-1 truncate"
+                    style={{ color: "var(--qg-text)" }}
                   >
-                    {formatPct(pct)}
+                    {h.label}
                   </span>
-                ) : null}
+                  {pct != null ? (
+                    <span
+                      className="shrink-0 font-semibold"
+                      style={{ color: "var(--qg-text-muted)" }}
+                    >
+                      {formatPct(pct)}
+                    </span>
+                  ) : null}
+                </button>
               </li>
             ))}
           </ul>
         )}
       </div>
 
-      <NodeEditorBlock
-        key={node.id}
-        node={node}
-        allNodes={allNodes}
-        entreprises={entreprises}
-        employes={employes}
-        onPatch={onPatch}
-      />
-
-      {node.kind === "company" ? (
-        <RoleSuggestionsPanel key={`sug-${node.id}`} node={node} onCreate={onCreate} />
-      ) : null}
+      {/* Notes libres — la ligne « Détention : … » (écrite par la
+          sync) est montrée à part et recomposée au PATCH. */}
+      <div>
+        <p
+          className="text-[9px] font-semibold uppercase tracking-wide"
+          style={{ color: "var(--qg-text-soft)" }}
+        >
+          Notes
+        </p>
+        {detention ? (
+          <p
+            className="mt-0.5 whitespace-pre-line rounded border p-2 text-[10px]"
+            style={{
+              borderColor: "var(--qg-border-soft)",
+              color: "var(--qg-text-muted)"
+            }}
+            title="Ligne maintenue par « Synchroniser avec les fiches » — se met à jour toute seule"
+          >
+            {detention}
+          </p>
+        ) : null}
+        <textarea
+          key={node.id}
+          defaultValue={notes}
+          onBlur={(e) => {
+            if (e.target.value.trim() !== notes) {
+              void onPatch(node.id, {
+                description: composeDescription(detention, e.target.value)
+              });
+            }
+          }}
+          rows={3}
+          className="input mt-1 text-[11px]"
+          placeholder="Notes libres sur cette compagnie / personne…"
+        />
+      </div>
     </div>
   );
 }
