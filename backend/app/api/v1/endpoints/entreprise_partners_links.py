@@ -148,16 +148,32 @@ async def partners_annuaire(
             .order_by(Entreprise.name.asc())
         )
     ).scalars().all()
+    # Filet : si la fiche n'a pas encore une coordonnée, on reprend
+    # celle de la ligne partenaire LIÉE la plus récente de cette INC.
+    liees: dict = {}
+    for p in rows:
+        if p.partner_entreprise_id and p.partner_entreprise_id not in liees:
+            liees[p.partner_entreprise_id] = p
     for ent in ents:
+        ligne = liees.get(ent.id)
         entry = PartnerRead(
             id=-ent.id,
             entreprise_id=ent.id,
             partner_name=ent.name,
             is_personne_morale=True,
-            partner_neq=ent.neq,
-            partner_adresse=getattr(ent, "siege_social", None),
-            partner_email=getattr(ent, "contact_email", None),
-            partner_telephone=getattr(ent, "contact_telephone", None),
+            partner_neq=ent.neq or getattr(ligne, "partner_neq", None),
+            partner_adresse=(
+                getattr(ent, "siege_social", None)
+                or getattr(ligne, "partner_adresse", None)
+            ),
+            partner_email=(
+                getattr(ent, "contact_email", None)
+                or getattr(ligne, "partner_email", None)
+            ),
+            partner_telephone=(
+                getattr(ent, "contact_telephone", None)
+                or getattr(ligne, "partner_telephone", None)
+            ),
             partner_entreprise_id=ent.id,
         )
         entry.display_name = ent.name

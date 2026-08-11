@@ -614,6 +614,44 @@ async def ensure_critical_columns() -> None:
     except Exception as exc:  # noqa: BLE001
         log.warning("nettoyage descriptions Monday failed: %s", exc)
 
+    # Backfill 2026-08-11 (retour Phil) : les lignes partenaires saisies
+    # AVANT l'interconnexion et qui portent exactement le nom d'une de
+    # nos INCs sont LIÉES à leur fiche (partner_entreprise_id), puis
+    # leurs coordonnées remontent sur la fiche quand elle ne les a pas
+    # (fill-only). Récupère les saisies « MGV actionnaire » d'avant le
+    # fix. Idempotent.
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE entreprise_partners p "
+                    "SET partner_entreprise_id = e.id, "
+                    "    is_personne_morale = true "
+                    "FROM entreprises e "
+                    "WHERE p.partner_entreprise_id IS NULL "
+                    "  AND p.partner_name IS NOT NULL "
+                    "  AND LOWER(TRIM(p.partner_name)) = LOWER(TRIM(e.name)) "
+                    "  AND e.id <> p.entreprise_id"
+                )
+            )
+            for col_src, col_dst in (
+                ("partner_email", "contact_email"),
+                ("partner_telephone", "contact_telephone"),
+                ("partner_adresse", "siege_social"),
+                ("partner_neq", "neq"),
+            ):
+                await conn.execute(
+                    text(
+                        f"UPDATE entreprises e SET {col_dst} = p.{col_src} "
+                        "FROM entreprise_partners p "
+                        "WHERE p.partner_entreprise_id = e.id "
+                        f"  AND e.{col_dst} IS NULL "
+                        f"  AND p.{col_src} IS NOT NULL"
+                    )
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("backfill partenaires liés aux INCs failed: %s", exc)
+
 
 async def ensure_raci_tables() -> None:
     """Crée les tables RACI dans leur PROPRE transaction.
