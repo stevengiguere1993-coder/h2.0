@@ -28,6 +28,7 @@ import { BailDocActions } from "@/components/immobilier/tal-avis";
 import {
   CreerBailModal,
   FinBailModal,
+  JourEcheanceInline,
   KANBAN_STATUTS,
   type SuiviBailRow
 } from "@/components/immobilier/fin-bail";
@@ -335,6 +336,13 @@ export default function SuiviBauxPage() {
                       </td>
                       <td className="px-4 py-2.5 text-right font-mono text-xs text-white/80">
                         {money(r.loyer_mensuel)}
+                        {/* Bail TAL « Ou le ___ » : discret quand c'est le
+                            1er, cliquable pour modifier. */}
+                        <JourEcheanceInline
+                          bailId={r.bail_id}
+                          jour={r.jour_echeance}
+                          onChanged={load}
+                        />
                       </td>
                       <td className="px-4 py-2.5">
                         {r.resiliation_en_cours ? (

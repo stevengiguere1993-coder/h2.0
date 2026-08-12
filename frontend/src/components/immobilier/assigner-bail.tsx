@@ -19,6 +19,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, Search, UserPlus, X } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import {
+  JOUR_ECHEANCE_DEFAUT,
+  JourEcheanceField
+} from "@/components/immobilier/fin-bail";
 
 type LocataireItem = {
   id: number;
@@ -142,6 +146,8 @@ function AssignerBailModal({
   );
   const [fin, setFin] = useState(() => finParDefaut(""));
   const [depot, setDepot] = useState("");
+  // Bail TAL « Ou le ___ » : 1er du mois pour l'immense majorité.
+  const [jourEcheance, setJourEcheance] = useState(JOUR_ECHEANCE_DEFAUT);
   // Bail AU MOIS (chambres) : reconduction auto, jamais d'avis de
   // renouvellement. Pré-coché quand le logement est loué en chambres.
   const [auMois, setAuMois] = useState(Boolean(logementEnChambres));
@@ -252,6 +258,7 @@ function AssignerBailModal({
           depot_garantie: depot.trim()
             ? parseFloat(depot.replace(",", "."))
             : null,
+          jour_echeance: jourEcheance,
           status: statut,
           au_mois: auMois
         })
@@ -505,6 +512,14 @@ function AssignerBailModal({
               value={fin}
               onChange={(e) => setFin(e.target.value)}
               className="input mt-1 w-full"
+            />
+          </div>
+          <div>
+            <JourEcheanceField
+              value={jourEcheance}
+              onChange={setJourEcheance}
+              labelClassName="text-xs font-medium text-white/60"
+              selectClassName="input mt-1 w-full"
             />
           </div>
         </div>

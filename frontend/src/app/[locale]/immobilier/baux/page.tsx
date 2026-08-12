@@ -18,6 +18,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
+import { echeanceLabel } from "@/components/immobilier/fin-bail";
 import {
   CorrectionOptions,
   duMois
@@ -41,6 +42,8 @@ type Row = {
   locataire_name: string | null;
   locataire_phone: string | null;
   loyer_mensuel: number;
+  /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
+  jour_echeance?: number | null;
   paiement_id: number | null;
   montant_paye: number | null;
   paye_le: string | null;
@@ -802,6 +805,15 @@ export default function BauxPage() {
                       </td>
                       <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-white">
                         {fmtMoney(r.loyer_mensuel)}
+                        {/* Bail TAL « Ou le ___ » : rien quand c'est le 1er
+                            (l'immense majorité), mention discrète sinon —
+                            c'est ce qui explique qu'il ne soit pas encore
+                            « en retard ». */}
+                        {echeanceLabel(r.jour_echeance) ? (
+                          <div className="text-[10px] font-normal text-white/45">
+                            {echeanceLabel(r.jour_echeance)}
+                          </div>
+                        ) : null}
                         {r.etat === "partiel" ? (
                           <div className="text-[10px] font-normal text-amber-300">
                             reçu {fmtMoney(r.montant_paye ?? 0)}

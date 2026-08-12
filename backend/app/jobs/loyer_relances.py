@@ -5,6 +5,9 @@ en retard du mois courant. N'envoie RIEN aux locataires — les relances
 individuelles (courriel) se font à la main depuis la page Loyers, pour
 garder le contrôle sur ce qui part.
 
+Le seuil de retard est calculé PAR BAIL (échéance du bail + délai de
+grâce) : un bail payable le 12 n'entre dans le compte qu'à partir du 16.
+
 Usage (Render cron, en semaine après le 5 du mois) :
     python -m app.jobs.loyer_relances
 """
@@ -26,6 +29,7 @@ from app.models.immobilier import (
     PaiementLoyer,
 )
 from app.services.locatif_demarrage import get_demarrage
+from app.services.loyer_echeance import seuil_retard
 from app.services.notifications import notify_role
 
 
@@ -35,10 +39,13 @@ log = logging.getLogger(__name__)
 async def _run() -> None:
     async with AsyncSessionLocal() as db:
         today = datetime.now(timezone.utc).date()
-        # Même seuil que la page Loyers : on ne signale qu'après le 5.
-        if today.day <= 5:
-            return
         month_start = today.replace(day=1)
+        # Même seuil que la page Loyers, mais PAR BAIL (échéance du bail
+        # + délai de grâce) : un bail payable le 12 ne se fait pas
+        # relancer le 6. Court-circuit si même le bail le plus tôt
+        # (échéance le 1er) n'est pas encore en retard.
+        if today <= seuil_retard(month_start, 1):
+            return
         # Rien avant le démarrage du pôle (Paramètres → Gestion locative).
         if month_start < await get_demarrage():
             return
@@ -72,7 +79,12 @@ async def _run() -> None:
                 )
             ).all()
         }
-        retards = [b for b in baux if b.id not in paid]
+        retards = [
+            b
+            for b in baux
+            if b.id not in paid
+            and today > seuil_retard(month_start, b.jour_echeance)
+        ]
         if not retards:
             return
 

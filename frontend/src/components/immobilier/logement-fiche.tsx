@@ -12,6 +12,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { echeanceLabel } from "@/components/immobilier/fin-bail";
 
 /**
  * Fiche logement partagée — modale d'affichage/édition d'UN logement.
@@ -47,6 +48,8 @@ export type LogementFicheBail = {
   date_fin: string;
   loyer_mensuel: number;
   status: string;
+  /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
+  jour_echeance?: number | null;
 };
 
 /** 3.5 → « 3½ », 4 → « 4 » (convention QC). */
@@ -282,6 +285,12 @@ export function LogementFiche({
                 <span className="font-mono text-xs text-white/70">
                   {fmtMoney(bailActif.loyer_mensuel)}/mois
                 </span>
+                {/* Bail TAL « Ou le ___ » : muet quand c'est le 1er. */}
+                {echeanceLabel(bailActif.jour_echeance) ? (
+                  <span className="text-xs text-white/45">
+                    {echeanceLabel(bailActif.jour_echeance)}
+                  </span>
+                ) : null}
                 <span className="text-xs text-white/50">
                   {bailActif.date_debut} → {bailActif.date_fin}
                 </span>

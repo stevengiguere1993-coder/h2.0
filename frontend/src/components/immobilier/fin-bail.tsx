@@ -32,6 +32,8 @@ export type SuiviBailRow = {
   date_fin: string | null;
   loyer_mensuel: number | null;
   au_mois: boolean | null;
+  /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
+  jour_echeance: number | null;
   document_id: number | null;
   signed_at: string | null;
   prochain_bail_id: number | null;
@@ -63,6 +65,161 @@ export const KANBAN_STATUTS: Array<{ id: string; label: string }> = [
 
 const INPUT_CLS =
   "rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
+
+// ─── Jour d'échéance du loyer (bail TAL « Ou le ___ ») ──────────────────
+//
+// Le bail TAL a une case « le 1er jour du mois » ET un champ « Ou le
+// ___ » : la quasi-totalité des baux sont payables le 1er, mais pas tous
+// (ex. le garage du 8900 St-Hubert, payable le 12). Défaut = 1 → rien ne
+// change pour les baux existants. Borné à 28 côté API (février).
+
+export const JOUR_ECHEANCE_DEFAUT = 1;
+export const JOUR_ECHEANCE_MAX = 28;
+
+/** Options 1 → 28 du sélecteur (partagées par tous les formulaires). */
+export const JOURS_ECHEANCE: number[] = Array.from(
+  { length: JOUR_ECHEANCE_MAX },
+  (_, i) => i + 1
+);
+
+/** « payable le 12 » — `null` quand c'est le 1er (on n'alourdit pas). */
+export function echeanceLabel(jour?: number | null): string | null {
+  const j = Number(jour ?? JOUR_ECHEANCE_DEFAUT);
+  if (!Number.isFinite(j) || j === JOUR_ECHEANCE_DEFAUT) return null;
+  return `payable le ${j}`;
+}
+
+/** Champ « Loyer payable le » — même rendu partout (création + édition).
+ *  Les classes sont surchargeables pour épouser le style local du
+ *  formulaire hôte (modales `INPUT_CLS` vs formulaires `.input`). */
+export function JourEcheanceField({
+  value,
+  onChange,
+  disabled,
+  labelClassName,
+  selectClassName,
+  hint = true
+}: {
+  value: number;
+  onChange: (jour: number) => void;
+  disabled?: boolean;
+  labelClassName?: string;
+  selectClassName?: string;
+  hint?: boolean;
+}) {
+  return (
+    <label
+      className={labelClassName ?? "text-[11px] font-semibold text-white/60"}
+    >
+      Loyer payable le
+      <select
+        value={String(value || JOUR_ECHEANCE_DEFAUT)}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className={selectClassName ?? `${INPUT_CLS} mt-0.5 block w-full`}
+      >
+        {JOURS_ECHEANCE.map((j) => (
+          <option key={j} value={j}>
+            {j === 1 ? "1er du mois" : `${j} du mois`}
+          </option>
+        ))}
+      </select>
+      {hint ? (
+        <span className="mt-0.5 block text-[10px] font-normal text-white/40">
+          Habituellement le 1er du mois.
+        </span>
+      ) : null}
+    </label>
+  );
+}
+
+/** Mention « payable le 12 » CLIQUABLE sous un loyer : au clic, un
+ *  sélecteur qui PATCH le bail. Rien d'affiché quand c'est le 1er —
+ *  l'édition passe alors par le crayon (au survol de la cellule).
+ *
+ *  Utilisé tel quel par la page Baux ET l'onglet Baux de la fiche
+ *  immeuble (directive « miroir bidirectionnel »). */
+export function JourEcheanceInline({
+  bailId,
+  jour,
+  onChanged,
+  compact = false
+}: {
+  bailId: number | null;
+  jour?: number | null;
+  onChanged?: () => void | Promise<void>;
+  /** Pilule en ligne (fiches) plutôt que ligne pleine largeur (tableaux). */
+  compact?: boolean;
+}) {
+  const courant = Number(jour ?? JOUR_ECHEANCE_DEFAUT) || JOUR_ECHEANCE_DEFAUT;
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  if (bailId == null) return null;
+
+  async function enregistrer(nouveau: number) {
+    if (nouveau === courant) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await authedFetch(`/api/v1/immobilier/baux/${bailId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ jour_echeance: nouveau })
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setEditing(false);
+      await onChanged?.();
+    } catch {
+      window.alert("Jour d'échéance non enregistré — réessaie.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <select
+        autoFocus
+        disabled={busy}
+        value={String(courant)}
+        onBlur={() => setEditing(false)}
+        onChange={(e) => void enregistrer(Number(e.target.value))}
+        className={`${INPUT_CLS} font-sans ${
+          compact ? "inline-block" : "mt-0.5 w-full"
+        }`}
+      >
+        {JOURS_ECHEANCE.map((j) => (
+          <option key={j} value={j}>
+            {j === 1 ? "payable le 1er" : `payable le ${j}`}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      title="Jour du mois où le loyer est payable (bail TAL « Ou le ___ ») — cliquer pour modifier"
+      className={
+        compact
+          ? "cursor-pointer rounded-md border border-brand-700 px-2 py-0.5 text-[11px] font-medium text-white/50 transition hover:border-brand-600 hover:text-white/80"
+          : `mt-0.5 block w-full cursor-pointer font-sans text-[10px] font-normal transition ${
+              courant === JOUR_ECHEANCE_DEFAUT
+                ? // Le 1er = le cas normal : rien à l'écran, révélé au
+                  // survol pour rester modifiable sans alourdir.
+                  "text-transparent hover:text-white/40"
+                : "text-white/45 hover:text-white/70"
+            }`
+      }
+    >
+      {echeanceLabel(courant) ?? "payable le 1er"}
+    </button>
+  );
+}
 
 // ─── Mettre fin au bail (entente signée en ligne OU fin immédiate) ──────
 
@@ -258,6 +415,8 @@ export function CreerBailModal({
   const [fin, setFin] = useState("");
   const [loyer, setLoyer] = useState("");
   const [depot, setDepot] = useState("");
+  // Bail TAL « Ou le ___ » : 1er du mois pour l'immense majorité.
+  const [jourEcheance, setJourEcheance] = useState(JOUR_ECHEANCE_DEFAUT);
   // Statut de création UNIFIÉ (même défaut que la page Baux) : proposé
   // → passe par le kanban Locations ; actif → bail déjà signé/en vigueur.
   const [statut, setStatut] = useState<CreerBailStatut>("propose");
@@ -310,6 +469,7 @@ export function CreerBailModal({
           date_fin: fin,
           loyer_mensuel: Number(loyer),
           depot_garantie: depot.trim() ? Number(depot) : null,
+          jour_echeance: jourEcheance,
           status: statut
         })
       });
@@ -478,6 +638,12 @@ export function CreerBailModal({
                 className={`${INPUT_CLS} mt-0.5 block w-full`}
               />
             </label>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <JourEcheanceField
+              value={jourEcheance}
+              onChange={setJourEcheance}
+            />
           </div>
           <div className="grid gap-1.5">
             <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 px-3 py-2 text-xs text-white/75">

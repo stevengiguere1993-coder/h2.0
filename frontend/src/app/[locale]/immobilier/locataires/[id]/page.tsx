@@ -36,6 +36,11 @@ import {
 } from "@/components/immobilier/tal-avis";
 import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
 import {
+  echeanceLabel,
+  JOUR_ECHEANCE_DEFAUT,
+  JOURS_ECHEANCE
+} from "@/components/immobilier/fin-bail";
+import {
   CorrectionOptions,
   duMois,
   RENOUVELLEMENT_BADGES
@@ -76,6 +81,8 @@ type DossierBail = {
   document_id?: number | null;
   signed_at?: string | null;
   au_mois?: boolean | null;
+  /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
+  jour_echeance?: number | null;
   relocation_statut?: string | null;
 };
 
@@ -237,6 +244,8 @@ export default function LocataireDetailPage({
   // modifier ici est répercuté partout : fiche immeuble, logement, KPIs).
   const [editingBailId, setEditingBailId] = useState<number | null>(null);
   const [loyerDraft, setLoyerDraft] = useState("");
+  // Bail TAL « Ou le ___ » : édité en même temps que le loyer.
+  const [jourDraft, setJourDraft] = useState(JOUR_ECHEANCE_DEFAUT);
   const [savingLoyer, setSavingLoyer] = useState(false);
 
   // « Départ » : le locataire confirme qu'il quitte → dossier de
@@ -416,7 +425,10 @@ export default function LocataireDetailPage({
     try {
       const r = await authedFetch(`/api/v1/immobilier/baux/${bailId}`, {
         method: "PATCH",
-        body: JSON.stringify({ loyer_mensuel: montant })
+        body: JSON.stringify({
+          loyer_mensuel: montant,
+          jour_echeance: jourDraft
+        })
       });
       if (!r.ok) {
         const t = await r.text();
@@ -1161,6 +1173,20 @@ export default function LocataireDetailPage({
                                   }}
                                   className="w-24 rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-right text-xs text-white outline-none focus:border-accent-500"
                                 />
+                                <select
+                                  value={String(jourDraft)}
+                                  title="Jour du mois où le loyer est payable (bail TAL « Ou le ___ ») — habituellement le 1er"
+                                  onChange={(e) =>
+                                    setJourDraft(Number(e.target.value))
+                                  }
+                                  className="rounded-md border border-brand-800 bg-brand-950 px-1.5 py-1 text-xs text-white outline-none focus:border-accent-500"
+                                >
+                                  {JOURS_ECHEANCE.map((j) => (
+                                    <option key={j} value={j}>
+                                      {j === 1 ? "le 1er" : `le ${j}`}
+                                    </option>
+                                  ))}
+                                </select>
                                 <button
                                   type="button"
                                   disabled={savingLoyer}
@@ -1183,13 +1209,24 @@ export default function LocataireDetailPage({
                               </span>
                             ) : (
                               <span className="inline-flex items-center gap-1.5">
-                                {money(b.loyer_mensuel)}
+                                <span className="inline-flex flex-col items-end">
+                                  {money(b.loyer_mensuel)}
+                                  {/* Bail TAL « Ou le ___ » : muet au 1er. */}
+                                  {echeanceLabel(b.jour_echeance) ? (
+                                    <span className="text-[10px] text-white/45">
+                                      {echeanceLabel(b.jour_echeance)}
+                                    </span>
+                                  ) : null}
+                                </span>
                                 <button
                                   type="button"
-                                  title="Modifier le loyer de ce bail (répercuté partout)"
+                                  title="Modifier le loyer et le jour d'échéance de ce bail (répercuté partout)"
                                   onClick={() => {
                                     setEditingBailId(b.id);
                                     setLoyerDraft(String(b.loyer_mensuel));
+                                    setJourDraft(
+                                      b.jour_echeance || JOUR_ECHEANCE_DEFAUT
+                                    );
                                   }}
                                   className="rounded p-1 text-white/30 hover:bg-brand-800 hover:text-white"
                                 >
