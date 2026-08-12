@@ -29,6 +29,10 @@ import {
 import { ImmobilierTopbar } from "../../layout";
 import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
 import {
+  echeanceLabel,
+  JourEcheanceInline
+} from "@/components/immobilier/fin-bail";
+import {
   fmtPieces,
   type LogementFicheData
 } from "@/components/immobilier/logement-fiche";
@@ -55,6 +59,8 @@ type DossierBail = {
   signed_at: string | null;
   document_id?: number | null;
   au_mois?: boolean | null;
+  /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
+  jour_echeance?: number | null;
   relocation_statut?: string | null;
 };
 
@@ -719,7 +725,14 @@ export default function LogementDetailPage({
                     <dl className="space-y-1.5">
                       <Row
                         label="Loyer"
-                        value={`${money(bailActif.loyer_mensuel)}/mois`}
+                        value={
+                          // Bail TAL « Ou le ___ » : muet quand c'est le
+                          // 1er (l'immense majorité des baux).
+                          `${money(bailActif.loyer_mensuel)}/mois` +
+                          (echeanceLabel(bailActif.jour_echeance)
+                            ? ` · ${echeanceLabel(bailActif.jour_echeance)}`
+                            : "")
+                        }
                       />
                       <Row
                         label="Période"
@@ -753,6 +766,14 @@ export default function LogementDetailPage({
                       <AuMoisToggle
                         bailId={bailActif.id}
                         auMois={!!bailActif.au_mois}
+                        onChanged={() => void loadDossier()}
+                      />
+                      {/* Bail TAL « Ou le ___ » — modifiable ici comme
+                          sur la page Baux (miroir bidirectionnel). */}
+                      <JourEcheanceInline
+                        compact
+                        bailId={bailActif.id}
+                        jour={bailActif.jour_echeance}
                         onChanged={() => void loadDossier()}
                       />
                       <ResilierBailButton
@@ -823,6 +844,12 @@ export default function LogementDetailPage({
                           </td>
                           <td className="py-2.5 pr-3 text-right text-white/80">
                             {money(b.loyer_mensuel)}
+                            {/* Bail TAL « Ou le ___ » : muet au 1er. */}
+                            {echeanceLabel(b.jour_echeance) ? (
+                              <div className="text-[10px] text-white/45">
+                                {echeanceLabel(b.jour_echeance)}
+                              </div>
+                            ) : null}
                           </td>
                           <td className="py-2.5 pr-3 text-right">
                             <span

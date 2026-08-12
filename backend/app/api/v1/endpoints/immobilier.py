@@ -43,6 +43,7 @@ from app.repositories.user import UserRepository
 from app.api.deps import CurrentUser, DBSession
 from app.models.user import User
 from app.services.locatif_demarrage import get_demarrage, set_demarrage
+from app.services.loyer_echeance import paiement_en_retard, seuil_retard
 from app.services.permissions_service import require_capability
 from app.models.entreprise import Entreprise
 from app.models.bon_travail import BonTravail
@@ -2155,6 +2156,7 @@ async def logement_dossier(
                 signed_at=b.signed_at,
                 document_id=b.document_id,
                 au_mois=b.au_mois,
+                jour_echeance=b.jour_echeance or 1,
             )
         )
 
@@ -2476,6 +2478,7 @@ async def locataire_dossier(
                 document_id=b.document_id,
                 signed_at=b.signed_at,
                 au_mois=b.au_mois,
+                jour_echeance=b.jour_echeance or 1,
             )
         )
 
@@ -3394,6 +3397,10 @@ async def update_bail(
                         f"logement (fin le {chev.date_fin})."
                     ),
                 )
+    # `jour_echeance` est NOT NULL en base : un `null` explicite dans le
+    # payload signifie « ne touche pas », pas « efface » (sinon 500).
+    if data.get("jour_echeance") is None:
+        data.pop("jour_echeance", None)
     for k, v in data.items():
         setattr(obj, k, v)
     obj.updated_at = _now()
@@ -3618,8 +3625,9 @@ async def create_paiement(
             notes=payload.notes if obj is None else None,
         )
         row.created_at = _now()
-        # Marquer en retard si payé > 5 jours après le 1er du mois couvert
-        if row.paye_le and (row.paye_le - mois).days > 5:
+        # Marquer en retard si payé > 5 jours après l'ÉCHÉANCE du bail
+        # (le 1er du mois par défaut, « Ou le ___ » du bail TAL sinon).
+        if paiement_en_retard(mois, row.paye_le, bail.jour_echeance):
             row.en_retard = True
         db.add(row)
         if obj is None:
@@ -3744,6 +3752,10 @@ class LoyerOverviewRow(BaseModel):
     locataire_name: Optional[str] = None
     locataire_phone: Optional[str] = None
     loyer_mensuel: float
+    #: Jour d'échéance du loyer (bail TAL « Ou le ___ ») — affiché
+    #: « payable le X » à côté du loyer quand ce n'est pas le 1er, et
+    #: seuil de retard de la ligne.
+    jour_echeance: int = 1
     paiement_id: Optional[int] = None
     #: SOMME des paiements du mois (plusieurs paiements partiels possibles
     #: — retour Steven 2026-07-20).
@@ -3794,9 +3806,10 @@ async def loyers_overview(
 ) -> LoyerOverview:
     """Croisement baux actifs × paiements pour un mois (def. courant).
 
-    Un bail sans paiement pour le mois est « retard » passé le 5 du
-    mois (même règle que le flag ``en_retard`` à la création d'un
-    paiement), sinon « attente ».
+    Un bail sans paiement pour le mois est « retard » passé son ÉCHÉANCE
+    + le délai de grâce (le 1er → le 5 pour l'immense majorité des baux ;
+    un bail payable le 12 bascule le 16). Même ancrage que le flag
+    ``en_retard`` à la création d'un paiement. Sinon « attente ».
     """
     _require_volet(user)
 
@@ -3999,8 +4012,6 @@ async def loyers_overview(
             return 0
         return (fin.year - debut.year) * 12 + (fin.month - debut.month) + 1
 
-    # Seuil de retard : après le 5 du mois couvert (ou mois passé).
-    overdue_threshold = month_start.replace(day=5)
     rows: List[LoyerOverviewRow] = []
     total_attendu = 0.0
     total_recu = 0.0
@@ -4038,7 +4049,10 @@ async def loyers_overview(
             # (il manque de l'argent), mais badge distinct dans l'UI.
             etat = "partiel"
             nb_retards += 1
-        elif today > overdue_threshold:
+        # Seuil de retard PAR BAIL : échéance du bail (le 1er par défaut,
+        # « Ou le ___ » du bail TAL sinon) + délai de grâce. Un bail
+        # payable le 12 n'est donc plus « en retard » du 5 au 12.
+        elif today > seuil_retard(month_start, b.jour_echeance):
             etat = "retard"
             nb_retards += 1
         else:
@@ -4075,6 +4089,7 @@ async def loyers_overview(
                 locataire_name=loc.full_name if loc else None,
                 locataire_phone=loc.phone if loc else None,
                 loyer_mensuel=loyer,
+                jour_echeance=b.jour_echeance or 1,
                 paiement_id=dernier.id if dernier else None,
                 montant_paye=paye_mois if ps else None,
                 paye_le=dernier.paye_le if dernier else None,

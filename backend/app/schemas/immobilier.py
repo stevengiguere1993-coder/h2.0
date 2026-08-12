@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ─── Immeuble ──────────────────────────────────────────────────────────
@@ -227,6 +227,22 @@ class LocataireListItem(LocataireRead):
 # ─── Bail ───────────────────────────────────────────────────────────────
 
 
+#: Message unique pour le jour d'échéance du loyer (bail TAL « Ou le ___ »).
+#: Borné à 28 : au-delà, le jour n'existe pas tous les mois (février).
+JOUR_ECHEANCE_ERREUR = (
+    "Le jour d'échéance du loyer doit être entre 1 et 28 "
+    "(28 max pour que le jour existe aussi en février)."
+)
+
+
+def _valider_jour_echeance(v: Optional[int]) -> Optional[int]:
+    if v is None:
+        return v
+    if not 1 <= int(v) <= 28:
+        raise ValueError(JOUR_ECHEANCE_ERREUR)
+    return int(v)
+
+
 class BailBase(BaseModel):
     logement_id: int
     locataire_id: int
@@ -244,6 +260,20 @@ class BailBase(BaseModel):
     #: Bail AU MOIS (chambres) : reconduction auto, hors du suivi des
     #: renouvellements, loyers sans égard à date_fin.
     au_mois: Optional[bool] = None
+    #: Jour du mois où le loyer est payable (bail TAL : « le 1er jour du
+    #: mois » OU « Ou le ___ »). 1 par défaut.
+    jour_echeance: int = Field(
+        default=1,
+        description=(
+            "Jour du mois où le loyer est payable (1 à 28). "
+            "Habituellement le 1er."
+        ),
+    )
+
+    @field_validator("jour_echeance")
+    @classmethod
+    def _check_jour_echeance(cls, v: int) -> int:
+        return _valider_jour_echeance(v)  # type: ignore[return-value]
 
 
 class BailCreate(BailBase):
@@ -265,6 +295,13 @@ class BailUpdate(BaseModel):
     document_url: Optional[str] = Field(default=None, max_length=1000)
     notes: Optional[str] = None
     au_mois: Optional[bool] = None
+    #: Jour du mois où le loyer est payable (bail TAL « Ou le ___ »).
+    jour_echeance: Optional[int] = None
+
+    @field_validator("jour_echeance")
+    @classmethod
+    def _check_jour_echeance(cls, v: Optional[int]) -> Optional[int]:
+        return _valider_jour_echeance(v)
 
 
 class BailRead(BailBase):
@@ -495,6 +532,8 @@ class DossierBail(BaseModel):
     document_id: Optional[int] = None
     signed_at: Optional[datetime] = None
     au_mois: Optional[bool] = None
+    #: Jour d'échéance du loyer (affiché « payable le X » si ≠ 1).
+    jour_echeance: Optional[int] = None
 
 
 class DossierPaiement(BaseModel):
@@ -588,6 +627,8 @@ class LogementDossierBail(BaseModel):
     #: LE bail courant (imm_documents) — bouton « Bail » de la fiche.
     document_id: Optional[int] = None
     au_mois: Optional[bool] = None
+    #: Jour d'échéance du loyer (affiché « payable le X » si ≠ 1).
+    jour_echeance: Optional[int] = None
 
 
 class LogementDossierBon(BaseModel):

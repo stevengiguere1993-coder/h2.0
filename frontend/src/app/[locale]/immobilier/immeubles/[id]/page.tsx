@@ -51,7 +51,9 @@ import {
 } from "@/components/immobilier/paiements-actions";
 import {
   CreerBailModal,
+  echeanceLabel,
   FinBailModal,
+  JourEcheanceInline,
   KANBAN_STATUTS,
   type SuiviBailRow
 } from "@/components/immobilier/fin-bail";
@@ -108,6 +110,8 @@ type Bail = {
   date_debut: string;
   date_fin: string;
   loyer_mensuel: number;
+  /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
+  jour_echeance?: number | null;
   status: string;
   signed_at?: string | null;
   signed_by_name?: string | null;
@@ -2460,6 +2464,14 @@ function BauxTab({
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-xs text-white/80">
                       {fmtCurrency(r.loyer_mensuel)}
+                      {/* Bail TAL « Ou le ___ » : discret quand c'est le
+                          1er, cliquable pour modifier (miroir de la page
+                          Baux). */}
+                      <JourEcheanceInline
+                        bailId={r.bail_id}
+                        jour={r.jour_echeance}
+                        onChanged={load}
+                      />
                     </td>
                     <td className="px-4 py-2.5">
                       {r.resiliation_en_cours ? (
@@ -2648,6 +2660,8 @@ type LoyerRow = {
   locataire_id: number | null;
   locataire_name: string | null;
   loyer_mensuel: number;
+  /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
+  jour_echeance?: number | null;
   montant_paye: number | null;
   paye_le: string | null;
   etat: string; // "paye" | "partiel" | "retard" | "attente"
@@ -3097,6 +3111,12 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                   </td>
                   <td className="py-2 pr-3 text-right font-mono text-xs text-white/80">
                     {fmtCurrency(r.loyer_mensuel)}
+                    {/* Bail TAL « Ou le ___ » : muet quand c'est le 1er. */}
+                    {echeanceLabel(r.jour_echeance) ? (
+                      <div className="font-sans text-[10px] text-white/45">
+                        {echeanceLabel(r.jour_echeance)}
+                      </div>
+                    ) : null}
                     {r.etat === "partiel" ? (
                       <div className="text-[10px] text-amber-300">
                         reçu {fmtCurrency(r.montant_paye ?? 0)}

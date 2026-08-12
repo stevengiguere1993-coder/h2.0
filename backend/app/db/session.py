@@ -342,6 +342,9 @@ async def ensure_critical_columns() -> None:
         # Bail AU MOIS (chambres) : reconduction auto, jamais d'avis de
         # renouvellement, loyers qui courent sans egard a date_fin.
         ("imm_baux", "au_mois", "BOOLEAN"),
+        # Jour d'echeance du loyer (bail TAL « Ou le ___ ») : 1 par
+        # defaut, jusqu'a 28. Pilote le seuil de retard par bail.
+        ("imm_baux", "jour_echeance", "INTEGER NOT NULL DEFAULT 1"),
         # Hub Rencontres v2 : source d'import + fichiers archives Drive.
         ("rencontres", "source", "VARCHAR(16)"),
         ("rencontres", "drive_links_json", "TEXT"),

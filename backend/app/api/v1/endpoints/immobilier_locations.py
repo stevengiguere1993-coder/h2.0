@@ -1057,6 +1057,9 @@ class SuiviBailRow(BaseModel):
     date_fin: Optional[date] = None
     loyer_mensuel: Optional[float] = None
     au_mois: Optional[bool] = None
+    #: Jour d'échéance du loyer (bail TAL « Ou le ___ ») — affiché
+    #: « payable le X » à côté du loyer quand ce n'est pas le 1er.
+    jour_echeance: Optional[int] = None
     document_id: Optional[int] = None
     signed_at: Optional[datetime] = None
     # Prochain bail (proposé / futur) — suivi même signé à l'externe.
@@ -1230,6 +1233,7 @@ async def suivi_baux(
                     float(b.loyer_mensuel) if b and b.loyer_mensuel else None
                 ),
                 au_mois=b.au_mois if b else None,
+                jour_echeance=(b.jour_echeance or 1) if b else None,
                 document_id=b.document_id if b else None,
                 signed_at=b.signed_at if b else None,
                 prochain_bail_id=p.id if p else None,

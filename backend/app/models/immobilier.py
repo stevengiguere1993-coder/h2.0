@@ -640,6 +640,16 @@ class Bail(Base, TimestampUpdateMixin):
     #: suivi d'assurance (réglable). Colonne additive → ensure_critical_columns.
     au_mois: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
+    #: Jour du mois où le loyer est payable (bail TAL : case « le 1er jour
+    #: du mois » OU champ « Ou le ___ »). 1 = le 1er, cas de l'immense
+    #: majorité des baux ; ex. le garage du 8900 St-Hubert est payable le
+    #: 12. Sert de point de départ au calcul du retard (délai de grâce
+    #: appliqué à partir de ce jour). Borné 1..28 (février).
+    #: Colonne additive → ensure_critical_columns.
+    jour_echeance: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+
     # Inclusions (chauffage, eau chaude, électricité, internet…)
     chauffage_inclus: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
