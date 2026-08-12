@@ -3334,18 +3334,19 @@ async def create_bail(
     await db.refresh(obj)
     result = BailRead.model_validate(obj)
 
-    # Consentement aux communications électroniques (v17b) : généré et
-    # envoyé pour signature best-effort — un échec (courriel, PDF) ne
-    # bloque jamais la création du bail.
+    # Consentement aux communications électroniques : le PDF est généré et
+    # ARCHIVÉ au dossier du bail. Aucun courriel n'est envoyé — l'envoi pour
+    # signature reste un geste manuel (règle « zéro envoi auto au locataire »).
+    # Best-effort : un échec ne bloque jamais la création du bail.
     try:
         from app.api.v1.endpoints.immobilier_extras import (
-            envoyer_consentement_communications,
+            preparer_consentement_communications,
         )
 
-        await envoyer_consentement_communications(db, obj.id, user)
+        await preparer_consentement_communications(db, obj.id, user)
     except Exception:  # noqa: BLE001 — la création prime
         log.exception(
-            "Envoi du consentement communications échoué (bail %s)", result.id
+            "Préparation du consentement communications échouée (bail %s)", result.id
         )
 
     return result

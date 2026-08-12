@@ -590,18 +590,19 @@ async def generate_bail_tal_pdf(
     )
 
 
-async def envoyer_consentement_communications(db, bail_id: int, user) -> bool:
-    """Consentement aux communications électroniques (v17b) : génère le
-    PDF du gabarit pour le bail, l'archive au dossier puis l'envoie pour
-    SIGNATURE EN LIGNE si le locataire a un courriel. Appelé best-effort
-    à la création d'un bail (create_bail, convertir_dossier) — le
-    document est COMMITTÉ avant l'envoi pour survivre à un courriel en
-    échec (envoyer_signature commit lui-même et peut lever 502)."""
-    from app.api.v1.endpoints.immobilier_documents import (
-        EnvoyerSignatureRequest,
-        envoyer_signature,
-        save_document,
-    )
+async def preparer_consentement_communications(db, bail_id: int, user) -> bool:
+    """Consentement aux communications électroniques : génère le PDF du
+    gabarit pour le bail et l'ARCHIVE au dossier. Appelé best-effort à la
+    création d'un bail (create_bail, convertir_dossier).
+
+    ⚠️ N'ENVOIE RIEN. Règle posée par Phil le 2026-07-10 et réaffirmée le
+    2026-08-12 : AUCUN courriel ne part vers un locataire sans qu'il l'ait
+    déclenché lui-même. La v17b (2026-08-11) expédiait ce document pour
+    signature dès la création du bail — régression corrigée ici. Le document
+    reste prêt au dossier ; l'envoi se fait par le bouton « Envoyer pour
+    signature » de la fiche, quand Phil le décide.
+    """
+    from app.api.v1.endpoints.immobilier_documents import save_document
 
     bail = await db.get(Bail, bail_id)
     if bail is None:
@@ -614,7 +615,7 @@ async def envoyer_consentement_communications(db, bail_id: int, user) -> bool:
     )
     logement = await db.get(Logement, bail.logement_id)
     label, _desc = _TAL_LABELS["consentement_communications"]
-    doc = await save_document(
+    await save_document(
         db,
         bail_id=bail.id,
         locataire_id=bail.locataire_id,
@@ -626,14 +627,6 @@ async def envoyer_consentement_communications(db, bail_id: int, user) -> bool:
         created_by_email=getattr(user, "email", None),
     )
     await db.commit()
-    locataire = await db.get(Locataire, bail.locataire_id)
-    if locataire is not None and (locataire.email or "").strip():
-        await envoyer_signature(
-            doc_id=doc.id,
-            payload=EnvoyerSignatureRequest(),
-            db=db,
-            user=user,
-        )
     return True
 
 

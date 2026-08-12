@@ -3,9 +3,10 @@
 1. POST /baux/{id}/tal/consentement_communications.pdf → 200, un PDF,
    et un ImmDocument type ``consentement_communications`` archivé au
    DOSSIER du locataire (signable → non exclu par ``_est_dossier``).
-2. Le helper ``envoyer_consentement_communications`` (accroché à la
-   création d'un bail) archive le document même SANS courriel au
-   locataire — rien ne part, mais la pièce est au dossier.
+2. Le helper ``preparer_consentement_communications`` (accroché à la
+   création d'un bail) archive le document au dossier et n'envoie
+   JAMAIS de courriel — même quand le locataire en a un. Règle posée
+   par Phil : aucun envoi automatique vers un locataire.
 """
 from __future__ import annotations
 
@@ -42,8 +43,12 @@ def consentement_seed(run, seeded_users) -> dict:
                 immeuble_id=imm.id, numero="2",
                 status=LogementStatus.OCCUPE.value,
             )
-            # SANS courriel : l'archivage doit marcher, l'envoi est sauté.
-            loc = Locataire(full_name="Colette Courriel")
+            # AVEC courriel : c'est justement le cas qui doit prouver que
+            # rien ne part automatiquement.
+            loc = Locataire(
+                full_name="Colette Courriel",
+                email="colette.courriel@example.com",
+            )
             s.add_all([lg, loc])
             await s.flush()
             bail = Bail(
@@ -97,11 +102,11 @@ def test_generation_pdf_et_archivage(client, auth_headers, consentement_seed):
     assert all(d["signature_requise"] for d in matches)
 
 
-def test_helper_sans_courriel_archive_quand_meme(
+def test_helper_archive_sans_jamais_envoyer(
     client, auth_headers, consentement_seed, run
 ):
     from app.api.v1.endpoints.immobilier_extras import (
-        envoyer_consentement_communications,
+        preparer_consentement_communications,
     )
 
     avant = len(
@@ -116,7 +121,7 @@ def test_helper_sans_courriel_archive_quand_meme(
 
     async def _call() -> bool:
         async with TestSessionLocal() as s:
-            return await envoyer_consentement_communications(
+            return await preparer_consentement_communications(
                 s,
                 consentement_seed["bail_id"],
                 SimpleNamespace(email=ADMIN_EMAIL),
@@ -132,5 +137,7 @@ def test_helper_sans_courriel_archive_quand_meme(
         if d["type"] == "consentement_communications"
     ]
     assert len(apres) == avant + 1
-    # Locataire sans courriel : rien n'est parti pour signature.
+    # RÈGLE ABSOLUE : le document est archivé, mais RIEN ne part au
+    # locataire — même quand il a un courriel. L'envoi reste un geste
+    # manuel (bouton « Envoyer pour signature » de la fiche).
     assert all(d["envoye_le"] is None for d in apres)
