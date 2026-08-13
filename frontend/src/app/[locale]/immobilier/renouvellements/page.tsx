@@ -656,33 +656,49 @@ Nouvelle date de fin :`,
     }
   }
 
-  // « Non renouvelé » : le bail ne sera pas prolongé → ouvre un dossier
-  // de relocation dans Locations (prérempli depuis le bail).
-  async function nonRenouvele(bailId: number) {
+  // « Le locataire quitte » / « Non renouvelé » — UN seul geste
+  // (cycle unifié 2026-08-13) : le bail se fermera à sa date de fin,
+  // le cycle de renouvellement passe à « depart » (plus de « réputé
+  // accepté ») et un dossier de relocation s'ouvre dans Locations.
+  // Avec un avis en attente, la réponse est consignée via le cycle
+  // (PATCH depart) ; sinon on ouvre directement le dossier.
+  async function locataireQuitte(r: RenouvellementOverview) {
     if (
       !window.confirm(
-        "Marquer ce bail « non renouvelé » ?\n\nUn dossier de relocation sera ouvert dans la page Locations pour relouer le logement."
+        `Le locataire ${r.locataire_nom} quitte ?\n\nLe bail se terminera à sa date de fin (${r.bail_date_fin}) et un dossier de relocation sera ouvert dans la page Locations pour relouer le logement.`
       )
     )
       return;
-    setRelocatingId(bailId);
+    setRelocatingId(r.bail_id);
     setMsg(null);
     try {
-      const r = await authedFetch("/api/v1/immobilier/locations", {
-        method: "POST",
-        body: JSON.stringify({ bail_id: bailId })
-      });
-      if (!r.ok) {
-        const t = await r.text();
-        throw new Error(
-          t.includes("déjà en cours")
-            ? "Une relocation est déjà en cours pour ce logement."
-            : t.slice(0, 200) || `HTTP ${r.status}`
+      if (r.renouvellement_id && r.reponse === "attente") {
+        const res = await authedFetch(
+          `/api/v1/immobilier/renouvellements/${r.renouvellement_id}`,
+          { method: "PATCH", body: JSON.stringify({ status: "depart" }) }
         );
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+        }
+      } else {
+        const res = await authedFetch("/api/v1/immobilier/locations", {
+          method: "POST",
+          body: JSON.stringify({ bail_id: r.bail_id })
+        });
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(
+            t.includes("déjà en cours")
+              ? "Une relocation est déjà en cours pour ce logement."
+              : t.slice(0, 200) || `HTTP ${res.status}`
+          );
+        }
       }
       setMsg(
-        "Dossier de relocation créé — suivi dans la page Locations."
+        "Départ enregistré — le bail se terminera à sa date de fin, relocation à suivre dans la page Locations."
       );
+      void reload();
     } catch (e) {
       setMsg((e as Error).message);
     } finally {
@@ -1183,6 +1199,20 @@ Nouvelle date de fin :`,
                             >
                               Refusé
                             </button>
+                            <button
+                              type="button"
+                              title="Le locataire quitte à la fin du bail — le bail se terminera à sa date de fin et un dossier de relocation s'ouvre dans Locations"
+                              disabled={relocatingId === r.bail_id}
+                              onClick={() => void locataireQuitte(r)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
+                            >
+                              {relocatingId === r.bail_id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <KeyRound className="h-3.5 w-3.5" />
+                              )}
+                              Quitte
+                            </button>
                           </>
                         ) : null}
                         {r.reponse === "refuse" && r.renouvellement_id ? (
@@ -1227,23 +1257,30 @@ Nouvelle date de fin :`,
                           )}
                           Reconduire tel quel
                         </button>
-                        <button
-                          type="button"
-                          title="Le bail ne sera PAS renouvelé — ouvrir un dossier de relocation dans Locations"
-                          disabled={relocatingId === r.bail_id}
-                          onClick={() => {
-                            if (!confirmerMalgreEtat(r)) return;
-                            void nonRenouvele(r.bail_id);
-                          }}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
-                        >
-                          {relocatingId === r.bail_id ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <KeyRound className="h-3.5 w-3.5" />
-                          )}
-                          Non renouvelé
-                        </button>
+                        {/* Fusion « Quitte » / « Non renouvelé »
+                            (2026-08-13) : UN seul geste de départ. Avec
+                            un avis en attente, il vit dans le groupe de
+                            réponses ci-dessus (« Quitte ») ; sinon le
+                            bouton reste ici, même traitement. */}
+                        {r.reponse === "attente" && r.renouvellement_id ? null : (
+                          <button
+                            type="button"
+                            title="Le locataire quitte / bail non renouvelé — le bail se terminera à sa date de fin, dossier de relocation ouvert dans Locations"
+                            disabled={relocatingId === r.bail_id}
+                            onClick={() => {
+                              if (!confirmerMalgreEtat(r)) return;
+                              void locataireQuitte(r);
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
+                          >
+                            {relocatingId === r.bail_id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <KeyRound className="h-3.5 w-3.5" />
+                            )}
+                            Non renouvelé
+                          </button>
+                        )}
                         {r.document_id ? (
                           <button
                             type="button"

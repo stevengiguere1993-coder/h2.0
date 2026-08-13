@@ -344,29 +344,18 @@ async def public_sign(
             dfin_txt = params.get("date_fin")
             bail_r = await db.get(Bail, doc.bail_id)
             if bail_r is not None and bail_r.status == "actif" and dfin_txt:
-                bail_r.status = "resilie"
-                bail_r.date_fin = date.fromisoformat(dfin_txt)
-                from app.models.immobilier import LocationDossier
+                # Cycle unifié (2026-08-13) : le service ferme le bail à
+                # la date convenue, recale le logement, ouvre/complète
+                # le dossier de relocation et passe le cycle de
+                # renouvellement à « depart ».
+                from app.services.locatif_depart import declarer_depart
 
-                existant = (
-                    await db.execute(
-                        select(LocationDossier).where(
-                            LocationDossier.logement_id
-                            == bail_r.logement_id,
-                            LocationDossier.statut.notin_(
-                                ["annule", "reloue"]
-                            ),
-                        )
-                    )
-                ).scalars().first()
-                if existant is None:
-                    db.add(
-                        LocationDossier(
-                            logement_id=bail_r.logement_id,
-                            bail_id=bail_r.id,
-                            statut="avis_recu",
-                        )
-                    )
+                await declarer_depart(
+                    db,
+                    bail_r.id,
+                    date_depart=date.fromisoformat(dfin_txt),
+                    source="Entente de résiliation signée par le locataire",
+                )
         except Exception:  # noqa: BLE001 — best-effort
             log.exception("Résiliation après signature (doc %s)", doc.id)
     # Drive ↔ documents locatifs (v17b) : dépose la copie SIGNÉE dans le
@@ -435,31 +424,18 @@ async def public_sign(
 
 
 async def _ouvrir_dossier_relocation(db, doc: ImmDocument) -> None:
-    """Réponse « je quitte » signée → dossier de relocation (comme le
-    bouton « Non renouvelé »), s'il n'y en a pas déjà un d'actif."""
-    from app.models.immobilier import LocationDossier
+    """Réponse « je quitte » signée → cycle de départ unifié
+    (2026-08-13) : dossier de relocation complet (date de départ = fin
+    du bail, loyers photographiés), bail fermé à son échéance, logement
+    recalé — comme le bouton « Non renouvelé »."""
+    from app.services.locatif_depart import declarer_depart
 
     if not doc.bail_id:
         return
-    bail = await db.get(Bail, doc.bail_id)
-    if bail is None or not bail.logement_id:
-        return
-    existant = (
-        await db.execute(
-            select(LocationDossier).where(
-                LocationDossier.logement_id == bail.logement_id,
-                LocationDossier.statut.notin_(["annule", "reloue"]),
-            )
-        )
-    ).scalars().first()
-    if existant is not None:
-        return
-    db.add(
-        LocationDossier(
-            logement_id=bail.logement_id,
-            bail_id=bail.id,
-            statut="avis_recu",
-        )
+    await declarer_depart(
+        db,
+        doc.bail_id,
+        source="Réponse signée du locataire — départ à la fin du bail",
     )
 
 

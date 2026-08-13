@@ -896,6 +896,21 @@ async def patch_renouvellement(
         r.status = data["status"]
         if r.status in ("accepte", "refuse"):
             r.reponse_le = date.today()
+        elif r.status == "depart":
+            # « Le locataire quitte » : la réponse est datée ET le cycle
+            # de départ unifié s'enclenche (bail fermé à sa date de fin,
+            # dossier de relocation, logement recalé) — 2026-08-13.
+            r.reponse_le = date.today()
+            from app.services.locatif_depart import declarer_depart
+
+            await declarer_depart(
+                db,
+                r.bail_id,
+                source=(
+                    "Réponse « le locataire quitte » — suivi des "
+                    "renouvellements"
+                ),
+            )
     if data.get("nouveau_loyer") is not None:
         r.nouveau_loyer = data["nouveau_loyer"]
         # Montant révisé → (re)reporté sur le bail à la date effective.
@@ -1085,36 +1100,26 @@ async def resilier_bail(
             relocation_ouverte=False,
             avis_envoye=True,
         )
-    bail.status = BailStatus.RESILIE.value
-    bail.date_fin = payload.date_fin
-    reloc = False
-    if payload.ouvrir_relocation and bail.logement_id:
-        from app.models.immobilier import LocationDossier
+    # Cycle unifié (2026-08-13) : TOUT passe par le service —
+    # fermeture du bail (résilié si la date est passée, sinon fin posée
+    # et recalage lazy à l'échéance), recalage du logement, dossier de
+    # relocation créé/complété, cycle de renouvellement → « depart ».
+    from app.services.locatif_depart import (
+        declarer_depart,
+        dossier_relocation_actif,
+    )
 
-        existant = (
-            await db.execute(
-                select(LocationDossier).where(
-                    LocationDossier.logement_id == bail.logement_id,
-                    LocationDossier.statut.notin_(["annule", "reloue"]),
-                )
-            )
-        ).scalars().first()
-        if existant is None:
-            db.add(
-                LocationDossier(
-                    logement_id=bail.logement_id,
-                    bail_id=bail.id,
-                    statut="avis_recu",
-                )
-            )
-            reloc = True
-        elif existant.loyer_demande is not None:
-            # Miroir « loyer demandé » (2026-08-13) : le logement
-            # redevient VACANT — le prix affiché pour la relocation
-            # (porté par le dossier) fait foi sur la fiche.
-            lg = await db.get(Logement, bail.logement_id)
-            if lg is not None:
-                lg.loyer_demande = existant.loyer_demande
+    avait_dossier = (
+        bail.logement_id is not None
+        and await dossier_relocation_actif(db, bail.logement_id) is not None
+    )
+    await declarer_depart(
+        db,
+        bail_id,
+        date_depart=payload.date_fin,
+        source="Résiliation immédiate",
+        ouvrir_dossier=payload.ouvrir_relocation,
+    )
     await db.commit()
     log.info(
         "Bail %s résilié au %s par %s",
@@ -1123,8 +1128,8 @@ async def resilier_bail(
     return ResilierResult(
         bail_id=bail_id,
         date_fin=payload.date_fin,
-        statut="resilie",
-        relocation_ouverte=reloc,
+        statut=bail.status,
+        relocation_ouverte=payload.ouvrir_relocation and not avait_dossier,
     )
 
 
@@ -1170,6 +1175,15 @@ async def renouvellements_overview(
             ).order_by(Bail.date_fin.asc())
         )
     ).scalars().all()
+
+    # Reconduction tacite AUTOMATIQUE (lazy, 2026-08-13) : un bail échu
+    # sans réponse est reconduit tel quel ; un bail échu dont le départ
+    # était annoncé (dossier de relocation actif) est terminé — dans les
+    # deux cas la liste reflète l'état recalé.
+    from app.services.locatif_depart import reconduire_tacitement_baux_echus
+
+    if await reconduire_tacitement_baux_echus(db, bails):
+        bails = [b for b in bails if b.status == BailStatus.ACTIF.value]
 
     # Chargement groupé pour éviter le N+1 (auparavant 3 db.get + 1 select par
     # bail). On collecte les identifiants puis on résout logements, immeubles,
@@ -1292,11 +1306,23 @@ async def renouvellements_overview(
         reponse = None
         deadline_reponse = None
         deadline_fixation = None
+        reloc_active = (
+            b.logement_id in reloc_by_logement
+            and reloc_by_logement[b.logement_id].statut
+            not in ("annule", "reloue")
+        )
         if courant:
             deadline_reponse = _plus_un_mois(last_ren.avis_envoye_le)
-            if last_ren.status == "propose" and today > deadline_reponse:
+            if (
+                last_ren.status == "propose"
+                and today > deadline_reponse
+                and not reloc_active
+            ):
                 # Art. 1945 C.c.Q. : sans réponse dans le mois de la
                 # réception, le locataire est réputé avoir ACCEPTÉ.
+                # SAUF si un dossier de relocation ACTIF existe sur le
+                # logement : le départ est annoncé, pas d'acceptation
+                # tacite (cycle unifié 2026-08-13).
                 last_ren.status = "repute_accepte"
                 last_ren.reponse_le = deadline_reponse
                 dirty = True
