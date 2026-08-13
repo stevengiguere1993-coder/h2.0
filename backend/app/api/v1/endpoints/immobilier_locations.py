@@ -43,18 +43,22 @@ from app.models.immobilier import (
     LogementStatus,
 )
 
+from app.services.locatif_depart import (
+    DOSSIER_STATUTS_REGLES,
+    marquer_prise_en_charge_humaine,
+    recaler_statut_logement,
+)
+
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/immobilier", tags=["immobilier-locations"])
 
+#: Règle UNIQUE « dossier actif » (m1, audit 2026-08-13) : tout ce qui
+#: n'est pas réglé (annulé/reloué) est actif — dérivé de l'enum pour
+#: que les deux ensembles ne divergent jamais.
 STATUTS_ACTIFS = {
-    LocationDossierStatut.AVIS_RECU.value,
-    LocationDossierStatut.ANNONCE_PUBLIEE.value,
-    LocationDossierStatut.VISITES.value,
-    LocationDossierStatut.CANDIDAT_RETENU.value,
-    LocationDossierStatut.BAIL_A_ENVOYER.value,
-    LocationDossierStatut.BAIL_ENVOYE.value,
-}
+    s.value for s in LocationDossierStatut
+} - set(DOSSIER_STATUTS_REGLES)
 
 STATUTS_VALIDES = {s.value for s in LocationDossierStatut}
 
@@ -341,51 +345,11 @@ async def locations_overview(
     if not imm_ids:
         return LocationsOverview()
 
-    # v16 — « toutes les unités libres » : chaque logement VACANT sans
-    # dossier ACTIF obtient son dossier automatiquement — le kanban et
-    # la page Baux vivent sur la même donnée.
-    vacants = (
-        await db.execute(
-            select(Logement).where(
-                Logement.immeuble_id.in_(imm_ids),
-                Logement.status == LogementStatus.VACANT.value,
-            )
-        )
-    ).scalars().all()
-    if vacants:
-        deja = {
-            d.logement_id
-            for d in (
-                await db.execute(
-                    select(LocationDossier).where(
-                        LocationDossier.logement_id.in_(
-                            [lg.id for lg in vacants]
-                        ),
-                        LocationDossier.statut.notin_(
-                            [
-                                LocationDossierStatut.ANNULE.value,
-                                LocationDossierStatut.RELOUE.value,
-                            ]
-                        ),
-                    )
-                )
-            ).scalars().all()
-        }
-        crees = False
-        for lg in vacants:
-            if lg.id in deja:
-                continue
-            nd = LocationDossier(
-                logement_id=lg.id,
-                statut=LocationDossierStatut.AVIS_RECU.value,
-                notes="Créé automatiquement — unité vacante.",
-            )
-            nd.created_at = _now()
-            nd.updated_at = _now()
-            db.add(nd)
-            crees = True
-        if crees:
-            await db.commit()
+    # v16 — « toutes les unités libres ont un dossier » : la CRÉATION ne
+    # se fait plus ici (M9a, audit 2026-08-13 : un GET ne mute pas, et
+    # les dossiers fantômes finissaient en frais facturables). Elle vit
+    # dans le service ``locatif_depart.ouvrir_dossiers_unites_vacantes``,
+    # appelé par les mutations qui rendent un logement vacant + au boot.
 
     logement_ids = [
         row[0]
@@ -600,10 +564,7 @@ async def update_dossier(
                         LocationDossier.logement_id == obj.logement_id,
                         LocationDossier.id != obj.id,
                         LocationDossier.statut.notin_(
-                            [
-                                LocationDossierStatut.ANNULE.value,
-                                LocationDossierStatut.RELOUE.value,
-                            ]
+                            list(DOSSIER_STATUTS_REGLES)
                         ),
                     )
                 )
@@ -614,6 +575,30 @@ async def update_dossier(
                     "Un autre dossier de relocation est déjà actif "
                     "sur ce logement.",
                 )
+        # m2 (audit 2026-08-13) : reculer une carte AVANT « Bail à
+        # envoyer » détache le bail créé à la conversion — sinon le
+        # dossier garde un lien fantôme et les gardes « bail requis »
+        # raisonnent sur un état impossible. Le bail « proposé » reste
+        # visible sur la page Baux (le désistement gère sa suppression).
+        if (
+            nouveau_statut
+            in (
+                LocationDossierStatut.AVIS_RECU.value,
+                LocationDossierStatut.ANNONCE_PUBLIEE.value,
+                LocationDossierStatut.VISITES.value,
+                LocationDossierStatut.CANDIDAT_RETENU.value,
+            )
+            and obj.nouveau_bail_id is not None
+        ):
+            obj.nouveau_bail_id = None
+        # M9b : un humain déplace la carte au-delà de « Départ
+        # confirmé » → le dossier auto-créé est pris en charge (il
+        # redevient facturable comme frais de relocation).
+        if nouveau_statut not in (
+            LocationDossierStatut.AVIS_RECU.value,
+            LocationDossierStatut.ANNULE.value,
+        ):
+            marquer_prise_en_charge_humaine(obj)
     for k, v in data.items():
         setattr(obj, k, v)
     # Passage à « reloué » : quand un bail a été créé pour ce dossier,
@@ -630,11 +615,14 @@ async def update_dossier(
                 )
         if obj.reloue_le is None:
             obj.reloue_le = _now().date()
+        # Règle UNIQUE du statut du logement (M2, audit 2026-08-13) :
+        # le service recalcule d'après les baux — un bail qui commence
+        # dans 3 mois donne « réservé », pas « occupé » de force.
+        await recaler_statut_logement(db, obj.logement_id)
         lg = await db.get(Logement, obj.logement_id)
         if lg is not None:
-            lg.status = LogementStatus.OCCUPE.value
             # Miroir « loyer demandé » (2026-08-13) : reloué → le
-            # logement occupé suit le loyer réel du NOUVEAU bail.
+            # logement suit le loyer réel du NOUVEAU bail.
             if obj.nouveau_bail_id is not None:
                 nb_sync = await db.get(Bail, obj.nouveau_bail_id)
                 if (
@@ -642,6 +630,21 @@ async def update_dossier(
                     and nb_sync.loyer_mensuel is not None
                 ):
                     lg.loyer_demande = nb_sync.loyer_mensuel
+    # M4 (audit 2026-08-13) : le prix affiché modifié dans le kanban
+    # redescend sur la fiche du logement pendant la vacance — dossier
+    # ACTIF + logement VACANT → Logement.loyer_demande suit le dossier.
+    if (
+        "loyer_demande" in data
+        and obj.loyer_demande is not None
+        and obj.statut not in DOSSIER_STATUTS_REGLES
+    ):
+        lg_m4 = await db.get(Logement, obj.logement_id)
+        if (
+            lg_m4 is not None
+            and lg_m4.status == LogementStatus.VACANT.value
+        ):
+            lg_m4.loyer_demande = obj.loyer_demande
+            lg_m4.updated_at = _now()
     obj.updated_at = _now()
     await db.commit()
     await db.refresh(obj)
@@ -878,6 +881,9 @@ async def convertir_dossier(
     # Le bail se prépare et s'envoie dans le système CORPIQ (hors
     # Kratos) : la carte passe à « bail à envoyer ».
     dossier.statut = LocationDossierStatut.BAIL_A_ENVOYER.value
+    # M9b : la conversion est un geste HUMAIN — un dossier auto-créé
+    # est pris en charge (frais de relocation à nouveau facturables).
+    marquer_prise_en_charge_humaine(dossier)
 
     locataire_id = locataire.id
     bail_id = bail.id
@@ -909,28 +915,10 @@ async def convertir_dossier(
 
 
 async def _recaler_statut_logement(db, logement_id: int) -> None:
-    """Statut du logement recalculé d'après ses baux (occupé si un
-    bail actif court encore, vacant sinon) — partagé désistement /
-    suppression de dossier (audit 2026-07-31)."""
-    from app.models.immobilier import BailStatus
-
-    lg = await db.get(Logement, logement_id)
-    if lg is None:
-        return
-    actif = (
-        await db.execute(
-            select(Bail).where(
-                Bail.logement_id == logement_id,
-                Bail.status == BailStatus.ACTIF.value,
-                Bail.date_fin >= _now().date(),
-            )
-        )
-    ).scalars().first()
-    lg.status = (
-        LogementStatus.OCCUPE.value
-        if actif
-        else LogementStatus.VACANT.value
-    )
+    """Statut du logement recalculé d'après ses baux — délégué à la
+    règle UNIQUE du service (M2/M3, audit 2026-08-13 : occupé/réservé/
+    vacant, baux au mois et hors-location respectés)."""
+    await recaler_statut_logement(db, logement_id)
 
 
 async def _supprimer_bail_et_locataire_crees(db, dossier) -> None:
@@ -1042,8 +1030,6 @@ async def desistement_candidat(
     « Départ confirmé » et le logement reprend son vrai statut (occupé
     si le locataire sortant est encore en place, vacant sinon)."""
     _require_volet(user)
-    from app.models.immobilier import BailStatus
-
     dossier = await _dossier_or_404(db, dossier_id)
     if dossier.nouveau_bail_id is None:
         raise HTTPException(
@@ -1053,23 +1039,26 @@ async def desistement_candidat(
     await _supprimer_bail_et_locataire_crees(db, dossier)
     dossier.reloue_le = None
     dossier.statut = LocationDossierStatut.AVIS_RECU.value
-    dossier.updated_at = _now()
-    lg = await db.get(Logement, dossier.logement_id)
-    if lg is not None:
-        actif = (
-            await db.execute(
-                select(Bail).where(
-                    Bail.logement_id == lg.id,
-                    Bail.status == BailStatus.ACTIF.value,
-                    Bail.date_fin >= _now().date(),
-                )
+    # m4 (audit 2026-08-13) : le dossier repart de « Départ confirmé »
+    # — ses infos de départ sont restaurées depuis le bail SORTANT
+    # s'il existe (fill-only : on ne touche pas une saisie manuelle).
+    if dossier.bail_id:
+        bail_sortant = await db.get(Bail, dossier.bail_id)
+        if bail_sortant is not None:
+            if dossier.date_depart is None:
+                dossier.date_depart = bail_sortant.date_fin
+            loyer_sortant = (
+                float(bail_sortant.loyer_mensuel)
+                if bail_sortant.loyer_mensuel is not None
+                else None
             )
-        ).scalars().first()
-        lg.status = (
-            LogementStatus.OCCUPE.value
-            if actif
-            else LogementStatus.VACANT.value
-        )
+            if dossier.loyer_ancien is None:
+                dossier.loyer_ancien = loyer_sortant
+            if dossier.loyer_demande is None:
+                dossier.loyer_demande = loyer_sortant
+    dossier.updated_at = _now()
+    await db.flush()
+    await recaler_statut_logement(db, dossier.logement_id)
     await db.commit()
     obj = await _dossier_or_404(db, dossier_id)
     return await _to_row(db, obj)
@@ -1184,7 +1173,9 @@ async def suivi_baux(
             await db.execute(
                 select(LocationDossier).where(
                     LocationDossier.nouveau_bail_id.in_(bail_ids),
-                    LocationDossier.statut.notin_(["annule", "reloue"]),
+                    LocationDossier.statut.notin_(
+                        list(DOSSIER_STATUTS_REGLES)
+                    ),
                 )
             )
         ).scalars().all():
@@ -1195,7 +1186,9 @@ async def suivi_baux(
         await db.execute(
             select(LocationDossier).where(
                 LocationDossier.logement_id.in_(log_ids),
-                LocationDossier.statut.notin_(["annule", "reloue"]),
+                LocationDossier.statut.notin_(
+                    list(DOSSIER_STATUTS_REGLES)
+                ),
             )
         )
     ).scalars().all() if log_ids else []:
@@ -1364,6 +1357,9 @@ async def create_annonce(
     if dossier.statut == LocationDossierStatut.AVIS_RECU.value:
         dossier.statut = LocationDossierStatut.ANNONCE_PUBLIEE.value
         dossier.updated_at = _now()
+    # M9b : publier une annonce est un geste HUMAIN — un dossier
+    # auto-créé est pris en charge (frais de relocation facturables).
+    marquer_prise_en_charge_humaine(dossier)
     await db.commit()
     await db.refresh(obj)
     return AnnonceRead.model_validate(obj)
@@ -1449,6 +1445,9 @@ async def create_visite(
     ):
         dossier.statut = LocationDossierStatut.VISITES.value
         dossier.updated_at = _now()
+    # M9b : planifier une visite est un geste HUMAIN — un dossier
+    # auto-créé est pris en charge (frais de relocation facturables).
+    marquer_prise_en_charge_humaine(dossier)
     await db.commit()
     await db.refresh(obj)
     return VisiteRead.model_validate(obj)

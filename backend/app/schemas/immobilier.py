@@ -529,9 +529,12 @@ class DossierBail(BaseModel):
     loyer_mensuel: float
     depot_garantie: Optional[float] = None
     status: str
-    #: Statut du dossier de relocation lié (kanban Locations), tant
-    #: que pas « reloué » : bail_a_envoyer | bail_envoye.
+    #: Statut du dossier de relocation ACTIF lié (kanban Locations) :
+    #: par le bail ENTRANT (bail_a_envoyer | bail_envoye) OU par le
+    #: bail SORTANT (avis_recu, visites… — M1, audit 2026-08-13).
     relocation_statut: Optional[str] = None
+    #: Id du dossier lié — lien « Ouvrir dans Locations » ciblé.
+    relocation_dossier_id: Optional[int] = None
     #: LE bail courant (imm_documents) — bouton « Bail » de la fiche.
     document_id: Optional[int] = None
     signed_at: Optional[datetime] = None
@@ -623,9 +626,12 @@ class LogementDossierBail(BaseModel):
     date_debut: date
     date_fin: date
     status: str
-    #: Statut du dossier de relocation lié (kanban Locations), tant
-    #: que pas « reloué » : bail_a_envoyer | bail_envoye.
+    #: Statut du dossier de relocation ACTIF lié (kanban Locations) :
+    #: par le bail ENTRANT (bail_a_envoyer | bail_envoye) OU par le
+    #: bail SORTANT (avis_recu, visites… — M1, audit 2026-08-13).
     relocation_statut: Optional[str] = None
+    #: Id du dossier lié — lien « Ouvrir dans Locations » ciblé.
+    relocation_dossier_id: Optional[int] = None
     document_url: Optional[str] = None
     signed_at: Optional[datetime] = None
     #: LE bail courant (imm_documents) — bouton « Bail » de la fiche.

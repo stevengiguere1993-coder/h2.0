@@ -846,7 +846,6 @@ async def upload_bail_document(
             LocationDossier,
             LocationDossierStatut,
             Logement,
-            LogementStatus,
         )
 
         # Miroir « loyer demandé » (2026-08-13) : bail ACTIF au dossier
@@ -856,16 +855,18 @@ async def upload_bail_document(
             if lg_sync is not None:
                 lg_sync.loyer_demande = bail.loyer_mensuel
 
+        from app.services.locatif_depart import (
+            DOSSIER_STATUTS_REGLES,
+            recaler_statut_logement,
+        )
+
         dossier_reloc = (
             (
                 await db.execute(
                     select(LocationDossier).where(
                         LocationDossier.nouveau_bail_id == bail.id,
                         LocationDossier.statut.notin_(
-                            [
-                                LocationDossierStatut.RELOUE.value,
-                                LocationDossierStatut.ANNULE.value,
-                            ]
+                            list(DOSSIER_STATUTS_REGLES)
                         ),
                     )
                 )
@@ -877,13 +878,10 @@ async def upload_bail_document(
             dossier_reloc.statut = LocationDossierStatut.RELOUE.value
             if dossier_reloc.reloue_le is None:
                 dossier_reloc.reloue_le = _now().date()
-            lg = await db.get(Logement, dossier_reloc.logement_id)
-            if lg is not None:
-                lg.status = (
-                    LogementStatus.OCCUPE.value
-                    if bail.date_debut and bail.date_debut <= _now().date()
-                    else LogementStatus.RESERVE.value
-                )
+        # Règle UNIQUE du statut du logement (M2/M3, audit 2026-08-13) :
+        # le service recalcule occupé/réservé/vacant d'après les baux.
+        if bail.logement_id:
+            await recaler_statut_logement(db, bail.logement_id)
     except Exception:  # noqa: BLE001 — best-effort
         log.exception(
             "Transition relocation après import du bail %s", bail_id

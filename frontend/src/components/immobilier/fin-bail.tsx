@@ -80,10 +80,23 @@ const KANBAN_STATUT_DOT: Record<string, string> = {
 /** Pastille LECTURE SEULE du statut de relocation + lien vers la
  *  source. Directive « miroir bidirectionnel » : on VOIT le statut
  *  partout (page Baux, fiches), mais on le MODIFIE seulement à la
- *  source — le kanban Locations (retour Phil 2026-08-13). */
-export function RelocationStatutPastille({ statut }: { statut: string }) {
+ *  source — le kanban Locations (retour Phil 2026-08-13).
+ *
+ *  `dossierId` (m3, audit 2026-08-13) : le lien cible la carte —
+ *  `?focus={id}` fait défiler et surligner la carte dans le kanban. */
+export function RelocationStatutPastille({
+  statut,
+  dossierId
+}: {
+  statut: string;
+  dossierId?: number | null;
+}) {
   const label =
     KANBAN_STATUTS.find((s) => s.id === statut)?.label ?? statut;
+  const href =
+    dossierId != null
+      ? `/immobilier/locations?focus=${dossierId}`
+      : "/immobilier/locations";
   return (
     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
       <span
@@ -99,7 +112,7 @@ export function RelocationStatutPastille({ statut }: { statut: string }) {
       </span>
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        href={"/immobilier/locations" as any}
+        href={href as any}
         className="text-[11px] font-medium text-accent-500 underline-offset-2 hover:underline"
         title="La relocation se pilote dans le kanban Locations"
       >

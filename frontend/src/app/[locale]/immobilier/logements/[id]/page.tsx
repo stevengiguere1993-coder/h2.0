@@ -31,9 +31,11 @@ import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
 import {
   echeanceLabel,
   JourEcheanceInline,
+  KANBAN_STATUTS,
   LOUER_INDEFINIMENT_INFO,
   LOUER_INDEFINIMENT_LABEL,
-  LouerIndefinimentBulle
+  LouerIndefinimentBulle,
+  RelocationStatutPastille
 } from "@/components/immobilier/fin-bail";
 import {
   fmtPieces,
@@ -65,6 +67,8 @@ type DossierBail = {
   /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
   jour_echeance?: number | null;
   relocation_statut?: string | null;
+  /** Dossier de relocation lié — lien ciblé vers le kanban. */
+  relocation_dossier_id?: number | null;
 };
 
 type DossierBon = {
@@ -788,17 +792,13 @@ export default function LogementDetailPage({
                           bailActif.status}
                       </span>
                       {bailActif.relocation_statut ? (
-                        <span
-                          className={`badge ${
-                            bailActif.relocation_statut === "bail_envoye"
-                              ? "badge-violet"
-                              : "badge-amber"
-                          }`}
-                        >
-                          {bailActif.relocation_statut === "bail_envoye"
-                            ? "Bail envoyé — à signer"
-                            : "Bail à envoyer"}
-                        </span>
+                        // M1 (audit 2026-08-13) : pastille kanban
+                        // complète — le bail SORTANT montre aussi son
+                        // cycle de départ (avis reçu, visites…).
+                        <RelocationStatutPastille
+                          statut={bailActif.relocation_statut}
+                          dossierId={bailActif.relocation_dossier_id}
+                        />
                       ) : null}
                       <AuMoisToggle
                         bailId={bailActif.id}
@@ -889,6 +889,9 @@ export default function LogementDetailPage({
                             ) : null}
                           </td>
                           <td className="py-2.5 pr-3 text-right">
+                            {/* M1 : libellé kanban complet — le bail
+                                sortant montre aussi son cycle de
+                                départ (avis reçu, visites…). */}
                             <span
                               className={`badge ${
                                 b.relocation_statut === "bail_envoye"
@@ -899,12 +902,12 @@ export default function LogementDetailPage({
                                       "badge-neutral"
                               }`}
                             >
-                              {b.relocation_statut === "bail_envoye"
-                                ? "Bail envoyé — à signer"
-                                : b.relocation_statut
-                                  ? "Bail à envoyer"
-                                  : (BAIL_STATUS_LABEL[b.status] ??
-                                    b.status)}
+                              {b.relocation_statut
+                                ? (KANBAN_STATUTS.find(
+                                    (s) => s.id === b.relocation_statut
+                                  )?.label ?? b.relocation_statut)
+                                : (BAIL_STATUS_LABEL[b.status] ??
+                                  b.status)}
                             </span>
                           </td>
                           <td className="py-2.5 text-right">

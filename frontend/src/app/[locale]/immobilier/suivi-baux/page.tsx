@@ -361,6 +361,7 @@ export default function SuiviBauxPage() {
                                 (retour Phil 2026-08-13). */}
                             <RelocationStatutPastille
                               statut={r.dossier_statut}
+                              dossierId={r.dossier_id}
                             />
                           </div>
                         ) : null}

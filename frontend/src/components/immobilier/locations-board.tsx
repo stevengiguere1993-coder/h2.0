@@ -178,6 +178,29 @@ export function LocationsBoard({
   const [showHistorique, setShowHistorique] = useState(false);
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+  // m3 (audit 2026-08-13) : `?focus={dossier_id}` — venu d'une pastille
+  // « Ouvrir dans Locations » (page Baux, fiches) : la carte visée est
+  // défilée à l'écran et surlignée quelques secondes.
+  const [focusId, setFocusId] = useState<number | null>(null);
+
+  useEffect(() => {
+    const raw = new URLSearchParams(window.location.search).get("focus");
+    const id = raw ? Number(raw) : NaN;
+    if (Number.isFinite(id) && id > 0) setFocusId(id);
+  }, []);
+
+  useEffect(() => {
+    if (focusId == null || data === null) return;
+    const el = document.getElementById(`dossier-card-${focusId}`);
+    if (!el) return;
+    el.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+      inline: "center"
+    });
+    const t = window.setTimeout(() => setFocusId(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [focusId, data]);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -383,6 +406,7 @@ export function LocationsBoard({
                         key={d.id}
                         d={d}
                         showImmeuble={immeubleId == null}
+                        highlighted={focusId === d.id}
                         onOpen={() => setOpenId(d.id)}
                       />
                     ))
@@ -500,11 +524,14 @@ function KpiTile({
 function DossierCard({
   d,
   showImmeuble,
-  onOpen
+  onOpen,
+  highlighted = false
 }: {
   d: Dossier;
   showImmeuble: boolean;
   onOpen: () => void;
+  /** Carte ciblée par `?focus={id}` — surlignée après le défilement. */
+  highlighted?: boolean;
 }) {
   const retenu = d.visites.find((v) => v.retenu);
   const prochaine = d.visites.find(
@@ -519,12 +546,17 @@ function DossierCard({
   return (
     <button
       type="button"
+      id={`dossier-card-${d.id}`}
       draggable
       onDragStart={(e) =>
         e.dataTransfer.setData("text/plain", String(d.id))
       }
       onClick={onOpen}
-      className="block w-full cursor-grab rounded-lg border border-brand-800 bg-brand-950 p-3 text-left transition hover:border-accent-500 active:cursor-grabbing"
+      className={`block w-full cursor-grab rounded-lg border p-3 text-left transition hover:border-accent-500 active:cursor-grabbing ${
+        highlighted
+          ? "border-accent-500 bg-accent-500/10 ring-2 ring-accent-500/60"
+          : "border-brand-800 bg-brand-950"
+      }`}
     >
       <p className="truncate text-sm font-semibold text-white">
         Logement {d.logement_numero}

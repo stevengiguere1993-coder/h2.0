@@ -1306,10 +1306,12 @@ async def renouvellements_overview(
         reponse = None
         deadline_reponse = None
         deadline_fixation = None
+        from app.services.locatif_depart import DOSSIER_STATUTS_REGLES
+
         reloc_active = (
             b.logement_id in reloc_by_logement
             and reloc_by_logement[b.logement_id].statut
-            not in ("annule", "reloue")
+            not in DOSSIER_STATUTS_REGLES
         )
         if courant:
             deadline_reponse = _plus_un_mois(last_ren.avis_envoye_le)

@@ -63,6 +63,15 @@ DOSSIER_STATUTS_REGLES = (
 NOTE_RECONDUCTION_AUTO = (
     "Reconduction tacite automatique (aucune réponse à l'échéance)"
 )
+#: Préfixe des dossiers créés par un AUTOMATISME (détection d'unité
+#: vacante, bail préparé depuis la page Baux). Tant qu'un humain ne les
+#: a pas pris en charge, ils ne génèrent pas de frais de relocation
+#: facturables (M9, audit 2026-08-13).
+NOTE_AUTO_PREFIX = "Créé automatiquement"
+NOTE_AUTO_UNITE_VACANTE = "Créé automatiquement — unité vacante."
+#: Marqueur ajouté quand un HUMAIN fait avancer un dossier auto-créé
+#: (kanban, conversion) — il redevient facturable.
+NOTE_PRISE_EN_CHARGE = "Pris en charge manuellement"
 NOTE_TERMINE_BAIL_SUIVANT = (
     "Terminé automatiquement à l'arrivée du bail suivant"
 )
@@ -97,6 +106,89 @@ async def dossier_relocation_actif(
             )
         )
     ).scalars().first()
+
+
+def dossier_auto_sans_prise_en_charge(dossier: LocationDossier) -> bool:
+    """Dossier créé par un automatisme et jamais pris en charge par un
+    humain → exclu des frais de relocation facturables (M9b)."""
+    notes = dossier.notes or ""
+    return notes.startswith(NOTE_AUTO_PREFIX) and (
+        NOTE_PRISE_EN_CHARGE not in notes
+    )
+
+
+def marquer_prise_en_charge_humaine(dossier: LocationDossier) -> None:
+    """Un HUMAIN vient de faire avancer ce dossier (kanban, conversion) :
+    si le dossier avait été créé automatiquement, le marqueur le rend à
+    nouveau facturable (frais de relocation)."""
+    if dossier_auto_sans_prise_en_charge(dossier):
+        dossier.notes = _append_note(dossier.notes, NOTE_PRISE_EN_CHARGE)
+
+
+async def ouvrir_dossiers_unites_vacantes(
+    db: AsyncSession,
+    logement_ids: Optional[Iterable[int]] = None,
+    limite: int = 500,
+) -> int:
+    """Chaque logement VACANT sans dossier de relocation ACTIF obtient
+    son dossier automatiquement (invariant v16 « toutes les unités
+    libres sont au kanban »).
+
+    Déplacé HORS du GET /locations/overview (M9a, audit 2026-08-13) :
+    appelé par les MUTATIONS qui rendent un logement vacant et par le
+    backfill de démarrage du backend (borné par ``limite``). Immeubles
+    en gestion externe ou inactifs exclus. Ne committe pas — le geste
+    appelant garde la main sur sa transaction.
+    """
+    await db.flush()  # les dossiers/logements en attente comptent
+    q = (
+        select(Logement)
+        .join(Immeuble, Immeuble.id == Logement.immeuble_id)
+        .where(
+            Logement.status == LogementStatus.VACANT.value,
+            Immeuble.gestion_externe.isnot(True),
+            Immeuble.is_active.is_(True),
+        )
+    )
+    ids = [i for i in (logement_ids or []) if i]
+    if logement_ids is not None:
+        if not ids:
+            return 0
+        q = q.where(Logement.id.in_(ids))
+    vacants = (await db.execute(q)).scalars().all()
+    if not vacants:
+        return 0
+    deja = {
+        d.logement_id
+        for d in (
+            await db.execute(
+                select(LocationDossier).where(
+                    LocationDossier.logement_id.in_(
+                        [lg.id for lg in vacants]
+                    ),
+                    LocationDossier.statut.notin_(
+                        list(DOSSIER_STATUTS_REGLES)
+                    ),
+                )
+            )
+        ).scalars().all()
+    }
+    crees = 0
+    for lg in vacants:
+        if lg.id in deja or crees >= limite:
+            continue
+        nd = LocationDossier(
+            logement_id=lg.id,
+            statut=LocationDossierStatut.AVIS_RECU.value,
+            notes=NOTE_AUTO_UNITE_VACANTE,
+        )
+        nd.created_at = _now()
+        nd.updated_at = _now()
+        db.add(nd)
+        crees += 1
+    if crees:
+        log.info("Dossiers de relocation auto-créés : %d", crees)
+    return crees
 
 
 async def recaler_statut_logement(
