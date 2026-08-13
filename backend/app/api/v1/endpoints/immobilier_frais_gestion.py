@@ -300,6 +300,14 @@ async def overview(
     # Relocations abouties (« reloué ») par immeuble — un frais fixe au
     # contrat (tarif logement complet vs chambre) est facturable dès que
     # le dossier aboutit, s'il n'a pas déjà été facturé.
+    # M9b (audit 2026-08-13) : un dossier CRÉÉ AUTOMATIQUEMENT (unité
+    # vacante, bail préparé depuis la page Baux) qu'aucun humain n'a
+    # fait avancer ne génère PAS de frais — seul un dossier pris en
+    # charge (kanban, conversion) est facturable.
+    from app.services.locatif_depart import (
+        dossier_auto_sans_prise_en_charge,
+    )
+
     reloc_par_immeuble: Dict[int, list] = {}
     for dossier, logement in (
         await db.execute(
@@ -308,6 +316,8 @@ async def overview(
             .where(LocationDossier.statut == "reloue")
         )
     ).all():
+        if dossier_auto_sans_prise_en_charge(dossier):
+            continue
         reloc_par_immeuble.setdefault(int(logement.immeuble_id), []).append(
             (dossier, logement)
         )

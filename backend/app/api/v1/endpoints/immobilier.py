@@ -926,6 +926,32 @@ async def _recaler_logement_apres_bail(db, logement_id: int) -> None:
     lg.updated_at = _now()
 
 
+async def _consigner_suppression_bail_sortant(db, bail) -> None:
+    """M6 (audit 2026-08-13) : la suppression d'un bail référencé comme
+    bail SORTANT d'un dossier de relocation (FK SET NULL) laissait un
+    dossier orphelin muet. AVANT la suppression : recopie fill-only de
+    ``date_depart``/``loyer_ancien`` depuis le bail + note datée."""
+    from app.models.immobilier import LocationDossier
+    from app.services.locatif_depart import _append_note
+
+    for dsr in (
+        await db.execute(
+            select(LocationDossier).where(
+                LocationDossier.bail_id == bail.id
+            )
+        )
+    ).scalars().all():
+        if dsr.date_depart is None:
+            dsr.date_depart = bail.date_fin
+        if dsr.loyer_ancien is None and bail.loyer_mensuel is not None:
+            dsr.loyer_ancien = float(bail.loyer_mensuel)
+        dsr.notes = _append_note(
+            dsr.notes,
+            f"Bail sortant supprimé le {_now().date().isoformat()}",
+        )
+        dsr.updated_at = _now()
+
+
 async def _recalc_paiement_score(db, bail) -> None:
     """Score de paiement du locataire recalculé (aussi après une
     SUPPRESSION de paiements — audit 2026-07-31)."""
@@ -2091,6 +2117,15 @@ async def update_logement(
             )
             .values(au_mois=True, updated_at=_now())
         )
+    # M9a : passer le logement à « vacant » À LA MAIN ouvre son dossier
+    # de relocation, comme toute mutation qui libère une unité (la
+    # création ne vit plus dans le GET /locations/overview).
+    if data.get("status") == LogementStatus.VACANT.value:
+        from app.services.locatif_depart import (
+            ouvrir_dossiers_unites_vacantes,
+        )
+
+        await ouvrir_dossiers_unites_vacantes(db, [logement_id])
     await db.commit()
     await db.refresh(obj)
     return LogementRead.model_validate(obj)
@@ -2129,24 +2164,50 @@ async def delete_logement(
     await db.commit()
 
 
-async def _relocation_par_bail(db, bail_ids) -> dict:
-    """bail_id -> statut du dossier de relocation lié (kanban
-    Locations), tant que pas « reloué » — affiché partout où on voit
-    les baux (retour Phil 2026-07-31)."""
+async def _relocation_par_bail(
+    db, bail_ids, inclure_sortant: bool = True
+) -> dict:
+    """bail_id -> dossier de relocation ACTIF lié (kanban Locations) —
+    affiché partout où on voit les baux (retour Phil 2026-07-31).
+
+    M1 (audit 2026-08-13) : le lien se fait par le bail ENTRANT
+    (``nouveau_bail_id``) ET par le bail SORTANT (``bail_id``) — le
+    bail du locataire qui part porte enfin sa pastille dans les fiches,
+    comme la page Baux le fait via le logement. Valeur : dict
+    ``{"statut": ..., "dossier_id": ...}`` (le dossier_id alimente le
+    lien « Ouvrir dans Locations » ciblé)."""
     ids = [i for i in bail_ids if i]
     if not ids:
         return {}
     from app.models.immobilier import LocationDossier
+    from app.services.locatif_depart import DOSSIER_STATUTS_REGLES
 
-    rows = (
+    out: dict = {}
+    if inclure_sortant:
+        for d in (
+            await db.execute(
+                select(LocationDossier).where(
+                    LocationDossier.bail_id.in_(ids),
+                    LocationDossier.statut.notin_(
+                        list(DOSSIER_STATUTS_REGLES)
+                    ),
+                )
+            )
+        ).scalars().all():
+            out[d.bail_id] = {"statut": d.statut, "dossier_id": d.id}
+    for d in (
         await db.execute(
             select(LocationDossier).where(
                 LocationDossier.nouveau_bail_id.in_(ids),
-                LocationDossier.statut.notin_(["annule", "reloue"]),
+                LocationDossier.statut.notin_(
+                    list(DOSSIER_STATUTS_REGLES)
+                ),
             )
         )
-    ).scalars().all()
-    return {d.nouveau_bail_id: d.statut for d in rows}
+    ).scalars().all():
+        # Le lien ENTRANT garde priorité (comportement historique).
+        out[d.nouveau_bail_id] = {"statut": d.statut, "dossier_id": d.id}
+    return out
 
 
 @router.get(
@@ -2188,6 +2249,7 @@ async def logement_dossier(
     dossier_baux = []
     for b in baux:
         loc = loc_by_id.get(b.locataire_id)
+        reloc = reloc_par_bail.get(b.id)
         dossier_baux.append(
             LogementDossierBail(
                 id=b.id,
@@ -2202,7 +2264,10 @@ async def logement_dossier(
                 date_debut=b.date_debut,
                 date_fin=b.date_fin,
                 status=b.status,
-                relocation_statut=reloc_par_bail.get(b.id),
+                relocation_statut=reloc["statut"] if reloc else None,
+                relocation_dossier_id=(
+                    reloc["dossier_id"] if reloc else None
+                ),
                 document_url=b.document_url,
                 signed_at=b.signed_at,
                 document_id=b.document_id,
@@ -2456,11 +2521,22 @@ async def delete_locataire(
     ).scalars().all():
         v.locataire_id = None
     for b in baux:
+        # M6 : les dossiers de relocation dont ce bail est le SORTANT
+        # gardent leurs repères (date de départ, ancien loyer) + note.
+        await _consigner_suppression_bail_sortant(db, b)
         await db.delete(b)
     await db.delete(obj)
     await db.flush()
     for lg_id in logement_ids:
         await _recaler_logement_apres_bail(db, lg_id)
+    # M9a : logements redevenus vacants sans dossier actif → la
+    # mutation ouvre les dossiers (plus de création dans un GET).
+    if logement_ids:
+        from app.services.locatif_depart import (
+            ouvrir_dossiers_unites_vacantes,
+        )
+
+        await ouvrir_dossiers_unites_vacantes(db, list(logement_ids))
     await db.commit()
 
 
@@ -2509,6 +2585,7 @@ async def locataire_dossier(
     for b in baux:
         lg = log_by_id.get(b.logement_id)
         im = imm_by_id.get(lg.immeuble_id) if lg else None
+        reloc = reloc_par_bail.get(b.id)
         dossier_baux.append(
             DossierBail(
                 id=b.id,
@@ -2525,7 +2602,10 @@ async def locataire_dossier(
                     else None
                 ),
                 status=b.status,
-                relocation_statut=reloc_par_bail.get(b.id),
+                relocation_statut=reloc["statut"] if reloc else None,
+                relocation_dossier_id=(
+                    reloc["dossier_id"] if reloc else None
+                ),
                 document_id=b.document_id,
                 signed_at=b.signed_at,
                 au_mois=b.au_mois,
@@ -3367,12 +3447,15 @@ async def create_bail(
     if obj.status == BailStatus.PROPOSE.value:
         await db.flush()
         from app.models.immobilier import LocationDossier
+        from app.services.locatif_depart import DOSSIER_STATUTS_REGLES
 
         dossier = (
             await db.execute(
                 select(LocationDossier).where(
                     LocationDossier.logement_id == obj.logement_id,
-                    LocationDossier.statut.notin_(["annule", "reloue"]),
+                    LocationDossier.statut.notin_(
+                        list(DOSSIER_STATUTS_REGLES)
+                    ),
                 )
             )
         ).scalars().first()
@@ -3396,6 +3479,14 @@ async def create_bail(
                 "candidat_retenu",
             ):
                 dossier.statut = "bail_a_envoyer"
+            # M9b : préparer un bail est un geste HUMAIN — un dossier
+            # auto-créé (unité vacante) est pris en charge : ses frais
+            # de relocation redeviennent facturables une fois reloué.
+            from app.services.locatif_depart import (
+                marquer_prise_en_charge_humaine,
+            )
+
+            marquer_prise_en_charge_humaine(dossier)
         dossier.updated_at = _now()
 
     await db.commit()
@@ -3497,19 +3588,20 @@ async def update_bail(
             # Miroir « loyer demandé » (2026-08-13) : logement VACANT →
             # le prix affiché pour la relocation (dossier Locations)
             # fait foi s'il existe ; sinon on garde le dernier loyer.
-            from app.models.immobilier import LocationDossier
+            from app.services.locatif_depart import (
+                dossier_relocation_actif,
+                ouvrir_dossiers_unites_vacantes,
+            )
 
-            dossier = (
-                await db.execute(
-                    select(LocationDossier).where(
-                        LocationDossier.logement_id == obj.logement_id,
-                        LocationDossier.statut.notin_(["annule", "reloue"]),
-                    )
-                )
-            ).scalars().first()
+            dossier = await dossier_relocation_actif(db, obj.logement_id)
             if dossier is not None and dossier.loyer_demande is not None:
                 log_obj.loyer_demande = dossier.loyer_demande
             log_obj.updated_at = _now()
+            # M9a : la mutation qui rend le logement vacant ouvre le
+            # dossier de relocation (plus de création dans un GET).
+            await ouvrir_dossiers_unites_vacantes(
+                db, [obj.logement_id]
+            )
     elif (
         old_status != BailStatus.ACTIF.value
         and obj.status == BailStatus.ACTIF.value
@@ -3600,10 +3692,20 @@ async def delete_bail(
             dsr.statut = "candidat_retenu"
         dsr.reloue_le = None
         dsr.updated_at = _now()
+    # M6 (audit 2026-08-13) : un dossier dont ce bail est le SORTANT
+    # perdrait silencieusement ses repères (FK SET NULL). AVANT la
+    # suppression, on recopie les infos utiles qu'il n'a pas encore
+    # (fill-only) + une note de traçabilité.
+    await _consigner_suppression_bail_sortant(db, obj)
     logement_id = obj.logement_id
     await db.delete(obj)
     await db.flush()
     await _recaler_logement_apres_bail(db, logement_id)
+    # M9a : si le logement vient de redevenir vacant sans dossier de
+    # relocation actif, la mutation en ouvre un (plus de GET créateur).
+    from app.services.locatif_depart import ouvrir_dossiers_unites_vacantes
+
+    await ouvrir_dossiers_unites_vacantes(db, [logement_id])
     await db.commit()
 
 
@@ -3649,9 +3751,12 @@ async def create_paiement(
     bail = await db.get(Bail, payload.bail_id)
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
-    # Garde-fou (audit 2026-07-31) : pas de paiement sur un bail
-    # proposé/résilié/terminé — la ligne serait invisible partout.
-    if bail.status != BailStatus.ACTIF.value:
+    # Garde-fou (audit 2026-07-31, assoupli M7 2026-08-13) : pas de
+    # paiement sur un bail « proposé ». Un bail RESILIE/TERMINE accepte
+    # encore un paiement pour un MOIS QU'IL COUVRAIT — sa ligne reste
+    # visible dans le suivi des loyers de ce mois (dernier loyer,
+    # solde de départ).
+    if bail.status == BailStatus.PROPOSE.value:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -3659,6 +3764,26 @@ async def create_paiement(
                 "enregistré que sur un bail actif."
             ),
         )
+    if bail.status in (
+        BailStatus.RESILIE.value,
+        BailStatus.TERMINE.value,
+    ):
+        m_paiement = payload.mois_couvert.replace(day=1)
+        couvre = (
+            bail.date_fin is not None
+            and bail.date_debut is not None
+            and bail.date_debut.replace(day=1)
+            <= m_paiement
+            <= bail.date_fin.replace(day=1)
+        )
+        if not couvre:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Ce bail est terminé — un paiement ne peut viser "
+                    "qu'un mois couvert par le bail."
+                ),
+            )
 
     async def _du_restant(mois: date) -> float:
         """Loyer + frais du mois − paiements déjà enregistrés."""
@@ -3867,6 +3992,11 @@ class LoyerOverviewRow(BaseModel):
     paye_le: Optional[date] = None
     # "paye" | "partiel" | "retard" | "attente"
     etat: str
+    #: Statut du bail (M7, audit 2026-08-13) : un bail RESILIE/TERMINE
+    #: en cours de mois reste dans le mois qu'il couvrait (loyer du
+    #: mois entamé + solde), avec un badge « Bail terminé le X ».
+    bail_statut: str = "actif"
+    bail_termine_le: Optional[date] = None
     #: LE bail courant (imm_documents) — clic sur la ligne = l'ouvrir.
     document_id: Optional[int] = None
     #: Frais ponctuels du MOIS affiché (retard, etc.) — supprimables.
@@ -3974,24 +4104,55 @@ async def loyers_overview(
     month_end = (
         month_start.replace(day=28) + timedelta(days=4)
     ).replace(day=1) - timedelta(days=1)
+    # M7 (audit 2026-08-13) : un bail RESILIE/TERMINE dont la période
+    # couvrait une partie du MOIS AFFICHÉ reste dans ce mois (loyer du
+    # mois entamé + solde, badge « Bail terminé le X ») — il ne
+    # disparaît des mois SUIVANTS que sa fin ne couvre plus.
+    from sqlalchemy import or_
+
     baux = (
         await db.execute(
             select(Bail).where(
                 Bail.logement_id.in_(list(log_by_id.keys())),
-                Bail.status == BailStatus.ACTIF.value,
                 Bail.date_debut <= month_end,
+                or_(
+                    Bail.status == BailStatus.ACTIF.value,
+                    and_(
+                        Bail.status.in_(
+                            [
+                                BailStatus.RESILIE.value,
+                                BailStatus.TERMINE.value,
+                            ]
+                        ),
+                        Bail.date_fin.is_not(None),
+                        Bail.date_fin >= month_start,
+                    ),
+                ),
             )
         )
     ).scalars().all()
 
+    def _visible_ce_mois(b: Bail) -> bool:
+        if b.status == BailStatus.ACTIF.value:
+            return True
+        return (
+            b.status
+            in (BailStatus.RESILIE.value, BailStatus.TERMINE.value)
+            and b.date_fin is not None
+            and b.date_fin >= month_start
+        )
+
     # Reconduction tacite AUTOMATIQUE (lazy, 2026-08-13) : un bail échu
     # sans réponse s'étire d'un cycle ; un bail échu dont le départ
     # était annoncé (dossier de relocation actif) se termine — plus de
-    # baux zombies dans le suivi des loyers.
+    # baux zombies dans le suivi des loyers. Exécutée AVANT la
+    # construction des lignes (M8 : plus de faux « retard » sur un bail
+    # actif échu) ; un bail terminé à l'instant qui couvrait le mois
+    # affiché reste visible avec son badge.
     from app.services.locatif_depart import reconduire_tacitement_baux_echus
 
     if await reconduire_tacitement_baux_echus(db, baux):
-        baux = [b for b in baux if b.status == BailStatus.ACTIF.value]
+        baux = [b for b in baux if _visible_ce_mois(b)]
 
     locataires = {}
     loc_ids = {b.locataire_id for b in baux if b.locataire_id}
@@ -4067,8 +4228,6 @@ async def loyers_overview(
     # logement — le plus proche par date de début.
     prochains: dict = {}
     if log_by_id:
-        from sqlalchemy import or_
-
         futurs = (
             await db.execute(
                 select(Bail)
@@ -4084,8 +4243,10 @@ async def loyers_overview(
         ).scalars().all()
         deja = set(bail_ids)
         futurs = [fb for fb in futurs if fb.id not in deja]
+        # Statut ENTRANT seulement : « Prochain » décrit le bail qui
+        # s'en vient, pas le cycle de départ d'un autre locataire.
         reloc_fut = await _relocation_par_bail(
-            db, [fb.id for fb in futurs]
+            db, [fb.id for fb in futurs], inclure_sortant=False
         )
         fut_loc_ids = {
             fb.locataire_id for fb in futurs if fb.locataire_id
@@ -4104,11 +4265,12 @@ async def loyers_overview(
             if fb.logement_id in prochains:
                 continue
             floc = fut_locs.get(fb.locataire_id)
+            reloc_f = reloc_fut.get(fb.id)
             prochains[fb.logement_id] = {
                 "nom": floc.full_name if floc else None,
                 "loyer": float(fb.loyer_mensuel or 0),
                 "debut": fb.date_debut,
-                "statut": reloc_fut.get(fb.id, "a_venir"),
+                "statut": reloc_f["statut"] if reloc_f else "a_venir",
             }
 
     def _mois_echus(b: Bail) -> int:
@@ -4118,8 +4280,11 @@ async def loyers_overview(
         debut = max(b.date_debut.replace(day=1), solde_depuis)
         fin = min(month_start, today.replace(day=1))
         # Bail AU MOIS : reconduction auto — les loyers courent sans
-        # egard a la date de fin (retour Phil 2026-07-28).
-        if b.date_fin and not b.au_mois:
+        # egard a la date de fin (retour Phil 2026-07-28)… sauf s'il
+        # est terminé/résilié (M7) : la fin borne alors le cumul.
+        if b.date_fin and (
+            not b.au_mois or b.status != BailStatus.ACTIF.value
+        ):
             fin = min(fin, b.date_fin.replace(day=1))
         if fin < debut:
             return 0
@@ -4186,6 +4351,16 @@ async def loyers_overview(
         rows.append(
             LoyerOverviewRow(
                 bail_id=b.id,
+                bail_statut=b.status,
+                bail_termine_le=(
+                    b.date_fin
+                    if b.status
+                    in (
+                        BailStatus.RESILIE.value,
+                        BailStatus.TERMINE.value,
+                    )
+                    else None
+                ),
                 prochain_nom=pro["nom"] if pro else None,
                 prochain_loyer=pro["loyer"] if pro else None,
                 prochain_debut=pro["debut"] if pro else None,

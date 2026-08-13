@@ -185,18 +185,23 @@ async def public_accept(
     await _archive_signed_bail(db, bail)
 
     # Dossier de relocation attaché à ce bail → « reloué » dès la
-    # signature (best-effort — n'échoue jamais la signature).
+    # signature (best-effort — n'échoue jamais la signature), puis le
+    # STATUT DU LOGEMENT est recalé par la règle UNIQUE du service
+    # (M3, audit 2026-08-13 : la signature en ligne ne recalait rien —
+    # occupé si le bail court, réservé s'il commence plus tard).
     try:
+        from app.services.locatif_depart import (
+            DOSSIER_STATUTS_REGLES,
+            recaler_statut_logement,
+        )
+
         dossier = (
             (
                 await db.execute(
                     select(LocationDossier).where(
                         LocationDossier.nouveau_bail_id == bail.id,
                         LocationDossier.statut.notin_(
-                            [
-                                LocationDossierStatut.RELOUE.value,
-                                LocationDossierStatut.ANNULE.value,
-                            ]
+                            list(DOSSIER_STATUTS_REGLES)
                         ),
                     )
                 )
@@ -209,7 +214,9 @@ async def public_accept(
             if dossier.reloue_le is None:
                 dossier.reloue_le = datetime.now(timezone.utc).date()
             dossier.updated_at = datetime.now(timezone.utc)
-            await db.flush()
+        if bail.logement_id:
+            await recaler_statut_logement(db, bail.logement_id)
+        await db.flush()
     except Exception:  # pragma: no cover — best-effort
         log.exception("Transition du dossier de relocation après signature")
 

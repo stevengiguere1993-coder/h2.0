@@ -38,7 +38,8 @@ import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
 import {
   echeanceLabel,
   JOUR_ECHEANCE_DEFAUT,
-  JOURS_ECHEANCE
+  JOURS_ECHEANCE,
+  RelocationStatutPastille
 } from "@/components/immobilier/fin-bail";
 import {
   CorrectionOptions,
@@ -84,6 +85,8 @@ type DossierBail = {
   /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
   jour_echeance?: number | null;
   relocation_statut?: string | null;
+  /** Dossier de relocation lié — lien ciblé vers le kanban. */
+  relocation_dossier_id?: number | null;
 };
 
 type DossierPaiement = {
@@ -1255,17 +1258,13 @@ export default function LocataireDetailPage({
                                 {BAIL_STATUS_LABEL[b.status] ?? b.status}
                               </span>
                               {b.relocation_statut ? (
-                                <span
-                                  className={`badge ${
-                                    b.relocation_statut === "bail_envoye"
-                                      ? "badge-violet"
-                                      : "badge-amber"
-                                  }`}
-                                >
-                                  {b.relocation_statut === "bail_envoye"
-                                    ? "Bail envoyé — à signer"
-                                    : "Bail à envoyer"}
-                                </span>
+                                // M1 (audit 2026-08-13) : pastille
+                                // kanban complète — le bail SORTANT
+                                // montre aussi son cycle de départ.
+                                <RelocationStatutPastille
+                                  statut={b.relocation_statut}
+                                  dossierId={b.relocation_dossier_id}
+                                />
                               ) : null}
                               {b.status === "actif" ? (
                                 <button
@@ -1794,6 +1793,10 @@ type LoyerMoisRow = {
   montant_paye: number | null;
   paye_le: string | null;
   etat: string;
+  /** Bail résilié/terminé en cours de mois : la ligne reste dans le
+   *  mois couvert avec un badge « Bail terminé le X » (M7). */
+  bail_statut?: string;
+  bail_termine_le?: string | null;
   frais_mois?: { id: number; montant: number; libelle: string }[];
   solde_total?: number;
   nb_relances: number;
@@ -2115,12 +2118,17 @@ function LoyersMoisSection({
           {rows.map((r) => (
             <div
               key={r.bail_id}
+              // Fond TEINTÉ selon l'état (retour Phil 2026-08-13) :
+              // gris attente, vert payé, jaune partiel, rouge retard —
+              // mêmes teintes que la page Paiements.
               className={`rounded-xl border border-brand-800 p-3 ${
                 r.etat === "retard"
-                  ? "bg-rose-500/5"
+                  ? "bg-rose-500/10"
                   : r.etat === "partiel"
-                    ? "bg-amber-500/5"
-                    : "bg-brand-950/40"
+                    ? "bg-amber-500/10"
+                    : r.etat === "paye"
+                      ? "bg-emerald-500/10"
+                      : "bg-brand-950/40"
               }`}
             >
               <div className="flex flex-wrap items-center gap-2">
@@ -2133,6 +2141,15 @@ function LoyersMoisSection({
                 ) : (
                   <span className="badge badge-neutral">Attente</span>
                 )}
+                {r.bail_termine_le ? (
+                  // M7 : bail résilié/terminé en cours de mois.
+                  <span
+                    className="badge badge-rose"
+                    title="Le bail couvrait une partie de ce mois — dernier loyer et solde encore dus"
+                  >
+                    Bail terminé le {r.bail_termine_le}
+                  </span>
+                ) : null}
                 <span className="text-xs text-white/70">
                   {r.immeuble_name}
                   {r.logement_numero ? ` · ${r.logement_numero}` : ""}
@@ -2146,6 +2163,16 @@ function LoyersMoisSection({
                   <span className="text-emerald-300">
                     reçu {money(r.montant_paye ?? 0)}
                     {r.paye_le ? ` le ${r.paye_le}` : ""}
+                  </span>
+                ) : null}
+                {r.etat === "partiel" ? (
+                  // La BALANCE du mois, bien visible (retour Phil
+                  // 2026-08-13).
+                  <span className="font-semibold text-amber-200">
+                    reste{" "}
+                    {money(
+                      Math.max(0, duMois(r) - (r.montant_paye ?? 0))
+                    )}
                   </span>
                 ) : null}
                 {(r.solde_total ?? 0) > 0 ? (

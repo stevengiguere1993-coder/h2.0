@@ -48,6 +48,10 @@ type Row = {
   montant_paye: number | null;
   paye_le: string | null;
   etat: string; // "retard" | "attente" | "paye" | "partiel"
+  /** Bail résilié/terminé en cours de mois : la ligne reste dans le
+   *  mois couvert avec un badge « Bail terminé le X » (M7). */
+  bail_statut?: string;
+  bail_termine_le?: string | null;
   //: LE bail courant (imm_documents) — clic = l'ouvrir.
   document_id?: number | null;
   // Frais ponctuels du mois (retard…) + solde cumulatif dû sur le bail.
@@ -690,12 +694,18 @@ export default function BauxPage() {
                   {filteredRows.map((r) => (
                     <tr
                       key={r.bail_id}
-                      className={`transition hover:bg-brand-800/40 ${
+                      // Fond TEINTÉ selon l'état (retour Phil
+                      // 2026-08-13) : gris en attente, vert payé,
+                      // jaune partiel, rouge retard — mêmes teintes
+                      // que les lignes de résiliation de la page Baux.
+                      className={`transition ${
                         r.etat === "retard"
-                          ? "bg-rose-500/5"
+                          ? "bg-rose-500/10 hover:bg-rose-500/15"
                           : r.etat === "partiel"
-                            ? "bg-amber-500/5"
-                            : ""
+                            ? "bg-amber-500/10 hover:bg-amber-500/15"
+                            : r.etat === "paye"
+                              ? "bg-emerald-500/10 hover:bg-emerald-500/15"
+                              : "hover:bg-brand-800/40"
                       }`}
                     >
                       <td className="px-3 py-2.5">
@@ -788,7 +798,18 @@ export default function BauxPage() {
                         ) : null}
                       </td>
                       <td className="px-3 py-2.5">
-                        <span className="badge badge-emerald">Actif</span>
+                        {r.bail_termine_le ? (
+                          // M7 : bail résilié/terminé en cours de mois
+                          // — la ligne reste dans le mois couvert.
+                          <span
+                            className="badge badge-rose"
+                            title="Le bail couvrait une partie de ce mois — dernier loyer et solde encore dus"
+                          >
+                            Bail terminé le {r.bail_termine_le}
+                          </span>
+                        ) : (
+                          <span className="badge badge-emerald">Actif</span>
+                        )}
                         {r.prochain_statut ? (
                           <div className="mt-0.5">
                             <span
@@ -817,6 +838,17 @@ export default function BauxPage() {
                         {r.etat === "partiel" ? (
                           <div className="text-[10px] font-normal text-amber-300">
                             reçu {fmtMoney(r.montant_paye ?? 0)}
+                            {/* La BALANCE du mois, bien visible
+                                (retour Phil 2026-08-13). */}
+                            <div className="text-[11px] font-semibold text-amber-200">
+                              reste{" "}
+                              {fmtMoney(
+                                Math.max(
+                                  0,
+                                  duMois(r) - (r.montant_paye ?? 0)
+                                )
+                              )}
+                            </div>
                           </div>
                         ) : null}
                       </td>

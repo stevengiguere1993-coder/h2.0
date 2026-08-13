@@ -82,6 +82,29 @@ async def _run_startup_tasks() -> None:
             "ensure_immobilier_aux_tables failed during startup: %s", exc
         )
 
+    # Backfill borné (M9a, audit 2026-08-13) : chaque logement VACANT
+    # sans dossier de relocation actif obtient son dossier — la création
+    # ne vit plus dans le GET /locations/overview (un GET ne mute pas).
+    # Best-effort, idempotent, borné à 500 créations par démarrage.
+    try:
+        from app.db.session import AsyncSessionLocal as _LocSession
+        from app.services.locatif_depart import (
+            ouvrir_dossiers_unites_vacantes,
+        )
+
+        async with _LocSession() as session:
+            n = await ouvrir_dossiers_unites_vacantes(session, limite=500)
+            if n:
+                await session.commit()
+                logger.info(
+                    "Startup backfill: %d dossier(s) de relocation "
+                    "créés pour les unités vacantes", n,
+                )
+    except Exception as exc:
+        logger.warning(
+            "backfill dossiers unites vacantes failed: %s", exc
+        )
+
     # Tables Feuille de temps (Gestion d'entreprise) — transaction isolée.
     try:
         await ensure_timesheet_tables()

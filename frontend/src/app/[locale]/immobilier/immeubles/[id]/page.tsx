@@ -2527,6 +2527,7 @@ function BauxTab({
                               (retour Phil 2026-08-13). */}
                           <RelocationStatutPastille
                             statut={r.dossier_statut}
+                            dossierId={r.dossier_id}
                           />
                         </div>
                       ) : null}
@@ -2669,6 +2670,10 @@ type LoyerRow = {
   montant_paye: number | null;
   paye_le: string | null;
   etat: string; // "paye" | "partiel" | "retard" | "attente"
+  /** Bail résilié/terminé en cours de mois : la ligne reste dans le
+   *  mois couvert avec un badge « Bail terminé le X » (M7). */
+  bail_statut?: string;
+  bail_termine_le?: string | null;
   frais_mois?: { id: number; montant: number; libelle: string }[];
   solde_total?: number;
 };
@@ -3059,12 +3064,17 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
               {rows.map((r) => (
                 <tr
                   key={r.bail_id}
+                  // Fond TEINTÉ selon l'état (retour Phil 2026-08-13) :
+                  // gris attente, vert payé, jaune partiel, rouge
+                  // retard — mêmes teintes que la page Paiements.
                   className={
                     r.etat === "retard"
-                      ? "bg-rose-500/5"
+                      ? "bg-rose-500/10"
                       : r.etat === "partiel"
-                        ? "bg-amber-500/5"
-                        : ""
+                        ? "bg-amber-500/10"
+                        : r.etat === "paye"
+                          ? "bg-emerald-500/10"
+                          : ""
                   }
                 >
                   <td className="py-2 pr-3">
@@ -3077,6 +3087,17 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                     ) : (
                       <span className="badge badge-neutral">Attente</span>
                     )}
+                    {r.bail_termine_le ? (
+                      // M7 : bail résilié/terminé en cours de mois.
+                      <div className="mt-0.5">
+                        <span
+                          className="badge badge-rose"
+                          title="Le bail couvrait une partie de ce mois — dernier loyer et solde encore dus"
+                        >
+                          Bail terminé le {r.bail_termine_le}
+                        </span>
+                      </div>
+                    ) : null}
                   </td>
                   <td className="py-2 pr-3">
                     {r.locataire_id != null ? (
@@ -3124,6 +3145,17 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                     {r.etat === "partiel" ? (
                       <div className="text-[10px] text-amber-300">
                         reçu {fmtCurrency(r.montant_paye ?? 0)}
+                        {/* La BALANCE du mois, bien visible
+                            (retour Phil 2026-08-13). */}
+                        <div className="text-[11px] font-semibold text-amber-200">
+                          reste{" "}
+                          {fmtCurrency(
+                            Math.max(
+                              0,
+                              duMois(r) - (r.montant_paye ?? 0)
+                            )
+                          )}
+                        </div>
                       </div>
                     ) : null}
                     {(r.solde_total ?? 0) > 0 ? (
@@ -5629,12 +5661,17 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
               {data.rows.map((r) => (
                 <tr
                   key={r.logement_id}
+                  // Mêmes teintes que la page Paiements (retour Phil
+                  // 2026-08-13) : vert payé, jaune partiel, rouge à
+                  // confirmer, gris sinon.
                   className={
                     r.etat === "a_confirmer"
-                      ? "bg-rose-500/5"
+                      ? "bg-rose-500/10"
                       : r.etat === "partiel"
-                        ? "bg-amber-500/5"
-                        : ""
+                        ? "bg-amber-500/10"
+                        : r.etat === "paye"
+                          ? "bg-emerald-500/10"
+                          : ""
                   }
                 >
                   <td className="py-2 pr-3">
@@ -5668,6 +5705,18 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
                     {r.etat === "partiel" ? (
                       <div className="text-[10px] text-amber-300">
                         reçu {fmtCurrency(r.montant ?? 0)}
+                        {r.loyer_attendu != null ? (
+                          // La BALANCE du mois (retour Phil 2026-08-13).
+                          <div className="text-[11px] font-semibold text-amber-200">
+                            reste{" "}
+                            {fmtCurrency(
+                              Math.max(
+                                0,
+                                (r.loyer_attendu ?? 0) - (r.montant ?? 0)
+                              )
+                            )}
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </td>
