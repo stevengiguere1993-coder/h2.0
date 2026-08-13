@@ -32,6 +32,9 @@ import { ImmobilierTopbar } from "../layout";
  * Tout ce qui PART vers les locataires sans exiger de signature :
  * 1. À QUI — immeubles entiers et/ou locataires précis (l'envoi reste
  *    UN courriel individualisé par locataire, jamais de liste visible).
+ *    Les immeubles en GESTION EXTERNE sont exclus par défaut (retour
+ *    Phil 2026-08-13 : « comment ça le 1-3-5 Elgin y apparaît ? ») —
+ *    une case les ramène quand l'avis vient quand même de nous.
  * 2. QUOI — avis « modèle courriel » (rappel de paiement, avis d'accès,
  *    demande d'assurance) ou message libre. Le relevé 31 reste dans
  *    Suivis annuels ; les avis TAL à signature restent dans Documents.
@@ -156,6 +159,10 @@ export default function CommunicationsPage() {
   const [locSel, setLocSel] = useState<Map<number, Destinataire>>(new Map());
   const [rechLoc, setRechLoc] = useState("");
   const [immOuverts, setImmOuverts] = useState<Set<number>>(new Set());
+  // Gestion externe : masquée par défaut (c'est le gestionnaire tiers
+  // qui parle à ses locataires). La case la ramène — et le drapeau part
+  // avec l'envoi pour que le backend applique la même règle.
+  const [avecExterne, setAvecExterne] = useState(false);
 
   // Quoi
   const [type, setType] = useState<string>("rappel_paiement");
@@ -225,7 +232,10 @@ export default function CommunicationsPage() {
   useEffect(() => {
     void (async () => {
       const [rd, rr] = await Promise.all([
-        authedFetch("/api/v1/immobilier/communications/destinataires"),
+        authedFetch(
+          "/api/v1/immobilier/communications/destinataires" +
+            (avecExterne ? "?inclure_gestion_externe=true" : "")
+        ),
         authedFetch("/api/v1/immobilier/communications/reglages")
       ]);
       if (rd.ok) setBlocs(await rd.json());
@@ -236,7 +246,25 @@ export default function CommunicationsPage() {
         if (cfg.profil_defaut) setProfilSel(cfg.profil_defaut);
       }
     })();
-  }, []);
+  }, [avecExterne]);
+
+  // Décocher la case retire les immeubles externes de la liste : leurs
+  // sélections doivent partir avec eux, sinon on enverrait à des gens
+  // devenus invisibles (le backend les filtrerait de toute façon).
+  useEffect(() => {
+    if (avecExterne || !blocs) return;
+    const visibles = new Set(blocs.map((b) => b.immeuble_id));
+    const locVisibles = new Set(
+      blocs.flatMap((b) => b.locataires.map((l) => l.locataire_id))
+    );
+    setImmSel((prev) => new Set([...prev].filter((id) => visibles.has(id))));
+    setLocSel((prev) => {
+      const next = new Map(prev);
+      for (const id of prev.keys())
+        if (!locVisibles.has(id)) next.delete(id);
+      return next;
+    });
+  }, [avecExterne, blocs]);
 
   useEffect(() => {
     void loadAudit();
@@ -458,7 +486,10 @@ export default function CommunicationsPage() {
               type === "avis_acces" ? accesMotif || undefined : undefined,
             // Profil sélectionné (défaut si non modifié) — le backend
             // retombe sur le profil par défaut si vide.
-            profil: profilSel || undefined
+            profil: profilSel || undefined,
+            // Miroir de la case : l'envoi vise exactement ce que le
+            // sélecteur montrait.
+            inclure_gestion_externe: avecExterne
           })
         }
       );
@@ -580,6 +611,25 @@ export default function CommunicationsPage() {
                 </button>
               </div>
             </div>
+
+            {/* Gestion externe : hors liste par défaut — c'est leur
+                gestionnaire qui écrit à ces locataires. */}
+            <label className="mb-2 flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2 text-xs text-white/80">
+              <input
+                type="checkbox"
+                checked={avecExterne}
+                onChange={(e) => setAvecExterne(e.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent-500,#f59e0b)]"
+              />
+              <span>
+                Inclure les immeubles en gestion externe
+                <span className="block text-[10px] text-white/45">
+                  Décoché (défaut) : leur gestionnaire s&apos;occupe de
+                  ses locataires. Coche si l&apos;avis part quand même de
+                  nous (ex. avis d&apos;accès pour des travaux).
+                </span>
+              </span>
+            </label>
 
             {blocs === null ? (
               <div className="flex items-center gap-2 py-6 text-xs text-white/50">

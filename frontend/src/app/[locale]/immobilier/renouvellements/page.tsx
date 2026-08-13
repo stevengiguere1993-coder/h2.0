@@ -13,6 +13,7 @@ import {
   Loader2,
   Lock,
   Mail,
+  Plus,
   RotateCcw,
   Search,
   Trash2,
@@ -835,7 +836,7 @@ Nouvelle date de fin :`,
               {tab === "renouvellements"
                 ? "Baux qui se terminent dans les 12 prochains mois. Rien ne part tout seul : chaque avis de modification (PDF + courriel) s'envoie à la main, bail par bail, après vérification."
                 : tab === "releves31"
-                  ? "Relevés 31 (Revenu Québec) : un par logement occupé au 31 décembre, copie à remettre au locataire avant le dernier jour de février."
+                  ? "Relevés 31 (Revenu Québec) : un par LOCATAIRE ayant occupé un logement pendant l'année — deux occupants successifs = deux relevés. Copie à remettre avant le dernier jour de février."
                   : "Preuve d'assurance habitation de chaque locataire, à revalider une fois par année : demande la preuve par courriel puis confirme-la ici."}
             </p>
           </div>
@@ -1790,10 +1791,14 @@ function FilterPill({
 }
 
 // ── Onglet Relevés 31 (Revenu Québec) ────────────────────────────────
-// Un relevé par logement occupé au 31 décembre ; copie à remettre au
-// locataire avant le dernier jour de février. Kratos prépare les données
-// (à saisir dans le service en ligne de Revenu Québec), suit le statut,
-// conserve la copie PDF et l'envoie au locataire (suivi d'ouverture).
+// UN RELEVÉ PAR LOCATAIRE (et non par logement — retour Phil
+// 2026-08-13) : au 44 Kennedy, les logements 101/105/107 ont eu deux
+// locataires successifs dans l'année et chacun a légalement droit au
+// sien. Les occupants d'un même logement s'affichent l'un sous l'autre
+// avec leur période. Copie à remettre avant le dernier jour de février.
+// Kratos prépare les données (à saisir dans le service en ligne de
+// Revenu Québec), suit le statut, conserve la copie PDF et l'envoie au
+// locataire (suivi d'ouverture).
 
 type Releve31Row = {
   annee: number;
@@ -1802,6 +1807,7 @@ type Releve31Row = {
   immeuble_id: number | null;
   immeuble_name: string | null;
   immeuble_adresse: string | null;
+  /** Identifie LE locataire de la ligne — clé du suivi avec l'année. */
   bail_id: number | null;
   locataire_id: number | null;
   locataire_nom: string | null;
@@ -1815,17 +1821,8 @@ type Releve31Row = {
   /** Période d'occupation retenue DANS l'année (bornée 1er janv./31 déc.). */
   occupation_debut: string | null;
   occupation_fin: string | null;
-  /** Tous les locataires de l'année pour ce logement (principal inclus). */
-  occupants: Releve31Occupant[];
-};
-
-type Releve31Occupant = {
-  bail_id: number | null;
-  locataire_id: number | null;
-  locataire_nom: string | null;
-  debut: string | null;
-  fin: string | null;
-  principal: boolean;
+  /** Occupants du logement dans l'année (≥ 2 = changement de locataire). */
+  nb_occupants_logement: number;
 };
 
 type Releve31Overview = {
@@ -1846,6 +1843,32 @@ const R31_STATUT: Record<string, { label: string; badge: string }> = {
   remis: { label: "Remis au locataire", badge: "badge-emerald" }
 };
 
+/** Clé d'une ligne = (logement, bail) : deux locataires successifs d'un
+ *  même logement sont DEUX lignes distinctes, jamais confondues. */
+function cleR31(r: Releve31Row): string {
+  return `${r.logement_id}-${r.bail_id ?? "sans-bail"}`;
+}
+
+/** Suffixe `?bail_id=…` des routes de suivi — omis quand la ligne n'a
+ *  pas de bail (relevé créé à la main sur un logement seul). */
+function qsBail(r: Releve31Row): string {
+  return r.bail_id != null ? `?bail_id=${r.bail_id}` : "";
+}
+
+/** « 1er janv. → 31 mai » — la période d'occupation dans l'année. */
+function fmtPeriode(
+  debut: string | null,
+  fin: string | null
+): string | null {
+  if (!debut || !fin) return null;
+  const court = (iso: string) =>
+    new Date(iso + "T12:00:00").toLocaleDateString("fr-CA", {
+      day: "numeric",
+      month: "short"
+    });
+  return `${court(debut)} → ${court(fin)}`;
+}
+
 function Releves31Tab() {
   const [data, setData] = useState<Releve31Overview | null>(null);
   const [annee, setAnnee] = useState<number | null>(null);
@@ -1855,8 +1878,9 @@ function Releves31Tab() {
   const [search31, setSearch31] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<number | null>(null);
-  const [numDraft, setNumDraft] = useState<Record<number, string>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [numDraft, setNumDraft] = useState<Record<string, string>>({});
+  const [creerOuvert, setCreerOuvert] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const uploadFor = useRef<Releve31Row | null>(null);
 
@@ -1886,11 +1910,11 @@ function Releves31Tab() {
     body: Record<string, unknown>,
     okMsg?: string
   ): Promise<boolean> {
-    setBusyId(row.logement_id);
+    setBusyId(cleR31(row));
     setErr(null);
     try {
       const r = await authedFetch(
-        `/api/v1/immobilier/releves31/${row.annee}/${row.logement_id}`,
+        `/api/v1/immobilier/releves31/${row.annee}/${row.logement_id}${qsBail(row)}`,
         { method: "PATCH", body: JSON.stringify(body) }
       );
       if (!r.ok)
@@ -1909,13 +1933,13 @@ function Releves31Tab() {
   async function televerser(file: File) {
     const row = uploadFor.current;
     if (!row) return;
-    setBusyId(row.logement_id);
+    setBusyId(cleR31(row));
     setErr(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
       const r = await authedFetch(
-        `/api/v1/immobilier/releves31/${row.annee}/${row.logement_id}/pdf`,
+        `/api/v1/immobilier/releves31/${row.annee}/${row.logement_id}/pdf${qsBail(row)}`,
         { method: "POST", body: fd }
       );
       if (!r.ok)
@@ -1951,10 +1975,10 @@ function Releves31Tab() {
     // officiel de Revenu Québec.
     let docId = row.document_id;
     if (!docId) {
-      setBusyId(row.logement_id);
+      setBusyId(cleR31(row));
       try {
         const g = await authedFetch(
-          `/api/v1/immobilier/releves31/${row.annee}/${row.logement_id}/generer`,
+          `/api/v1/immobilier/releves31/${row.annee}/${row.logement_id}/generer${qsBail(row)}`,
           { method: "POST" }
         );
         if (!g.ok)
@@ -1984,7 +2008,7 @@ function Releves31Tab() {
       )
     )
       return;
-    setBusyId(row.logement_id);
+    setBusyId(cleR31(row));
     setErr(null);
     try {
       const r = await authedFetch(
@@ -2019,7 +2043,8 @@ function Releves31Tab() {
   }
 
   // Annuler un relevé : supprime la copie PDF liée et la ligne
-  // redevient « à produire » (retour Phil 2026-07-30).
+  // redevient « à produire » (retour Phil 2026-07-30). N'affecte que le
+  // locataire de la ligne — le relevé de l'autre occupant reste intact.
   async function supprimerReleve(row: Releve31Row) {
     if (
       !window.confirm(
@@ -2031,18 +2056,18 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
       )
     )
       return;
-    setBusyId(row.logement_id);
+    setBusyId(cleR31(row));
     setErr(null);
     try {
       const r = await authedFetch(
-        `/api/v1/immobilier/releves31/${row.annee}/${row.logement_id}`,
+        `/api/v1/immobilier/releves31/${row.annee}/${row.logement_id}${qsBail(row)}`,
         { method: "DELETE" }
       );
       if (!r.ok)
         throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
       setNumDraft((d) => {
         const n = { ...d };
-        delete n[row.logement_id];
+        delete n[cleR31(row)];
         return n;
       });
       setFlash("Relevé annulé — la ligne est de retour « à produire ».");
@@ -2068,22 +2093,34 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
     ? `Les relevés 31 de ${data.annee} pourront être produits à partir du ${ouvertureLe} — la remise au locataire est due avant la fin février ${data.annee + 1}.`
     : "";
 
-  const rows31 = (data?.rows || [])
-    .filter((r) => {
-      if (fImmeuble && String(r.immeuble_id ?? "") !== fImmeuble) return false;
+  // Les lignes arrivent déjà triées immeuble → logement → date de début.
+  // On les regroupe PAR LOGEMENT pour que les occupants successifs
+  // restent collés l'un sous l'autre, puis on descend en bas les
+  // logements entièrement REMIS (retour Phil 2026-07-31) — en bloc :
+  // on ne sépare jamais deux locataires du même logement.
+  const groupes31 = (() => {
+    const map = new Map<number, Releve31Row[]>();
+    for (const r of data?.rows || []) {
+      if (fImmeuble && String(r.immeuble_id ?? "") !== fImmeuble) continue;
       if (search31.trim()) {
         const q = search31.toLowerCase();
         const hay = `${r.locataire_nom || ""} ${r.immeuble_name || ""} ${r.logement_numero || ""} ${r.numero_releve || ""}`.toLowerCase();
-        if (!hay.includes(q)) return false;
+        if (!hay.includes(q)) continue;
       }
-      return true;
-    })
-    // Retour Phil 2026-07-31 : seuls les relevés REMIS descendent en
-    // bas (verts) ; « à produire » et « produit » (numéro collé mais
-    // envoi à faire) restent en haut. Tri stable.
-    .sort(
-      (a, b) => Number(a.statut === "remis") - Number(b.statut === "remis")
+      const dedans = map.get(r.logement_id);
+      if (dedans) dedans.push(r);
+      else map.set(r.logement_id, [r]);
+    }
+    return Array.from(map.values()).sort(
+      (a, b) =>
+        Number(a.every((r) => r.statut === "remis")) -
+        Number(b.every((r) => r.statut === "remis"))
     );
+  })();
+  const rows31 = groupes31.flat();
+  //: Clés des lignes qui OUVRENT un groupe — seules elles répètent le
+  //: nom de l'immeuble et du logement.
+  const premiersDuLogement = new Set(groupes31.map((g) => cleR31(g[0])));
 
   return (
     <div className="mt-4 space-y-4">
@@ -2112,7 +2149,12 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
           </a>{" "}
           avec les données du tableau (adresse, locataire). 2. Colle ici le
           numéro du relevé émis. 3. Téléverse la copie PDF du locataire.
-          4. Envoie-la par courriel — l&apos;ouverture est suivie.
+          4. Envoie-la par courriel — l&apos;ouverture est suivie.{" "}
+          <b className="text-white">
+            Un relevé par LOCATAIRE :
+          </b>{" "}
+          si le logement a changé de mains dans l&apos;année, les deux
+          occupants ont chacun leur ligne (et leur numéro).
           {data ? (
             <>
               {" "}
@@ -2191,10 +2233,34 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
             className="input w-56 pl-8 text-sm"
           />
         </div>
+        {/* Création MANUELLE : le cas que la détection ne voit pas —
+            bail absent de Kratos, logement passé hors location… */}
+        <button
+          type="button"
+          onClick={() => {
+            if (verrouille) {
+              setErr(msgVerrou);
+              return;
+            }
+            setCreerOuvert(true);
+          }}
+          className="btn-outline-accent btn-sm"
+          title={
+            verrouille
+              ? msgVerrou
+              : "Ajouter un relevé qui n'a pas été détecté automatiquement"
+          }
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Créer un relevé
+        </button>
         {data ? (
           <span className="text-xs text-white/50">
-            {data.rows.length} logement{data.rows.length > 1 ? "s" : ""} occupé
-            {data.rows.length > 1 ? "s" : ""} en {data.annee} ·{" "}
+            {/* Un relevé PAR LOCATAIRE : le compte des lignes n'est plus
+                celui des logements quand il y a eu un changement. */}
+            {data.rows.length} relevé{data.rows.length > 1 ? "s" : ""} en{" "}
+            {data.annee} ({groupes31.length} logement
+            {groupes31.length > 1 ? "s" : ""}) ·{" "}
             <span className="text-amber-300">
               {data.nb_a_produire} à produire
             </span>{" "}
@@ -2226,7 +2292,7 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
       ) : rows31.length === 0 ? (
         <p className="rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
           {data.rows.length === 0
-            ? `Aucun logement occupé pendant ${data.annee} (gestion externe exclue).`
+            ? `Aucun logement occupé pendant ${data.annee} (gestion externe exclue). Un cas manque ? « Créer un relevé ».`
             : "Aucun relevé ne correspond aux filtres."}
         </p>
       ) : (
@@ -2244,15 +2310,24 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
             </thead>
             <tbody className="divide-y divide-brand-800">
               {rows31.map((r) => {
+                const cle = cleR31(r);
                 const st = R31_STATUT[r.statut] || R31_STATUT.a_produire;
-                const busy = busyId === r.logement_id;
+                const busy = busyId === cle;
                 const traite = r.statut !== "a_produire";
                 // Vert = REMIS seulement (envoyé au locataire) — coller
                 // un numéro ne suffit pas (retour Phil 2026-07-31).
                 const remis = r.statut === "remis";
+                // Changement de locataire dans l'année : la 2e ligne (et
+                // les suivantes) ne répètent pas l'immeuble/logement,
+                // elles se rattachent visuellement à la première.
+                const premier = premiersDuLogement.has(cle);
+                const periode = fmtPeriode(
+                  r.occupation_debut,
+                  r.occupation_fin
+                );
                 return (
                   <tr
-                    key={r.logement_id}
+                    key={cle}
                     className={
                       remis
                         ? "bg-emerald-500/10 hover:bg-emerald-500/15"
@@ -2260,29 +2335,46 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
                     }
                   >
                     <td className="px-4 py-2.5">
-                      {r.immeuble_id != null ? (
-                        <Link
-                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          href={`/immobilier/immeubles/${r.immeuble_id}` as any}
-                          className="block font-bold text-white hover:text-accent-500"
-                        >
-                          {r.immeuble_name}
-                        </Link>
+                      {premier ? (
+                        <>
+                          {r.immeuble_id != null ? (
+                            <Link
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                              href={`/immobilier/immeubles/${r.immeuble_id}` as any}
+                              className="block font-bold text-white hover:text-accent-500"
+                            >
+                              {r.immeuble_name}
+                            </Link>
+                          ) : (
+                            <span className="font-bold text-white">
+                              {r.immeuble_name || "—"}
+                            </span>
+                          )}
+                          <Link
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            href={`/immobilier/logements/${r.logement_id}` as any}
+                            className="text-[11px] font-mono text-accent-500 hover:underline"
+                          >
+                            {r.logement_numero || `#${r.logement_id}`}
+                          </Link>
+                          <div className="text-[10px] text-white/40">
+                            {r.immeuble_adresse || ""}
+                          </div>
+                          {r.nb_occupants_logement > 1 ? (
+                            <div
+                              className="mt-0.5 text-[10px] font-semibold text-amber-300/80"
+                              title="Changement de locataire dans l'année — chacun a droit à SON relevé 31 (Revenu Québec)."
+                            >
+                              {r.nb_occupants_logement} locataires en{" "}
+                              {r.annee}
+                            </div>
+                          ) : null}
+                        </>
                       ) : (
-                        <span className="font-bold text-white">
-                          {r.immeuble_name || "—"}
+                        <span className="pl-3 text-[11px] text-white/30">
+                          ↳ même logement
                         </span>
                       )}
-                      <Link
-                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                        href={`/immobilier/logements/${r.logement_id}` as any}
-                        className="text-[11px] font-mono text-accent-500 hover:underline"
-                      >
-                        {r.logement_numero || `#${r.logement_id}`}
-                      </Link>
-                      <div className="text-[10px] text-white/40">
-                        {r.immeuble_adresse || ""}
-                      </div>
                     </td>
                     <td className="px-4 py-2.5">
                       {r.locataire_id != null ? (
@@ -2302,24 +2394,13 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
                         {r.locataire_email || "(pas d'email)"}
                       </div>
                       {/* Occupation retenue DANS l'année : un bail qui se
-                          termine en cours d'année reste visible. */}
-                      {r.occupation_debut && r.occupation_fin ? (
+                          termine en cours d'année reste visible, avec sa
+                          période — « 1er janv. → 31 mai ». */}
+                      {periode ? (
                         <div className="text-[10px] text-white/40">
-                          Occupé du {r.occupation_debut} au {r.occupation_fin}
+                          Occupé {periode}
                         </div>
                       ) : null}
-                      {r.occupants
-                        .filter((o) => !o.principal)
-                        .map((o) => (
-                          <div
-                            key={o.bail_id ?? o.locataire_id ?? o.debut}
-                            className="text-[10px] text-amber-300/70"
-                            title="A aussi occupé ce logement pendant l'année — le relevé revient au locataire présent au 31 décembre."
-                          >
-                            Aussi : {o.locataire_nom || "—"} ({o.debut} →{" "}
-                            {o.fin})
-                          </div>
-                        ))}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-xs text-white/80">
                       {fmtCurrency(r.loyer_31_dec)}
@@ -2329,15 +2410,15 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
                     </td>
                     <td className="px-4 py-2.5">
                       <input
-                        value={numDraft[r.logement_id] ?? r.numero_releve ?? ""}
+                        value={numDraft[cle] ?? r.numero_releve ?? ""}
                         onChange={(e) =>
                           setNumDraft((d) => ({
                             ...d,
-                            [r.logement_id]: e.target.value
+                            [cle]: e.target.value
                           }))
                         }
                         onBlur={() => {
-                          const v = (numDraft[r.logement_id] ?? "").trim();
+                          const v = (numDraft[cle] ?? "").trim();
                           if (v && v !== (r.numero_releve || ""))
                             void patchReleve(
                               r,
@@ -2434,6 +2515,246 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
         Les copies téléversées se retrouvent aussi dans la section Documents
         de la fiche du locataire et du logement.
       </p>
+
+      {creerOuvert && annee != null ? (
+        <CreerReleve31Modal
+          annee={annee}
+          onClose={() => setCreerOuvert(false)}
+          onCree={async (msg) => {
+            setCreerOuvert(false);
+            setFlash(msg);
+            await load();
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** Création MANUELLE d'un relevé 31 (retour Phil 2026-08-13) — pour les
+ *  cas que la détection automatique ne voit pas : bail jamais saisi dans
+ *  Kratos, logement passé hors location, colocataire à part. Le choix du
+ *  locataire (bail) est FACULTATIF : sans lui, le relevé est rattaché au
+ *  logement seul. */
+function CreerReleve31Modal({
+  annee,
+  onClose,
+  onCree
+}: {
+  annee: number;
+  onClose: () => void;
+  onCree: (msg: string) => void | Promise<void>;
+}) {
+  type ImmLite = { id: number; name: string };
+  type LgLite = { id: number; numero: string | null };
+  type BailLite = {
+    id: number;
+    locataire?: { id: number; full_name: string } | null;
+    date_debut: string;
+    date_fin: string;
+  };
+
+  const [immeubles, setImmeubles] = useState<ImmLite[]>([]);
+  const [logements, setLogements] = useState<LgLite[] | null>(null);
+  const [baux, setBaux] = useState<BailLite[] | null>(null);
+  const [immId, setImmId] = useState("");
+  const [lgId, setLgId] = useState("");
+  const [bailId, setBailId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch("/api/v1/immobilier/immeubles");
+        if (r.ok) setImmeubles((await r.json()) as ImmLite[]);
+      } catch {
+        // Liste vide = le staff verra qu'il n'y a rien à choisir.
+      }
+    })();
+  }, []);
+
+  // Immeuble choisi → ses logements (le relevé se pose sur un logement).
+  useEffect(() => {
+    setLgId("");
+    setBailId("");
+    setBaux(null);
+    if (!immId) {
+      setLogements(null);
+      return;
+    }
+    void (async () => {
+      setLogements(null);
+      try {
+        const r = await authedFetch(
+          `/api/v1/immobilier/immeubles/${immId}/logements`
+        );
+        if (r.ok) setLogements((await r.json()) as LgLite[]);
+      } catch {
+        setLogements([]);
+      }
+    })();
+  }, [immId]);
+
+  // Logement choisi → ses baux, pour désigner LE locataire du relevé.
+  useEffect(() => {
+    setBailId("");
+    if (!lgId) {
+      setBaux(null);
+      return;
+    }
+    void (async () => {
+      setBaux(null);
+      try {
+        const r = await authedFetch(
+          `/api/v1/immobilier/logements/${lgId}/dossier`
+        );
+        if (r.ok) {
+          const d = (await r.json()) as { baux: BailLite[] };
+          setBaux(d.baux || []);
+        }
+      } catch {
+        setBaux([]);
+      }
+    })();
+  }, [lgId]);
+
+  async function creer() {
+    if (!lgId) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch("/api/v1/immobilier/releves31", {
+        method: "POST",
+        body: JSON.stringify({
+          annee,
+          logement_id: Number(lgId),
+          bail_id: bailId ? Number(bailId) : undefined
+        })
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        throw new Error((d && (d.detail || d.message)) || `HTTP ${r.status}`);
+      }
+      await onCree(`Relevé 31 ${annee} créé — il est dans la liste.`);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 p-5 shadow-2xl"
+      >
+        <h3 className="text-sm font-bold uppercase tracking-wider text-accent-500">
+          Créer un relevé 31 — {annee}
+        </h3>
+        <p className="mt-1 text-[11px] text-white/50">
+          Pour un cas que la liste ne détecte pas toute seule (bail
+          absent de Kratos, logement hors location, colocataire à part).
+        </p>
+        <div className="mt-3 space-y-3">
+          <div>
+            <label className="label">Immeuble</label>
+            <select
+              value={immId}
+              onChange={(e) => setImmId(e.target.value)}
+              className="input w-full text-sm"
+            >
+              <option value="">Choisir…</option>
+              {immeubles.map((im) => (
+                <option key={im.id} value={String(im.id)}>
+                  {im.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Logement</label>
+            <select
+              value={lgId}
+              onChange={(e) => setLgId(e.target.value)}
+              disabled={!immId || logements === null}
+              className="input w-full text-sm disabled:opacity-50"
+            >
+              <option value="">
+                {!immId
+                  ? "Choisis d'abord l'immeuble"
+                  : logements === null
+                    ? "Chargement…"
+                    : "Choisir…"}
+              </option>
+              {(logements || []).map((lg) => (
+                <option key={lg.id} value={String(lg.id)}>
+                  {lg.numero || `#${lg.id}`}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Locataire (facultatif)</label>
+            <select
+              value={bailId}
+              onChange={(e) => setBailId(e.target.value)}
+              disabled={!lgId || baux === null}
+              className="input w-full text-sm disabled:opacity-50"
+            >
+              <option value="">
+                {!lgId
+                  ? "Choisis d'abord le logement"
+                  : baux === null
+                    ? "Chargement…"
+                    : "Sans bail (logement seul)"}
+              </option>
+              {(baux || []).map((b) => (
+                <option key={b.id} value={String(b.id)}>
+                  {b.locataire?.full_name || `Bail #${b.id}`} (
+                  {b.date_debut} → {b.date_fin})
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[10px] text-white/40">
+              Un relevé par locataire : choisis le bail concerné si le
+              logement a eu plusieurs occupants dans l&apos;année.
+            </p>
+          </div>
+        </div>
+        {err ? (
+          <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+            <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+            {err}
+          </p>
+        ) : null}
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-secondary btn-sm"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={() => void creer()}
+            disabled={busy || !lgId}
+            className="btn-accent btn-sm disabled:opacity-50"
+          >
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
+            Créer
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

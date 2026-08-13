@@ -1,7 +1,7 @@
-"""Smoke — Relevés 31 : sélection par CHEVAUCHEMENT + fenêtre de
-production (retour Phil 2026-08-13).
+"""Smoke — Relevés 31 : sélection par CHEVAUCHEMENT, un relevé PAR
+LOCATAIRE et fenêtre de production (retours Phil 2026-08-13).
 
-Deux régressions couvertes :
+Trois régressions couvertes :
 
 1. « Pour 2026, Drissa n'apparaît même pas comme locataire. » — la liste
    se construisait à partir des baux couvrant le 31 décembre. Un bail
@@ -11,6 +11,10 @@ Deux régressions couvertes :
 2. « Il devrait avoir un mécanisme m'empêchant de les créer avant. » —
    les relevés de l'année N ne se produisent qu'à partir du 1er décembre
    N (même bascule que ``releve31_bascule_mois``, défaut novembre).
+3. Trou fiscal : au 44 Kennedy, les logements 101/105/107 ont eu DEUX
+   locataires successifs dans la même année. Chacun a légalement droit
+   à SON relevé — la liste sort donc une ligne PAR OCCUPANT et le suivi
+   est porté par (année, logement, bail).
 """
 from __future__ import annotations
 
@@ -146,9 +150,7 @@ def test_releve31_chevauchement_et_fenetre(client, auth_headers, run):
     # Période d'occupation bornée à l'année.
     assert ligne["occupation_debut"] == f"{an_ouvert}-01-01"
     assert ligne["occupation_fin"] == f"{an_ouvert}-06-30"
-    assert [o["locataire_nom"] for o in ligne["occupants"]] == [
-        "Drissa Smoke R31"
-    ]
+    assert ligne["nb_occupants_logement"] == 1
 
     # (b) … et aussi pour l'année précédente (occupée d'octobre à déc.).
     d0 = client.get(
@@ -203,9 +205,9 @@ def test_releve31_chevauchement_et_fenetre(client, auth_headers, run):
 
 
 def test_releve31_deux_locataires_dans_lannee(client, auth_headers, run):
-    """Changement de locataire en cours d'année : les DEUX apparaissent
-    (aucun ne disparaît) et le relevé est porté par celui présent au
-    31 décembre — la règle de Revenu Québec."""
+    """Changement de locataire en cours d'année : DEUX lignes, une par
+    locataire, chacune avec sa période et son propre suivi. Chacun a
+    légalement droit à son relevé (44 Kennedy 101/105/107)."""
     from app.models.immobilier import (
         Bail,
         BailStatus,
@@ -237,41 +239,194 @@ def test_releve31_deux_locataires_dans_lannee(client, auth_headers, run):
             entrant = Locataire(full_name="Entrant Smoke R31")
             s.add_all([lg, sortant, entrant])
             await s.flush()
-            s.add_all(
-                [
-                    Bail(
-                        logement_id=lg.id, locataire_id=sortant.id,
-                        date_debut=date(an - 1, 7, 1),
-                        date_fin=date(an, 6, 30),
-                        loyer_mensuel=900.0,
-                        status=BailStatus.TERMINE.value,
-                    ),
-                    Bail(
-                        logement_id=lg.id, locataire_id=entrant.id,
-                        date_debut=date(an, 7, 1),
-                        date_fin=date(an + 1, 6, 30),
-                        loyer_mensuel=1000.0,
-                        status=BailStatus.ACTIF.value,
-                    ),
-                ]
+            b_sortant = Bail(
+                logement_id=lg.id, locataire_id=sortant.id,
+                date_debut=date(an - 1, 7, 1),
+                date_fin=date(an, 6, 30),
+                loyer_mensuel=900.0,
+                status=BailStatus.TERMINE.value,
             )
+            b_entrant = Bail(
+                logement_id=lg.id, locataire_id=entrant.id,
+                date_debut=date(an, 7, 1),
+                date_fin=date(an + 1, 6, 30),
+                loyer_mensuel=1000.0,
+                status=BailStatus.ACTIF.value,
+            )
+            s.add_all([b_sortant, b_entrant])
+            await s.commit()
+            return {
+                "logement": lg.id,
+                "sortant": b_sortant.id,
+                "entrant": b_entrant.id,
+            }
+
+    ids = run(_seed())
+    lg_id = ids["logement"]
+
+    d = client.get(
+        f"/api/v1/immobilier/releves31?annee={an}", headers=auth_headers
+    ).json()
+    lignes = [r for r in d["rows"] if r["logement_id"] == lg_id]
+    # UNE ligne par locataire — c'est le trou fiscal corrigé.
+    assert len(lignes) == 2, lignes
+    par_bail = {r["bail_id"]: r for r in lignes}
+    assert set(par_bail) == {ids["sortant"], ids["entrant"]}
+    sortant = par_bail[ids["sortant"]]
+    entrant = par_bail[ids["entrant"]]
+    assert sortant["locataire_nom"] == "Sortant Smoke R31"
+    assert entrant["locataire_nom"] == "Entrant Smoke R31"
+    # Chacun avec SA période bornée à l'année.
+    assert (sortant["occupation_debut"], sortant["occupation_fin"]) == (
+        f"{an}-01-01", f"{an}-06-30",
+    )
+    assert (entrant["occupation_debut"], entrant["occupation_fin"]) == (
+        f"{an}-07-01", f"{an}-12-31",
+    )
+    assert sortant["nb_occupants_logement"] == 2
+    # Ordre chronologique : le sortant s'affiche au-dessus de l'entrant.
+    assert lignes.index(sortant) < lignes.index(entrant)
+
+    # Un numéro collé sur le SORTANT ne déteint pas sur l'entrant.
+    r = client.patch(
+        f"/api/v1/immobilier/releves31/{an}/{lg_id}?bail_id={ids['sortant']}",
+        headers=auth_headers,
+        json={"numero_releve": "R31SORTANT"},
+    )
+    assert r.status_code == 200, r.text
+    r = client.patch(
+        f"/api/v1/immobilier/releves31/{an}/{lg_id}?bail_id={ids['entrant']}",
+        headers=auth_headers,
+        json={"numero_releve": "R31ENTRANT"},
+    )
+    assert r.status_code == 200, r.text
+    d2 = client.get(
+        f"/api/v1/immobilier/releves31?annee={an}", headers=auth_headers
+    ).json()
+    par_bail2 = {
+        r["bail_id"]: r for r in d2["rows"] if r["logement_id"] == lg_id
+    }
+    assert par_bail2[ids["sortant"]]["numero_releve"] == "R31SORTANT"
+    assert par_bail2[ids["entrant"]]["numero_releve"] == "R31ENTRANT"
+    assert par_bail2[ids["sortant"]]["statut"] == "produit"
+
+    # La copie PDF générée est établie au nom du BON locataire : c'est
+    # le cœur du trou fiscal (le sortant recevait le relevé de l'autre).
+    g = client.post(
+        f"/api/v1/immobilier/releves31/{an}/{lg_id}/generer"
+        f"?bail_id={ids['sortant']}",
+        headers=auth_headers,
+    )
+    assert g.status_code == 200, g.text
+    doc_id = g.json()["document_id"]
+    assert doc_id
+
+    def _doc_locataire(document_id: int) -> int:
+        async def _lire():
+            async with TestSessionLocal() as s:
+                from app.models.immobilier import ImmDocument
+
+                doc = await s.get(ImmDocument, document_id)
+                return doc.locataire_id
+
+        return run(_lire())
+
+    assert _doc_locataire(doc_id) == par_bail2[ids["sortant"]]["locataire_id"]
+
+    # Annuler le relevé du sortant laisse celui de l'entrant intact.
+    assert client.delete(
+        f"/api/v1/immobilier/releves31/{an}/{lg_id}?bail_id={ids['sortant']}",
+        headers=auth_headers,
+    ).status_code == 204
+    d3 = client.get(
+        f"/api/v1/immobilier/releves31?annee={an}", headers=auth_headers
+    ).json()
+    par_bail3 = {
+        r["bail_id"]: r for r in d3["rows"] if r["logement_id"] == lg_id
+    }
+    assert par_bail3[ids["sortant"]]["statut"] == "a_produire"
+    assert par_bail3[ids["sortant"]]["numero_releve"] is None
+    assert par_bail3[ids["entrant"]]["numero_releve"] == "R31ENTRANT"
+
+    # Chaque locataire ne voit que SON relevé sur sa fiche.
+    loc_entrant = par_bail3[ids["entrant"]]["locataire_id"]
+    mes = client.get(
+        f"/api/v1/immobilier/locataires/{loc_entrant}/releves31",
+        headers=auth_headers,
+    ).json()
+    assert [x["numero_releve"] for x in mes] == ["R31ENTRANT"]
+
+    client.delete(
+        f"/api/v1/immobilier/releves31/{an}/{lg_id}?bail_id={ids['entrant']}",
+        headers=auth_headers,
+    )
+
+
+def test_releve31_creation_manuelle(client, auth_headers, run):
+    """Bouton « Créer un relevé » : POST /releves31 fabrique la ligne
+    même quand la détection automatique ne voit rien (bail absent), et
+    respecte la fenêtre de production."""
+    from app.models.immobilier import Immeuble, Logement, LogementStatus
+
+    from .conftest import TestSessionLocal
+
+    today = date.today()
+    an_ouvert = _annee_ouverte(today)
+    an_ferme = _annee_fermee(today)
+    _set_bascule(client, auth_headers, 11)
+
+    async def _seed():
+        async with TestSessionLocal() as s:
+            imm = Immeuble(
+                name="Manuel smoke R31", address="9 rue Manuelle",
+                is_active=True,
+            )
+            s.add(imm)
+            await s.flush()
+            # Aucun bail : la détection automatique ignore ce logement.
+            lg = Logement(
+                immeuble_id=imm.id, numero="M-1",
+                status=LogementStatus.VACANT.value,
+            )
+            s.add(lg)
             await s.commit()
             return lg.id
 
     lg_id = run(_seed())
 
+    # Absent de la détection automatique…
     d = client.get(
-        f"/api/v1/immobilier/releves31?annee={an}", headers=auth_headers
+        f"/api/v1/immobilier/releves31?annee={an_ouvert}", headers=auth_headers
     ).json()
-    ligne = next((r for r in d["rows"] if r["logement_id"] == lg_id), None)
-    assert ligne is not None
-    noms = {o["locataire_nom"] for o in ligne["occupants"]}
-    assert noms == {"Sortant Smoke R31", "Entrant Smoke R31"}
-    # Le relevé revient à l'occupant du 31 décembre.
-    assert ligne["locataire_nom"] == "Entrant Smoke R31"
-    principal = [o for o in ligne["occupants"] if o["principal"]]
-    assert len(principal) == 1
-    assert principal[0]["locataire_nom"] == "Entrant Smoke R31"
-    # Un seul logement = une seule ligne (la clé du suivi reste
-    # (année, logement) — pas de doublon dans le tableau).
-    assert sum(1 for r in d["rows"] if r["logement_id"] == lg_id) == 1
+    assert all(r["logement_id"] != lg_id for r in d["rows"])
+
+    # … mais créable à la main.
+    r = client.post(
+        "/api/v1/immobilier/releves31",
+        headers=auth_headers,
+        json={"annee": an_ouvert, "logement_id": lg_id},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["statut"] == "a_produire"
+    # Idempotent : re-créer renvoie la même ligne, pas un doublon.
+    r2 = client.post(
+        "/api/v1/immobilier/releves31",
+        headers=auth_headers,
+        json={"annee": an_ouvert, "logement_id": lg_id},
+    )
+    assert r2.status_code == 201, r2.text
+
+    # La fenêtre de production s'applique aussi à la création manuelle.
+    r3 = client.post(
+        "/api/v1/immobilier/releves31",
+        headers=auth_headers,
+        json={"annee": an_ferme, "logement_id": lg_id},
+    )
+    assert r3.status_code == 422, r3.text
+    assert "1er décembre" in r3.json()["detail"]
+
+    client.delete(
+        f"/api/v1/immobilier/releves31/{an_ouvert}/{lg_id}",
+        headers=auth_headers,
+    )
+    _set_bascule(client, auth_headers, 2)
