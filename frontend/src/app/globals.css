@@ -168,6 +168,11 @@
   .badge-amber {
     @apply bg-amber-500/15 text-amber-300;
   }
+  .badge-orange {
+    /* Palier intermédiaire du dégradé jaune → rouge (avis de
+       renouvellement) : plus chaud que l'ambre, pas encore l'alerte. */
+    @apply bg-orange-500/20 text-orange-200;
+  }
   .badge-rose {
     @apply bg-rose-500/15 text-rose-300;
   }
@@ -305,6 +310,7 @@ html[data-portal-theme="light"] .input::placeholder { color: #94a3b8 !important;
 html[data-portal-theme="light"] .badge-neutral { color: rgb(15 23 42 / 0.78) !important; background-color: #eef2f6 !important; }
 html[data-portal-theme="light"] .badge-emerald { color: #047857 !important; background-color: rgb(209 250 229 / 0.85) !important; }
 html[data-portal-theme="light"] .badge-amber { color: #b45309 !important; background-color: rgb(254 243 199 / 0.8) !important; }
+html[data-portal-theme="light"] .badge-orange { color: #c2410c !important; background-color: rgb(255 237 213 / 0.9) !important; }
 html[data-portal-theme="light"] .badge-rose { color: #be123c !important; background-color: rgb(255 228 230 / 0.85) !important; }
 html[data-portal-theme="light"] .badge-sky { color: #0369a1 !important; background-color: rgb(224 242 254 / 0.85) !important; }
 html[data-portal-theme="light"] .badge-blue { color: #1d4ed8 !important; background-color: rgb(219 234 254 / 0.85) !important; }

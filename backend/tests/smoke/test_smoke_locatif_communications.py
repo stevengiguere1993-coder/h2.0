@@ -572,3 +572,96 @@ def test_redirect_all_to_staging(client, auth_headers, comm_seed, monkeypatch):
         headers=auth_headers,
         json={"from_email": "", "from_name": "", "reply_to": "", "profils": []},
     )
+
+
+def test_gestion_externe_exclue_par_defaut(
+    client, auth_headers, comm_seed, fake_mailer, run
+):
+    """« Comment ça l'immeuble 1-3-5 Elgin y apparaît ? Il est gestion
+    externe pourtant » (retour Phil 2026-08-13) : la gestion externe
+    sort du sélecteur « À qui » PAR DÉFAUT, la case
+    ``inclure_gestion_externe`` la ramène — et l'envoi suit la même
+    règle (pas de destinataire fantôme)."""
+
+    async def _seed() -> dict:
+        async with TestSessionLocal() as s:
+            imm = Immeuble(
+                name="1-3-5 Elgin (smoke externe)",
+                address="1-3-5 rue Elgin",
+                city="Montréal",
+                is_active=True,
+                gestion_externe=True,
+            )
+            s.add(imm)
+            await s.flush()
+            lg = Logement(
+                immeuble_id=imm.id, numero="3",
+                status=LogementStatus.OCCUPE.value,
+            )
+            loc = Locataire(
+                full_name="Externe Comm", email="externe@test.local"
+            )
+            s.add_all([lg, loc])
+            await s.flush()
+            mois = datetime.now(timezone.utc).date().replace(day=1)
+            s.add(
+                Bail(
+                    logement_id=lg.id, locataire_id=loc.id,
+                    date_debut=mois - timedelta(days=90),
+                    date_fin=mois + timedelta(days=275),
+                    loyer_mensuel=950.0,
+                    status=BailStatus.ACTIF.value,
+                )
+            )
+            await s.commit()
+            return {"immeuble_id": imm.id, "locataire_id": loc.id}
+
+    ext = run(_seed())
+
+    # (a) Par défaut : absent du sélecteur.
+    blocs = client.get(
+        "/api/v1/immobilier/communications/destinataires", headers=auth_headers
+    ).json()
+    assert all(b["immeuble_id"] != ext["immeuble_id"] for b in blocs)
+
+    # (b) Case cochée : il réapparaît avec ses locataires.
+    blocs2 = client.get(
+        "/api/v1/immobilier/communications/destinataires"
+        "?inclure_gestion_externe=true",
+        headers=auth_headers,
+    ).json()
+    bloc = next(
+        (b for b in blocs2 if b["immeuble_id"] == ext["immeuble_id"]), None
+    )
+    assert bloc is not None
+    assert [x["nom"] for x in bloc["locataires"]] == ["Externe Comm"]
+
+    # (c) Envoi sans la case : rien ne part vers la gestion externe.
+    r = client.post(
+        "/api/v1/immobilier/communications/envoyer",
+        headers=auth_headers,
+        json={
+            "type": "demande_assurance",
+            "immeuble_ids": [ext["immeuble_id"]],
+            "locataire_ids": [],
+            "from_email": "info@immohorizon.com",
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert fake_mailer.sent == []
+
+    # (d) Avec la case : l'envoi passe.
+    r2 = client.post(
+        "/api/v1/immobilier/communications/envoyer",
+        headers=auth_headers,
+        json={
+            "type": "demande_assurance",
+            "immeuble_ids": [ext["immeuble_id"]],
+            "locataire_ids": [],
+            "from_email": "info@immohorizon.com",
+            "inclure_gestion_externe": True,
+        },
+    )
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["envoyes"] == 1
+    assert fake_mailer.sent[-1]["to"] == ["externe@test.local"]

@@ -1,6 +1,8 @@
 """Page COMMUNICATIONS — Gestion locative (retour Phil 2026-07-27).
 
     GET  /immobilier/communications/destinataires  → immeubles + locataires
+         (gestion externe EXCLUE par défaut ;
+          ?inclure_gestion_externe=true la ramène)
     GET  /immobilier/communications/reglages       → expéditeur par défaut
     PUT  /immobilier/communications/reglages       (manager+)
     POST /immobilier/communications/envoyer        → envoi individualisé
@@ -136,25 +138,34 @@ class ImmeubleDestinatairesOut(BaseModel):
     "/destinataires", response_model=List[ImmeubleDestinatairesOut]
 )
 async def list_destinataires(
-    db: DBSession, user: CurrentUser
+    db: DBSession,
+    user: CurrentUser,
+    inclure_gestion_externe: bool = False,
 ) -> List[ImmeubleDestinatairesOut]:
     """Tous les locataires à bail ACTIF, groupés par immeuble — la
-    matière du sélecteur « À qui » (gestion externe incluse : un avis
-    d'accès reste pertinent même si la perception est déléguée)."""
+    matière du sélecteur « À qui ».
+
+    La GESTION EXTERNE est exclue PAR DÉFAUT (retour Phil 2026-08-13 :
+    « comment ça l'immeuble 1-3-5 Elgin y apparaît ? Il est gestion
+    externe pourtant ») : c'est le gestionnaire tiers qui parle à ses
+    locataires. La case « Inclure les immeubles en gestion externe » du
+    sélecteur les fait réapparaître — un avis d'accès reste parfois
+    pertinent même quand la perception est déléguée."""
     _require_volet(user)
-    rows = (
-        await db.execute(
-            select(Bail, Locataire, Logement, Immeuble)
-            .join(Locataire, Locataire.id == Bail.locataire_id)
-            .join(Logement, Logement.id == Bail.logement_id)
-            .join(Immeuble, Immeuble.id == Logement.immeuble_id)
-            .where(
-                Bail.status == BailStatus.ACTIF.value,
-                Immeuble.is_active.is_(True),
-            )
-            .order_by(Immeuble.name.asc(), Logement.numero.asc())
+    query = (
+        select(Bail, Locataire, Logement, Immeuble)
+        .join(Locataire, Locataire.id == Bail.locataire_id)
+        .join(Logement, Logement.id == Bail.logement_id)
+        .join(Immeuble, Immeuble.id == Logement.immeuble_id)
+        .where(
+            Bail.status == BailStatus.ACTIF.value,
+            Immeuble.is_active.is_(True),
         )
-    ).all()
+        .order_by(Immeuble.name.asc(), Logement.numero.asc())
+    )
+    if not inclure_gestion_externe:
+        query = query.where(Immeuble.gestion_externe.isnot(True))
+    rows = (await db.execute(query)).all()
     mois_courant = _now().date().replace(day=1)
     dus = await _du_du_mois(db, [b.id for b, _l, _lg, _i in rows], mois_courant)
     par_immeuble: Dict[int, ImmeubleDestinatairesOut] = {}
@@ -296,6 +307,10 @@ class EnvoyerIn(BaseModel):
     #: Label d'un PROFIL approuvé des réglages — seule façon pour un
     #: non-manager de choisir un autre expéditeur que le défaut.
     profil: Optional[str] = Field(default=None, max_length=80)
+    #: Miroir de la case du sélecteur « À qui » : les immeubles en
+    #: gestion externe sont exclus par défaut (leur gestionnaire tiers
+    #: parle à ses locataires).
+    inclure_gestion_externe: bool = False
 
 
 class EnvoyerOut(BaseModel):
@@ -310,10 +325,19 @@ class EnvoyerOut(BaseModel):
 
 
 async def _resoudre_destinataires(
-    db, immeuble_ids: List[int], locataire_ids: List[int]
+    db,
+    immeuble_ids: List[int],
+    locataire_ids: List[int],
+    inclure_gestion_externe: bool = False,
 ) -> List[tuple]:
     """(bail, locataire, logement, immeuble) des baux ACTIFS visés —
-    union immeubles ∪ locataires, dédupliquée par locataire."""
+    union immeubles ∪ locataires, dédupliquée par locataire.
+
+    Même règle que ``list_destinataires`` : la gestion externe est
+    EXCLUE par défaut, et le drapeau du formulaire (case « Inclure les
+    immeubles en gestion externe ») la ramène. Le filtre est appliqué
+    ici aussi pour que l'envoi corresponde exactement à ce que le
+    sélecteur montrait — pas de destinataire fantôme."""
     if not immeuble_ids and not locataire_ids:
         return []
     q = (
@@ -324,6 +348,8 @@ async def _resoudre_destinataires(
         .where(Bail.status == BailStatus.ACTIF.value)
         .order_by(Immeuble.name.asc(), Logement.numero.asc())
     )
+    if not inclure_gestion_externe:
+        q = q.where(Immeuble.gestion_externe.isnot(True))
     rows = (await db.execute(q)).all()
     vus: set[int] = set()
     out: List[tuple] = []
@@ -433,7 +459,10 @@ async def envoyer(
         )
 
     cibles = await _resoudre_destinataires(
-        db, payload.immeuble_ids, payload.locataire_ids
+        db,
+        payload.immeuble_ids,
+        payload.locataire_ids,
+        payload.inclure_gestion_externe,
     )
     if not cibles:
         raise HTTPException(

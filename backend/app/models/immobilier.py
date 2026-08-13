@@ -1192,12 +1192,20 @@ class Releve31(Base, TimestampUpdateMixin):
     (service en ligne Revenu Québec) — il prépare les données, suit le
     statut, conserve la copie PDF téléversée (imm_documents) et l'envoie
     au locataire. Nouvelle table → ensure_immobilier_aux_tables.
+
+    Une ligne = UN relevé = UN locataire (``bail_id``) : deux locataires
+    successifs dans la même année sur le même logement = deux lignes.
     """
 
     __tablename__ = "imm_releves31"
-    __table_args__ = (
-        UniqueConstraint("annee", "logement_id", name="uq_releve31_annee_logement"),
-    )
+    # Unicité = (année, logement, BAIL) et non (année, logement) : au
+    # 44 Kennedy, les logements 101/105/107 ont eu deux locataires
+    # successifs dans la même année et chacun a légalement droit à SON
+    # relevé (Revenu Québec). ``bail_id`` étant nullable — et Postgres ne
+    # considérant jamais deux NULL comme égaux — la contrainte vit en
+    # INDEX UNIQUE sur ``(annee, logement_id, COALESCE(bail_id, 0))``,
+    # créé dans ``ensure_immobilier_aux_tables`` (session.py), qui
+    # supprime au passage l'ancienne ``uq_releve31_annee_logement``.
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     annee: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
