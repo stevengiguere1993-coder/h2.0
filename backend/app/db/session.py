@@ -793,6 +793,37 @@ async def ensure_immobilier_aux_tables() -> None:
                     """
                 )
             )
+        # Relevés 31 : un relevé PAR LOCATAIRE et non par logement
+        # (2026-08-13). Deux locataires successifs dans la même année sur
+        # le même logement ont chacun droit au leur — l'ancienne
+        # contrainte (annee, logement_id) en masquait un. ``bail_id``
+        # étant nullable et Postgres ne considérant jamais deux NULL
+        # comme égaux, l'unicité passe par un index sur COALESCE.
+        # Transaction SÉPARÉE : un échec ici ne doit pas annuler la
+        # création des tables ci-dessus (même précaution que
+        # ``uq_timesheet_entry_cell_v2``).
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    DO $$
+                    BEGIN
+                      ALTER TABLE imm_releves31
+                        DROP CONSTRAINT IF EXISTS
+                        uq_releve31_annee_logement;
+                      IF NOT EXISTS (
+                        SELECT 1 FROM pg_class
+                        WHERE relname = 'uq_releve31_annee_logement_bail'
+                      ) THEN
+                        CREATE UNIQUE INDEX
+                          uq_releve31_annee_logement_bail
+                          ON imm_releves31
+                          (annee, logement_id, COALESCE(bail_id, 0));
+                      END IF;
+                    END $$;
+                    """
+                )
+            )
     except Exception as exc:  # noqa: BLE001
         log.warning("ensure_immobilier_aux_tables failed: %s", exc)
 

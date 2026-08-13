@@ -33,7 +33,7 @@ from fastapi import (
 )
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.permissions import visible_immeuble_ids
@@ -2385,6 +2385,158 @@ async def list_locataires(
     return out
 
 
+def _cle_courriel(v: Optional[str]) -> str:
+    """Courriel normalisé pour comparaison : trim + minuscules."""
+    return (v or "").strip().lower()
+
+
+def _cle_telephone(v: Optional[str]) -> str:
+    """Téléphone réduit à ses chiffres, 10 derniers retenus.
+
+    Les numéros sont saisis à la main dans tous les formats — « 514
+    555-1234 », « (514) 555-1234 », « 5145551234 », parfois avec le 1
+    de longue distance. Les 10 derniers chiffres sont le numéro
+    canadien ; en dessous de 7, on considère la saisie inutilisable
+    (poste interne, numéro tronqué) et on ne compare pas."""
+    chiffres = re.sub(r"\D", "", v or "")
+    if len(chiffres) < 7:
+        return ""
+    return chiffres[-10:]
+
+
+class LocataireDoublon(BaseModel):
+    """Fiche existante qui ressemble à celle qu'on est en train de créer."""
+
+    id: int
+    full_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    #: Ce qui a matché : 'courriel' | 'téléphone' | 'courriel + téléphone'.
+    motif: str
+    #: Logement/bail ACTIF le plus récent, s'il y en a un — permet de
+    #: reconnaître la fiche du premier coup d'œil.
+    immeuble_id: Optional[int] = None
+    immeuble_name: Optional[str] = None
+    logement_id: Optional[int] = None
+    logement_numero: Optional[str] = None
+    bail_id: Optional[int] = None
+
+
+@router.get("/locataires/doublons", response_model=List[LocataireDoublon])
+async def locataires_doublons(
+    db: DBSession,
+    user: CurrentUser,
+    email: Optional[str] = None,
+    phone: Optional[str] = None,
+    exclure_id: Optional[int] = None,
+) -> List[LocataireDoublon]:
+    """Fiches existantes portant le MÊME courriel ou le MÊME téléphone.
+
+    Sert d'alerte au moment de créer un locataire (retour Phil
+    2026-08-13) : 6 paires de fiches en double ont dû être fusionnées à
+    la main la semaine dernière. Purement INFORMATIF — la création n'est
+    jamais bloquée, le staff garde le dernier mot.
+
+    La comparaison se fait sur les formes normalisées : le SQL ne sait
+    pas retirer la ponctuation d'un téléphone de façon portable, alors
+    les fiches avec un téléphone sont ramenées et comparées en Python
+    (quelques centaines de lignes — pas de quoi pagner)."""
+    _require_volet(user)
+    cle_mail = _cle_courriel(email)
+    cle_tel = _cle_telephone(phone)
+    if not cle_mail and not cle_tel:
+        return []
+
+    conditions = []
+    if cle_mail:
+        conditions.append(
+            func.lower(func.coalesce(Locataire.email, "")) == cle_mail
+        )
+    if cle_tel:
+        conditions.append(func.coalesce(Locataire.phone, "") != "")
+    query = select(Locataire).where(or_(*conditions))
+    if exclure_id is not None:
+        query = query.where(Locataire.id != exclure_id)
+    candidats = (await db.execute(query)).scalars().all()
+
+    trouves: List[tuple] = []
+    for loc in candidats:
+        par_mail = bool(cle_mail) and _cle_courriel(loc.email) == cle_mail
+        par_tel = bool(cle_tel) and _cle_telephone(loc.phone) == cle_tel
+        if not par_mail and not par_tel:
+            continue
+        if par_mail and par_tel:
+            motif = "courriel + téléphone"
+        else:
+            motif = "courriel" if par_mail else "téléphone"
+        trouves.append((loc, motif))
+    if not trouves:
+        return []
+
+    # Où habitent-ils aujourd'hui ? (bail actif le plus récent) — c'est
+    # ce qui permet de dire « ah oui, c'est le 44 Kennedy 101 ».
+    habite: dict[int, tuple] = {}
+    baux = (
+        await db.execute(
+            select(Bail)
+            .where(
+                Bail.locataire_id.in_([lo.id for lo, _m in trouves]),
+                Bail.status == BailStatus.ACTIF.value,
+            )
+            .order_by(Bail.date_debut.asc())
+        )
+    ).scalars().all()
+    if baux:
+        logs = {
+            lg.id: lg
+            for lg in (
+                await db.execute(
+                    select(Logement).where(
+                        Logement.id.in_([b.logement_id for b in baux])
+                    )
+                )
+            ).scalars().all()
+        }
+        imms = {
+            im.id: im
+            for im in (
+                await db.execute(
+                    select(Immeuble).where(
+                        Immeuble.id.in_(
+                            [lg.immeuble_id for lg in logs.values()]
+                        )
+                    )
+                )
+            ).scalars().all()
+        }
+        # Tri ascendant → le bail le plus récent écrase les précédents.
+        for b in baux:
+            lg = logs.get(b.logement_id)
+            im = imms.get(lg.immeuble_id) if lg else None
+            if lg and im:
+                habite[b.locataire_id] = (lg, im, b)
+
+    out: List[LocataireDoublon] = []
+    for loc, motif in trouves:
+        pair = habite.get(loc.id)
+        out.append(
+            LocataireDoublon(
+                id=loc.id,
+                full_name=loc.full_name,
+                email=loc.email,
+                phone=loc.phone,
+                motif=motif,
+                logement_id=pair[0].id if pair else None,
+                logement_numero=pair[0].numero if pair else None,
+                immeuble_id=pair[1].id if pair else None,
+                immeuble_name=pair[1].name if pair else None,
+                bail_id=pair[2].id if pair else None,
+            )
+        )
+    out.sort(key=lambda d: d.full_name.lower())
+    return out
+
+
 @router.post(
     "/locataires",
     response_model=LocataireRead,
@@ -2393,6 +2545,10 @@ async def list_locataires(
 async def create_locataire(
     payload: LocataireCreate, db: DBSession, user: CurrentUser
 ) -> LocataireRead:
+    """Crée la fiche. Volontairement SANS blocage sur doublon : l'UI
+    interroge d'abord ``GET /locataires/doublons`` et affiche l'alerte,
+    mais le staff peut toujours créer quand même (vrais homonymes,
+    colocataires partageant un courriel de ménage…)."""
     _require_volet(user)
     obj = Locataire(**payload.model_dump())
     obj.created_at = _now()

@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import {
   AlertTriangle,
+  ExternalLink,
   Loader2,
   Plus,
   Search,
   User,
+  UserCheck,
   X
 } from "lucide-react";
 
@@ -32,6 +34,22 @@ type Locataire = {
 type ImmeubleLite = {
   id: number;
   name: string;
+};
+
+/** Fiche existante qui porte le même courriel ou le même téléphone —
+ *  matière de l'alerte anti-doublon (retour Phil 2026-08-13 : 6 paires
+ *  de fiches avaient dû être fusionnées à la main). */
+type LocataireDoublon = {
+  id: number;
+  full_name: string;
+  email?: string | null;
+  phone?: string | null;
+  motif: string;
+  immeuble_id?: number | null;
+  immeuble_name?: string | null;
+  logement_id?: number | null;
+  logement_numero?: string | null;
+  bail_id?: number | null;
 };
 
 type BailLite = {
@@ -348,10 +366,11 @@ export default function LocatairesPage() {
       {showCreate ? (
         <CreateLocataireModal
           onClose={() => setShowCreate(false)}
-          onSaved={(createdId) => {
+          onSaved={(locataireId) => {
             setShowCreate(false);
-            // Ouvrir directement le hub du locataire créé (retour Phil).
-            router.push(`/immobilier/locataires/${createdId}` as any);
+            // Ouvrir directement le hub du locataire créé (retour Phil)
+            // — ou de la fiche existante retenue via l'alerte doublon.
+            router.push(`/immobilier/locataires/${locataireId}` as any);
           }}
         />
       ) : null}
@@ -364,7 +383,9 @@ function CreateLocataireModal({
   onSaved
 }: {
   onClose: () => void;
-  onSaved: (createdId: number) => void;
+  /** Fiche retenue : celle qu'on vient de créer, ou l'existante
+   *  choisie dans l'alerte doublon (« Sélectionner »). */
+  onSaved: (locataireId: number) => void;
 }) {
   // Formulaire COMPLET dès la création (retour Phil 2026-07-20 : « je
   // veux pouvoir avoir toutes les infos dès la création »).
@@ -380,9 +401,13 @@ function CreateLocataireModal({
   });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Alerte anti-doublon : on interroge le backend AVANT de créer. Elle
+  // est purement informative — « Créer quand même » passe outre (vrais
+  // homonymes, couple qui partage un courriel de ménage).
+  const [doublons, setDoublons] = useState<LocataireDoublon[] | null>(null);
+  const [verifDoublons, setVerifDoublons] = useState(false);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function creer() {
     setSaving(true);
     setErr(null);
     try {
@@ -414,8 +439,44 @@ function CreateLocataireModal({
     }
   }
 
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    // Rien à comparer (ni courriel ni téléphone) → création directe.
+    const email = form.email.trim();
+    const phone = form.phone.trim();
+    if (!email && !phone) {
+      void creer();
+      return;
+    }
+    setVerifDoublons(true);
+    setErr(null);
+    try {
+      const p = new URLSearchParams();
+      if (email) p.set("email", email);
+      if (phone) p.set("phone", phone);
+      const r = await authedFetch(
+        `/api/v1/immobilier/locataires/doublons?${p.toString()}`
+      );
+      if (r.ok) {
+        const trouves = (await r.json()) as LocataireDoublon[];
+        if (trouves.length > 0) {
+          setDoublons(trouves);
+          return; // on montre l'alerte, on ne crée rien pour l'instant
+        }
+      }
+      // Détection en panne = on ne bloque pas la saisie du staff.
+    } catch {
+      // idem : l'alerte est un confort, pas un verrou.
+    } finally {
+      setVerifDoublons(false);
+    }
+    void creer();
+  }
+
   function set<K extends keyof typeof form>(k: K, v: string) {
     setForm({ ...form, [k]: v });
+    // Une correction du courriel/téléphone invalide l'alerte affichée.
+    if (k === "email" || k === "phone") setDoublons(null);
   }
 
   return (
@@ -523,24 +584,117 @@ function CreateLocataireModal({
             </p>
           ) : null}
 
+          {/* Alerte DOUBLON — même courriel ou même téléphone qu'une
+              fiche existante. Jamais bloquante : trois issues, dont
+              « Créer quand même ». */}
+          {doublons && doublons.length > 0 ? (
+            <div className="rounded-xl border border-amber-500/50 bg-amber-500/10 p-3">
+              <p className="flex items-start gap-2 text-xs font-semibold text-amber-200">
+                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <span>
+                  {doublons.length === 1
+                    ? "Cette personne existe déjà"
+                    : `${doublons.length} fiches existantes correspondent`}{" "}
+                  <span className="font-normal text-amber-200/80">
+                    — même coordonnée. Utilise la fiche existante plutôt
+                    que d&apos;en créer une deuxième.
+                  </span>
+                </span>
+              </p>
+              <ul className="mt-2 space-y-2">
+                {doublons.map((d) => (
+                  <li
+                    key={d.id}
+                    className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-2"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-white">
+                          {d.full_name}
+                        </p>
+                        <p className="text-[11px] text-white/60">
+                          {d.email || "pas de courriel"} ·{" "}
+                          <span className="font-mono">
+                            {d.phone || "pas de téléphone"}
+                          </span>
+                        </p>
+                        <p className="text-[11px] text-white/45">
+                          {d.logement_id
+                            ? `${d.immeuble_name || "Immeuble"} · ${
+                                d.logement_numero || ""
+                              }`
+                            : "Aucun bail actif"}{" "}
+                          <span className="text-amber-300/80">
+                            (même {d.motif})
+                          </span>
+                        </p>
+                      </div>
+                      <div className="flex flex-shrink-0 items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onSaved(d.id)}
+                          className="btn-accent btn-xs inline-flex items-center gap-1"
+                          title="Utiliser cette fiche au lieu d'en créer une nouvelle"
+                        >
+                          <UserCheck className="h-3 w-3" />
+                          Sélectionner
+                        </button>
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={`/immobilier/locataires/${d.id}` as any}
+                          target="_blank"
+                          className="btn-secondary btn-xs inline-flex items-center gap-1"
+                          title="Ouvrir la fiche dans un nouvel onglet pour la modifier — le formulaire reste ouvert"
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          Ouvrir
+                        </Link>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           <div className="flex items-center justify-end gap-2 border-t border-brand-800 pt-4">
             <button type="button" onClick={onClose} className="btn-secondary text-sm">
               Annuler
             </button>
-            <button
-              type="submit"
-              disabled={saving || !form.full_name.trim()}
-              className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Création…
-                </>
-              ) : (
-                "Créer"
-              )}
-            </button>
+            {doublons && doublons.length > 0 ? (
+              // Le staff garde le dernier mot : l'alerte informe, elle
+              // n'interdit rien.
+              <button
+                type="button"
+                onClick={() => void creer()}
+                disabled={saving}
+                className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
+              >
+                {saving ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Création…
+                  </>
+                ) : (
+                  "Créer quand même"
+                )}
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={saving || verifDoublons || !form.full_name.trim()}
+                className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
+              >
+                {saving || verifDoublons ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {verifDoublons ? "Vérification…" : "Création…"}
+                  </>
+                ) : (
+                  "Créer"
+                )}
+              </button>
+            )}
           </div>
         </form>
       </div>

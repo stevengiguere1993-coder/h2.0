@@ -5,20 +5,24 @@ OCCUPÉ au 31 décembre et en remettre copie au(x) locataire(s) avant le
 dernier jour de FÉVRIER. Kratos ne produit pas le relevé officiel (ça se
 fait dans le service en ligne de Revenu Québec) ; il fournit :
 
-    GET   /immobilier/releves31?annee=AAAA   — la liste des logements
-          occupés PENDANT l'année (chevauchement de bail, pas la seule
-          photo du 31 déc. : un locataire parti en juin doit rester
-          visible — retour Phil 2026-08-13) + locataire + données à
+    GET   /immobilier/releves31?annee=AAAA   — UNE LIGNE PAR LOCATAIRE
+          ayant occupé un logement PENDANT l'année (chevauchement de
+          bail, pas la seule photo du 31 déc. : un locataire parti en
+          juin doit rester visible — retour Phil 2026-08-13) + données à
           saisir chez RQ, jointe au suivi (statut / numéro / copie PDF).
-          Le relevé revient au locataire présent au 31 décembre ; les
-          autres occupants de l'année sont listés dans ``occupants``.
-          La PRODUCTION n'ouvre qu'au 1er décembre de l'année fiscale
+          Deux locataires successifs dans la même année = deux lignes,
+          chacune avec sa période : chacun a légalement droit à SON
+          relevé (44 Kennedy, logements 101/105/107). La PRODUCTION
+          n'ouvre qu'au 1er décembre de l'année fiscale
           (``SuivisConfig.ouverture_releve31``).
-    PATCH /immobilier/releves31/{annee}/{logement_id}   — statut, numéro
-          de relevé, notes (upsert).
-    POST  /immobilier/releves31/{annee}/{logement_id}/pdf — téléverse la
-          copie du relevé (→ ImmDocument type « releve31 », consultable
-          et envoyable par courriel avec suivi d'ouverture).
+    POST  /immobilier/releves31                        — création MANUELLE
+          d'un relevé (année + logement + bail optionnel), pour les cas
+          que la détection automatique ne voit pas.
+    PATCH /immobilier/releves31/{annee}/{logement_id}?bail_id=…  — statut,
+          numéro de relevé, notes (upsert sur la ligne du bail visé).
+    POST  /immobilier/releves31/{annee}/{logement_id}/pdf?bail_id=… —
+          téléverse la copie du relevé (→ ImmDocument type « releve31 »,
+          consultable et envoyable par courriel avec suivi d'ouverture).
 """
 
 from __future__ import annotations
@@ -55,19 +59,11 @@ def _require_volet(user: CurrentUser) -> None:
         )
 
 
-class Releve31Occupant(BaseModel):
-    """Un locataire ayant occupé le logement pendant l'année."""
-
-    bail_id: Optional[int] = None
-    locataire_id: Optional[int] = None
-    locataire_nom: Optional[str] = None
-    debut: Optional[date] = None
-    fin: Optional[date] = None
-    #: Celui qui porte le relevé (présent au 31 déc., sinon le dernier).
-    principal: bool = False
-
-
 class Releve31Row(BaseModel):
+    """UN relevé = UN locataire. La ligne est identifiée par
+    (annee, logement_id, bail_id) — deux occupants successifs d'un même
+    logement produisent deux lignes, jamais fusionnées."""
+
     annee: int
     logement_id: int
     logement_numero: Optional[str] = None
@@ -90,9 +86,9 @@ class Releve31Row(BaseModel):
     #: 31 déc.) — un bail qui se termine en juin s'affiche tel quel.
     occupation_debut: Optional[date] = None
     occupation_fin: Optional[date] = None
-    #: Tous les locataires de l'année pour ce logement (le principal
-    #: inclus) : personne ne disparaît quand il y a eu un changement.
-    occupants: List[Releve31Occupant] = []
+    #: Nombre d'occupants du logement DANS l'année (≥ 2 = changement de
+    #: locataire) — l'UI regroupe alors les lignes l'une sous l'autre.
+    nb_occupants_logement: int = 1
 
 
 class Releve31Overview(BaseModel):
@@ -112,6 +108,18 @@ class Releve31Update(BaseModel):
     statut: Optional[str] = Field(default=None, max_length=16)
     numero_releve: Optional[str] = Field(default=None, max_length=32)
     notes: Optional[str] = None
+
+
+class Releve31Create(BaseModel):
+    """Création MANUELLE d'un relevé (retour Phil 2026-08-13) : les cas
+    que la détection automatique ne voit pas — bail absent de Kratos,
+    logement passé hors location, colocataire à part."""
+
+    annee: int = Field(ge=2000, le=2100)
+    logement_id: int
+    #: Le locataire visé. Sans bail, le relevé est rattaché au logement
+    #: seul (une seule ligne « sans bail » possible par année).
+    bail_id: Optional[int] = None
 
 
 def _fin_fevrier(annee: int) -> date:
@@ -189,12 +197,13 @@ def _occupants_annee(baux: List[Bail], annee: int, today: date) -> List[Bail]:
 def _bail_principal(
     baux: List[Bail], annee: int, today: date
 ) -> Optional[Bail]:
-    """Le bail qui porte le relevé du logement pour ``annee``.
+    """Le DERNIER occupant de l'année (celui du 31 décembre en priorité).
 
-    Priorité au locataire présent au 31 décembre (règle de Revenu
-    Québec) ; à défaut — logement libéré en cours d'année, bail non
-    encore renouvelé dans Kratos — le DERNIER occupant de l'année, pour
-    qu'il ne disparaisse jamais de la liste."""
+    Ne sert plus à choisir QUI a droit au relevé — depuis 2026-08-13
+    chaque occupant a le sien, personne n'est masqué. Il reste utile
+    pour deux choses : rattacher un suivi HÉRITÉ (ligne créée avant la
+    scission, ``bail_id`` vide) au bon locataire, et servir de cible par
+    défaut aux appels qui ne précisent pas de bail."""
     occupants = _occupants_annee(baux, annee, today)
     if not occupants:
         return None
@@ -226,9 +235,16 @@ async def _baux_du_logement(db, logement_id: int) -> List[Bail]:
 
 
 async def _occupations_annee(db, annee: int) -> List[dict]:
-    """Logements OCCUPÉS pendant ``annee`` (chevauchement de période, et
-    non plus la seule photo du 31 décembre) : immeubles actifs hors
-    gestion externe (le gestionnaire tiers produit ses relevés)."""
+    """UNE ENTRÉE PAR OCCUPANT (par bail) ayant occupé un logement
+    pendant ``annee`` — chevauchement de période, et non plus la seule
+    photo du 31 décembre. Immeubles actifs hors gestion externe (le
+    gestionnaire tiers produit ses relevés).
+
+    Un logement avec deux locataires successifs dans l'année produit
+    donc DEUX entrées, chacune bornée à sa période : chacun a droit à
+    son propre RL-31 (Revenu Québec). Le tri reste immeuble → numéro de
+    logement → date de début, pour que les occupants d'un même logement
+    s'affichent l'un sous l'autre dans l'ordre chronologique."""
     today = date.today()
     dec31 = date(annee, 12, 31)
     immeubles = {
@@ -293,41 +309,34 @@ async def _occupations_annee(db, annee: int) -> List[dict]:
     out: List[dict] = []
     for lg_id, lst in par_logement.items():
         occupants = _occupants_annee(lst, annee, today)
-        b = _bail_principal(lst, annee, today)
-        if b is None:
+        if not occupants:
             continue
+        principal = _bail_principal(lst, annee, today)
         lg = logements[lg_id]
         im = immeubles.get(lg.immeuble_id)
-        lo = locataires.get(b.locataire_id)
-        out.append(
-            {
-                "logement": lg,
-                "immeuble": im,
-                "bail": b,
-                "locataire": lo,
-                # Tous ceux qui ont occupé le logement dans l'année —
-                # aucun locataire ne disparaît de la page.
-                "occupants": [
-                    {
-                        "bail_id": o.id,
-                        "locataire_id": o.locataire_id,
-                        "locataire_nom": (
-                            locataires[o.locataire_id].full_name
-                            if o.locataire_id in locataires
-                            else None
-                        ),
-                        "debut": max(o.date_debut, jan1),
-                        "fin": min(_fin_effective(o, today), dec31),
-                        "principal": o.id == b.id,
-                    }
-                    for o in occupants
-                ],
-            }
-        )
+        for o in occupants:
+            out.append(
+                {
+                    "logement": lg,
+                    "immeuble": im,
+                    "bail": o,
+                    "locataire": locataires.get(o.locataire_id),
+                    # Période bornée à l'année d'imposition : « 1er janv.
+                    # → 31 mai » puis « 1er juin → 31 déc. ».
+                    "debut": max(o.date_debut, jan1),
+                    "fin": min(_fin_effective(o, today), dec31),
+                    # Dernier occupant de l'année : seul lui peut hériter
+                    # d'un suivi créé avant la scission par locataire.
+                    "principal": principal is not None and o.id == principal.id,
+                    "nb_occupants": len(occupants),
+                }
+            )
     out.sort(
         key=lambda o: (
             o["immeuble"].name if o["immeuble"] else "",
             str(o["logement"].numero or ""),
+            o["debut"],
+            o["bail"].id or 0,
         )
     )
     return out
@@ -349,13 +358,22 @@ async def releves31_overview(
         annee = suivis_cfg.annee_releve31_defaut(today)
     occupations = await _occupations_annee(db, annee)
 
-    suivis = {
-        r.logement_id: r
-        for r in (
-            await db.execute(
-                select(Releve31).where(Releve31.annee == annee)
-            )
-        ).scalars().all()
+    # Suivis indexés par (logement, bail). Les lignes HÉRITÉES (créées
+    # avant la scission par locataire, donc sans bail_id) sont rangées à
+    # part et rattachées au dernier occupant de l'année — celui qui
+    # portait le relevé unique du logement à l'époque.
+    suivis: dict[tuple[int, Optional[int]], Releve31] = {}
+    for r in (
+        await db.execute(select(Releve31).where(Releve31.annee == annee))
+    ).scalars().all():
+        suivis[(r.logement_id, r.bail_id)] = r
+
+    # Dès qu'une ligne du logement porte un bail, la ligne « sans bail »
+    # n'est plus un vestige de l'époque « un relevé par logement » : elle
+    # a été posée à la main, et on la laisse tranquille au lieu de
+    # l'accrocher à un occupant qui a déjà la sienne.
+    logements_scindes = {
+        lg_id for (lg_id, bid) in suivis if bid is not None
     }
 
     rows: List[Releve31Row] = []
@@ -363,16 +381,20 @@ async def releves31_overview(
         lg, im, b, lo = (
             o["logement"], o["immeuble"], o["bail"], o["locataire"],
         )
-        suivi = suivis.get(lg.id)
-        occs = [Releve31Occupant(**oc) for oc in o.get("occupants", [])]
-        princ = next((oc for oc in occs if oc.principal), None)
+        suivi = suivis.get((lg.id, b.id))
+        if (
+            suivi is None
+            and o["principal"]
+            and lg.id not in logements_scindes
+        ):
+            suivi = suivis.get((lg.id, None))
         rows.append(
             Releve31Row(
                 annee=annee,
                 logement_id=lg.id,
-                occupation_debut=princ.debut if princ else None,
-                occupation_fin=princ.fin if princ else None,
-                occupants=occs,
+                occupation_debut=o["debut"],
+                occupation_fin=o["fin"],
+                nb_occupants_logement=o["nb_occupants"],
                 logement_numero=lg.numero,
                 immeuble_id=im.id if im else None,
                 immeuble_name=im.name if im else None,
@@ -406,15 +428,54 @@ async def releves31_overview(
     )
 
 
-async def _upsert(db, annee: int, logement_id: int) -> Releve31:
-    obj = (
-        await db.execute(
-            select(Releve31).where(
-                Releve31.annee == annee,
-                Releve31.logement_id == logement_id,
+async def _ligne_existante(
+    db, annee: int, logement_id: int, bail_id: Optional[int]
+) -> Optional[Releve31]:
+    """La ligne de suivi du (annee, logement, bail) visé, si elle existe.
+
+    Repli sur la ligne HÉRITÉE (sans ``bail_id``, créée avant la
+    scission par locataire) UNIQUEMENT quand le bail visé est le dernier
+    occupant de l'année : c'est lui qui portait le relevé unique du
+    logement à l'époque. Sans ce garde-fou, annuler le relevé du sortant
+    effacerait celui de l'entrant."""
+    lignes = list(
+        (
+            await db.execute(
+                select(Releve31).where(
+                    Releve31.annee == annee,
+                    Releve31.logement_id == logement_id,
+                )
             )
-        )
-    ).scalar_one_or_none()
+        ).scalars().all()
+    )
+    obj = next((r for r in lignes if r.bail_id == bail_id), None)
+    if obj is not None or bail_id is None:
+        return obj
+    orpheline = next((r for r in lignes if r.bail_id is None), None)
+    if orpheline is None:
+        return None
+    principal = _bail_principal(
+        await _baux_du_logement(db, logement_id), annee, date.today()
+    )
+    if principal is None or principal.id != bail_id:
+        return None
+    return orpheline
+
+
+async def _upsert(
+    db, annee: int, logement_id: int, bail_id: Optional[int] = None
+) -> Releve31:
+    """La ligne de suivi du (annee, logement, bail) visé — créée au
+    besoin. ``bail_id`` identifie LE locataire : deux occupants
+    successifs d'un logement ont chacun leur ligne."""
+    obj = await _ligne_existante(db, annee, logement_id, bail_id)
+    if obj is not None and obj.bail_id is None and bail_id is not None:
+        # Ligne héritée reprise par son locataire : on la lui rattache
+        # au lieu d'en créer une seconde, qui perdrait son numéro de
+        # relevé et sa copie PDF.
+        bail = await db.get(Bail, bail_id)
+        obj.bail_id = bail_id
+        obj.locataire_id = bail.locataire_id if bail else None
     if obj is None:
         # CRÉATION seulement : un relevé déjà commencé reste modifiable.
         await _garde_fenetre(annee)
@@ -423,14 +484,81 @@ async def _upsert(db, annee: int, logement_id: int) -> Releve31:
             raise HTTPException(
                 status_code=404, detail="Logement introuvable."
             )
+        bail = None
+        if bail_id is not None:
+            bail = await db.get(Bail, bail_id)
+            if bail is None or bail.logement_id != logement_id:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Bail introuvable pour ce logement.",
+                )
         obj = Releve31(
             annee=annee,
             logement_id=logement_id,
             immeuble_id=lg.immeuble_id,
+            bail_id=bail_id,
+            locataire_id=bail.locataire_id if bail else None,
         )
         db.add(obj)
         await db.flush()
     return obj
+
+
+async def _bail_cible(
+    db, logement_id: int, annee: int, bail_id: Optional[int]
+) -> Optional[Bail]:
+    """Le bail (= le locataire) visé par une action de production.
+
+    Explicite quand l'UI passe ``bail_id`` — c'est le cas normal depuis
+    qu'une ligne = un locataire. Sans lui, on retombe sur le dernier
+    occupant de l'année, pour que les anciens appels (et les liens
+    profonds) continuent de viser quelque chose de sensé."""
+    if bail_id is not None:
+        b = await db.get(Bail, bail_id)
+        if b is None or b.logement_id != logement_id:
+            raise HTTPException(
+                status_code=404, detail="Bail introuvable pour ce logement."
+            )
+        return b
+    return _bail_principal(
+        await _baux_du_logement(db, logement_id), annee, date.today()
+    )
+
+
+def _row_suivi(obj: Releve31, logement: Optional[Logement]) -> Releve31Row:
+    """Écho minimal d'une ligne de suivi après écriture — l'UI recharge
+    la liste complète juste après (statuts, périodes, compteurs)."""
+    return Releve31Row(
+        annee=obj.annee,
+        logement_id=obj.logement_id,
+        logement_numero=logement.numero if logement else None,
+        bail_id=obj.bail_id,
+        locataire_id=obj.locataire_id,
+        statut=obj.statut,
+        numero_releve=obj.numero_releve,
+        notes=obj.notes,
+        document_id=obj.document_id,
+    )
+
+
+@router.post(
+    "/releves31",
+    response_model=Releve31Row,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_releve31(
+    payload: Releve31Create, db: DBSession, user: CurrentUser
+) -> Releve31Row:
+    """Crée un relevé À LA MAIN (retour Phil 2026-08-13) quand la
+    détection automatique ne voit pas le cas — bail absent de Kratos,
+    logement passé hors location, colocataire à part. La fenêtre de
+    production s'applique comme partout : rien avant le 1er décembre de
+    l'année fiscale. Idempotent : re-créer la même ligne la renvoie."""
+    _require_volet(user)
+    obj = await _upsert(db, payload.annee, payload.logement_id, payload.bail_id)
+    await db.commit()
+    await db.refresh(obj)
+    return _row_suivi(obj, await db.get(Logement, payload.logement_id))
 
 
 @router.patch(
@@ -442,11 +570,14 @@ async def update_releve31(
     payload: Releve31Update,
     db: DBSession,
     user: CurrentUser,
+    bail_id: Optional[int] = None,
 ) -> Releve31Row:
+    """``bail_id`` = LE locataire visé (une ligne du tableau). Absent,
+    on retombe sur le dernier occupant de l'année."""
     _require_volet(user)
     if payload.statut is not None and payload.statut not in _STATUTS:
         raise HTTPException(status_code=422, detail="Statut invalide.")
-    obj = await _upsert(db, annee, logement_id)
+    obj = await _upsert(db, annee, logement_id, bail_id)
     data = payload.model_dump(exclude_unset=True)
     for k, v in data.items():
         setattr(obj, k, v)
@@ -455,16 +586,7 @@ async def update_releve31(
         obj.statut = "produit"
     await db.commit()
     await db.refresh(obj)
-    lg = await db.get(Logement, logement_id)
-    return Releve31Row(
-        annee=annee,
-        logement_id=logement_id,
-        logement_numero=lg.numero if lg else None,
-        statut=obj.statut,
-        numero_releve=obj.numero_releve,
-        notes=obj.notes,
-        document_id=obj.document_id,
-    )
+    return _row_suivi(obj, await db.get(Logement, logement_id))
 
 
 @router.delete(
@@ -472,20 +594,19 @@ async def update_releve31(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_releve31(
-    annee: int, logement_id: int, db: DBSession, user: CurrentUser
+    annee: int,
+    logement_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    bail_id: Optional[int] = None,
 ) -> None:
     """Annule le suivi d'un relevé 31 : la copie PDF liée est supprimée
     et la ligne redevient « à produire » (retour Phil 2026-07-30 —
-    miroir de DELETE /documents/{id})."""
+    miroir de DELETE /documents/{id}). Ne touche QUE la ligne du
+    locataire visé (``bail_id``) : annuler le relevé du sortant laisse
+    celui de l'entrant intact."""
     _require_volet(user)
-    obj = (
-        await db.execute(
-            select(Releve31).where(
-                Releve31.annee == annee,
-                Releve31.logement_id == logement_id,
-            )
-        )
-    ).scalar_one_or_none()
+    obj = await _ligne_existante(db, annee, logement_id, bail_id)
     if obj is None:
         return  # déjà « à produire »
     if obj.document_id:
@@ -506,12 +627,14 @@ async def upload_releve31_pdf(
     logement_id: int,
     db: DBSession,
     user: CurrentUser,
+    bail_id: Optional[int] = None,
     file: UploadFile = File(...),
 ) -> Releve31Row:
     """Téléverse la copie PDF du relevé (émise par Revenu Québec) —
     conservée dans imm_documents (type « releve31 ») : visible dans la
     fiche du locataire/logement et envoyable par courriel avec suivi
-    d'ouverture. Statut → « produit » (l'envoi le passera à « remis »)."""
+    d'ouverture. Statut → « produit » (l'envoi le passera à « remis »).
+    Le PDF est rattaché au locataire de la ligne (``bail_id``)."""
     _require_volet(user)
     data = await file.read()
     if not data or not data[:5].startswith(b"%PDF-"):
@@ -519,13 +642,8 @@ async def upload_releve31_pdf(
     if len(data) > 15_000_000:
         raise HTTPException(status_code=400, detail="PDF trop volumineux (max 15 Mo).")
 
-    obj = await _upsert(db, annee, logement_id)
-
-    # Bail/locataire de l'année (présent au 31 déc., sinon le dernier
-    # occupant) pour rattacher le document — même règle que la liste.
-    bail = _bail_principal(
-        await _baux_du_logement(db, logement_id), annee, date.today()
-    )
+    obj = await _upsert(db, annee, logement_id, bail_id)
+    bail = await _bail_cible(db, logement_id, annee, bail_id)
 
     from app.api.v1.endpoints.immobilier_documents import save_document
 
@@ -547,20 +665,14 @@ async def upload_releve31_pdf(
     doc.filename = (file.filename or f"releve31-{annee}.pdf")[:255]
     doc.remplace_document_id = obj.document_id
     obj.document_id = doc.id
-    obj.bail_id = bail.id if bail else None
-    obj.locataire_id = bail.locataire_id if bail else None
+    if bail is not None:
+        obj.bail_id = bail.id
+        obj.locataire_id = bail.locataire_id
     if obj.statut == "a_produire":
         obj.statut = "produit"
     await db.commit()
     await db.refresh(obj)
-    return Releve31Row(
-        annee=annee,
-        logement_id=logement_id,
-        statut=obj.statut,
-        numero_releve=obj.numero_releve,
-        notes=obj.notes,
-        document_id=obj.document_id,
-    )
+    return _row_suivi(obj, await db.get(Logement, logement_id))
 
 
 
@@ -638,13 +750,18 @@ def _pdf_copie_releve31(
     "/releves31/{annee}/{logement_id}/generer", response_model=Releve31Row
 )
 async def generer_releve31_pdf(
-    annee: int, logement_id: int, db: DBSession, user: CurrentUser
+    annee: int,
+    logement_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    bail_id: Optional[int] = None,
 ) -> Releve31Row:
     """Génère AUTOMATIQUEMENT la copie PDF du relevé (numéro officiel
     déjà collé) et la classe comme document courant — plus besoin
-    d'importer un fichier pour pouvoir l'envoyer au locataire."""
+    d'importer un fichier pour pouvoir l'envoyer au locataire. La copie
+    est établie AU NOM du locataire de la ligne (``bail_id``)."""
     _require_volet(user)
-    obj = await _upsert(db, annee, logement_id)
+    obj = await _upsert(db, annee, logement_id, bail_id)
     if not (obj.numero_releve or "").strip():
         raise HTTPException(
             status_code=422,
@@ -653,9 +770,7 @@ async def generer_releve31_pdf(
                 "Québec) — la copie se génère avec."
             ),
         )
-    bail = _bail_principal(
-        await _baux_du_logement(db, logement_id), annee, date.today()
-    )
+    bail = await _bail_cible(db, logement_id, annee, bail_id)
     locataire = (
         await db.get(Locataire, bail.locataire_id) if bail else None
     )
@@ -689,20 +804,14 @@ async def generer_releve31_pdf(
     )
     doc.remplace_document_id = obj.document_id
     obj.document_id = doc.id
-    obj.bail_id = bail.id if bail else None
-    obj.locataire_id = bail.locataire_id if bail else None
+    if bail is not None:
+        obj.bail_id = bail.id
+        obj.locataire_id = bail.locataire_id
     if obj.statut == "a_produire":
         obj.statut = "produit"
     await db.commit()
     await db.refresh(obj)
-    return Releve31Row(
-        annee=annee,
-        logement_id=logement_id,
-        statut=obj.statut,
-        numero_releve=obj.numero_releve,
-        notes=obj.notes,
-        document_id=obj.document_id,
-    )
+    return _row_suivi(obj, lg)
 
 
 class Releve31LocataireRow(BaseModel):
@@ -710,6 +819,8 @@ class Releve31LocataireRow(BaseModel):
     logement_id: int
     logement_numero: Optional[str] = None
     immeuble_name: Optional[str] = None
+    #: Le bail auquel le relevé est rattaché (une ligne = un locataire).
+    bail_id: Optional[int] = None
     statut: str
     numero_releve: Optional[str] = None
     document_id: Optional[int] = None
@@ -722,9 +833,14 @@ class Releve31LocataireRow(BaseModel):
 async def releves31_locataire(
     locataire_id: int, db: DBSession, user: CurrentUser
 ) -> List[Releve31LocataireRow]:
-    """Relevés 31 liés aux logements de CE locataire (années couvertes
-    par ses baux) — section « Relevés 31 » de sa fiche (retour Phil
-    2026-07-31)."""
+    """Relevés 31 de CE locataire — section « Relevés 31 » de sa fiche
+    (retour Phil 2026-07-31).
+
+    Depuis la scission par locataire (2026-08-13), un relevé porte le
+    bail auquel il appartient : on ne montre à ce locataire QUE les
+    siens. Les lignes héritées (sans bail) restent visibles via les
+    paires (logement, année) couvertes par ses baux — c'était la seule
+    façon de les rattacher avant."""
     _require_volet(user)
     from datetime import date as _date
 
@@ -737,6 +853,7 @@ async def releves31_locataire(
         return []
     paires = set()
     log_ids = set()
+    mes_baux = {b.id for b in baux}
     for b in baux:
         if not b.logement_id or not b.date_debut:
             continue
@@ -753,7 +870,15 @@ async def releves31_locataire(
             .order_by(Releve31.annee.desc())
         )
     ).scalars().all()
-    rels = [r for r in rels if (r.logement_id, r.annee) in paires]
+    rels = [
+        r
+        for r in rels
+        if (
+            r.bail_id in mes_baux
+            # Ligne héritée : rattachée au logement, pas encore au bail.
+            or (r.bail_id is None and (r.logement_id, r.annee) in paires)
+        )
+    ]
     lgs = {
         lg.id: lg
         for lg in (
@@ -783,6 +908,7 @@ async def releves31_locataire(
                 logement_id=r.logement_id,
                 logement_numero=lg.numero if lg else None,
                 immeuble_name=im.name if im else None,
+                bail_id=r.bail_id,
                 statut=r.statut,
                 numero_releve=r.numero_releve,
                 document_id=r.document_id,
