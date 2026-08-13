@@ -8,8 +8,10 @@ import {
   Eye,
   FileDown,
   FileText,
+  Info,
   KeyRound,
   Loader2,
+  Lock,
   Mail,
   RotateCcw,
   Search,
@@ -438,6 +440,21 @@ function fmtDateTime(iso: string | null | undefined): string {
     return new Date(iso).toLocaleString("fr-CA", {
       dateStyle: "short",
       timeStyle: "short"
+    });
+  } catch {
+    return iso;
+  }
+}
+
+/** « 1 décembre 2026 » depuis un ISO `AAAA-MM-JJ` (midi local pour ne pas
+ *  reculer d'un jour à cause du fuseau). */
+function fmtDateLongue(iso: string | null | undefined): string {
+  if (!iso) return "";
+  try {
+    return new Date(iso + "T12:00:00").toLocaleDateString("fr-CA", {
+      day: "numeric",
+      month: "long",
+      year: "numeric"
     });
   } catch {
     return iso;
@@ -1758,6 +1775,20 @@ type Releve31Row = {
   numero_releve: string | null;
   notes: string | null;
   document_id: number | null;
+  /** Période d'occupation retenue DANS l'année (bornée 1er janv./31 déc.). */
+  occupation_debut: string | null;
+  occupation_fin: string | null;
+  /** Tous les locataires de l'année pour ce logement (principal inclus). */
+  occupants: Releve31Occupant[];
+};
+
+type Releve31Occupant = {
+  bail_id: number | null;
+  locataire_id: number | null;
+  locataire_nom: string | null;
+  debut: string | null;
+  fin: string | null;
+  principal: boolean;
 };
 
 type Releve31Overview = {
@@ -1767,6 +1798,9 @@ type Releve31Overview = {
   nb_a_produire: number;
   nb_produits: number;
   nb_remis: number;
+  /** Fenêtre de production ouverte (1er décembre de l'année fiscale) ? */
+  creation_ouverte: boolean;
+  ouverture_le: string | null;
 };
 
 const R31_STATUT: Record<string, { label: string; badge: string }> = {
@@ -1862,6 +1896,12 @@ function Releves31Tab() {
   async function envoyer(row: Releve31Row) {
     // Toujours cliquable : chaque prérequis manquant est EXPLIQUÉ au
     // clic (un bouton pâle muet = « rien ne se passe », retour Phil).
+    // Sauf la fenêtre de production, qui grise les boutons et s'explique
+    // dans la bulle d'info au-dessus du tableau.
+    if (verrouille) {
+      setErr(msgVerrou);
+      return;
+    }
     if (!(row.numero_releve || "").trim()) {
       setErr(
         "Colle d'abord le numéro du relevé (émis par Revenu Québec) — l'envoi est bloqué sans numéro."
@@ -1982,6 +2022,15 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
     return [now, now - 1, now - 2];
   })();
 
+  // Fenêtre de production : les relevés de l'année N ne se créent qu'à
+  // partir du 1er décembre N (retour Phil 2026-08-13). Avant, la page
+  // reste CONSULTABLE (on voit qui occupe quoi) mais rien ne se produit.
+  const verrouille = data != null && data.creation_ouverte === false;
+  const ouvertureLe = fmtDateLongue(data?.ouverture_le);
+  const msgVerrou = verrouille
+    ? `Les relevés 31 de ${data.annee} pourront être produits à partir du ${ouvertureLe} — la remise au locataire est due avant la fin février ${data.annee + 1}.`
+    : "";
+
   const rows31 = (data?.rows || [])
     .filter((r) => {
       if (fImmeuble && String(r.immeuble_id ?? "") !== fImmeuble) return false;
@@ -2035,7 +2084,30 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
             </>
           ) : null}
         </p>
+        {data?.ouverture_le ? (
+          <p className="mt-2 flex items-start gap-1.5">
+            <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+            <span>
+              Les relevés d&apos;une année ne se produisent qu&apos;à partir du{" "}
+              <b className="text-white">1<sup>er</sup> décembre</b> de cette
+              année — décembre, janvier et février pour les produire et les
+              remettre. Ceux de {data.annee} s&apos;ouvrent le{" "}
+              <b className="text-white">{ouvertureLe}</b>.
+            </span>
+          </p>
+        ) : null}
       </div>
+
+      {verrouille ? (
+        <p className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          <Lock className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+          <span>
+            <b className="text-white">Trop tôt pour {data.annee}.</b>{" "}
+            {msgVerrou} En attendant, la liste ci-dessous te montre déjà qui a
+            occupé chaque logement pendant l&apos;année.
+          </span>
+        </p>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-3">
         <label className="text-xs font-semibold uppercase tracking-wider text-white/50">
@@ -2085,7 +2157,7 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
         {data ? (
           <span className="text-xs text-white/50">
             {data.rows.length} logement{data.rows.length > 1 ? "s" : ""} occupé
-            {data.rows.length > 1 ? "s" : ""} au 31 déc. {data.annee} ·{" "}
+            {data.rows.length > 1 ? "s" : ""} en {data.annee} ·{" "}
             <span className="text-amber-300">
               {data.nb_a_produire} à produire
             </span>{" "}
@@ -2117,7 +2189,7 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
       ) : rows31.length === 0 ? (
         <p className="rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
           {data.rows.length === 0
-            ? `Aucun logement occupé au 31 décembre ${data.annee} (gestion externe exclue).`
+            ? `Aucun logement occupé pendant ${data.annee} (gestion externe exclue).`
             : "Aucun relevé ne correspond aux filtres."}
         </p>
       ) : (
@@ -2127,7 +2199,7 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
               <tr>
                 <th className="px-4 py-2.5">Immeuble · logt</th>
                 <th className="px-4 py-2.5">Locataire</th>
-                <th className="px-4 py-2.5 text-right">Loyer au 31 déc</th>
+                <th className="px-4 py-2.5 text-right">Loyer mensuel</th>
                 <th className="px-4 py-2.5">Statut</th>
                 <th className="px-4 py-2.5">No de relevé (RQ)</th>
                 <th className="px-4 py-2.5 text-right">Actions</th>
@@ -2192,6 +2264,25 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
                       <div className="text-[10px] text-white/40">
                         {r.locataire_email || "(pas d'email)"}
                       </div>
+                      {/* Occupation retenue DANS l'année : un bail qui se
+                          termine en cours d'année reste visible. */}
+                      {r.occupation_debut && r.occupation_fin ? (
+                        <div className="text-[10px] text-white/40">
+                          Occupé du {r.occupation_debut} au {r.occupation_fin}
+                        </div>
+                      ) : null}
+                      {r.occupants
+                        .filter((o) => !o.principal)
+                        .map((o) => (
+                          <div
+                            key={o.bail_id ?? o.locataire_id ?? o.debut}
+                            className="text-[10px] text-amber-300/70"
+                            title="A aussi occupé ce logement pendant l'année — le relevé revient au locataire présent au 31 décembre."
+                          >
+                            Aussi : {o.locataire_nom || "—"} ({o.debut} →{" "}
+                            {o.fin})
+                          </div>
+                        ))}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-xs text-white/80">
                       {fmtCurrency(r.loyer_31_dec)}
@@ -2217,8 +2308,10 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
                               "Numéro de relevé enregistré."
                             );
                         }}
-                        placeholder="ex. R310001234"
-                        className="w-36 rounded-md border border-brand-800 bg-brand-950 px-2 py-1 font-mono text-xs text-white outline-none focus:border-accent-500"
+                        disabled={verrouille}
+                        title={verrouille ? msgVerrou : undefined}
+                        placeholder={verrouille ? "—" : "ex. R310001234"}
+                        className="w-36 rounded-md border border-brand-800 bg-brand-950 px-2 py-1 font-mono text-xs text-white outline-none focus:border-accent-500 disabled:cursor-not-allowed disabled:opacity-40"
                       />
                     </td>
                     <td className="px-4 py-2.5 text-right">
@@ -2235,17 +2328,21 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
                         ) : null}
                         <button
                           type="button"
-                          disabled={busy}
+                          disabled={busy || verrouille}
                           onClick={() => void envoyer(r)}
-                          className="btn-accent btn-xs disabled:opacity-40"
-                          title="Envoyer la copie au locataire (PDF joint + lien suivi) — numéro de relevé obligatoire"
+                          className="btn-accent btn-xs disabled:cursor-not-allowed disabled:opacity-40"
+                          title={
+                            verrouille
+                              ? msgVerrou
+                              : "Envoyer la copie au locataire (PDF joint + lien suivi) — numéro de relevé obligatoire"
+                          }
                         >
                           <Mail className="h-3 w-3" />
                           {r.statut === "remis" ? "Renvoyer" : "Envoyer"}
                         </button>
                         <button
                           type="button"
-                          disabled={busy}
+                          disabled={busy || verrouille}
                           onClick={() => {
                             if (
                               r.document_id &&
@@ -2259,11 +2356,13 @@ La copie PDF liée sera supprimée et la ligne redeviendra « à produire ».`
                             uploadFor.current = r;
                             fileRef.current?.click();
                           }}
-                          className="rounded-lg border border-brand-700 bg-brand-900 p-1.5 text-white/70 transition hover:bg-brand-800 disabled:opacity-50"
+                          className="rounded-lg border border-brand-700 bg-brand-900 p-1.5 text-white/70 transition hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
                           title={
-                            r.document_id
-                              ? "Remplacer le relevé courant — l'ancien reste dans les Documents"
-                              : "Importer la copie PDF du relevé (émise par Revenu Québec)"
+                            verrouille
+                              ? msgVerrou
+                              : r.document_id
+                                ? "Remplacer le relevé courant — l'ancien reste dans les Documents"
+                                : "Importer la copie PDF du relevé (émise par Revenu Québec)"
                           }
                         >
                           {busy ? (

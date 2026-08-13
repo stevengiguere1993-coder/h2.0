@@ -14,6 +14,7 @@ import {
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
+import { LOUER_INDEFINIMENT_INFO } from "@/components/immobilier/fin-bail";
 import {
   fmtPieces,
   LogementFiche,
@@ -303,9 +304,16 @@ export default function LogementsPage() {
                         {l.type}
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-white/70">
-                        {l.location_en_chambres
-                          ? "Chambre"
-                          : fmtPieces(l.nb_pieces_decimal)}
+                        {l.location_en_chambres ? (
+                          <span
+                            title={LOUER_INDEFINIMENT_INFO}
+                            className="cursor-help border-b border-dotted border-white/25"
+                          >
+                            Chambre ∞
+                          </span>
+                        ) : (
+                          fmtPieces(l.nb_pieces_decimal)
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right font-mono text-xs text-white/80">
                         {fmtMoney(l.loyer_demande)}

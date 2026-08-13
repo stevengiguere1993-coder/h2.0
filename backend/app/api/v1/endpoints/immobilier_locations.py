@@ -828,6 +828,13 @@ async def convertir_dossier(
         loyer_mensuel=payload.loyer_mensuel,
         depot_garantie=payload.depot_garantie,
         status="propose",
+        # « Louer indéfiniment (chambre) » : le logement impose le bail
+        # AU MOIS — loyer figé, aucun renouvellement (Phil 2026-08-13).
+        au_mois=(
+            True
+            if getattr(lg, "location_en_chambres", False)
+            else None
+        ),
     )
     bail.created_at = now
     bail.updated_at = now
@@ -1048,6 +1055,9 @@ class SuiviBailRow(BaseModel):
     logement_id: int
     logement_numero: str
     logement_status: str
+    #: « Louer indéfiniment (chambre) » — loyer figé, bail au mois,
+    #: jamais de renouvellement (Logement.location_en_chambres).
+    logement_en_chambres: bool = False
     immeuble_id: int
     immeuble_name: str
     # Bail COURANT (actif) — None = ligne grise (à créer / importer).
@@ -1223,6 +1233,9 @@ async def suivi_baux(
                 logement_id=lg.id,
                 logement_numero=str(lg.numero or ""),
                 logement_status=lg.status,
+                logement_en_chambres=bool(
+                    getattr(lg, "location_en_chambres", False)
+                ),
                 immeuble_id=im.id if im else 0,
                 immeuble_name=im.name if im else "—",
                 bail_id=b.id if b else None,

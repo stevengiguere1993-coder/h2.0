@@ -1155,6 +1155,10 @@ async def renouvellements_overview(
                     # Baux AU MOIS : reconduction auto, jamais d'avis —
                     # hors du suivi (retour Phil 2026-07-28).
                     Bail.au_mois.isnot(True),
+                    # « Louer indéfiniment (chambre) » : même logique au
+                    # niveau du LOGEMENT — filet pour les baux legacy
+                    # créés avant que le flag pilote au_mois (2026-08-13).
+                    Logement.location_en_chambres.isnot(True),
                 )
             ).order_by(Bail.date_fin.asc())
         )

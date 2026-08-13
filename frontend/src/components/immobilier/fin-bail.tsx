@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { FileSignature, Loader2, X } from "lucide-react";
+import { FileSignature, Info, Loader2, X } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
 
@@ -23,6 +23,8 @@ export type SuiviBailRow = {
   logement_id: number;
   logement_numero: string;
   logement_status: string;
+  /** « Louer indéfiniment (chambre) » — loyer figé, bail au mois. */
+  logement_en_chambres?: boolean;
   immeuble_id: number;
   immeuble_name: string;
   bail_id: number | null;
@@ -65,6 +67,45 @@ export const KANBAN_STATUTS: Array<{ id: string; label: string }> = [
 
 const INPUT_CLS =
   "rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
+
+// ─── « Louer indéfiniment (chambre) » ───────────────────────────────────
+//
+// Anciennement « Loué en chambre » : le flag Logement.location_en_chambres
+// (nom de colonne inchangé) veut dire « on loue ça au mois, pour toujours ».
+// Conséquences, toutes portées par le BAIL (au_mois) :
+//   - loyer figé, aucun avis d'augmentation à produire ;
+//   - jamais dans les échéances ni dans le hub Renouvellements ;
+//   - tarif de gestion « chambre » (moindre) au contrat de gestion.
+// Libellé et texte d'aide sont CENTRALISÉS ici — un seul endroit à
+// changer (retour Phil 2026-08-13).
+
+export const LOUER_INDEFINIMENT_LABEL = "Louer indéfiniment (chambre)";
+
+export const LOUER_INDEFINIMENT_INFO =
+  "Le logement est loué au mois, indéfiniment. Le loyer reste le même " +
+  "— aucun avis d'augmentation n'est attendu et l'unité n'apparaît pas " +
+  "dans les renouvellements. Le tarif de gestion appliqué est celui des " +
+  "chambres (moindre).";
+
+/** Bulle d'information — même boîte « info » que le reste du pôle. */
+export function LouerIndefinimentBulle({
+  className,
+  children
+}: {
+  className?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div
+      className={`flex items-start gap-2 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-[11px] leading-relaxed text-sky-200 ${
+        className ?? ""
+      }`}
+    >
+      <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+      <span>{children ?? LOUER_INDEFINIMENT_INFO}</span>
+    </div>
+  );
+}
 
 // ─── Jour d'échéance du loyer (bail TAL « Ou le ___ ») ──────────────────
 //
@@ -393,15 +434,19 @@ export function CreerBailModal({
   logementId,
   immeubleName,
   logementNumero,
+  logementEnChambres,
   onClose,
   onDone
 }: {
   logementId: number;
   immeubleName?: string | null;
   logementNumero?: string | null;
+  /** Logement « Louer indéfiniment (chambre) » → bail au mois imposé. */
+  logementEnChambres?: boolean | null;
   onClose: () => void;
   onDone: (statut: CreerBailStatut) => void;
 }) {
+  const indefini = Boolean(logementEnChambres);
   const [modeExistant, setModeExistant] = useState(true);
   const [dispo, setDispo] = useState<
     { id: number; full_name: string }[] | null
@@ -470,7 +515,10 @@ export function CreerBailModal({
           loyer_mensuel: Number(loyer),
           depot_garantie: depot.trim() ? Number(depot) : null,
           jour_echeance: jourEcheance,
-          status: statut
+          status: statut,
+          // Le flag du logement fait foi (le serveur le réimpose de
+          // toute façon) — pas de bascule manuelle à la création.
+          au_mois: indefini ? true : null
         })
       });
       if (!rb.ok) {
@@ -508,6 +556,16 @@ export function CreerBailModal({
             (« Bail à envoyer ») : importe ensuite le PDF signé (CORPIQ)
             pour le rendre actif.
           </p>
+          {indefini ? (
+            <LouerIndefinimentBulle>
+              <strong className="font-semibold text-white">
+                Ce logement est loué indéfiniment (chambre)
+              </strong>{" "}
+              : le bail sera créé <strong>au mois</strong> — loyer figé,
+              reconduction automatique, aucun avis de renouvellement.{" "}
+              {LOUER_INDEFINIMENT_INFO}
+            </LouerIndefinimentBulle>
+          ) : null}
           <div className="flex gap-1.5">
             <button
               type="button"
@@ -616,6 +674,12 @@ export function CreerBailModal({
                 onChange={(e) => setFin(e.target.value)}
                 className={`${INPUT_CLS} mt-0.5 block w-full`}
               />
+              {indefini ? (
+                <span className="mt-0.5 block text-[10px] font-normal text-sky-300/80">
+                  Formalité : le bail se reconduit tout seul au même
+                  loyer, cette date ne déclenche rien.
+                </span>
+              ) : null}
             </label>
           </div>
           <div className="grid grid-cols-2 gap-2">

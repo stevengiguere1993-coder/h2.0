@@ -30,7 +30,10 @@ import { ImmobilierTopbar } from "../../layout";
 import { AssignerBailButton } from "@/components/immobilier/assigner-bail";
 import {
   echeanceLabel,
-  JourEcheanceInline
+  JourEcheanceInline,
+  LOUER_INDEFINIMENT_INFO,
+  LOUER_INDEFINIMENT_LABEL,
+  LouerIndefinimentBulle
 } from "@/components/immobilier/fin-bail";
 import {
   fmtPieces,
@@ -542,8 +545,11 @@ export default function LogementDetailPage({
                         className={inputCls}
                       />
                     </EditField>
-                    <EditField label="Loué en chambre">
-                      <label className="flex h-9 cursor-pointer items-center gap-2 text-sm text-white/80">
+                    <EditField label={LOUER_INDEFINIMENT_LABEL}>
+                      <label
+                        title={LOUER_INDEFINIMENT_INFO}
+                        className="flex h-9 cursor-pointer items-center gap-2 text-sm text-white/80"
+                      >
                         <input
                           type="checkbox"
                           checked={form.location_en_chambres}
@@ -555,9 +561,12 @@ export default function LogementDetailPage({
                           }
                           className="h-4 w-4 accent-accent-500"
                         />
-                        Logement loué à la chambre
+                        Loyer figé, bail au mois
                       </label>
                     </EditField>
+                    {form.location_en_chambres ? (
+                      <LouerIndefinimentBulle className="col-span-2" />
+                    ) : null}
                     <EditField label="Étage">
                       <input
                         inputMode="numeric"
@@ -654,6 +663,15 @@ export default function LogementDetailPage({
                             : "—"
                       }
                     />
+                    {lg.location_en_chambres ? (
+                      <>
+                        <Row
+                          label={LOUER_INDEFINIMENT_LABEL}
+                          value="Oui — loyer figé, bail au mois"
+                        />
+                        <LouerIndefinimentBulle className="mt-1" />
+                      </>
+                    ) : null}
                   </dl>
                 )}
               </div>

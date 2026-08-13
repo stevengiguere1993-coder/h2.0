@@ -21,7 +21,9 @@ import { Loader2, Plus, Search, UserPlus, X } from "lucide-react";
 import { authedFetch } from "@/lib/auth";
 import {
   JOUR_ECHEANCE_DEFAUT,
-  JourEcheanceField
+  JourEcheanceField,
+  LOUER_INDEFINIMENT_INFO,
+  LouerIndefinimentBulle
 } from "@/components/immobilier/fin-bail";
 
 type LocataireItem = {
@@ -63,7 +65,7 @@ export function AssignerBailButton({
   mode: "logement" | "locataire";
   logementId?: number;
   logementLabel?: string;
-  /** Pré-coche « Bail au mois » (les chambres se louent au mois). */
+  /** Logement « Louer indéfiniment (chambre) » → bail créé AU MOIS. */
   logementEnChambres?: boolean;
   locataireId?: number;
   locataireNom?: string;
@@ -148,9 +150,6 @@ function AssignerBailModal({
   const [depot, setDepot] = useState("");
   // Bail TAL « Ou le ___ » : 1er du mois pour l'immense majorité.
   const [jourEcheance, setJourEcheance] = useState(JOUR_ECHEANCE_DEFAUT);
-  // Bail AU MOIS (chambres) : reconduction auto, jamais d'avis de
-  // renouvellement. Pré-coché quand le logement est loué en chambres.
-  const [auMois, setAuMois] = useState(Boolean(logementEnChambres));
   // Statut de création UNIFIÉ (même défaut que la page Baux) : proposé
   // → suivi via le kanban Locations ; actif → bail déjà signé/en vigueur.
   const [statut, setStatut] = useState<"propose" | "actif">("propose");
@@ -192,6 +191,18 @@ function AssignerBailModal({
       }
     });
   }, [mode, immId]);
+
+  // « Louer indéfiniment (chambre) » : c'est le LOGEMENT qui décide, pas
+  // une case à cocher du formulaire — le bail naît AU MOIS (le serveur le
+  // réimpose de toute façon). Retour Phil 2026-08-13.
+  const logementChoisi = useMemo(
+    () => (logements || []).find((l) => String(l.id) === logId) || null,
+    [logements, logId]
+  );
+  const indefini =
+    mode === "logement"
+      ? Boolean(logementEnChambres)
+      : Boolean(logementChoisi?.location_en_chambres);
 
   const resultats = useMemo(() => {
     const q = rech.trim().toLowerCase();
@@ -260,7 +271,7 @@ function AssignerBailModal({
             : null,
           jour_echeance: jourEcheance,
           status: statut,
-          au_mois: auMois
+          au_mois: indefini ? true : null
         })
       });
       if (!rb.ok) {
@@ -436,13 +447,7 @@ function AssignerBailModal({
               </label>
               <select
                 value={logId}
-                onChange={(e) => {
-                  setLogId(e.target.value);
-                  const lg = (logements || []).find(
-                    (l) => String(l.id) === e.target.value
-                  );
-                  if (lg?.location_en_chambres) setAuMois(true);
-                }}
+                onChange={(e) => setLogId(e.target.value)}
                 disabled={!immId}
                 className="input mt-1 w-full disabled:opacity-50"
               >
@@ -513,6 +518,12 @@ function AssignerBailModal({
               onChange={(e) => setFin(e.target.value)}
               className="input mt-1 w-full"
             />
+            {indefini ? (
+              <p className="mt-1 text-[10px] text-sky-300/80">
+                Formalité : le bail se reconduit tout seul au même loyer,
+                cette date ne déclenche rien.
+              </p>
+            ) : null}
           </div>
           <div>
             <JourEcheanceField
@@ -557,20 +568,16 @@ function AssignerBailModal({
           </label>
         </div>
 
-        <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2">
-          <input
-            type="checkbox"
-            checked={auMois}
-            onChange={(e) => setAuMois(e.target.checked)}
-            className="mt-0.5 h-4 w-4 accent-[var(--accent-500,#f59e0b)]"
-          />
-          <span className="text-xs text-white/70">
-            <span className="font-semibold text-white">Bail au mois</span>{" "}
-            (chambres) — reconduction automatique au même prix : jamais
-            d&apos;avis de renouvellement, le loyer court jusqu&apos;au
-            départ. Modifiable ensuite sur le bail.
-          </span>
-        </label>
+        {indefini ? (
+          <LouerIndefinimentBulle className="mt-3">
+            <strong className="font-semibold text-white">
+              Ce logement est loué indéfiniment (chambre)
+            </strong>{" "}
+            : le bail sera créé <strong>au mois</strong> — loyer figé,
+            reconduction automatique, aucun renouvellement.{" "}
+            {LOUER_INDEFINIMENT_INFO}
+          </LouerIndefinimentBulle>
+        ) : null}
 
         <button
           className="btn-accent btn-sm mt-4 w-full justify-center disabled:opacity-50"
