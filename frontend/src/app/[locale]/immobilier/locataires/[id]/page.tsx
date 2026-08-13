@@ -42,6 +42,7 @@ import {
   RelocationStatutPastille
 } from "@/components/immobilier/fin-bail";
 import {
+  CelluleLoyer,
   CorrectionOptions,
   duMois,
   RENOUVELLEMENT_BADGES
@@ -2154,52 +2155,27 @@ function LoyersMoisSection({
                   {r.immeuble_name}
                   {r.logement_numero ? ` · ${r.logement_numero}` : ""}
                 </span>
-                <span className="ml-auto text-sm font-semibold tabular-nums text-white">
-                  {money(r.loyer_mensuel)}
+                {/* Même empilement Loyer / Reçu / Solde que la page
+                    Paiements et la fiche immeuble (retour Phil
+                    2026-08-13) — une seule lecture partout. */}
+                <span className="ml-auto text-sm">
+                  <CelluleLoyer
+                    loyer={r.loyer_mensuel}
+                    recu={r.montant_paye}
+                    solde={r.solde_total}
+                    fmt={money}
+                    frais={r.frais_mois}
+                    onSupprimerFrais={(id) => void supprimerFrais(id)}
+                  />
                 </span>
               </div>
-              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
-                {(r.montant_paye ?? 0) > 0 ? (
-                  <span className="text-emerald-300">
-                    reçu {money(r.montant_paye ?? 0)}
-                    {r.paye_le ? ` le ${r.paye_le}` : ""}
-                  </span>
-                ) : null}
-                {r.etat === "partiel" ? (
-                  // La BALANCE du mois, bien visible (retour Phil
-                  // 2026-08-13).
-                  <span className="font-semibold text-amber-200">
-                    reste{" "}
-                    {money(
-                      Math.max(0, duMois(r) - (r.montant_paye ?? 0))
-                    )}
-                  </span>
-                ) : null}
-                {(r.solde_total ?? 0) > 0 ? (
-                  <span
-                    className="font-semibold text-rose-300"
-                    title="Cumul dû sur le bail (loyers échus + frais − reçus)"
-                  >
-                    solde dû {money(r.solde_total ?? 0)}
-                  </span>
-                ) : null}
-                {(r.frais_mois ?? []).map((f) => (
-                  <span
-                    key={f.id}
-                    className="inline-flex items-center gap-1 text-amber-300"
-                  >
-                    + {money(f.montant)} {f.libelle}
-                    <button
-                      type="button"
-                      onClick={() => void supprimerFrais(f.id)}
-                      title="Retirer ce frais"
-                      className="text-white/40 transition hover:text-rose-300"
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
+              {/* Reçu, solde et frais vivent maintenant dans la cellule
+                  Loyer ci-dessus — ici on ne garde que la DATE. */}
+              {r.paye_le ? (
+                <div className="mt-1 text-[11px] text-white/60">
+                  Payé le {r.paye_le}
+                </div>
+              ) : null}
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 {r.etat !== "paye" ? (
                   <>

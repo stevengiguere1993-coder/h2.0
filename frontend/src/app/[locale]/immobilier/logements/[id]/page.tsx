@@ -41,6 +41,7 @@ import {
   fmtPieces,
   type LogementFicheData
 } from "@/components/immobilier/logement-fiche";
+import { CelluleLoyer } from "@/components/immobilier/paiements-actions";
 
 /**
  * Fiche logement — VRAIE page 360 d'un logement : infos (ÉDITABLES
@@ -140,6 +141,25 @@ function fmtDate(d: string | null | undefined): string {
   return d.slice(0, 10);
 }
 
+/** Ligne « loyer du mois » — champs communs à /loyers/overview (interne)
+ *  et /loyers/externes (gestion externe). */
+type LoyerMoisLigne = {
+  logement_id?: number | null;
+  loyer_mensuel: number;
+  montant_paye: number | null;
+  solde_total?: number;
+};
+
+function moisCourant(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+const moisCourantLisible = new Date().toLocaleDateString("fr-CA", {
+  month: "long",
+  year: "numeric"
+});
+
 function StatutBadge({ status }: { status: string }) {
   const map: Record<string, { cls: string; label: string }> = {
     occupe: { cls: "badge-emerald", label: "Occupé" },
@@ -163,6 +183,10 @@ export default function LogementDetailPage({
   const fromImmeuble = searchParams.get("from") === "immeuble";
   const [dossier, setDossier] = useState<Dossier | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Loyer du MOIS COURANT (lecture seule) : mêmes chiffres que la page
+  // Paiements — interne via /loyers/overview, gestion externe via
+  // /loyers/externes. La saisie reste sur les surfaces dédiées.
+  const [loyerMois, setLoyerMois] = useState<LoyerMoisLigne | null>(null);
 
   // Édition INLINE des infos (plus de modale) + notes.
   const [editing, setEditing] = useState(false);
@@ -201,6 +225,31 @@ export default function LogementDetailPage({
   useEffect(() => {
     void loadDossier();
   }, [loadDossier]);
+
+  useEffect(() => {
+    let annule = false;
+    void (async () => {
+      const mois = moisCourant();
+      const [ri, rx] = await Promise.all([
+        authedFetch(`/api/v1/immobilier/loyers/overview?mois=${mois}`),
+        authedFetch(`/api/v1/immobilier/loyers/externes?mois=${mois}`)
+      ]);
+      if (annule) return;
+      let ligne: LoyerMoisLigne | null = null;
+      if (ri.ok) {
+        const d = (await ri.json()) as { rows: LoyerMoisLigne[] };
+        ligne = d.rows.find((r) => r.logement_id === logementId) || null;
+      }
+      if (!ligne && rx.ok) {
+        const d = (await rx.json()) as { rows: LoyerMoisLigne[] };
+        ligne = d.rows.find((r) => r.logement_id === logementId) || null;
+      }
+      if (!annule) setLoyerMois(ligne);
+    })();
+    return () => {
+      annule = true;
+    };
+  }, [logementId]);
 
   function startEdit() {
     const l = dossier?.logement;
@@ -784,6 +833,24 @@ export default function LogementDetailPage({
                         }
                       />
                     </dl>
+                    {/* Même empilement Loyer / Reçu / Solde que la page
+                        Paiements et les fiches immeuble/locataire —
+                        « partout dans la colonne loyer » (Phil
+                        2026-08-13). Vaut aussi en gestion externe, où le
+                        suivi se fait par logement. */}
+                    {loyerMois ? (
+                      <div className="rounded-xl border border-brand-800 bg-brand-950/40 p-3">
+                        <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/60">
+                          Loyer du mois — {moisCourantLisible}
+                        </p>
+                        <CelluleLoyer
+                          loyer={loyerMois.loyer_mensuel}
+                          recu={loyerMois.montant_paye}
+                          solde={loyerMois.solde_total}
+                          fmt={money}
+                        />
+                      </div>
+                    ) : null}
                     <div className="flex flex-wrap items-center gap-2 pt-1">
                       <span
                         className={`badge ${BAIL_STATUS_BADGE[bailActif.status] || "badge-neutral"}`}

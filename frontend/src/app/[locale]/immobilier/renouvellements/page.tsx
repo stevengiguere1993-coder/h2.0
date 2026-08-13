@@ -467,33 +467,105 @@ const FENETRE_LABELS: Record<RenouvellementOverview["fenetre"], string> = {
   a_envoyer: "À envoyer",
   envoye: "Avis envoyé",
   reconduit: "Reconduit tel quel",
-  hors_fenetre: "Hors fenêtre"
-};
-
-const FENETRE_TONE: Record<RenouvellementOverview["fenetre"], string> = {
-  echu: "badge-rose",
-  imminente: "badge-rose",
-  a_envoyer: "badge-amber",
-  envoye: "badge-emerald",
-  reconduit: "badge-emerald",
-  hors_fenetre: "badge-neutral"
+  hors_fenetre: "Rien à faire"
 };
 
 //: Lignes « réglées » (avis envoyé ou bail reconduit) — en bas de
 //: liste, sauf REFUS (rouge, tout en haut : 1 mois pour la fixation).
 const FENETRES_REGLEES = new Set(["envoye", "reconduit"]);
 
+/**
+ * Code couleur des avis de renouvellement — même sémantique que partout
+ * ailleurs dans Kratos (retour Phil 2026-08-13) :
+ *
+ *  - VERT   : rien à faire. L'état normal ~9 mois sur 12 — soit l'avis du
+ *             cycle courant est envoyé/réglé, soit la fenêtre d'envoi
+ *             n'est pas encore ouverte.
+ *  - GRIS   : aucun avis au dossier, jamais importé. « On ne sait pas »,
+ *             ce n'est PAS une alerte.
+ *  - JAUNE  : la fenêtre légale d'envoi est ouverte (elle s'ouvre N mois
+ *             avant la fin — réglage « Suivis annuels », défaut 6).
+ *  - ORANGE : elle se referme (moins de 3 mois : plancher légal de
+ *             l'art. 1942 C.c.Q.) — le dégradé se réchauffe.
+ *  - ROUGE  : urgence — moins d'un mois avant la fin, ou bail déjà échu
+ *             sans avis, ou refus à porter au TAL.
+ *
+ * Le mauve reste réservé au flux de relocation, qui a sa propre lecture.
+ *
+ * Les baux « au mois » / « Louer indéfiniment (chambre) » et les
+ * immeubles en gestion externe n'arrivent jamais ici : le backend les
+ * exclut de /renouvellements/overview — donc jamais de jaune ni de rouge
+ * pour eux.
+ */
+type TonRenouvellement =
+  | "vert"
+  | "gris"
+  | "jaune"
+  | "orange"
+  | "rouge"
+  | "mauve";
+
+const TON_BADGE: Record<TonRenouvellement, string> = {
+  vert: "badge-emerald",
+  gris: "badge-neutral",
+  jaune: "badge-amber",
+  orange: "badge-orange",
+  rouge: "badge-rose",
+  mauve: "badge-violet"
+};
+
+const TON_LIGNE: Record<TonRenouvellement, string> = {
+  vert: "bg-emerald-500/10 hover:bg-emerald-500/15",
+  gris: "hover:bg-brand-950/50",
+  jaune: "bg-amber-500/10 hover:bg-amber-500/15",
+  orange: "bg-orange-500/15 hover:bg-orange-500/20",
+  rouge: "bg-rose-500/15 hover:bg-rose-500/20",
+  mauve: "bg-violet-500/10 hover:bg-violet-500/15"
+};
+
+//: Urgence : à moins d'un mois de la fin, sans avis, c'est rouge.
+const JOURS_URGENCE = 31;
+
+/** Rien du tout au dossier : ni cycle, ni avis envoyé, ni document
+ *  importé. On ne peut pas dire « tout beau » — d'où le gris. */
+function sansAucunAvis(r: RenouvellementOverview): boolean {
+  return (
+    !r.renouvellement_id &&
+    !r.avis_envoye_le &&
+    !r.document_id &&
+    !r.avis_doc_envoye_le
+  );
+}
+
+function tonLigne(r: RenouvellementOverview): TonRenouvellement {
+  // Flux départ / relocation : lecture propre, hors dégradé d'envoi.
+  if (r.relocation_dossier_id) return "mauve";
+  if (r.reponse === "refuse") return "rouge"; // 1 mois pour la fixation TAL
+  if (r.reponse === "depart") return "orange"; // relocation à ouvrir
+  // Avis du cycle courant envoyé, accepté, réputé accepté, ou bail
+  // reconduit tel quel → rien à faire.
+  if (r.reponse || FENETRES_REGLEES.has(r.fenetre)) return "vert";
+  if (r.fenetre === "echu") return "rouge"; // date à corriger
+  if (r.jours_avant_fin <= JOURS_URGENCE) return "rouge";
+  if (r.fenetre === "imminente") return "orange";
+  if (r.fenetre === "a_envoyer") return "jaune";
+  // Hors fenêtre : rien à faire… sauf qu'on n'a jamais rien vu passer.
+  return sansAucunAvis(r) ? "gris" : "vert";
+}
+
+//: Ordre d'affichage : le plus chaud en haut, le vert en bas. Le gris
+//: n'est pas une alerte → il passe après les couleurs d'action.
+const RANG_TON: Record<TonRenouvellement, number> = {
+  rouge: 0,
+  orange: 1,
+  jaune: 2,
+  mauve: 3,
+  gris: 4,
+  vert: 5
+};
+
 function rangLigne(r: RenouvellementOverview): number {
-  // Ordre voulu (retour Phil 2026-07-31) : ROUGE (action requise) →
-  // GRIS (à envoyer) → JAUNE (attente) → MAUVE/ORANGE (départs) →
-  // VERT (réglés).
-  if (r.reponse === "refuse") return 0; // rouge — fixation TAL
-  if (r.fenetre === "echu" && !r.reponse) return 0; // rouge — date
-  if (r.relocation_dossier_id) return 3; // mauve — en relocation
-  if (r.reponse === "depart") return 3; // orange — départ annoncé
-  if (r.reponse === "attente") return 2; // jaune
-  if (FENETRES_REGLEES.has(r.fenetre) || r.reponse) return 4; // verts
-  return 1; // gris — à préparer
+  return RANG_TON[tonLigne(r)];
 }
 
 function fmtCurrency(n: number | null | undefined): string {
@@ -950,22 +1022,7 @@ Nouvelle date de fin :`,
               </thead>
               <tbody className="divide-y divide-brand-800">
                 {sorted.map((r) => (
-                  <tr
-                    key={r.bail_id}
-                    className={
-                      r.relocation_dossier_id
-                        ? "bg-violet-500/10 hover:bg-violet-500/15"
-                        : r.reponse === "refuse"
-                          ? "bg-rose-500/15 hover:bg-rose-500/20"
-                        : r.reponse === "attente" || r.reponse === "depart"
-                          ? "bg-amber-500/10 hover:bg-amber-500/15"
-                          : FENETRES_REGLEES.has(r.fenetre)
-                            ? "bg-emerald-500/10 hover:bg-emerald-500/15"
-                            : r.fenetre === "echu"
-                              ? "bg-rose-500/10 hover:bg-rose-500/15"
-                              : "hover:bg-brand-950/50"
-                    }
-                  >
+                  <tr key={r.bail_id} className={TON_LIGNE[tonLigne(r)]}>
                     <td className="px-4 py-2.5">
                       <Link
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1047,18 +1104,7 @@ Nouvelle date de fin :`,
                     </td>
                     <td className="px-4 py-2.5">
                       <span
-                        className={`badge ${
-                          r.relocation_dossier_id
-                            ? "badge-violet"
-                            : r.reponse === "refuse"
-                              ? "badge-rose"
-                            : r.reponse === "attente" ||
-                                r.reponse === "depart"
-                              ? "badge-amber"
-                              : r.reponse
-                                ? "badge-emerald"
-                                : FENETRE_TONE[r.fenetre]
-                        }`}
+                        className={`badge ${TON_BADGE[tonLigne(r)]}`}
                       >
                         {r.relocation_dossier_id
                           ? "Non renouvelé — en relocation"
@@ -1072,7 +1118,12 @@ Nouvelle date de fin :`,
                                 ? `Accepté${r.reponse_le ? ` le ${r.reponse_le}` : ""}`
                                 : r.reponse === "repute_accepte"
                                   ? "Réputé accepté (1 mois sans réponse)"
-                                  : FENETRE_LABELS[r.fenetre]}
+                                  : tonLigne(r) === "gris"
+                                    ? "Aucun avis au dossier"
+                                    : tonLigne(r) === "rouge" &&
+                                        r.fenetre !== "echu"
+                                      ? "Urgent — moins d'un mois"
+                                      : FENETRE_LABELS[r.fenetre]}
                       </span>
                       {r.reponse === "refuse" && r.deadline_fixation ? (
                         <div className="mt-1 text-[10px] font-bold text-rose-300">

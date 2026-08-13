@@ -4700,6 +4700,13 @@ async def baux_echeances(
     """
     _require_volet(user)
     today = datetime.now(timezone.utc).date()
+    # MÊME fenêtre que la page Suivis annuels : le réglage « renouvellement
+    # N mois avant » pilote l'ouverture ici aussi (avant, 183 j en dur →
+    # le bandeau de la page Paiements contredisait la page Renouvellements).
+    from app.services.locatif_suivis import get_suivis
+
+    suivis_cfg = await get_suivis()
+    ouverture_jours = suivis_cfg.renouvellement_mois_avant * 30
 
     # Gestion externe : les avis de renouvellement relèvent du
     # gestionnaire tiers → exclu (isnot(True) couvre les NULL legacy).
@@ -4776,7 +4783,9 @@ async def baux_echeances(
             and getattr(logement, "location_en_chambres", False)
         ):
             continue
-        window_start = b.date_fin - timedelta(days=183)
+        # Ouverture réglable (défaut 6 mois) ; fermeture au plancher légal
+        # de 3 mois (art. 1942 C.c.Q.), qui lui ne se règle pas.
+        window_start = b.date_fin - timedelta(days=ouverture_jours)
         window_end = b.date_fin - timedelta(days=91)
         # Avis déjà transmis dans ce cycle ?
         if any(

@@ -10,6 +10,8 @@ export type BadgeVariant =
   | "neutral"
   | "emerald"
   | "amber"
+  //: Palier entre l'ambre et le rose (dégradé d'urgence).
+  | "orange"
   | "rose"
   | "sky"
   | "blue"
@@ -19,6 +21,7 @@ const VARIANT_CLASS: Record<BadgeVariant, string> = {
   neutral: "badge-neutral",
   emerald: "badge-emerald",
   amber: "badge-amber",
+  orange: "badge-orange",
   rose: "badge-rose",
   sky: "badge-sky",
   blue: "badge-blue",

@@ -45,6 +45,8 @@ import {
 import { LocationsBoard } from "@/components/immobilier/locations-board";
 import { BailDocActions } from "@/components/immobilier/tal-avis";
 import {
+  BadgeGestionExterne,
+  CelluleLoyer,
   CorrectionOptions,
   duMois,
   RENOUVELLEMENT_BADGES
@@ -317,6 +319,9 @@ export default function ImmeubleDetailPage({
     nb_logements: "",
     purchase_price: "",
     urgence_phone: "",
+    //: Entreprise propriétaire (INC). Vit dans imm_immeuble_ownerships,
+    //: pas sur l'immeuble → enregistrée par un appel séparé.
+    owner_entreprise_id: "",
     gestion_externe: false,
     gestionnaire_externe_nom: "",
     gestionnaire_externe_contact: "",
@@ -557,6 +562,7 @@ export default function ImmeubleDetailPage({
         ? String(immeuble.purchase_price)
         : "",
       urgence_phone: immeuble.urgence_phone || "",
+      owner_entreprise_id: ownerId != null ? String(ownerId) : "",
       gestion_externe: !!immeuble.gestion_externe,
       gestionnaire_externe_nom: immeuble.gestionnaire_externe_nom || "",
       gestionnaire_externe_contact:
@@ -608,6 +614,27 @@ export default function ImmeubleDetailPage({
       if (!res.ok)
         throw new Error((await res.text()).slice(0, 200) || `HTTP ${res.status}`);
       setImmeuble((await res.json()) as Immeuble);
+      // Le propriétaire est une AUTRE ressource (ownerships) : on
+      // l'enregistre après les champs de l'immeuble, et seulement s'il a
+      // changé. La fiche d'entreprise et l'organigramme de détention
+      // lisent la même table → la propagation est immédiate.
+      const nouvelOwner = editForm.owner_entreprise_id
+        ? Number(editForm.owner_entreprise_id)
+        : null;
+      if (nouvelOwner != null && nouvelOwner !== ownerId) {
+        const resOwner = await authedFetch(
+          `/api/v1/immobilier/immeubles/${immeubleId}/owner`,
+          {
+            method: "PUT",
+            body: JSON.stringify({ entreprise_id: nouvelOwner })
+          }
+        );
+        if (!resOwner.ok)
+          throw new Error(
+            `propriétaire — HTTP ${resOwner.status} (les autres champs sont enregistrés)`
+          );
+        setOwnerships((await resOwner.json()) as Ownership[]);
+      }
       setShowEdit(false);
     } catch (e) {
       setActionErr(`Modification échouée : ${(e as Error).message}`);
@@ -1110,6 +1137,41 @@ export default function ImmeubleDetailPage({
                   />
                 </EditField>
               </div>
+              {/* Propriétaire (INC) : le même réglage que le raccourci de
+                  l'en-tête, exposé ici parce que c'est là qu'on le
+                  cherche (retour Phil 2026-08-13). Réassigne l'immeuble à
+                  100 % → visible aussitôt en Gestion d'entreprise. */}
+              <EditField label="Propriétaire (INC)">
+                <select
+                  value={editForm.owner_entreprise_id}
+                  onChange={(e) =>
+                    setEditForm((f) => ({
+                      ...f,
+                      owner_entreprise_id: e.target.value
+                    }))
+                  }
+                  disabled={entreprises.length === 0}
+                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-accent-500 disabled:opacity-50"
+                >
+                  <option value="" disabled className="bg-brand-950 text-white">
+                    — choisir —
+                  </option>
+                  {entreprises.map((e) => (
+                    <option
+                      key={e.id}
+                      value={e.id}
+                      className="bg-brand-950 text-white"
+                    >
+                      {e.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-white/60">
+                  L&apos;immeuble est réassigné à 100 % à cette compagnie.
+                  Le changement se reflète dans Gestion d&apos;entreprise
+                  (fiche de l&apos;entreprise, organigramme de détention).
+                </p>
+              </EditField>
               <EditField label="Numéro d'urgence (concierge / gestionnaire)">
                 <input
                   type="tel"
@@ -3134,56 +3196,20 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                       </span>
                     )}
                   </td>
-                  <td className="py-2 pr-3 text-right font-mono text-xs text-white/80">
-                    {fmtCurrency(r.loyer_mensuel)}
+                  <td className="py-2 pr-3">
                     {/* Bail TAL « Ou le ___ » : muet quand c'est le 1er. */}
-                    {echeanceLabel(r.jour_echeance) ? (
-                      <div className="font-sans text-[10px] text-white/45">
-                        {echeanceLabel(r.jour_echeance)}
-                      </div>
-                    ) : null}
-                    {r.etat === "partiel" ? (
-                      <div className="text-[10px] text-amber-300">
-                        reçu {fmtCurrency(r.montant_paye ?? 0)}
-                        {/* La BALANCE du mois, bien visible
-                            (retour Phil 2026-08-13). */}
-                        <div className="text-[11px] font-semibold text-amber-200">
-                          reste{" "}
-                          {fmtCurrency(
-                            Math.max(
-                              0,
-                              duMois(r) - (r.montant_paye ?? 0)
-                            )
-                          )}
-                        </div>
-                      </div>
-                    ) : null}
-                    {(r.solde_total ?? 0) > 0 ? (
-                      <div
-                        className="text-[10px] font-semibold text-rose-300"
-                        title="Cumul dû sur le bail (loyers échus + frais − reçus)"
-                      >
-                        solde {fmtCurrency(r.solde_total ?? 0)}
-                      </div>
-                    ) : null}
-                    {(r.frais_mois ?? []).map((f) => (
-                      <div
-                        key={f.id}
-                        className="flex items-center justify-end gap-1 text-[10px] text-amber-300"
-                      >
-                        <span title={f.libelle}>
-                          + {fmtCurrency(f.montant)} {f.libelle}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => void supprimerFrais(f.id)}
-                          title="Retirer ce frais"
-                          className="text-white/40 transition hover:text-rose-300"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
+                    {/* Loyer / Reçu / Solde empilés (retour Phil
+                        2026-08-13) — la balance d'un paiement partiel se
+                        lit sur la ligne « Solde ». */}
+                    <CelluleLoyer
+                      loyer={r.loyer_mensuel}
+                      recu={r.montant_paye}
+                      solde={r.solde_total}
+                      fmt={fmtCurrency}
+                      echeance={echeanceLabel(r.jour_echeance)}
+                      frais={r.frais_mois}
+                      onSupprimerFrais={(id) => void supprimerFrais(id)}
+                    />
                   </td>
                   <td className="py-2 pr-3 text-right text-xs text-white/60">
                     {r.paye_le || "—"}
@@ -5432,6 +5458,11 @@ function Empty({ msg }: { msg: string }) {
 // La compagnie de gestion perçoit les loyers ; quand son rapport arrive,
 // on coche ici, PAR LOGEMENT (pas de locataire connu), payé ou non pour
 // le mois (retour Phil 2026-07-22, pt 10).
+//
+// MÊME mise en page que la gestion interne (retour Phil 2026-08-13) :
+// mêmes colonnes, mêmes états, même cellule Loyer/Reçu/Solde. Seule la
+// colonne « Locataire » change — une pastille bleue « Gestion externe »,
+// puisqu'il n'y a pas de locataire nominatif de notre côté.
 
 type PaiementExtRow = {
   logement_id: number;
@@ -5439,9 +5470,11 @@ type PaiementExtRow = {
   logement_status: string;
   loyer_attendu: number | null;
   paye: boolean;
-  etat: "paye" | "partiel" | "a_confirmer" | "aucun";
+  etat: "paye" | "partiel" | "retard" | "attente" | "aucun";
   montant: number | null;
   paye_le: string | null;
+  /** Manquant du MOIS (pas de solde cumulatif en gestion externe). */
+  solde_total: number;
 };
 
 type PaiementExtOverview = {
@@ -5578,8 +5611,13 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
     });
   })();
 
+  const totalSolde = (data?.rows ?? []).reduce(
+    (s, r) => s + (r.solde_total ?? 0),
+    0
+  );
+
   return (
-    <Section title={`Paiements (gestion externe) — ${moisLisible}`}>
+    <Section title={`Paiements — ${moisLisible}`}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-3 text-xs text-white/60">
           <span>
@@ -5592,6 +5630,14 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
           {data && data.nb_impayes > 0 ? (
             <span className="badge badge-rose">
               {data.nb_impayes} impayé{data.nb_impayes > 1 ? "s" : ""}
+            </span>
+          ) : null}
+          {totalSolde > 0 ? (
+            <span
+              className="badge badge-rose"
+              title="Manquant du mois selon le rapport de la compagnie de gestion"
+            >
+              Solde dû {fmtCurrency(totalSolde)}
             </span>
           ) : null}
         </div>
@@ -5629,10 +5675,10 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
           </button>
         </div>
       </div>
-      <p className="mb-3 text-xs text-white/50">
+      <p className="mb-3 text-xs text-white/60">
         Loyers perçus par la compagnie de gestion — coche ce qui est payé
         quand son rapport arrive. Le suivi est par logement : pas de
-        locataire ni de relance ici.
+        locataire nominatif (d&apos;où la pastille bleue) ni de relance ici.
       </p>
       {err ? (
         <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
@@ -5647,10 +5693,13 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
         </p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[480px] text-left text-sm">
+          {/* Mêmes colonnes que la gestion interne — « Locataire » porte
+              la pastille bleue au lieu d'un nom. */}
+          <table className="w-full min-w-[560px] text-left text-sm">
             <thead className="text-[10px] uppercase tracking-wider text-white/45">
               <tr>
                 <th className="py-2 pr-3">État</th>
+                <th className="py-2 pr-3">Locataire</th>
                 <th className="py-2 pr-3">Logement</th>
                 <th className="py-2 pr-3 text-right">Loyer</th>
                 <th className="py-2 pr-3 text-right">Payé le</th>
@@ -5662,10 +5711,10 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
                 <tr
                   key={r.logement_id}
                   // Mêmes teintes que la page Paiements (retour Phil
-                  // 2026-08-13) : vert payé, jaune partiel, rouge à
-                  // confirmer, gris sinon.
+                  // 2026-08-13) : vert payé, jaune partiel, rouge en
+                  // retard, gris sinon.
                   className={
-                    r.etat === "a_confirmer"
+                    r.etat === "retard"
                       ? "bg-rose-500/10"
                       : r.etat === "partiel"
                         ? "bg-amber-500/10"
@@ -5679,8 +5728,10 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
                       <span className="badge badge-emerald">Payé</span>
                     ) : r.etat === "partiel" ? (
                       <span className="badge badge-amber">Partiel</span>
-                    ) : r.etat === "a_confirmer" ? (
-                      <span className="badge badge-rose">À confirmer</span>
+                    ) : r.etat === "retard" ? (
+                      <span className="badge badge-rose">Retard</span>
+                    ) : r.etat === "attente" ? (
+                      <span className="badge badge-neutral">Attente</span>
                     ) : (
                       <span className="badge badge-neutral">
                         {r.logement_status === "vacant"
@@ -5688,6 +5739,9 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
                           : "—"}
                       </span>
                     )}
+                  </td>
+                  <td className="py-2 pr-3">
+                    <BadgeGestionExterne />
                   </td>
                   <td className="py-2 pr-3 font-mono text-xs">
                     <Link
@@ -5700,25 +5754,15 @@ function PaiementsExternesSection({ immeubleId }: { immeubleId: number }) {
                       {r.logement_numero}
                     </Link>
                   </td>
-                  <td className="py-2 pr-3 text-right font-mono text-xs text-white/80">
-                    {fmtCurrency(r.loyer_attendu ?? r.montant)}
-                    {r.etat === "partiel" ? (
-                      <div className="text-[10px] text-amber-300">
-                        reçu {fmtCurrency(r.montant ?? 0)}
-                        {r.loyer_attendu != null ? (
-                          // La BALANCE du mois (retour Phil 2026-08-13).
-                          <div className="text-[11px] font-semibold text-amber-200">
-                            reste{" "}
-                            {fmtCurrency(
-                              Math.max(
-                                0,
-                                (r.loyer_attendu ?? 0) - (r.montant ?? 0)
-                              )
-                            )}
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
+                  <td className="py-2 pr-3">
+                    {/* Même empilement Loyer / Reçu / Solde qu'en gestion
+                        interne (retour Phil 2026-08-13). */}
+                    <CelluleLoyer
+                      loyer={r.loyer_attendu ?? r.montant ?? 0}
+                      recu={r.montant}
+                      solde={r.solde_total}
+                      fmt={fmtCurrency}
+                    />
                   </td>
                   <td className="py-2 pr-3 text-right text-xs text-white/60">
                     {r.paye_le || "—"}
