@@ -14,6 +14,7 @@
 import { useEffect, useState } from "react";
 import { FileSignature, Info, Loader2, X } from "lucide-react";
 
+import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 
 /** Ligne de /immobilier/suivi-baux — une ligne PAR LOGEMENT (bail actif
@@ -64,6 +65,49 @@ export const KANBAN_STATUTS: Array<{ id: string; label: string }> = [
   { id: "bail_envoye", label: "Bail envoyé — à signer" },
   { id: "reloue", label: "Reloué" }
 ];
+
+// Mêmes points de couleur que les colonnes du kanban Locations.
+const KANBAN_STATUT_DOT: Record<string, string> = {
+  avis_recu: "bg-amber-400",
+  annonce_publiee: "bg-sky-400",
+  visites: "bg-violet-400",
+  candidat_retenu: "bg-blue-400",
+  bail_a_envoyer: "bg-orange-400",
+  bail_envoye: "bg-fuchsia-400",
+  reloue: "bg-emerald-400"
+};
+
+/** Pastille LECTURE SEULE du statut de relocation + lien vers la
+ *  source. Directive « miroir bidirectionnel » : on VOIT le statut
+ *  partout (page Baux, fiches), mais on le MODIFIE seulement à la
+ *  source — le kanban Locations (retour Phil 2026-08-13). */
+export function RelocationStatutPastille({ statut }: { statut: string }) {
+  const label =
+    KANBAN_STATUTS.find((s) => s.id === statut)?.label ?? statut;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span
+        title="Étape du kanban Locations — se modifie dans la page Locations"
+        className="inline-flex items-center gap-1.5 rounded-full border border-brand-700 bg-brand-950 px-2.5 py-1 text-[11px] font-semibold text-white/80"
+      >
+        <span
+          className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${
+            KANBAN_STATUT_DOT[statut] ?? "bg-white/40"
+          }`}
+        />
+        {label}
+      </span>
+      <Link
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        href={"/immobilier/locations" as any}
+        className="text-[11px] font-medium text-accent-500 underline-offset-2 hover:underline"
+        title="La relocation se pilote dans le kanban Locations"
+      >
+        Ouvrir dans Locations →
+      </Link>
+    </span>
+  );
+}
 
 const INPUT_CLS =
   "rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";

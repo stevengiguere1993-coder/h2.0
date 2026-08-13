@@ -840,6 +840,13 @@ async def upload_bail_document(
             LogementStatus,
         )
 
+        # Miroir « loyer demandé » (2026-08-13) : bail ACTIF au dossier
+        # → le logement occupé suit le loyer réel du bail.
+        if bail.status == "actif" and bail.loyer_mensuel is not None:
+            lg_sync = await db.get(Logement, bail.logement_id)
+            if lg_sync is not None:
+                lg_sync.loyer_demande = bail.loyer_mensuel
+
         dossier_reloc = (
             (
                 await db.execute(

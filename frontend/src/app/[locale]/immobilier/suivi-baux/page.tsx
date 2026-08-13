@@ -7,8 +7,9 @@
  *   - VERTE : bail actif au dossier (PDF importé) ;
  *   - ambre : bail actif mais document à importer ;
  *   - grise : aucun bail — « Créer un nouveau bail » ou importer.
- * Interconnectée au kanban Locations : le sélecteur de statut modifie
- * le MÊME dossier de relocation (changer ici = changer là-bas).
+ * Interconnectée au kanban Locations : le statut de relocation s'AFFICHE
+ * ici (pastille lecture seule) mais se MODIFIE à la source — la page
+ * Locations (retour Phil 2026-08-13).
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -29,7 +30,7 @@ import {
   CreerBailModal,
   FinBailModal,
   JourEcheanceInline,
-  KANBAN_STATUTS,
+  RelocationStatutPastille,
   type SuiviBailRow
 } from "@/components/immobilier/fin-bail";
 import { RENOUVELLEMENT_BADGES } from "@/components/immobilier/paiements-actions";
@@ -41,9 +42,6 @@ function money(n: number | null | undefined): string {
   return `${Math.round(n).toLocaleString("fr-CA")} $`;
 }
 
-const INPUT_CLS =
-  "rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500";
-
 export default function SuiviBauxPage() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -52,7 +50,6 @@ export default function SuiviBauxPage() {
   const [search, setSearch] = useState("");
   const [finBailFor, setFinBailFor] = useState<Row | null>(null);
   const [creerFor, setCreerFor] = useState<Row | null>(null);
-  const [statutBusy, setStatutBusy] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -68,28 +65,6 @@ export default function SuiviBauxPage() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  async function changerStatut(r: Row, statut: string) {
-    if (!r.dossier_id || statut === r.dossier_statut) return;
-    setStatutBusy(r.dossier_id);
-    setErr(null);
-    try {
-      const res = await authedFetch(
-        `/api/v1/immobilier/locations/${r.dossier_id}`,
-        { method: "PATCH", body: JSON.stringify({ statut }) }
-      );
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
-      }
-      setFlash("Statut mis à jour — le kanban Locations est synchronisé.");
-      await load();
-    } catch (e) {
-      setErr(`Changement de statut : ${(e as Error).message}`);
-    } finally {
-      setStatutBusy(null);
-    }
-  }
 
   async function supprimerBail(r: Row) {
     if (!r.bail_id) return;
@@ -381,21 +356,12 @@ export default function SuiviBauxPage() {
                         {r.dossier_id != null &&
                         r.dossier_statut != null ? (
                           <div className="mt-1">
-                            <select
-                              value={r.dossier_statut}
-                              disabled={statutBusy === r.dossier_id}
-                              onChange={(e) =>
-                                void changerStatut(r, e.target.value)
-                              }
-                              title="Étape du kanban Locations — changer ici le change là-bas"
-                              className={`${INPUT_CLS} w-full max-w-[190px] disabled:opacity-50`}
-                            >
-                              {KANBAN_STATUTS.map((s) => (
-                                <option key={s.id} value={s.id}>
-                                  {s.label}
-                                </option>
-                              ))}
-                            </select>
+                            {/* Lecture seule — le statut de relocation se
+                                MODIFIE à la source : le kanban Locations
+                                (retour Phil 2026-08-13). */}
+                            <RelocationStatutPastille
+                              statut={r.dossier_statut}
+                            />
                           </div>
                         ) : null}
                       </td>

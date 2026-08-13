@@ -173,7 +173,8 @@ export default function LogementsPage() {
               <h1 className="text-2xl font-bold text-white">Logements</h1>
               <p className="mt-1 max-w-2xl text-sm text-white/60">
                 Tous les logements du portefeuille, tous immeubles confondus —
-                statut, pièces et loyer demandé en un coup d&apos;œil.
+                statut, pièces et loyer en un coup d&apos;œil (loyer du bail
+                si occupé, loyer demandé si vacant).
               </p>
             </div>
           </div>
@@ -263,7 +264,7 @@ export default function LogementsPage() {
                     <th className="px-4 py-2.5">Immeuble</th>
                     <th className="px-4 py-2.5">Type</th>
                     <th className="px-4 py-2.5">Pièces</th>
-                    <th className="px-4 py-2.5 text-right">Loyer demandé</th>
+                    <th className="px-4 py-2.5 text-right">Loyer</th>
                     <th className="px-4 py-2.5 text-right">Statut</th>
                   </tr>
                 </thead>
@@ -315,8 +316,21 @@ export default function LogementsPage() {
                           fmtPieces(l.nb_pieces_decimal)
                         )}
                       </td>
-                      <td className="px-4 py-3 text-right font-mono text-xs text-white/80">
-                        {fmtMoney(l.loyer_demande)}
+                      <td
+                        className="px-4 py-3 text-right font-mono text-xs text-white/80"
+                        title={
+                          l.status === "occupe"
+                            ? "Loyer du bail actif"
+                            : "Loyer demandé (prix affiché pour la relocation)"
+                        }
+                      >
+                        {/* Occupé → loyer RÉEL du bail ; sinon loyer
+                            demandé (miroir bidirectionnel). */}
+                        {fmtMoney(
+                          l.status === "occupe"
+                            ? (l.loyer_actuel ?? l.loyer_demande)
+                            : l.loyer_demande
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <StatutBadge status={l.status} />

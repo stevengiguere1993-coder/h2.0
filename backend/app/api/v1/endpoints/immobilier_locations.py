@@ -615,6 +615,15 @@ async def update_dossier(
         lg = await db.get(Logement, obj.logement_id)
         if lg is not None:
             lg.status = LogementStatus.OCCUPE.value
+            # Miroir « loyer demandé » (2026-08-13) : reloué → le
+            # logement occupé suit le loyer réel du NOUVEAU bail.
+            if obj.nouveau_bail_id is not None:
+                nb_sync = await db.get(Bail, obj.nouveau_bail_id)
+                if (
+                    nb_sync is not None
+                    and nb_sync.loyer_mensuel is not None
+                ):
+                    lg.loyer_demande = nb_sync.loyer_mensuel
     obj.updated_at = _now()
     await db.commit()
     await db.refresh(obj)

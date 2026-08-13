@@ -42,6 +42,10 @@ export type LogementFicheData = {
   type: string;
   status: string;
   loyer_demande?: number | null;
+  /** Loyer RÉEL du bail actif (lecture seule, fourni par l'API liste).
+   *  Un logement OCCUPÉ affiche ce loyer — le « loyer demandé » ne
+   *  vaut que pour la relocation (vacant). */
+  loyer_actuel?: number | null;
   notes?: string | null;
 };
 

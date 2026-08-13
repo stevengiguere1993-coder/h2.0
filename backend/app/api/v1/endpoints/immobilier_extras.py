@@ -1108,6 +1108,13 @@ async def resilier_bail(
                 )
             )
             reloc = True
+        elif existant.loyer_demande is not None:
+            # Miroir « loyer demandé » (2026-08-13) : le logement
+            # redevient VACANT — le prix affiché pour la relocation
+            # (porté par le dossier) fait foi sur la fiche.
+            lg = await db.get(Logement, bail.logement_id)
+            if lg is not None:
+                lg.loyer_demande = existant.loyer_demande
     await db.commit()
     log.info(
         "Bail %s résilié au %s par %s",
@@ -1310,6 +1317,12 @@ async def renouvellements_overview(
                     and last_ren.nouvelle_date_fin != b.date_fin
                 ):
                     b.date_fin = last_ren.nouvelle_date_fin
+                # Miroir « loyer demandé » (2026-08-13) : un logement
+                # OCCUPÉ affiche le loyer RÉEL du bail — quand l'avis
+                # s'applique, Logement.loyer_demande suit le nouveau
+                # loyer pour que fiches et annonces restent cohérentes.
+                if logement is not None and b.loyer_mensuel is not None:
+                    logement.loyer_demande = b.loyer_mensuel
                 last_ren.applique_le = today
                 dirty = True
                 # Cycle réglé et appliqué : dès CE rendu, la ligne
