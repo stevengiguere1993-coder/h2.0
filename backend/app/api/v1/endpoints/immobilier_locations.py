@@ -529,6 +529,24 @@ async def create_dossier(
     obj.created_at = _now()
     obj.updated_at = _now()
     db.add(obj)
+    # Cycle unifié (2026-08-13) : « Départ » / « Non renouvelé » ne se
+    # contentent plus d'ouvrir le dossier — le bail sortant se ferme à
+    # la date de départ (sa fin par défaut : il reste actif jusqu'à
+    # l'échéance, le recalage lazy le termine ensuite), le logement est
+    # recalé et le cycle de renouvellement passe à « depart » (plus de
+    # faux « réputé accepté »). Le dossier fraîchement créé est flushé
+    # AVANT l'appel pour que le service le complète au lieu d'en
+    # recréer un.
+    if payload.bail_id:
+        await db.flush()
+        from app.services.locatif_depart import declarer_depart
+
+        await declarer_depart(
+            db,
+            payload.bail_id,
+            date_depart=date_depart,
+            source="Bouton « Départ » / « Non renouvelé »",
+        )
     await db.commit()
     await db.refresh(obj)
     return await _to_row(db, obj)
@@ -1142,6 +1160,14 @@ async def suivi_baux(
             .order_by(Bail.date_debut.asc())
         )
     ).scalars().all() if log_ids else []
+
+    # Reconduction tacite AUTOMATIQUE (lazy, 2026-08-13) : les baux
+    # échus sans réponse s'étirent d'un cycle, ceux dont le départ
+    # était annoncé se terminent — la page Baux montre l'état recalé.
+    from app.services.locatif_depart import reconduire_tacitement_baux_echus
+
+    await reconduire_tacitement_baux_echus(db, baux)
+
     loc_ids = {b.locataire_id for b in baux if b.locataire_id}
     locs = {}
     if loc_ids:

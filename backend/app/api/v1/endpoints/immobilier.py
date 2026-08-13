@@ -3318,6 +3318,14 @@ async def create_bail(
         )
     # Jamais deux baux ACTIFS qui se chevauchent (audit 2026-07-31).
     if payload.status == BailStatus.ACTIF.value:
+        # Garde-fou C4 (2026-08-13) : un bail ACTIF déjà ÉCHU (fin avant
+        # le début du nouveau) est terminé automatiquement au lieu de
+        # coexister — un chevauchement réel garde le 409 ci-dessous.
+        from app.services.locatif_depart import terminer_baux_echus_avant
+
+        await terminer_baux_echus_avant(
+            db, payload.logement_id, payload.date_debut
+        )
         chev = await _bail_actif_chevauchant(
             db, payload.logement_id, payload.date_debut, payload.date_fin
         )
@@ -3443,6 +3451,18 @@ async def update_bail(
                 ),
             )
         if data["status"] == BailStatus.ACTIF.value:
+            # Garde-fou C4 (2026-08-13) : même règle qu'à la création —
+            # l'ancien bail actif échu se termine automatiquement.
+            from app.services.locatif_depart import (
+                terminer_baux_echus_avant,
+            )
+
+            await terminer_baux_echus_avant(
+                db,
+                obj.logement_id,
+                data.get("date_debut", obj.date_debut),
+                exclure_bail_id=obj.id,
+            )
             chev = await _bail_actif_chevauchant(
                 db,
                 obj.logement_id,
@@ -3963,6 +3983,15 @@ async def loyers_overview(
             )
         )
     ).scalars().all()
+
+    # Reconduction tacite AUTOMATIQUE (lazy, 2026-08-13) : un bail échu
+    # sans réponse s'étire d'un cycle ; un bail échu dont le départ
+    # était annoncé (dossier de relocation actif) se termine — plus de
+    # baux zombies dans le suivi des loyers.
+    from app.services.locatif_depart import reconduire_tacitement_baux_echus
+
+    if await reconduire_tacitement_baux_echus(db, baux):
+        baux = [b for b in baux if b.status == BailStatus.ACTIF.value]
 
     locataires = {}
     loc_ids = {b.locataire_id for b in baux if b.locataire_id}

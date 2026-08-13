@@ -808,6 +808,15 @@ async def upload_bail_document(
     # logement est considéré loué par ce locataire (retour Phil
     # 2026-07-31).
     if bail.status == "propose":
+        # Garde-fou C4 (2026-08-13) : un bail ACTIF déjà ÉCHU sur ce
+        # logement (sa fin précède le début du nouveau) est terminé
+        # automatiquement — sinon les deux coexistent et le suivi des
+        # loyers double la ligne.
+        from app.services.locatif_depart import terminer_baux_echus_avant
+
+        await terminer_baux_echus_avant(
+            db, bail.logement_id, bail.date_debut, exclure_bail_id=bail.id
+        )
         # Jamais deux baux ACTIFS qui se chevauchent sur le même
         # logement (audit 2026-07-31).
         chevauche = (
