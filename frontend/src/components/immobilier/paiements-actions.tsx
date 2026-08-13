@@ -31,18 +31,116 @@ export function duMois(row: PaiementRowLike): number {
 
 // Pastille (NON cliquable) du dernier avis de renouvellement du bail —
 // mêmes libellés sur la page Baux et dans les fiches.
+//
+// Sémantique de couleur alignée sur le reste de Kratos (retour Phil
+// 2026-08-13) : VERT = rien à faire. Un avis envoyé (ou une reconduction)
+// est un dossier RÉGLÉ — on attend, on n'agit pas. Restent en alerte les
+// seuls états qui demandent une action de notre part : refus (1 mois pour
+// la fixation au TAL) et départ annoncé (relocation à ouvrir).
 export const RENOUVELLEMENT_BADGES: Record<
   string,
   { label: string; cls: string }
 > = {
-  propose: { label: "Avis envoyé", cls: "badge-amber" },
+  propose: { label: "Avis envoyé", cls: "badge-emerald" },
   accepte: { label: "Avis accepté", cls: "badge-emerald" },
   repute_accepte: { label: "Réputé accepté", cls: "badge-emerald" },
   refuse: { label: "Avis refusé", cls: "badge-rose" },
-  depart: { label: "Départ annoncé", cls: "badge-rose" },
-  reconduit: { label: "Reconduit", cls: "badge-neutral" },
-  en_negociation: { label: "En négociation", cls: "badge-blue" }
+  depart: { label: "Départ annoncé", cls: "badge-amber" },
+  reconduit: { label: "Reconduit", cls: "badge-emerald" },
+  en_negociation: { label: "En négociation", cls: "badge-amber" }
 };
+
+/** Pastille bleue qui remplace le nom du locataire en gestion externe :
+ *  la perception est déléguée au gestionnaire, on n'a pas de locataire
+ *  nominatif de notre côté (retour Phil 2026-08-13). */
+export function BadgeGestionExterne() {
+  return (
+    <span
+      className="badge badge-sky"
+      title="Loyers perçus par la compagnie de gestion — pas de locataire nominatif chez nous"
+    >
+      Gestion externe
+    </span>
+  );
+}
+
+/**
+ * Cellule « Loyer » unique à toutes les surfaces de paiement (page
+ * Paiements, sous-page d'immeuble interne ET externe, fiche locataire).
+ *
+ * Trois niveaux empilés, demandés tels quels par Phil (2026-08-13) :
+ * le loyer en gros, puis « Reçu » + l'encaissé, puis « Solde » + le
+ * manquant. Solde à zéro ⇒ sobre (pas de rouge sur une ligne saine).
+ */
+export function CelluleLoyer({
+  loyer,
+  recu,
+  solde,
+  fmt,
+  echeance,
+  frais,
+  onSupprimerFrais
+}: {
+  loyer: number;
+  recu?: number | null;
+  solde?: number | null;
+  /** Formateur monétaire de la surface appelante (styles différents). */
+  fmt: (n: number) => string;
+  /** Bail TAL « Ou le ___ » — muet quand c'est le 1er. */
+  echeance?: string | null;
+  frais?: FraisMois[];
+  onSupprimerFrais?: (fraisId: number) => void;
+}) {
+  const du = solde ?? 0;
+  return (
+    <div className="text-right">
+      <div className="font-semibold tabular-nums text-white">{fmt(loyer)}</div>
+      {echeance ? (
+        <div className="text-[10px] font-normal text-white/60">{echeance}</div>
+      ) : null}
+      <div className="text-[10px] font-normal text-white/60">
+        Reçu{" "}
+        <span
+          className={`tabular-nums font-semibold ${
+            (recu ?? 0) > 0 ? "text-emerald-300" : "text-white/70"
+          }`}
+        >
+          {fmt(recu ?? 0)}
+        </span>
+      </div>
+      <div className="text-[10px] font-normal text-white/60">
+        Solde{" "}
+        <span
+          className={`tabular-nums font-semibold ${
+            du > 0 ? "text-rose-300" : "text-white/70"
+          }`}
+        >
+          {fmt(du)}
+        </span>
+      </div>
+      {(frais ?? []).map((f) => (
+        <div
+          key={f.id}
+          className="flex items-center justify-end gap-1 text-[10px] text-amber-300"
+        >
+          <span title={f.libelle}>
+            + {fmt(f.montant)} {f.libelle}
+          </span>
+          {onSupprimerFrais ? (
+            <button
+              type="button"
+              onClick={() => onSupprimerFrais(f.id)}
+              title="Retirer ce frais"
+              className="text-white/50 transition hover:text-rose-300"
+            >
+              ×
+            </button>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** Options de correction d'un paiement — mêmes choix que la saisie
  *  (retour Phil 2026-07-31 : « Corriger » ne doit plus juste annuler

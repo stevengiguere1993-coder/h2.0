@@ -20,6 +20,8 @@ import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 import { echeanceLabel } from "@/components/immobilier/fin-bail";
 import {
+  BadgeGestionExterne,
+  CelluleLoyer,
   CorrectionOptions,
   duMois
 } from "@/components/immobilier/paiements-actions";
@@ -30,6 +32,11 @@ import {
  * Tous les baux ACTIFS du portefeuille croisés avec les paiements du
  * mois choisi : qui a payé, qui est en retard, marquer payé en 1 clic.
  * Les retards remontent en premier.
+ *
+ * Les immeubles en GESTION EXTERNE y figurent aussi (retour Phil
+ * 2026-08-13) : même tableau, mais une pastille bleue « Gestion externe »
+ * à la place du locataire — la perception est déléguée, donc pas de
+ * relance ni de frais sur ces lignes.
  */
 
 type Row = {
@@ -60,7 +67,70 @@ type Row = {
   prochain_loyer?: number | null;
   prochain_debut?: string | null;
   prochain_statut?: string | null;
+  /** Ligne d'un immeuble en gestion externe : suivi PAR LOGEMENT, sans
+   *  locataire nominatif ni relance (bail_id vaut alors 0). */
+  gestion_externe?: boolean;
 };
+
+/** Ligne brute de /loyers/externes — repliée dans `Row` pour l'affichage. */
+type RowExterne = {
+  immeuble_id: number;
+  immeuble_name: string;
+  logement_id: number;
+  logement_numero: string;
+  loyer_mensuel: number;
+  montant_paye: number | null;
+  paye_le: string | null;
+  etat: string;
+  solde_total: number;
+};
+
+type OverviewExterne = {
+  mois: string;
+  rows: RowExterne[];
+  total_attendu: number;
+  total_recu: number;
+  nb_payes: number;
+  nb_retards: number;
+  nb_attente: number;
+};
+
+/** Clé de rendu : les lignes externes n'ont pas de bail. */
+function rowKey(r: Row): string {
+  return r.gestion_externe
+    ? `ext-${r.logement_id}`
+    : `bail-${r.bail_id}`;
+}
+
+/** Identifiant « ligne occupée » : bail_id en interne, logement en
+ *  négatif en externe — les deux espaces d'ID ne se marchent pas dessus. */
+function busyKey(r: Row): number {
+  return r.gestion_externe ? -(r.logement_id ?? 0) : r.bail_id;
+}
+
+function externeToRow(x: RowExterne): Row {
+  return {
+    bail_id: 0,
+    immeuble_id: x.immeuble_id,
+    immeuble_name: x.immeuble_name,
+    logement_id: x.logement_id,
+    logement_numero: x.logement_numero,
+    locataire_id: null,
+    locataire_name: null,
+    locataire_phone: null,
+    loyer_mensuel: x.loyer_mensuel,
+    jour_echeance: 1,
+    paiement_id: null,
+    montant_paye: x.montant_paye,
+    paye_le: x.paye_le,
+    etat: x.etat,
+    frais_mois: [],
+    solde_total: x.solde_total,
+    nb_relances: 0,
+    derniere_relance_le: null,
+    gestion_externe: true
+  };
+}
 
 type Overview = {
   mois: string;
@@ -142,6 +212,7 @@ export default function BauxPage() {
   const { currentEntrepriseId } = useImmobilierLayout();
   const [mois, setMois] = useState(currentMonth());
   const [data, setData] = useState<Overview | null>(null);
+  const [externe, setExterne] = useState<OverviewExterne | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<number | null>(null);
@@ -163,11 +234,20 @@ export default function BauxPage() {
       if (currentEntrepriseId != null) {
         params.set("entreprise_id", String(currentEntrepriseId));
       }
-      const r = await authedFetch(
-        `/api/v1/immobilier/loyers/overview?${params.toString()}`
-      );
+      // Deux sources : le suivi interne (baux) et le miroir des
+      // immeubles en gestion externe (par logement). Un échec côté
+      // externe ne doit pas masquer le tableau principal.
+      const [r, rx] = await Promise.all([
+        authedFetch(
+          `/api/v1/immobilier/loyers/overview?${params.toString()}`
+        ),
+        authedFetch(
+          `/api/v1/immobilier/loyers/externes?${params.toString()}`
+        )
+      ]);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setData((await r.json()) as Overview);
+      setExterne(rx.ok ? ((await rx.json()) as OverviewExterne) : null);
     } catch (e) {
       setError(`Chargement échoué : ${(e as Error).message}`);
     } finally {
@@ -409,35 +489,120 @@ export default function BauxPage() {
     }
   }
 
+  // ── Gestion externe : les mêmes gestes, sur le logement ────────────
+  // Pas de bail ni de locataire chez nous : on coche ce que le rapport
+  // du gestionnaire indique. Ni relance ni frais ponctuel ici.
+  async function enregistrerExterne(row: Row, montant: number) {
+    if (row.logement_id == null) return;
+    setPayingId(busyKey(row));
+    try {
+      const r = await authedFetch("/api/v1/immobilier/paiements-externes", {
+        method: "POST",
+        body: JSON.stringify({
+          logement_id: row.logement_id,
+          mois,
+          montant
+        })
+      });
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      flash(
+        `Paiement enregistré — ${row.immeuble_name} · ${row.logement_numero} (${fmtMoney(montant)})`
+      );
+      await load();
+    } catch (e) {
+      setError(`Paiement échoué : ${(e as Error).message}`);
+    } finally {
+      setPayingId(null);
+    }
+  }
+
+  async function marquerPayeExterne(row: Row) {
+    const restant =
+      Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
+    await enregistrerExterne(
+      row,
+      restant > 0 ? restant : row.loyer_mensuel
+    );
+  }
+
+  async function marquerPartielExterne(row: Row) {
+    const restant =
+      Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
+    const saisie = window.prompt(
+      `Montant reçu pour le logement ${row.logement_numero} (${mois}) ?\n(Restant du mois : ${fmtMoney(restant)})`,
+      ""
+    );
+    if (saisie == null) return;
+    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(montant) || montant <= 0) {
+      setError("Montant invalide.");
+      return;
+    }
+    await enregistrerExterne(row, Math.round(montant * 100) / 100);
+  }
+
+  async function corrigerExterne(row: Row) {
+    if (row.logement_id == null) return;
+    if (
+      !window.confirm(
+        `Annuler les paiements du logement ${row.logement_numero} pour ${mois} ?`
+      )
+    )
+      return;
+    setPayingId(busyKey(row));
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/paiements-externes/${row.logement_id}?mois=${mois}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      flash("Paiement retiré — le mois est de retour impayé.");
+      await load();
+    } catch (e) {
+      setError(`Annulation échouée : ${(e as Error).message}`);
+    } finally {
+      setPayingId(null);
+    }
+  }
+
+  // Toutes les lignes du mois : interne + gestion externe.
+  const allRows = useMemo(() => {
+    const internes = data?.rows ?? [];
+    const externes = (externe?.rows ?? []).map(externeToRow);
+    return [...internes, ...externes];
+  }, [data, externe]);
+
   // Immeubles distincts présents dans les rows du mois chargé.
   const immeubleOptions = useMemo(() => {
-    if (!data) return [];
     const m = new Map<number, string>();
-    for (const r of data.rows) {
+    for (const r of allRows) {
       if (!m.has(r.immeuble_id)) m.set(r.immeuble_id, r.immeuble_name);
     }
     return [...m.entries()]
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name, "fr"));
-  }, [data]);
+  }, [allRows]);
 
   // Tuiles KPI : suivent le filtre immeuble (voir l'état d'UN immeuble),
-  // mais ignorent le filtre état + la recherche.
+  // mais ignorent le filtre état + la recherche. Les totaux du backend
+  // ne couvrent que l'interne → on ajoute le portefeuille externe.
   const kpi = useMemo(() => {
     if (!data) return null;
     if (immeubleFilter === "all") {
       return {
-        total_attendu: data.total_attendu,
-        total_recu: data.total_recu,
-        nb_retards: data.nb_retards,
-        nb_attente: data.nb_attente,
-        nb_baux: data.rows.length,
+        total_attendu: data.total_attendu + (externe?.total_attendu ?? 0),
+        total_recu: data.total_recu + (externe?.total_recu ?? 0),
+        nb_retards: data.nb_retards + (externe?.nb_retards ?? 0),
+        nb_attente: data.nb_attente + (externe?.nb_attente ?? 0),
+        nb_baux: allRows.length,
         total_solde_du:
-          data.total_solde_du ??
-          data.rows.reduce((s, r) => s + (r.solde_total ?? 0), 0)
+          (data.total_solde_du ??
+            data.rows.reduce((s, r) => s + (r.solde_total ?? 0), 0)) +
+          (externe?.rows ?? []).reduce((s, r) => s + r.solde_total, 0)
       };
     }
-    const rows = data.rows.filter((r) => r.immeuble_id === immeubleFilter);
+    const rows = allRows.filter((r) => r.immeuble_id === immeubleFilter);
     return {
       total_attendu: rows.reduce((s, r) => s + r.loyer_mensuel, 0),
       total_recu: rows.reduce((s, r) => s + (r.montant_paye ?? 0), 0),
@@ -448,7 +613,7 @@ export default function BauxPage() {
       nb_baux: rows.length,
       total_solde_du: rows.reduce((s, r) => s + (r.solde_total ?? 0), 0)
     };
-  }, [data, immeubleFilter]);
+  }, [data, externe, allRows, immeubleFilter]);
 
   const tauxCollecte = useMemo(() => {
     if (!kpi || kpi.total_attendu <= 0) return null;
@@ -466,15 +631,17 @@ export default function BauxPage() {
       attente: 2,
       paye: 3
     };
-    return data.rows
+    return allRows
       .filter((r) => {
         if (immeubleFilter !== "all" && r.immeuble_id !== immeubleFilter)
           return false;
         if (etatFilter !== "all" && r.etat !== etatFilter) return false;
         if (q) {
+          // « gestion externe » est cherchable comme un nom de locataire :
+          // c'est ce que la ligne affiche à sa place.
           const hay = `${r.locataire_name || ""} ${r.immeuble_name} ${
             r.logement_numero || ""
-          }`.toLowerCase();
+          }${r.gestion_externe ? " gestion externe" : ""}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -487,7 +654,7 @@ export default function BauxPage() {
             b.logement_numero || "", "fr"
           )
       );
-  }, [data, search, etatFilter, immeubleFilter]);
+  }, [data, allRows, search, etatFilter, immeubleFilter]);
 
   return (
     <>
@@ -645,7 +812,7 @@ export default function BauxPage() {
           />
           {data ? (
             <span className="text-xs text-white/50">
-              {filteredRows.length} / {data.rows.length}
+              {filteredRows.length} / {allRows.length}
             </span>
           ) : null}
         </div>
@@ -658,7 +825,7 @@ export default function BauxPage() {
             </div>
           ) : !data || filteredRows.length === 0 ? (
             <div className="p-10 text-center text-sm text-white/50">
-              {data && data.rows.length > 0 ? (
+              {allRows.length > 0 ? (
                 "Aucun bail correspondant aux filtres."
               ) : (
                 <>
@@ -680,8 +847,10 @@ export default function BauxPage() {
                     <th className="px-3 py-2.5">Locataire</th>
                     <th className="px-3 py-2.5">Immeuble · log.</th>
                     <th className="px-3 py-2.5">Statut</th>
+                    {/* Loyer / Reçu / Solde tiennent dans UNE colonne
+                        (retour Phil 2026-08-13) — plus de « Solde dû »
+                        séparé, on lit la ligne d'un coup d'œil. */}
                     <th className="px-3 py-2.5 text-right">Loyer</th>
-                    <th className="px-3 py-2.5 text-right">Solde dû</th>
                     <th className="px-3 py-2.5 text-right">Payé le</th>
                     <th className="px-3 py-2.5"></th>
                   </tr>
@@ -689,7 +858,7 @@ export default function BauxPage() {
                 <tbody className="divide-y divide-brand-800">
                   {filteredRows.map((r) => (
                     <tr
-                      key={r.bail_id}
+                      key={rowKey(r)}
                       className={`transition hover:bg-brand-800/40 ${
                         r.etat === "retard"
                           ? "bg-rose-500/5"
@@ -718,7 +887,9 @@ export default function BauxPage() {
                         )}
                       </td>
                       <td className="px-3 py-2.5">
-                        {r.locataire_id != null ? (
+                        {r.gestion_externe ? (
+                          <BadgeGestionExterne />
+                        ) : r.locataire_id != null ? (
                           <Link
                             // eslint-disable-next-line @typescript-eslint/no-explicit-any
                             href={
@@ -788,7 +959,18 @@ export default function BauxPage() {
                         ) : null}
                       </td>
                       <td className="px-3 py-2.5">
-                        <span className="badge badge-emerald">Actif</span>
+                        <span
+                          className={`badge ${
+                            r.gestion_externe
+                              ? "badge-neutral"
+                              : "badge-emerald"
+                          }`}
+                        >
+                          {/* Pas de bail chez nous en gestion externe :
+                              la ligne suit le LOGEMENT, forcément occupé
+                              puisqu'un loyer y est attendu. */}
+                          {r.gestion_externe ? "Occupé" : "Actif"}
+                        </span>
                         {r.prochain_statut ? (
                           <div className="mt-0.5">
                             <span
@@ -803,61 +985,25 @@ export default function BauxPage() {
                           </div>
                         ) : null}
                       </td>
-                      <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-white">
-                        {fmtMoney(r.loyer_mensuel)}
+                      <td className="px-3 py-2.5">
                         {/* Bail TAL « Ou le ___ » : rien quand c'est le 1er
                             (l'immense majorité), mention discrète sinon —
                             c'est ce qui explique qu'il ne soit pas encore
                             « en retard ». */}
-                        {echeanceLabel(r.jour_echeance) ? (
-                          <div className="text-[10px] font-normal text-white/45">
-                            {echeanceLabel(r.jour_echeance)}
-                          </div>
-                        ) : null}
-                        {r.etat === "partiel" ? (
-                          <div className="text-[10px] font-normal text-amber-300">
-                            reçu {fmtMoney(r.montant_paye ?? 0)}
-                          </div>
-                        ) : null}
+                        <CelluleLoyer
+                          loyer={r.loyer_mensuel}
+                          recu={r.montant_paye}
+                          solde={r.solde_total}
+                          fmt={fmtMoney}
+                          echeance={echeanceLabel(r.jour_echeance)}
+                          frais={r.frais_mois}
+                          onSupprimerFrais={(id) => void supprimerFrais(id)}
+                        />
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">
-                        {(r.solde_total ?? 0) > 0 ? (
-                          <span className="font-semibold text-rose-300">
-                            {fmtMoney(r.solde_total ?? 0)}
-                          </span>
-                        ) : (
-                          <span className="text-white/30">—</span>
-                        )}
-                        {(r.frais_mois ?? []).map((f) => (
-                          <div
-                            key={f.id}
-                            className="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-amber-300"
-                          >
-                            <span title={f.libelle}>
-                              + {fmtMoney(f.montant)} {f.libelle}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => void supprimerFrais(f.id)}
-                              title="Retirer ce frais"
-                              className="text-white/40 transition hover:text-rose-300"
-                            >
-                              ×
-                            </button>
-                          </div>
-                        ))}
-                      </td>
+                      {/* Le montant reçu vit maintenant dans la colonne
+                          Loyer — ici on ne garde que la DATE. */}
                       <td className="px-3 py-2.5 text-right tabular-nums text-white/60">
                         {r.paye_le || "—"}
-                        {r.etat !== "partiel" &&
-                        r.montant_paye != null &&
-                        r.montant_paye > 0 &&
-                        Math.round(r.montant_paye) !==
-                          Math.round(r.loyer_mensuel) ? (
-                          <span className="ml-1 text-[10px] text-amber-300">
-                            ({fmtMoney(r.montant_paye)})
-                          </span>
-                        ) : null}
                       </td>
                       <td className="px-3 py-2.5 text-right">
                         {/* 3 groupes visuellement délimités (retour Phil v4) :
@@ -867,7 +1013,55 @@ export default function BauxPage() {
                           <div className="flex flex-wrap items-center justify-end gap-2">
                             {/* ── Groupe 1 — Paiement ── */}
                             <div className="inline-flex items-center gap-1.5 rounded-xl border border-brand-700 px-1.5 py-1">
-                              {r.etat !== "paye" ? (
+                              {r.gestion_externe ? (
+                                // Gestion externe : on ne fait que refléter
+                                // le rapport du gestionnaire — ni relance
+                                // (aucun courriel ne part d'ici), ni frais.
+                                <>
+                                  {r.etat !== "paye" ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void marquerPayeExterne(r)
+                                        }
+                                        disabled={payingId === busyKey(r)}
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                                      >
+                                        {payingId === busyKey(r) ? (
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                        ) : (
+                                          <Check className="h-3 w-3" />
+                                        )}
+                                        Marquer payé
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void marquerPartielExterne(r)
+                                        }
+                                        disabled={payingId === busyKey(r)}
+                                        title="Enregistrer un paiement partiel (montant saisi, ajouté au cumul)"
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+                                      >
+                                        Partiel
+                                      </button>
+                                    </>
+                                  ) : null}
+                                  {(r.montant_paye ?? 0) > 0 ||
+                                  r.etat === "paye" ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => void corrigerExterne(r)}
+                                      disabled={payingId === busyKey(r)}
+                                      title="Erreur de saisie ? Annule les paiements du mois"
+                                      className="px-1 text-[11px] text-white/50 transition hover:text-rose-300 disabled:opacity-50"
+                                    >
+                                      Corriger
+                                    </button>
+                                  ) : null}
+                                </>
+                              ) : r.etat !== "paye" ? (
                                 <>
                                   <button
                                     type="button"
@@ -986,8 +1180,11 @@ export default function BauxPage() {
           montant a été reçu mais le mois n&apos;est pas couvert. « Marquer
           payé » enregistre le restant du mois en 1 clic ; « Partiel » saisit
           un montant précis ; « + Frais » ajoute un frais ponctuel (ex. 20 $
-          de retard) au solde. Le « Solde dû » cumule tous les loyers échus et
-          frais du bail, moins tout ce qui a été reçu.
+          de retard) au solde. La colonne « Loyer » empile le loyer du mois,
+          le « Reçu » et le « Solde » : ce dernier cumule tous les loyers
+          échus et frais du bail, moins tout ce qui a été reçu. Les lignes
+          « Gestion externe » reflètent le rapport de la compagnie de
+          gestion — pas de locataire nominatif, pas de relance.
         </p>
       </div>
 
@@ -1004,6 +1201,10 @@ export default function BauxPage() {
 }
 
 function EcheancesSection({ data }: { data: EcheanceData }) {
+  // Même sémantique que partout dans Kratos (retour Phil 2026-08-13) :
+  // vert = rien à faire (la fenêtre d'envoi n'est pas encore ouverte),
+  // jaune = c'est le moment d'envoyer, rouge = la fenêtre légale se
+  // referme. L'ouverture suit le réglage « renouvellement N mois ».
   const TONE: Record<string, { box: string; chip: string; txt: string }> = {
     en_retard: {
       box: "border-rose-500/40 bg-rose-500/5",
@@ -1016,9 +1217,9 @@ function EcheancesSection({ data }: { data: EcheanceData }) {
       txt: "À envoyer"
     },
     a_venir: {
-      box: "border-sky-500/40 bg-sky-500/5",
-      chip: "badge-sky",
-      txt: "À venir"
+      box: "border-emerald-500/40 bg-emerald-500/5",
+      chip: "badge-emerald",
+      txt: "Rien à faire — fenêtre s'ouvre"
     }
   };
   return (
