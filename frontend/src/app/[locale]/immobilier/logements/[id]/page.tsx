@@ -452,18 +452,23 @@ export default function LogementDetailPage({
               </p>
             ) : null}
 
-            {/* Mini-KPIs */}
+            {/* Mini-KPIs — miroir bidirectionnel : OCCUPÉ → le loyer
+                RÉEL du bail est l'information principale ; le « loyer
+                demandé » (prix affiché pour la relocation) ne
+                s'affiche que VACANT (retour Phil 2026-08-13). */}
             <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               <MiniKpi
                 label="Loyer actuel"
                 value={bailActif ? money(bailActif.loyer_mensuel) : "Vacant"}
               />
-              <MiniKpi
-                label="Loyer demandé"
-                value={
-                  lg.loyer_demande != null ? money(lg.loyer_demande) : "—"
-                }
-              />
+              {!bailActif ? (
+                <MiniKpi
+                  label="Loyer demandé"
+                  value={
+                    lg.loyer_demande != null ? money(lg.loyer_demande) : "—"
+                  }
+                />
+              ) : null}
               <MiniKpi
                 label="Occupé depuis"
                 value={bailActif ? fmtDate(bailActif.date_debut) : "—"}
@@ -618,6 +623,12 @@ export default function LogementDetailPage({
                         }
                         className={inputCls}
                       />
+                      {bailActif ? (
+                        <span className="mt-0.5 block text-[10px] font-normal text-white/40">
+                          Logement occupé : cette valeur suit
+                          automatiquement le loyer du bail.
+                        </span>
+                      ) : null}
                     </EditField>
                   </div>
                 ) : (
@@ -653,16 +664,24 @@ export default function LogementDetailPage({
                       label="Étage"
                       value={lg.etage != null ? String(lg.etage) : "—"}
                     />
-                    <Row
-                      label="Loyer demandé"
-                      value={
-                        lg.loyer_demande != null
-                          ? money(lg.loyer_demande)
-                          : bailActif
-                            ? "Non défini"
+                    {/* Occupé → loyer RÉEL du bail (les avis acceptés
+                        l'appliquent) ; vacant → prix affiché pour la
+                        relocation (miroir bidirectionnel). */}
+                    {bailActif ? (
+                      <Row
+                        label="Loyer actuel (bail)"
+                        value={money(bailActif.loyer_mensuel)}
+                      />
+                    ) : (
+                      <Row
+                        label="Loyer demandé"
+                        value={
+                          lg.loyer_demande != null
+                            ? money(lg.loyer_demande)
                             : "—"
-                      }
-                    />
+                        }
+                      />
+                    )}
                     {lg.location_en_chambres ? (
                       <>
                         <Row

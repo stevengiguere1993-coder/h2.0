@@ -166,6 +166,12 @@ async def public_accept(
         ).scalars().first()
         if chevauche is None:
             bail.status = "actif"
+            # Miroir « loyer demandé » (2026-08-13) : bail signé et
+            # actif → le logement occupé suit le loyer réel du bail.
+            if bail.logement_id and bail.loyer_mensuel is not None:
+                lg = await db.get(Logement, bail.logement_id)
+                if lg is not None:
+                    lg.loyer_demande = bail.loyer_mensuel
         else:
             log.warning(
                 "Bail %s signé mais NON activé : chevauchement avec le "

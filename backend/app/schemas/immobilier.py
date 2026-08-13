@@ -164,6 +164,10 @@ class LogementRead(LogementBase):
     id: int
     created_at: datetime
     updated_at: datetime
+    #: Loyer RÉEL du bail actif (lecture seule, rempli par la liste des
+    #: logements) — un logement OCCUPÉ affiche ce loyer, pas le
+    #: « loyer demandé » qui ne vaut que pour la relocation (vacant).
+    loyer_actuel: Optional[float] = None
 
 
 # ─── Locataire ──────────────────────────────────────────────────────────

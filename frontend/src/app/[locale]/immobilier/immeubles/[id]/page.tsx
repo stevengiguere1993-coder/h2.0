@@ -54,8 +54,8 @@ import {
   echeanceLabel,
   FinBailModal,
   JourEcheanceInline,
-  KANBAN_STATUTS,
   LOUER_INDEFINIMENT_INFO,
+  RelocationStatutPastille,
   type SuiviBailRow
 } from "@/components/immobilier/fin-bail";
 
@@ -2095,6 +2095,20 @@ function LogementsTab({
   // navigue vers la page dédiée du logement.
   const [showCreate, setShowCreate] = useState(false);
 
+  // Loyer RÉEL du bail actif par logement — un logement OCCUPÉ affiche
+  // ce loyer, le « loyer demandé » ne vaut que pour la relocation
+  // (miroir bidirectionnel, retour Phil 2026-08-13).
+  const loyerBailParLogement = useMemo(() => {
+    const m = new Map<number, number>();
+    const today = new Date().toISOString().slice(0, 10);
+    for (const b of baux ?? []) {
+      if (b.status !== "actif" || b.loyer_mensuel == null) continue;
+      if (b.date_debut && b.date_debut > today) continue; // futur
+      m.set(b.logement_id, b.loyer_mensuel);
+    }
+    return m;
+  }, [baux]);
+
   const addButton = (
     <button
       type="button"
@@ -2159,7 +2173,7 @@ function LogementsTab({
               <th className="px-4 py-2.5">Pièces</th>
               <th className="px-4 py-2.5 text-right">Superficie</th>
               <th className="px-4 py-2.5">Statut</th>
-              <th className="px-4 py-2.5 text-right">Loyer demandé</th>
+              <th className="px-4 py-2.5 text-right">Loyer</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-brand-800">
@@ -2193,8 +2207,21 @@ function LogementsTab({
                 <td className="px-4 py-2 text-xs">
                   <StatusBadge status={l.status} />
                 </td>
-                <td className="px-4 py-2 text-right font-mono text-xs text-white/70">
-                  {fmtCurrency(l.loyer_demande)}
+                <td
+                  className="px-4 py-2 text-right font-mono text-xs text-white/70"
+                  title={
+                    l.status === "occupe"
+                      ? "Loyer du bail actif"
+                      : "Loyer demandé (prix affiché pour la relocation)"
+                  }
+                >
+                  {/* Occupé → loyer RÉEL du bail ; sinon loyer demandé
+                      (miroir bidirectionnel). */}
+                  {fmtCurrency(
+                    l.status === "occupe"
+                      ? (loyerBailParLogement.get(l.id) ?? l.loyer_demande)
+                      : l.loyer_demande
+                  )}
                 </td>
               </tr>
             ))}
@@ -2222,7 +2249,6 @@ function BauxTab({
   const [flash, setFlash] = useState<string | null>(null);
   const [finBailFor, setFinBailFor] = useState<SuiviBailRow | null>(null);
   const [creerFor, setCreerFor] = useState<SuiviBailRow | null>(null);
-  const [statutBusy, setStatutBusy] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -2240,28 +2266,6 @@ function BauxTab({
   useEffect(() => {
     void load();
   }, [load]);
-
-  async function changerStatut(r: SuiviBailRow, statut: string) {
-    if (!r.dossier_id || statut === r.dossier_statut) return;
-    setStatutBusy(r.dossier_id);
-    setErr(null);
-    try {
-      const res = await authedFetch(
-        `/api/v1/immobilier/locations/${r.dossier_id}`,
-        { method: "PATCH", body: JSON.stringify({ statut }) }
-      );
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
-      }
-      setFlash("Statut mis à jour — le kanban Locations est synchronisé.");
-      await load();
-    } catch (e) {
-      setErr(`Changement de statut : ${(e as Error).message}`);
-    } finally {
-      setStatutBusy(null);
-    }
-  }
 
   async function supprimerBail(r: SuiviBailRow) {
     if (!r.bail_id) return;
@@ -2518,21 +2522,12 @@ function BauxTab({
                       {r.dossier_id != null &&
                       r.dossier_statut != null ? (
                         <div className="mt-1">
-                          <select
-                            value={r.dossier_statut}
-                            disabled={statutBusy === r.dossier_id}
-                            onChange={(e) =>
-                              void changerStatut(r, e.target.value)
-                            }
-                            title="Étape du kanban Locations — changer ici le change là-bas"
-                            className="w-full max-w-[190px] rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white outline-none focus:border-accent-500 disabled:opacity-50"
-                          >
-                            {KANBAN_STATUTS.map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.label}
-                              </option>
-                            ))}
-                          </select>
+                          {/* Lecture seule — le statut de relocation se
+                              MODIFIE à la source : le kanban Locations
+                              (retour Phil 2026-08-13). */}
+                          <RelocationStatutPastille
+                            statut={r.dossier_statut}
+                          />
                         </div>
                       ) : null}
                     </td>

@@ -917,6 +917,10 @@ async def _recaler_logement_apres_bail(db, logement_id: int) -> None:
     ).scalars().first()
     if actif is not None:
         lg.status = LogementStatus.OCCUPE.value
+        # Miroir « loyer demandé » (2026-08-13) : occupé → suit le
+        # loyer réel du bail actif restant.
+        if actif.loyer_mensuel is not None:
+            lg.loyer_demande = actif.loyer_mensuel
     elif lg.status == LogementStatus.OCCUPE.value:
         lg.status = LogementStatus.VACANT.value
     lg.updated_at = _now()
@@ -2004,7 +2008,36 @@ async def list_logements(
             .order_by(Logement.numero.asc())
         )
     ).scalars().all()
-    return [LogementRead.model_validate(r) for r in rows]
+    # Miroir « loyer demandé » (2026-08-13) : la liste porte aussi le
+    # loyer RÉEL du bail actif — un logement OCCUPÉ affiche ce loyer,
+    # le « loyer demandé » ne vaut que pour la relocation (vacant).
+    loyer_actif: dict[int, Bail] = {}
+    ids = [r.id for r in rows]
+    if ids:
+        today = _now().date()
+        for b in (
+            await db.execute(
+                select(Bail).where(
+                    Bail.logement_id.in_(ids),
+                    Bail.status == BailStatus.ACTIF.value,
+                )
+            )
+        ).scalars().all():
+            if b.date_debut is not None and b.date_debut > today:
+                continue  # actif futur = « prochain », pas courant
+            cur = loyer_actif.get(b.logement_id)
+            if cur is None or (
+                (b.date_debut or date.min) > (cur.date_debut or date.min)
+            ):
+                loyer_actif[b.logement_id] = b
+    out: List[LogementRead] = []
+    for r in rows:
+        lr = LogementRead.model_validate(r)
+        b = loyer_actif.get(r.id)
+        if b is not None and b.loyer_mensuel is not None:
+            lr.loyer_actuel = float(b.loyer_mensuel)
+        out.append(lr)
+    return out
 
 
 @router.post(
@@ -3311,6 +3344,10 @@ async def create_bail(
     # Met à jour le statut du logement automatiquement
     if obj.status == BailStatus.ACTIF.value:
         log_obj.status = LogementStatus.OCCUPE.value
+        # Miroir « loyer demandé » (2026-08-13) : logement OCCUPÉ →
+        # Logement.loyer_demande suit le loyer réel du bail.
+        if obj.loyer_mensuel is not None:
+            log_obj.loyer_demande = obj.loyer_mensuel
         log_obj.updated_at = _now()
     elif obj.status == BailStatus.PROPOSE.value:
         log_obj.status = LogementStatus.RESERVE.value
@@ -3437,6 +3474,21 @@ async def update_bail(
         log_obj = await db.get(Logement, obj.logement_id)
         if log_obj is not None:
             log_obj.status = LogementStatus.VACANT.value
+            # Miroir « loyer demandé » (2026-08-13) : logement VACANT →
+            # le prix affiché pour la relocation (dossier Locations)
+            # fait foi s'il existe ; sinon on garde le dernier loyer.
+            from app.models.immobilier import LocationDossier
+
+            dossier = (
+                await db.execute(
+                    select(LocationDossier).where(
+                        LocationDossier.logement_id == obj.logement_id,
+                        LocationDossier.statut.notin_(["annule", "reloue"]),
+                    )
+                )
+            ).scalars().first()
+            if dossier is not None and dossier.loyer_demande is not None:
+                log_obj.loyer_demande = dossier.loyer_demande
             log_obj.updated_at = _now()
     elif (
         old_status != BailStatus.ACTIF.value
@@ -3448,6 +3500,14 @@ async def update_bail(
         if log_obj is not None:
             log_obj.status = LogementStatus.OCCUPE.value
             log_obj.updated_at = _now()
+
+    # Miroir « loyer demandé » (2026-08-13) : tant que le bail est
+    # ACTIF (réactivation ou simple correction du loyer), le logement
+    # occupé garde Logement.loyer_demande aligné sur le loyer du bail.
+    if obj.status == BailStatus.ACTIF.value and obj.loyer_mensuel is not None:
+        log_obj = await db.get(Logement, obj.logement_id)
+        if log_obj is not None:
+            log_obj.loyer_demande = obj.loyer_mensuel
 
     await db.commit()
     await db.refresh(obj)
