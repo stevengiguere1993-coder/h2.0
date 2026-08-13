@@ -6,8 +6,14 @@ dernier jour de FÉVRIER. Kratos ne produit pas le relevé officiel (ça se
 fait dans le service en ligne de Revenu Québec) ; il fournit :
 
     GET   /immobilier/releves31?annee=AAAA   — la liste des logements
-          occupés au 31 déc + locataire + données à saisir chez RQ,
-          jointe au suivi (statut / numéro / copie PDF).
+          occupés PENDANT l'année (chevauchement de bail, pas la seule
+          photo du 31 déc. : un locataire parti en juin doit rester
+          visible — retour Phil 2026-08-13) + locataire + données à
+          saisir chez RQ, jointe au suivi (statut / numéro / copie PDF).
+          Le relevé revient au locataire présent au 31 décembre ; les
+          autres occupants de l'année sont listés dans ``occupants``.
+          La PRODUCTION n'ouvre qu'au 1er décembre de l'année fiscale
+          (``SuivisConfig.ouverture_releve31``).
     PATCH /immobilier/releves31/{annee}/{logement_id}   — statut, numéro
           de relevé, notes (upsert).
     POST  /immobilier/releves31/{annee}/{logement_id}/pdf — téléverse la
@@ -22,7 +28,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.immobilier import (
@@ -49,6 +55,18 @@ def _require_volet(user: CurrentUser) -> None:
         )
 
 
+class Releve31Occupant(BaseModel):
+    """Un locataire ayant occupé le logement pendant l'année."""
+
+    bail_id: Optional[int] = None
+    locataire_id: Optional[int] = None
+    locataire_nom: Optional[str] = None
+    debut: Optional[date] = None
+    fin: Optional[date] = None
+    #: Celui qui porte le relevé (présent au 31 déc., sinon le dernier).
+    principal: bool = False
+
+
 class Releve31Row(BaseModel):
     annee: int
     logement_id: int
@@ -68,6 +86,13 @@ class Releve31Row(BaseModel):
     numero_releve: Optional[str] = None
     notes: Optional[str] = None
     document_id: Optional[int] = None
+    #: Période d'occupation retenue DANS l'année (bornée au 1er janv. /
+    #: 31 déc.) — un bail qui se termine en juin s'affiche tel quel.
+    occupation_debut: Optional[date] = None
+    occupation_fin: Optional[date] = None
+    #: Tous les locataires de l'année pour ce logement (le principal
+    #: inclus) : personne ne disparaît quand il y a eu un changement.
+    occupants: List[Releve31Occupant] = []
 
 
 class Releve31Overview(BaseModel):
@@ -77,6 +102,10 @@ class Releve31Overview(BaseModel):
     nb_a_produire: int = 0
     nb_produits: int = 0
     nb_remis: int = 0
+    #: Fenêtre de production : les relevés de ``annee`` ne se créent qu'à
+    #: partir de ``ouverture_le`` (1er décembre de ``annee`` par défaut).
+    creation_ouverte: bool = True
+    ouverture_le: Optional[date] = None
 
 
 class Releve31Update(BaseModel):
@@ -92,10 +121,115 @@ def _fin_fevrier(annee: int) -> date:
     return date(an, 2, 29 if bissextile else 28)
 
 
-async def _occupations_31_dec(db, annee: int) -> List[dict]:
-    """Logements occupés au 31 décembre de ``annee`` : bail couvrant
-    cette date (peu importe qu'il soit terminé depuis), immeubles actifs
-    hors gestion externe (le gestionnaire tiers produit ses relevés)."""
+_MOIS_FR = (
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+)
+
+
+def _date_fr(d: date) -> str:
+    """« 1er décembre 2026 » — pour les messages d'erreur lisibles."""
+    jour = "1er" if d.day == 1 else str(d.day)
+    return f"{jour} {_MOIS_FR[d.month - 1]} {d.year}"
+
+
+async def _garde_fenetre(annee: int) -> None:
+    """Refuse de PRODUIRE un relevé avant l'ouverture de sa fenêtre.
+
+    Retour Phil 2026-08-13 : « il devrait avoir un mécanisme m'empêchant
+    de les créer avant ». On réutilise la bascule déjà en place
+    (``releve31_bascule_mois``, défaut novembre) : les relevés de N
+    s'ouvrent le 1er décembre N — décembre, janvier et février pour les
+    produire et les remettre avant l'échéance légale."""
+    from app.services.locatif_suivis import get_suivis
+
+    cfg = await get_suivis()
+    if cfg.releve31_creation_ouverte(annee, date.today()):
+        return
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"Les relevés 31 de {annee} pourront être produits à partir "
+            f"du {_date_fr(cfg.ouverture_releve31(annee))} (remise au "
+            f"locataire avant la fin février {annee + 1})."
+        ),
+    )
+
+
+def _fin_effective(b: Bail, today: date) -> date:
+    """Fin RÉELLE de l'occupation d'un bail.
+
+    Un bail AU MOIS actif se reconduit automatiquement : sa ``date_fin``
+    peut être dépassée alors que le locataire occupe toujours. On la
+    prolonge jusqu'à aujourd'hui pour ne pas le faire disparaître des
+    années récentes."""
+    fin = b.date_fin
+    if getattr(b, "au_mois", False) and b.status == BailStatus.ACTIF.value:
+        return max(fin, today) if fin else today
+    return fin
+
+
+def _occupants_annee(baux: List[Bail], annee: int, today: date) -> List[Bail]:
+    """Baux CHEVAUCHANT l'année d'imposition, du plus ancien au plus
+    récent. Le RL-31 vise le locataire qui a occupé le logement pendant
+    l'année : un bail qui commence en octobre N-1 et se termine en juin N
+    compte pour N-1 ET pour N (retour Phil 2026-08-13)."""
+    jan1, dec31 = date(annee, 1, 1), date(annee, 12, 31)
+    dedans = [
+        b
+        for b in baux
+        if b.date_debut
+        and b.date_debut <= dec31
+        and _fin_effective(b, today) >= jan1
+    ]
+    dedans.sort(key=lambda b: (b.date_debut, b.id or 0))
+    return dedans
+
+
+def _bail_principal(
+    baux: List[Bail], annee: int, today: date
+) -> Optional[Bail]:
+    """Le bail qui porte le relevé du logement pour ``annee``.
+
+    Priorité au locataire présent au 31 décembre (règle de Revenu
+    Québec) ; à défaut — logement libéré en cours d'année, bail non
+    encore renouvelé dans Kratos — le DERNIER occupant de l'année, pour
+    qu'il ne disparaisse jamais de la liste."""
+    occupants = _occupants_annee(baux, annee, today)
+    if not occupants:
+        return None
+    dec31 = date(annee, 12, 31)
+    au_31 = [
+        b
+        for b in occupants
+        if b.date_debut <= dec31 <= _fin_effective(b, today)
+    ]
+    pool = au_31 or occupants
+    return max(
+        pool,
+        key=lambda b: (_fin_effective(b, today), b.date_debut, b.id or 0),
+    )
+
+
+async def _baux_du_logement(db, logement_id: int) -> List[Bail]:
+    """Tous les baux retenus (hors « proposé ») d'un logement."""
+    return list(
+        (
+            await db.execute(
+                select(Bail).where(
+                    Bail.logement_id == logement_id,
+                    Bail.status != BailStatus.PROPOSE.value,
+                )
+            )
+        ).scalars().all()
+    )
+
+
+async def _occupations_annee(db, annee: int) -> List[dict]:
+    """Logements OCCUPÉS pendant ``annee`` (chevauchement de période, et
+    non plus la seule photo du 31 décembre) : immeubles actifs hors
+    gestion externe (le gestionnaire tiers produit ses relevés)."""
+    today = date.today()
     dec31 = date(annee, 12, 31)
     immeubles = {
         im.id: im
@@ -123,21 +257,30 @@ async def _occupations_31_dec(db, annee: int) -> List[dict]:
     }
     if not logements:
         return []
+    jan1 = date(annee, 1, 1)
     baux = (
         await db.execute(
             select(Bail).where(
                 Bail.logement_id.in_(list(logements.keys())),
                 Bail.date_debut <= dec31,
-                Bail.date_fin >= dec31,
+                # Chevauchement de l'année (et non « présent au 31 déc ») :
+                # bail terminé en cours d'année inclus, plus les baux AU
+                # MOIS actifs dont la date_fin est dépassée (reconduction).
+                or_(
+                    Bail.date_fin >= jan1,
+                    and_(
+                        Bail.au_mois.is_(True),
+                        Bail.status == BailStatus.ACTIF.value,
+                    ),
+                ),
                 Bail.status != BailStatus.PROPOSE.value,
             ).order_by(Bail.date_debut.asc())
         )
     ).scalars().all()
-    # Un bail par logement (le plus récent couvrant le 31 déc).
-    bail_par_logement: dict[int, Bail] = {}
+    par_logement: dict[int, List[Bail]] = {}
     for b in baux:
-        bail_par_logement[b.logement_id] = b
-    loc_ids = {b.locataire_id for b in bail_par_logement.values()}
+        par_logement.setdefault(b.logement_id, []).append(b)
+    loc_ids = {b.locataire_id for b in baux if b.locataire_id}
     locataires = {}
     if loc_ids:
         for lo in (
@@ -148,7 +291,11 @@ async def _occupations_31_dec(db, annee: int) -> List[dict]:
             locataires[lo.id] = lo
 
     out: List[dict] = []
-    for lg_id, b in bail_par_logement.items():
+    for lg_id, lst in par_logement.items():
+        occupants = _occupants_annee(lst, annee, today)
+        b = _bail_principal(lst, annee, today)
+        if b is None:
+            continue
         lg = logements[lg_id]
         im = immeubles.get(lg.immeuble_id)
         lo = locataires.get(b.locataire_id)
@@ -158,6 +305,23 @@ async def _occupations_31_dec(db, annee: int) -> List[dict]:
                 "immeuble": im,
                 "bail": b,
                 "locataire": lo,
+                # Tous ceux qui ont occupé le logement dans l'année —
+                # aucun locataire ne disparaît de la page.
+                "occupants": [
+                    {
+                        "bail_id": o.id,
+                        "locataire_id": o.locataire_id,
+                        "locataire_nom": (
+                            locataires[o.locataire_id].full_name
+                            if o.locataire_id in locataires
+                            else None
+                        ),
+                        "debut": max(o.date_debut, jan1),
+                        "fin": min(_fin_effective(o, today), dec31),
+                        "principal": o.id == b.id,
+                    }
+                    for o in occupants
+                ],
             }
         )
     out.sort(
@@ -178,11 +342,12 @@ async def releves31_overview(
     # Année fiscale « en cours » : jusqu'au mois de bascule inclus (réglable,
     # défaut février) on travaille encore sur l'année précédente. Après, sur
     # l'année courante (retour Phil 2026-07-28).
-    if annee is None:
-        from app.services.locatif_suivis import get_suivis
+    from app.services.locatif_suivis import get_suivis
 
-        annee = (await get_suivis()).annee_releve31_defaut(today)
-    occupations = await _occupations_31_dec(db, annee)
+    suivis_cfg = await get_suivis()
+    if annee is None:
+        annee = suivis_cfg.annee_releve31_defaut(today)
+    occupations = await _occupations_annee(db, annee)
 
     suivis = {
         r.logement_id: r
@@ -199,10 +364,15 @@ async def releves31_overview(
             o["logement"], o["immeuble"], o["bail"], o["locataire"],
         )
         suivi = suivis.get(lg.id)
+        occs = [Releve31Occupant(**oc) for oc in o.get("occupants", [])]
+        princ = next((oc for oc in occs if oc.principal), None)
         rows.append(
             Releve31Row(
                 annee=annee,
                 logement_id=lg.id,
+                occupation_debut=princ.debut if princ else None,
+                occupation_fin=princ.fin if princ else None,
+                occupants=occs,
                 logement_numero=lg.numero,
                 immeuble_id=im.id if im else None,
                 immeuble_name=im.name if im else None,
@@ -231,6 +401,8 @@ async def releves31_overview(
         nb_a_produire=sum(1 for r in rows if r.statut == "a_produire"),
         nb_produits=sum(1 for r in rows if r.statut == "produit"),
         nb_remis=sum(1 for r in rows if r.statut == "remis"),
+        creation_ouverte=suivis_cfg.releve31_creation_ouverte(annee, today),
+        ouverture_le=suivis_cfg.ouverture_releve31(annee),
     )
 
 
@@ -244,6 +416,8 @@ async def _upsert(db, annee: int, logement_id: int) -> Releve31:
         )
     ).scalar_one_or_none()
     if obj is None:
+        # CRÉATION seulement : un relevé déjà commencé reste modifiable.
+        await _garde_fenetre(annee)
         lg = await db.get(Logement, logement_id)
         if lg is None:
             raise HTTPException(
@@ -347,18 +521,11 @@ async def upload_releve31_pdf(
 
     obj = await _upsert(db, annee, logement_id)
 
-    # Bail/locataire couvrant le 31 décembre pour rattacher le document.
-    dec31 = date(annee, 12, 31)
-    bail = (
-        await db.execute(
-            select(Bail).where(
-                Bail.logement_id == logement_id,
-                Bail.date_debut <= dec31,
-                Bail.date_fin >= dec31,
-                Bail.status != BailStatus.PROPOSE.value,
-            ).order_by(Bail.date_debut.desc())
-        )
-    ).scalars().first()
+    # Bail/locataire de l'année (présent au 31 déc., sinon le dernier
+    # occupant) pour rattacher le document — même règle que la liste.
+    bail = _bail_principal(
+        await _baux_du_logement(db, logement_id), annee, date.today()
+    )
 
     from app.api.v1.endpoints.immobilier_documents import save_document
 
@@ -486,17 +653,9 @@ async def generer_releve31_pdf(
                 "Québec) — la copie se génère avec."
             ),
         )
-    dec31 = date(annee, 12, 31)
-    bail = (
-        await db.execute(
-            select(Bail).where(
-                Bail.logement_id == logement_id,
-                Bail.date_debut <= dec31,
-                Bail.date_fin >= dec31,
-                Bail.status != BailStatus.PROPOSE.value,
-            ).order_by(Bail.date_debut.desc())
-        )
-    ).scalars().first()
+    bail = _bail_principal(
+        await _baux_du_logement(db, logement_id), annee, date.today()
+    )
     locataire = (
         await db.get(Locataire, bail.locataire_id) if bail else None
     )

@@ -55,6 +55,7 @@ import {
   FinBailModal,
   JourEcheanceInline,
   KANBAN_STATUTS,
+  LOUER_INDEFINIMENT_INFO,
   type SuiviBailRow
 } from "@/components/immobilier/fin-bail";
 
@@ -2175,9 +2176,16 @@ function LogementsTab({
               >
                 <td className="px-4 py-2 font-bold text-white">{l.numero}</td>
                 <td className="px-4 py-2 text-xs text-white/70">
-                  {l.location_en_chambres
-                    ? "Chambre"
-                    : fmtPieces(l.nb_pieces_decimal)}
+                  {l.location_en_chambres ? (
+                    <span
+                      title={LOUER_INDEFINIMENT_INFO}
+                      className="cursor-help border-b border-dotted border-white/25"
+                    >
+                      Chambre ∞
+                    </span>
+                  ) : (
+                    fmtPieces(l.nb_pieces_decimal)
+                  )}
                 </td>
                 <td className="px-4 py-2 text-right font-mono text-xs text-white/70">
                   {l.superficie_pi2 ? `${l.superficie_pi2} pi²` : "—"}
@@ -2634,6 +2642,7 @@ function BauxTab({
           logementId={creerFor.logement_id}
           immeubleName={creerFor.immeuble_name}
           logementNumero={creerFor.logement_numero}
+          logementEnChambres={creerFor.logement_en_chambres}
           onClose={() => setCreerFor(null)}
           onDone={(statut) => {
             setCreerFor(null);

@@ -2037,9 +2037,27 @@ async def update_logement(
     obj = await db.get(Logement, logement_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Logement introuvable.")
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    etait_indefini = bool(getattr(obj, "location_en_chambres", False))
+    data = payload.model_dump(exclude_unset=True)
+    for k, v in data.items():
         setattr(obj, k, v)
     obj.updated_at = _now()
+    # « Louer indéfiniment (chambre) » qu'on COCHE : les baux en cours du
+    # logement basculent AU MOIS (même loyer à l'infini, hors des
+    # renouvellements). Qu'on DÉCOCHE : on ne touche à rien — le
+    # gestionnaire décide bail par bail (retour Phil 2026-08-13).
+    if data.get("location_en_chambres") and not etait_indefini:
+        await db.execute(
+            update(Bail)
+            .where(
+                Bail.logement_id == logement_id,
+                Bail.status.in_(
+                    [BailStatus.ACTIF.value, BailStatus.PROPOSE.value]
+                ),
+                Bail.au_mois.isnot(True),
+            )
+            .values(au_mois=True, updated_at=_now())
+        )
     await db.commit()
     await db.refresh(obj)
     return LogementRead.model_validate(obj)
@@ -3281,6 +3299,11 @@ async def create_bail(
             )
 
     obj = Bail(**payload.model_dump())
+    # « Louer indéfiniment (chambre) » : le logement impose le bail AU
+    # MOIS — même loyer à l'infini, aucun avis d'augmentation, hors des
+    # renouvellements (retour Phil 2026-08-13).
+    if getattr(log_obj, "location_en_chambres", False):
+        obj.au_mois = True
     obj.created_at = _now()
     obj.updated_at = _now()
     db.add(obj)
@@ -4479,6 +4502,16 @@ async def baux_echeances(
     for b in baux:
         if not b.date_fin:
             continue
+        logement = log_by_id.get(b.logement_id)
+        # « Louer indéfiniment (chambre) » / bail AU MOIS : reconduction
+        # automatique au même loyer, aucun avis d'augmentation attendu →
+        # jamais dans les échéances (retour Phil 2026-08-13). Le flag du
+        # logement sert de filet pour les baux legacy créés avant le lien.
+        if b.au_mois or (
+            logement is not None
+            and getattr(logement, "location_en_chambres", False)
+        ):
+            continue
         window_start = b.date_fin - timedelta(days=183)
         window_end = b.date_fin - timedelta(days=91)
         # Avis déjà transmis dans ce cycle ?
@@ -4498,7 +4531,6 @@ async def baux_echeances(
         else:
             statut, jours = "en_retard", (b.date_fin - today).days
 
-        logement = log_by_id.get(b.logement_id)
         immeuble = (
             imm_by_id.get(logement.immeuble_id) if logement else None
         )

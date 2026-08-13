@@ -12,7 +12,12 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { echeanceLabel } from "@/components/immobilier/fin-bail";
+import {
+  echeanceLabel,
+  LOUER_INDEFINIMENT_INFO,
+  LOUER_INDEFINIMENT_LABEL,
+  LouerIndefinimentBulle
+} from "@/components/immobilier/fin-bail";
 
 /**
  * Fiche logement partagée — modale d'affichage/édition d'UN logement.
@@ -356,7 +361,7 @@ export function LogementFiche({
               />
               {enChambres ? (
                 <p className="mt-1 text-[11px] text-white/50">
-                  Affiché : Chambre (loué en chambre)
+                  Affiché : Chambre (louer indéfiniment)
                 </p>
               ) : form.nb_pieces_decimal.trim() !== "" ? (
                 <p className="mt-1 text-[11px] text-white/50">
@@ -398,14 +403,17 @@ export function LogementFiche({
                 onChange={(e) => set("superficie_pi2", e.target.value)}
                 className="input font-mono"
               />
-              <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-xs text-white/70">
+              <label
+                title={LOUER_INDEFINIMENT_INFO}
+                className="mt-1.5 flex cursor-pointer items-center gap-2 text-xs text-white/70"
+              >
                 <input
                   type="checkbox"
                   checked={enChambres}
                   onChange={(e) => setEnChambres(e.target.checked)}
                   className="h-3.5 w-3.5 accent-accent-500"
                 />
-                Loué en chambre
+                {LOUER_INDEFINIMENT_LABEL}
               </label>
             </div>
             <div>
@@ -430,6 +438,8 @@ export function LogementFiche({
               />
             </div>
           </div>
+
+          {enChambres ? <LouerIndefinimentBulle /> : null}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div>

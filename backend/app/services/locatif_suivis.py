@@ -13,7 +13,9 @@ Retour Phil 2026-07-28 : « à partir de quand dans l'année tu switch pour
   novembre), on travaille sur l'année PRÉCÉDENTE ; dès le 1er décembre,
   l'onglet passe à l'année courante et tout repart « à produire »
   (retour Phil 2026-07-31). (L'échéance légale reste le dernier jour
-  de février.)
+  de février.) La MÊME bascule verrouille la production : les relevés de
+  l'année N ne sont créables qu'à partir du 1er décembre N
+  (``ouverture_releve31``), retour Phil 2026-08-13.
 
 Clé de config partagée (``automation_settings``) pour que tous les
 endpoints lisent LES MÊMES fenêtres.
@@ -64,6 +66,24 @@ class SuivisConfig:
             if today.month <= self.releve31_bascule_mois
             else today.year
         )
+
+    def ouverture_releve31(self, annee: int) -> date:
+        """Premier jour où les relevés de ``annee`` deviennent produisibles.
+
+        MÊME bascule que ``annee_releve31_defaut`` : le lendemain du mois
+        ``releve31_bascule_mois`` (défaut novembre → 1er décembre de
+        ``annee``). Laisse décembre + janvier + février pour produire et
+        remettre, l'échéance légale restant le dernier jour de février de
+        ``annee + 1`` (retour Phil 2026-08-13 : « pour 2026, je peux juste
+        les créer en 2027 » → la fenêtre s'ouvre le 1er déc. 2026)."""
+        mois = self.releve31_bascule_mois
+        if mois >= 12:
+            return date(annee + 1, 1, 1)
+        return date(annee, mois + 1, 1)
+
+    def releve31_creation_ouverte(self, annee: int, today: date) -> bool:
+        """La fenêtre de production de ``annee`` est-elle ouverte ?"""
+        return today >= self.ouverture_releve31(annee)
 
     def fenetre_renouvellement(
         self, jours_avant_fin: int, avis_envoye: bool

@@ -506,6 +506,7 @@ export default function SuiviBauxPage() {
           logementId={creerFor.logement_id}
           immeubleName={creerFor.immeuble_name}
           logementNumero={creerFor.logement_numero}
+          logementEnChambres={creerFor.logement_en_chambres}
           onClose={() => setCreerFor(null)}
           onDone={(statut) => {
             setCreerFor(null);
