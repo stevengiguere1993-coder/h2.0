@@ -68,6 +68,8 @@ from app.api.v1.endpoints import (
     immobilier_frais_gestion,
     immobilier_releves31,
     investissements,
+    invest_admin,
+    invest_portal,
     dashboard,
     help,
     kratos,
@@ -511,6 +513,13 @@ api_router.include_router(immobilier.router_images)
 api_router.include_router(contrats_gestion.router, dependencies=DEP_IMMOBILIER)
 api_router.include_router(immobilier.router, dependencies=DEP_IMMOBILIER)
 api_router.include_router(investissements.router, dependencies=DEP_INVESTISSEUR)
+# Portail Investisseur v2 — participation par compagnie. La console
+# admin (/invest/admin) est réservée admin/owner ; le portail
+# (/invest/me) suit le volet investisseur.
+api_router.include_router(
+    invest_admin.router, dependencies=[Depends(get_current_admin_or_owner)]
+)
+api_router.include_router(invest_portal.router, dependencies=DEP_INVESTISSEUR)
 # Formulaire public Dev Logiciel — endpoint POST /public/devlog/contact
 # sans auth, cree un DevlogLead avec source=web_form au submit.
 api_router.include_router(public_devlog_contact.router)

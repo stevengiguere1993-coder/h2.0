@@ -257,6 +257,10 @@ PAGES: list[PageEntry] = [
     # ── Investisseurs ──
     _p("investisseur.portefeuille", "Mon portefeuille", "investisseur",
        "employee", "/investisseur"),
+    # Console admin du pôle (gestion des investisseurs, participations,
+    # publication) — direction seulement.
+    _p("investisseur.admin", "Console admin (investisseurs)",
+       "investisseur", "admin", "/investisseur/admin"),
     # ── Développement logiciel (comportement actuel : owner/admin) ──
     _p("devlogiciel.accueil", "Accueil Dev logiciel",
        "developpement_logiciel", "admin", "/dev-logiciel"),

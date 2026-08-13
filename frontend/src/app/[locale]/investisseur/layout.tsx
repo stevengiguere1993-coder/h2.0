@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   Loader2,
   Menu,
+  Settings2,
   Sparkles,
   TrendingUp,
   X
@@ -20,6 +21,7 @@ import { KratosLogo } from "@/components/kratos-logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { useNavAccess } from "@/hooks/use-nav-access";
 import { canEnterVolet } from "@/lib/access";
 
 type NavItem = {
@@ -29,7 +31,9 @@ type NavItem = {
 };
 
 const NAV: NavItem[] = [
-  { href: "/investisseur", label: "Mon portefeuille", icon: TrendingUp }
+  { href: "/investisseur", label: "Mon portefeuille", icon: TrendingUp },
+  // Console de gestion (direction seulement — filtrée par useNavAccess).
+  { href: "/investisseur/admin", label: "Console admin", icon: Settings2 }
 ];
 
 type Ctx = { onOpenSidebar: () => void };
@@ -45,6 +49,7 @@ export default function InvestisseurLayout({
   children: React.ReactNode;
 }) {
   const { user, loading } = useCurrentUser();
+  const canSeeHref = useNavAccess(user);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const pathname = usePathname() || "";
 
@@ -106,7 +111,7 @@ export default function InvestisseurLayout({
                 Investisseurs
               </p>
               <ul className="space-y-0.5">
-                {NAV.map((item) => {
+                {NAV.filter((item) => canSeeHref(item.href)).map((item) => {
                   const active = isActive(item.href);
                   return (
                     <li key={item.href}>
