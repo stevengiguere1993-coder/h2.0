@@ -45,6 +45,8 @@ import {
   CelluleLoyer,
   CorrectionOptions,
   duMois,
+  moisCouvertPourPaiement,
+  montantMarquerPaye,
   RENOUVELLEMENT_BADGES
 } from "@/components/immobilier/paiements-actions";
 import { ImmobilierTopbar } from "../../layout";
@@ -1859,7 +1861,9 @@ function LoyersMoisSection({
         method: "POST",
         body: JSON.stringify({
           bail_id: row.bail_id,
-          mois_couvert: `${mois}-01`,
+          // Ligne « dette » d'un bail terminé : imputer au dernier mois
+          // couvert (le backend refuse un mois hors période du bail).
+          mois_couvert: `${moisCouvertPourPaiement(row, mois)}-01`,
           montant,
           paye_le: payeLe
         })
@@ -1875,9 +1879,9 @@ function LoyersMoisSection({
   }
 
   async function marquerPaye(row: LoyerMoisRow) {
-    const restant =
-      Math.round((duMois(row) - (row.montant_paye ?? 0)) * 100) / 100;
-    await paiement(row, restant > 0 ? restant : duMois(row));
+    // Restant du mois — et SOLDE du bail pour une ligne « dette
+    // seulement » (bail terminé, mois après sa fin — 2026-08-14).
+    await paiement(row, montantMarquerPaye(row));
   }
 
   async function marquerPartiel(row: LoyerMoisRow) {

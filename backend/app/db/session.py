@@ -405,6 +405,10 @@ async def ensure_critical_columns() -> None:
         ),
         ("imm_locataires", "dpa_envoye_le", "DATE"),
         ("imm_locataires", "dpa_signe_le", "DATE"),
+        # Gestion externe 2026-08-14 : loyer attendu FIGÉ au moment du
+        # « marquer payé » — les mois déjà réglés gardent leur montant
+        # historique quand le loyer du logement change ensuite.
+        ("imm_paiements_externes", "loyer_attendu", "NUMERIC(10,2)"),
         # Retours Steven 2026-07-20 : confirmation annuelle d'assurance
         # locataire + logement loué en chambres.
         ("imm_locataires", "assurance_confirmee_le", "DATE"),

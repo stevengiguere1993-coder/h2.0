@@ -631,54 +631,93 @@ async def list_immeubles(
     for imm_id, st, n in log_rows:
         logs_by_imm.setdefault(imm_id, {})[st] = int(n)
 
-    # Revenu mensuel = somme baux actifs des logements de l'immeuble
-    bail_rows = (
-        await db.execute(
-            select(
-                Logement.immeuble_id,
-                func.coalesce(func.sum(Bail.loyer_mensuel), 0),
-            )
-            .join(Bail, Bail.logement_id == Logement.id)
-            .where(
-                and_(
-                    Logement.immeuble_id.in_([i.id for i in immeubles]),
-                    Bail.status == BailStatus.ACTIF.value,
+    # Revenu mensuel — hiérarchie du loyer effectif (2026-08-14) :
+    # INTERNE = somme des baux actifs + loyer demandé des occupés sans
+    # bail ; EXTERNE = le loyer SAISI sur le logement prime (un bail
+    # résiduel ne sert que de filet). Les externes se calculent en
+    # Python (peu d'immeubles, logique par logement).
+    interne_ids = [i.id for i in immeubles if not i.gestion_externe]
+    externe_ids = [i.id for i in immeubles if i.gestion_externe]
+    rev_by_imm: dict[int, float] = {}
+    if interne_ids:
+        bail_rows = (
+            await db.execute(
+                select(
+                    Logement.immeuble_id,
+                    func.coalesce(func.sum(Bail.loyer_mensuel), 0),
                 )
+                .join(Bail, Bail.logement_id == Logement.id)
+                .where(
+                    and_(
+                        Logement.immeuble_id.in_(interne_ids),
+                        Bail.status == BailStatus.ACTIF.value,
+                    )
+                )
+                .group_by(Logement.immeuble_id)
             )
-            .group_by(Logement.immeuble_id)
-        )
-    ).all()
-    rev_by_imm = {r[0]: float(r[1] or 0) for r in bail_rows}
+        ).all()
+        rev_by_imm = {r[0]: float(r[1] or 0) for r in bail_rows}
 
-    # + logements OCCUPÉS sans bail actif au loyer demandé (gestion
-    # externe : les baux vivent chez le gestionnaire) — même définition
-    # « unités louées » que les financials de la fiche.
-    bail_actif_exists = (
-        select(Bail.id)
-        .where(
-            Bail.logement_id == Logement.id,
-            Bail.status == BailStatus.ACTIF.value,
-        )
-        .exists()
-    )
-    occ_rows = (
-        await db.execute(
-            select(
-                Logement.immeuble_id,
-                func.coalesce(func.sum(Logement.loyer_demande), 0),
-            )
+        bail_actif_exists = (
+            select(Bail.id)
             .where(
-                and_(
-                    Logement.immeuble_id.in_([i.id for i in immeubles]),
-                    Logement.status == LogementStatus.OCCUPE.value,
-                    ~bail_actif_exists,
+                Bail.logement_id == Logement.id,
+                Bail.status == BailStatus.ACTIF.value,
+            )
+            .exists()
+        )
+        occ_rows = (
+            await db.execute(
+                select(
+                    Logement.immeuble_id,
+                    func.coalesce(func.sum(Logement.loyer_demande), 0),
+                )
+                .where(
+                    and_(
+                        Logement.immeuble_id.in_(interne_ids),
+                        Logement.status == LogementStatus.OCCUPE.value,
+                        ~bail_actif_exists,
+                    )
+                )
+                .group_by(Logement.immeuble_id)
+            )
+        ).all()
+        for imm_id, somme in occ_rows:
+            rev_by_imm[imm_id] = (
+                rev_by_imm.get(imm_id, 0.0) + float(somme or 0)
+            )
+    if externe_ids:
+        from app.services.loyer_effectif import loyer_effectif_loue
+
+        logs_ext = (
+            await db.execute(
+                select(Logement).where(
+                    Logement.immeuble_id.in_(externe_ids)
                 )
             )
-            .group_by(Logement.immeuble_id)
-        )
-    ).all()
-    for imm_id, somme in occ_rows:
-        rev_by_imm[imm_id] = rev_by_imm.get(imm_id, 0.0) + float(somme or 0)
+        ).scalars().all()
+        bail_ext: dict[int, float] = {}
+        if logs_ext:
+            for b in (
+                await db.execute(
+                    select(Bail).where(
+                        Bail.logement_id.in_([l.id for l in logs_ext]),
+                        Bail.status == BailStatus.ACTIF.value,
+                    )
+                )
+            ).scalars().all():
+                bail_ext[b.logement_id] = (
+                    bail_ext.get(b.logement_id, 0.0)
+                    + float(b.loyer_mensuel or 0)
+                )
+        for lg in logs_ext:
+            m = loyer_effectif_loue(
+                lg, bail_ext.get(lg.id), gestion_externe=True
+            )
+            if m is not None:
+                rev_by_imm[lg.immeuble_id] = (
+                    rev_by_imm.get(lg.immeuble_id, 0.0) + m
+                )
 
     out: List[ImmeubleListItem] = []
     for imm in immeubles:
@@ -917,10 +956,9 @@ async def _recaler_logement_apres_bail(db, logement_id: int) -> None:
     ).scalars().first()
     if actif is not None:
         lg.status = LogementStatus.OCCUPE.value
-        # Miroir « loyer demandé » (2026-08-13) : occupé → suit le
-        # loyer réel du bail actif restant.
-        if actif.loyer_mensuel is not None:
-            lg.loyer_demande = actif.loyer_mensuel
+        # Hiérarchie 2026-08-14 : « loyer demandé » = prix de la
+        # PROCHAINE location — le bail ne l'écrase plus, les surfaces
+        # lisent le loyer du bail directement quand il y en a un.
     elif lg.status == LogementStatus.OCCUPE.value:
         lg.status = LogementStatus.VACANT.value
     lg.updated_at = _now()
@@ -2034,11 +2072,16 @@ async def list_logements(
             .order_by(Logement.numero.asc())
         )
     ).scalars().all()
-    # Miroir « loyer demandé » (2026-08-13) : la liste porte aussi le
-    # loyer RÉEL du bail actif — un logement OCCUPÉ affiche ce loyer,
-    # le « loyer demandé » ne vaut que pour la relocation (vacant).
+    # Hiérarchie du loyer effectif (retour client 2026-08-14) : la liste
+    # porte le loyer RÉEL du bail actif pour un logement occupé… SAUF en
+    # gestion EXTERNE, où le loyer SAISI sur le logement est la vérité —
+    # un bail résiduel (invisible, l'onglet Baux est caché en externe)
+    # ne doit pas masquer la saisie. loyer_actuel reste alors vide et
+    # toutes les surfaces retombent sur loyer_demande.
+    imm = await db.get(Immeuble, immeuble_id)
+    externe = bool(getattr(imm, "gestion_externe", False)) if imm else False
     loyer_actif: dict[int, Bail] = {}
-    ids = [r.id for r in rows]
+    ids = [r.id for r in rows] if not externe else []
     if ids:
         today = _now().date()
         for b in (
@@ -2313,6 +2356,9 @@ async def logement_dossier(
                 else f"Immeuble #{lg.immeuble_id}"
             ),
             address=(imm.address if imm else None),
+            gestion_externe=bool(
+                getattr(imm, "gestion_externe", False)
+            ) if imm else False,
         ),
         baux=dossier_baux,
         bons_travail=dossier_bons,
@@ -3588,10 +3634,9 @@ async def create_bail(
     # Met à jour le statut du logement automatiquement
     if obj.status == BailStatus.ACTIF.value:
         log_obj.status = LogementStatus.OCCUPE.value
-        # Miroir « loyer demandé » (2026-08-13) : logement OCCUPÉ →
-        # Logement.loyer_demande suit le loyer réel du bail.
-        if obj.loyer_mensuel is not None:
-            log_obj.loyer_demande = obj.loyer_mensuel
+        # Hiérarchie 2026-08-14 : « loyer demandé » = prix de la
+        # PROCHAINE location — le bail ne l'écrase plus (les surfaces
+        # affichent le loyer du bail directement pour un occupé).
         log_obj.updated_at = _now()
     elif obj.status == BailStatus.PROPOSE.value:
         log_obj.status = LogementStatus.RESERVE.value
@@ -3769,13 +3814,10 @@ async def update_bail(
             log_obj.status = LogementStatus.OCCUPE.value
             log_obj.updated_at = _now()
 
-    # Miroir « loyer demandé » (2026-08-13) : tant que le bail est
-    # ACTIF (réactivation ou simple correction du loyer), le logement
-    # occupé garde Logement.loyer_demande aligné sur le loyer du bail.
-    if obj.status == BailStatus.ACTIF.value and obj.loyer_mensuel is not None:
-        log_obj = await db.get(Logement, obj.logement_id)
-        if log_obj is not None:
-            log_obj.loyer_demande = obj.loyer_mensuel
+    # Hiérarchie 2026-08-14 : plus de miroir bail→loyer_demande sur un
+    # logement occupé. « Loyer demandé » = prix de la PROCHAINE location
+    # (il alimente le dossier de relocation) ; corriger le loyer du bail
+    # n'a pas à l'écraser — les surfaces lisent le bail directement.
 
     await db.commit()
     await db.refresh(obj)
@@ -4020,6 +4062,52 @@ async def create_paiement(
         derniere = row
         montant_total = round(montant_total - tranche, 2)
         mois = _mois_suivant(mois)
+    # Bail TERMINÉ : la répartition ci-dessus ne peut pas déborder sa
+    # fin. Si rien n'a été alloué (les mois visés étaient déjà couverts)
+    # alors que la dette vient de mois ANTÉRIEURS impayés, on redescend
+    # vers eux — c'est l'encaissement du solde d'un locataire parti
+    # (retour client 2026-08-14 : la ligne « dette » doit s'encaisser).
+    if (
+        obj is None
+        and montant_total > 0.005
+        and bail.status
+        in (BailStatus.RESILIE.value, BailStatus.TERMINE.value)
+        and bail.date_debut is not None
+    ):
+        def _mois_precedent(m: date) -> date:
+            return date(m.year - (1 if m.month == 1 else 0),
+                        12 if m.month == 1 else m.month - 1, 1)
+
+        plancher = bail.date_debut.replace(day=1)
+        mois = payload.mois_couvert.replace(day=1)
+        for _ in range(36):
+            mois = _mois_precedent(mois)
+            if mois < plancher:
+                break
+            if montant_total <= 0.005:
+                break
+            restant = await _du_restant(mois)
+            if restant <= 0:
+                continue
+            tranche = min(montant_total, restant)
+            row = PaiementLoyer(
+                bail_id=bail.id,
+                mois_couvert=mois,
+                montant=tranche,
+                paye_le=payload.paye_le,
+                methode=payload.methode,
+                reference=payload.reference,
+                notes=payload.notes if obj is None else None,
+            )
+            row.created_at = _now()
+            if paiement_en_retard(mois, row.paye_le, bail.jour_echeance):
+                row.en_retard = True
+            db.add(row)
+            if obj is None:
+                obj = row
+            derniere = row
+            montant_total = round(montant_total - tranche, 2)
+
     # Reliquat après la borne : collé au dernier mois créé plutôt que
     # silencieusement perdu.
     if montant_total > 0.005 and derniere is not None:
@@ -4260,12 +4348,17 @@ async def loyers_overview(
     month_end = (
         month_start.replace(day=28) + timedelta(days=4)
     ).replace(day=1) - timedelta(days=1)
-    # M7 (audit 2026-08-13) : un bail RESILIE/TERMINE dont la période
-    # couvrait une partie du MOIS AFFICHÉ reste dans ce mois (loyer du
-    # mois entamé + solde, badge « Bail terminé le X ») — il ne
-    # disparaît des mois SUIVANTS que sa fin ne couvre plus.
+    # Baux RESILIE/TERMINE (règle affinée 2026-08-14, retour client) :
+    # - mois que le bail COUVRAIT (date_fin >= 1er du mois affiché) :
+    #   la ligne reste, toujours (M7 : loyer du mois entamé + badge) ;
+    # - mois APRÈS la fin : la ligne n'apparaît QUE si le solde du bail
+    #   est encore > 0 (dette à percevoir) — le tri se fait plus bas,
+    #   une fois le solde calculé. Le SQL ramène donc aussi les baux
+    #   terminés AVANT le mois affiché (bornés au démarrage du pôle,
+    #   d'où aucun solde ne peut remonter).
     from sqlalchemy import or_
 
+    fin_minimale = min(month_start, solde_depuis)
     baux = (
         await db.execute(
             select(Bail).where(
@@ -4281,7 +4374,7 @@ async def loyers_overview(
                             ]
                         ),
                         Bail.date_fin.is_not(None),
-                        Bail.date_fin >= month_start,
+                        Bail.date_fin >= fin_minimale,
                     ),
                 ),
             )
@@ -4289,13 +4382,16 @@ async def loyers_overview(
     ).scalars().all()
 
     def _visible_ce_mois(b: Bail) -> bool:
+        # Un bail tout juste terminé par la reconduction lazy suit la
+        # même règle : mois couvert → visible ; mois d'après → seulement
+        # si dette (décidé au calcul du solde, plus bas).
         if b.status == BailStatus.ACTIF.value:
             return True
         return (
             b.status
             in (BailStatus.RESILIE.value, BailStatus.TERMINE.value)
             and b.date_fin is not None
-            and b.date_fin >= month_start
+            and b.date_fin >= fin_minimale
         )
 
     # Reconduction tacite AUTOMATIQUE (lazy, 2026-08-13) : un bail échu
@@ -4459,7 +4555,17 @@ async def loyers_overview(
             continue
         loc = locataires.get(b.locataire_id)
         ps = paiements_mois.get(b.id) or []
-        loyer = float(b.loyer_mensuel or 0)
+        loyer_bail_ref = float(b.loyer_mensuel or 0)
+        # Mois APRÈS la fin d'un bail terminé (retour client 2026-08-14) :
+        # rien n'est attendu pour le mois affiché lui-même — la ligne
+        # n'existe que pour la DETTE (solde > 0) du locataire parti.
+        apres_fin = (
+            b.status
+            in (BailStatus.RESILIE.value, BailStatus.TERMINE.value)
+            and b.date_fin is not None
+            and b.date_fin < month_start
+        )
+        loyer = 0.0 if apres_fin else loyer_bail_ref
         # DÛ du mois = loyer + frais ponctuels du mois (retour Phil
         # 2026-07-22 : « Marquer payé » doit couvrir 650 + 20 = 670, et
         # le mois n'est « payé » que si les frais sont couverts aussi).
@@ -4473,9 +4579,32 @@ async def loyers_overview(
         du_mois = round(loyer + frais_mois_total, 2)
         paye_mois = round(sum(float(p.montant or 0) for p in ps), 2)
         dernier = max(ps, key=lambda p: (p.paye_le or month_start, p.id)) if ps else None
+
+        # Solde cumulatif du bail : loyers échus + frais − payé, borné
+        # à 0. Calculé AVANT l'état : il décide de la visibilité des
+        # mois post-fin (le solde des baux terminés reste borné par leur
+        # date de fin via _mois_echus — fix du 2026-08-12, préservé).
+        solde = round(
+            _mois_echus(b) * loyer_bail_ref
+            + frais_total_by_bail.get(b.id, 0.0)
+            - paye_total_by_bail.get(b.id, 0.0),
+            2,
+        )
+        solde = max(0.0, solde)
+        if apres_fin and solde <= 0:
+            # Dette réglée → le locataire parti disparaît des mois que
+            # son bail ne couvrait pas (il reste dans les mois couverts).
+            continue
+
         total_attendu += du_mois
         total_recu += paye_mois
-        if ps and paye_mois >= du_mois - 0.005:
+        if apres_fin:
+            # Dette à percevoir : « partiel » si un versement est entré
+            # ce mois-ci, sinon « retard » — jamais « attente », la fin
+            # du bail est passée.
+            etat = "partiel" if ps else "retard"
+            nb_retards += 1
+        elif ps and paye_mois >= du_mois - 0.005:
             etat = "paye"
             nb_payes += 1
         elif ps:
@@ -4492,15 +4621,6 @@ async def loyers_overview(
         else:
             etat = "attente"
             nb_attente += 1
-
-        # Solde cumulatif du bail : loyers échus + frais − payé, borné à 0.
-        solde = round(
-            _mois_echus(b) * loyer
-            + frais_total_by_bail.get(b.id, 0.0)
-            - paye_total_by_bail.get(b.id, 0.0),
-            2,
-        )
-        solde = max(0.0, solde)
         total_solde_du += solde
 
         pro = prochains.get(b.logement_id) if b.logement_id else None
@@ -5245,9 +5365,13 @@ async def finances_pnl(
             )
         ).scalars().all()
 
-        # Loyers mensuels LOUÉS par immeuble : bail actif, sinon loyer
-        # demandé des logements occupés (gestion externe — les baux
-        # vivent chez le gestionnaire). Même définition que la fiche.
+        # Loyers mensuels LOUÉS par immeuble — hiérarchie du loyer
+        # effectif (2026-08-14) : interne = bail actif d'abord ; externe
+        # = loyer SAISI sur le logement d'abord (un bail résiduel ne
+        # masque plus la saisie). Même définition que la fiche.
+        from app.services.loyer_effectif import loyer_effectif_loue
+
+        externes_pnl = {i.id for i in immeubles if i.gestion_externe}
         loyer_bail_par_logement: dict[int, float] = {}
         for b in baux:
             loyer_bail_par_logement[b.logement_id] = (
@@ -5256,14 +5380,12 @@ async def finances_pnl(
             )
         loyers_mensuels_par_imm: dict[int, float] = {}
         for lg in logements:
-            if lg.id in loyer_bail_par_logement:
-                m = loyer_bail_par_logement[lg.id]
-            elif (
-                lg.status == LogementStatus.OCCUPE.value
-                and lg.loyer_demande is not None
-            ):
-                m = float(lg.loyer_demande)
-            else:
+            m = loyer_effectif_loue(
+                lg,
+                loyer_bail_par_logement.get(lg.id),
+                gestion_externe=lg.immeuble_id in externes_pnl,
+            )
+            if m is None:
                 continue
             loyers_mensuels_par_imm[lg.immeuble_id] = (
                 loyers_mensuels_par_imm.get(lg.immeuble_id, 0.0) + m
@@ -5410,8 +5532,12 @@ async def finances_previsionnel(
             )
         ).scalars().all()
 
-    # Revenus mensuels LOUÉS par immeuble : bail actif, sinon loyer
-    # demandé des logements occupés (gestion externe).
+    # Revenus mensuels LOUÉS par immeuble — hiérarchie du loyer effectif
+    # (2026-08-14) : interne = bail actif d'abord ; externe = loyer
+    # SAISI sur le logement d'abord (bail résiduel en simple filet).
+    from app.services.loyer_effectif import loyer_effectif_loue
+
+    externes_prev = {i.id for i in immeubles if i.gestion_externe}
     loyer_bail_par_logement: dict[int, float] = {}
     for b in baux:
         loyer_bail_par_logement[b.logement_id] = (
@@ -5420,14 +5546,12 @@ async def finances_previsionnel(
         )
     loyers_par_imm: dict[int, float] = {}
     for lg in logements:
-        if lg.id in loyer_bail_par_logement:
-            m = loyer_bail_par_logement[lg.id]
-        elif (
-            lg.status == LogementStatus.OCCUPE.value
-            and lg.loyer_demande is not None
-        ):
-            m = float(lg.loyer_demande)
-        else:
+        m = loyer_effectif_loue(
+            lg,
+            loyer_bail_par_logement.get(lg.id),
+            gestion_externe=lg.immeuble_id in externes_prev,
+        )
+        if m is None:
             continue
         loyers_par_imm[lg.immeuble_id] = (
             loyers_par_imm.get(lg.immeuble_id, 0.0) + m
@@ -6088,26 +6212,30 @@ async def get_financials(
         baux_actifs_par_logement[b.logement_id] = baux_actifs_par_logement.get(
             b.logement_id, 0.0
         ) + float(b.loyer_mensuel or 0)
-    # `revenu` = unités LOUÉES seulement : bail actif, ou statut « occupé »
-    # sans bail (gestion externe — les baux vivent chez le gestionnaire).
-    # `revenu_toutes_unites` = potentiel : + loyer demandé des vacantes
-    # (retour Phil 2026-07-16 : le montant principal doit refléter ce qui
-    # rentre vraiment ; le potentiel s'affiche en petit à côté).
+    # `revenu` = unités LOUÉES seulement — hiérarchie du loyer effectif
+    # (2026-08-14) : interne = bail actif d'abord ; externe = loyer
+    # SAISI sur le logement d'abord (un bail résiduel ne masque plus la
+    # saisie). `revenu_toutes_unites` = potentiel : + loyer demandé des
+    # vacantes (retour Phil 2026-07-16 : le montant principal doit
+    # refléter ce qui rentre vraiment ; le potentiel en petit à côté).
+    from app.services.loyer_effectif import loyer_effectif
+
+    imm_externe = bool(getattr(imm, "gestion_externe", False))
     revenu = 0.0
     revenu_toutes_unites = 0.0
     for lg in logements_imm:
-        if lg.id in baux_actifs_par_logement:
-            m = baux_actifs_par_logement[lg.id]
-            revenu += m
-            revenu_toutes_unites += m
+        loyer_bail = baux_actifs_par_logement.get(lg.id)
+        m_eff = loyer_effectif(lg, loyer_bail, imm_externe)
+        if loyer_bail is not None or (
+            lg.status == LogementStatus.OCCUPE.value and m_eff is not None
+        ):
+            revenu += m_eff or 0.0
+            revenu_toutes_unites += m_eff or 0.0
         elif (
             lg.status != LogementStatus.HORS_LOC.value
-            and lg.loyer_demande is not None
+            and m_eff is not None
         ):
-            m = float(lg.loyer_demande)
-            revenu_toutes_unites += m
-            if lg.status == LogementStatus.OCCUPE.value:
-                revenu += m
+            revenu_toutes_unites += m_eff
 
     # Hypothèques actives. Balance EFFECTIVE par hypothèque : la balance
     # saisie prime, sinon la balance CALCULÉE au jour J (tableau

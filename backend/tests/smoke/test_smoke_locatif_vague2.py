@@ -150,7 +150,9 @@ def test_bail_resilie_mi_mois_reste_dans_le_mois_avec_badge(
     assert lignes[0]["bail_termine_le"] == str(today)
     assert lignes[0]["loyer_mensuel"] == 980.0
 
-    # Le mois SUIVANT ne le montre plus.
+    # Le mois SUIVANT (hors période du bail) : la ligne RESTE tant que
+    # le solde n'est pas réglé — dette à percevoir, loyer du mois à 0
+    # (règle affinée 2026-08-14, retour client).
     prochain = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
     ov2 = client.get(
         f"/api/v1/immobilier/loyers/overview"
@@ -158,9 +160,13 @@ def test_bail_resilie_mi_mois_reste_dans_le_mois_avec_badge(
         headers=auth_headers,
     )
     assert ov2.status_code == 200, ov2.text
-    assert not [
+    dettes = [
         x for x in ov2.json()["rows"] if x["bail_id"] == ids["bail_id"]
     ]
+    assert len(dettes) == 1
+    assert dettes[0]["loyer_mensuel"] == 0.0
+    assert dettes[0]["solde_total"] > 0
+    assert dettes[0]["etat"] == "retard"
 
     # Le dernier loyer reste encaissable (bail résilié, mois couvert).
     p = client.post(
@@ -187,6 +193,45 @@ def test_bail_resilie_mi_mois_reste_dans_le_mois_avec_badge(
         },
     )
     assert p2.status_code == 400, p2.text
+
+    # Solder la dette restante → le locataire parti DISPARAÎT des mois
+    # que son bail ne couvrait pas… (le trop-payé imputé au mois couvert
+    # se répartit sur les mois impayés du bail)
+    ov3 = client.get(
+        f"/api/v1/immobilier/loyers/overview?mois={mois}",
+        headers=auth_headers,
+    )
+    reste = next(
+        x for x in ov3.json()["rows"] if x["bail_id"] == ids["bail_id"]
+    )["solde_total"]
+    if reste > 0:
+        p3 = client.post(
+            "/api/v1/immobilier/paiements",
+            headers=auth_headers,
+            json={
+                "bail_id": ids["bail_id"],
+                "mois_couvert": str(today.replace(day=1)),
+                "montant": reste,
+                "paye_le": str(today),
+            },
+        )
+        assert p3.status_code == 201, p3.text
+    ov4 = client.get(
+        f"/api/v1/immobilier/loyers/overview"
+        f"?mois={prochain.strftime('%Y-%m')}",
+        headers=auth_headers,
+    )
+    assert not [
+        x for x in ov4.json()["rows"] if x["bail_id"] == ids["bail_id"]
+    ]
+    # …mais reste visible dans le mois qu'il COUVRAIT.
+    ov5 = client.get(
+        f"/api/v1/immobilier/loyers/overview?mois={mois}",
+        headers=auth_headers,
+    )
+    assert [
+        x for x in ov5.json()["rows"] if x["bail_id"] == ids["bail_id"]
+    ]
 
 
 # ─── (M1) Pastille de relocation sur le bail SORTANT ──────────────────

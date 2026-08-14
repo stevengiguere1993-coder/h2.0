@@ -381,7 +381,9 @@ def test_import_bail_signe_termine_l_ancien_echu(
     nouveau = _db_get(run, Bail, nouveau_bail_id)
     assert nouveau.status == BailStatus.ACTIF.value
 
-    # UNE seule ligne dans le suivi des loyers pour ce logement.
+    # UNE seule ligne de bail COURANT dans le suivi des loyers pour ce
+    # logement. (Une ligne « dette » du locataire sortant peut coexister
+    # tant que son solde n'est pas réglé — c'est voulu, 2026-08-14.)
     lo = client.get(
         "/api/v1/immobilier/loyers/overview", headers=auth_headers
     )
@@ -390,6 +392,7 @@ def test_import_bail_signe_termine_l_ancien_echu(
         x
         for x in lo.json()["rows"]
         if x["logement_id"] == ids["logement_id"]
+        and x["bail_statut"] == "actif"
     ]
     assert len(lignes) == 1
     assert lignes[0]["bail_id"] == nouveau_bail_id

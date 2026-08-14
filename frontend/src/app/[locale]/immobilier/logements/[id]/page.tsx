@@ -85,7 +85,14 @@ type LoyerPoint = { date_debut: string; loyer_mensuel: number };
 
 type Dossier = {
   logement: LogementFicheData;
-  immeuble: { id: number; name: string; address: string | null };
+  immeuble: {
+    id: number;
+    name: string;
+    address: string | null;
+    /** Gestion externe : le loyer SAISI sur le logement est la vérité
+     *  (retour client 2026-08-14) — l'affichage du loyer s'adapte. */
+    gestion_externe?: boolean;
+  };
   baux: DossierBail[];
   bons_travail: DossierBon[];
   historique_loyer: LoyerPoint[];
@@ -383,6 +390,9 @@ export default function LogementDetailPage({
   }
 
   const lg = dossier?.logement ?? null;
+  // Gestion EXTERNE : le loyer SAISI sur le logement est la vérité —
+  // un bail résiduel dans Kratos ne pilote plus l'affichage (2026-08-14).
+  const externe = !!dossier?.immeuble?.gestion_externe;
   const bailActif = dossier
     ? dossier.baux.find((b) => b.status === "actif") ||
       dossier.baux.find((b) => b.status === "propose") ||
@@ -505,23 +515,43 @@ export default function LogementDetailPage({
               </p>
             ) : null}
 
-            {/* Mini-KPIs — miroir bidirectionnel : OCCUPÉ → le loyer
-                RÉEL du bail est l'information principale ; le « loyer
-                demandé » (prix affiché pour la relocation) ne
-                s'affiche que VACANT (retour Phil 2026-08-13). */}
+            {/* Mini-KPIs — hiérarchie du loyer effectif (retour client
+                2026-08-14) : gestion EXTERNE → le loyer SAISI est LA
+                vérité ; interne OCCUPÉ → le loyer RÉEL du bail, avec le
+                « loyer demandé » (prix de la PROCHAINE location) en
+                complément ; vacant → le demandé seul. */}
             <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <MiniKpi
-                label="Loyer actuel"
-                value={bailActif ? money(bailActif.loyer_mensuel) : "Vacant"}
-              />
-              {!bailActif ? (
+              {externe ? (
                 <MiniKpi
-                  label="Loyer demandé"
+                  label="Loyer mensuel"
                   value={
                     lg.loyer_demande != null ? money(lg.loyer_demande) : "—"
                   }
+                  sub="Gestion externe — loyer saisi sur le logement"
                 />
-              ) : null}
+              ) : (
+                <>
+                  <MiniKpi
+                    label="Loyer actuel (bail)"
+                    value={
+                      bailActif ? money(bailActif.loyer_mensuel) : "Vacant"
+                    }
+                    href={bailActif ? "#bail-actif" : undefined}
+                    sub={bailActif ? "Voir le bail" : undefined}
+                  />
+                  <MiniKpi
+                    label="Loyer demandé"
+                    value={
+                      lg.loyer_demande != null ? money(lg.loyer_demande) : "—"
+                    }
+                    sub={
+                      bailActif
+                        ? "Prix de la prochaine location"
+                        : undefined
+                    }
+                  />
+                </>
+              )}
               <MiniKpi
                 label="Occupé depuis"
                 value={bailActif ? fmtDate(bailActif.date_debut) : "—"}
@@ -664,7 +694,13 @@ export default function LogementDetailPage({
                         <option value="hors_location">Hors location</option>
                       </select>
                     </EditField>
-                    <EditField label="Loyer demandé ($/mois)">
+                    <EditField
+                      label={
+                        externe
+                          ? "Loyer mensuel ($/mois)"
+                          : "Loyer demandé ($/mois)"
+                      }
+                    >
                       <input
                         inputMode="decimal"
                         value={form.loyer_demande}
@@ -676,10 +712,15 @@ export default function LogementDetailPage({
                         }
                         className={inputCls}
                       />
-                      {bailActif ? (
+                      {externe ? (
                         <span className="mt-0.5 block text-[10px] font-normal text-white/40">
-                          Logement occupé : cette valeur suit
-                          automatiquement le loyer du bail.
+                          Gestion externe : ce montant fait foi partout
+                          (listes, paiements, cashflow).
+                        </span>
+                      ) : bailActif ? (
+                        <span className="mt-0.5 block text-[10px] font-normal text-white/40">
+                          Prix de la PROCHAINE location — le loyer du
+                          bail en cours ne se modifie pas ici.
                         </span>
                       ) : null}
                     </EditField>
@@ -717,14 +758,34 @@ export default function LogementDetailPage({
                       label="Étage"
                       value={lg.etage != null ? String(lg.etage) : "—"}
                     />
-                    {/* Occupé → loyer RÉEL du bail (les avis acceptés
-                        l'appliquent) ; vacant → prix affiché pour la
-                        relocation (miroir bidirectionnel). */}
-                    {bailActif ? (
+                    {/* Hiérarchie du loyer effectif (2026-08-14) :
+                        externe → loyer SAISI ; interne occupé → loyer
+                        RÉEL du bail + demandé (prochaine location) en
+                        complément ; vacant → demandé seul. */}
+                    {externe ? (
                       <Row
-                        label="Loyer actuel (bail)"
-                        value={money(bailActif.loyer_mensuel)}
+                        label="Loyer mensuel (gestion externe)"
+                        value={
+                          lg.loyer_demande != null
+                            ? money(lg.loyer_demande)
+                            : "—"
+                        }
                       />
+                    ) : bailActif ? (
+                      <>
+                        <Row
+                          label="Loyer actuel (bail)"
+                          value={money(bailActif.loyer_mensuel)}
+                        />
+                        <Row
+                          label="Loyer demandé (prochaine location)"
+                          value={
+                            lg.loyer_demande != null
+                              ? money(lg.loyer_demande)
+                              : "—"
+                          }
+                        />
+                      </>
                     ) : (
                       <Row
                         label="Loyer demandé"
@@ -748,7 +809,11 @@ export default function LogementDetailPage({
                 )}
               </div>
 
-              <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+              {/* id : cible du lien « Voir le bail » du KPI Loyer actuel. */}
+              <div
+                id="bail-actif"
+                className="rounded-2xl border border-brand-800 bg-brand-900 p-5"
+              >
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                     Locataire actuel &amp; bail actif
@@ -1180,15 +1245,45 @@ function EditField({
   );
 }
 
-function MiniKpi({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-3.5">
+function MiniKpi({
+  label,
+  value,
+  sub,
+  href
+}: {
+  label: string;
+  value: string;
+  /** Mention discrète sous la valeur (ex. « prix de la prochaine location »). */
+  sub?: string;
+  /** Ancre optionnelle (ex. #bail-actif — « Loyer actuel (bail) »). */
+  href?: string;
+}) {
+  const inner = (
+    <>
       <div className="text-[10px] font-semibold uppercase tracking-wider text-white/45">
         {label}
       </div>
       <div className="mt-0.5 truncate text-lg font-bold text-white">
         {value}
       </div>
+      {sub ? (
+        <div className="mt-0.5 truncate text-[10px] text-white/40">{sub}</div>
+      ) : null}
+    </>
+  );
+  if (href) {
+    return (
+      <a
+        href={href}
+        className="block rounded-2xl border border-brand-800 bg-brand-900 p-3.5 transition hover:border-accent-500/40"
+      >
+        {inner}
+      </a>
+    );
+  }
+  return (
+    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-3.5">
+      {inner}
     </div>
   );
 }

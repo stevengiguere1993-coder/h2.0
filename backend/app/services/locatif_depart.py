@@ -510,6 +510,23 @@ async def reconduire_tacitement_baux_echus(
         if last_ren is not None and est_cycle_courant(
             last_ren, b.date_fin, today
         ):
+            if last_ren.status == "depart":
+                # Départ ANNONCÉ (réponse « depart ») et fin passée,
+                # mais dossier de relocation déjà fermé (unité relouée,
+                # par ex.) : sans cette branche le bail restait ACTIF à
+                # jamais — ligne zombie dans le suivi des loyers
+                # (retour client 2026-08-14). Même sort que le départ
+                # avec dossier actif : le bail se termine à sa fin.
+                b.status = BailStatus.TERMINE.value
+                b.notes = _append_note(b.notes, NOTE_TERMINE_DEPART_ANNONCE)
+                b.updated_at = _now()
+                await recaler_statut_logement(db, b.logement_id)
+                dirty = True
+                log.info(
+                    "Bail %s terminé à l'échéance (départ annoncé via "
+                    "le cycle de renouvellement)", b.id,
+                )
+                continue
             # Avis en cours, refus, négociation… : la machine à états
             # des renouvellements garde la main — pas de reconduction.
             continue

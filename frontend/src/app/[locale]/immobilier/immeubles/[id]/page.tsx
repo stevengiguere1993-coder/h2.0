@@ -49,6 +49,8 @@ import {
   CelluleLoyer,
   CorrectionOptions,
   duMois,
+  moisCouvertPourPaiement,
+  montantMarquerPaye,
   RENOUVELLEMENT_BADGES
 } from "@/components/immobilier/paiements-actions";
 import {
@@ -946,6 +948,7 @@ export default function ImmeubleDetailPage({
               list={logements}
               baux={baux}
               setList={setLogements}
+              gestionExterne={gestionExterne}
             />
           ) : null}
           {tab === "paiements-ext" ? (
@@ -994,6 +997,7 @@ export default function ImmeubleDetailPage({
               logements={logements}
               hypotheques={hypotheques}
               onMutated={() => void refreshFinancials()}
+              gestionExterne={gestionExterne}
             />
           ) : null}
           {tab === "maintenance" ? (
@@ -2145,23 +2149,27 @@ function LogementsTab({
   immeubleId,
   list,
   baux,
-  setList
+  setList,
+  gestionExterne
 }: {
   immeubleId: number;
   list: Logement[] | null;
   baux: Bail[] | null;
   setList: React.Dispatch<React.SetStateAction<Logement[] | null>>;
+  gestionExterne?: boolean;
 }) {
   const router = useRouter();
   // La modale ne sert plus qu'à la création — le clic sur une ligne
   // navigue vers la page dédiée du logement.
   const [showCreate, setShowCreate] = useState(false);
 
-  // Loyer RÉEL du bail actif par logement — un logement OCCUPÉ affiche
-  // ce loyer, le « loyer demandé » ne vaut que pour la relocation
-  // (miroir bidirectionnel, retour Phil 2026-08-13).
+  // Hiérarchie du loyer effectif (retour client 2026-08-14) : interne
+  // occupé → loyer RÉEL du bail actif ; gestion EXTERNE → le loyer
+  // SAISI sur le logement est la vérité (un bail résiduel invisible ne
+  // doit pas le masquer) — la map reste vide dans ce cas.
   const loyerBailParLogement = useMemo(() => {
     const m = new Map<number, number>();
+    if (gestionExterne) return m;
     const today = new Date().toISOString().slice(0, 10);
     for (const b of baux ?? []) {
       if (b.status !== "actif" || b.loyer_mensuel == null) continue;
@@ -2169,7 +2177,7 @@ function LogementsTab({
       m.set(b.logement_id, b.loyer_mensuel);
     }
     return m;
-  }, [baux]);
+  }, [baux, gestionExterne]);
 
   const addButton = (
     <button
@@ -2272,18 +2280,26 @@ function LogementsTab({
                 <td
                   className="px-4 py-2 text-right font-mono text-xs text-white/70"
                   title={
-                    l.status === "occupe"
-                      ? "Loyer du bail actif"
-                      : "Loyer demandé (prix affiché pour la relocation)"
+                    gestionExterne
+                      ? "Loyer saisi sur le logement (gestion externe)"
+                      : l.status === "occupe"
+                        ? "Loyer du bail actif"
+                        : "Loyer demandé (prix de la prochaine location)"
                   }
                 >
-                  {/* Occupé → loyer RÉEL du bail ; sinon loyer demandé
-                      (miroir bidirectionnel). */}
+                  {/* Hiérarchie du loyer effectif (2026-08-14) :
+                      externe → loyer SAISI ; interne occupé → loyer
+                      RÉEL du bail ; vacant → demandé. */}
                   {fmtCurrency(
                     l.status === "occupe"
                       ? (loyerBailParLogement.get(l.id) ?? l.loyer_demande)
                       : l.loyer_demande
                   )}
+                  {!gestionExterne &&
+                  l.status !== "occupe" &&
+                  l.loyer_demande != null ? (
+                    <span className="ml-1 text-white/40">demandé</span>
+                  ) : null}
                 </td>
               </tr>
             ))}
@@ -2803,7 +2819,9 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
         method: "POST",
         body: JSON.stringify({
           bail_id: row.bail_id,
-          mois_couvert: `${mois}-01`,
+          // Ligne « dette » d'un bail terminé : imputer au dernier mois
+          // couvert (le backend refuse un mois hors période du bail).
+          mois_couvert: `${moisCouvertPourPaiement(row, mois)}-01`,
           montant,
           paye_le: payeLe
         })
@@ -2820,11 +2838,10 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
     }
   }
 
-  // 1 clic = le restant du mois (loyer + frais − déjà reçu).
+  // 1 clic = le restant du mois (loyer + frais − déjà reçu) — et le
+  // SOLDE du bail pour une ligne « dette seulement » (bail terminé).
   async function marquerPaye(row: LoyerRow) {
-    const restant =
-      Math.round((duMois(row) - (row.montant_paye ?? 0)) * 100) / 100;
-    await enregistrerPaiement(row, restant > 0 ? restant : duMois(row));
+    await enregistrerPaiement(row, montantMarquerPaye(row));
   }
 
   async function marquerPartiel(row: LoyerRow) {
@@ -4672,13 +4689,15 @@ function CashflowTab({
   baux,
   logements,
   hypotheques,
-  onMutated
+  onMutated,
+  gestionExterne
 }: {
   immeubleId: number;
   baux: Bail[] | null;
   logements: Logement[] | null;
   hypotheques: Hypotheque[] | null;
   onMutated: () => void;
+  gestionExterne?: boolean;
 }) {
   const [depenses, setDepenses] = useState<Depense[] | null>(null);
   const [mode, setMode] = useState<"mensuel" | "annuel">("mensuel");
@@ -4719,10 +4738,11 @@ function CashflowTab({
   );
   const nbPonctuelles = (depenses || []).length - recurrentes.length;
 
-  // Revenus PAR LOGEMENT, même logique que le backend (financials) :
-  // bail actif → son loyer ; sinon statut « occupé » → loyer demandé
-  // (gestion externe : les baux vivent chez le gestionnaire). Le
-  // potentiel « toutes unités » ajoute les vacantes au loyer demandé.
+  // Revenus PAR LOGEMENT, même logique que le backend (financials) —
+  // hiérarchie du loyer effectif (2026-08-14) : interne = bail actif
+  // d'abord ; gestion EXTERNE = le loyer SAISI sur le logement d'abord
+  // (un bail résiduel ne sert que de filet). Le potentiel « toutes
+  // unités » ajoute les vacantes au loyer demandé.
   const bauxActifs = (baux || []).filter((b) => b.status === "actif");
   const loyerBailParLogement = new Map<number, number>();
   for (const b of bauxActifs) {
@@ -4736,16 +4756,17 @@ function CashflowTab({
   let nbUnitesLouees = 0;
   for (const lg of logements || []) {
     const loyerBail = loyerBailParLogement.get(lg.id);
-    if (loyerBail != null) {
-      revenusMensuel += loyerBail;
-      revenusToutesUnites += loyerBail;
-      nbUnitesLouees += 1;
-    } else if (lg.status !== "hors_location" && lg.loyer_demande != null) {
-      revenusToutesUnites += lg.loyer_demande;
-      if (lg.status === "occupe") {
-        revenusMensuel += lg.loyer_demande;
+    const effectif = gestionExterne
+      ? (lg.loyer_demande ?? loyerBail ?? null)
+      : (loyerBail ?? lg.loyer_demande ?? null);
+    if (loyerBail != null || lg.status === "occupe") {
+      if (effectif != null) {
+        revenusMensuel += effectif;
+        revenusToutesUnites += effectif;
         nbUnitesLouees += 1;
       }
+    } else if (lg.status !== "hors_location" && effectif != null) {
+      revenusToutesUnites += effectif;
     }
   }
   // Filet : baux actifs orphelins (logements pas encore chargés/supprimés).
