@@ -2,7 +2,7 @@
 
 /**
  * Modales PARTAGÉES du cycle de vie d'un bail — extraites de la page
- * « Baux » (suivi-baux) pour que les fiches (locataire, logement,
+ * « Baux » (/immobilier/baux) pour que les fiches (locataire, logement,
  * immeuble) offrent EXACTEMENT le même comportement (directive
  * « miroir bidirectionnel ») :
  *   - FinBailModal : 2 modes — entente de résiliation signée en ligne
@@ -17,9 +17,9 @@ import { FileSignature, Info, Loader2, X } from "lucide-react";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 
-/** Ligne de /immobilier/suivi-baux — une ligne PAR LOGEMENT (bail actif
- *  + prochain). Utilisée par la page Baux et l'onglet Baux de la fiche
- *  immeuble. */
+/** Ligne renvoyée par l'API `GET /api/v1/immobilier/suivi-baux` — une
+ *  ligne PAR LOGEMENT (bail actif + prochain). Utilisée par la page Baux
+ *  (/immobilier/baux) et l'onglet Baux de la fiche immeuble. */
 export type SuiviBailRow = {
   logement_id: number;
   logement_numero: string;

@@ -188,10 +188,14 @@ PAGES: list[PageEntry] = [
        "/immobilier/logements"),
     _p("immobilier.locataires", "Locataires", "immobilier", "manager",
        "/immobilier/locataires"),
-    _p("immobilier.baux", "Paiements", "immobilier", "manager",
+    # Les deux URL étaient INVERSÉES par accident historique (la page
+    # Paiements vivait sous /immobilier/baux et la page Baux sous
+    # /immobilier/suivi-baux). Remises d'aplomb 2026-08-14 : chaque page
+    # est servie à l'URL de son nom.
+    _p("immobilier.paiements", "Paiements", "immobilier", "manager",
+       "/immobilier/paiements"),
+    _p("immobilier.baux", "Baux", "immobilier", "manager",
        "/immobilier/baux"),
-    _p("immobilier.suivi_baux", "Baux", "immobilier", "manager",
-       "/immobilier/suivi-baux"),
     _p("immobilier.locations", "Locations (relocation)", "immobilier",
        "manager", "/immobilier/locations"),
     _p("immobilier.communications", "Communications", "immobilier",

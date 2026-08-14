@@ -99,7 +99,7 @@ async def _run() -> None:
                 f"Total dû : {montant:,.0f} $. "
                 f"Relance-les depuis la page Loyers."
             ),
-            href="/immobilier/baux",
+            href="/immobilier/paiements",
         )
         await db.commit()
         log.info("loyer_relances: %d retard(s), %.0f$", n, montant)
