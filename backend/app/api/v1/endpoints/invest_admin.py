@@ -60,12 +60,15 @@ from app.services.invest_invite import (
 )
 from app.services.invest_portfolio import (
     entreprise_snapshot,
+    flux_signes,
     get_or_default_profil,
     kpis_participation,
     phase_projet,
     serie_mensuelle,
+    serie_valeur_totale,
     timeline_projet,
 )
+from app.services.invest_tri import xirr
 
 log = logging.getLogger(__name__)
 
@@ -198,6 +201,119 @@ async def _participation_payload(db, part: InvestParticipation) -> dict:
             }
             for f in flux
         ],
+    }
+
+
+# ───────────────────── Vue globale (portefeuille) ─────────────────────
+
+
+@router.get(
+    "/portefeuille-global",
+    summary="Vue globale : TOUS les investissements, toutes compagnies",
+)
+async def portefeuille_global(db: DBSession, user: CurrentUser) -> dict:
+    """Même forme que /invest/me/portefeuille, mais agrégée sur TOUTES
+    les participations (visibles ou non) — la vue direction. Chaque
+    carte projet montre le total des parts investisseurs, le cash-flow
+    COMPLET de la compagnie et le TRI combiné des investisseurs."""
+    parts = (
+        await db.execute(
+            select(InvestParticipation).order_by(
+                InvestParticipation.entreprise_id, InvestParticipation.id
+            )
+        )
+    ).scalars().all()
+
+    by_ent: dict[int, list[InvestParticipation]] = {}
+    for p in parts:
+        by_ent.setdefault(p.entreprise_id, []).append(p)
+
+    pairs: list[tuple[InvestParticipation, list[InvestFlux]]] = []
+    projets: list[dict] = []
+    tot_capital_actuel = tot_capital_total = 0.0
+    tot_rembourse = tot_distrib = tot_valeur_parts = 0.0
+    flux_global: list = []
+    from datetime import date as _date
+
+    for eid, plist in by_ent.items():
+        ent = await db.get(Entreprise, eid)
+        if ent is None:
+            continue
+        snap = await entreprise_snapshot(db, eid)
+        flux_combined: list[InvestFlux] = []
+        pct_total = 0.0
+        for p in plist:
+            fl = list(
+                (
+                    await db.execute(
+                        select(InvestFlux)
+                        .where(InvestFlux.participation_id == p.id)
+                        .order_by(InvestFlux.date_flux, InvestFlux.id)
+                    )
+                ).scalars()
+            )
+            flux_combined.extend(fl)
+            pairs.append((p, fl))
+            pct_total += float(p.parts_pct)
+        valeur_parts = round(snap["equite"] * pct_total / 100.0, 2)
+        k = kpis_participation(flux_combined, valeur_parts)
+        profil = await get_or_default_profil(db, eid)
+        phase = await phase_projet(db, eid, profil)
+        serie = await serie_mensuelle(db, eid)
+        adresses = [i["address"] or i["name"] for i in snap["immeubles"]]
+        projets.append(
+            {
+                "entreprise_id": eid,
+                "entreprise_name": ent.name,
+                "color_accent": ent.color_accent,
+                "phase": phase,
+                "adresse": adresses[0] if adresses else None,
+                "nb_immeubles": len(snap["immeubles"]),
+                "nb_logements": snap["nb_logements"],
+                "cover_photo_url": (
+                    snap["immeubles"][0]["cover_photo_url"]
+                    if snap["immeubles"]
+                    else None
+                ),
+                "parts_pct": round(pct_total, 3),
+                "valeur_parts": valeur_parts,
+                # Vue direction : cash-flow COMPLET de la compagnie.
+                "cashflow_moyen_part": serie["cashflow_moyen"],
+                "statut": "actif",
+                "nb_investisseurs": len(plist),
+                **k,
+            }
+        )
+        tot_capital_actuel += k["capital_actuel"]
+        tot_capital_total += k["capital_investi_total"]
+        tot_rembourse += k["capital_rembourse"]
+        tot_distrib += k["distributions_recues"]
+        tot_valeur_parts += valeur_parts
+        flux_global.extend(flux_signes(flux_combined))
+        if valeur_parts:
+            flux_global.append((_date.today(), valeur_parts))
+
+    tri_global = xirr(flux_global)
+    return {
+        "capital_actuel": round(tot_capital_actuel, 2),
+        "capital_investi_total": round(tot_capital_total, 2),
+        "capital_rembourse": round(tot_rembourse, 2),
+        "distributions_recues": round(tot_distrib, 2),
+        "valeur_parts": round(tot_valeur_parts, 2),
+        "tri_pct": round(tri_global * 100, 1)
+        if tri_global is not None
+        else None,
+        "tvpi": (
+            round(
+                (tot_rembourse + tot_distrib + tot_valeur_parts)
+                / tot_capital_total,
+                4,
+            )
+            if tot_capital_total > 0
+            else None
+        ),
+        "serie_valeur": await serie_valeur_totale(db, pairs),
+        "projets": projets,
     }
 
 
