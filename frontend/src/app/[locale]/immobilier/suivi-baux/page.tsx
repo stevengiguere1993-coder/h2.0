@@ -370,37 +370,47 @@ export default function SuiviBauxPage() {
                         <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
                           {r.bail_id != null ? (
                             <>
-                              {!r.resiliation_en_cours ? (
-                                <button
-                                  type="button"
-                                  onClick={() => setFinBailFor(r)}
-                                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
-                                >
-                                  Mettre fin au bail
-                                </button>
-                              ) : null}
+                              {/* Ordre voulu par Phil (2026-08-14) :
+                                  Bail · Avis · Mettre fin (réduit) ·
+                                  Remplacer · + · poubelle. Avis et
+                                  Mettre fin s'intercalent DANS
+                                  BailDocActions via entreBoutons. */}
                               <BailDocActions
                                 bailId={r.bail_id}
                                 hasDoc={r.document_id != null}
                                 signedAt={r.signed_at}
                                 compact
+                                entreBoutons={
+                                  <>
+                                    {r.renouvellement_avis_document_id !=
+                                    null ? (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void ouvrirDoc(
+                                            r.renouvellement_avis_document_id!
+                                          )
+                                        }
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-2.5 py-1 text-xs font-semibold text-white/80 transition hover:border-white/30 hover:text-white"
+                                        title="Ouvrir l'avis de renouvellement courant (PDF)"
+                                      >
+                                        <FileDown className="h-3.5 w-3.5" />
+                                        Avis
+                                      </button>
+                                    ) : null}
+                                    {!r.resiliation_en_cours ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => setFinBailFor(r)}
+                                        className="inline-flex items-center rounded-lg border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[11px] font-semibold text-rose-300 transition hover:bg-rose-500/20"
+                                      >
+                                        Mettre fin au bail
+                                      </button>
+                                    ) : null}
+                                  </>
+                                }
                                 onChanged={() => void load()}
                               />
-                              {r.renouvellement_avis_document_id != null ? (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    void ouvrirDoc(
-                                      r.renouvellement_avis_document_id!
-                                    )
-                                  }
-                                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-2.5 py-1 text-xs font-semibold text-white/80 transition hover:border-white/30 hover:text-white"
-                                  title="Ouvrir l'avis de renouvellement courant (PDF)"
-                                >
-                                  <FileDown className="h-3.5 w-3.5" />
-                                  Avis
-                                </button>
-                              ) : null}
                               <button
                                 type="button"
                                 onClick={() => setCreerFor(r)}
