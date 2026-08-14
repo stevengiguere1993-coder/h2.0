@@ -216,19 +216,35 @@ async def entreprise_snapshot(db: AsyncSession, entreprise_id: int) -> dict:
                     loyer_bail_par_log.get(b.logement_id, 0.0)
                     + float(b.loyer_mensuel or 0)
                 )
+        from app.services.loyer_effectif import loyer_effectif
+
         externe = bool(getattr(imm, "gestion_externe", False))
         loyers_mensuels = 0.0
         nb_loues = 0
         nb_actifs = 0
+        logements_rows: list[dict] = []
         for lg in logements:
-            if lg.status != LogementStatus.HORS_LOC.value:
-                nb_actifs += 1
-            m = loyer_effectif_loue(
+            if lg.status == LogementStatus.HORS_LOC.value:
+                continue
+            nb_actifs += 1
+            m_loue = loyer_effectif_loue(
                 lg, loyer_bail_par_log.get(lg.id), externe
             )
-            if m is not None:
-                loyers_mensuels += m
+            m_aff = loyer_effectif(
+                lg, loyer_bail_par_log.get(lg.id), externe
+            )
+            if m_loue is not None:
+                loyers_mensuels += m_loue
                 nb_loues += 1
+            logements_rows.append(
+                {
+                    "logement_id": lg.id,
+                    "numero": getattr(lg, "numero", None),
+                    "loue": m_loue is not None,
+                    "loyer": round(m_aff, 2) if m_aff is not None else None,
+                }
+            )
+        logements_rows.sort(key=lambda r: str(r["numero"] or ""))
         nb_log = nb_actifs
         nb_baux = nb_loues
 
@@ -261,6 +277,7 @@ async def entreprise_snapshot(db: AsyncSession, entreprise_id: int) -> dict:
                     float(imm.purchase_price) if imm.purchase_price else None
                 ),
                 "purchase_date": imm.purchase_date,
+                "logements": logements_rows,
             }
         )
         tot_valeur += (val or 0.0) * pct
@@ -271,11 +288,21 @@ async def entreprise_snapshot(db: AsyncSession, entreprise_id: int) -> dict:
         tot_baux += nb_baux
         paiement_hypo_mensuel += pay_mensuel * pct
 
+    # Avances aux actionnaires (dette envers eux) — soustraites de
+    # l'équité de la compagnie : équité = valeur − hypothèques − avances.
+    profil = await get_or_default_profil(db, entreprise_id)
+    avances = (
+        float(profil.avances_actionnaires)
+        if profil is not None and profil.avances_actionnaires is not None
+        else 0.0
+    )
+
     return {
         "immeubles": immeubles,
         "valeur_totale": round(tot_valeur, 2),
         "hypotheque_totale": round(tot_hypo, 2),
-        "equite": round(tot_equite, 2),
+        "avances_actionnaires": round(avances, 2),
+        "equite": round(tot_equite - avances, 2),
         "loyers_mensuels": round(tot_loyers, 2),
         "nb_logements": tot_logements,
         "nb_baux_actifs": tot_baux,
@@ -329,6 +356,7 @@ async def serie_mensuelle(
     hypo_mensuel = 0.0
     loyers_effectifs = 0.0
     dep_recurrentes = 0.0
+    par_categorie: dict[str, float] = {}
 
     for imm, own_pct in pairs:
         pct = own_pct / 100.0
@@ -422,18 +450,26 @@ async def serie_mensuelle(
                 base = loyers_imm * base / 100.0
             if d.taxable:
                 base *= 1.14975
+            cat = (getattr(d, "categorie", None) or "autre").strip()
             if d.frequence == "mensuel":
                 dep_recurrentes += base * pct
+                par_categorie[cat] = (
+                    par_categorie.get(cat, 0.0) + base * 12 * pct
+                )
                 for k in keys:
                     dep[k] += base * pct
             elif d.frequence == "annuel":
                 dep_recurrentes += base / 12.0 * pct
+                par_categorie[cat] = par_categorie.get(cat, 0.0) + base * pct
                 for k in keys:
                     dep[k] += base / 12.0 * pct
             elif d.date_depense:
                 k = _month_start(d.date_depense)
                 if k in dep:
                     dep[k] += base * pct
+                    par_categorie[cat] = (
+                        par_categorie.get(cat, 0.0) + base * pct
+                    )
 
         hyps = await hypotheques_actives(db, imm.id)
         hypo_mensuel += sum(
@@ -468,6 +504,14 @@ async def serie_mensuelle(
         "loyers_effectifs": round(loyers_effectifs, 2),
         "hypotheque_mensuelle": round(hypo_mensuel, 2),
         "cashflow_moyen": round(cashflow_moyen, 2),
+        # Total 12 mois par catégorie de dépense, trié décroissant.
+        "depenses_par_categorie": sorted(
+            (
+                {"categorie": c, "total": round(t, 2)}
+                for c, t in par_categorie.items()
+            ),
+            key=lambda x: -x["total"],
+        ),
     }
 
 

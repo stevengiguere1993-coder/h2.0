@@ -147,6 +147,14 @@ class InvestProjetProfil(Base, TimestampUpdateMixin):
         String(16), nullable=True
     )
 
+    #: Avances aux actionnaires (dette de la compagnie envers eux) —
+    #: soustraites de l'équité : équité = valeur − hypothèques −
+    #: avances. Saisie manuelle pour l'instant (candidate à un tirage
+    #: QBO auto via le mapping de la section optimisation).
+    avances_actionnaires: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+
     # ── Interrupteurs de transparence (défauts = transparent) ──
     show_depenses: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"

@@ -1393,6 +1393,16 @@ async def ensure_invest_portal_tables() -> None:
                     ],
                 )
             )
+            # Colonnes additives (create_all n'ALTER jamais une table
+            # existante).
+            from sqlalchemy import text as _text
+
+            await conn.execute(
+                _text(
+                    "ALTER TABLE inv_projet_profils ADD COLUMN IF NOT "
+                    "EXISTS avances_actionnaires NUMERIC(12,2)"
+                )
+            )
     except Exception as exc:  # noqa: BLE001
         log.warning("ensure_invest_portal_tables failed: %s", exc)
 

@@ -88,6 +88,9 @@ class ProfilPatch(BaseModel):
     show_hypotheque: Optional[bool] = None
     show_actionnaires: Optional[bool] = None
     show_cashflow: Optional[bool] = None
+    #: Avances aux actionnaires ($) — soustraites de l'équité.
+    #: 0 ou null pour retirer.
+    avances_actionnaires: Optional[float] = Field(default=None, ge=0)
 
 
 class NewInvestor(BaseModel):
@@ -161,6 +164,117 @@ def _user_display(u: User) -> str:
     return (
         f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email
     )
+
+
+def _partner_identity(
+    pr: EntreprisePartner, pu: Optional[User]
+) -> tuple[str, Optional[str]]:
+    """(nom d'affichage, courriel) d'un partenaire — le User lié prime."""
+    name = (
+        _user_display(pu)
+        if pu
+        else (pr.partner_name or "").strip() or "—"
+    )
+    email = ((pu.email if pu else pr.partner_email) or "").strip().lower()
+    return name, (email or None)
+
+
+async def _resolve_partner_user(
+    db, pr: EntreprisePartner
+) -> Optional[User]:
+    """User correspondant au partenaire : lien direct, sinon courriel."""
+    if pr.user_id:
+        u = await db.get(User, pr.user_id)
+        if u is not None:
+            return u
+    email = (pr.partner_email or "").strip().lower()
+    if email:
+        return (
+            await db.execute(
+                select(User).where(func.lower(User.email) == email)
+            )
+        ).scalar_one_or_none()
+    return None
+
+
+async def _create_investor_account(
+    db,
+    *,
+    first_name: str,
+    last_name: str,
+    email: str,
+    phone: Optional[str],
+    invited_by: str,
+) -> tuple[User, bool, bool, Optional[str]]:
+    """(user, créé?, invitation envoyée?, mot de passe si courriel KO).
+
+    Réutilise un compte existant avec ce courriel (jamais de doublon)."""
+    email_norm = email.strip().lower()
+    existing = (
+        await db.execute(
+            select(User).where(func.lower(User.email) == email_norm)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing, False, False, None
+    pw = generate_password()
+    user = User(
+        email=email_norm,
+        hashed_password=get_password_hash(pw),
+        role="employee",
+        is_active=True,
+        must_change_password=True,
+        volets_json=investor_volets_json(),
+        first_name=first_name.strip()[:100] or None,
+        last_name=last_name.strip()[:100] or None,
+        phone_e164=(phone or "").strip()[:32] or None,
+    )
+    db.add(user)
+    await db.flush()
+    try:
+        await send_investor_invitation(
+            to_email=email_norm,
+            first_name=first_name.strip(),
+            temporary_password=pw,
+            invited_by=invited_by,
+        )
+        return user, True, True, None
+    except InvestInviteError:
+        return user, True, False, pw
+
+
+async def _ensure_participation(
+    db, user_id: int, entreprise_id: int, pct: Optional[float]
+) -> tuple[InvestParticipation, bool]:
+    """Participation (INVISIBLE par défaut) pour ce user/entreprise —
+    créée au besoin, jamais dupliquée. Le % vient de la fiche
+    entreprise (Parts & actionnaires), ajustable ensuite."""
+    part = (
+        await db.execute(
+            select(InvestParticipation).where(
+                InvestParticipation.user_id == user_id,
+                InvestParticipation.entreprise_id == entreprise_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if part is not None:
+        return part, False
+    part = InvestParticipation(
+        user_id=user_id,
+        entreprise_id=entreprise_id,
+        parts_pct=pct if pct is not None else 0,
+        is_visible=False,
+    )
+    db.add(part)
+    await db.flush()
+    return part, True
+
+
+def _split_name(full: str) -> tuple[str, str]:
+    parts = (full or "").strip().split()
+    if not parts:
+        return "", ""
+    return parts[0], " ".join(parts[1:]) or parts[0]
 
 
 async def _participation_payload(db, part: InvestParticipation) -> dict:
@@ -444,14 +558,10 @@ async def get_projet(
     ).scalars().all()
     serie = await serie_mensuelle(db, entreprise_id)
 
-    # Partenaires « Parts & actionnaires » de la compagnie (pôle gestion
-    # d'entreprise) — proposés en un clic pour créer une participation.
-    deja_user_ids = {p.user_id for p in parts}
-    deja_emails = {
-        (pp["user_email"] or "").lower()
-        for pp in participations
-        if pp.get("user_email")
-    }
+    # Actionnaires « Parts & actionnaires » de la compagnie (pôle
+    # gestion d'entreprise) — la SOURCE des investisseurs du projet.
+    # L'admin n'a plus qu'à « Activer » puis « Rendre visible ».
+    part_by_user = {p.user_id: p for p in parts}
     partenaires: list[dict] = []
     partner_rows = (
         await db.execute(
@@ -461,29 +571,26 @@ async def get_projet(
         )
     ).scalars().all()
     for pr in partner_rows:
-        pu = await db.get(User, pr.user_id) if pr.user_id else None
-        name = (
-            _user_display(pu)
-            if pu
-            else (pr.partner_name or "").strip() or "—"
-        )
-        email = (pu.email if pu else pr.partner_email) or None
+        pu = await _resolve_partner_user(db, pr)
+        name, email = _partner_identity(pr, pu)
+        linked = part_by_user.get(pu.id) if pu else None
         partenaires.append(
             {
                 "partner_id": pr.id,
                 "name": name,
                 "email": email,
+                "missing_email": not email,
                 "role": pr.role,
                 "ownership_pct": (
                     float(pr.ownership_pct)
                     if pr.ownership_pct is not None
                     else None
                 ),
-                "user_id": pr.user_id,
-                "deja_participant": bool(
-                    (pr.user_id and pr.user_id in deja_user_ids)
-                    or (email and email.lower() in deja_emails)
-                ),
+                "user_id": pu.id if pu else None,
+                "has_account": pu is not None,
+                "deja_participant": linked is not None,
+                "participation_id": linked.id if linked else None,
+                "is_visible": linked.is_visible if linked else False,
             }
         )
 
@@ -502,10 +609,17 @@ async def get_projet(
                 profil.show_actionnaires if profil else True
             ),
             "show_cashflow": profil.show_cashflow if profil else True,
+            "avances_actionnaires": (
+                float(profil.avances_actionnaires)
+                if profil is not None
+                and profil.avances_actionnaires is not None
+                else None
+            ),
         },
         **snap,
         "serie_mensuelle": serie["rows"],
         "revenus_mode": serie["revenus_mode"],
+        "depenses_par_categorie": serie["depenses_par_categorie"],
         "hypotheque_mensuelle": serie["hypotheque_mensuelle"],
         "cashflow_moyen": serie["cashflow_moyen"],
         "participations": participations,
@@ -567,6 +681,8 @@ async def patch_profil(
         val = getattr(data, fld)
         if val is not None:
             setattr(profil, fld, bool(val))
+    if "avances_actionnaires" in data.model_fields_set:
+        profil.avances_actionnaires = data.avances_actionnaires or None
     await db.flush()
     await db.commit()
     return {"ok": True}
@@ -975,34 +1091,234 @@ async def delete_document(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+# ─────────── Activation d'un actionnaire (depuis un projet) ───────────
+
+
+@router.post(
+    "/projets/{entreprise_id}/partenaires/{partner_id}/activer",
+    summary="Active un actionnaire comme investisseur du projet "
+    "(compte + participation invisible, créés au besoin)",
+)
+async def activer_partenaire(
+    entreprise_id: int,
+    partner_id: int,
+    db: DBSession,
+    user: CurrentUser,
+) -> dict:
+    await _load_entreprise(db, entreprise_id)
+    pr = await db.get(EntreprisePartner, partner_id)
+    if pr is None or pr.entreprise_id != entreprise_id:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Actionnaire introuvable."
+        )
+    pu = await _resolve_partner_user(db, pr)
+    invitation_sent = False
+    temp_password: Optional[str] = None
+    if pu is None:
+        name, email = _partner_identity(pr, None)
+        if not email:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"Courriel manquant pour {name} — ajoutez-le dans la "
+                "fiche entreprise (Parts & actionnaires).",
+            )
+        first, last = _split_name(name)
+        pu, _created, invitation_sent, temp_password = (
+            await _create_investor_account(
+                db,
+                first_name=first,
+                last_name=last,
+                email=email,
+                phone=pr.partner_telephone,
+                invited_by=user.email,
+            )
+        )
+    part, _ = await _ensure_participation(
+        db,
+        pu.id,
+        entreprise_id,
+        float(pr.ownership_pct) if pr.ownership_pct is not None else None,
+    )
+    await db.commit()
+    payload = await _participation_payload(db, part)
+    payload["invitation_sent"] = invitation_sent
+    payload["temp_password"] = temp_password
+    return payload
+
+
 # ─────────────────────── Investisseurs (comptes) ───────────────────────
 
 
-@router.get("/investisseurs", summary="Comptes investisseurs")
+@router.get(
+    "/investisseurs",
+    summary="Tous les actionnaires de tous les projets (+ comptes)",
+)
 async def list_investisseurs(db: DBSession, user: CurrentUser) -> List[dict]:
-    rows = (
+    """Union des actionnaires « Parts & actionnaires » de toutes les
+    compagnies ET des participations existantes — dédupliqués par
+    compte/courriel. C'est ici qu'on voit qui a son compte (✓) et
+    qu'on envoie les informations de création."""
+    ents = {
+        e.id: e
+        for e in (
+            await db.execute(select(Entreprise))
+        ).scalars().all()
+    }
+    parts = (
+        await db.execute(select(InvestParticipation))
+    ).scalars().all()
+    parts_by_user: dict[int, list[InvestParticipation]] = {}
+    for p in parts:
+        parts_by_user.setdefault(p.user_id, []).append(p)
+
+    groups: dict[str, dict] = {}
+
+    def _group_for(
+        key: str, name: str, email: Optional[str], pu: Optional[User]
+    ) -> dict:
+        g = groups.get(key)
+        if g is None:
+            g = {
+                "key": key,
+                "name": name,
+                "email": email,
+                "missing_email": not email,
+                "user_id": pu.id if pu else None,
+                "has_account": pu is not None,
+                "is_active": pu.is_active if pu else None,
+                "must_change_password": (
+                    pu.must_change_password if pu else None
+                ),
+                "partner_id": None,
+                "entreprises": [],
+                "nb_projets_visibles": 0,
+            }
+            groups[key] = g
+        return g
+
+    # 1) Actionnaires de toutes les compagnies (fiche entreprise).
+    partner_rows = (
         await db.execute(
-            select(User, func.count(InvestParticipation.id))
-            .join(
-                InvestParticipation,
-                InvestParticipation.user_id == User.id,
-            )
-            .group_by(User.id)
-            .order_by(User.id)
+            select(EntreprisePartner).order_by(EntreprisePartner.id)
         )
-    ).all()
-    return [
-        {
-            "user_id": u.id,
-            "name": _user_display(u),
-            "email": u.email,
-            "phone": u.phone_e164,
-            "is_active": u.is_active,
-            "must_change_password": u.must_change_password,
-            "nb_projets": int(n),
-        }
-        for u, n in rows
-    ]
+    ).scalars().all()
+    for pr in partner_rows:
+        ent = ents.get(pr.entreprise_id)
+        if ent is None or not ent.is_active:
+            continue
+        pu = await _resolve_partner_user(db, pr)
+        name, email = _partner_identity(pr, pu)
+        key = (
+            f"user:{pu.id}"
+            if pu
+            else (f"email:{email}" if email else f"partner:{pr.id}")
+        )
+        g = _group_for(key, name, email, pu)
+        if g["partner_id"] is None:
+            g["partner_id"] = pr.id
+        if all(e["id"] != ent.id for e in g["entreprises"]):
+            g["entreprises"].append(
+                {
+                    "id": ent.id,
+                    "name": ent.name,
+                    "pct": (
+                        float(pr.ownership_pct)
+                        if pr.ownership_pct is not None
+                        else None
+                    ),
+                }
+            )
+
+    # 2) Participations sans ligne d'actionnaire (ajouts manuels).
+    for uid, plist in parts_by_user.items():
+        pu = await db.get(User, uid)
+        if pu is None:
+            continue
+        key = f"user:{uid}"
+        g = _group_for(key, _user_display(pu), pu.email, pu)
+        for p in plist:
+            ent = ents.get(p.entreprise_id)
+            if ent and all(e["id"] != ent.id for e in g["entreprises"]):
+                g["entreprises"].append(
+                    {"id": ent.id, "name": ent.name, "pct": float(p.parts_pct)}
+                )
+        g["nb_projets_visibles"] = sum(1 for p in plist if p.is_visible)
+
+    out = list(groups.values())
+    out.sort(key=lambda g: (not g["has_account"], g["name"].lower()))
+    return out
+
+
+@router.post(
+    "/partenaires/{partner_id}/creer-compte",
+    summary="Crée le compte d'un actionnaire + participations "
+    "(invisibles) dans toutes ses compagnies, et envoie l'invitation",
+)
+async def creer_compte_partenaire(
+    partner_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    pr = await db.get(EntreprisePartner, partner_id)
+    if pr is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Actionnaire introuvable."
+        )
+    pu = await _resolve_partner_user(db, pr)
+    name, email = _partner_identity(pr, pu)
+    invitation_sent = False
+    temp_password: Optional[str] = None
+    if pu is None:
+        if not email:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"Courriel manquant pour {name} — ajoutez-le dans la "
+                "fiche entreprise (Parts & actionnaires).",
+            )
+        first, last = _split_name(name)
+        pu, _created, invitation_sent, temp_password = (
+            await _create_investor_account(
+                db,
+                first_name=first,
+                last_name=last,
+                email=email,
+                phone=pr.partner_telephone,
+                invited_by=user.email,
+            )
+        )
+    # Participations INVISIBLES dans toutes les compagnies où cette
+    # personne est actionnaire (même user ou même courriel) — le compte
+    # démarre avec 0 projet visible ; « Rendre visible » se fait
+    # projet par projet.
+    all_rows = (
+        await db.execute(
+            select(EntreprisePartner).order_by(EntreprisePartner.id)
+        )
+    ).scalars().all()
+    nb_crees = 0
+    for row in all_rows:
+        row_user = await _resolve_partner_user(db, row)
+        _n, row_email = _partner_identity(row, row_user)
+        same = (row_user is not None and row_user.id == pu.id) or (
+            email and row_email and row_email == email
+        )
+        if not same:
+            continue
+        _part, created = await _ensure_participation(
+            db,
+            pu.id,
+            row.entreprise_id,
+            float(row.ownership_pct)
+            if row.ownership_pct is not None
+            else None,
+        )
+        if created:
+            nb_crees += 1
+    await db.commit()
+    return {
+        "user_id": pu.id,
+        "invitation_sent": invitation_sent,
+        "temp_password": temp_password,
+        "participations_creees": nb_crees,
+    }
 
 
 @router.post(

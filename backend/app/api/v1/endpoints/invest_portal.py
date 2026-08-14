@@ -256,6 +256,9 @@ async def build_projet(
     ).scalars().all()
 
     immeubles = snap["immeubles"]
+    for i in immeubles:
+        # Détail par logement réservé à la console admin.
+        i.pop("logements", None)
     if not show_hypotheque:
         for i in immeubles:
             i["hypotheque_preteur"] = None
@@ -284,6 +287,7 @@ async def build_projet(
         "immeubles": immeubles,
         "valeur_totale": snap["valeur_totale"],
         "hypotheque_totale": snap["hypotheque_totale"],
+        "avances_actionnaires": snap["avances_actionnaires"],
         "equite": snap["equite"],
         "loyers_mensuels": snap["loyers_mensuels"],
         "nb_logements": snap["nb_logements"],
@@ -291,6 +295,9 @@ async def build_projet(
         "taux_occupation": snap["taux_occupation"],
         "serie_mensuelle": serie_rows,
         "revenus_mode": serie["revenus_mode"],
+        "depenses_par_categorie": (
+            serie["depenses_par_categorie"] if show_depenses else []
+        ),
         "hypotheque_mensuelle": (
             serie["hypotheque_mensuelle"] if show_hypotheque else None
         ),
