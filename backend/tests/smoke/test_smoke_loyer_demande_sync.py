@@ -1,11 +1,12 @@
-"""Smoke — Hiérarchie du loyer effectif (retour client 2026-08-14).
+"""Smoke — Hiérarchie du loyer effectif (retours client 2026-08-14).
 
-Un logement OCCUPÉ affiche le loyer RÉEL du bail (les listes le lisent
-directement, via ``loyer_actuel``) ; ``Logement.loyer_demande`` est le
-prix de la PROCHAINE location et n'est PLUS écrasé par le bail (fin du
-miroir bail→logement du 2026-08-13). Quand le bail se résilie, le prix
-de relocation porté par le dossier Locations fait foi sur le logement
-VACANT (ce miroir kanban→logement, lui, est conservé).
+Un logement OCCUPÉ affiche le loyer RÉEL du bail, et son
+``loyer_demande`` LE SUIT automatiquement (création de bail, correction
+du loyer, avis appliqué) : « demandé 1 000 $ à la création, locataire
+rendu à 1 600 $ douze ans plus tard — faut que ça s'ajuste ». Le vrai
+prix de la prochaine location se décide À LA RELOCATION : quand le bail
+se résilie, le prix porté par le dossier Locations fait foi sur le
+logement vacant (miroir kanban→logement conservé).
 """
 from __future__ import annotations
 
@@ -77,11 +78,11 @@ def _loyer_demande(run, logement_id: int):
     return run(_s())
 
 
-def test_avis_applique_ne_touche_plus_loyer_demande(client, auth_headers, run):
+def test_avis_applique_aligne_loyer_demande(client, auth_headers, run):
     """Avis accepté puis APPLIQUÉ (lazy, à la consultation de
-    l'overview) → le bail prend le nouveau loyer, mais
-    ``Logement.loyer_demande`` (prix de la PROCHAINE location) n'est
-    plus écrasé (hiérarchie 2026-08-14)."""
+    l'overview) → le bail prend le nouveau loyer ET
+    ``Logement.loyer_demande`` le suit — un demandé posé il y a des
+    années ne survit pas aux augmentations."""
     from app.models.immobilier import BailRenouvellement
 
     from .conftest import TestSessionLocal
@@ -119,18 +120,16 @@ def test_avis_applique_ne_touche_plus_loyer_demande(client, auth_headers, run):
     assert row["applique_le"] is not None
     assert row["bail_loyer_mensuel"] == 1450.0
 
-    # Hiérarchie 2026-08-14 : le prix de la prochaine location reste
-    # intact — les surfaces lisent le loyer du bail directement.
-    assert _loyer_demande(run, lg_id) == 999.0
+    # Le loyer demandé SUIT le bail tant que c'est loué (2026-08-14).
+    assert _loyer_demande(run, lg_id) == 1450.0
 
 
-def test_creation_et_correction_bail_ne_touchent_plus_loyer_demande(
+def test_creation_et_correction_bail_alignent_loyer_demande(
     client, auth_headers, run
 ):
     """Créer un bail ACTIF puis corriger son loyer → le « loyer
-    demandé » du logement (prix de la prochaine location) reste
-    intact ; la liste expose le loyer RÉEL du bail via
-    ``loyer_actuel`` (hiérarchie 2026-08-14)."""
+    demandé » du logement suit à chaque fois ; la liste expose le
+    loyer RÉEL du bail via ``loyer_actuel``."""
     from app.models.immobilier import Immeuble, Locataire, Logement
 
     from .conftest import TestSessionLocal
@@ -171,17 +170,17 @@ def test_creation_et_correction_bail_ne_touchent_plus_loyer_demande(
     )
     assert r.status_code == 201, r.text
     bail_id = r.json()["id"]
-    # Le prix de la prochaine location n'est pas écrasé par le bail.
-    assert _loyer_demande(run, lg_id) == 777.0
+    # Loué → le demandé suit le bail.
+    assert _loyer_demande(run, lg_id) == 1200.0
 
-    # Correction du loyer du bail actif → loyer_demande intact aussi.
+    # Correction du loyer du bail actif → le demandé suit aussi.
     p = client.patch(
         f"/api/v1/immobilier/baux/{bail_id}",
         headers=auth_headers,
         json={"loyer_mensuel": 1250.0},
     )
     assert p.status_code == 200, p.text
-    assert _loyer_demande(run, lg_id) == 777.0
+    assert _loyer_demande(run, lg_id) == 1250.0
 
     # La liste des logements expose le loyer RÉEL du bail actif
     # (BailRead n'expose pas immeuble_id — on le relit du logement).

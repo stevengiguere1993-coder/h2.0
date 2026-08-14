@@ -1345,9 +1345,20 @@ async def renouvellements_overview(
                     and last_ren.nouvelle_date_fin != b.date_fin
                 ):
                     b.date_fin = last_ren.nouvelle_date_fin
-                # Hiérarchie 2026-08-14 : « loyer demandé » = prix de la
-                # PROCHAINE location — l'avis appliqué ne l'écrase plus,
-                # les surfaces affichent le loyer du bail directement.
+                # Le « loyer demandé » suit le bail tant que c'est loué
+                # (retour client 2026-08-14) : l'avis appliqué réaligne
+                # le logement — 1 000 $ posé à la création ne doit pas
+                # survivre à douze ans d'augmentations.
+                if last_ren.nouveau_loyer is not None:
+                    from app.services.loyer_effectif import (
+                        refleter_bail_sur_demande,
+                    )
+
+                    lg_avis = await db.get(Logement, b.logement_id)
+                    if lg_avis is not None:
+                        refleter_bail_sur_demande(
+                            lg_avis, float(last_ren.nouveau_loyer)
+                        )
                 last_ren.applique_le = today
                 dirty = True
                 # Cycle réglé et appliqué : dès CE rendu, la ligne
