@@ -22,9 +22,12 @@ import {
   Trash2
 } from "lucide-react";
 
+import { useSearchParams } from "next/navigation";
+
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../layout";
+import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
 import { BailDocActions } from "@/components/immobilier/tal-avis";
 import {
   CreerBailModal,
@@ -43,6 +46,15 @@ function money(n: number | null | undefined): string {
 }
 
 export default function SuiviBauxPage() {
+  // La page sert aussi de sous-page « Baux & locataires » de la fiche
+  // immeuble (?immeuble_id=X) : le bandeau d'avis se limite alors aux
+  // alertes de CET immeuble ; sans paramètre → toutes les alertes.
+  const searchParams = useSearchParams();
+  const immeubleIdParam = searchParams.get("immeuble_id");
+  const immeubleId =
+    immeubleIdParam != null && /^\d+$/.test(immeubleIdParam)
+      ? Number(immeubleIdParam)
+      : null;
   const [rows, setRows] = useState<Row[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
@@ -146,6 +158,10 @@ export default function SuiviBauxPage() {
     <>
       <ImmobilierTopbar breadcrumbs={[{ label: "Baux" }]} />
       <div className="space-y-4 p-4 sm:p-6">
+        {/* MÊME bandeau que la page Baux & paiements (composant partagé),
+            filtré sur l'immeuble quand ?immeuble_id= est présent. */}
+        <BandeauAvisRenouvellement immeubleId={immeubleId} />
+
         <div className="rounded-2xl border border-sky-400/30 bg-sky-500/10 p-4 text-xs text-sky-200">
           <p className="font-semibold text-white">Comment ça marche</p>
           <p className="mt-1">

@@ -4979,6 +4979,7 @@ async def baux_echeances(
     db: DBSession,
     user: CurrentUser,
     entreprise_id: Optional[int] = None,
+    immeuble_id: Optional[int] = None,
     horizon_jours: int = 45,
 ) -> EcheanceOverview:
     """Baux actifs dont la fenêtre d'avis de renouvellement approche.
@@ -4989,6 +4990,10 @@ async def baux_echeances(
     ou est dépassée mais le bail pas encore terminé (« en retard »). Les
     baux pour lesquels un avis a déjà été enregistré dans le cycle sont
     écartés.
+
+    `immeuble_id` restreint les alertes à UN immeuble (bandeau de la
+    page Baux quand elle sert de sous-page de la fiche immeuble) —
+    simple filtre de portée, aucune règle métier ne change.
     """
     _require_volet(user)
     today = datetime.now(timezone.utc).date()
@@ -5010,6 +5015,8 @@ async def baux_echeances(
         imm_q = imm_q.where(
             Immeuble.owner_entreprise_id == int(entreprise_id)
         )
+    if immeuble_id is not None:
+        imm_q = imm_q.where(Immeuble.id == int(immeuble_id))
     immeubles = (await db.execute(imm_q)).scalars().all()
     visible = await visible_immeuble_ids(db, user)
     if visible is not None:
@@ -6149,7 +6156,8 @@ async def a_traiter(db: DBSession, user: CurrentUser) -> ATraiterOut:
         db=db, user=user, mois=None, entreprise_id=None
     )
     ech = await baux_echeances(
-        db=db, user=user, entreprise_id=None, horizon_jours=45
+        db=db, user=user, entreprise_id=None, immeuble_id=None,
+        horizon_jours=45
     )
     maint = await maintenance_overview(
         db=db,

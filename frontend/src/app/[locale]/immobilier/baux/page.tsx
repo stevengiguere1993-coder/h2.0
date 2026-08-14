@@ -18,6 +18,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
+import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
 import { echeanceLabel } from "@/components/immobilier/fin-bail";
 import {
   BadgeGestionExterne,
@@ -152,34 +153,6 @@ type Overview = {
   solde_depuis?: string | null;
 };
 
-type Echeance = {
-  bail_id: number;
-  immeuble: string;
-  logement: string;
-  locataire: string;
-  date_fin: string;
-  fenetre_debut: string;
-  fenetre_fin: string;
-  statut: string; // a_envoyer | en_retard | a_venir
-  jours: number;
-  loyer_mensuel: number;
-};
-type EcheanceData = {
-  rows: Echeance[];
-  nb_a_envoyer: number;
-  nb_en_retard: number;
-  nb_a_venir: number;
-};
-
-function fmtDateShort(iso: string): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, (m || 1) - 1, d || 1).toLocaleDateString("fr-CA", {
-    day: "numeric",
-    month: "short",
-    year: "numeric"
-  });
-}
-
 const RELOC_LABEL: Record<string, string> = {
   bail_a_envoyer: "bail à envoyer",
   bail_envoye: "bail envoyé — à signer",
@@ -225,7 +198,6 @@ export default function BauxPage() {
   const [relancingId, setRelancingId] = useState<number | null>(null);
   const [correctingId, setCorrectingId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [echeances, setEcheances] = useState<EcheanceData | null>(null);
   const [search, setSearch] = useState("");
   const [etatFilter, setEtatFilter] = useState<
     "all" | "paye" | "partiel" | "retard" | "attente"
@@ -268,19 +240,6 @@ export default function BauxPage() {
   // Changement d'entreprise → le portefeuille change, on repart sur « Tous ».
   useEffect(() => {
     setImmeubleFilter("all");
-  }, [currentEntrepriseId]);
-
-  useEffect(() => {
-    void (async () => {
-      const params = new URLSearchParams();
-      if (currentEntrepriseId != null) {
-        params.set("entreprise_id", String(currentEntrepriseId));
-      }
-      const r = await authedFetch(
-        `/api/v1/immobilier/baux/echeances?${params.toString()}`
-      );
-      if (r.ok) setEcheances((await r.json()) as EcheanceData);
-    })();
   }, [currentEntrepriseId]);
 
   function flash(msg: string) {
@@ -760,9 +719,7 @@ export default function BauxPage() {
           </div>
         ) : null}
 
-        {echeances && echeances.rows.length > 0 ? (
-          <EcheancesSection data={echeances} />
-        ) : null}
+        <BandeauAvisRenouvellement entrepriseId={currentEntrepriseId} />
 
         {/* Filtres */}
         <div className="mt-5 flex flex-wrap items-center gap-2">
@@ -1226,69 +1183,6 @@ export default function BauxPage() {
         </div>
       ) : null}
     </>
-  );
-}
-
-function EcheancesSection({ data }: { data: EcheanceData }) {
-  // Retour client 2026-08-14 : le bandeau ne liste QUE l'actionnable
-  // (à envoyer / en retard). Les « à venir » (ligne verte « rien à
-  // faire ») sortent de la liste — seul le compteur de l'en-tête les
-  // mentionne. Aucune action → pas de bandeau du tout.
-  const actionnables = data.rows.filter((r) => r.statut !== "a_venir");
-  if (actionnables.length === 0) return null;
-  const TONE: Record<string, { box: string; chip: string; txt: string }> = {
-    en_retard: {
-      box: "border-rose-500/40 bg-rose-500/5",
-      chip: "badge-rose",
-      txt: "En retard"
-    },
-    a_envoyer: {
-      box: "border-amber-500/40 bg-amber-500/5",
-      chip: "badge-amber",
-      txt: "À envoyer"
-    }
-  };
-  return (
-    <div className="mt-5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
-      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-amber-200">
-        <span>📅 Avis de renouvellement</span>
-        <span className="text-xs font-normal text-white/50">
-          {data.nb_en_retard > 0 ? `${data.nb_en_retard} en retard · ` : ""}
-          {data.nb_a_envoyer} à envoyer
-          {data.nb_a_venir > 0 ? ` · ${data.nb_a_venir} à venir` : ""}
-        </span>
-      </div>
-      <p className="mb-3 text-xs text-white/50">
-        L'avis officiel se transmet via le formulaire du TAL ou de la CORPIQ,
-        entre 6 et 3 mois avant la fin du bail.
-      </p>
-      <div className="space-y-1.5">
-        {actionnables.map((r) => {
-          const t = TONE[r.statut] || TONE.a_envoyer;
-          return (
-            <div
-              key={r.bail_id}
-              className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm ${t.box}`}
-            >
-              <div className="min-w-0">
-                <span className="font-medium">{r.locataire}</span>
-                <span className="ml-2 text-xs text-white/50">
-                  {r.immeuble} · {r.logement}
-                </span>
-              </div>
-              <div className="flex items-center gap-3 text-xs text-white/60">
-                <span>Fin du bail : {fmtDateShort(r.date_fin)}</span>
-                <span className="hidden sm:inline">
-                  Fenêtre : {fmtDateShort(r.fenetre_debut)} →{" "}
-                  {fmtDateShort(r.fenetre_fin)}
-                </span>
-                <span className={`badge ${t.chip}`}>{t.txt}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
   );
 }
 
