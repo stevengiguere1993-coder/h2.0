@@ -463,12 +463,19 @@ type SyncCompteDetail = {
   erreur: string | null;
 };
 
+type SyncCompteIgnore = {
+  compte_id: number;
+  compte_nom: string;
+  raison: string;
+};
+
 type SyncRapport = {
   comptes: number;
   importees: number;
   mises_a_jour: number;
   ignorees: number;
   details: SyncCompteDetail[];
+  comptes_ignores: SyncCompteIgnore[];
 };
 
 type SelectionCompte = {
@@ -499,7 +506,11 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
     const sel: Record<number, SelectionCompte> = {};
     for (const c of d.comptes) {
       // Préremplissage : le confirmé, sinon la SUGGESTION (liste
-      // d'immeubles, ou case « tous » pour un compte fiducie).
+      // d'immeubles, ou case « tous » pour un compte fiducie). Un
+      // compte jamais confirmé arrive avec actif=false de la base —
+      // c'est un défaut technique, pas un choix humain : on prérègle
+      // l'interrupteur à ON pour que « confirmer la suggestion +
+      // Enregistrer » suffise à le mettre en lecture.
       const confirme = c.tous_les_immeubles || c.immeuble_ids.length > 0;
       sel[c.id] = confirme
         ? {
@@ -510,7 +521,7 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
         : {
             immeuble_ids: c.suggestion_immeuble_ids,
             tous: c.suggestion_tous,
-            actif: c.actif
+            actif: true
           };
     }
     setSelections(sel);
@@ -645,8 +656,12 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
       const d = (await r.json()) as SyncRapport;
       await load();
       setRapport(d);
+      const sautes = d.comptes_ignores?.length ?? 0;
       setMsg(
-        `Synchro terminée : ${d.comptes} compte${d.comptes > 1 ? "s" : ""} lu${d.comptes > 1 ? "s" : ""}, ${d.importees} transaction${d.importees > 1 ? "s" : ""} importée${d.importees > 1 ? "s" : ""}, ${d.mises_a_jour} mise${d.mises_a_jour > 1 ? "s" : ""} à jour, ${d.ignorees} ignorée${d.ignorees > 1 ? "s" : ""} — détail ci-dessous.`
+        `Synchro terminée : ${d.comptes} compte${d.comptes > 1 ? "s" : ""} lu${d.comptes > 1 ? "s" : ""}, ${d.importees} transaction${d.importees > 1 ? "s" : ""} importée${d.importees > 1 ? "s" : ""}, ${d.mises_a_jour} mise${d.mises_a_jour > 1 ? "s" : ""} à jour, ${d.ignorees} ignorée${d.ignorees > 1 ? "s" : ""} — détail ci-dessous.` +
+          (d.importees === 0 && sautes > 0
+            ? ` ⚠ ${sautes} compte${sautes > 1 ? "s" : ""} non lu${sautes > 1 ? "s" : ""} (désactivé ou sans immeuble) — c'est souvent là que sont les transactions attendues, voir le rapport.`
+            : "")
       );
     } catch (e) {
       setErr(`Synchro échouée : ${(e as Error).message}`);
@@ -839,6 +854,19 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
                           — erreur : {d.erreur}
                         </span>
                       ) : null}
+                    </li>
+                  ))}
+                  {/* Comptes SAUTÉS — quand « 0 importée », la réponse
+                      est souvent ici : le compte qui contient les
+                      transactions (ex. la fiducie des Interac) n'est
+                      pas activé ou pas relié. */}
+                  {(rapport.comptes_ignores ?? []).map((i) => (
+                    <li
+                      key={`ign-${i.compte_id}`}
+                      className="text-xs text-amber-300/90"
+                    >
+                      <span className="font-medium">{i.compte_nom}</span> :
+                      non lu — {i.raison}
                     </li>
                   ))}
                 </ul>

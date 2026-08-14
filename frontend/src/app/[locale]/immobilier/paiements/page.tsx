@@ -29,6 +29,7 @@ import {
   montantMarquerPaye
 } from "@/components/immobilier/paiements-actions";
 import {
+  CrochetFilBancaire,
   EncartValidationBancaire,
   PastilleValidationBancaire,
   ValidationEtat,
@@ -664,27 +665,33 @@ export default function PaiementsPage() {
             </div>
           </div>
 
-          {/* Sélecteur de mois */}
-          <div className="inline-flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-900 px-1 py-1">
-            <button
-              type="button"
-              onClick={() => setMois((m) => shiftMonth(m, -1))}
-              className="btn-ghost btn-xs"
-              aria-label="Mois précédent"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <span className="min-w-[140px] text-center text-sm font-semibold capitalize text-white">
-              {monthLabel(mois)}
-            </span>
-            <button
-              type="button"
-              onClick={() => setMois((m) => shiftMonth(m, 1))}
-              className="btn-ghost btn-xs"
-              aria-label="Mois suivant"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
+          {/* Crochet fil bancaire (validation QuickBooks) + sélecteur de mois */}
+          <div className="flex items-center gap-2">
+            <CrochetFilBancaire
+              actif={!!valBanque?.active}
+              onChange={() => void load()}
+            />
+            <div className="inline-flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-900 px-1 py-1">
+              <button
+                type="button"
+                onClick={() => setMois((m) => shiftMonth(m, -1))}
+                className="btn-ghost btn-xs"
+                aria-label="Mois précédent"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <span className="min-w-[140px] text-center text-sm font-semibold capitalize text-white">
+                {monthLabel(mois)}
+              </span>
+              <button
+                type="button"
+                onClick={() => setMois((m) => shiftMonth(m, 1))}
+                className="btn-ghost btn-xs"
+                aria-label="Mois suivant"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </header>
 
