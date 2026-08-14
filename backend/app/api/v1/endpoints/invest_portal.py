@@ -210,8 +210,30 @@ async def build_projet(
     timeline = await timeline_projet(db, entreprise_id, flux, phase)
 
     # Co-actionnaires de CETTE compagnie (jamais les autres projets).
+    # Le nom saisi dans « Parts & actionnaires » (fiche entreprise)
+    # PRIME sur le nom du compte : c'est souvent un holding (« Groupe X
+    # Investissement ») dont le compte de connexion reste la personne.
     actionnaires: list[dict] = []
     if show_actionnaires:
+        from app.models.entreprise import EntreprisePartner
+
+        override_by_user: dict[int, str] = {}
+        override_by_email: dict[str, str] = {}
+        for pr in (
+            await db.execute(
+                select(EntreprisePartner).where(
+                    EntreprisePartner.entreprise_id == entreprise_id
+                )
+            )
+        ).scalars():
+            nm = (pr.partner_name or "").strip()
+            if not nm:
+                continue
+            if pr.user_id:
+                override_by_user[pr.user_id] = nm
+            if pr.partner_email:
+                override_by_email[pr.partner_email.strip().lower()] = nm
+
         all_parts = (
             await db.execute(
                 select(InvestParticipation, User)
@@ -226,7 +248,9 @@ async def build_projet(
         total_pct = 0.0
         for p, u in all_parts:
             name = (
-                f"{u.first_name or ''} {u.last_name or ''}".strip()
+                override_by_user.get(u.id)
+                or override_by_email.get((u.email or "").lower())
+                or f"{u.first_name or ''} {u.last_name or ''}".strip()
                 or u.email
             )
             actionnaires.append(
