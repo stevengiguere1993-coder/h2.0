@@ -19,6 +19,7 @@ from app.db.session import (
     ensure_contrat_gestion_tables,
     ensure_critical_columns,
     ensure_esign_tables,
+    ensure_invest_portal_tables,
     ensure_immobilier_aux_tables,
     ensure_project_corrections_tables,
     ensure_raci_tables,
@@ -186,6 +187,16 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning(
             "ensure_esign_tables failed during startup: %s", exc
+        )
+
+    # Tables du Portail Investisseur v2 (participations par compagnie,
+    # flux, réglages de publication, documents, jalons). Transaction
+    # isolée.
+    try:
+        await ensure_invest_portal_tables()
+    except Exception as exc:
+        logger.warning(
+            "ensure_invest_portal_tables failed during startup: %s", exc
         )
 
     # Backfill : crée le projet (+ facture d'acompte DRAFT) pour les

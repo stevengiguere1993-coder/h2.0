@@ -148,6 +148,14 @@ from app.models.investissement import (  # noqa: F401
     Investissement,
     InvestissementStatus,
 )
+from app.models.invest_portal import (  # noqa: F401
+    InvestDocument,
+    InvestFlux,
+    InvestFluxType,
+    InvestJalon,
+    InvestParticipation,
+    InvestProjetProfil,
+)
 from app.models.immobilier import (  # noqa: F401
     DepenseImmeuble,
     Bail,
@@ -345,6 +353,12 @@ __all__ = [
     "Immeuble",
     "ImmeubleOwnership",
     "Investissement",
+    "InvestDocument",
+    "InvestFlux",
+    "InvestFluxType",
+    "InvestJalon",
+    "InvestParticipation",
+    "InvestProjetProfil",
     "Logement",
     "Locataire",
     "MaintenanceOrdre",

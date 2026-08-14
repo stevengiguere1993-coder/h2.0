@@ -1302,6 +1302,42 @@ async def ensure_esign_tables() -> None:
         log.warning("ensure_esign_tables failed: %s", exc)
 
 
+async def ensure_invest_portal_tables() -> None:
+    """Crée les tables du Portail Investisseur v2 (participation par
+    compagnie) dans leur PROPRE transaction : `inv_participations`,
+    `inv_flux`, `inv_projet_profils`, `inv_documents`, `inv_jalons`.
+
+    Voir app/models/invest_portal.py — pattern identique aux autres."""
+    import logging
+
+    log = logging.getLogger("db.ensure_invest_portal_tables")
+    try:
+        from app.db.base import Base
+        from app.models.invest_portal import (  # noqa: F401
+            InvestDocument,
+            InvestFlux,
+            InvestJalon,
+            InvestParticipation,
+            InvestProjetProfil,
+        )
+
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(
+                    c,
+                    tables=[
+                        InvestParticipation.__table__,
+                        InvestFlux.__table__,
+                        InvestProjetProfil.__table__,
+                        InvestDocument.__table__,
+                        InvestJalon.__table__,
+                    ],
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_invest_portal_tables failed: %s", exc)
+
+
 async def init_db() -> None:
     """
     Initialize database tables.
