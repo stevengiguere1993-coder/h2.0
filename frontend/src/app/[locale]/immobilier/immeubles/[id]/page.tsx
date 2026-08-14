@@ -38,6 +38,7 @@ import { authedFetch, getToken } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../../layout";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { ContratGestionTab } from "./contrat-gestion-tab";
+import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
 import {
   fmtPieces,
   LogementFiche
@@ -2407,6 +2408,10 @@ function BauxTab({
 
   return (
     <div className="space-y-3">
+      {/* MÊME bandeau que la page Baux & paiements (composant partagé),
+          limité aux alertes de CET immeuble. */}
+      <BandeauAvisRenouvellement immeubleId={immeubleId} />
+
       {rows ? (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs text-white/50">
