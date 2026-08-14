@@ -506,7 +506,11 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
     const sel: Record<number, SelectionCompte> = {};
     for (const c of d.comptes) {
       // Préremplissage : le confirmé, sinon la SUGGESTION (liste
-      // d'immeubles, ou case « tous » pour un compte fiducie).
+      // d'immeubles, ou case « tous » pour un compte fiducie). Un
+      // compte jamais confirmé arrive avec actif=false de la base —
+      // c'est un défaut technique, pas un choix humain : on prérègle
+      // l'interrupteur à ON pour que « confirmer la suggestion +
+      // Enregistrer » suffise à le mettre en lecture.
       const confirme = c.tous_les_immeubles || c.immeuble_ids.length > 0;
       sel[c.id] = confirme
         ? {
@@ -517,7 +521,7 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
         : {
             immeuble_ids: c.suggestion_immeuble_ids,
             tous: c.suggestion_tous,
-            actif: c.actif
+            actif: true
           };
     }
     setSelections(sel);
