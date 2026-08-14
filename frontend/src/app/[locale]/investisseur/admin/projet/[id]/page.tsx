@@ -27,7 +27,16 @@ import {
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { InvestisseurTopbar } from "../../../layout";
-import { fmtDate, fmtMoney, fmtPct, PhaseBadge } from "../../../invest-ui";
+import {
+  fmtDate,
+  fmtMoney,
+  fmtPct,
+  PhaseBadge,
+  RevDepChart,
+  SerieMois,
+  Timeline,
+  TimelineEvent
+} from "../../../invest-ui";
 
 type FluxRow = {
   id: number;
@@ -74,13 +83,30 @@ type AdminProjet = {
     immeuble_id: number;
     name: string;
     address: string | null;
+    nb_logements: number;
+    nb_baux_actifs: number;
+    loyers_mensuels: number;
     valeur: number | null;
+    valeur_source: string | null;
+    valeur_date: string | null;
     hypotheque_balance: number;
+    hypotheque_preteur: string | null;
+    hypotheque_taux_pct: number | null;
+    hypotheque_fin_terme: string | null;
     equite: number;
+    ownership_pct: number;
   }[];
   valeur_totale: number;
+  hypotheque_totale: number;
   equite: number;
+  loyers_mensuels: number;
+  nb_logements: number;
+  nb_baux_actifs: number;
+  taux_occupation: number | null;
+  serie_mensuelle: SerieMois[];
+  hypotheque_mensuelle: number;
   cashflow_moyen: number;
+  timeline: TimelineEvent[];
   participations: ParticipationRow[];
   jalons: {
     id: number;
@@ -304,13 +330,195 @@ export default function AdminProjetPage() {
         <div className="mb-5 flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-bold text-white">{data.name}</h1>
           <PhaseBadge phase={data.phase} />
-          <span className="text-xs text-white/40 tabular-nums">
-            Équité {fmtMoney(data.equite)} · cash-flow{" "}
-            {data.cashflow_moyen >= 0 ? "+" : ""}
-            {fmtMoney(data.cashflow_moyen)}/mois
-          </span>
         </div>
 
+        {/* ── Dashboard du projet (visible même sans investisseur) ── */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
+              Valeur des immeubles
+            </p>
+            <p className="mt-1.5 text-2xl font-bold tabular-nums text-white">
+              {fmtMoney(data.valeur_totale)}
+            </p>
+            <p className="mt-1 text-xs text-white/50">
+              évaluation de référence
+            </p>
+          </div>
+          <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
+              Dette hypothécaire
+            </p>
+            <p className="mt-1.5 text-2xl font-bold tabular-nums text-white">
+              {fmtMoney(data.hypotheque_totale)}
+            </p>
+            <p className="mt-1 text-xs text-white/50">
+              {fmtMoney(data.hypotheque_mensuelle)}/mois
+            </p>
+          </div>
+          <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
+              Équité de la compagnie
+            </p>
+            <p className="mt-1.5 text-2xl font-bold tabular-nums text-emerald-400">
+              {fmtMoney(data.equite)}
+            </p>
+            <p className="mt-1 text-xs text-white/50">
+              valeur − hypothèques
+            </p>
+          </div>
+          <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
+              Occupation
+            </p>
+            <p className="mt-1.5 text-2xl font-bold tabular-nums text-white">
+              {data.nb_baux_actifs} / {data.nb_logements || "—"}
+            </p>
+            <p className="mt-1 text-xs text-white/50">
+              loyers {fmtMoney(data.loyers_mensuels)}/mois · cash-flow{" "}
+              <span
+                className={
+                  data.cashflow_moyen >= 0
+                    ? "text-emerald-400"
+                    : "text-rose-400"
+                }
+              >
+                {data.cashflow_moyen >= 0 ? "+" : ""}
+                {fmtMoney(data.cashflow_moyen)}/mois
+              </span>
+            </p>
+          </div>
+        </div>
+
+        {/* Immeubles */}
+        <div className="mt-4 overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
+          <div className="flex items-center justify-between border-b border-brand-800 px-4 py-2.5">
+            <h2 className="text-sm font-semibold text-white">
+              Immeubles de la compagnie
+            </h2>
+            <span className="text-xs text-white/40">
+              {data.immeubles.length} immeuble
+              {data.immeubles.length > 1 ? "s" : ""} — c&apos;est ce que
+              verront les investisseurs
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm tabular-nums">
+              <thead>
+                <tr className="text-left text-[10px] uppercase tracking-wider text-white/40">
+                  <th className="px-4 py-2.5 font-medium">Immeuble</th>
+                  <th className="px-4 py-2.5 text-right font-medium">
+                    Logements
+                  </th>
+                  <th className="px-4 py-2.5 text-right font-medium">
+                    Loyers / mois
+                  </th>
+                  <th className="px-4 py-2.5 text-right font-medium">
+                    Valeur
+                  </th>
+                  <th className="px-4 py-2.5 text-right font-medium">
+                    Hypothèque
+                  </th>
+                  <th className="px-4 py-2.5 text-right font-medium">
+                    Équité
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.immeubles.map((im) => (
+                  <tr
+                    key={im.immeuble_id}
+                    className="border-t border-brand-800/60"
+                  >
+                    <td className="px-4 py-3">
+                      <p className="font-medium text-white">
+                        {im.address || im.name}
+                      </p>
+                      <p className="text-xs text-white/40">
+                        {im.hypotheque_preteur
+                          ? `${im.hypotheque_preteur}${
+                              im.hypotheque_taux_pct !== null
+                                ? ` · ${im.hypotheque_taux_pct.toLocaleString(
+                                    "fr-CA",
+                                    { maximumFractionDigits: 2 }
+                                  )} %`
+                                : ""
+                            }`
+                          : "aucune hypothèque active"}
+                        {im.ownership_pct !== 100
+                          ? ` · détenu à ${im.ownership_pct} %`
+                          : ""}
+                        {im.valeur_source === "achat"
+                          ? " · ⚠ valeur = prix d'achat (aucune évaluation saisie)"
+                          : ""}
+                      </p>
+                    </td>
+                    <td className="px-4 py-3 text-right text-white/80">
+                      {im.nb_logements || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right text-white/80">
+                      {fmtMoney(im.loyers_mensuels)}
+                    </td>
+                    <td className="px-4 py-3 text-right text-white/80">
+                      {fmtMoney(im.valeur)}
+                    </td>
+                    <td className="px-4 py-3 text-right text-white/80">
+                      {fmtMoney(im.hypotheque_balance)}
+                    </td>
+                    <td className="px-4 py-3 text-right font-semibold text-emerald-400">
+                      {fmtMoney(im.equite)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Revenus / dépenses + timeline */}
+        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+          <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white">
+            <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-sm font-semibold">
+                Revenus et dépenses · 12 derniers mois
+              </h2>
+              <span className="text-xs text-white/50 tabular-nums">
+                Cash-flow moyen :{" "}
+                <b
+                  className={
+                    data.cashflow_moyen >= 0
+                      ? "text-emerald-400"
+                      : "text-rose-400"
+                  }
+                >
+                  {data.cashflow_moyen >= 0 ? "+" : ""}
+                  {fmtMoney(data.cashflow_moyen)}/mois
+                </b>
+              </span>
+            </div>
+            <RevDepChart serie={data.serie_mensuelle} showDepenses />
+            <div className="mt-1 flex gap-4 text-xs text-white/50">
+              <span className="inline-flex items-center gap-1.5">
+                <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#199e70]" />
+                Revenus perçus
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#e66767]" />
+                Dépenses
+              </span>
+            </div>
+          </div>
+          <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+            <h2 className="mb-4 text-sm font-semibold text-white">
+              Timeline du projet
+            </h2>
+            <Timeline events={data.timeline} />
+          </div>
+        </div>
+
+        <h2 className="mb-3 mt-8 text-base font-semibold text-white">
+          Gestion des investisseurs et de la publication
+        </h2>
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr_0.8fr]">
           {/* ── Colonne gauche : participations ── */}
           <div className="min-w-0 space-y-4">
