@@ -100,6 +100,9 @@ export type ProjetDetail = {
   nb_baux_actifs: number;
   taux_occupation: number | null;
   serie_mensuelle: SerieMois[];
+  /** "recus" = paiements enregistrés ; "potentiel" = loyers effectifs
+   *  des unités louées (aucun paiement détaillé suivi). */
+  revenus_mode?: "recus" | "potentiel";
   hypotheque_mensuelle: number | null;
   cashflow_moyen: number | null;
   timeline: TimelineEvent[];

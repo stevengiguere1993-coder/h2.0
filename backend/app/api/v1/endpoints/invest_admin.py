@@ -38,7 +38,7 @@ from sqlalchemy.orm import undefer
 
 from app.api.deps import CurrentUser, DBSession
 from app.core.security import get_password_hash
-from app.models.entreprise import Entreprise
+from app.models.entreprise import Entreprise, EntreprisePartner
 from app.models.invest_portal import (
     InvestDocument,
     InvestFlux,
@@ -443,6 +443,50 @@ async def get_projet(
         )
     ).scalars().all()
     serie = await serie_mensuelle(db, entreprise_id)
+
+    # Partenaires « Parts & actionnaires » de la compagnie (pôle gestion
+    # d'entreprise) — proposés en un clic pour créer une participation.
+    deja_user_ids = {p.user_id for p in parts}
+    deja_emails = {
+        (pp["user_email"] or "").lower()
+        for pp in participations
+        if pp.get("user_email")
+    }
+    partenaires: list[dict] = []
+    partner_rows = (
+        await db.execute(
+            select(EntreprisePartner)
+            .where(EntreprisePartner.entreprise_id == entreprise_id)
+            .order_by(EntreprisePartner.id)
+        )
+    ).scalars().all()
+    for pr in partner_rows:
+        pu = await db.get(User, pr.user_id) if pr.user_id else None
+        name = (
+            _user_display(pu)
+            if pu
+            else (pr.partner_name or "").strip() or "—"
+        )
+        email = (pu.email if pu else pr.partner_email) or None
+        partenaires.append(
+            {
+                "partner_id": pr.id,
+                "name": name,
+                "email": email,
+                "role": pr.role,
+                "ownership_pct": (
+                    float(pr.ownership_pct)
+                    if pr.ownership_pct is not None
+                    else None
+                ),
+                "user_id": pr.user_id,
+                "deja_participant": bool(
+                    (pr.user_id and pr.user_id in deja_user_ids)
+                    or (email and email.lower() in deja_emails)
+                ),
+            }
+        )
+
     return {
         "entreprise_id": ent.id,
         "name": ent.name,
@@ -461,9 +505,11 @@ async def get_projet(
         },
         **snap,
         "serie_mensuelle": serie["rows"],
+        "revenus_mode": serie["revenus_mode"],
         "hypotheque_mensuelle": serie["hypotheque_mensuelle"],
         "cashflow_moyen": serie["cashflow_moyen"],
         "participations": participations,
+        "partenaires": partenaires,
         "timeline": await timeline_projet(
             db, entreprise_id, all_flux, phase
         ),

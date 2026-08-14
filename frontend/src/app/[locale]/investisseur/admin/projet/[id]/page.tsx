@@ -104,9 +104,11 @@ type AdminProjet = {
   nb_baux_actifs: number;
   taux_occupation: number | null;
   serie_mensuelle: SerieMois[];
+  revenus_mode?: "recus" | "potentiel";
   hypotheque_mensuelle: number;
   cashflow_moyen: number;
   timeline: TimelineEvent[];
+  partenaires: PartenaireT[];
   participations: ParticipationRow[];
   jalons: {
     id: number;
@@ -129,6 +131,16 @@ type DriveFileT = {
   mime_type?: string;
   mimeType?: string;
   size?: string | null;
+};
+
+type PartenaireT = {
+  partner_id: number;
+  name: string;
+  email: string | null;
+  role: string | null;
+  ownership_pct: number | null;
+  user_id: number | null;
+  deja_participant: boolean;
 };
 
 const FLUX_LABELS: Record<string, string> = {
@@ -497,10 +509,12 @@ export default function AdminProjetPage() {
               </span>
             </div>
             <RevDepChart serie={data.serie_mensuelle} showDepenses />
-            <div className="mt-1 flex gap-4 text-xs text-white/50">
+            <div className="mt-1 flex flex-wrap gap-4 text-xs text-white/50">
               <span className="inline-flex items-center gap-1.5">
                 <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#199e70]" />
-                Revenus perçus
+                {data.revenus_mode === "potentiel"
+                  ? "Loyers (unités louées — paiements détaillés non suivis)"
+                  : "Revenus perçus"}
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#e66767]" />
@@ -728,6 +742,7 @@ export default function AdminProjetPage() {
       {addOpen ? (
         <AddParticipationModal
           entrepriseId={entrepriseId}
+          partenaires={data.partenaires}
           onClose={() => setAddOpen(false)}
           onAdded={async (msg) => {
             setAddOpen(false);
@@ -1131,10 +1146,12 @@ function JalonsCard({
 
 function AddParticipationModal({
   entrepriseId,
+  partenaires,
   onClose,
   onAdded
 }: {
   entrepriseId: number;
+  partenaires: PartenaireT[];
   onClose: () => void;
   onAdded: (banner: string | null) => Promise<void>;
 }) {
@@ -1260,6 +1277,58 @@ function AddParticipationModal({
             ✕
           </button>
         </div>
+
+        {/* Partenaires « Parts & actionnaires » (gestion d'entreprise) */}
+        {partenaires.length > 0 ? (
+          <div className="rounded-lg border border-brand-800 bg-brand-950/60 p-2.5">
+            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+              Parts &amp; actionnaires de la compagnie
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {partenaires.map((pa) => (
+                <button
+                  key={pa.partner_id}
+                  type="button"
+                  disabled={pa.deja_participant}
+                  title={
+                    pa.deja_participant
+                      ? "A déjà une participation sur ce projet"
+                      : "Pré-remplir avec ce partenaire"
+                  }
+                  onClick={() => {
+                    setMode("nouveau");
+                    const parts = pa.name.trim().split(/\s+/);
+                    setFirstName(parts[0] || "");
+                    setLastName(
+                      parts.slice(1).join(" ") || parts[0] || ""
+                    );
+                    setEmail(pa.email || "");
+                    if (pa.ownership_pct) {
+                      setPct(String(pa.ownership_pct));
+                    }
+                  }}
+                  className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+                    pa.deja_participant
+                      ? "cursor-default border-brand-800 text-white/30"
+                      : "border-accent-500/50 text-accent-500 hover:bg-accent-500/10"
+                  }`}
+                >
+                  {pa.name}
+                  {pa.ownership_pct
+                    ? ` · ${pa.ownership_pct.toLocaleString("fr-CA", {
+                        maximumFractionDigits: 1
+                      })} %`
+                    : ""}
+                  {pa.deja_participant ? " ✓" : ""}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[10px] text-white/35">
+              Tirés de la fiche entreprise (gestion d&apos;entreprise) —
+              cliquez pour pré-remplir, ajustez le % au besoin.
+            </p>
+          </div>
+        ) : null}
 
         <div className="flex gap-1">
           {(
