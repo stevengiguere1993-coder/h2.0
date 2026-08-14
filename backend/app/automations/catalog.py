@@ -132,6 +132,13 @@ CATALOG: tuple[Automation, ...] = (
         "Tous les jours · 22h00",
         "Ferme automatiquement les punchs d'employés laissés ouverts.",
     ),
+    Automation(
+        "qbo_loyers_sync", "Validation bancaire des loyers (QuickBooks)",
+        "synchro", "cron", "Quotidien",
+        "Lit les encaissements « Loyer à remettre » publiés dans "
+        "QuickBooks (lecture seule) et les rapproche des baux — pastilles "
+        "« Validé banque ». S'active dans Paramètres → Gestion locative.",
+    ),
     # ---- Courriels événementiels (informational en v1) ----
     Automation(
         "welcome_email", "Courriel de bienvenue", "courriel", "evenement",

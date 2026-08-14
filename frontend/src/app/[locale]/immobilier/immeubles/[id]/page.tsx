@@ -63,6 +63,13 @@ import {
   RelocationStatutPastille,
   type SuiviBailRow
 } from "@/components/immobilier/fin-bail";
+import {
+  EncartValidationBancaire,
+  PastilleValidationBancaire,
+  type ValidationEtat,
+  chargerValidationBancaire,
+  indexValidations
+} from "@/components/immobilier/validation-bancaire";
 
 type Ownership = {
   id: number;
@@ -2781,6 +2788,8 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
   const [relancingId, setRelancingId] = useState<number | null>(null);
   const [correctingId, setCorrectingId] = useState<number | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  // 2e validation (banque via QuickBooks) — null = aucune pastille.
+  const [valBanque, setValBanque] = useState<ValidationEtat | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -2802,11 +2811,31 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
               )
           )
       );
+      // Fail-quiet : feature inactive / immeuble non mappé → null.
+      setValBanque(await chargerValidationBancaire(mois));
     } catch (e) {
       setErr((e as Error).message);
       setRows([]);
     }
   }, [mois, immeubleId]);
+
+  // Pastilles ✓✓ / ⚠ de la 2e validation, indexées par bail (même
+  // rendu que la page Paiements — miroir bidirectionnel).
+  const valMap = useMemo(() => indexValidations(valBanque), [valBanque]);
+
+  // Encart limité à CET immeuble (l'API renvoie tout le portefeuille).
+  const valBanqueImmeuble = useMemo(() => {
+    if (!valBanque) return null;
+    return {
+      ...valBanque,
+      encaisses_non_marques: (valBanque.encaisses_non_marques ?? []).filter(
+        (e) => e.immeuble_id === immeubleId
+      ),
+      a_traiter: (valBanque.a_traiter ?? []).filter(
+        (t) => t.immeuble_id === immeubleId
+      )
+    };
+  }, [valBanque, immeubleId]);
 
   useEffect(() => {
     void load();
@@ -3171,6 +3200,16 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                     ) : (
                       <span className="badge badge-neutral">Attente</span>
                     )}
+                    {/* 2e validation (banque via QuickBooks) —
+                        pastille discrète, absente si la feature est
+                        inactive ou l'immeuble non mappé. */}
+                    {valMap.get(r.bail_id) ? (
+                      <div className="mt-0.5">
+                        <PastilleValidationBancaire
+                          v={valMap.get(r.bail_id)}
+                        />
+                      </div>
+                    ) : null}
                     {r.bail_termine_le ? (
                       // M7 : bail résilié/terminé en cours de mois.
                       <div className="mt-0.5">
@@ -3333,6 +3372,12 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
           </table>
         </div>
       )}
+      {/* Encart « Encaissés non marqués » LIMITÉ à cet immeuble — même
+          composant que la page Paiements (miroir bidirectionnel). */}
+      <EncartValidationBancaire
+        etat={valBanqueImmeuble}
+        onChange={() => void load()}
+      />
     </Section>
   );
 }
