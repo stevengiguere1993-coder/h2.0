@@ -6,17 +6,31 @@ les catégorisant au compte « Loyer à remettre - {immeuble} » (un compte
 du plan comptable par immeuble). Ce service :
 
 1. DÉCOUVRE ces comptes (nom qui matche « loyer à remettre », insensible
-   casse/accents) et SUGGÈRE l'immeuble correspondant par similarité de
-   nom/adresse — la confirmation reste humaine (Paramètres) ;
+   casse/accents) et SUGGÈRE le ou LES immeubles correspondants par
+   similarité de nom/adresse (« 9085 Millen & 710 Legendre » suggère les
+   deux ; un nom générique type « fiducie » suggère la case « tous les
+   immeubles ») — la confirmation reste humaine (Paramètres). Un compte
+   couvre N immeubles (``qbo_compte_immeubles``) ou tous
+   (``tous_les_immeubles``) ;
 2. SYNCHRONISE les écritures publiées qui touchent les comptes mappés
    via le rapport GeneralLedger (fenêtre glissante, idempotent par
    (type, id QBO, compte)) — le rapport couvre TOUT ce qui est publié
    (Deposits, écritures de journal, reçus de vente…), contrairement aux
-   requêtes d'entités qui obligeraient à énumérer chaque type ;
-3. RAPPROCHE chaque transaction d'un bail/mois de façon DÉTERMINISTE
-   (montant == loyer du mois ou dû restant frais inclus, proximité de
-   date, texte payeur vs nom du locataire / alias confirmés). Un seul
-   candidat plausible → rapproché auto ; plusieurs → « ambigu » (aucun
+   requêtes d'entités qui obligeraient à énumérer chaque type. Chaque
+   ligne est classée par son TYPE d'écriture — pas par le signe du
+   montant (sur un compte de PASSIF, un dépôt est un crédit et le signe
+   dépend de la représentation du GeneralLedger) : Dépôt / Paiement /
+   Reçu de vente = ENTRÉE à rapprocher (montant en valeur absolue) ;
+   Dépense / Chèque / Virement / Facture fournisseur = SORTIE, conservée
+   pour info (statut « ignoree ») mais jamais comptée comme un loyer.
+   La synchro retourne un RAPPORT détaillé par compte (lues / importées /
+   mises à jour / ignorées, avec la raison) ;
+3. RAPPROCHE chaque entrée d'un bail/mois de façon DÉTERMINISTE
+   (montant == loyer du mois ou dû restant frais inclus — y compris la
+   somme de PLUSIEURS mois échus consécutifs impayés (locataire qui
+   règle 2 mois d'un coup) —, proximité de date, texte payeur extrait du
+   mémo Interac vs nom du locataire / alias confirmés). Un seul candidat
+   plausible → rapproché auto ; plusieurs → « ambigu » (aucun
    pronostic) ; aucun → « non rapproché » ;
 4. Apprend un ALIAS de payeur quand un humain confirme un rapprochement
    ambigu — la même provenance se rapproche seule le mois suivant ;
@@ -54,6 +68,7 @@ from app.models.immobilier import (
 )
 from app.models.qbo_loyers import (
     QboAliasPayeur,
+    QboCompteImmeuble,
     QboCompteLoyer,
     QboTransactionLoyer,
 )
@@ -71,6 +86,77 @@ _TOL = 0.01
 
 #: Nom de compte reconnu : « loyer à remettre » / « loyers a remettre »…
 _MOTIF_COMPTE = re.compile(r"loyers?\s+a\s+remettre")
+
+#: Nom de compte générique (fiducie qui reçoit les virements de TOUS les
+#: locataires) → on suggère la case « tous les immeubles internes ».
+_MOTIF_TOUS = re.compile(r"\b(fiducie|fonds|trust)\b")
+
+# ── Classification par TYPE d'écriture (jamais par signe) ──────────────
+# Libellés NORMALISÉS (via ``_norm``) — le GeneralLedger sort les types
+# en anglais (API brute) ou en français (compagnie francophone).
+
+#: ENTRÉE d'argent = dépôt de loyer, candidate au rapprochement.
+_TYPES_ENTREE = {
+    "deposit", "depot",
+    "payment", "paiement", "receive payment", "paiement recu",
+    "sales receipt", "salesreceipt", "recu de vente",
+}
+#: SORTIE d'argent = remise aux immeubles / dépense — conservée pour
+#: info (statut « ignoree »), jamais comptée comme un loyer.
+_TYPES_SORTIE = {
+    "expense", "depense",
+    "cheque", "check", "chq",
+    "transfer", "virement",
+    "bill", "facture fournisseur",
+    "bill payment", "bill payment check", "billpaymentcheck",
+    "paiement de facture", "paiement de factures",
+}
+#: Écriture de journal : le type ne dit pas le sens — le SIGNE du
+#: montant naturel tranche (compte de passif : crédit = positif =
+#: encaissement ; débit = négatif = remise).
+_TYPES_JOURNAL = {
+    "journal entry", "journalentry", "journal",
+    "ecriture de journal", "ecriture du journal",
+}
+
+
+def classifier_type(txn_type: str, montant: float) -> Tuple[str, Optional[str]]:
+    """Classe une écriture par son TYPE → ("entree" | "sortie" |
+    "ecartee", raison). Le montant (naturel, signé) ne sert qu'aux
+    écritures de journal (créditeur = entrée) et au filtre montant nul."""
+    if abs(montant) <= _TOL:
+        return "ecartee", "montant_nul"
+    t = _norm(txn_type)
+    if t in _TYPES_ENTREE:
+        return "entree", None
+    if t in _TYPES_SORTIE:
+        return "sortie", "sortie_argent"
+    if t in _TYPES_JOURNAL:
+        if montant > 0:
+            return "entree", None
+        return "sortie", "sortie_argent"
+    return "ecartee", "type_non_reconnu"
+
+
+#: Payeur entre barres obliques d'un mémo Interac réel :
+#: « Virement Interac de /DRISSA KONE / » → « DRISSA KONE ».
+_MOTIF_PAYEUR = re.compile(r"/\s*([^/]+?)\s*(?:/|$)")
+
+
+def extraire_payeur(nom: str, memo: str) -> Optional[str]:
+    """Nom du payeur d'une écriture : le segment entre « / » du mémo
+    (convention des virements Interac), sinon la colonne Nom du GL.
+    Retourne None quand rien d'exploitable."""
+    for source in (memo or "", nom or ""):
+        if "/" not in source:
+            continue
+        for brut in _MOTIF_PAYEUR.findall(source):
+            payeur = brut.strip()
+            # Au moins une lettre — écarte les fragments de date « 31/07 ».
+            if payeur and re.search(r"[a-zA-Z]", _norm(payeur)):
+                return payeur[:255]
+    nom = (nom or "").strip()
+    return nom[:255] if nom else None
 
 
 # ── Normalisation de texte ─────────────────────────────────────────────
@@ -168,24 +254,30 @@ async def qbo_locatif():
 # ── 1) Découverte des comptes + suggestion d'immeuble ──────────────────
 
 
-def _suggerer_immeuble(
+def _suggerer_immeubles(
     nom_compte: str, immeubles: List[Immeuble]
-) -> Tuple[Optional[int], float]:
-    """Suggestion DÉTERMINISTE de l'immeuble pour un compte « Loyer à
-    remettre - X » : numéro civique + similarité de nom/adresse.
-    Retourne (immeuble_id | None, score 0..1)."""
+) -> Tuple[List[int], bool, float]:
+    """Suggestion DÉTERMINISTE des immeubles d'un compte « Loyer à
+    remettre » : numéro civique + similarité de nom/adresse. Un nom qui
+    cite deux adresses (« 9085 Millen & 710 Legendre ») suggère LES DEUX
+    immeubles ; un nom générique (fiducie/fonds) ne suggère rien mais
+    propose la case « tous les immeubles ».
+    Retourne (immeuble_ids triés par score, suggestion_tous, meilleur
+    score 0..1)."""
+    ncompte = _norm(nom_compte)
+    # Compte fourre-tout (fiducie des virements Interac de tous les
+    # locataires) : aucune adresse à matcher → case « tous ».
+    if _MOTIF_TOUS.search(ncompte):
+        return [], True, 0.0
+
     # Partie « X » après le motif (sinon le nom complet).
-    cible_brute = _MOTIF_COMPTE.split(_norm(nom_compte), maxsplit=1)
-    cible = (cible_brute[-1] if cible_brute else "").strip() or _norm(
-        nom_compte
-    )
+    cible_brute = _MOTIF_COMPTE.split(ncompte, maxsplit=1)
+    cible = (cible_brute[-1] if cible_brute else "").strip() or ncompte
     cible_tokens = _tokens_adresse(cible)
     cible_norm = " ".join(cible_tokens) or cible
     cible_nums = set(re.findall(r"\d+", cible))
 
-    meilleur: Optional[int] = None
-    meilleur_score = 0.0
-    second_score = 0.0
+    scores: List[Tuple[int, float, frozenset]] = []
     for imm in immeubles:
         source = f"{imm.name or ''} {imm.address or ''} {imm.city or ''}"
         src_tokens = _tokens_adresse(source)
@@ -193,8 +285,11 @@ def _suggerer_immeuble(
         src_nums = set(re.findall(r"\d+", _norm(source)))
 
         score = 0.0
-        # Numéro civique identique = signal fort.
-        if cible_nums and cible_nums & src_nums:
+        # Numéro civique identique = signal fort. Chaque immeuble matche
+        # SON numéro dans le nom du compte (9085 → Millen, 710 →
+        # Legendre) — c'est ce qui permet la suggestion multiple.
+        civiques = frozenset(cible_nums & src_nums)
+        if civiques:
             score += 0.6
         # Recouvrement de mots (rue…) OU ressemblance globale.
         mots_cible = [t for t in cible_tokens if not t.isdigit()]
@@ -205,23 +300,24 @@ def _suggerer_immeuble(
             part_mots = 0.0
         ratio = SequenceMatcher(None, cible_norm, src_norm).ratio()
         score += 0.4 * max(part_mots, ratio)
+        scores.append((imm.id, score, civiques))
 
-        if score > meilleur_score + 1e-9:
-            second_score = meilleur_score
-            meilleur_score = score
-            meilleur = imm.id
-        elif score > second_score:
-            second_score = score
-    # Deux immeubles quasi ex æquo (même n° civique, noms voisins) →
-    # AUCUNE suggestion : l'ambiguïté revient à l'humain (Paramètres),
-    # jamais de pronostic (même règle que le rapprochement).
-    if (
-        meilleur is not None
-        and meilleur_score >= 0.5
-        and (second_score < 0.5 or meilleur_score - second_score >= 0.05)
-    ):
-        return meilleur, round(meilleur_score, 3)
-    return None, round(meilleur_score, 3)
+    retenus = [s for s in scores if s[1] >= 0.5]
+    # Deux immeubles INDISCERNABLES (même évidence civique — ou aucune —
+    # et scores quasi ex æquo) → on écarte les deux : l'ambiguïté revient
+    # à l'humain, jamais de pronostic. Deux immeubles matchés par des
+    # numéros DIFFÉRENTS du nom de compte restent tous deux suggérés.
+    suggeres = [
+        (iid, score)
+        for iid, score, civ in retenus
+        if not any(
+            aid != iid and acov == civ and abs(ascore - score) < 0.05
+            for aid, ascore, acov in retenus
+        )
+    ]
+    suggeres.sort(key=lambda s: (-s[1], s[0]))
+    meilleur_score = max((s[1] for s in scores), default=0.0)
+    return [iid for iid, _s in suggeres], False, round(meilleur_score, 3)
 
 
 async def _immeubles_mappables(db) -> List[Immeuble]:
@@ -239,11 +335,50 @@ async def _immeubles_mappables(db) -> List[Immeuble]:
     )
 
 
+async def liens_par_compte(db) -> Dict[int, List[int]]:
+    """{compte_id: [immeuble_id, …]} — liens N-N confirmés."""
+    out: Dict[int, List[int]] = {}
+    for cid, iid in (
+        await db.execute(
+            select(
+                QboCompteImmeuble.compte_id, QboCompteImmeuble.immeuble_id
+            ).order_by(QboCompteImmeuble.immeuble_id)
+        )
+    ).all():
+        out.setdefault(int(cid), []).append(int(iid))
+    return out
+
+
+async def immeubles_du_compte(
+    db, compte: QboCompteLoyer,
+    liens: Optional[Dict[int, List[int]]] = None,
+) -> List[int]:
+    """Immeubles COUVERTS par un compte : tous les internes mappables si
+    ``tous_les_immeubles``, sinon les liens confirmés."""
+    if compte.tous_les_immeubles:
+        return [i.id for i in await _immeubles_mappables(db)]
+    if liens is None:
+        liens = await liens_par_compte(db)
+    return liens.get(compte.id, [])
+
+
+def _compte_mappe(
+    compte: QboCompteLoyer, liens: Dict[int, List[int]]
+) -> bool:
+    """Un compte est synchronisable s'il couvre au moins un immeuble."""
+    return bool(
+        compte.tous_les_immeubles or liens.get(compte.id)
+    )
+
+
 async def decouvrir_comptes(db, qbo=None) -> List[QboCompteLoyer]:
     """Interroge le plan comptable QBO (lecture seule), stocke les
     comptes dont le nom matche « loyer à remettre » et pose une
-    SUGGESTION d'immeuble sur ceux pas encore confirmés. Idempotent
-    (upsert par qbo_account_id). Ne commit pas."""
+    SUGGESTION d'immeubles (liste — un nom peut citer deux adresses — ou
+    case « tous » pour un compte fiducie) sur ceux pas encore confirmés.
+    Idempotent (upsert par qbo_account_id). Ne commit pas."""
+    import json
+
     if qbo is None:
         qbo = await qbo_locatif()
     rows = await qbo.query(
@@ -251,6 +386,7 @@ async def decouvrir_comptes(db, qbo=None) -> List[QboCompteLoyer]:
         "WHERE Active = true MAXRESULTS 1000"
     )
     immeubles = await _immeubles_mappables(db)
+    liens = await liens_par_compte(db)
 
     existants = {
         c.qbo_account_id: c
@@ -274,13 +410,23 @@ async def decouvrir_comptes(db, qbo=None) -> List[QboCompteLoyer]:
                 created_at=datetime.now(timezone.utc),
             )
             db.add(compte)
+            await db.flush()  # id nécessaire pour _compte_mappe
             existants[acc_id] = compte
         else:
             compte.qbo_account_name = nom
         # Suggestion seulement tant qu'aucun humain n'a confirmé.
-        if compte.immeuble_id is None:
-            sugg, score = _suggerer_immeuble(nom, immeubles)
-            compte.suggestion_immeuble_id = sugg
+        if not _compte_mappe(compte, liens):
+            sugg_ids, sugg_tous, score = _suggerer_immeubles(
+                nom, immeubles
+            )
+            compte.suggestion_immeubles_json = (
+                json.dumps(sugg_ids) if sugg_ids else None
+            )
+            compte.suggestion_tous = sugg_tous
+            # Legacy : meilleure suggestion unique (compat).
+            compte.suggestion_immeuble_id = (
+                sugg_ids[0] if sugg_ids else None
+            )
             compte.suggestion_score = score
         out.append(compte)
     await db.flush()
@@ -340,11 +486,19 @@ def _lignes_gl(node: Any, out: List[List[Dict[str, Any]]]) -> None:
         _lignes_gl(sous, out)
 
 
-def parse_general_ledger(report: Dict[str, Any]) -> List[Dict[str, Any]]:
+def parse_general_ledger(
+    report: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Rapport GeneralLedger (filtré sur UN compte) → écritures agrégées
-    par (type, id QBO) : [{"txn_type", "txn_id", "date", "montant",
-    "description", "doc_num"}]. Les montants ≤ 0 (remises, contre-
-    passations) sont ignorés — on ne suit que les encaissements."""
+    par (type, id QBO), CLASSÉES PAR TYPE (jamais par signe) :
+
+    - retour[0] : écritures à persister — [{"txn_type", "txn_id",
+      "date", "montant" (valeur absolue), "sens" ("entree"|"sortie"),
+      "ignore_raison", "description", "payeur", "doc_num"}] ;
+    - retour[1] : ventilation des lignes ÉCARTÉES (jamais persistées) —
+      {"lues": total écritures, "montant_nul": n, "type_non_reconnu": n,
+      "types_inconnus": [libellés]}.
+    """
     idx = _colonnes_gl(report)
     lignes: List[List[Dict[str, Any]]] = []
     _lignes_gl((report.get("Rows") or {}).get("Row") or [], lignes)
@@ -375,7 +529,7 @@ def parse_general_ledger(report: Dict[str, Any]) -> List[Dict[str, Any]]:
         cle = (txn_type, txn_id)
         if cle in agreges:
             # Même écriture, plusieurs lignes sur le même compte →
-            # une seule transaction, montants sommés.
+            # une seule transaction, montants (naturels) sommés.
             agreges[cle]["montant"] = round(
                 agreges[cle]["montant"] + montant, 2
             )
@@ -386,28 +540,66 @@ def parse_general_ledger(report: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "date": d,
                 "montant": round(montant, 2),
                 "description": desc,
+                "payeur": extraire_payeur(nom, memo),
                 "doc_num": doc,
             }
-    return [e for e in agreges.values() if e["montant"] > _TOL]
+
+    entrees: List[Dict[str, Any]] = []
+    ecartees: Dict[str, Any] = {
+        "lues": len(agreges),
+        "montant_nul": 0,
+        "type_non_reconnu": 0,
+        "types_inconnus": [],
+    }
+    for e in agreges.values():
+        sens, raison = classifier_type(e["txn_type"], e["montant"])
+        if sens == "ecartee":
+            ecartees[raison] += 1
+            if (
+                raison == "type_non_reconnu"
+                and e["txn_type"] not in ecartees["types_inconnus"]
+            ):
+                ecartees["types_inconnus"].append(e["txn_type"])
+            continue
+        # Montant TOUJOURS en valeur absolue — le sens est porté par le
+        # type, pas par le signe (représentation GL d'un compte de passif).
+        e["montant"] = round(abs(e["montant"]), 2)
+        e["sens"] = sens
+        e["ignore_raison"] = raison
+        entrees.append(e)
+    return entrees, ecartees
 
 
 async def synchroniser_transactions(
     db, qbo=None, *, jours: int = FENETRE_SYNC_JOURS
-) -> Dict[str, int]:
+) -> Dict[str, Any]:
     """Importe (lecture seule) les écritures publiées des comptes MAPPÉS
     sur la fenêtre glissante, IDEMPOTENT par (type, id, compte), puis
-    relance le rapprochement déterministe. Ne commit pas."""
-    comptes = list(
-        (
+    relance le rapprochement déterministe. Ne commit pas.
+
+    Retourne un RAPPORT DÉTAILLÉ (« 0 importée » sans explication est
+    inacceptable) : totaux + par compte lues / importées / mises à jour /
+    ignorées, avec la ventilation des raisons (sortie d'argent, montant
+    nul, déjà importée, type non reconnu + libellés inconnus)."""
+    liens = await liens_par_compte(db)
+    comptes = [
+        c
+        for c in (
             await db.execute(
                 select(QboCompteLoyer).where(
-                    QboCompteLoyer.actif.is_(True),
-                    QboCompteLoyer.immeuble_id.is_not(None),
+                    QboCompteLoyer.actif.is_(True)
                 )
             )
         ).scalars().all()
-    )
-    stats = {"comptes": 0, "importees": 0, "mises_a_jour": 0}
+        if _compte_mappe(c, liens)
+    ]
+    stats: Dict[str, Any] = {
+        "comptes": 0,
+        "importees": 0,
+        "mises_a_jour": 0,
+        "ignorees": 0,
+        "details": [],
+    }
     if not comptes:
         return stats
     if qbo is None:
@@ -418,6 +610,23 @@ async def synchroniser_transactions(
     fin = aujourdhui.isoformat()
 
     for compte in comptes:
+        detail: Dict[str, Any] = {
+            "compte_id": compte.id,
+            "compte_nom": compte.qbo_account_name,
+            "lues": 0,
+            "importees": 0,
+            "mises_a_jour": 0,
+            "ignorees": 0,
+            "raisons": {
+                "sortie_argent": 0,
+                "montant_nul": 0,
+                "deja_importee": 0,
+                "type_non_reconnu": 0,
+            },
+            "types_non_reconnus": [],
+            "erreur": None,
+        }
+        stats["details"].append(detail)
         try:
             report = await qbo.report(
                 "GeneralLedger",
@@ -431,9 +640,24 @@ async def synchroniser_transactions(
                 "GeneralLedger compte %s (%s) : %s",
                 compte.qbo_account_id, compte.qbo_account_name, exc,
             )
+            detail["erreur"] = str(exc)[:300]
             continue
         stats["comptes"] += 1
-        entrees = parse_general_ledger(report)
+        entrees, ecartees = parse_general_ledger(report)
+        detail["lues"] = ecartees["lues"]
+        detail["raisons"]["montant_nul"] = ecartees["montant_nul"]
+        detail["raisons"]["type_non_reconnu"] = ecartees[
+            "type_non_reconnu"
+        ]
+        detail["types_non_reconnus"] = ecartees["types_inconnus"]
+        detail["ignorees"] += (
+            ecartees["montant_nul"] + ecartees["type_non_reconnu"]
+        )
+
+        # Compte mono-immeuble : l'immeuble est connu d'avance ; multi /
+        # « tous » : il sera dérivé du bail au rapprochement.
+        imm_ids = await immeubles_du_compte(db, compte, liens)
+        immeuble_defaut = imm_ids[0] if len(imm_ids) == 1 else None
 
         existantes = {
             (t.qbo_txn_type, t.qbo_txn_id): t
@@ -446,6 +670,10 @@ async def synchroniser_transactions(
             ).scalars().all()
         }
         for e in entrees:
+            est_sortie = e["sens"] == "sortie"
+            if est_sortie:
+                detail["ignorees"] += 1
+                detail["raisons"]["sortie_argent"] += 1
             txn = existantes.get((e["txn_type"], e["txn_id"]))
             if txn is None:
                 db.add(
@@ -454,18 +682,28 @@ async def synchroniser_transactions(
                         qbo_txn_id=e["txn_id"],
                         qbo_account_id=compte.qbo_account_id,
                         compte_id=compte.id,
-                        immeuble_id=compte.immeuble_id,
+                        immeuble_id=immeuble_defaut,
                         date_txn=e["date"],
                         montant=e["montant"],
+                        sens=e["sens"],
                         description=e["description"],
+                        payeur=e["payeur"],
                         doc_num=e["doc_num"],
-                        statut="non_rapproche",
+                        # Sortie d'argent (virement de remise…) : gardée
+                        # pour le fil bancaire, JAMAIS candidate au
+                        # rapprochement — pas un loyer.
+                        statut="ignoree" if est_sortie else "non_rapproche",
+                        ignore_raison=e["ignore_raison"],
                     )
                 )
-                stats["importees"] += 1
+                if not est_sortie:
+                    stats["importees"] += 1
+                    detail["importees"] += 1
             else:
-                # Écriture modifiée dans QBO → refléter ; le
-                # rapprochement (auto) est rejoué plus bas.
+                # Écriture modifiée dans QBO → refléter, et remettre le
+                # rapprochement AUTO à zéro (il est rejoué plus bas avec
+                # les données fraîches). Une confirmation MANUELLE n'est
+                # jamais écrasée.
                 change = (
                     float(txn.montant or 0) != e["montant"]
                     or txn.date_txn != e["date"]
@@ -475,15 +713,26 @@ async def synchroniser_transactions(
                     txn.date_txn = e["date"]
                     txn.montant = e["montant"]
                     txn.description = e["description"]
+                    txn.payeur = e["payeur"]
                     txn.doc_num = e["doc_num"]
-                    stats["mises_a_jour"] += 1
-                # L'immeuble du compte a pu être re-mappé.
-                if txn.immeuble_id != compte.immeuble_id:
-                    txn.immeuble_id = compte.immeuble_id
+                    if not est_sortie and txn.rapproche_par != "manuel":
+                        txn.statut = "non_rapproche"
+                        txn.bail_id = None
+                        txn.mois_couvert = None
+                        txn.mois_couvert_fin = None
+                        txn.rapproche_par = None
+                    if not est_sortie:
+                        stats["mises_a_jour"] += 1
+                        detail["mises_a_jour"] += 1
+                elif not est_sortie:
+                    detail["raisons"]["deja_importee"] += 1
+                if txn.payeur is None and e["payeur"]:
+                    txn.payeur = e["payeur"]
         compte.derniere_synchro_le = datetime.now(timezone.utc)
         await db.flush()
-        await rapprocher_compte(db, compte)
+        await rapprocher_compte(db, compte, liens=liens)
     await db.flush()
+    stats["ignorees"] = sum(d["ignorees"] for d in stats["details"])
     return stats
 
 
@@ -498,6 +747,20 @@ def _mois_prec(m: date) -> date:
 def _mois_suiv(m: date) -> date:
     return date(m.year + (1 if m.month == 12 else 0),
                 1 if m.month == 12 else m.month + 1, 1)
+
+
+def mois_couverts_txn(txn: QboTransactionLoyer) -> List[date]:
+    """Mois couverts par une transaction rapprochée : [mois_couvert] ou
+    l'intervalle mois_couvert..mois_couvert_fin (paiement multi-mois)."""
+    if not txn.mois_couvert:
+        return []
+    out = [txn.mois_couvert]
+    fin = txn.mois_couvert_fin
+    m = txn.mois_couvert
+    while fin and m < fin and len(out) < 24:  # garde-fou
+        m = _mois_suiv(m)
+        out.append(m)
+    return out
 
 
 def _bail_couvre(bail: Bail, m: date) -> bool:
@@ -536,6 +799,65 @@ def _nom_correspond(desc: str, nom_locataire: str) -> bool:
     return all(t in desc_mots for t in mots)
 
 
+#: Fenêtre de rattrapage du rapprochement MULTI-MOIS (mois échus
+#: consécutifs impayés réglés d'un coup).
+_MULTI_MOIS_FENETRE = 12
+
+
+def _match_multi_mois(
+    bail: Bail,
+    m0: date,
+    montant: float,
+    paye_map: Dict[Tuple[int, date], float],
+    frais_map: Dict[Tuple[int, date], float],
+) -> Optional[Tuple[date, date]]:
+    """Paiement de rattrapage : le montant règle-t-il la somme des dus
+    (loyers + frais, moins le déjà payé) de PLUSIEURS mois consécutifs
+    impayés du bail ? → (premier mois, dernier mois) ou None.
+
+    Déterministe : on balaie les mois du plus ancien (m0 - 12 mois) au
+    mois suivant la date (même tolérance que le mois adjacent) ; le
+    premier enchaînement de ≥ 2 mois impayés consécutifs dont le cumul
+    tombe pile sur le montant gagne — la dette la plus ancienne
+    d'abord."""
+    loyer = float(bail.loyer_mensuel or 0)
+    if loyer <= 0:
+        return None
+
+    def _du_restant(m: date) -> float:
+        du = loyer + frais_map.get((bail.id, m), 0.0)
+        return round(du - paye_map.get((bail.id, m), 0.0), 2)
+
+    fenetre: List[date] = []
+    m = m0
+    for _ in range(_MULTI_MOIS_FENETRE):
+        m = _mois_prec(m)
+        fenetre.insert(0, m)
+    fenetre.append(m0)
+    fenetre.append(_mois_suiv(m0))
+
+    for i, debut in enumerate(fenetre):
+        if not _bail_couvre(bail, debut) or _du_restant(debut) <= _TOL:
+            continue
+        cumul = 0.0
+        for m in fenetre[i:]:
+            if not _bail_couvre(bail, m):
+                break
+            dr = _du_restant(m)
+            if dr <= _TOL:
+                break  # rupture de consécutivité (mois réglé)
+            cumul = round(cumul + dr, 2)
+            if abs(cumul - montant) <= _TOL and m > debut:
+                return debut, m
+            if cumul > montant + _TOL:
+                break
+        # Départ le plus ancien uniquement : si le cumul depuis la
+        # première dette ne colle pas, on ne « saute » pas de mois
+        # (jamais de pronostic sur quel retard est réglé).
+        return None
+    return None
+
+
 def _match_deterministe(
     txn: QboTransactionLoyer,
     baux: List[Bail],
@@ -543,25 +865,30 @@ def _match_deterministe(
     aliases: List[QboAliasPayeur],
     paye_map: Dict[Tuple[int, date], float],
     frais_map: Dict[Tuple[int, date], float],
-) -> Tuple[str, Optional[int], Optional[date]]:
-    """→ (statut, bail_id, mois_couvert). Règles (dans l'ordre) :
+) -> Tuple[str, Optional[int], Optional[date], Optional[date]]:
+    """→ (statut, bail_id, mois_couvert, mois_couvert_fin). Règles :
 
     1. CANDIDATS PLAUSIBLES par montant × date : pour chaque bail, pour
        le mois de la date (puis mois précédent, puis suivant — le
        débordement toléré), plausible si montant == loyer du mois, ==
        loyer + frais, ou == dû restant (> 0). Premier mois plausible
-       retenu par bail (préférence : mois de la date).
-    2. TEXTE PAYEUR : un alias confirmé restreint aux baux visés ;
-       sinon le nom du locataire. La restriction ne s'applique que si
-       elle laisse au moins un candidat.
+       retenu par bail (préférence : mois de la date). À défaut, le
+       montant peut régler PLUSIEURS mois échus consécutifs impayés
+       d'un coup (cf. ``_match_multi_mois``) — le candidat couvre alors
+       un intervalle de mois.
+    2. TEXTE PAYEUR (extrait du mémo Interac quand disponible) : un
+       alias confirmé restreint aux baux visés ; sinon le nom du
+       locataire. La restriction ne s'applique que si elle laisse au
+       moins un candidat.
     3. Un seul bail candidat → rapproché AUTO ; plusieurs → « ambigu »
        (pas de pronostic) ; aucun → « non rapproché »."""
     m0 = txn.date_txn.replace(day=1)
     mois_ordre = [m0, _mois_prec(m0), _mois_suiv(m0)]
     montant = float(txn.montant or 0)
 
-    plausibles: List[Tuple[Bail, date]] = []
+    plausibles: List[Tuple[Bail, date, date]] = []
     for bail in baux:
+        trouve = False
         for m in mois_ordre:
             if not _bail_couvre(bail, m):
                 continue
@@ -577,10 +904,15 @@ def _match_deterministe(
                 or abs(montant - du_mois) <= _TOL
                 or (du_restant > _TOL and abs(montant - du_restant) <= _TOL)
             ):
-                plausibles.append((bail, m))
+                plausibles.append((bail, m, m))
+                trouve = True
                 break  # préférence de mois : le premier plausible suffit
+        if not trouve:
+            multi = _match_multi_mois(bail, m0, montant, paye_map, frais_map)
+            if multi is not None:
+                plausibles.append((bail, multi[0], multi[1]))
 
-    desc = _norm_payeur(txn.description or "")
+    desc = _norm_payeur(txn.payeur or txn.description or "")
     if desc and plausibles:
         alias_baux = {
             a.bail_id
@@ -588,7 +920,9 @@ def _match_deterministe(
             if _alias_correspond(desc, a.texte_normalise)
         }
         if alias_baux:
-            restreints = [(b, m) for b, m in plausibles if b.id in alias_baux]
+            restreints = [
+                p for p in plausibles if p[0].id in alias_baux
+            ]
             if restreints:
                 plausibles = restreints
         else:
@@ -602,38 +936,47 @@ def _match_deterministe(
             }
             if nom_baux:
                 restreints = [
-                    (b, m) for b, m in plausibles if b.id in nom_baux
+                    p for p in plausibles if p[0].id in nom_baux
                 ]
                 if restreints:
                     plausibles = restreints
 
-    baux_distincts = {b.id for b, _m in plausibles}
+    baux_distincts = {b.id for b, _d, _f in plausibles}
     if len(baux_distincts) == 1:
-        bail, m = plausibles[0]
-        return "rapproche", bail.id, m
+        bail, debut, fin = plausibles[0]
+        return (
+            "rapproche", bail.id, debut,
+            fin if fin != debut else None,
+        )
     if not baux_distincts:
-        return "non_rapproche", None, None
-    return "ambigu", None, None
+        return "non_rapproche", None, None, None
+    return "ambigu", None, None, None
 
 
-async def _baux_de_l_immeuble(db, immeuble_id: int) -> List[Bail]:
-    log_ids = [
-        int(r[0])
-        for r in (
+async def _baux_des_immeubles(
+    db, immeuble_ids: List[int]
+) -> Tuple[List[Bail], Dict[int, int]]:
+    """(baux des immeubles, {logement_id: immeuble_id}) — l'UNION des
+    baux de tous les immeubles couverts par le compte."""
+    if not immeuble_ids:
+        return [], {}
+    logement_imm = {
+        int(lid): int(iid)
+        for lid, iid in (
             await db.execute(
-                select(Logement.id).where(
-                    Logement.immeuble_id == immeuble_id
+                select(Logement.id, Logement.immeuble_id).where(
+                    Logement.immeuble_id.in_(immeuble_ids)
                 )
             )
         ).all()
-    ]
-    if not log_ids:
-        return []
-    return list(
+    }
+    if not logement_imm:
+        return [], {}
+    baux = list(
         (
             await db.execute(
                 select(Bail).where(
-                    Bail.logement_id.in_(log_ids),
+                    Bail.logement_id.in_(list(logement_imm.keys())),
                     Bail.status.in_(
                         [
                             BailStatus.ACTIF.value,
@@ -645,31 +988,49 @@ async def _baux_de_l_immeuble(db, immeuble_id: int) -> List[Bail]:
             )
         ).scalars().all()
     )
+    return baux, logement_imm
 
 
-async def rapprocher_compte(db, compte: QboCompteLoyer) -> int:
-    """Rejoue le rapprochement déterministe de TOUTES les transactions
-    non confirmées manuellement du compte. Les confirmations humaines
-    (``rapproche_par='manuel'``) ne sont JAMAIS écrasées. Retourne le
-    nombre de transactions rapprochées auto. Ne commit pas."""
-    if compte.immeuble_id is None:
+async def rapprocher_compte(
+    db,
+    compte: QboCompteLoyer,
+    *,
+    liens: Optional[Dict[int, List[int]]] = None,
+    forcer: bool = False,
+) -> int:
+    """Rejoue le rapprochement déterministe des transactions du compte
+    (candidats = UNION des baux des immeubles reliés — ou de tous les
+    internes si ``tous_les_immeubles``). Les confirmations humaines
+    (``rapproche_par='manuel'``) ne sont JAMAIS écrasées ; les sorties
+    d'argent (statut « ignoree ») non plus — pas des loyers.
+
+    Par défaut, un rapprochement AUTO déjà posé est STABLE (marquer les
+    mois payés ensuite ne le défait pas) : seules les transactions non
+    rapprochées / ambiguës sont rejouées — la synchro remet un statut à
+    zéro quand l'écriture change dans QBO. ``forcer=True`` (re-mapping
+    du compte) rejoue tout sauf le manuel. Retourne le nombre de
+    transactions rapprochées auto. Ne commit pas."""
+    immeuble_ids = await immeubles_du_compte(db, compte, liens)
+    if not immeuble_ids:
         return 0
+    conditions = [
+        QboTransactionLoyer.compte_id == compte.id,
+        QboTransactionLoyer.statut != "ignoree",
+        func.coalesce(QboTransactionLoyer.rapproche_par, "auto")
+        != "manuel",
+    ]
+    if not forcer:
+        conditions.append(QboTransactionLoyer.statut != "rapproche")
     txns = list(
         (
             await db.execute(
-                select(QboTransactionLoyer).where(
-                    QboTransactionLoyer.compte_id == compte.id,
-                    func.coalesce(
-                        QboTransactionLoyer.rapproche_par, "auto"
-                    )
-                    != "manuel",
-                )
+                select(QboTransactionLoyer).where(*conditions)
             )
         ).scalars().all()
     )
     if not txns:
         return 0
-    baux = await _baux_de_l_immeuble(db, compte.immeuble_id)
+    baux, logement_imm = await _baux_des_immeubles(db, immeuble_ids)
     bail_ids = [b.id for b in baux]
     locataires: Dict[int, Locataire] = {}
     aliases: List[QboAliasPayeur] = []
@@ -722,15 +1083,28 @@ async def rapprocher_compte(db, compte: QboCompteLoyer) -> int:
         ).all():
             frais_map[(bid, m)] = float(total or 0)
 
+    baux_by_id = {b.id: b for b in baux}
+    immeuble_defaut = immeuble_ids[0] if len(immeuble_ids) == 1 else None
     n_auto = 0
     for txn in txns:
-        statut, bail_id, mois = _match_deterministe(
+        statut, bail_id, mois, mois_fin = _match_deterministe(
             txn, baux, locataires, aliases, paye_map, frais_map
         )
         txn.statut = statut
         txn.bail_id = bail_id
         txn.mois_couvert = mois
+        txn.mois_couvert_fin = mois_fin
         txn.rapproche_par = "auto" if statut == "rapproche" else None
+        # L'immeuble vient du BAIL une fois rapproché (indispensable sur
+        # un compte multi-immeubles/fiducie) ; sinon celui du compte
+        # quand il n'en couvre qu'un seul.
+        if bail_id is not None:
+            b = baux_by_id.get(bail_id)
+            txn.immeuble_id = (
+                logement_imm.get(b.logement_id) if b else immeuble_defaut
+            )
+        else:
+            txn.immeuble_id = immeuble_defaut
         if statut == "rapproche":
             n_auto += 1
     await db.flush()
@@ -756,9 +1130,12 @@ async def confirmer_transaction(
         if mois_couvert
         else txn.date_txn.replace(day=1)
     )
+    txn.mois_couvert_fin = None
     txn.rapproche_par = "manuel"
 
-    alias = _norm_payeur(txn.description or "")[:255]
+    # L'alias appris = le PAYEUR extrait du mémo Interac quand il existe
+    # (stable de mois en mois), sinon la description complète.
+    alias = _norm_payeur(txn.payeur or txn.description or "")[:255]
     if alias:
         existe = (
             await db.execute(
@@ -807,22 +1184,31 @@ async def etat_validation(db, mois: date) -> Dict[str, Any]:
     if not cfg["active"]:
         return vide
 
-    comptes = list(
-        (
+    liens = await liens_par_compte(db)
+    comptes = [
+        c
+        for c in (
             await db.execute(
                 select(QboCompteLoyer).where(
-                    QboCompteLoyer.actif.is_(True),
-                    QboCompteLoyer.immeuble_id.is_not(None),
+                    QboCompteLoyer.actif.is_(True)
                 )
             )
         ).scalars().all()
-    )
+        if _compte_mappe(c, liens)
+    ]
     if not comptes:
         vide["active"] = True
         return vide
 
-    # Immeubles couverts : mappés, actifs, PAS en gestion externe.
-    imm_ids = {c.immeuble_id for c in comptes if c.immeuble_id}
+    # Immeubles couverts (UNION des liens de chaque compte — tous les
+    # internes pour un compte fiducie) : actifs, PAS en gestion externe.
+    comptes_by_id = {c.id: c for c in comptes}
+    couverts_par_compte: Dict[int, List[int]] = {}
+    imm_ids: set = set()
+    for c in comptes:
+        ids = await immeubles_du_compte(db, c, liens)
+        couverts_par_compte[c.id] = ids
+        imm_ids.update(ids)
     immeubles = {
         i.id: i
         for i in (
@@ -834,7 +1220,7 @@ async def etat_validation(db, mois: date) -> Dict[str, Any]:
                 )
             )
         ).scalars().all()
-    }
+    } if imm_ids else {}
     if not immeubles:
         vide["active"] = True
         return vide
@@ -925,28 +1311,33 @@ async def etat_validation(db, mois: date) -> Dict[str, Any]:
         ).all():
             mois_marques.add((bid, m))
 
-    # Transactions de la fenêtre (bornée large : synchro + 30 j).
+    # Transactions de la fenêtre (bornée large : synchro + 30 j) — par
+    # COMPTE (une txn d'un compte multi-immeubles/fiducie n'a pas
+    # d'immeuble tant qu'elle n'est pas rapprochée). Les sorties
+    # d'argent (statut « ignoree ») ne sortent jamais ici.
     plancher = aujourdhui - timedelta(days=FENETRE_SYNC_JOURS + 30)
     txns = list(
         (
             await db.execute(
                 select(QboTransactionLoyer).where(
-                    QboTransactionLoyer.immeuble_id.in_(
-                        list(immeubles.keys())
+                    QboTransactionLoyer.compte_id.in_(
+                        list(comptes_by_id.keys())
                     ),
+                    QboTransactionLoyer.statut != "ignoree",
                     QboTransactionLoyer.date_txn >= plancher,
                 )
             )
         ).scalars().all()
     )
 
-    # ✓✓ / ⚠ par bail pour le mois affiché.
+    # ✓✓ / ⚠ par bail pour le mois affiché. Un paiement MULTI-MOIS
+    # (rattrapage de 2 mois d'un coup) valide CHACUN des mois couverts.
     rapprochees_mois: Dict[int, List[QboTransactionLoyer]] = {}
     for t in txns:
         if (
             t.statut == "rapproche"
             and t.bail_id
-            and t.mois_couvert == month_start
+            and month_start in mois_couverts_txn(t)
         ):
             rapprochees_mois.setdefault(t.bail_id, []).append(t)
 
@@ -980,30 +1371,36 @@ async def etat_validation(db, mois: date) -> Dict[str, Any]:
                     }
                 )
 
-    # Encart 1 : encaissés (banque) non marqués (Kratos).
+    # Encart 1 : encaissés (banque) non marqués (Kratos). Un paiement
+    # multi-mois sort UNE ligne par mois couvert non marqué.
     encaisses: List[Dict[str, Any]] = []
     for t in txns:
         if t.statut != "rapproche" or not t.bail_id or not t.mois_couvert:
             continue
-        if (t.bail_id, t.mois_couvert) in mois_marques:
-            continue
         imm = immeubles.get(t.immeuble_id or 0)
-        encaisses.append(
-            {
-                "txn_id": t.id,
-                "immeuble_id": t.immeuble_id,
-                "immeuble_name": imm.name if imm else "",
-                "bail_id": t.bail_id,
-                **_infos_bail(t.bail_id),
-                "mois_couvert": t.mois_couvert.isoformat(),
-                "date_txn": t.date_txn.isoformat(),
-                "montant": float(t.montant or 0),
-                "description": t.description,
-            }
-        )
-    encaisses.sort(key=lambda x: (x["immeuble_name"], x["date_txn"]))
+        for m in mois_couverts_txn(t):
+            if (t.bail_id, m) in mois_marques:
+                continue
+            encaisses.append(
+                {
+                    "txn_id": t.id,
+                    "immeuble_id": t.immeuble_id,
+                    "immeuble_name": imm.name if imm else "",
+                    "bail_id": t.bail_id,
+                    **_infos_bail(t.bail_id),
+                    "mois_couvert": m.isoformat(),
+                    "date_txn": t.date_txn.isoformat(),
+                    "montant": float(t.montant or 0),
+                    "description": t.description,
+                }
+            )
+    encaisses.sort(
+        key=lambda x: (x["immeuble_name"], x["date_txn"], x["mois_couvert"])
+    )
 
-    # Encart 2 : ambiguës / non rapprochées, avec les baux candidats.
+    # Encart 2 : ambiguës / non rapprochées, avec les baux candidats de
+    # TOUS les immeubles couverts par le compte de la transaction (union
+    # — un compte fiducie propose les baux de tous les internes).
     candidats_par_imm: Dict[int, List[Dict[str, Any]]] = {}
     for b in baux:
         imm = _imm_du_bail(b)
@@ -1022,20 +1419,35 @@ async def etat_validation(db, mois: date) -> Dict[str, Any]:
     for t in txns:
         if t.statut not in ("ambigu", "non_rapproche"):
             continue
-        imm = immeubles.get(t.immeuble_id or 0)
-        if imm is None:
+        compte = comptes_by_id.get(t.compte_id)
+        imm_compte = [
+            i for i in couverts_par_compte.get(t.compte_id, [])
+            if i in immeubles
+        ]
+        if not imm_compte:
             continue
+        imm = immeubles.get(t.immeuble_id or 0)
+        candidats = [
+            c for iid in imm_compte for c in candidats_par_imm.get(iid, [])
+        ]
         a_traiter.append(
             {
                 "txn_id": t.id,
                 "immeuble_id": t.immeuble_id,
-                "immeuble_name": imm.name,
+                # Compte multi-immeubles : pas d'immeuble tant que rien
+                # n'est rapproché — on affiche le nom du compte QBO.
+                "immeuble_name": (
+                    imm.name
+                    if imm
+                    else (compte.qbo_account_name if compte else "")
+                ),
                 "statut": t.statut,
                 "date_txn": t.date_txn.isoformat(),
                 "montant": float(t.montant or 0),
                 "description": t.description,
+                "payeur": t.payeur,
                 "candidats": sorted(
-                    candidats_par_imm.get(imm.id, []),
+                    candidats,
                     key=lambda c: (
                         c["logement_numero"] or "",
                         c["locataire_name"] or "",
@@ -1051,4 +1463,216 @@ async def etat_validation(db, mois: date) -> Dict[str, Any]:
         "validations": validations,
         "encaisses_non_marques": encaisses,
         "a_traiter": a_traiter,
+    }
+
+
+# ── 6) Fil bancaire (visualiseur — données déjà en base, zéro appel QBO) ─
+
+
+async def lister_transactions(
+    db,
+    *,
+    immeuble_id: Optional[int] = None,
+    statut: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fil des transactions synchronisées (fenêtre 90 jours, tri date
+    desc) pour le visualiseur « Voir le fil bancaire » : chaque ligne
+    avec son rapprochement (bail/locataire/mois couverts + ✓✓ si les
+    mois sont aussi marqués payés dans Kratos), les candidats pour les
+    ambiguës/non rapprochées, et les sorties d'argent ignorées (mention
+    informative). AUCUN appel QuickBooks — lecture de la base seulement.
+    """
+    liens = await liens_par_compte(db)
+    comptes = {
+        c.id: c
+        for c in (
+            await db.execute(select(QboCompteLoyer))
+        ).scalars().all()
+    }
+    couverts_par_compte: Dict[int, List[int]] = {}
+    for c in comptes.values():
+        couverts_par_compte[c.id] = await immeubles_du_compte(
+            db, c, liens
+        )
+
+    plancher = (
+        datetime.now(timezone.utc).date()
+        - timedelta(days=FENETRE_SYNC_JOURS)
+    )
+    txns = list(
+        (
+            await db.execute(
+                select(QboTransactionLoyer)
+                .where(QboTransactionLoyer.date_txn >= plancher)
+                .order_by(
+                    QboTransactionLoyer.date_txn.desc(),
+                    QboTransactionLoyer.id.desc(),
+                )
+            )
+        ).scalars().all()
+    )
+    # Filtres simples (volumes faibles — 90 jours).
+    if statut:
+        txns = [t for t in txns if t.statut == statut]
+    if immeuble_id is not None:
+        txns = [
+            t
+            for t in txns
+            if t.immeuble_id == immeuble_id
+            or (
+                t.immeuble_id is None
+                and immeuble_id in couverts_par_compte.get(t.compte_id, [])
+            )
+        ]
+
+    # Référentiels pour l'affichage (immeubles couverts + baux visés).
+    imm_ids = {i for ids in couverts_par_compte.values() for i in ids}
+    imm_ids.update(t.immeuble_id for t in txns if t.immeuble_id)
+    immeubles = {
+        i.id: i
+        for i in (
+            await db.execute(
+                select(Immeuble).where(Immeuble.id.in_(list(imm_ids)))
+            )
+        ).scalars().all()
+    } if imm_ids else {}
+    baux, logement_imm = await _baux_des_immeubles(
+        db, [i for i in imm_ids if immeubles.get(i)]
+    )
+    bail_ids = {b.id for b in baux} | {
+        t.bail_id for t in txns if t.bail_id
+    }
+    baux_manquants = [
+        bid for bid in bail_ids if bid not in {b.id for b in baux}
+    ]
+    if baux_manquants:
+        for b in (
+            await db.execute(
+                select(Bail).where(Bail.id.in_(baux_manquants))
+            )
+        ).scalars().all():
+            baux.append(b)
+    baux_by_id = {b.id: b for b in baux}
+    logements = {
+        l.id: l
+        for l in (
+            await db.execute(
+                select(Logement).where(
+                    Logement.id.in_(
+                        [b.logement_id for b in baux]
+                    )
+                )
+            )
+        ).scalars().all()
+    } if baux else {}
+    locataires = {
+        loc.id: loc
+        for loc in (
+            await db.execute(
+                select(Locataire).where(
+                    Locataire.id.in_(
+                        [b.locataire_id for b in baux if b.locataire_id]
+                    )
+                )
+            )
+        ).scalars().all()
+    } if baux else {}
+
+    # Mois marqués payés (1re validation) des baux visés → ✓✓.
+    mois_marques: set = set()
+    if bail_ids:
+        for bid, m in (
+            await db.execute(
+                select(
+                    PaiementLoyer.bail_id, PaiementLoyer.mois_couvert
+                ).where(PaiementLoyer.bail_id.in_(list(bail_ids)))
+            )
+        ).all():
+            mois_marques.add((bid, m))
+
+    # Candidats (baux ACTIFS) par immeuble — pour le sélecteur des
+    # ambiguës directement dans le fil.
+    candidats_par_imm: Dict[int, List[Dict[str, Any]]] = {}
+    for b in baux:
+        lg = logements.get(b.logement_id)
+        if lg is None or b.status != BailStatus.ACTIF.value:
+            continue
+        loc = locataires.get(b.locataire_id)
+        candidats_par_imm.setdefault(lg.immeuble_id, []).append(
+            {
+                "bail_id": b.id,
+                "locataire_name": loc.full_name if loc else None,
+                "logement_numero": lg.numero if lg else None,
+                "loyer_mensuel": float(b.loyer_mensuel or 0),
+            }
+        )
+
+    out: List[Dict[str, Any]] = []
+    for t in txns:
+        compte = comptes.get(t.compte_id)
+        imm = immeubles.get(t.immeuble_id or 0)
+        bail = baux_by_id.get(t.bail_id or 0)
+        loc = (
+            locataires.get(bail.locataire_id)
+            if bail and bail.locataire_id
+            else None
+        )
+        lg = logements.get(bail.logement_id) if bail else None
+        mois = mois_couverts_txn(t)
+        candidats: List[Dict[str, Any]] = []
+        if t.statut in ("ambigu", "non_rapproche"):
+            candidats = sorted(
+                (
+                    c
+                    for iid in couverts_par_compte.get(t.compte_id, [])
+                    for c in candidats_par_imm.get(iid, [])
+                ),
+                key=lambda c: (
+                    c["logement_numero"] or "",
+                    c["locataire_name"] or "",
+                ),
+            )
+        out.append(
+            {
+                "txn_id": t.id,
+                "date_txn": t.date_txn.isoformat(),
+                "montant": float(t.montant or 0),
+                "sens": t.sens,
+                "statut": t.statut,
+                "ignore_raison": t.ignore_raison,
+                "rapproche_par": t.rapproche_par,
+                "payeur": t.payeur,
+                "description": t.description,
+                "doc_num": t.doc_num,
+                "compte_id": t.compte_id,
+                "compte_nom": (
+                    compte.qbo_account_name if compte else ""
+                ),
+                "immeuble_id": t.immeuble_id,
+                "immeuble_name": imm.name if imm else None,
+                "bail_id": t.bail_id,
+                "locataire_id": loc.id if loc else None,
+                "locataire_name": loc.full_name if loc else None,
+                "logement_numero": lg.numero if lg else None,
+                "mois_couverts": [m.isoformat() for m in mois],
+                # ✓✓ : rapprochée ET chaque mois couvert marqué payé.
+                "valide": bool(
+                    t.statut == "rapproche"
+                    and t.bail_id
+                    and mois
+                    and all((t.bail_id, m) in mois_marques for m in mois)
+                ),
+                "candidats": candidats,
+            }
+        )
+
+    return {
+        "transactions": out,
+        "immeubles": sorted(
+            (
+                {"id": i.id, "name": i.name}
+                for i in immeubles.values()
+            ),
+            key=lambda x: x["name"] or "",
+        ),
     }

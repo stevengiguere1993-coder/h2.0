@@ -5,11 +5,14 @@
 
 - Paramètres (manager+) : activer la feature, régler « alerte après N
   jours », découvrir les comptes « Loyer à remettre - X » du plan
-  comptable et confirmer l'immeuble suggéré, lancer la synchro ;
+  comptable et confirmer le ou LES immeubles suggérés (un compte peut
+  couvrir plusieurs immeubles, ou tous — fiducie), lancer la synchro
+  (retour = rapport détaillé par compte) ;
 - Pôle locatif (tout utilisateur du volet) : état des pastilles
   (✓✓ « Validé banque » / ⚠ « Payé — sans trace bancaire »), encart
-  « Encaissés non marqués », confirmation d'un rapprochement ambigu
-  (qui apprend l'alias payeur).
+  « Encaissés non marqués », FIL BANCAIRE (visualiseur des transactions
+  synchronisées, sans appel QBO), confirmation d'un rapprochement
+  ambigu (qui apprend l'alias payeur).
 
 ⚠️ Ce module n'ÉCRIT JAMAIS dans QuickBooks — voir
 ``services/qbo_validation_loyers.py``. Aucun courriel, aucun LLM.
@@ -17,16 +20,20 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.immobilier import Immeuble
-from app.models.qbo_loyers import QboCompteLoyer, QboTransactionLoyer
+from app.models.qbo_loyers import (
+    QboCompteImmeuble,
+    QboCompteLoyer,
+    QboTransactionLoyer,
+)
 from app.services.qbo_validation_loyers import (
     DEFAUT_ALERTE_JOURS,
     VALIDATION_KEY,
@@ -34,6 +41,9 @@ from app.services.qbo_validation_loyers import (
     decouvrir_comptes,
     etat_validation,
     get_validation_config,
+    immeubles_du_compte,
+    liens_par_compte,
+    lister_transactions,
     rapprocher_compte,
     synchroniser_transactions,
 )
@@ -61,13 +71,42 @@ class CompteRead(BaseModel):
     id: int
     qbo_account_id: str
     qbo_account_name: str
-    immeuble_id: Optional[int] = None
-    suggestion_immeuble_id: Optional[int] = None
+    #: Immeubles CONFIRMÉS (lien N-N — un compte peut en couvrir
+    #: plusieurs). Vide + ``tous_les_immeubles`` = compte fiducie.
+    immeuble_ids: List[int] = []
+    tous_les_immeubles: bool = False
+    #: Suggestions automatiques (liste — « 9085 Millen & 710 Legendre »
+    #: suggère les deux) + case « tous » pour un nom générique fiducie.
+    suggestion_immeuble_ids: List[int] = []
+    suggestion_tous: bool = False
     suggestion_score: Optional[float] = None
     actif: bool = True
     derniere_synchro_le: Optional[datetime] = None
 
-    model_config = ConfigDict(from_attributes=True)
+
+def _compte_read(
+    c: QboCompteLoyer, liens: dict[int, List[int]]
+) -> CompteRead:
+    import json
+
+    try:
+        sugg = json.loads(c.suggestion_immeubles_json or "[]")
+        if not isinstance(sugg, list):
+            sugg = []
+    except ValueError:
+        sugg = []
+    return CompteRead(
+        id=c.id,
+        qbo_account_id=c.qbo_account_id,
+        qbo_account_name=c.qbo_account_name,
+        immeuble_ids=liens.get(c.id, []),
+        tous_les_immeubles=bool(c.tous_les_immeubles),
+        suggestion_immeuble_ids=[int(i) for i in sugg],
+        suggestion_tous=bool(c.suggestion_tous),
+        suggestion_score=c.suggestion_score,
+        actif=bool(c.actif),
+        derniere_synchro_le=c.derniere_synchro_le,
+    )
 
 
 class ImmeubleOption(BaseModel):
@@ -92,7 +131,10 @@ class ConfigWrite(BaseModel):
 
 
 class CompteWrite(BaseModel):
-    immeuble_id: Optional[int] = None
+    #: Immeubles reliés (multi-sélection). Ignoré si
+    #: ``tous_les_immeubles`` est coché.
+    immeuble_ids: List[int] = []
+    tous_les_immeubles: bool = False
     actif: bool = True
 
 
@@ -102,11 +144,39 @@ class ConfirmerBody(BaseModel):
     mois_couvert: Optional[date] = None
 
 
+class SyncRaisons(BaseModel):
+    """Ventilation des lignes ignorées d'un compte."""
+
+    sortie_argent: int = 0
+    montant_nul: int = 0
+    deja_importee: int = 0
+    type_non_reconnu: int = 0
+
+
+class SyncCompteDetail(BaseModel):
+    """Rapport de synchro d'UN compte — « 0 importée » sans explication
+    est inacceptable (retour Phil 2026-08-14)."""
+
+    compte_id: int
+    compte_nom: str
+    lues: int = 0
+    importees: int = 0
+    mises_a_jour: int = 0
+    ignorees: int = 0
+    raisons: SyncRaisons = SyncRaisons()
+    #: Libellés des types d'écriture non reconnus (à rapporter tels
+    #: quels pour qu'on puisse les ajouter à la classification).
+    types_non_reconnus: List[str] = []
+    erreur: Optional[str] = None
+
+
 class SyncResult(BaseModel):
     ok: bool = True
     comptes: int = 0
     importees: int = 0
     mises_a_jour: int = 0
+    ignorees: int = 0
+    details: List[SyncCompteDetail] = []
 
 
 # ── Paramètres (manager+) ──────────────────────────────────────────────
@@ -133,10 +203,11 @@ async def _config_read(db) -> ConfigRead:
             select(QboCompteLoyer).order_by(QboCompteLoyer.qbo_account_name)
         )
     ).scalars().all()
+    liens = await liens_par_compte(db)
     return ConfigRead(
         active=cfg["active"],
         alerte_jours=cfg["alerte_jours"],
-        comptes=[CompteRead.model_validate(c) for c in comptes],
+        comptes=[_compte_read(c, liens) for c in comptes],
         immeubles=await _immeubles_options(db),
     )
 
@@ -192,18 +263,24 @@ async def put_compte(
     db: DBSession,
     user: CurrentUser,
 ) -> CompteRead:
-    """Confirme (ou retire) l'immeuble d'un compte découvert + son
-    interrupteur. Les transactions déjà importées suivent le nouveau
-    mapping et sont re-rapprochées."""
+    """Confirme (ou retire) le ou LES immeubles d'un compte découvert
+    (+ la case « tous les immeubles internes » et son interrupteur).
+    Les transactions déjà importées suivent le nouveau mapping et sont
+    re-rapprochées — sauf les confirmations manuelles."""
     _require_manager(user)
     compte = await db.get(QboCompteLoyer, compte_id)
     if compte is None:
         raise HTTPException(status_code=404, detail="Compte introuvable.")
-    if payload.immeuble_id is not None:
-        imm = await db.get(Immeuble, payload.immeuble_id)
+
+    # « Tous les immeubles » désactive la sélection fine.
+    voulu = [] if payload.tous_les_immeubles else list(
+        dict.fromkeys(payload.immeuble_ids)
+    )
+    for iid in voulu:
+        imm = await db.get(Immeuble, iid)
         if imm is None:
             raise HTTPException(
-                status_code=404, detail="Immeuble introuvable."
+                status_code=404, detail=f"Immeuble {iid} introuvable."
             )
         if imm.gestion_externe:
             raise HTTPException(
@@ -213,9 +290,42 @@ async def put_compte(
                     "déléguée, la validation bancaire ne s'y applique pas."
                 ),
             )
-    compte.immeuble_id = payload.immeuble_id
+
+    compte.tous_les_immeubles = payload.tous_les_immeubles
+    compte.immeuble_id = None  # legacy 1-1 neutralisé (lien N-N ci-bas)
     compte.actif = payload.actif
-    # Les transactions déjà importées suivent le mapping.
+
+    # Liens N-N : diff idempotent (on ne touche pas aux liens conservés).
+    liens_actuels = {
+        l.immeuble_id: l
+        for l in (
+            await db.execute(
+                select(QboCompteImmeuble).where(
+                    QboCompteImmeuble.compte_id == compte.id
+                )
+            )
+        ).scalars().all()
+    }
+    for iid, lien in liens_actuels.items():
+        if iid not in voulu:
+            await db.delete(lien)
+    for iid in voulu:
+        if iid not in liens_actuels:
+            db.add(
+                QboCompteImmeuble(
+                    compte_id=compte.id,
+                    immeuble_id=iid,
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+    await db.flush()
+
+    # Les transactions non confirmées manuellement suivent le mapping :
+    # immeuble connu d'avance seulement quand le compte n'en couvre
+    # qu'un ; sinon il sera dérivé du bail au re-rapprochement.
+    liens = await liens_par_compte(db)
+    imm_ids = await immeubles_du_compte(db, compte, liens)
+    immeuble_defaut = imm_ids[0] if len(imm_ids) == 1 else None
     for txn in (
         await db.execute(
             select(QboTransactionLoyer).where(
@@ -223,19 +333,32 @@ async def put_compte(
             )
         )
     ).scalars().all():
-        txn.immeuble_id = compte.immeuble_id
+        if txn.rapproche_par != "manuel":
+            txn.immeuble_id = immeuble_defaut
+            # Compte plus mappé du tout → les rapprochements auto
+            # n'ont plus de base : on les remet à zéro.
+            if not imm_ids and txn.statut in ("rapproche", "ambigu"):
+                txn.statut = "non_rapproche"
+                txn.bail_id = None
+                txn.mois_couvert = None
+                txn.mois_couvert_fin = None
+                txn.rapproche_par = None
     await db.flush()
-    if compte.immeuble_id is not None:
-        await rapprocher_compte(db, compte)
+    if imm_ids:
+        # Re-mapping = les candidats changent → on rejoue TOUT le
+        # rapprochement auto (le manuel n'est jamais écrasé).
+        await rapprocher_compte(db, compte, liens=liens, forcer=True)
     await db.commit()
     await db.refresh(compte)
-    return CompteRead.model_validate(compte)
+    return _compte_read(compte, await liens_par_compte(db))
 
 
 @router.post("/sync", response_model=SyncResult)
 async def sync_maintenant(db: DBSession, user: CurrentUser) -> SyncResult:
     """« Synchroniser maintenant » — importe les écritures publiées des
-    comptes mappés (fenêtre glissante) et rejoue le rapprochement."""
+    comptes mappés (fenêtre glissante) et rejoue le rapprochement.
+    Retour = RAPPORT DÉTAILLÉ par compte (lues / importées / mises à
+    jour / ignorées + raisons), affiché dans Paramètres."""
     _require_manager(user)
     try:
         stats = await synchroniser_transactions(db)
@@ -243,6 +366,35 @@ async def sync_maintenant(db: DBSession, user: CurrentUser) -> SyncResult:
         raise HTTPException(status_code=503, detail=str(exc))
     await db.commit()
     return SyncResult(ok=True, **stats)
+
+
+# ── Fil bancaire (visualiseur — lecture de la base, zéro appel QBO) ────
+
+
+@router.get("/transactions")
+async def fil_bancaire(
+    db: DBSession,
+    user: CurrentUser,
+    immeuble_id: Optional[int] = None,
+    statut: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fil des transactions synchronisées (90 jours, tri date desc) avec
+    leur rapprochement — pour la modale « Voir le fil bancaire »
+    (Paramètres + encart Paiements). Filtres simples par immeuble et
+    par statut. Ne fait AUCUN appel QuickBooks."""
+    if statut and statut not in (
+        "rapproche", "ambigu", "non_rapproche", "ignoree"
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Statut inconnu — attendu : rapproche, ambigu, "
+                "non_rapproche ou ignoree."
+            ),
+        )
+    return await lister_transactions(
+        db, immeuble_id=immeuble_id, statut=statut
+    )
 
 
 # ── Pôle locatif : état + confirmation ─────────────────────────────────
@@ -283,23 +435,37 @@ async def confirmer(
         raise HTTPException(
             status_code=404, detail="Transaction introuvable."
         )
+    if txn.statut == "ignoree":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Sortie d'argent (virement de remise, dépense…) — "
+                "jamais un loyer, pas de rapprochement possible."
+            ),
+        )
     from app.models.immobilier import Bail, Logement
 
     bail = await db.get(Bail, payload.bail_id)
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
     logement = await db.get(Logement, bail.logement_id)
-    if (
-        txn.immeuble_id is not None
-        and (logement is None or logement.immeuble_id != txn.immeuble_id)
+    # Le bail doit appartenir à un des immeubles COUVERTS par le compte
+    # de la transaction (liens N-N, ou tous les internes — fiducie).
+    compte = await db.get(QboCompteLoyer, txn.compte_id)
+    imm_autorises = (
+        await immeubles_du_compte(db, compte) if compte else []
+    )
+    if logement is None or (
+        imm_autorises and logement.immeuble_id not in imm_autorises
     ):
         raise HTTPException(
             status_code=400,
             detail=(
-                "Ce bail n'appartient pas à l'immeuble de la "
-                "transaction (compte QuickBooks)."
+                "Ce bail n'appartient pas aux immeubles couverts par "
+                "le compte QuickBooks de la transaction."
             ),
         )
+    txn.immeuble_id = logement.immeuble_id
     await confirmer_transaction(
         db, txn, payload.bail_id, payload.mois_couvert
     )

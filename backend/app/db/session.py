@@ -486,6 +486,30 @@ async def ensure_critical_columns() -> None:
         # de détention par flèche.
         ("org_nodes", "version_id", "INTEGER"),
         ("org_nodes", "ownership_json", "TEXT"),
+        # Validation bancaire v2 (2026-08-14) : un compte QBO couvre
+        # plusieurs immeubles (ou tous — fiducie), classification par
+        # TYPE d'écriture (sens + raison d'ignorance), payeur extrait du
+        # mémo Interac, paiement multi-mois (mois_couvert_fin). Tables
+        # créées au déploiement v1 SANS ces colonnes → additif ici.
+        (
+            "qbo_comptes_loyers",
+            "tous_les_immeubles",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        ),
+        ("qbo_comptes_loyers", "suggestion_immeubles_json", "TEXT"),
+        (
+            "qbo_comptes_loyers",
+            "suggestion_tous",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        ),
+        (
+            "qbo_transactions_loyers",
+            "sens",
+            "VARCHAR(8) NOT NULL DEFAULT 'entree'",
+        ),
+        ("qbo_transactions_loyers", "payeur", "VARCHAR(255)"),
+        ("qbo_transactions_loyers", "ignore_raison", "VARCHAR(64)"),
+        ("qbo_transactions_loyers", "mois_couvert_fin", "DATE"),
     )
     for table, column, col_type in critical_columns:
         try:
@@ -954,17 +978,27 @@ async def ensure_qbo_connections_table() -> None:
 async def ensure_validation_bancaire_tables() -> None:
     """Crée les tables de la VALIDATION BANCAIRE des loyers (2026-08-14)
     dans leur propre transaction : ``qbo_comptes_loyers`` (compte du plan
-    comptable ↔ immeuble), ``qbo_transactions_loyers`` (écritures QBO
-    publiées, importées en lecture seule) et ``qbo_alias_payeurs`` (alias
-    appris à la confirmation d'un rapprochement ambigu). Idempotent
-    (create_all checkfirst) — survit à un abort d'``init_db``."""
+    comptable), ``qbo_compte_immeubles`` (lien N-N compte ↔ immeubles —
+    v2, un compte QBO peut couvrir plusieurs immeubles),
+    ``qbo_transactions_loyers`` (écritures QBO publiées, importées en
+    lecture seule) et ``qbo_alias_payeurs`` (alias appris à la
+    confirmation d'un rapprochement ambigu). Idempotent (create_all
+    checkfirst) — survit à un abort d'``init_db``.
+
+    Migration v2 (idempotente) : les liens 1-1 ``immeuble_id`` déjà
+    confirmés par Phil en prod sont RECOPIÉS dans la table de liens puis
+    la colonne legacy est remise à NULL (rerun = no-op). Aucune
+    confirmation n'est perdue."""
     import logging
+
+    from sqlalchemy import text
 
     log = logging.getLogger("db.ensure_validation_bancaire_tables")
     try:
         from app.db.base import Base
         from app.models.qbo_loyers import (  # noqa: F401
             QboAliasPayeur,
+            QboCompteImmeuble,
             QboCompteLoyer,
             QboTransactionLoyer,
         )
@@ -975,6 +1009,7 @@ async def ensure_validation_bancaire_tables() -> None:
                     c,
                     tables=[
                         QboCompteLoyer.__table__,
+                        QboCompteImmeuble.__table__,
                         QboTransactionLoyer.__table__,
                         QboAliasPayeur.__table__,
                     ],
@@ -982,6 +1017,35 @@ async def ensure_validation_bancaire_tables() -> None:
             )
     except Exception as exc:  # noqa: BLE001
         log.warning("ensure_validation_bancaire_tables failed: %s", exc)
+        return
+
+    # ── Migration 1-1 → N-N (transaction dédiée, idempotente) ──────────
+    # Recopie les mappings confirmés (immeuble_id NOT NULL) dans
+    # qbo_compte_immeubles, puis neutralise la colonne legacy : au boot
+    # suivant, plus rien à migrer. ON CONFLICT = rejouable sans doublon.
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO qbo_compte_immeubles (compte_id, "
+                    "immeuble_id, created_at) "
+                    "SELECT c.id, c.immeuble_id, NOW() "
+                    "FROM qbo_comptes_loyers c "
+                    "WHERE c.immeuble_id IS NOT NULL "
+                    "ON CONFLICT (compte_id, immeuble_id) DO NOTHING"
+                )
+            )
+            await conn.execute(
+                text(
+                    "UPDATE qbo_comptes_loyers SET immeuble_id = NULL "
+                    "WHERE immeuble_id IS NOT NULL"
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "ensure_validation_bancaire_tables migration 1-1→N-N "
+            "failed: %s", exc,
+        )
 
 
 async def ensure_timesheet_tables() -> None:

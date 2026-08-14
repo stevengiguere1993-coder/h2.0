@@ -18,7 +18,7 @@ Chaque endpoint relance la fonction `_run()` du job correspondant.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
 from pydantic import BaseModel
@@ -546,10 +546,15 @@ async def trigger_devlog_nps_dispatch(
 
 
 class QboLoyersSyncResult(CronResult):
-    """Résultat de la synchro bancaire des loyers (QBO lecture seule)."""
+    """Résultat de la synchro bancaire des loyers (QBO lecture seule) —
+    avec le RAPPORT DÉTAILLÉ par compte (lues / importées / mises à
+    jour / ignorées + raisons), le même que le bouton « Synchroniser
+    maintenant » de Paramètres."""
     comptes: int = 0
     importees: int = 0
     mises_a_jour: int = 0
+    ignorees: int = 0
+    details: List[Dict[str, Any]] = []
     skipped: bool = False
 
 
@@ -576,6 +581,23 @@ async def _run_qbo_loyers_sync() -> dict:
     async with AsyncSessionLocal() as db:
         stats = await synchroniser_transactions(db)
         await db.commit()
+        # Même détail que le bouton de Paramètres, dans les logs du
+        # cron : par compte, lues / importées / mises à jour / ignorées
+        # avec la ventilation des raisons.
+        for d in stats.get("details", []):
+            log.info(
+                "qbo-loyers-sync %s : lues=%s importees=%s "
+                "mises_a_jour=%s ignorees=%s raisons=%s "
+                "types_non_reconnus=%s erreur=%s",
+                d.get("compte_nom"),
+                d.get("lues"),
+                d.get("importees"),
+                d.get("mises_a_jour"),
+                d.get("ignorees"),
+                d.get("raisons"),
+                d.get("types_non_reconnus"),
+                d.get("erreur"),
+            )
         return stats
 
 
@@ -607,6 +629,8 @@ async def trigger_qbo_loyers_sync(
         comptes=res.get("comptes", 0),
         importees=res.get("importees", 0),
         mises_a_jour=res.get("mises_a_jour", 0),
+        ignorees=res.get("ignorees", 0),
+        details=res.get("details", []),
         skipped=bool(res.get("skipped", False)),
     )
 
