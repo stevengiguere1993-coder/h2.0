@@ -2,8 +2,9 @@
 
 /**
  * Validation bancaire des loyers (QuickBooks, lecture seule) — morceaux
- * PARTAGÉS entre la page Paiements et la sous-page Paiements de la
- * fiche immeuble (même directive « miroir » que paiements-actions).
+ * PARTAGÉS entre la page Paiements, la sous-page Paiements de la fiche
+ * immeuble et la section Paramètres (même directive « miroir » que
+ * paiements-actions).
  *
  * 2e validation posée PAR-DESSUS le suivi manuel : l'adjointe publie
  * les encaissements au compte « Loyer à remettre - {immeuble} » dans
@@ -14,14 +15,27 @@
  *   trace bancaire » (ambre, après N jours réglables) ;
  * - l'ENCART replié « Encaissés non marqués » : transactions
  *   rapprochées dont le mois n'est pas marqué payé + les ambiguës /
- *   non rapprochées (le choix d'un bail confirme ET apprend l'alias).
+ *   non rapprochées (le choix d'un bail confirme ET apprend l'alias) ;
+ * - le FIL BANCAIRE (« Voir le fil bancaire ») : modale qui liste les
+ *   transactions synchronisées (90 jours) avec leur rapprochement en
+ *   code couleur — vert rapprochée, jaune ambiguë (avec le sélecteur de
+ *   bail), gris non rapprochée, mention discrète pour les sorties
+ *   d'argent ignorées. Données déjà en base — aucun appel QuickBooks.
  *
  * Feature inactive ou immeuble non mappé → l'API ne renvoie rien et
  * RIEN ne s'affiche (zéro bruit).
  */
 
-import { useState } from "react";
-import { AlertTriangle, CheckCheck, Landmark } from "lucide-react";
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
+import {
+  AlertTriangle,
+  CheckCheck,
+  Landmark,
+  ListOrdered,
+  Loader2,
+  X
+} from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
 
@@ -142,6 +156,9 @@ export function PastilleValidationBancaire({
  * Encart REPLIÉ en bas de la page Paiements : encaissés (banque) non
  * marqués payés dans Kratos + transactions ambiguës / non rapprochées
  * par immeuble. Confirmer le bail d'une ambiguë apprend l'alias payeur.
+ * Porte aussi l'accès au FIL BANCAIRE (« Voir le fil bancaire ») — il
+ * reste donc visible dès que la feature est active, même quand il n'y
+ * a rien à traiter.
  */
 export function EncartValidationBancaire({
   etat,
@@ -158,7 +175,6 @@ export function EncartValidationBancaire({
   if (!etat?.active) return null;
   const encaisses = etat.encaisses_non_marques ?? [];
   const aTraiter = etat.a_traiter ?? [];
-  if (encaisses.length === 0 && aTraiter.length === 0) return null;
 
   async function confirmer(t: TxnATraiter) {
     const bailId = choix[t.txn_id] ?? t.candidats[0]?.bail_id;
@@ -207,6 +223,14 @@ export function EncartValidationBancaire({
         {err ? (
           <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
             {err}
+          </p>
+        ) : null}
+
+        {encaisses.length === 0 && aTraiter.length === 0 ? (
+          <p className="text-xs text-white/50">
+            Rien à traiter — tout ce qui est encaissé à la banque est
+            marqué payé, et aucune transaction n&apos;attend un
+            rapprochement.
           </p>
         ) : null}
 
@@ -317,6 +341,10 @@ export function EncartValidationBancaire({
           </>
         ) : null}
 
+        <div className="mt-3">
+          <BoutonFilBancaire onChange={onChange} />
+        </div>
+
         <p className="mt-3 text-[11px] text-white/40">
           Lecture seule depuis QuickBooks (comptes « Loyer à remettre - …
           ») — rien n&apos;est écrit dans la comptabilité. Confirmer une
@@ -325,5 +353,392 @@ export function EncartValidationBancaire({
         </p>
       </div>
     </details>
+  );
+}
+
+// ─── Fil bancaire (visualiseur des transactions synchronisées) ─────────
+
+export type FilTransaction = {
+  txn_id: number;
+  date_txn: string;
+  montant: number;
+  sens: "entree" | "sortie";
+  statut: "rapproche" | "ambigu" | "non_rapproche" | "ignoree";
+  ignore_raison: string | null;
+  rapproche_par: "auto" | "manuel" | null;
+  payeur: string | null;
+  description: string | null;
+  doc_num: string | null;
+  compte_id: number;
+  compte_nom: string;
+  immeuble_id: number | null;
+  immeuble_name: string | null;
+  bail_id: number | null;
+  locataire_id: number | null;
+  locataire_name: string | null;
+  logement_numero: string | null;
+  /** 1ers de mois ISO — plusieurs entrées = paiement multi-mois. */
+  mois_couverts: string[];
+  /** ✓✓ : rapprochée ET chaque mois couvert marqué payé dans Kratos. */
+  valide: boolean;
+  candidats: CandidatBail[];
+};
+
+type FilData = {
+  transactions: FilTransaction[];
+  immeubles: { id: number; name: string }[];
+};
+
+const MOIS_FR = [
+  "janvier",
+  "février",
+  "mars",
+  "avril",
+  "mai",
+  "juin",
+  "juillet",
+  "août",
+  "septembre",
+  "octobre",
+  "novembre",
+  "décembre"
+];
+
+/** « juillet 2026 » — ou « couvre juillet + août 2026 » en multi-mois. */
+export function libelleMoisCouverts(mois: string[]): string {
+  const parts = mois
+    .map((m) => {
+      const [y, mm] = m.split("-");
+      const nom = MOIS_FR[Number(mm) - 1] || mm;
+      return { nom, annee: y };
+    })
+    .filter((p) => p.nom);
+  if (parts.length === 0) return "";
+  if (parts.length === 1) return `${parts[0].nom} ${parts[0].annee}`;
+  // Une seule année → « couvre juillet + août 2026 » ; sinon chaque
+  // mois garde son année.
+  const memeAnnee = parts.every((p) => p.annee === parts[0].annee);
+  const libelles = memeAnnee
+    ? parts.map((p) => p.nom)
+    : parts.map((p) => `${p.nom} ${p.annee}`);
+  return `couvre ${libelles.join(" + ")}${
+    memeAnnee ? ` ${parts[0].annee}` : ""
+  }`;
+}
+
+/**
+ * Bouton « Voir le fil bancaire » + sa modale — utilisé dans la section
+ * Paramètres (à côté de « Synchroniser maintenant ») ET sur l'encart de
+ * la page Paiements.
+ */
+export function BoutonFilBancaire({
+  onChange
+}: {
+  /** Rechargement de la page appelante après une confirmation. */
+  onChange?: () => void;
+}) {
+  const [ouvert, setOuvert] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOuvert(true)}
+        title="Liste les transactions bancaires synchronisées (90 jours) avec leur rapprochement — aucune requête vers QuickBooks"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10"
+      >
+        <ListOrdered className="h-3.5 w-3.5" />
+        Voir le fil bancaire
+      </button>
+      {ouvert ? (
+        <FilBancaireModal
+          onClose={() => setOuvert(false)}
+          onChange={onChange}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function FilBancaireModal({
+  onClose,
+  onChange
+}: {
+  onClose: () => void;
+  onChange?: () => void;
+}) {
+  const [data, setData] = useState<FilData | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [immeuble, setImmeuble] = useState<string>("");
+  const [statut, setStatut] = useState<string>("");
+  const [choix, setChoix] = useState<Record<number, number>>({});
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const charger = useCallback(async () => {
+    setErr(null);
+    try {
+      const params = new URLSearchParams();
+      if (immeuble) params.set("immeuble_id", immeuble);
+      if (statut) params.set("statut", statut);
+      const qs = params.toString();
+      const r = await authedFetch(
+        `/api/v1/immobilier/validation-bancaire/transactions${
+          qs ? `?${qs}` : ""
+        }`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setData((await r.json()) as FilData);
+    } catch (e) {
+      setErr(`Chargement du fil impossible : ${(e as Error).message}`);
+    }
+  }, [immeuble, statut]);
+
+  useEffect(() => {
+    void charger();
+  }, [charger]);
+
+  async function confirmer(t: FilTransaction) {
+    const bailId = choix[t.txn_id] ?? t.candidats[0]?.bail_id;
+    if (!bailId) return;
+    setBusyId(t.txn_id);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/validation-bancaire/transactions/${t.txn_id}/confirmer`,
+        { method: "POST", body: JSON.stringify({ bail_id: bailId }) }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      await charger();
+      onChange?.();
+    } catch (e) {
+      setErr(`Confirmation échouée : ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Fil bancaire (QuickBooks)"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-900 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex flex-wrap items-center gap-2 border-b border-brand-800 px-4 py-3">
+          <Landmark className="h-4 w-4 text-accent-500" />
+          <h2 className="text-sm font-semibold text-white">
+            Fil bancaire (QuickBooks) — 90 derniers jours
+          </h2>
+          <div className="ml-auto flex items-center gap-2">
+            <select
+              value={immeuble}
+              onChange={(e) => setImmeuble(e.target.value)}
+              className="rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
+              aria-label="Filtrer par immeuble"
+            >
+              <option value="">Tous les immeubles</option>
+              {(data?.immeubles ?? []).map((i) => (
+                <option key={i.id} value={String(i.id)}>
+                  {i.name}
+                </option>
+              ))}
+            </select>
+            <select
+              value={statut}
+              onChange={(e) => setStatut(e.target.value)}
+              className="rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
+              aria-label="Filtrer par statut"
+            >
+              <option value="">Tous les statuts</option>
+              <option value="rapproche">Rapprochées</option>
+              <option value="ambigu">Ambiguës</option>
+              <option value="non_rapproche">Non rapprochées</option>
+              <option value="ignoree">Ignorées (sorties)</option>
+            </select>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Fermer"
+              className="rounded-lg border border-white/15 bg-white/5 p-1 text-white/70 transition hover:bg-white/10"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-y-auto px-4 py-3">
+          {err ? (
+            <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {err}
+            </p>
+          ) : null}
+          {data === null ? (
+            <div className="flex items-center justify-center py-10 text-white/40">
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </div>
+          ) : data.transactions.length === 0 ? (
+            <p className="py-6 text-center text-xs text-white/50">
+              Aucune transaction synchronisée sur la fenêtre de 90 jours
+              (ou rien ne correspond aux filtres). Lance « Synchroniser
+              maintenant » dans Paramètres → Gestion locative.
+            </p>
+          ) : (
+            <ul className="space-y-1.5">
+              {data.transactions.map((t) => (
+                <FilLigne
+                  key={t.txn_id}
+                  t={t}
+                  choix={choix[t.txn_id]}
+                  busy={busyId === t.txn_id}
+                  onChoix={(bailId) =>
+                    setChoix((c) => ({ ...c, [t.txn_id]: bailId }))
+                  }
+                  onConfirmer={() => void confirmer(t)}
+                />
+              ))}
+            </ul>
+          )}
+          <p className="mt-3 text-[11px] text-white/40">
+            Lecture des transactions déjà synchronisées — aucune requête
+            vers QuickBooks. Vert = rapprochée à un bail · jaune =
+            ambiguë (choisis le bail, la provenance est apprise) · gris =
+            non rapprochée · les sorties d&apos;argent (virements de
+            remise) sont ignorées, jamais comptées comme des loyers.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FilLigne({
+  t,
+  choix,
+  busy,
+  onChoix,
+  onConfirmer
+}: {
+  t: FilTransaction;
+  choix: number | undefined;
+  busy: boolean;
+  onChoix: (bailId: number) => void;
+  onConfirmer: () => void;
+}) {
+  // Code couleur : vert rapprochée / jaune ambiguë / gris le reste
+  // (les sorties ignorées sont en plus atténuées).
+  const cadre =
+    t.statut === "rapproche"
+      ? "border-emerald-500/25 bg-emerald-500/5"
+      : t.statut === "ambigu"
+        ? "border-amber-500/25 bg-amber-500/5"
+        : "border-brand-800 bg-brand-950/60";
+  return (
+    <li
+      className={`flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-xs text-white/75 ${cadre} ${
+        t.statut === "ignoree" ? "opacity-60" : ""
+      }`}
+    >
+      <span className="tabular-nums text-white/50">{t.date_txn}</span>
+      <span
+        className={`tabular-nums font-semibold ${
+          t.statut === "rapproche"
+            ? "text-emerald-300"
+            : t.statut === "ambigu"
+              ? "text-amber-300"
+              : "text-white/70"
+        }`}
+      >
+        {fmtMontant(t.montant)}
+      </span>
+      {t.payeur ? (
+        <span className="font-medium text-white">{t.payeur}</span>
+      ) : null}
+      <span
+        className="max-w-[200px] truncate text-white/40"
+        title={`${t.compte_nom}${t.description ? ` — ${t.description}` : ""}`}
+      >
+        {t.compte_nom}
+      </span>
+
+      {t.statut === "rapproche" ? (
+        <span className="inline-flex flex-wrap items-center gap-1.5">
+          {t.locataire_id ? (
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={`/immobilier/locataires/${t.locataire_id}` as any}
+              className="font-semibold text-emerald-300 underline-offset-2 hover:underline"
+              title="Ouvrir la fiche du locataire"
+            >
+              {t.locataire_name || `Locataire #${t.locataire_id}`}
+            </Link>
+          ) : (
+            <span className="font-semibold text-emerald-300">
+              {t.locataire_name || "—"}
+            </span>
+          )}
+          {t.immeuble_name ? (
+            <span className="text-white/50">
+              {t.immeuble_name}
+              {t.logement_numero ? ` · ${t.logement_numero}` : ""}
+            </span>
+          ) : null}
+          <span className="text-white/50">
+            {libelleMoisCouverts(t.mois_couverts)}
+          </span>
+          {t.valide ? (
+            <span
+              className="badge badge-emerald"
+              title="Rapprochée ET chaque mois couvert marqué payé dans Kratos"
+            >
+              <CheckCheck className="h-3 w-3" /> validé
+            </span>
+          ) : null}
+        </span>
+      ) : t.statut === "ambigu" ? (
+        <>
+          <span className="badge badge-amber">plusieurs baux possibles</span>
+          {t.candidats.length > 0 ? (
+            <span className="ml-auto inline-flex items-center gap-1.5">
+              <select
+                value={String(choix ?? t.candidats[0]?.bail_id ?? "")}
+                onChange={(ev) => onChoix(Number(ev.target.value))}
+                className="rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
+                aria-label="Choisir le bail"
+              >
+                {t.candidats.map((c) => (
+                  <option key={c.bail_id} value={c.bail_id}>
+                    {c.locataire_name || `Bail #${c.bail_id}`}
+                    {c.logement_numero ? ` · ${c.logement_numero}` : ""} (
+                    {fmtMontant(c.loyer_mensuel)})
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onConfirmer}
+                title="Confirme le bail ET apprend la provenance — le mois prochain, ce payeur se rapproche tout seul"
+                className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+              >
+                Confirmer
+              </button>
+            </span>
+          ) : null}
+        </>
+      ) : t.statut === "ignoree" ? (
+        <span className="italic text-white/45">
+          {t.ignore_raison === "sortie_argent"
+            ? "virement de remise — ignoré"
+            : "ignorée"}
+        </span>
+      ) : (
+        <span className="badge badge-neutral">non rapprochée</span>
+      )}
+    </li>
   );
 }

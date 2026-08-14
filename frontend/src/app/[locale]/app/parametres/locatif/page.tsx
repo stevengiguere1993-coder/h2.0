@@ -21,6 +21,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../../layout";
 import { authedFetch, hasMinRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { BoutonFilBancaire } from "@/components/immobilier/validation-bancaire";
 
 const MOIS_FR = [
   "janvier", "février", "mars", "avril", "mai", "juin", "juillet",
@@ -421,14 +422,18 @@ export default function LocatifDemarragePage() {
 // {immeuble} » dans QuickBooks ; Kratos les LIT (lecture seule, aucune
 // écriture) et pose ✓✓ « Validé banque » dans le suivi des loyers. Ici :
 // activer la feature, régler l'alerte « sans trace après N jours »,
-// découvrir les comptes, confirmer l'immeuble suggéré, synchroniser.
+// découvrir les comptes, confirmer le ou LES immeubles suggérés (un
+// compte peut couvrir plusieurs immeubles — ou tous : fiducie),
+// synchroniser (avec le rapport détaillé) et ouvrir le fil bancaire.
 
 type CompteLoyer = {
   id: number;
   qbo_account_id: string;
   qbo_account_name: string;
-  immeuble_id: number | null;
-  suggestion_immeuble_id: number | null;
+  immeuble_ids: number[];
+  tous_les_immeubles: boolean;
+  suggestion_immeuble_ids: number[];
+  suggestion_tous: boolean;
   suggestion_score: number | null;
   actif: boolean;
   derniere_synchro_le: string | null;
@@ -441,32 +446,72 @@ type ValidationConfig = {
   immeubles: { id: number; name: string }[];
 };
 
+type SyncCompteDetail = {
+  compte_id: number;
+  compte_nom: string;
+  lues: number;
+  importees: number;
+  mises_a_jour: number;
+  ignorees: number;
+  raisons: {
+    sortie_argent: number;
+    montant_nul: number;
+    deja_importee: number;
+    type_non_reconnu: number;
+  };
+  types_non_reconnus: string[];
+  erreur: string | null;
+};
+
+type SyncRapport = {
+  comptes: number;
+  importees: number;
+  mises_a_jour: number;
+  ignorees: number;
+  details: SyncCompteDetail[];
+};
+
+type SelectionCompte = {
+  immeuble_ids: number[];
+  tous: boolean;
+  actif: boolean;
+};
+
 function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
   const [cfg, setCfg] = useState<ValidationConfig | null>(null);
   const [active, setActive] = useState(false);
   const [jours, setJours] = useState(5);
-  // Sélection locale par compte : immeuble choisi + interrupteur.
+  // Sélection locale par compte : immeubles cochés + case « tous » +
+  // interrupteur.
   const [selections, setSelections] = useState<
-    Record<number, { immeuble_id: number | null; actif: boolean }>
+    Record<number, SelectionCompte>
   >({});
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Rapport détaillé de la dernière synchro manuelle (bloc repliable).
+  const [rapport, setRapport] = useState<SyncRapport | null>(null);
 
   const appliquer = useCallback((d: ValidationConfig) => {
     setCfg(d);
     setActive(d.active);
     setJours(d.alerte_jours);
-    const sel: Record<
-      number,
-      { immeuble_id: number | null; actif: boolean }
-    > = {};
+    const sel: Record<number, SelectionCompte> = {};
     for (const c of d.comptes) {
-      // Préremplissage : l'immeuble confirmé, sinon la SUGGESTION.
-      sel[c.id] = {
-        immeuble_id: c.immeuble_id ?? c.suggestion_immeuble_id,
-        actif: c.actif
-      };
+      // Préremplissage : le confirmé, sinon la SUGGESTION (liste
+      // d'immeubles, ou case « tous » pour un compte fiducie).
+      const confirme = c.tous_les_immeubles || c.immeuble_ids.length > 0;
+      sel[c.id] = confirme
+        ? {
+            immeuble_ids: c.immeuble_ids,
+            tous: c.tous_les_immeubles,
+            actif: c.actif
+          }
+        : {
+            immeuble_ids: c.suggestion_immeuble_ids,
+            tous: c.suggestion_tous,
+            actif: c.actif
+          };
     }
     setSelections(sel);
   }, []);
@@ -557,7 +602,11 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(sel)
+          body: JSON.stringify({
+            immeuble_ids: sel.tous ? [] : sel.immeuble_ids,
+            tous_les_immeubles: sel.tous,
+            actif: sel.actif
+          })
         }
       );
       if (!r.ok) {
@@ -566,9 +615,11 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
       }
       await load();
       setMsg(
-        sel.immeuble_id != null
-          ? `Compte « ${c.qbo_account_name} » relié.`
-          : `Compte « ${c.qbo_account_name} » sans immeuble — il ne sera pas synchronisé.`
+        sel.tous
+          ? `Compte « ${c.qbo_account_name} » relié à TOUS les immeubles internes.`
+          : sel.immeuble_ids.length > 0
+            ? `Compte « ${c.qbo_account_name} » relié à ${sel.immeuble_ids.length} immeuble${sel.immeuble_ids.length > 1 ? "s" : ""}.`
+            : `Compte « ${c.qbo_account_name} » sans immeuble — il ne sera pas synchronisé.`
       );
     } catch (e) {
       setErr(`Enregistrement du compte échoué : ${(e as Error).message}`);
@@ -581,6 +632,7 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
     setBusy("sync");
     setMsg(null);
     setErr(null);
+    setRapport(null);
     try {
       const r = await authedFetch(
         "/api/v1/immobilier/validation-bancaire/sync",
@@ -590,14 +642,11 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
         const t = await r.text();
         throw new Error(t.slice(0, 300) || `HTTP ${r.status}`);
       }
-      const d = (await r.json()) as {
-        comptes: number;
-        importees: number;
-        mises_a_jour: number;
-      };
+      const d = (await r.json()) as SyncRapport;
       await load();
+      setRapport(d);
       setMsg(
-        `Synchro terminée : ${d.comptes} compte${d.comptes > 1 ? "s" : ""} lu${d.comptes > 1 ? "s" : ""}, ${d.importees} transaction${d.importees > 1 ? "s" : ""} importée${d.importees > 1 ? "s" : ""}, ${d.mises_a_jour} mise${d.mises_a_jour > 1 ? "s" : ""} à jour.`
+        `Synchro terminée : ${d.comptes} compte${d.comptes > 1 ? "s" : ""} lu${d.comptes > 1 ? "s" : ""}, ${d.importees} transaction${d.importees > 1 ? "s" : ""} importée${d.importees > 1 ? "s" : ""}, ${d.mises_a_jour} mise${d.mises_a_jour > 1 ? "s" : ""} à jour, ${d.ignorees} ignorée${d.ignorees > 1 ? "s" : ""} — détail ci-dessous.`
       );
     } catch (e) {
       setErr(`Synchro échouée : ${(e as Error).message}`);
@@ -605,11 +654,6 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
       setBusy(null);
     }
   }
-
-  const nomImmeuble = (id: number | null): string => {
-    if (id == null || !cfg) return "";
-    return cfg.immeubles.find((i) => i.id === id)?.name || `#${id}`;
-  };
 
   return (
     <>
@@ -702,144 +746,252 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
               <h3 className="text-xs font-semibold uppercase tracking-wider text-white/50">
                 Comptes « Loyer à remettre » ↔ immeubles
               </h3>
-              {canEdit ? (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void decouvrir()}
-                    disabled={busy === "decouvrir"}
-                    title="Lit le plan comptable QuickBooks (lecture seule) et suggère l'immeuble de chaque compte"
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10 disabled:opacity-50"
-                  >
-                    {busy === "decouvrir" ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <RefreshCw className="h-3.5 w-3.5" />
-                    )}
-                    Découvrir les comptes
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void syncMaintenant()}
-                    disabled={busy === "sync"}
-                    title="Importe maintenant les transactions publiées des comptes reliés (90 derniers jours)"
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                  >
-                    {busy === "sync" ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <RefreshCw className="h-3.5 w-3.5" />
-                    )}
-                    Synchroniser maintenant
-                  </button>
-                </div>
-              ) : null}
+              <div className="flex items-center gap-2">
+                {canEdit ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void decouvrir()}
+                      disabled={busy === "decouvrir"}
+                      title="Lit le plan comptable QuickBooks (lecture seule) et suggère le ou les immeubles de chaque compte"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10 disabled:opacity-50"
+                    >
+                      {busy === "decouvrir" ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      )}
+                      Découvrir les comptes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void syncMaintenant()}
+                      disabled={busy === "sync"}
+                      title="Importe maintenant les transactions publiées des comptes reliés (90 derniers jours)"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                    >
+                      {busy === "sync" ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      )}
+                      Synchroniser maintenant
+                    </button>
+                  </>
+                ) : null}
+                <BoutonFilBancaire />
+              </div>
             </div>
+
+            {/* Rapport DÉTAILLÉ de la dernière synchro manuelle — parce
+                que « 0 transaction importée » sans explication ne veut
+                rien dire. Le cron loggue exactement la même chose. */}
+            {rapport ? (
+              <details
+                className="mt-3 rounded-lg border border-brand-800 bg-brand-950/60"
+                open
+              >
+                <summary className="cursor-pointer list-none px-3 py-2 text-xs font-semibold text-white/70 [&::-webkit-details-marker]:hidden">
+                  Rapport de synchro — {rapport.importees} importée
+                  {rapport.importees > 1 ? "s" : ""} ·{" "}
+                  {rapport.mises_a_jour} mise
+                  {rapport.mises_a_jour > 1 ? "s" : ""} à jour ·{" "}
+                  {rapport.ignorees} ignorée
+                  {rapport.ignorees > 1 ? "s" : ""}
+                </summary>
+                <ul className="space-y-1 border-t border-brand-800 px-3 py-2">
+                  {rapport.details.map((d) => (
+                    <li key={d.compte_id} className="text-xs text-white/60">
+                      <span className="font-medium text-white/85">
+                        {d.compte_nom}
+                      </span>{" "}
+                      : {d.lues} ligne{d.lues > 1 ? "s" : ""} lue
+                      {d.lues > 1 ? "s" : ""}, {d.importees} importée
+                      {d.importees > 1 ? "s" : ""}, {d.mises_a_jour} mise
+                      {d.mises_a_jour > 1 ? "s" : ""} à jour,{" "}
+                      {d.ignorees + d.raisons.deja_importee} ignorée
+                      {d.ignorees + d.raisons.deja_importee > 1 ? "s" : ""}
+                      {d.ignorees + d.raisons.deja_importee > 0 ? (
+                        <span className="text-white/45">
+                          {" ("}
+                          {[
+                            d.raisons.sortie_argent > 0
+                              ? `${d.raisons.sortie_argent} sortie${d.raisons.sortie_argent > 1 ? "s" : ""} d'argent`
+                              : null,
+                            d.raisons.deja_importee > 0
+                              ? `${d.raisons.deja_importee} déjà importée${d.raisons.deja_importee > 1 ? "s" : ""}`
+                              : null,
+                            d.raisons.montant_nul > 0
+                              ? `${d.raisons.montant_nul} montant${d.raisons.montant_nul > 1 ? "s" : ""} nul${d.raisons.montant_nul > 1 ? "s" : ""}`
+                              : null,
+                            d.raisons.type_non_reconnu > 0
+                              ? `${d.raisons.type_non_reconnu} type${d.raisons.type_non_reconnu > 1 ? "s" : ""} non reconnu${d.raisons.type_non_reconnu > 1 ? "s" : ""}${d.types_non_reconnus.length > 0 ? ` : ${d.types_non_reconnus.join(", ")}` : ""}`
+                              : null
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                          {")"}
+                        </span>
+                      ) : null}
+                      {d.erreur ? (
+                        <span className="text-rose-300">
+                          {" "}
+                          — erreur : {d.erreur}
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
 
             {cfg.comptes.length === 0 ? (
               <p className="mt-3 text-xs text-white/50">
                 Aucun compte découvert pour l&apos;instant. Clique
                 « Découvrir les comptes » — les comptes du plan comptable
                 dont le nom contient « Loyer à remettre » apparaîtront
-                ici avec l&apos;immeuble suggéré.
+                ici avec le ou les immeubles suggérés.
               </p>
             ) : (
               <ul className="mt-3 space-y-2">
                 {cfg.comptes.map((c) => {
-                  const sel = selections[c.id] ?? {
-                    immeuble_id: c.immeuble_id,
+                  const sel: SelectionCompte = selections[c.id] ?? {
+                    immeuble_ids: c.immeuble_ids,
+                    tous: c.tous_les_immeubles,
                     actif: c.actif
                   };
+                  const confirme =
+                    c.tous_les_immeubles || c.immeuble_ids.length > 0;
                   const suggere =
-                    c.immeuble_id == null &&
-                    sel.immeuble_id != null &&
-                    sel.immeuble_id === c.suggestion_immeuble_id;
+                    !confirme &&
+                    (sel.tous || sel.immeuble_ids.length > 0) &&
+                    (sel.tous === c.suggestion_tous &&
+                      JSON.stringify([...sel.immeuble_ids].sort()) ===
+                        JSON.stringify(
+                          [...c.suggestion_immeuble_ids].sort()
+                        ));
                   const modifie =
-                    sel.immeuble_id !== c.immeuble_id ||
-                    sel.actif !== c.actif;
+                    sel.tous !== c.tous_les_immeubles ||
+                    sel.actif !== c.actif ||
+                    JSON.stringify([...sel.immeuble_ids].sort()) !==
+                      JSON.stringify([...c.immeuble_ids].sort());
+                  const basculer = (id: number) => {
+                    setSelections((s) => ({
+                      ...s,
+                      [c.id]: {
+                        ...sel,
+                        immeuble_ids: sel.immeuble_ids.includes(id)
+                          ? sel.immeuble_ids.filter((x) => x !== id)
+                          : [...sel.immeuble_ids, id]
+                      }
+                    }));
+                  };
                   return (
                     <li
                       key={c.id}
-                      className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2"
+                      className="rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2"
                     >
-                      <span className="min-w-[220px] text-sm font-medium text-white">
-                        {c.qbo_account_name}
-                      </span>
-                      <span className="text-xs text-white/40">→</span>
-                      <select
-                        value={sel.immeuble_id != null ? String(sel.immeuble_id) : ""}
-                        disabled={!canEdit}
-                        onChange={(e) =>
-                          setSelections((s) => ({
-                            ...s,
-                            [c.id]: {
-                              ...sel,
-                              immeuble_id: e.target.value
-                                ? Number(e.target.value)
-                                : null
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-medium text-white">
+                          {c.qbo_account_name}
+                        </span>
+                        {suggere ? (
+                          <span
+                            className="badge badge-amber"
+                            title="Suggestion automatique d'après le nom du compte — à confirmer"
+                          >
+                            suggéré
+                          </span>
+                        ) : confirme ? (
+                          <span
+                            className="badge badge-emerald"
+                            title={
+                              c.tous_les_immeubles
+                                ? "Relié à tous les immeubles internes"
+                                : `Relié à ${c.immeuble_ids.length} immeuble${c.immeuble_ids.length > 1 ? "s" : ""}`
                             }
-                          }))
-                        }
-                        className="min-w-[220px] rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white focus:border-accent-500 focus:outline-none disabled:opacity-60"
-                        aria-label={`Immeuble du compte ${c.qbo_account_name}`}
-                      >
-                        <option value="">— Aucun immeuble —</option>
-                        {cfg.immeubles.map((i) => (
-                          <option key={i.id} value={i.id}>
-                            {i.name}
-                          </option>
-                        ))}
-                      </select>
-                      {suggere ? (
-                        <span
-                          className="badge badge-amber"
-                          title={`Suggestion automatique (similarité ${Math.round((c.suggestion_score ?? 0) * 100)} %) — à confirmer`}
+                          >
+                            confirmé
+                          </span>
+                        ) : null}
+                        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-white/60">
+                          <input
+                            type="checkbox"
+                            checked={sel.actif}
+                            disabled={!canEdit}
+                            onChange={(e) =>
+                              setSelections((s) => ({
+                                ...s,
+                                [c.id]: { ...sel, actif: e.target.checked }
+                              }))
+                            }
+                            className="h-3.5 w-3.5 accent-[var(--accent-500,#f59e0b)]"
+                          />
+                          actif
+                        </label>
+                        {c.derniere_synchro_le ? (
+                          <span className="text-[10px] text-white/35">
+                            synchro {c.derniere_synchro_le.slice(0, 10)}
+                          </span>
+                        ) : null}
+                        {canEdit ? (
+                          <button
+                            type="button"
+                            onClick={() => void saveCompte(c)}
+                            disabled={busy === `compte-${c.id}` || !modifie}
+                            className="ml-auto inline-flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-40"
+                          >
+                            {busy === `compte-${c.id}` ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Check className="h-3 w-3" />
+                            )}
+                            Confirmer
+                          </button>
+                        ) : null}
+                      </div>
+                      {/* Case « tous » (compte fiducie) + sélection fine
+                          en pastilles cochables — un compte QBO peut
+                          couvrir PLUSIEURS immeubles. */}
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <label
+                          className="flex cursor-pointer items-center gap-1.5 rounded-full border border-brand-800 bg-brand-950 px-2.5 py-1 text-xs text-white/70"
+                          title="Compte fourre-tout (ex. fiducie des virements Interac) : les encaissements peuvent venir de n'importe quel immeuble interne"
                         >
-                          suggéré
-                        </span>
-                      ) : c.immeuble_id != null ? (
-                        <span
-                          className="badge badge-emerald"
-                          title={`Relié à ${nomImmeuble(c.immeuble_id)}`}
-                        >
-                          confirmé
-                        </span>
-                      ) : null}
-                      <label className="flex cursor-pointer items-center gap-1.5 text-xs text-white/60">
-                        <input
-                          type="checkbox"
-                          checked={sel.actif}
-                          disabled={!canEdit}
-                          onChange={(e) =>
-                            setSelections((s) => ({
-                              ...s,
-                              [c.id]: { ...sel, actif: e.target.checked }
-                            }))
-                          }
-                          className="h-3.5 w-3.5 accent-[var(--accent-500,#f59e0b)]"
-                        />
-                        actif
-                      </label>
-                      {c.derniere_synchro_le ? (
-                        <span className="text-[10px] text-white/35">
-                          synchro {c.derniere_synchro_le.slice(0, 10)}
-                        </span>
-                      ) : null}
-                      {canEdit ? (
-                        <button
-                          type="button"
-                          onClick={() => void saveCompte(c)}
-                          disabled={busy === `compte-${c.id}` || !modifie}
-                          className="ml-auto inline-flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-40"
-                        >
-                          {busy === `compte-${c.id}` ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <Check className="h-3 w-3" />
-                          )}
-                          Confirmer
-                        </button>
-                      ) : null}
+                          <input
+                            type="checkbox"
+                            checked={sel.tous}
+                            disabled={!canEdit}
+                            onChange={(e) =>
+                              setSelections((s) => ({
+                                ...s,
+                                [c.id]: { ...sel, tous: e.target.checked }
+                              }))
+                            }
+                            className="h-3.5 w-3.5 accent-[var(--accent-500,#f59e0b)]"
+                          />
+                          Tous les immeubles internes
+                        </label>
+                        {cfg.immeubles.map((i) => {
+                          const coche = sel.immeuble_ids.includes(i.id);
+                          return (
+                            <button
+                              key={i.id}
+                              type="button"
+                              disabled={!canEdit || sel.tous}
+                              onClick={() => basculer(i.id)}
+                              aria-pressed={coche}
+                              className={`rounded-full border px-2.5 py-1 text-xs transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                                coche
+                                  ? "border-emerald-500/50 bg-emerald-500/15 font-semibold text-emerald-300"
+                                  : "border-brand-800 bg-brand-950 text-white/60 hover:bg-white/5"
+                              }`}
+                            >
+                              {i.name}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </li>
                   );
                 })}
@@ -852,6 +1004,26 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
               (fenêtre glissante de 90 jours). Les immeubles en gestion
               externe sont exclus : la perception y est déléguée.
             </p>
+
+            {/* Aide : comment le mois d'un versement est déterminé. */}
+            <div className="mt-3 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2 text-xs text-white/55">
+              <p className="font-semibold text-white/75">
+                Comment le mois d&apos;un versement est déterminé
+              </p>
+              <p className="mt-1">
+                La date de la transaction donne le mois. Si le montant ne
+                colle pas à ce mois-là mais correspond à ce qui est dû le
+                mois d&apos;avant ou d&apos;après, le versement est
+                rattaché à ce mois — ex. un virement reçu le 31 juillet
+                compte pour août si juillet est déjà réglé et que le
+                montant correspond au dû d&apos;août. Un montant égal à
+                plusieurs mois de retard consécutifs (ex. 2 × 650&nbsp;$
+                = 1&nbsp;300&nbsp;$) couvre tous ces mois d&apos;un coup,
+                en commençant par le plus ancien. En cas de doute (deux
+                baux possibles), rien n&apos;est deviné : la transaction
+                reste « à rapprocher » et tu choisis le bail toi-même.
+              </p>
+            </div>
 
             {!canEdit ? (
               <p className="mt-3 text-xs text-white/50">

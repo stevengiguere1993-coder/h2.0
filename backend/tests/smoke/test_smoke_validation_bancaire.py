@@ -16,6 +16,21 @@ Vérifie avec un faux client QBO (aucun réseau) :
 6. feature active → ✓✓ « valide » quand paiement marqué + transaction
    rapprochée ; ⚠ « sans_trace » quand marqué payé depuis > N jours
    sans trace bancaire ; encart « encaissés non marqués » rempli.
+
+v2 (retours Phil 2026-08-14) :
+7. compte relié à PLUSIEURS immeubles → candidats = UNION des baux ;
+8. compte « tous les immeubles » (fiducie) + payeur extrait du mémo
+   Interac réel « Virement Interac de /X / » qui départage ;
+9. classification par TYPE (jamais par signe) : dépôt en négatif
+   (représentation d'un compte de passif) quand même importé ; virement
+   de remise sortant ignoré proprement ; type inconnu rapporté — avec le
+   RAPPORT de synchro détaillé par compte ;
+10. suggestion MULTI-immeubles (« 9085 Millen & 710 Legendre » suggère
+    les deux) + nom fiducie → suggestion « tous » ;
+11. paiement MULTI-MOIS : 2 mois de retard à 650 $ réglés par un
+    virement de 1 300 $ → rapproché aux deux mois (✓✓ sur chacun une
+    fois marqués payés) ; le même montant avec DEUX baux candidats →
+    ambigu, zéro pronostic ; le fil bancaire liste tout.
 """
 from __future__ import annotations
 
@@ -34,6 +49,7 @@ from app.models.immobilier import (
 )
 from app.models.qbo_loyers import (
     QboAliasPayeur,
+    QboCompteImmeuble,
     QboCompteLoyer,
     QboTransactionLoyer,
 )
@@ -42,6 +58,7 @@ from app.services.qbo_validation_loyers import (
     confirmer_transaction,
     decouvrir_comptes,
     etat_validation,
+    lister_transactions,
     synchroniser_transactions,
 )
 
@@ -131,6 +148,7 @@ def _purge(run):
         async with TestSessionLocal() as s:
             await s.execute(delete(QboTransactionLoyer))
             await s.execute(delete(QboAliasPayeur))
+            await s.execute(delete(QboCompteImmeuble))
             await s.execute(delete(QboCompteLoyer))
             await s.commit()
 
@@ -203,19 +221,38 @@ def _seed_immeuble(
     return run(_do())
 
 
-def _map_compte(run, qbo_account_id: str, nom: str, immeuble_id: int) -> int:
-    """Compte découvert + confirmé (comme le ferait Paramètres)."""
+def _map_compte(
+    run,
+    qbo_account_id: str,
+    nom: str,
+    immeuble_ids,
+    *,
+    tous: bool = False,
+) -> int:
+    """Compte découvert + confirmé (comme le ferait Paramètres) — relié
+    à UN, PLUSIEURS immeubles (liens N-N) ou à TOUS (fiducie)."""
+    if isinstance(immeuble_ids, int):
+        immeuble_ids = [immeuble_ids]
 
     async def _do() -> int:
         async with TestSessionLocal() as s:
             c = QboCompteLoyer(
                 qbo_account_id=qbo_account_id,
                 qbo_account_name=nom,
-                immeuble_id=immeuble_id,
+                tous_les_immeubles=tous,
                 actif=True,
                 created_at=datetime.now(timezone.utc),
             )
             s.add(c)
+            await s.flush()
+            for iid in immeuble_ids or []:
+                s.add(
+                    QboCompteImmeuble(
+                        compte_id=c.id,
+                        immeuble_id=iid,
+                        created_at=datetime.now(timezone.utc),
+                    )
+                )
             await s.commit()
             return c.id
 
@@ -579,3 +616,392 @@ def test_etat_valide_sans_trace_et_encaisses_non_marques(run, db_setup):
     assert par_bail2[roy["bail_id"]]["statut"] == "valide"
     assert par_bail2[roy["bail_id"]]["montant"] == 1105.0
     assert etat2["encaisses_non_marques"] == []
+
+
+# ── 7) v2 : un compte QBO → PLUSIEURS immeubles (union des baux) ───────
+
+
+def _mois_avant(m: date, n: int) -> date:
+    """1er du mois, n mois avant m."""
+    y, mo = m.year, m.month - n
+    while mo < 1:
+        mo += 12
+        y -= 1
+    return date(y, mo, 1)
+
+
+def test_compte_multi_immeubles_union_des_baux(run, db_setup):
+    _purge(run)
+    a = _seed_immeuble(
+        run,
+        name="9085, Rue Millen",
+        address="9085, Rue Millen",
+        baux=[{"loyer": 745.0, "nom": "Alice Fortin"}],
+    )
+    b = _seed_immeuble(
+        run,
+        name="710, Rue Legendre",
+        address="710, Rue Legendre",
+        baux=[{"loyer": 995.0, "nom": "Bruno Caron"}],
+    )
+    # UN compte QBO pour les DEUX immeubles (réalité du terrain).
+    _map_compte(
+        run, "200", "9085 Millen & 710 Legendre - Loyer à remettre",
+        [a["immeuble_id"], b["immeuble_id"]],
+    )
+    qbo = FakeQbo(
+        gl_par_compte={
+            "200": [
+                {"date": MOIS_COURANT.isoformat(), "id": "D-100",
+                 "nom": "", "memo": "Dépôt", "montant": 745.0},
+                {"date": MOIS_COURANT.isoformat(), "id": "D-101",
+                 "nom": "", "memo": "Dépôt", "montant": 995.0},
+            ]
+        }
+    )
+    _sync(run, qbo)
+    rows = {t.qbo_txn_id: t for t in _txns(run)}
+    # Chaque dépôt se rapproche au bail de SON immeuble (union des
+    # candidats), et la transaction hérite de l'immeuble du bail.
+    assert rows["D-100"].statut == "rapproche"
+    assert rows["D-100"].bail_id == a["baux"][0]["bail_id"]
+    assert rows["D-100"].immeuble_id == a["immeuble_id"]
+    assert rows["D-101"].statut == "rapproche"
+    assert rows["D-101"].bail_id == b["baux"][0]["bail_id"]
+    assert rows["D-101"].immeuble_id == b["immeuble_id"]
+
+
+# ── 8) v2 : compte fiducie « tous les immeubles » + payeur Interac ─────
+
+
+def test_compte_tous_les_immeubles_et_payeur_interac(run, db_setup):
+    _purge(run)
+    a = _seed_immeuble(
+        run,
+        name="4521, Rue Papineau",
+        address="4521, Rue Papineau",
+        baux=[{"loyer": 815.0, "nom": "Drissa Kone"}],
+    )
+    bimm = _seed_immeuble(
+        run,
+        name="6660, Rue Cartier",
+        address="6660, Rue Cartier",
+        baux=[{"loyer": 815.0, "nom": "Marie Tremblay"}],
+    )
+    # Compte fiducie : reçoit les virements de TOUS les locataires —
+    # aucun lien fin, la case « tous » suffit.
+    _map_compte(
+        run, "210", "Fonds en Fiducie – Loyers à Remettre", [], tous=True
+    )
+    qbo = FakeQbo(
+        gl_par_compte={
+            "210": [
+                # Mémo Interac RÉEL : le payeur est entre les « / ».
+                {"date": MOIS_COURANT.isoformat(), "id": "D-110",
+                 "nom": "",
+                 "memo": "Virement Interac de /DRISSA KONE / ",
+                 "montant": 815.0},
+                # Même montant, payeur inconnu : DEUX baux (dans DEUX
+                # immeubles) plausibles → ambigu, zéro pronostic.
+                {"date": MOIS_COURANT.isoformat(), "id": "D-111",
+                 "nom": "", "memo": "Transfert entrant",
+                 "montant": 815.0},
+            ]
+        }
+    )
+    _sync(run, qbo)
+    rows = {t.qbo_txn_id: t for t in _txns(run)}
+
+    # Payeur extrait du mémo (strip des « / » et espaces), et le nom
+    # départage les deux baux à 815 $ malgré la casse différente.
+    assert rows["D-110"].payeur == "DRISSA KONE"
+    assert rows["D-110"].statut == "rapproche"
+    assert rows["D-110"].bail_id == a["baux"][0]["bail_id"]
+    assert rows["D-110"].immeuble_id == a["immeuble_id"]
+
+    assert rows["D-111"].statut == "ambigu"
+    assert rows["D-111"].bail_id is None
+    assert rows["D-111"].immeuble_id is None  # fiducie : inconnu
+
+    # L'état propose les baux candidats des DEUX immeubles internes.
+    _set_config(run, active=True)
+    etat = _etat(run, MOIS_COURANT)
+    ambigues = [
+        t for t in etat["a_traiter"] if t["statut"] == "ambigu"
+    ]
+    assert len(ambigues) == 1
+    cand_ids = {c["bail_id"] for c in ambigues[0]["candidats"]}
+    assert a["baux"][0]["bail_id"] in cand_ids
+    assert bimm["baux"][0]["bail_id"] in cand_ids
+
+
+# ── 9) v2 : classification par TYPE + rapport de synchro détaillé ──────
+
+
+def test_classification_par_type_et_rapport_detaille(run, db_setup):
+    _purge(run)
+    seed = _seed_immeuble(
+        run,
+        name="3033, Rue Sherbrooke Est",
+        address="3033, Rue Sherbrooke Est",
+        baux=[{"loyer": 650.0, "nom": "Luc Talbot"}],
+    )
+    _map_compte(run, "220", "Loyer à remettre - 3033 Sherbrooke",
+                seed["immeuble_id"])
+    qbo = FakeQbo(
+        gl_par_compte={
+            "220": [
+                # Dépôt en NÉGATIF : représentation d'un compte de
+                # PASSIF (crédit) — la cause du « 0 importée ». Le TYPE
+                # dit « entrée », le montant passe en valeur absolue.
+                {"date": MOIS_COURANT.isoformat(), "id": "D-120",
+                 "type": "Deposit", "nom": "Luc Talbot", "memo": "",
+                 "montant": -650.0},
+                # Virement de remise SORTANT : jamais un loyer —
+                # ignoré proprement (raison « sortie_argent »), mais
+                # conservé pour le fil bancaire.
+                {"date": MOIS_COURANT.isoformat(), "id": "T-121",
+                 "type": "Transfer", "nom": "",
+                 "memo": "Paiement internet à /8900 St-Hub/loyer Août",
+                 "montant": -650.0},
+                # Type inconnu : écarté, mais RAPPORTÉ avec son libellé.
+                {"date": MOIS_COURANT.isoformat(), "id": "E-122",
+                 "type": "Estimate", "nom": "", "memo": "",
+                 "montant": 100.0},
+                # Montant nul : écarté (raison « montant_nul »).
+                {"date": MOIS_COURANT.isoformat(), "id": "D-123",
+                 "type": "Deposit", "nom": "", "memo": "",
+                 "montant": 0.0},
+            ]
+        }
+    )
+    stats = _sync(run, qbo)
+
+    # Totaux : 1 entrée importée, 3 ignorées (sortie + nul + inconnu).
+    assert stats["comptes"] == 1
+    assert stats["importees"] == 1
+    assert stats["ignorees"] == 3
+    detail = stats["details"][0]
+    assert detail["compte_nom"] == "Loyer à remettre - 3033 Sherbrooke"
+    assert detail["lues"] == 4
+    assert detail["importees"] == 1
+    assert detail["raisons"]["sortie_argent"] == 1
+    assert detail["raisons"]["montant_nul"] == 1
+    assert detail["raisons"]["type_non_reconnu"] == 1
+    assert detail["types_non_reconnus"] == ["Estimate"]
+
+    rows = {t.qbo_txn_id: t for t in _txns(run)}
+    # Le dépôt négatif est importé en valeur absolue ET rapproché.
+    assert float(rows["D-120"].montant) == 650.0
+    assert rows["D-120"].sens == "entree"
+    assert rows["D-120"].statut == "rapproche"
+    assert rows["D-120"].bail_id == seed["baux"][0]["bail_id"]
+    # La sortie est conservée mais IGNORÉE (jamais candidate).
+    assert rows["T-121"].sens == "sortie"
+    assert rows["T-121"].statut == "ignoree"
+    assert rows["T-121"].ignore_raison == "sortie_argent"
+    assert rows["T-121"].bail_id is None
+    # Le type inconnu et le montant nul ne sont PAS persistés.
+    assert "E-122" not in rows and "D-123" not in rows
+
+    # Rejouer la fenêtre : rien de neuf, l'entrée est « déjà importée ».
+    stats2 = _sync(run, qbo)
+    assert stats2["importees"] == 0
+    d2 = stats2["details"][0]
+    assert d2["raisons"]["deja_importee"] == 1
+    assert d2["raisons"]["sortie_argent"] == 1  # re-lue, toujours ignorée
+    assert len(_txns(run)) == 2  # aucune ligne dupliquée
+
+    # La sortie ne sort JAMAIS dans l'état (ni encart ni à traiter).
+    _set_config(run, active=True)
+    etat = _etat(run, MOIS_COURANT)
+    assert all(
+        t["txn_id"] != rows["T-121"].id for t in etat["a_traiter"]
+    )
+
+    # …mais le FIL BANCAIRE la montre, avec sa raison.
+    async def _fil():
+        async with TestSessionLocal() as s:
+            return await lister_transactions(s)
+
+    fil = run(_fil())
+    par_id = {t["txn_id"]: t for t in fil["transactions"]}
+    assert par_id[rows["T-121"].id]["statut"] == "ignoree"
+    assert par_id[rows["T-121"].id]["ignore_raison"] == "sortie_argent"
+    assert par_id[rows["D-120"].id]["statut"] == "rapproche"
+    assert par_id[rows["D-120"].id]["locataire_name"] == "Luc Talbot"
+
+
+# ── 10) v2 : suggestion multi-immeubles + fiducie → « tous » ───────────
+
+
+def test_suggestion_multi_immeubles_et_fiducie(run, db_setup):
+    import json
+
+    _purge(run)
+    # Adresses UNIQUES à ce test (la base est partagée entre les smoke
+    # tests — un doublon d'adresse rendrait la paire indiscernable et
+    # annulerait la suggestion, comme voulu en prod).
+    a = _seed_immeuble(
+        run,
+        name="4747, Rue Fabre",
+        address="4747, Rue Fabre",
+        baux=[{"loyer": 700.0, "nom": "Jean Dupont"}],
+    )
+    b = _seed_immeuble(
+        run,
+        name="1225, Rue Jarry Est",
+        address="1225, Rue Jarry Est",
+        baux=[{"loyer": 800.0, "nom": "Marie Roy"}],
+    )
+    qbo = FakeQbo(
+        accounts=[
+            {"Id": "230",
+             "Name": "4747 Fabre & 1225 Jarry - Loyer à remettre"},
+            {"Id": "231",
+             "Name": "Fonds en Fiducie – Loyers à Remettre"},
+        ]
+    )
+
+    async def _do():
+        async with TestSessionLocal() as s:
+            comptes = await decouvrir_comptes(s, qbo)
+            await s.commit()
+            return {
+                c.qbo_account_id: {
+                    "sugg": json.loads(c.suggestion_immeubles_json or "[]"),
+                    "tous": bool(c.suggestion_tous),
+                }
+                for c in comptes
+            }
+
+    res = run(_do())
+    # Le nom qui cite deux adresses suggère LES DEUX immeubles.
+    assert set(res["230"]["sugg"]) == {a["immeuble_id"], b["immeuble_id"]}
+    assert res["230"]["tous"] is False
+    # Le nom générique fiducie ne suggère rien… sauf la case « tous ».
+    assert res["231"]["sugg"] == []
+    assert res["231"]["tous"] is True
+
+
+# ── 11) v2 : paiement multi-mois (2 mois de retard d'un coup) ──────────
+
+
+def test_paiement_multi_mois_rapproche_et_valide_chaque_mois(run, db_setup):
+    _purge(run)
+    _set_config(run, active=True, jours=5)
+    seed = _seed_immeuble(
+        run,
+        name="1188, Rue Wolfe",
+        address="1188, Rue Wolfe",
+        baux=[{"loyer": 650.0, "nom": "Karim Ouali"}],
+    )
+    bail = seed["baux"][0]
+    _map_compte(run, "240", "Loyer à remettre - 1188 Wolfe",
+                seed["immeuble_id"])
+
+    # Historique : tout est réglé SAUF les 2 derniers mois échus (m-2 et
+    # m-1) — le locataire a sauté deux mois.
+    m_2 = _mois_avant(MOIS_COURANT, 2)
+    m_1 = _mois_avant(MOIS_COURANT, 1)
+    for n in range(3, 13):
+        _marquer_paye(
+            run, bail["bail_id"], _mois_avant(MOIS_COURANT, n), 650.0,
+            AUJOURDHUI - timedelta(days=30 * n),
+        )
+
+    # Virement de rattrapage : 2 × 650 $ = 1 300 $.
+    qbo = FakeQbo(
+        gl_par_compte={
+            "240": [
+                {"date": MOIS_COURANT.isoformat(), "id": "D-130",
+                 "nom": "Karim Ouali", "memo": "", "montant": 1300.0},
+            ]
+        }
+    )
+    _sync(run, qbo)
+    txn = _txns(run)[0]
+    # Rapproché aux DEUX mois échus consécutifs impayés (dette la plus
+    # ancienne d'abord — déterministe).
+    assert txn.statut == "rapproche"
+    assert txn.bail_id == bail["bail_id"]
+    assert txn.mois_couvert == m_2
+    assert txn.mois_couvert_fin == m_1
+
+    # L'encart « encaissés non marqués » sort UNE ligne PAR mois couvert.
+    etat0 = _etat(run, MOIS_COURANT)
+    mois_encart = [
+        e["mois_couvert"]
+        for e in etat0["encaisses_non_marques"]
+        if e["bail_id"] == bail["bail_id"]
+    ]
+    assert mois_encart == [m_2.isoformat(), m_1.isoformat()]
+
+    # Une fois les deux mois marqués payés (1re validation), la pastille
+    # ✓✓ s'affiche sur CHACUN des mois couverts.
+    _marquer_paye(run, bail["bail_id"], m_2, 650.0, AUJOURDHUI)
+    _marquer_paye(run, bail["bail_id"], m_1, 650.0, AUJOURDHUI)
+    for mois in (m_2, m_1):
+        etat = _etat(run, mois)
+        par_bail = {v["bail_id"]: v for v in etat["validations"]}
+        assert par_bail[bail["bail_id"]]["statut"] == "valide"
+
+    # STABILITÉ : rejouer la synchro après avoir marqué payé ne défait
+    # PAS le rapprochement (les mois ne sont plus « impayés », mais un
+    # rapprochement auto posé reste posé tant que l'écriture ne change
+    # pas dans QuickBooks).
+    _sync(run, qbo)
+    txn2 = _txns(run)[0]
+    assert txn2.statut == "rapproche"
+    assert txn2.mois_couvert == m_2
+    assert txn2.mois_couvert_fin == m_1
+
+    # Le fil bancaire porte les mois couverts + le ✓✓ (tous marqués).
+    async def _fil():
+        async with TestSessionLocal() as s:
+            return await lister_transactions(s)
+
+    fil = run(_fil())
+    ligne = next(
+        t for t in fil["transactions"] if t["txn_id"] == txn.id
+    )
+    assert ligne["mois_couverts"] == [m_2.isoformat(), m_1.isoformat()]
+    assert ligne["valide"] is True
+
+
+def test_paiement_multi_mois_deux_baux_candidats_ambigu(run, db_setup):
+    _purge(run)
+    seed = _seed_immeuble(
+        run,
+        name="2244, Rue Logan",
+        address="2244, Rue Logan",
+        baux=[
+            {"loyer": 650.0, "nom": "Jean Dupont"},
+            {"loyer": 650.0, "nom": "Marie Roy"},
+        ],
+    )
+    _map_compte(run, "250", "Loyer à remettre - 2244 Logan",
+                seed["immeuble_id"])
+    # Les DEUX baux ont les 2 mêmes mois échus impayés (le reste réglé).
+    for b in seed["baux"]:
+        for n in range(3, 13):
+            _marquer_paye(
+                run, b["bail_id"], _mois_avant(MOIS_COURANT, n), 650.0,
+                AUJOURDHUI - timedelta(days=30 * n),
+            )
+    # 1 300 $ sans payeur : deux baux plausibles → ambigu, ZÉRO
+    # pronostic (ni bail ni mois).
+    qbo = FakeQbo(
+        gl_par_compte={
+            "250": [
+                {"date": MOIS_COURANT.isoformat(), "id": "D-140",
+                 "nom": "", "memo": "Dépôt guichet", "montant": 1300.0},
+            ]
+        }
+    )
+    _sync(run, qbo)
+    txn = _txns(run)[0]
+    assert txn.statut == "ambigu"
+    assert txn.bail_id is None
+    assert txn.mois_couvert is None
+    assert txn.mois_couvert_fin is None
