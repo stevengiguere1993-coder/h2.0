@@ -20,6 +20,7 @@ import {
 import { authedFetch } from "@/lib/auth";
 import { InvestisseurTopbar } from "../../layout";
 import {
+  DepensesParCategorie,
   fmtDate,
   fmtMoney,
   fmtPct,
@@ -186,7 +187,11 @@ export default function ProjetPage() {
               {fmtMoney(data.equite)}
             </p>
             <p className="mt-1 text-xs text-white/50">
-              valeur − hypothèques
+              {(data.avances_actionnaires ?? 0) > 0
+                ? `valeur − hypothèques − avances aux actionnaires (${fmtMoney(
+                    data.avances_actionnaires
+                  )})`
+                : "valeur − hypothèques"}
             </p>
           </div>
           <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
@@ -259,6 +264,7 @@ export default function ProjetPage() {
                                 im.hypotheque_fin_terme
                               )}`
                             : ""}
+                          {` · solde ${fmtMoney(im.hypotheque_balance)}`}
                         </p>
                       ) : null}
                     </td>
@@ -328,6 +334,11 @@ export default function ProjetPage() {
                   </span>
                 ) : null}
               </div>
+              {data.show_depenses ? (
+                <DepensesParCategorie
+                  items={data.depenses_par_categorie || []}
+                />
+              ) : null}
             </div>
 
             {/* Timeline */}

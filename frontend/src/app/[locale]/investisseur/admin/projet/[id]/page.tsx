@@ -10,7 +10,7 @@
    - Documents partagés : upload PDF ou fichiers COCHÉS depuis le Drive
      de la compagnie (copie au partage — jamais le Drive complet). */
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { useRouter } from "@/i18n/navigation";
 import {
@@ -28,6 +28,8 @@ import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { InvestisseurTopbar } from "../../../layout";
 import {
+  DepenseCategorie,
+  DepensesParCategorie,
   fmtDate,
   fmtMoney,
   fmtPct,
@@ -78,6 +80,7 @@ type AdminProjet = {
     show_hypotheque: boolean;
     show_actionnaires: boolean;
     show_cashflow: boolean;
+    avances_actionnaires: number | null;
   };
   immeubles: {
     immeuble_id: number;
@@ -95,9 +98,17 @@ type AdminProjet = {
     hypotheque_fin_terme: string | null;
     equite: number;
     ownership_pct: number;
+    logements: {
+      logement_id: number;
+      numero: string | null;
+      loue: boolean;
+      loyer: number | null;
+    }[];
   }[];
   valeur_totale: number;
   hypotheque_totale: number;
+  avances_actionnaires: number;
+  depenses_par_categorie: DepenseCategorie[];
   equite: number;
   loyers_mensuels: number;
   nb_logements: number;
@@ -137,10 +148,14 @@ type PartenaireT = {
   partner_id: number;
   name: string;
   email: string | null;
+  missing_email: boolean;
   role: string | null;
   ownership_pct: number | null;
   user_id: number | null;
+  has_account: boolean;
   deja_participant: boolean;
+  participation_id: number | null;
+  is_visible: boolean;
 };
 
 const FLUX_LABELS: Record<string, string> = {
@@ -164,6 +179,8 @@ export default function AdminProjetPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [driveOpen, setDriveOpen] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [busyActiver, setBusyActiver] = useState<number | null>(null);
+  const [expandedImm, setExpandedImm] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -190,6 +207,41 @@ export default function AdminProjetPage() {
       { method: "PATCH", body: JSON.stringify(body) }
     );
     if (res.ok) await load();
+  }
+
+  async function activerPartenaire(pa: PartenaireT) {
+    setBusyActiver(pa.partner_id);
+    setBanner(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/invest/admin/projets/${entrepriseId}/partenaires/${pa.partner_id}/activer`,
+        { method: "POST" }
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        setBanner(
+          typeof body?.detail === "string"
+            ? body.detail
+            : "Activation échouée."
+        );
+        return;
+      }
+      if (body?.invitation_sent) {
+        setBanner(
+          `Compte créé et invitation envoyée à ${pa.email}. Le projet ` +
+            "reste masqué pour lui — activez « Visible dans son " +
+            "portail » quand vous êtes prêt."
+        );
+      } else if (body?.temp_password) {
+        setBanner(
+          `Compte créé mais courriel non configuré — transmettez ce ` +
+            `mot de passe temporaire à ${pa.name} : ${body.temp_password}`
+        );
+      }
+      await load();
+    } finally {
+      setBusyActiver(null);
+    }
   }
 
   async function removeParticipation(p: ParticipationRow) {
@@ -376,7 +428,11 @@ export default function AdminProjetPage() {
               {fmtMoney(data.equite)}
             </p>
             <p className="mt-1 text-xs text-white/50">
-              valeur − hypothèques
+              {data.avances_actionnaires > 0
+                ? `valeur − hypothèques − avances (${fmtMoney(
+                    data.avances_actionnaires
+                  )})`
+                : "valeur − hypothèques"}
             </p>
           </div>
           <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
@@ -438,53 +494,122 @@ export default function AdminProjetPage() {
               </thead>
               <tbody>
                 {data.immeubles.map((im) => (
-                  <tr
-                    key={im.immeuble_id}
-                    className="border-t border-brand-800/60"
-                  >
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-white">
-                        {im.address || im.name}
-                      </p>
-                      <p className="text-xs text-white/40">
-                        {im.hypotheque_preteur
-                          ? `${im.hypotheque_preteur}${
-                              im.hypotheque_taux_pct !== null
-                                ? ` · ${im.hypotheque_taux_pct.toLocaleString(
-                                    "fr-CA",
-                                    { maximumFractionDigits: 2 }
-                                  )} %`
-                                : ""
-                            }`
-                          : "aucune hypothèque active"}
-                        {im.ownership_pct !== 100
-                          ? ` · détenu à ${im.ownership_pct} %`
-                          : ""}
-                        {im.valeur_source === "achat"
-                          ? " · ⚠ valeur = prix d'achat (aucune évaluation saisie)"
-                          : ""}
-                      </p>
-                    </td>
-                    <td className="px-4 py-3 text-right text-white/80">
-                      {im.nb_logements || "—"}
-                    </td>
-                    <td className="px-4 py-3 text-right text-white/80">
-                      {fmtMoney(im.loyers_mensuels)}
-                    </td>
-                    <td className="px-4 py-3 text-right text-white/80">
-                      {fmtMoney(im.valeur)}
-                    </td>
-                    <td className="px-4 py-3 text-right text-white/80">
-                      {fmtMoney(im.hypotheque_balance)}
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold text-emerald-400">
-                      {fmtMoney(im.equite)}
-                    </td>
-                  </tr>
+                  <Fragment key={im.immeuble_id}>
+                    <tr
+                      onClick={() =>
+                        setExpandedImm(
+                          expandedImm === im.immeuble_id
+                            ? null
+                            : im.immeuble_id
+                        )
+                      }
+                      className="cursor-pointer border-t border-brand-800/60 transition hover:bg-white/[0.03]"
+                      title="Cliquez pour voir les logements"
+                    >
+                      <td className="px-4 py-3">
+                        <p className="font-medium text-white">
+                          {expandedImm === im.immeuble_id ? "▾ " : "▸ "}
+                          {im.address || im.name}
+                        </p>
+                        <p className="text-xs text-white/40">
+                          {im.hypotheque_preteur
+                            ? `${im.hypotheque_preteur}${
+                                im.hypotheque_taux_pct !== null
+                                  ? ` · ${im.hypotheque_taux_pct.toLocaleString(
+                                      "fr-CA",
+                                      { maximumFractionDigits: 2 }
+                                    )} %`
+                                  : ""
+                              }${
+                                im.hypotheque_fin_terme
+                                  ? ` · terme ${fmtDate(
+                                      im.hypotheque_fin_terme
+                                    )}`
+                                  : ""
+                              } · solde ${fmtMoney(im.hypotheque_balance)}`
+                            : "aucune hypothèque active"}
+                          {im.ownership_pct !== 100
+                            ? ` · détenu à ${im.ownership_pct} %`
+                            : ""}
+                          {im.valeur_source === "achat"
+                            ? " · ⚠ valeur = prix d'achat (aucune évaluation saisie)"
+                            : ""}
+                        </p>
+                      </td>
+                      <td className="px-4 py-3 text-right text-white/80">
+                        {im.nb_logements || "—"}
+                      </td>
+                      <td className="px-4 py-3 text-right text-white/80">
+                        {fmtMoney(im.loyers_mensuels)}
+                      </td>
+                      <td className="px-4 py-3 text-right text-white/80">
+                        {fmtMoney(im.valeur)}
+                      </td>
+                      <td className="px-4 py-3 text-right text-white/80">
+                        {fmtMoney(im.hypotheque_balance)}
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold text-emerald-400">
+                        {fmtMoney(im.equite)}
+                      </td>
+                    </tr>
+                    {expandedImm === im.immeuble_id ? (
+                      <tr className="border-t border-brand-800/40 bg-brand-950/50">
+                        <td colSpan={6} className="px-4 py-3">
+                          {im.logements.length === 0 ? (
+                            <p className="text-xs text-white/40">
+                              Aucun logement saisi pour cet immeuble
+                              dans le pôle locatif.
+                            </p>
+                          ) : (
+                            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
+                              {im.logements.map((lg) => (
+                                <div
+                                  key={lg.logement_id}
+                                  className={`rounded-lg border px-2.5 py-1.5 text-xs ${
+                                    lg.loue
+                                      ? "border-brand-800"
+                                      : "border-amber-500/40 bg-amber-500/5"
+                                  }`}
+                                >
+                                  <span className="font-medium text-white">
+                                    {lg.numero || "—"}
+                                  </span>
+                                  <span
+                                    className={`ml-1.5 ${
+                                      lg.loue
+                                        ? "text-emerald-400"
+                                        : "text-amber-400"
+                                    }`}
+                                  >
+                                    {lg.loue ? "Loué" : "Vacant"}
+                                  </span>
+                                  <span className="float-right tabular-nums text-white/70">
+                                    {lg.loyer !== null
+                                      ? `${fmtMoney(lg.loyer)}${
+                                          lg.loue ? "" : " (demandé)"
+                                        }`
+                                      : "—"}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
           </div>
+          {data.immeubles.length === 0 ? (
+            <p className="px-4 py-4 text-sm text-amber-400">
+              ⚠ Aucun immeuble lié à cette compagnie. Dans le pôle
+              locatif, ouvrez la fiche de l&apos;immeuble et choisissez
+              cette compagnie comme propriétaire — il apparaîtra ici
+              automatiquement.
+            </p>
+          ) : null}
         </div>
 
         {/* Revenus / dépenses + timeline */}
@@ -521,6 +646,7 @@ export default function AdminProjetPage() {
                 Dépenses
               </span>
             </div>
+            <DepensesParCategorie items={data.depenses_par_categorie} />
           </div>
           <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
             <h2 className="mb-4 text-sm font-semibold text-white">
@@ -539,23 +665,111 @@ export default function AdminProjetPage() {
             <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-white">
-                  Participations
+                  Actionnaires &amp; participations
                 </h2>
                 <button
                   type="button"
                   onClick={() => setAddOpen(true)}
-                  className="btn-accent btn-xs inline-flex items-center gap-1"
+                  className="btn-secondary btn-xs inline-flex items-center gap-1"
+                  title="Pour un investisseur qui n'est pas dans Parts & actionnaires"
                 >
                   <Plus className="h-3 w-3" />
-                  Ajouter un investisseur
+                  Autre investisseur
                 </button>
               </div>
 
+              {/* Actionnaires de la fiche entreprise — activation 1 clic */}
+              {data.partenaires.length > 0 ? (
+                <div className="mb-3 rounded-xl border border-brand-800 bg-brand-950/60 p-3">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                    Parts &amp; actionnaires (fiche entreprise)
+                  </p>
+                  <ul className="space-y-1.5">
+                    {data.partenaires.map((pa) => (
+                      <li
+                        key={pa.partner_id}
+                        className="flex flex-wrap items-center justify-between gap-2 text-sm"
+                      >
+                        <div className="min-w-0">
+                          <span className="font-medium text-white">
+                            {pa.name}
+                          </span>
+                          {pa.ownership_pct !== null ? (
+                            <span className="ml-1.5 text-xs text-white/50 tabular-nums">
+                              {pa.ownership_pct.toLocaleString("fr-CA", {
+                                maximumFractionDigits: 1
+                              })}{" "}
+                              %
+                            </span>
+                          ) : null}
+                          <span className="ml-1.5 text-xs">
+                            {pa.missing_email ? (
+                              <span className="text-amber-400">
+                                ⚠ courriel manquant (fiche entreprise)
+                              </span>
+                            ) : (
+                              <span className="text-white/40">
+                                {pa.email}
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                        <div className="shrink-0">
+                          {pa.deja_participant ? (
+                            <span
+                              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-bold ${
+                                pa.is_visible
+                                  ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
+                                  : "border-amber-500/50 bg-amber-500/10 text-amber-400"
+                              }`}
+                            >
+                              {pa.is_visible
+                                ? "✓ Visible dans son portail"
+                                : "Activé · masqué"}
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => void activerPartenaire(pa)}
+                              disabled={
+                                (pa.missing_email && !pa.has_account) ||
+                                busyActiver === pa.partner_id
+                              }
+                              title={
+                                pa.missing_email && !pa.has_account
+                                  ? "Ajoutez d'abord son courriel dans la fiche entreprise"
+                                  : pa.has_account
+                                  ? "Crée sa participation (masquée) sur ce projet"
+                                  : "Crée son compte (invitation courriel) + sa participation masquée"
+                              }
+                              className="btn-outline-accent btn-xs disabled:opacity-40"
+                            >
+                              {busyActiver === pa.partner_id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : pa.has_account ? (
+                                "Activer sur ce projet"
+                              ) : (
+                                "Créer le compte & activer"
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 text-[10px] text-white/35">
+                    Synchronisé depuis la fiche entreprise. Après
+                    activation : ajoutez l&apos;apport dans sa carte
+                    ci-dessous, puis cochez « Visible dans son portail ».
+                  </p>
+                </div>
+              ) : null}
+
               {data.participations.length === 0 ? (
                 <p className="py-4 text-center text-sm text-white/50">
-                  Aucun investisseur sur ce projet. Ajoutez une
-                  participation — le compte et l&apos;invitation courriel
-                  se créent tout seuls au besoin.
+                  {data.partenaires.length > 0
+                    ? "Aucune participation active — activez un actionnaire ci-dessus."
+                    : "Aucun actionnaire dans la fiche entreprise (Parts & actionnaires) — ajoutez-les là, ou utilisez « Autre investisseur »."}
                 </p>
               ) : (
                 <div className="space-y-3">
@@ -622,6 +836,29 @@ export default function AdminProjetPage() {
                   <option value="long_terme">Détention long terme</option>
                 </select>
               </div>
+              <div className="mt-3">
+                <label className="label">
+                  Avances aux actionnaires ($)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  defaultValue={data.profil.avances_actionnaires ?? ""}
+                  onBlur={(e) => {
+                    const v = e.target.value ? Number(e.target.value) : 0;
+                    if (v !== (data.profil.avances_actionnaires ?? 0)) {
+                      void patchProfil({ avances_actionnaires: v });
+                    }
+                  }}
+                  placeholder="0"
+                  className="input w-full text-xs tabular-nums"
+                />
+                <p className="mt-1 text-[10px] text-white/35">
+                  Soustraites de l&apos;équité : équité = valeur −
+                  hypothèques − avances.
+                </p>
+              </div>
               <div className="mt-3 space-y-2">
                 {(
                   [
@@ -658,16 +895,26 @@ export default function AdminProjetPage() {
                   Documents partagés
                 </h2>
                 <div className="flex items-center gap-1.5">
-                  {data.drive_folder_id ? (
-                    <button
-                      type="button"
-                      onClick={() => setDriveOpen(true)}
-                      className="btn-secondary btn-xs inline-flex items-center gap-1"
-                    >
-                      <FolderOpen className="h-3 w-3" />
-                      Depuis le Drive
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (data.drive_folder_id) {
+                        setDriveOpen(true);
+                      } else {
+                        setBanner(
+                          "Aucun dossier Drive lié à cette compagnie — " +
+                            "collez le lien de son dossier Google Drive " +
+                            "dans la fiche entreprise (gestion " +
+                            "d'entreprise), puis revenez cocher les " +
+                            "fichiers à partager."
+                        );
+                      }
+                    }}
+                    className="btn-secondary btn-xs inline-flex items-center gap-1"
+                  >
+                    <FolderOpen className="h-3 w-3" />
+                    Depuis le Drive
+                  </button>
                   <label className="btn-outline-accent btn-xs inline-flex cursor-pointer items-center gap-1">
                     {uploadBusy ? (
                       <Loader2 className="h-3 w-3 animate-spin" />
@@ -742,7 +989,6 @@ export default function AdminProjetPage() {
       {addOpen ? (
         <AddParticipationModal
           entrepriseId={entrepriseId}
-          partenaires={data.partenaires}
           onClose={() => setAddOpen(false)}
           onAdded={async (msg) => {
             setAddOpen(false);
@@ -1146,12 +1392,10 @@ function JalonsCard({
 
 function AddParticipationModal({
   entrepriseId,
-  partenaires,
   onClose,
   onAdded
 }: {
   entrepriseId: number;
-  partenaires: PartenaireT[];
   onClose: () => void;
   onAdded: (banner: string | null) => Promise<void>;
 }) {
@@ -1277,58 +1521,6 @@ function AddParticipationModal({
             ✕
           </button>
         </div>
-
-        {/* Partenaires « Parts & actionnaires » (gestion d'entreprise) */}
-        {partenaires.length > 0 ? (
-          <div className="rounded-lg border border-brand-800 bg-brand-950/60 p-2.5">
-            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/40">
-              Parts &amp; actionnaires de la compagnie
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {partenaires.map((pa) => (
-                <button
-                  key={pa.partner_id}
-                  type="button"
-                  disabled={pa.deja_participant}
-                  title={
-                    pa.deja_participant
-                      ? "A déjà une participation sur ce projet"
-                      : "Pré-remplir avec ce partenaire"
-                  }
-                  onClick={() => {
-                    setMode("nouveau");
-                    const parts = pa.name.trim().split(/\s+/);
-                    setFirstName(parts[0] || "");
-                    setLastName(
-                      parts.slice(1).join(" ") || parts[0] || ""
-                    );
-                    setEmail(pa.email || "");
-                    if (pa.ownership_pct) {
-                      setPct(String(pa.ownership_pct));
-                    }
-                  }}
-                  className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
-                    pa.deja_participant
-                      ? "cursor-default border-brand-800 text-white/30"
-                      : "border-accent-500/50 text-accent-500 hover:bg-accent-500/10"
-                  }`}
-                >
-                  {pa.name}
-                  {pa.ownership_pct
-                    ? ` · ${pa.ownership_pct.toLocaleString("fr-CA", {
-                        maximumFractionDigits: 1
-                      })} %`
-                    : ""}
-                  {pa.deja_participant ? " ✓" : ""}
-                </button>
-              ))}
-            </div>
-            <p className="mt-1.5 text-[10px] text-white/35">
-              Tirés de la fiche entreprise (gestion d&apos;entreprise) —
-              cliquez pour pré-remplir, ajustez le % au besoin.
-            </p>
-          </div>
-        ) : null}
 
         <div className="flex gap-1">
           {(
