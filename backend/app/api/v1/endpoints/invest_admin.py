@@ -169,14 +169,47 @@ def _user_display(u: User) -> str:
 def _partner_identity(
     pr: EntreprisePartner, pu: Optional[User]
 ) -> tuple[str, Optional[str]]:
-    """(nom d'affichage, courriel) d'un partenaire — le User lié prime."""
+    """(nom d'affichage, courriel) d'un partenaire.
+
+    Le `partner_name` saisi dans la fiche entreprise PRIME sur le nom
+    du User lié — c'est lui qui porte la réalité juridique (ex. un
+    holding « Groupe X Investissement » dont le compte de connexion
+    reste la personne physique)."""
     name = (
-        _user_display(pu)
-        if pu
-        else (pr.partner_name or "").strip() or "—"
+        (pr.partner_name or "").strip()
+        or (_user_display(pu) if pu else "—")
     )
     email = ((pu.email if pu else pr.partner_email) or "").strip().lower()
     return name, (email or None)
+
+
+def _ensure_volet_investisseur(u: User) -> None:
+    """Cohabitation employé/gestionnaire ↔ investisseur : ajoute le
+    volet `investisseur` au compte SANS toucher à ses autres accès.
+
+    - owner/admin : déjà tous les volets, rien à faire ;
+    - volets_json NULL = défauts implicites (construction, prospection,
+      devlog) → on matérialise les défauts AVANT d'ajouter, sinon on
+      les lui retirerait."""
+    if u.role in ("owner", "admin"):
+        return
+    import json as _json
+
+    from app.models.user import DEFAULT_VOLETS
+
+    try:
+        volets = (
+            _json.loads(u.volets_json)
+            if u.volets_json
+            else list(DEFAULT_VOLETS)
+        )
+        if not isinstance(volets, list):
+            volets = list(DEFAULT_VOLETS)
+    except Exception:  # noqa: BLE001
+        volets = list(DEFAULT_VOLETS)
+    if "investisseur" not in volets:
+        volets.append("investisseur")
+        u.volets_json = _json.dumps(volets)
 
 
 async def _resolve_partner_user(
@@ -767,6 +800,7 @@ async def create_participation(
             "compagnie.",
         )
 
+    _ensure_volet_investisseur(target_user)
     part = InvestParticipation(
         user_id=target_user.id,
         entreprise_id=data.entreprise_id,
@@ -1133,6 +1167,7 @@ async def activer_partenaire(
                 invited_by=user.email,
             )
         )
+    _ensure_volet_investisseur(pu)
     part, _ = await _ensure_participation(
         db,
         pu.id,
@@ -1185,6 +1220,7 @@ async def list_investisseurs(db: DBSession, user: CurrentUser) -> List[dict]:
                 "missing_email": not email,
                 "user_id": pu.id if pu else None,
                 "has_account": pu is not None,
+                "role": pu.role if pu else None,
                 "is_active": pu.is_active if pu else None,
                 "must_change_password": (
                     pu.must_change_password if pu else None
@@ -1284,6 +1320,7 @@ async def creer_compte_partenaire(
                 invited_by=user.email,
             )
         )
+    _ensure_volet_investisseur(pu)
     # Participations INVISIBLES dans toutes les compagnies où cette
     # personne est actionnaire (même user ou même courriel) — le compte
     # démarre avec 0 projet visible ; « Rendre visible » se fait
@@ -1333,6 +1370,11 @@ async def resend_invitation(
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Utilisateur introuvable."
         )
+    if target.role in ("owner", "admin"):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Compte direction — gérez-le dans Utilisateurs & rôles.",
+        )
     nb = (
         await db.execute(
             select(func.count(InvestParticipation.id)).where(
@@ -1360,6 +1402,34 @@ async def resend_invitation(
         return {"sent": True, "temp_password": None}
     except InvestInviteError:
         return {"sent": False, "temp_password": pw}
+
+
+@router.post(
+    "/investisseurs/{user_id}/toggle-active",
+    summary="Désactive / réactive l'accès d'un investisseur",
+)
+async def toggle_investor_active(
+    user_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    target = await db.get(User, user_id)
+    if target is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Utilisateur introuvable."
+        )
+    if target.role in ("owner", "admin"):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Compte direction — gérez-le dans Utilisateurs & rôles.",
+        )
+    if target.id == user.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Impossible de désactiver son propre compte.",
+        )
+    target.is_active = not bool(target.is_active)
+    await db.flush()
+    await db.commit()
+    return {"is_active": target.is_active}
 
 
 # ─────────────────────── « Voir comme lui » ───────────────────────
