@@ -48,6 +48,7 @@ type InvestisseurItem = {
   missing_email: boolean;
   user_id: number | null;
   has_account: boolean;
+  role: string | null;
   is_active: boolean | null;
   must_change_password: boolean | null;
   partner_id: number | null;
@@ -118,6 +119,30 @@ export default function InvestAdminPage() {
     } finally {
       setBusyResend(null);
     }
+  }
+
+  async function toggleActive(u: InvestisseurItem) {
+    if (!u.user_id) return;
+    setBanner(null);
+    const res = await authedFetch(
+      `/api/v1/invest/admin/investisseurs/${u.user_id}/toggle-active`,
+      { method: "POST" }
+    );
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      setBanner(
+        typeof body?.detail === "string"
+          ? body.detail
+          : "Changement d'état du compte échoué."
+      );
+      return;
+    }
+    setBanner(
+      body?.is_active
+        ? `Accès de ${u.name} réactivé.`
+        : `Accès de ${u.name} désactivé — il ne peut plus se connecter.`
+    );
+    await load();
   }
 
   async function createAccount(u: InvestisseurItem) {
@@ -392,20 +417,38 @@ export default function InvestAdminPage() {
                               <Eye className="h-3 w-3" />
                               Voir comme lui
                             </button>
-                            {u.must_change_password ? (
-                              <button
-                                type="button"
-                                onClick={() => void resend(u)}
-                                disabled={busyResend === u.user_id}
-                                className="btn-secondary btn-xs inline-flex items-center gap-1"
-                              >
-                                {busyResend === u.user_id ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <BellRing className="h-3 w-3" />
-                                )}
-                                Renvoyer l&apos;invitation
-                              </button>
+                            {u.role === "employee" ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => void resend(u)}
+                                  disabled={busyResend === u.user_id}
+                                  title="Génère un nouveau mot de passe temporaire et l'envoie par courriel (changement forcé à la connexion)"
+                                  className="btn-secondary btn-xs inline-flex items-center gap-1"
+                                >
+                                  {busyResend === u.user_id ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <BellRing className="h-3 w-3" />
+                                  )}
+                                  {u.must_change_password
+                                    ? "Renvoyer l'invitation"
+                                    : "Réinitialiser le mot de passe"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void toggleActive(u)}
+                                  className={`btn-xs ${
+                                    u.is_active === false
+                                      ? "btn-outline-accent"
+                                      : "btn-outline-rose"
+                                  }`}
+                                >
+                                  {u.is_active === false
+                                    ? "Réactiver l'accès"
+                                    : "Désactiver l'accès"}
+                                </button>
+                              </>
                             ) : null}
                           </>
                         ) : (

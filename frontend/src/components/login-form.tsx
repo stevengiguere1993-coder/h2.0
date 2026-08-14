@@ -39,6 +39,27 @@ const AUTRES_POLES = [
   "communication"
 ];
 
+/** Investisseur « pur » : le SEUL pôle accessible est le portail
+ *  investisseur → on l'y amène directement, sans sélecteur (c'est la
+ *  seule tuile qu'il verrait de toute façon). */
+function fileVersInvestisseur(me: {
+  role?: string;
+  volets?: unknown;
+  access?: Record<string, boolean> | null;
+}): boolean {
+  const access = me.access || {};
+  if (Object.keys(access).length === 0) {
+    const v = Array.isArray(me.volets) ? (me.volets as string[]) : [];
+    return v.length === 1 && v[0] === "investisseur";
+  }
+  const acc = { access };
+  return (
+    canEnterVolet(acc, "investisseur") &&
+    !["construction", ...AUTRES_POLES.filter((p) => p !== "investisseur")]
+      .some((p) => canEnterVolet(acc, p))
+  );
+}
+
 /** Employé dont le SEUL pôle accessible est construction → app mobile
  *  chantier directe, sans passer par le sélecteur. Dès qu'un autre pôle
  *  lui est ouvert (ex. feuille de temps), il voit le sélecteur. */
@@ -106,6 +127,11 @@ export function LoginForm() {
           router.replace("/m" as any);
           return;
         }
+        if (fileVersInvestisseur(me)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          router.replace("/investisseur" as any);
+          return;
+        }
         setUserEmail(me.email || null);
         setUserRole(me.role || "");
         setUserAccess(me.access || {});
@@ -152,6 +178,12 @@ export function LoginForm() {
         if (fileVersMobile(me)) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           router.replace("/m" as any);
+          return;
+        }
+        // Investisseur pur → portail investisseur direct.
+        if (fileVersInvestisseur(me)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          router.replace("/investisseur" as any);
           return;
         }
         // IMPORTANT : on hydrate volets + role AVANT setAuthed(true)

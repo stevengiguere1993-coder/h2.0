@@ -4,7 +4,20 @@ import { useEffect, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 
 import { useRouter } from "@/i18n/navigation";
+import { canEnterVolet } from "@/lib/access";
 import { authedFetch, getMe, getToken } from "@/lib/auth";
+
+//: Pôles « opérationnels » — si AUCUN n'est accessible mais que le
+//: volet investisseur l'est, l'utilisateur est un investisseur pur →
+//: on l'amène directement à son portail (pas à l'app chantier /m).
+const POLES_OPERATIONNELS = [
+  "construction",
+  "prospection",
+  "entreprises",
+  "immobilier",
+  "devlogiciel",
+  "communication"
+];
 
 export default function ChangePasswordPage() {
   const router = useRouter();
@@ -17,6 +30,7 @@ export default function ChangePasswordPage() {
   const [me, setMe] = useState<{
     role: string;
     must_change_password?: boolean;
+    access?: Record<string, boolean> | null;
   } | null>(null);
 
   useEffect(() => {
@@ -89,9 +103,18 @@ export default function ChangePasswordPage() {
         }
         throw new Error(msg);
       }
-      // Success — go where the user normally lands
-      const dest =
-        me?.role === "employee" || me?.role === undefined ? "/m" : "/app";
+      // Success — go where the user normally lands. Un investisseur
+      // « pur » (aucun pôle opérationnel accessible) atterrit
+      // directement sur son portail — jamais sur l'app chantier /m.
+      const acc = { access: me?.access || {} };
+      const investisseurSeul =
+        canEnterVolet(acc, "investisseur") &&
+        !POLES_OPERATIONNELS.some((p) => canEnterVolet(acc, p));
+      const dest = investisseurSeul
+        ? "/investisseur"
+        : me?.role === "employee" || me?.role === undefined
+        ? "/m"
+        : "/app";
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       router.replace(dest as any);
     } catch (err) {
