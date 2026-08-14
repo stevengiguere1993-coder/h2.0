@@ -545,6 +545,72 @@ async def trigger_devlog_nps_dispatch(
     )
 
 
+class QboLoyersSyncResult(CronResult):
+    """Résultat de la synchro bancaire des loyers (QBO lecture seule)."""
+    comptes: int = 0
+    importees: int = 0
+    mises_a_jour: int = 0
+    skipped: bool = False
+
+
+async def _run_qbo_loyers_sync() -> dict:
+    """Synchro quotidienne des écritures « Loyer à remettre » publiées
+    dans QuickBooks (LECTURE SEULE) + rapprochement déterministe.
+    Inerte tant que la feature n'est pas activée dans Paramètres →
+    Gestion locative → Validation bancaire (fail-closed), et respecte
+    le toggle du hub d'automatisations (fail-open)."""
+    from app.services.automation_state import is_automation_enabled
+    from app.services.qbo_validation_loyers import (
+        get_validation_config,
+        synchroniser_transactions,
+    )
+
+    if not await is_automation_enabled("qbo_loyers_sync"):
+        return {"skipped": True}
+    cfg = await get_validation_config()
+    if not cfg["active"]:
+        return {"skipped": True}
+
+    from app.db.session import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        stats = await synchroniser_transactions(db)
+        await db.commit()
+        return stats
+
+
+@router.api_route(
+    "/run/qbo-loyers-sync",
+    methods=["GET", "POST"],
+    response_model=QboLoyersSyncResult,
+)
+async def trigger_qbo_loyers_sync(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+) -> QboLoyersSyncResult:
+    """Cron quotidien : importe les transactions bancaires de loyers
+    publiées dans QBO (comptes « Loyer à remettre » mappés, fenêtre
+    glissante 90 j, idempotent) et rejoue le rapprochement. Aucune
+    écriture dans QuickBooks."""
+    _check_secret(x_cron_secret, secret)
+    try:
+        res = await _run_qbo_loyers_sync()
+    except Exception as exc:
+        log.exception("Cron qbo_loyers_sync failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Job a échoué : {exc}",
+        )
+    return QboLoyersSyncResult(
+        ok=True,
+        job="qbo-loyers-sync",
+        comptes=res.get("comptes", 0),
+        importees=res.get("importees", 0),
+        mises_a_jour=res.get("mises_a_jour", 0),
+        skipped=bool(res.get("skipped", False)),
+    )
+
+
 # ─── Mega-cron : exécute tous les jobs daily en un seul appel ──────────
 
 
@@ -699,6 +765,11 @@ async def trigger_all_daily(
             return r
 
     await _safe("qbo-cost-pull", _run_qbo_cost_pull, details)
+
+    # Validation bancaire des loyers : import QBO (lecture seule) des
+    # écritures « Loyer à remettre » + rapprochement déterministe.
+    # Inerte tant que la feature n'est pas activée dans Paramètres.
+    await _safe("qbo-loyers-sync", _run_qbo_loyers_sync, details)
 
     # Insights weekly : on tente quand même daily, le service est
     # idempotent et skip si rien à faire.
