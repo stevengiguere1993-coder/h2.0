@@ -45,6 +45,7 @@ from app.services.qbo_validation_loyers import (
     liens_par_compte,
     lister_transactions,
     rapprocher_compte,
+    suggestion_a_la_volee,
     synchroniser_transactions,
 )
 
@@ -170,6 +171,16 @@ class SyncCompteDetail(BaseModel):
     erreur: Optional[str] = None
 
 
+class SyncCompteIgnore(BaseModel):
+    """Compte SAUTÉ par la synchro (désactivé / sans immeuble) — listé
+    dans le rapport parce que « 0 importée » vient souvent de là : le
+    compte qui contient les transactions n'est simplement pas lu."""
+
+    compte_id: int
+    compte_nom: str
+    raison: str
+
+
 class SyncResult(BaseModel):
     ok: bool = True
     comptes: int = 0
@@ -177,23 +188,25 @@ class SyncResult(BaseModel):
     mises_a_jour: int = 0
     ignorees: int = 0
     details: List[SyncCompteDetail] = []
+    comptes_ignores: List[SyncCompteIgnore] = []
 
 
 # ── Paramètres (manager+) ──────────────────────────────────────────────
 
 
-async def _immeubles_options(db) -> List[ImmeubleOption]:
-    rows = (
-        await db.execute(
-            select(Immeuble)
-            .where(
-                Immeuble.is_active.is_(True),
-                Immeuble.gestion_externe.isnot(True),
+async def _immeubles_mappables(db) -> List[Immeuble]:
+    return list(
+        (
+            await db.execute(
+                select(Immeuble)
+                .where(
+                    Immeuble.is_active.is_(True),
+                    Immeuble.gestion_externe.isnot(True),
+                )
+                .order_by(Immeuble.name)
             )
-            .order_by(Immeuble.name)
-        )
-    ).scalars().all()
-    return [ImmeubleOption(id=i.id, name=i.name) for i in rows]
+        ).scalars().all()
+    )
 
 
 async def _config_read(db) -> ConfigRead:
@@ -204,11 +217,25 @@ async def _config_read(db) -> ConfigRead:
         )
     ).scalars().all()
     liens = await liens_par_compte(db)
+    imms = await _immeubles_mappables(db)
+    reads: List[CompteRead] = []
+    for c in comptes:
+        r = _compte_read(c, liens)
+        # Compte découvert avant que la suggestion « tous » /
+        # multi-immeubles existe → fiche muette : on recalcule à la
+        # lecture (rien n'est persisté) pour que la case fiducie et les
+        # immeubles proposés apparaissent quand même.
+        sugg = suggestion_a_la_volee(c, liens, imms)
+        if sugg:
+            r.suggestion_immeuble_ids = sugg["immeuble_ids"]
+            r.suggestion_tous = sugg["tous"]
+            r.suggestion_score = sugg["score"]
+        reads.append(r)
     return ConfigRead(
         active=cfg["active"],
         alerte_jours=cfg["alerte_jours"],
-        comptes=[_compte_read(c, liens) for c in comptes],
-        immeubles=await _immeubles_options(db),
+        comptes=reads,
+        immeubles=[ImmeubleOption(id=i.id, name=i.name) for i in imms],
     )
 
 

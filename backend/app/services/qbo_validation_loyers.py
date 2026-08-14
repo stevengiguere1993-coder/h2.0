@@ -371,6 +371,31 @@ def _compte_mappe(
     )
 
 
+def suggestion_a_la_volee(
+    compte: QboCompteLoyer,
+    liens: Dict[int, List[int]],
+    immeubles: List[Immeuble],
+) -> Optional[Dict[str, Any]]:
+    """Suggestion recalculée À LA LECTURE quand rien n'est stocké — un
+    compte découvert avant que la suggestion « tous » / multi-immeubles
+    existe garde sinon une fiche muette et la case fiducie n'est jamais
+    proposée (c'est exactement ce qui a laissé le compte Fiducie — et
+    tous les Interac — hors synchro). Ne persiste rien.
+
+    Retourne {"immeuble_ids", "tous", "score"} ou None si un humain a
+    déjà confirmé le compte ou si une suggestion stockée existe."""
+    if _compte_mappe(compte, liens):
+        return None
+    if compte.suggestion_tous or compte.suggestion_immeubles_json:
+        return None
+    ids, tous, score = _suggerer_immeubles(
+        compte.qbo_account_name or "", immeubles
+    )
+    if not ids and not tous:
+        return None
+    return {"immeuble_ids": ids, "tous": tous, "score": score}
+
+
 async def decouvrir_comptes(db, qbo=None) -> List[QboCompteLoyer]:
     """Interroge le plan comptable QBO (lecture seule), stocke les
     comptes dont le nom matche « loyer à remettre » et pose une
@@ -547,6 +572,9 @@ def parse_general_ledger(
     entrees: List[Dict[str, Any]] = []
     ecartees: Dict[str, Any] = {
         "lues": len(agreges),
+        #: Lignes de détail trouvées AVANT interprétation — si > 0 avec
+        #: lues = 0, le format du rapport n'est pas celui attendu.
+        "lignes_brutes": len(lignes),
         "montant_nul": 0,
         "type_non_reconnu": 0,
         "types_inconnus": [],
@@ -580,25 +608,42 @@ async def synchroniser_transactions(
     Retourne un RAPPORT DÉTAILLÉ (« 0 importée » sans explication est
     inacceptable) : totaux + par compte lues / importées / mises à jour /
     ignorées, avec la ventilation des raisons (sortie d'argent, montant
-    nul, déjà importée, type non reconnu + libellés inconnus)."""
+    nul, déjà importée, type non reconnu + libellés inconnus) — et la
+    liste des comptes SAUTÉS avec leur raison (désactivé / sans
+    immeuble) : c'est souvent LÀ que dorment les transactions attendues
+    (ex. la fiducie qui reçoit tous les Interac, jamais activée)."""
     liens = await liens_par_compte(db)
-    comptes = [
-        c
-        for c in (
-            await db.execute(
-                select(QboCompteLoyer).where(
-                    QboCompteLoyer.actif.is_(True)
-                )
-            )
-        ).scalars().all()
-        if _compte_mappe(c, liens)
-    ]
+    tous_comptes = (
+        await db.execute(
+            select(QboCompteLoyer).order_by(QboCompteLoyer.qbo_account_name)
+        )
+    ).scalars().all()
+    comptes: List[QboCompteLoyer] = []
+    comptes_ignores: List[Dict[str, Any]] = []
+    for c in tous_comptes:
+        if not c.actif:
+            comptes_ignores.append({
+                "compte_id": c.id,
+                "compte_nom": c.qbo_account_name,
+                "raison": "désactivé — coche « Actif » dans Paramètres "
+                          "pour lire ses transactions",
+            })
+        elif not _compte_mappe(c, liens):
+            comptes_ignores.append({
+                "compte_id": c.id,
+                "compte_nom": c.qbo_account_name,
+                "raison": "aucun immeuble relié (ni la case « tous les "
+                          "immeubles »)",
+            })
+        else:
+            comptes.append(c)
     stats: Dict[str, Any] = {
         "comptes": 0,
         "importees": 0,
         "mises_a_jour": 0,
         "ignorees": 0,
         "details": [],
+        "comptes_ignores": comptes_ignores,
     }
     if not comptes:
         return stats
@@ -653,6 +698,21 @@ async def synchroniser_transactions(
         detail["ignorees"] += (
             ecartees["montant_nul"] + ecartees["type_non_reconnu"]
         )
+        # QuickBooks a répondu mais rien n'a été interprété alors que le
+        # rapport contient des lignes → format inattendu, à SIGNALER
+        # plutôt que d'afficher un « 0 lue » silencieux.
+        if ecartees["lues"] == 0:
+            if ecartees["lignes_brutes"] > 0:
+                detail["erreur"] = (
+                    "Rapport reçu avec des lignes, mais aucune n'a pu "
+                    "être interprétée (type/id/date manquants) — format "
+                    "GeneralLedger inattendu, à signaler."
+                )
+            elif (report.get("Rows") or {}).get("Row"):
+                detail["erreur"] = (
+                    "Rapport reçu avec des sections mais aucune ligne de "
+                    "détail — format GeneralLedger inattendu, à signaler."
+                )
 
         # Compte mono-immeuble : l'immeuble est connu d'avance ; multi /
         # « tous » : il sera dérivé du bail au rapprochement.

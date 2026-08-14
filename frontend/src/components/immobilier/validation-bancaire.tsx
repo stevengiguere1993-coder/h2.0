@@ -16,11 +16,14 @@
  * - l'ENCART replié « Encaissés non marqués » : transactions
  *   rapprochées dont le mois n'est pas marqué payé + les ambiguës /
  *   non rapprochées (le choix d'un bail confirme ET apprend l'alias) ;
- * - le FIL BANCAIRE (« Voir le fil bancaire ») : modale qui liste les
- *   transactions synchronisées (90 jours) avec leur rapprochement en
- *   code couleur — vert rapprochée, jaune ambiguë (avec le sélecteur de
- *   bail), gris non rapprochée, mention discrète pour les sorties
- *   d'argent ignorées. Données déjà en base — aucun appel QuickBooks.
+ * - le FIL BANCAIRE : modale qui liste les transactions synchronisées
+ *   (90 jours) avec leur rapprochement en code couleur — vert
+ *   rapprochée, jaune ambiguë (avec le sélecteur de bail), gris non
+ *   rapprochée, mention discrète pour les sorties d'argent ignorées.
+ *   Données déjà en base — aucun appel QuickBooks. Il s'ouvre par le
+ *   petit CROCHET à gauche du sélecteur de mois (demande Phil
+ *   2026-08-14 — plus de gros bouton en bas de page) et reste
+ *   accessible dans Paramètres à côté de « Synchroniser maintenant ».
  *
  * Feature inactive ou immeuble non mappé → l'API ne renvoie rien et
  * RIEN ne s'affiche (zéro bruit).
@@ -156,9 +159,8 @@ export function PastilleValidationBancaire({
  * Encart REPLIÉ en bas de la page Paiements : encaissés (banque) non
  * marqués payés dans Kratos + transactions ambiguës / non rapprochées
  * par immeuble. Confirmer le bail d'une ambiguë apprend l'alias payeur.
- * Porte aussi l'accès au FIL BANCAIRE (« Voir le fil bancaire ») — il
- * reste donc visible dès que la feature est active, même quand il n'y
- * a rien à traiter.
+ * Le fil bancaire s'ouvre par le crochet à côté du sélecteur de mois,
+ * pas d'ici.
  */
 export function EncartValidationBancaire({
   etat,
@@ -341,10 +343,6 @@ export function EncartValidationBancaire({
           </>
         ) : null}
 
-        <div className="mt-3">
-          <BoutonFilBancaire onChange={onChange} />
-        </div>
-
         <p className="mt-3 text-[11px] text-white/40">
           Lecture seule depuis QuickBooks (comptes « Loyer à remettre - …
           ») — rien n&apos;est écrit dans la comptabilité. Confirmer une
@@ -427,9 +425,48 @@ export function libelleMoisCouverts(mois: string[]): string {
 }
 
 /**
- * Bouton « Voir le fil bancaire » + sa modale — utilisé dans la section
- * Paramètres (à côté de « Synchroniser maintenant ») ET sur l'encart de
- * la page Paiements.
+ * Petit crochet ✓✓ à GAUCHE du sélecteur de mois (pages Paiements) —
+ * c'est LUI qui ouvre le fil bancaire (demande Phil 2026-08-14 : « au
+ * lieu d'un énorme bouton en bas, à côté du mois, à gauche, un petit
+ * logo crochet de validation »). Tooltip au survol ; rien ne s'affiche
+ * quand la validation bancaire est inactive (fail-quiet).
+ */
+export function CrochetFilBancaire({
+  actif,
+  onChange
+}: {
+  /** true = validation bancaire active (état chargé par la page). */
+  actif: boolean;
+  /** Rechargement de la page appelante après une confirmation. */
+  onChange?: () => void;
+}) {
+  const [ouvert, setOuvert] = useState(false);
+  if (!actif) return null;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOuvert(true)}
+        aria-label="Voir le fil bancaire (QuickBooks)"
+        title="Validation bancaire (QuickBooks) — clique pour voir le fil des transactions bancaires synchronisées (90 jours) et leur rapprochement aux locataires"
+        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 transition hover:bg-emerald-500/20"
+      >
+        <CheckCheck className="h-4 w-4" />
+      </button>
+      {ouvert ? (
+        <FilBancaireModal
+          onClose={() => setOuvert(false)}
+          onChange={onChange}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Bouton « Voir le fil bancaire » + sa modale — encore utilisé dans la
+ * section Paramètres (à côté de « Synchroniser maintenant »). Sur les
+ * pages Paiements, c'est le crochet ci-dessus qui a pris le relais.
  */
 export function BoutonFilBancaire({
   onChange

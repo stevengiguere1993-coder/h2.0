@@ -64,6 +64,7 @@ import {
   type SuiviBailRow
 } from "@/components/immobilier/fin-bail";
 import {
+  CrochetFilBancaire,
   EncartValidationBancaire,
   PastilleValidationBancaire,
   type ValidationEtat,
@@ -3100,6 +3101,12 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
           ) : null}
         </div>
         <div className="flex items-center gap-2">
+          {/* Crochet fil bancaire — même accès que la page Paiements
+              (miroir), à gauche du sélecteur de mois. */}
+          <CrochetFilBancaire
+            actif={!!valBanque?.active}
+            onChange={() => void load()}
+          />
           <div className="inline-flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-950 px-1 py-0.5">
             <button
               type="button"
