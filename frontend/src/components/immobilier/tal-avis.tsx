@@ -8,7 +8,13 @@
  * (backend services/tal_forms.py).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode
+} from "react";
 import {
   Eye,
   FileDown,
@@ -1536,6 +1542,7 @@ export function BailDocActions({
   signedAt,
   allowImportInitial = true,
   compact = false,
+  entreBoutons,
   onChanged
 }: {
   bailId: number;
@@ -1548,6 +1555,10 @@ export function BailDocActions({
   allowImportInitial?: boolean;
   /** true = bouton d'import en ICÔNE seule (pages denses). */
   compact?: boolean;
+  /** Boutons à intercaler entre « Bail » et « Remplacer » — l'ordre
+   *  voulu par Phil sur la page Baux (2026-08-14) : Bail · Avis ·
+   *  Mettre fin · Remplacer. */
+  entreBoutons?: ReactNode;
   onChanged?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -1645,6 +1656,7 @@ export function BailDocActions({
           Bail
         </button>
       ) : null}
+      {entreBoutons ?? null}
       {hasDoc || allowImportInitial ? (
         <ImportDocButton
           label={
