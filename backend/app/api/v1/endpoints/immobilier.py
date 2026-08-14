@@ -943,6 +943,8 @@ async def _bail_actif_chevauchant(
 
 async def _recaler_logement_apres_bail(db, logement_id: int) -> None:
     """Statut du logement recalculé d'après ses baux restants."""
+    from app.services.loyer_effectif import refleter_bail_sur_demande
+
     lg = await db.get(Logement, logement_id)
     if lg is None:
         return
@@ -956,9 +958,11 @@ async def _recaler_logement_apres_bail(db, logement_id: int) -> None:
     ).scalars().first()
     if actif is not None:
         lg.status = LogementStatus.OCCUPE.value
-        # Hiérarchie 2026-08-14 : « loyer demandé » = prix de la
-        # PROCHAINE location — le bail ne l'écrase plus, les surfaces
-        # lisent le loyer du bail directement quand il y en a un.
+        # Le « loyer demandé » suit le bail tant que c'est loué (retour
+        # client 2026-08-14) — sinon il pourrit (1 000 $ posé à la
+        # création vs 1 600 $ payé douze ans plus tard).
+        if actif.loyer_mensuel is not None:
+            refleter_bail_sur_demande(lg, float(actif.loyer_mensuel))
     elif lg.status == LogementStatus.OCCUPE.value:
         lg.status = LogementStatus.VACANT.value
     lg.updated_at = _now()
@@ -3634,9 +3638,15 @@ async def create_bail(
     # Met à jour le statut du logement automatiquement
     if obj.status == BailStatus.ACTIF.value:
         log_obj.status = LogementStatus.OCCUPE.value
-        # Hiérarchie 2026-08-14 : « loyer demandé » = prix de la
-        # PROCHAINE location — le bail ne l'écrase plus (les surfaces
-        # affichent le loyer du bail directement pour un occupé).
+        # Le « loyer demandé » suit le bail tant que c'est loué (retour
+        # client 2026-08-14) — le prix de la prochaine location se
+        # décide à la relocation, prérempli avec le loyer courant.
+        if obj.loyer_mensuel is not None:
+            from app.services.loyer_effectif import (
+                refleter_bail_sur_demande,
+            )
+
+            refleter_bail_sur_demande(log_obj, float(obj.loyer_mensuel))
         log_obj.updated_at = _now()
     elif obj.status == BailStatus.PROPOSE.value:
         log_obj.status = LogementStatus.RESERVE.value
@@ -3814,10 +3824,16 @@ async def update_bail(
             log_obj.status = LogementStatus.OCCUPE.value
             log_obj.updated_at = _now()
 
-    # Hiérarchie 2026-08-14 : plus de miroir bail→loyer_demande sur un
-    # logement occupé. « Loyer demandé » = prix de la PROCHAINE location
-    # (il alimente le dossier de relocation) ; corriger le loyer du bail
-    # n'a pas à l'écraser — les surfaces lisent le bail directement.
+    # Le « loyer demandé » suit le bail tant que c'est loué (retour
+    # client 2026-08-14) : corriger le loyer du bail ACTIF réaligne le
+    # logement — le prix de la prochaine location se décide à la
+    # relocation.
+    if obj.status == BailStatus.ACTIF.value and obj.loyer_mensuel is not None:
+        from app.services.loyer_effectif import refleter_bail_sur_demande
+
+        log_obj = await db.get(Logement, obj.logement_id)
+        if log_obj is not None:
+            refleter_bail_sur_demande(log_obj, float(obj.loyer_mensuel))
 
     await db.commit()
     await db.refresh(obj)

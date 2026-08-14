@@ -47,6 +47,25 @@ def loyer_effectif(
     return loyer_bail if loyer_bail is not None else demande
 
 
+def refleter_bail_sur_demande(logement, loyer_bail: Optional[float]) -> None:
+    """Aligne ``loyer_demande`` sur le loyer réel du bail actif.
+
+    Retour client 2026-08-14 (exemple : demandé 1 000 $ posé à la
+    création, locataire rendu à 1 600 $ douze ans plus tard) : tant que
+    le logement est LOUÉ, le « loyer demandé » SUIT le bail — sinon il
+    pourrit et quelqu'un finit par relouer au vieux prix. Le vrai prix de
+    la prochaine location se décide À LA RELOCATION (dossier prérempli
+    avec le loyer courant, ajustable au kanban).
+
+    Un logement loué EN CHAMBRES est exclu : plusieurs baux par unité —
+    un loyer de chambre n'est pas le prix de l'unité.
+    """
+    if getattr(logement, "location_en_chambres", False):
+        return
+    if loyer_bail is not None:
+        logement.loyer_demande = loyer_bail
+
+
 def loyer_effectif_loue(
     logement,
     loyer_bail: Optional[float],

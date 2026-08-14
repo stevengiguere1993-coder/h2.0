@@ -517,9 +517,9 @@ export default function LogementDetailPage({
 
             {/* Mini-KPIs — hiérarchie du loyer effectif (retour client
                 2026-08-14) : gestion EXTERNE → le loyer SAISI est LA
-                vérité ; interne OCCUPÉ → le loyer RÉEL du bail, avec le
-                « loyer demandé » (prix de la PROCHAINE location) en
-                complément ; vacant → le demandé seul. */}
+                vérité ; interne OCCUPÉ → le loyer RÉEL du bail (le
+                « demandé » le suit automatiquement, pas de doublon) ;
+                vacant → le demandé seul. */}
             <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               {externe ? (
                 <MiniKpi
@@ -529,28 +529,21 @@ export default function LogementDetailPage({
                   }
                   sub="Gestion externe — loyer saisi sur le logement"
                 />
+              ) : bailActif ? (
+                <MiniKpi
+                  label="Loyer actuel (bail)"
+                  value={money(bailActif.loyer_mensuel)}
+                  href="#bail-actif"
+                  sub="Voir le bail"
+                />
               ) : (
-                <>
-                  <MiniKpi
-                    label="Loyer actuel (bail)"
-                    value={
-                      bailActif ? money(bailActif.loyer_mensuel) : "Vacant"
-                    }
-                    href={bailActif ? "#bail-actif" : undefined}
-                    sub={bailActif ? "Voir le bail" : undefined}
-                  />
-                  <MiniKpi
-                    label="Loyer demandé"
-                    value={
-                      lg.loyer_demande != null ? money(lg.loyer_demande) : "—"
-                    }
-                    sub={
-                      bailActif
-                        ? "Prix de la prochaine location"
-                        : undefined
-                    }
-                  />
-                </>
+                <MiniKpi
+                  label="Loyer demandé"
+                  value={
+                    lg.loyer_demande != null ? money(lg.loyer_demande) : "—"
+                  }
+                  sub="Vacant — prix affiché pour la relocation"
+                />
               )}
               <MiniKpi
                 label="Occupé depuis"
@@ -694,36 +687,50 @@ export default function LogementDetailPage({
                         <option value="hors_location">Hors location</option>
                       </select>
                     </EditField>
-                    <EditField
-                      label={
-                        externe
-                          ? "Loyer mensuel ($/mois)"
-                          : "Loyer demandé ($/mois)"
-                      }
-                    >
-                      <input
-                        inputMode="decimal"
-                        value={form.loyer_demande}
-                        onChange={(e) =>
-                          setForm((f) => ({
-                            ...f,
-                            loyer_demande: e.target.value
-                          }))
+                    {!externe && bailActif ? (
+                      // Logement LOUÉ : le loyer demandé SUIT le bail
+                      // automatiquement (retour client 2026-08-14) — le
+                      // prix de la prochaine location se décide à la
+                      // relocation, pas ici.
+                      <EditField label="Loyer ($/mois)">
+                        <input
+                          value={money(bailActif.loyer_mensuel)}
+                          disabled
+                          className={`${inputCls} opacity-60`}
+                        />
+                        <span className="mt-0.5 block text-[10px] font-normal text-white/40">
+                          Suit le bail en cours (avis d&apos;augmentation
+                          inclus). Le prix de la prochaine location se
+                          décide au moment de la relocation.
+                        </span>
+                      </EditField>
+                    ) : (
+                      <EditField
+                        label={
+                          externe
+                            ? "Loyer mensuel ($/mois)"
+                            : "Loyer demandé ($/mois)"
                         }
-                        className={inputCls}
-                      />
-                      {externe ? (
-                        <span className="mt-0.5 block text-[10px] font-normal text-white/40">
-                          Gestion externe : ce montant fait foi partout
-                          (listes, paiements, cashflow).
-                        </span>
-                      ) : bailActif ? (
-                        <span className="mt-0.5 block text-[10px] font-normal text-white/40">
-                          Prix de la PROCHAINE location — le loyer du
-                          bail en cours ne se modifie pas ici.
-                        </span>
-                      ) : null}
-                    </EditField>
+                      >
+                        <input
+                          inputMode="decimal"
+                          value={form.loyer_demande}
+                          onChange={(e) =>
+                            setForm((f) => ({
+                              ...f,
+                              loyer_demande: e.target.value
+                            }))
+                          }
+                          className={inputCls}
+                        />
+                        {externe ? (
+                          <span className="mt-0.5 block text-[10px] font-normal text-white/40">
+                            Gestion externe : ce montant fait foi partout
+                            (listes, paiements, cashflow).
+                          </span>
+                        ) : null}
+                      </EditField>
+                    )}
                   </div>
                 ) : (
                   <dl className="space-y-1.5 text-sm">
@@ -760,8 +767,8 @@ export default function LogementDetailPage({
                     />
                     {/* Hiérarchie du loyer effectif (2026-08-14) :
                         externe → loyer SAISI ; interne occupé → loyer
-                        RÉEL du bail + demandé (prochaine location) en
-                        complément ; vacant → demandé seul. */}
+                        RÉEL du bail (le demandé le suit, pas de
+                        doublon) ; vacant → demandé seul. */}
                     {externe ? (
                       <Row
                         label="Loyer mensuel (gestion externe)"
@@ -772,20 +779,10 @@ export default function LogementDetailPage({
                         }
                       />
                     ) : bailActif ? (
-                      <>
-                        <Row
-                          label="Loyer actuel (bail)"
-                          value={money(bailActif.loyer_mensuel)}
-                        />
-                        <Row
-                          label="Loyer demandé (prochaine location)"
-                          value={
-                            lg.loyer_demande != null
-                              ? money(lg.loyer_demande)
-                              : "—"
-                          }
-                        />
-                      </>
+                      <Row
+                        label="Loyer actuel (bail)"
+                        value={money(bailActif.loyer_mensuel)}
+                      />
                     ) : (
                       <Row
                         label="Loyer demandé"

@@ -229,6 +229,27 @@ async def recaler_statut_logement(
     )
     if occupe:
         nouveau = LogementStatus.OCCUPE.value
+        # Le « loyer demandé » suit le bail tant que c'est loué (retour
+        # client 2026-08-14) — voir refleter_bail_sur_demande.
+        courant = next(
+            (
+                b for b in baux
+                if b.status == BailStatus.ACTIF.value
+                and b.date_debut is not None
+                and b.date_debut <= today
+                and (
+                    b.au_mois
+                    or (b.date_fin is not None and b.date_fin >= today)
+                )
+            ),
+            None,
+        )
+        if courant is not None and courant.loyer_mensuel is not None:
+            from app.services.loyer_effectif import (
+                refleter_bail_sur_demande,
+            )
+
+            refleter_bail_sur_demande(lg, float(courant.loyer_mensuel))
     elif reserve:
         nouveau = LogementStatus.RESERVE.value
     else:
