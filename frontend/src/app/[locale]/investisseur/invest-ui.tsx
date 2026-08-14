@@ -21,6 +21,8 @@ export type ProjetCard = {
   valeur_parts: number;
   cashflow_moyen_part: number | null;
   statut: string;
+  /** Vue globale admin seulement : nombre d'investisseurs au capital. */
+  nb_investisseurs?: number;
   capital_investi_total: number;
   capital_rembourse: number;
   distributions_recues: number;

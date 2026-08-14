@@ -2,9 +2,12 @@
 
 /* Portail Investisseur v2 — vue d'ensemble.
 
-   KPIs (capital actuellement investi, total, valeur des parts, TRI),
-   courbe « valeur totale créée », cartes projets (une par compagnie).
-   Mode « voir comme » : /investisseur?apercu=<userId> (admin). */
+   Investisseur : son portefeuille (participations visibles).
+   Admin/owner : sélecteur de vue — « Vue globale » (tous les
+   investissements, cash-flow complet des compagnies), « Mes
+   participations », ou le portail exact de n'importe quel
+   investisseur (aperçu). ?apercu=<userId> présélectionne un
+   investisseur (boutons « Voir comme lui » de la console). */
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "@/i18n/navigation";
@@ -13,6 +16,7 @@ import {
   Download,
   Eye,
   Loader2,
+  Settings2,
   TrendingUp
 } from "lucide-react";
 
@@ -22,35 +26,71 @@ import { InvestisseurTopbar } from "./layout";
 import {
   fmtMoney,
   fmtPct,
-  investApiBase,
   PhaseBadge,
   Portefeuille,
   useApercu,
   ValueChart
 } from "./invest-ui";
 
+type Mode = "global" | "me" | number;
+
+type InvestisseurLite = {
+  user_id: number;
+  name: string;
+  email: string;
+};
+
 export default function PortefeuillePage() {
   const router = useRouter();
-  const { user } = useCurrentUser();
+  const { user, loading: userLoading } = useCurrentUser();
   const apercu = useApercu();
+
+  const isAdmin = user?.role === "admin" || user?.role === "owner";
+
+  const [mode, setMode] = useState<Mode | null>(null);
+  const [investisseurs, setInvestisseurs] = useState<InvestisseurLite[]>(
+    []
+  );
   const [data, setData] = useState<Portefeuille | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [apercuReady, setApercuReady] = useState(false);
 
-  // Attend un tick pour que useApercu lise l'URL avant le 1er fetch.
+  // Mode initial : ?apercu=<id> prime ; sinon global pour l'admin,
+  // « mes participations » pour l'investisseur.
   useEffect(() => {
-    const t = setTimeout(() => setApercuReady(true), 0);
+    if (userLoading || !user || mode !== null) return;
+    // Laisse useApercu lire l'URL (1er render → null puis valeur).
+    const t = setTimeout(() => {
+      setMode(apercu ?? (isAdmin ? "global" : "me"));
+    }, 0);
     return () => clearTimeout(t);
-  }, []);
+  }, [userLoading, user, isAdmin, apercu, mode]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    authedFetch("/api/v1/invest/admin/investisseurs")
+      .then(async (res) => {
+        if (res.ok) {
+          setInvestisseurs(
+            (await res.json()) as InvestisseurLite[]
+          );
+        }
+      })
+      .catch(() => undefined);
+  }, [isAdmin]);
 
   const load = useCallback(async () => {
+    if (mode === null) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await authedFetch(
-        `${investApiBase(apercu)}/portefeuille`
-      );
+      const url =
+        mode === "global"
+          ? "/api/v1/invest/admin/portefeuille-global"
+          : mode === "me"
+          ? "/api/v1/invest/me/portefeuille"
+          : `/api/v1/invest/admin/apercu/${mode}/portefeuille`;
+      const res = await authedFetch(url);
       if (!res.ok) throw new Error(`http_${res.status}`);
       setData((await res.json()) as Portefeuille);
     } catch {
@@ -58,11 +98,11 @@ export default function PortefeuillePage() {
     } finally {
       setLoading(false);
     }
-  }, [apercu]);
+  }, [mode]);
 
   useEffect(() => {
-    if (apercuReady) void load();
-  }, [apercuReady, load]);
+    void load();
+  }, [load]);
 
   async function openReleve() {
     const year = new Date().getFullYear();
@@ -76,14 +116,25 @@ export default function PortefeuillePage() {
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
+  const isGlobal = mode === "global";
+  const viewedInvestor =
+    typeof mode === "number"
+      ? investisseurs.find((i) => i.user_id === mode)
+      : null;
   const firstName = user?.first_name || "";
 
   return (
     <>
       <InvestisseurTopbar
-        breadcrumbs={[{ label: "Mon portefeuille" }]}
+        breadcrumbs={[
+          {
+            label: isGlobal
+              ? "Portefeuille — vue globale"
+              : "Mon portefeuille"
+          }
+        ]}
         rightSlot={
-          !apercu && data && data.projets.length > 0 ? (
+          mode === "me" && data && data.projets.length > 0 ? (
             <button
               type="button"
               onClick={() => void openReleve()}
@@ -97,11 +148,61 @@ export default function PortefeuillePage() {
       />
 
       <div className="mx-auto w-full max-w-5xl p-4 lg:p-6">
-        {apercu ? (
+        {/* Sélecteur de vue (admin) */}
+        {isAdmin ? (
+          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-brand-800 bg-brand-900 px-4 py-3">
+            <span className="text-xs font-semibold uppercase tracking-wider text-white/40">
+              Vue
+            </span>
+            <select
+              value={
+                mode === null
+                  ? ""
+                  : typeof mode === "number"
+                  ? String(mode)
+                  : mode
+              }
+              onChange={(e) => {
+                const v = e.target.value;
+                setMode(
+                  v === "global" || v === "me" ? v : Number(v)
+                );
+              }}
+              className="input min-w-0 flex-1 text-xs sm:max-w-xs"
+            >
+              <option value="global">
+                Vue globale — tous les investissements
+              </option>
+              <option value="me">Mes participations</option>
+              {investisseurs.length > 0 ? (
+                <optgroup label="Voir comme un investisseur">
+                  {investisseurs.map((i) => (
+                    <option key={i.user_id} value={String(i.user_id)}>
+                      {i.name} ({i.email})
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
+            </select>
+            <button
+              type="button"
+              onClick={() =>
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                router.push("/investisseur/admin" as any)
+              }
+              className="btn-secondary btn-xs inline-flex items-center gap-1"
+            >
+              <Settings2 className="h-3 w-3" />
+              Console admin
+            </button>
+          </div>
+        ) : null}
+
+        {viewedInvestor ? (
           <div className="mb-4 flex items-center gap-2 rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2.5 text-sm text-sky-400">
             <Eye className="h-4 w-4 shrink-0" />
-            Aperçu administrateur — vous voyez ce portail exactement
-            comme cet investisseur le voit.
+            Vous voyez le portail exactement comme{" "}
+            {viewedInvestor.name} le voit.
           </div>
         ) : null}
 
@@ -111,24 +212,42 @@ export default function PortefeuillePage() {
           </div>
         ) : null}
 
-        {loading ? (
+        {loading || mode === null ? (
           <div className="flex items-center justify-center py-24">
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : !data || data.projets.length === 0 ? (
-          <div className="mt-10 rounded-2xl border border-brand-800 bg-brand-900 p-10 text-center">
+          <div className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-10 text-center">
             <TrendingUp className="mx-auto h-9 w-9 text-white/30" />
             <h2 className="mt-4 text-lg font-semibold text-white">
-              Aucun investissement pour l&apos;instant
+              {isGlobal
+                ? "Aucune participation enregistrée"
+                : mode === "me"
+                ? "Aucune participation à votre nom"
+                : "Aucun investissement pour l'instant"}
             </h2>
             <p className="mx-auto mt-2 max-w-md text-sm text-white/60">
-              Vos projets apparaîtront ici dès qu&apos;une participation
-              vous sera attribuée.
+              {isGlobal || isAdmin
+                ? "Ouvrez la console admin, choisissez un projet et ajoutez une participation (capital + % de parts) — tout le reste s'assemble tout seul."
+                : "Vos projets apparaîtront ici dès qu'une participation vous sera attribuée."}
             </p>
+            {isAdmin ? (
+              <button
+                type="button"
+                onClick={() =>
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  router.push("/investisseur/admin" as any)
+                }
+                className="btn-accent btn-sm mt-4 inline-flex items-center gap-1.5"
+              >
+                <Settings2 className="h-3.5 w-3.5" />
+                Ouvrir la console admin
+              </button>
+            ) : null}
           </div>
         ) : (
           <>
-            {!apercu && firstName ? (
+            {mode === "me" && firstName ? (
               <h1 className="mb-5 text-2xl font-bold text-white">
                 Bonjour, {firstName}
               </h1>
@@ -144,7 +263,9 @@ export default function PortefeuillePage() {
                   {fmtMoney(data.capital_actuel)}
                 </p>
                 <p className="mt-1 text-xs text-white/50">
-                  apports moins remboursements
+                  {isGlobal
+                    ? "tous investisseurs confondus"
+                    : "apports moins remboursements"}
                 </p>
               </div>
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
@@ -164,13 +285,16 @@ export default function PortefeuillePage() {
               </div>
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
-                  Valeur de mes parts
+                  {isGlobal
+                    ? "Valeur des parts investisseurs"
+                    : "Valeur de mes parts"}
                 </p>
                 <p className="mt-1.5 text-2xl font-bold tabular-nums text-white">
                   {fmtMoney(data.valeur_parts)}
                 </p>
                 <p className="mt-1 text-xs text-white/50">
-                  équité des compagnies × vos %
+                  équité des compagnies ×{" "}
+                  {isGlobal ? "leurs %" : "vos %"}
                 </p>
               </div>
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
@@ -208,7 +332,7 @@ export default function PortefeuillePage() {
             {/* Projets */}
             <div className="mb-3 mt-7 flex items-baseline justify-between">
               <h2 className="text-base font-semibold text-white">
-                Mes projets
+                {isGlobal ? "Projets avec investisseurs" : "Mes projets"}
               </h2>
               <span className="text-xs text-white/40">
                 {data.projets.length} compagnie
@@ -220,14 +344,17 @@ export default function PortefeuillePage() {
                 <button
                   key={p.entreprise_id}
                   type="button"
-                  onClick={() =>
-                    router.push(
-                      `/investisseur/projet/${p.entreprise_id}${
-                        apercu ? `?apercu=${apercu}` : ""
-                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      }` as any
-                    )
-                  }
+                  onClick={() => {
+                    const href = isGlobal
+                      ? `/investisseur/admin/projet/${p.entreprise_id}`
+                      : `/investisseur/projet/${p.entreprise_id}${
+                          typeof mode === "number"
+                            ? `?apercu=${mode}`
+                            : ""
+                        }`;
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    router.push(href as any);
+                  }}
                   className="group overflow-hidden rounded-2xl border border-brand-800 bg-brand-900 text-left transition hover:border-accent-500/60"
                 >
                   <div className="relative h-28 bg-brand-950">
@@ -259,11 +386,16 @@ export default function PortefeuillePage() {
                       {p.nb_logements
                         ? ` · ${p.nb_logements} logements`
                         : ""}
+                      {isGlobal && p.nb_investisseurs
+                        ? ` · ${p.nb_investisseurs} investisseur${
+                            p.nb_investisseurs > 1 ? "s" : ""
+                          }`
+                        : ""}
                     </p>
                     <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 tabular-nums">
                       <div className="border-t border-brand-800 pt-2">
                         <p className="text-[10px] uppercase tracking-wider text-white/40">
-                          Ma part
+                          {isGlobal ? "Parts investisseurs" : "Ma part"}
                         </p>
                         <p className="text-sm font-bold text-white">
                           {p.parts_pct.toLocaleString("fr-CA", {
@@ -274,7 +406,9 @@ export default function PortefeuillePage() {
                       </div>
                       <div className="border-t border-brand-800 pt-2">
                         <p className="text-[10px] uppercase tracking-wider text-white/40">
-                          Valeur de mes parts
+                          {isGlobal
+                            ? "Valeur de leurs parts"
+                            : "Valeur de mes parts"}
                         </p>
                         <p className="text-sm font-bold text-white">
                           {fmtMoney(p.valeur_parts)}
@@ -282,7 +416,7 @@ export default function PortefeuillePage() {
                       </div>
                       <div className="border-t border-brand-800 pt-2">
                         <p className="text-[10px] uppercase tracking-wider text-white/40">
-                          Cash-flow
+                          Cash-flow{isGlobal ? " (compagnie)" : ""}
                         </p>
                         <p
                           className={`text-sm font-bold ${
