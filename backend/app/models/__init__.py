@@ -249,6 +249,11 @@ from app.models.purchase_agreement import (
 )
 from app.models.purchase_agreement_template import PurchaseAgreementTemplate
 from app.models.qbo_account_map import QboAccountMap
+from app.models.qbo_loyers import (
+    QboAliasPayeur,
+    QboCompteLoyer,
+    QboTransactionLoyer,
+)
 from app.models.qbo_monthly_invoice import QboMonthlyInvoice
 from app.models.qbo_token import QboToken
 from app.models.rental_listing import RentalListing
@@ -413,8 +418,11 @@ __all__ = [
     "PurchaseOrderItem",
     "Punch",
     "QboAccountMap",
+    "QboAliasPayeur",
+    "QboCompteLoyer",
     "QboMonthlyInvoice",
     "QboToken",
+    "QboTransactionLoyer",
     "RentalListing",
     "ReqCompany",
     "SalesTask",

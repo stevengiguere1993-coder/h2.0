@@ -28,6 +28,7 @@ from app.db.session import (
     ensure_role_permissions_tables,
     ensure_qbo_connections_table,
     ensure_timesheet_tables,
+    ensure_validation_bancaire_tables,
     ensure_volets_whitelist_migration,
     init_db,
 )
@@ -120,6 +121,16 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning(
             "ensure_qbo_connections_table failed during startup: %s", exc
+        )
+
+    # Tables Validation bancaire des loyers (QBO lecture seule) —
+    # transaction isolée.
+    try:
+        await ensure_validation_bancaire_tables()
+    except Exception as exc:
+        logger.warning(
+            "ensure_validation_bancaire_tables failed during startup: %s",
+            exc,
         )
 
     # Permissions v2 : reporte les volets des anciennes whitelists

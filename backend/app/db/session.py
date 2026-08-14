@@ -929,6 +929,39 @@ async def ensure_qbo_connections_table() -> None:
         log.warning("ensure_qbo_connections_table failed: %s", exc)
 
 
+async def ensure_validation_bancaire_tables() -> None:
+    """Crée les tables de la VALIDATION BANCAIRE des loyers (2026-08-14)
+    dans leur propre transaction : ``qbo_comptes_loyers`` (compte du plan
+    comptable ↔ immeuble), ``qbo_transactions_loyers`` (écritures QBO
+    publiées, importées en lecture seule) et ``qbo_alias_payeurs`` (alias
+    appris à la confirmation d'un rapprochement ambigu). Idempotent
+    (create_all checkfirst) — survit à un abort d'``init_db``."""
+    import logging
+
+    log = logging.getLogger("db.ensure_validation_bancaire_tables")
+    try:
+        from app.db.base import Base
+        from app.models.qbo_loyers import (  # noqa: F401
+            QboAliasPayeur,
+            QboCompteLoyer,
+            QboTransactionLoyer,
+        )
+
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(
+                    c,
+                    tables=[
+                        QboCompteLoyer.__table__,
+                        QboTransactionLoyer.__table__,
+                        QboAliasPayeur.__table__,
+                    ],
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_validation_bancaire_tables failed: %s", exc)
+
+
 async def ensure_timesheet_tables() -> None:
     """Crée les tables Feuille de temps (Gestion d'entreprise) dans leur
     propre transaction, pour survivre à un abort d'``init_db``."""

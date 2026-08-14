@@ -67,6 +67,7 @@ from app.api.v1.endpoints import (
     immobilier_gestion_externe,
     immobilier_frais_gestion,
     immobilier_releves31,
+    immobilier_validation_bancaire,
     investissements,
     invest_admin,
     invest_portal,
@@ -506,6 +507,11 @@ api_router.include_router(
 )
 api_router.include_router(
     immobilier_frais_gestion.router, dependencies=DEP_IMMOBILIER
+)
+# Validation bancaire des loyers (QuickBooks lecture seule) — avant
+# immobilier.router (préfixe /immobilier/validation-bancaire).
+api_router.include_router(
+    immobilier_validation_bancaire.router, dependencies=DEP_IMMOBILIER
 )
 # Images immobilier : PAS de dépendance routeur — auth par ?t=<jwt> dans
 # l'endpoint lui-même (les <img> ne portent pas de header Authorization).

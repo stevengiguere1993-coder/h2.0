@@ -28,6 +28,13 @@ import {
   moisCouvertPourPaiement,
   montantMarquerPaye
 } from "@/components/immobilier/paiements-actions";
+import {
+  EncartValidationBancaire,
+  PastilleValidationBancaire,
+  ValidationEtat,
+  chargerValidationBancaire,
+  indexValidations
+} from "@/components/immobilier/validation-bancaire";
 
 /**
  * Paiements — vue transversale « collection des loyers »
@@ -196,6 +203,9 @@ export default function PaiementsPage() {
   const [mois, setMois] = useState(currentMonth());
   const [data, setData] = useState<Overview | null>(null);
   const [externe, setExterne] = useState<OverviewExterne | null>(null);
+  // 2e validation (banque via QuickBooks) — null quand la feature est
+  // inactive ou l'appel échoue : AUCUNE pastille, zéro bruit.
+  const [valBanque, setValBanque] = useState<ValidationEtat | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<number | null>(null);
@@ -230,6 +240,8 @@ export default function PaiementsPage() {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setData((await r.json()) as Overview);
       setExterne(rx.ok ? ((await rx.json()) as OverviewExterne) : null);
+      // 2e validation bancaire (fail-quiet : null = aucune pastille).
+      setValBanque(await chargerValidationBancaire(mois));
     } catch (e) {
       setError(`Chargement échoué : ${(e as Error).message}`);
     } finally {
@@ -626,6 +638,9 @@ export default function PaiementsPage() {
       );
   }, [data, allRows, search, etatFilter, immeubleFilter]);
 
+  // Pastilles ✓✓ / ⚠ de la 2e validation, indexées par bail.
+  const valMap = useMemo(() => indexValidations(valBanque), [valBanque]);
+
   return (
     <>
       <ImmobilierTopbar
@@ -859,6 +874,16 @@ export default function PaiementsPage() {
                             <Clock className="h-3 w-3" /> Attente
                           </span>
                         )}
+                        {/* 2e validation (banque via QuickBooks) —
+                            pastille discrète, absente quand la feature
+                            est inactive ou l'immeuble non mappé. */}
+                        {!r.gestion_externe && valMap.get(r.bail_id) ? (
+                          <div className="mt-1">
+                            <PastilleValidationBancaire
+                              v={valMap.get(r.bail_id)}
+                            />
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2.5">
                         {r.gestion_externe ? (
@@ -1162,6 +1187,11 @@ export default function PaiementsPage() {
             </div>
           )}
         </div>
+
+        {/* Encart replié « Encaissés non marqués » + ambiguës à
+            rapprocher (2e validation bancaire). Rien quand la feature
+            est inactive ou qu'il n'y a rien à traiter. */}
+        <EncartValidationBancaire etat={valBanque} onChange={() => void load()} />
 
         <p className="mt-3 text-[11px] text-white/40">
           « Retard » = aucun paiement après le 5 du mois · « Partiel » = un
