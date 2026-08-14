@@ -1,1215 +1,563 @@
 "use client";
 
+/**
+ * Page « Baux » (/immobilier/baux) — split de l'ancienne
+ * « Baux & paiements » (v15/v16). La collecte des loyers, elle, vit sur
+ * la page « Paiements » (/immobilier/paiements).
+ *
+ * Une ligne par LOGEMENT, façon Suivis annuels :
+ *   - ROUGE : entente de résiliation envoyée, signature attendue ;
+ *   - VERTE : bail actif au dossier (PDF importé) ;
+ *   - ambre : bail actif mais document à importer ;
+ *   - grise : aucun bail — « Créer un nouveau bail » ou importer.
+ * Interconnectée au kanban Locations : le statut de relocation s'AFFICHE
+ * ici (pastille lecture seule) mais se MODIFIE à la source — la page
+ * Locations (retour Phil 2026-08-13).
+ */
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
-  Check,
-  CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   ClipboardList,
-  Clock,
+  FileDown,
   Loader2,
-  Mail,
-  Phone,
-  Search
+  Plus,
+  Search,
+  Trash2
 } from "lucide-react";
+
+import { useSearchParams } from "next/navigation";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
+import { ImmobilierTopbar } from "../layout";
 import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
-import { echeanceLabel } from "@/components/immobilier/fin-bail";
+import { BailDocActions } from "@/components/immobilier/tal-avis";
 import {
-  BadgeGestionExterne,
-  CelluleLoyer,
-  CorrectionOptions,
-  duMois,
-  moisCouvertPourPaiement,
-  montantMarquerPaye
-} from "@/components/immobilier/paiements-actions";
+  CreerBailModal,
+  FinBailModal,
+  JourEcheanceInline,
+  RelocationStatutPastille,
+  type SuiviBailRow
+} from "@/components/immobilier/fin-bail";
+import { RENOUVELLEMENT_BADGES } from "@/components/immobilier/paiements-actions";
 
-/**
- * Baux & paiements — vue transversale « collection des loyers ».
- *
- * Tous les baux ACTIFS du portefeuille croisés avec les paiements du
- * mois choisi : qui a payé, qui est en retard, marquer payé en 1 clic.
- * Les retards remontent en premier.
- *
- * Les immeubles en GESTION EXTERNE y figurent aussi (retour Phil
- * 2026-08-13) : même tableau, mais une pastille bleue « Gestion externe »
- * à la place du locataire — la perception est déléguée, donc pas de
- * relance ni de frais sur ces lignes.
- */
+type Row = SuiviBailRow;
 
-type Row = {
-  bail_id: number;
-  immeuble_id: number;
-  immeuble_name: string;
-  logement_id?: number | null;
-  logement_numero: string | null;
-  locataire_id: number | null;
-  locataire_name: string | null;
-  locataire_phone: string | null;
-  loyer_mensuel: number;
-  /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
-  jour_echeance?: number | null;
-  paiement_id: number | null;
-  montant_paye: number | null;
-  paye_le: string | null;
-  etat: string; // "retard" | "attente" | "paye" | "partiel"
-  /** Bail résilié/terminé en cours de mois : la ligne reste dans le
-   *  mois couvert avec un badge « Bail terminé le X » (M7). */
-  bail_statut?: string;
-  bail_termine_le?: string | null;
-  //: LE bail courant (imm_documents) — clic = l'ouvrir.
-  document_id?: number | null;
-  // Frais ponctuels du mois (retard…) + solde cumulatif dû sur le bail.
-  frais_mois?: { id: number; montant: number; libelle: string }[];
-  solde_total?: number;
-  nb_relances: number;
-  derniere_relance_le: string | null;
-  // Prochain locataire (transition) — bail futur / en préparation.
-  prochain_nom?: string | null;
-  prochain_loyer?: number | null;
-  prochain_debut?: string | null;
-  prochain_statut?: string | null;
-  /** Ligne d'un immeuble en gestion externe : suivi PAR LOGEMENT, sans
-   *  locataire nominatif ni relance (bail_id vaut alors 0). */
-  gestion_externe?: boolean;
-};
-
-/** Ligne brute de /loyers/externes — repliée dans `Row` pour l'affichage. */
-type RowExterne = {
-  immeuble_id: number;
-  immeuble_name: string;
-  logement_id: number;
-  logement_numero: string;
-  loyer_mensuel: number;
-  montant_paye: number | null;
-  paye_le: string | null;
-  etat: string;
-  solde_total: number;
-};
-
-type OverviewExterne = {
-  mois: string;
-  rows: RowExterne[];
-  total_attendu: number;
-  total_recu: number;
-  nb_payes: number;
-  nb_retards: number;
-  nb_attente: number;
-};
-
-/** Clé de rendu : les lignes externes n'ont pas de bail. */
-function rowKey(r: Row): string {
-  return r.gestion_externe
-    ? `ext-${r.logement_id}`
-    : `bail-${r.bail_id}`;
-}
-
-/** Identifiant « ligne occupée » : bail_id en interne, logement en
- *  négatif en externe — les deux espaces d'ID ne se marchent pas dessus. */
-function busyKey(r: Row): number {
-  return r.gestion_externe ? -(r.logement_id ?? 0) : r.bail_id;
-}
-
-function externeToRow(x: RowExterne): Row {
-  return {
-    bail_id: 0,
-    immeuble_id: x.immeuble_id,
-    immeuble_name: x.immeuble_name,
-    logement_id: x.logement_id,
-    logement_numero: x.logement_numero,
-    locataire_id: null,
-    locataire_name: null,
-    locataire_phone: null,
-    loyer_mensuel: x.loyer_mensuel,
-    jour_echeance: 1,
-    paiement_id: null,
-    montant_paye: x.montant_paye,
-    paye_le: x.paye_le,
-    etat: x.etat,
-    frais_mois: [],
-    solde_total: x.solde_total,
-    nb_relances: 0,
-    derniere_relance_le: null,
-    gestion_externe: true
-  };
-}
-
-type Overview = {
-  mois: string;
-  rows: Row[];
-  total_attendu: number;
-  total_recu: number;
-  nb_payes: number;
-  nb_retards: number;
-  nb_attente: number;
-  total_solde_du?: number;
-  //: Démarrage du pôle : les soldes ne remontent pas avant (réglable
-  //: dans Paramètres → Gestion locative).
-  solde_depuis?: string | null;
-};
-
-const RELOC_LABEL: Record<string, string> = {
-  bail_a_envoyer: "bail à envoyer",
-  bail_envoye: "bail envoyé — à signer",
-  a_venir: "à venir"
-};
-
-function fmtMoney(n: number): string {
+function money(n: number | null | undefined): string {
+  if (n == null) return "—";
   return `${Math.round(n).toLocaleString("fr-CA")} $`;
 }
 
-function monthLabel(mois: string): string {
-  const [y, m] = mois.split("-").map(Number);
-  return new Date(y, (m || 1) - 1, 1).toLocaleDateString("fr-CA", {
-    month: "long",
-    year: "numeric"
-  });
-}
-
-/** "2026-07-01" → "juillet 2026" (date de démarrage du pôle). */
-function moisLabelCourt(iso: string): string {
-  return monthLabel(iso.slice(0, 7));
-}
-
-function shiftMonth(mois: string, delta: number): string {
-  const [y, m] = mois.split("-").map(Number);
-  const d = new Date(y, (m || 1) - 1 + delta, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function currentMonth(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
 export default function BauxPage() {
-  const { currentEntrepriseId } = useImmobilierLayout();
-  const [mois, setMois] = useState(currentMonth());
-  const [data, setData] = useState<Overview | null>(null);
-  const [externe, setExterne] = useState<OverviewExterne | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [payingId, setPayingId] = useState<number | null>(null);
-  const [relancingId, setRelancingId] = useState<number | null>(null);
-  const [correctingId, setCorrectingId] = useState<number | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  // La page sert aussi de sous-page « Baux & locataires » de la fiche
+  // immeuble (?immeuble_id=X) : le bandeau d'avis se limite alors aux
+  // alertes de CET immeuble ; sans paramètre → toutes les alertes.
+  const searchParams = useSearchParams();
+  const immeubleIdParam = searchParams.get("immeuble_id");
+  const immeubleId =
+    immeubleIdParam != null && /^\d+$/.test(immeubleIdParam)
+      ? Number(immeubleIdParam)
+      : null;
+  const [rows, setRows] = useState<Row[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [fImmeuble, setFImmeuble] = useState("");
   const [search, setSearch] = useState("");
-  const [etatFilter, setEtatFilter] = useState<
-    "all" | "paye" | "partiel" | "retard" | "attente"
-  >("all");
-  const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
+  const [finBailFor, setFinBailFor] = useState<Row | null>(null);
+  const [creerFor, setCreerFor] = useState<Row | null>(null);
 
   const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    setErr(null);
     try {
-      const params = new URLSearchParams({ mois });
-      if (currentEntrepriseId != null) {
-        params.set("entreprise_id", String(currentEntrepriseId));
-      }
-      // Deux sources : le suivi interne (baux) et le miroir des
-      // immeubles en gestion externe (par logement). Un échec côté
-      // externe ne doit pas masquer le tableau principal.
-      const [r, rx] = await Promise.all([
-        authedFetch(
-          `/api/v1/immobilier/loyers/overview?${params.toString()}`
-        ),
-        authedFetch(
-          `/api/v1/immobilier/loyers/externes?${params.toString()}`
-        )
-      ]);
+      const r = await authedFetch("/api/v1/immobilier/suivi-baux");
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setData((await r.json()) as Overview);
-      setExterne(rx.ok ? ((await rx.json()) as OverviewExterne) : null);
+      setRows((await r.json()) as Row[]);
     } catch (e) {
-      setError(`Chargement échoué : ${(e as Error).message}`);
-    } finally {
-      setLoading(false);
+      setErr((e as Error).message);
     }
-  }, [mois, currentEntrepriseId]);
+  }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  // Changement d'entreprise → le portefeuille change, on repart sur « Tous ».
-  useEffect(() => {
-    setImmeubleFilter("all");
-  }, [currentEntrepriseId]);
-
-  function flash(msg: string) {
-    setToast(msg);
-    window.setTimeout(() => setToast(null), 2500);
-  }
-
-  async function enregistrerPaiement(row: Row, montant: number) {
-    setPayingId(row.bail_id);
-    try {
-      const today = new Date();
-      const payeLe = `${today.getFullYear()}-${String(
-        today.getMonth() + 1
-      ).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-      const r = await authedFetch("/api/v1/immobilier/paiements", {
-        method: "POST",
-        body: JSON.stringify({
-          bail_id: row.bail_id,
-          // Ligne « dette » d'un bail terminé : imputer au dernier mois
-          // couvert (le backend refuse un mois hors période du bail).
-          mois_couvert: `${moisCouvertPourPaiement(row, mois)}-01`,
-          montant,
-          paye_le: payeLe
-        })
-      });
-      if (!r.ok) {
-        const t = await r.text();
-        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
-      }
-      flash(
-        `Paiement enregistré — ${row.locataire_name || "locataire"} (${fmtMoney(
-          montant
-        )})`
-      );
-      await load();
-    } catch (e) {
-      setError(`Paiement échoué : ${(e as Error).message}`);
-    } finally {
-      setPayingId(null);
-    }
-  }
-
-  // Payé AU COMPLET en 1 clic : le restant du mois (loyer + frais −
-  // déjà payé) — et le SOLDE du bail pour une ligne « dette seulement »
-  // (bail terminé, mois après sa fin — retour client 2026-08-14).
-  async function marquerPaye(row: Row) {
-    await enregistrerPaiement(row, montantMarquerPaye(row));
-  }
-
-  // Paiement PARTIEL : montant saisi (ex. 500 $ sur un loyer de 800 $).
-  async function marquerPartiel(row: Row) {
-    const restant =
-      Math.round((duMois(row) - (row.montant_paye ?? 0)) * 100) / 100;
-    const saisie = window.prompt(
-      `Montant reçu de ${row.locataire_name || "ce locataire"} pour ${mois} ?\n(Restant du mois : ${fmtMoney(restant)})`,
-      ""
-    );
-    if (saisie == null) return;
-    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
-    if (!Number.isFinite(montant) || montant <= 0) {
-      setError("Montant invalide.");
+  async function supprimerBail(r: Row) {
+    if (!r.bail_id) return;
+    if (
+      !window.confirm(
+        `⚠️ Supprimer le bail de ${r.locataire_nom || "ce locataire"} (${r.immeuble_name} · ${r.logement_numero}) ?\n\nSes paiements et documents liés seront affectés — pour une fin de bail normale, utilise plutôt « Mettre fin au bail ».`
+      )
+    )
       return;
-    }
-    await enregistrerPaiement(row, Math.round(montant * 100) / 100);
-  }
-
-  // Frais ponctuel qui S'AJOUTE au solde (ex. 20 $ payé après le 15).
-  async function ajouterFrais(row: Row) {
-    const saisie = window.prompt(
-      `Frais à facturer à ${row.locataire_name || "ce locataire"} (mois ${mois}) ?\nMontant en $ :`,
-      "20"
-    );
-    if (saisie == null) return;
-    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
-    if (!Number.isFinite(montant) || montant <= 0) {
-      setError("Montant invalide.");
-      return;
-    }
-    const libelle =
-      window.prompt("Libellé du frais :", "Frais de retard") ||
-      "Frais de retard";
     try {
-      const r = await authedFetch(
-        `/api/v1/immobilier/baux/${row.bail_id}/frais`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            mois_couvert: `${mois}-01`,
-            montant,
-            libelle
-          })
-        }
-      );
-      if (!r.ok)
-        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
-      flash(`Frais ajouté au solde : ${libelle} (${fmtMoney(montant)})`);
-      await load();
-    } catch (e) {
-      setError(`Ajout du frais échoué : ${(e as Error).message}`);
-    }
-  }
-
-  async function supprimerFrais(fraisId: number) {
-    if (!window.confirm("Retirer ce frais du solde ?")) return;
-    try {
-      const r = await authedFetch(`/api/v1/immobilier/frais/${fraisId}`, {
+      const res = await authedFetch(`/api/v1/immobilier/baux/${r.bail_id}`, {
         method: "DELETE"
       });
-      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
-      await load();
-    } catch (e) {
-      setError(`Suppression du frais échouée : ${(e as Error).message}`);
-    }
-  }
-
-  // « Corriger » ouvre les OPTIONS (retour Phil 2026-07-31) : corriger
-  // le montant, marquer payé au complet, ou retirer — sans perdre la
-  // ligne ni devoir la retrouver.
-  async function supprimerPaiementsMois(row: Row): Promise<void> {
-    const r = await authedFetch(
-      `/api/v1/immobilier/baux/${row.bail_id}/paiements-mois?mois=${mois}`,
-      { method: "DELETE" }
-    );
-    if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
-  }
-
-  async function retirerPaiement(row: Row) {
-    if (
-      !window.confirm(
-        `Retirer le paiement de ${row.locataire_name || "ce locataire"} pour ${mois} (${fmtMoney(row.montant_paye ?? 0)} reçu) ?\nLe mois redeviendra impayé.`
-      )
-    )
-      return;
-    setPayingId(row.bail_id);
-    try {
-      await supprimerPaiementsMois(row);
-      flash("Paiement retiré — le mois est de retour impayé.");
-      setCorrectingId(null);
-      await load();
-    } catch (e) {
-      setError(`Annulation échouée : ${(e as Error).message}`);
-    } finally {
-      setPayingId(null);
-    }
-  }
-
-  async function corrigerMontant(row: Row) {
-    const saisie = window.prompt(
-      `Montant RÉELLEMENT reçu de ${row.locataire_name || "ce locataire"} pour ${mois} ?\n(Enregistré : ${fmtMoney(row.montant_paye ?? 0)} — dû du mois : ${fmtMoney(duMois(row))})`,
-      ""
-    );
-    if (saisie == null) return;
-    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
-    if (!Number.isFinite(montant) || montant < 0) {
-      setError("Montant invalide.");
-      return;
-    }
-    setPayingId(row.bail_id);
-    try {
-      await supprimerPaiementsMois(row);
-      setCorrectingId(null);
-      if (montant > 0) {
-        await enregistrerPaiement(row, Math.round(montant * 100) / 100);
-      } else {
-        flash("Paiements du mois retirés.");
-        await load();
-        setPayingId(null);
+      if (!res.ok && res.status !== 204) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
       }
-    } catch (e) {
-      setError(`Correction échouée : ${(e as Error).message}`);
-      setPayingId(null);
-    }
-  }
-
-  async function payeAuComplet(row: Row) {
-    if (
-      !window.confirm(
-        `Remplacer par un paiement COMPLET (${fmtMoney(duMois(row))}) pour ${mois} ?`
-      )
-    )
-      return;
-    setPayingId(row.bail_id);
-    try {
-      await supprimerPaiementsMois(row);
-      setCorrectingId(null);
-      await enregistrerPaiement(row, duMois(row));
-    } catch (e) {
-      setError(`Correction échouée : ${(e as Error).message}`);
-      setPayingId(null);
-    }
-  }
-
-  async function relancer(row: Row) {
-    setRelancingId(row.bail_id);
-    try {
-      const r = await authedFetch("/api/v1/immobilier/loyers/relance", {
-        method: "POST",
-        body: JSON.stringify({ bail_id: row.bail_id, mois })
-      });
-      if (!r.ok) {
-        const t = await r.text();
-        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
-      }
-      const res = (await r.json()) as { niveau: number; destinataire: string };
-      flash(
-        `Relance ${res.niveau} envoyée à ${res.destinataire}`
-      );
+      setFlash("Bail supprimé.");
       await load();
     } catch (e) {
-      setError(`Relance échouée : ${(e as Error).message}`);
-    } finally {
-      setRelancingId(null);
+      setErr(`Suppression : ${(e as Error).message}`);
     }
   }
 
-  // ── Gestion externe : les mêmes gestes, sur le logement ────────────
-  // Pas de bail ni de locataire chez nous : on coche ce que le rapport
-  // du gestionnaire indique. Ni relance ni frais ponctuel ici.
-  async function enregistrerExterne(row: Row, montant: number) {
-    if (row.logement_id == null) return;
-    setPayingId(busyKey(row));
-    try {
-      const r = await authedFetch("/api/v1/immobilier/paiements-externes", {
-        method: "POST",
-        body: JSON.stringify({
-          logement_id: row.logement_id,
-          mois,
-          montant
-        })
-      });
-      if (!r.ok)
-        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
-      flash(
-        `Paiement enregistré — ${row.immeuble_name} · ${row.logement_numero} (${fmtMoney(montant)})`
-      );
-      await load();
-    } catch (e) {
-      setError(`Paiement échoué : ${(e as Error).message}`);
-    } finally {
-      setPayingId(null);
-    }
-  }
-
-  async function marquerPayeExterne(row: Row) {
-    const restant =
-      Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
-    await enregistrerExterne(
-      row,
-      restant > 0 ? restant : row.loyer_mensuel
-    );
-  }
-
-  async function marquerPartielExterne(row: Row) {
-    const restant =
-      Math.round((row.loyer_mensuel - (row.montant_paye ?? 0)) * 100) / 100;
-    const saisie = window.prompt(
-      `Montant reçu pour le logement ${row.logement_numero} (${mois}) ?\n(Restant du mois : ${fmtMoney(restant)})`,
-      ""
-    );
-    if (saisie == null) return;
-    const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
-    if (!Number.isFinite(montant) || montant <= 0) {
-      setError("Montant invalide.");
-      return;
-    }
-    await enregistrerExterne(row, Math.round(montant * 100) / 100);
-  }
-
-  async function corrigerExterne(row: Row) {
-    if (row.logement_id == null) return;
-    if (
-      !window.confirm(
-        `Annuler les paiements du logement ${row.logement_numero} pour ${mois} ?`
-      )
-    )
-      return;
-    setPayingId(busyKey(row));
+  // Ouvre un document conservé (l'avis courant) dans un nouvel onglet.
+  async function ouvrirDoc(docId: number) {
     try {
       const r = await authedFetch(
-        `/api/v1/immobilier/paiements-externes/${row.logement_id}?mois=${mois}`,
-        { method: "DELETE" }
+        `/api/v1/immobilier/documents/${docId}/pdf`
       );
-      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
-      flash("Paiement retiré — le mois est de retour impayé.");
-      await load();
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const url = URL.createObjectURL(await r.blob());
+      window.open(url, "_blank");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e) {
-      setError(`Annulation échouée : ${(e as Error).message}`);
-    } finally {
-      setPayingId(null);
+      setErr(`Ouverture échouée : ${(e as Error).message}`);
     }
   }
 
-  // Toutes les lignes du mois : interne + gestion externe.
-  const allRows = useMemo(() => {
-    const internes = data?.rows ?? [];
-    const externes = (externe?.rows ?? []).map(externeToRow);
-    return [...internes, ...externes];
-  }, [data, externe]);
-
-  // Immeubles distincts présents dans les rows du mois chargé.
-  const immeubleOptions = useMemo(() => {
+  const immeubles = useMemo(() => {
     const m = new Map<number, string>();
-    for (const r of allRows) {
-      if (!m.has(r.immeuble_id)) m.set(r.immeuble_id, r.immeuble_name);
-    }
+    for (const r of rows || []) m.set(r.immeuble_id, r.immeuble_name);
     return [...m.entries()]
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name, "fr"));
-  }, [allRows]);
+  }, [rows]);
 
-  // Tuiles KPI : suivent le filtre immeuble (voir l'état d'UN immeuble),
-  // mais ignorent le filtre état + la recherche. Les totaux du backend
-  // ne couvrent que l'interne → on ajoute le portefeuille externe.
-  const kpi = useMemo(() => {
-    if (!data) return null;
-    if (immeubleFilter === "all") {
-      return {
-        total_attendu: data.total_attendu + (externe?.total_attendu ?? 0),
-        total_recu: data.total_recu + (externe?.total_recu ?? 0),
-        nb_retards: data.nb_retards + (externe?.nb_retards ?? 0),
-        nb_attente: data.nb_attente + (externe?.nb_attente ?? 0),
-        nb_baux: allRows.length,
-        total_solde_du:
-          (data.total_solde_du ??
-            data.rows.reduce((s, r) => s + (r.solde_total ?? 0), 0)) +
-          (externe?.rows ?? []).reduce((s, r) => s + r.solde_total, 0)
-      };
+  const filtres = useMemo(() => {
+    let list = rows || [];
+    if (fImmeuble) {
+      list = list.filter((r) => String(r.immeuble_id) === fImmeuble);
     }
-    const rows = allRows.filter((r) => r.immeuble_id === immeubleFilter);
-    return {
-      total_attendu: rows.reduce((s, r) => s + r.loyer_mensuel, 0),
-      total_recu: rows.reduce((s, r) => s + (r.montant_paye ?? 0), 0),
-      nb_retards: rows.filter(
-        (r) => r.etat === "retard" || r.etat === "partiel"
-      ).length,
-      nb_attente: rows.filter((r) => r.etat === "attente").length,
-      nb_baux: rows.length,
-      total_solde_du: rows.reduce((s, r) => s + (r.solde_total ?? 0), 0)
-    };
-  }, [data, externe, allRows, immeubleFilter]);
-
-  const tauxCollecte = useMemo(() => {
-    if (!kpi || kpi.total_attendu <= 0) return null;
-    return Math.round((kpi.total_recu / kpi.total_attendu) * 100);
-  }, [kpi]);
-
-  // Filtres client-side sur les rows du mois chargé + tri par état :
-  // retards en haut, partiels ensuite, payés en bas (retour Steven).
-  const filteredRows = useMemo(() => {
-    if (!data) return [];
-    const q = search.trim().toLowerCase();
-    const ordre: Record<string, number> = {
-      retard: 0,
-      partiel: 1,
-      attente: 2,
-      paye: 3
-    };
-    return allRows
-      .filter((r) => {
-        if (immeubleFilter !== "all" && r.immeuble_id !== immeubleFilter)
-          return false;
-        if (etatFilter !== "all" && r.etat !== etatFilter) return false;
-        if (q) {
-          // « gestion externe » est cherchable comme un nom de locataire :
-          // c'est ce que la ligne affiche à sa place.
-          const hay = `${r.locataire_name || ""} ${r.immeuble_name} ${
-            r.logement_numero || ""
-          }${r.gestion_externe ? " gestion externe" : ""}`.toLowerCase();
-          if (!hay.includes(q)) return false;
-        }
-        return true;
-      })
-      .sort(
-        (a, b) =>
-          (ordre[a.etat] ?? 9) - (ordre[b.etat] ?? 9) ||
-          a.immeuble_name.localeCompare(b.immeuble_name, "fr") ||
-          (a.logement_numero || "").localeCompare(
-            b.logement_numero || "", "fr"
-          )
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter((r) =>
+        `${r.locataire_nom || ""} ${r.prochain_locataire_nom || ""} ${r.immeuble_name} ${r.logement_numero}`
+          .toLowerCase()
+          .includes(q)
       );
-  }, [data, allRows, search, etatFilter, immeubleFilter]);
+    }
+    // Rouges (résiliation en cours) en premier, puis sans bail, puis le
+    // reste — ordre backend conservé (tri stable).
+    return [...list].sort(
+      (a, b) =>
+        Number(b.resiliation_en_cours) - Number(a.resiliation_en_cours) ||
+        Number(a.bail_id != null) - Number(b.bail_id != null)
+    );
+  }, [rows, fImmeuble, search]);
+
+  const nbSansBail = (rows || []).filter((r) => r.bail_id == null).length;
+  const nbADocumenter = (rows || []).filter(
+    (r) => r.bail_id != null && r.document_id == null
+  ).length;
+  const nbResiliations = (rows || []).filter(
+    (r) => r.resiliation_en_cours
+  ).length;
 
   return (
     <>
       <ImmobilierTopbar
         breadcrumbs={[
           { label: "Gestion immobilière", href: "/immobilier" },
-          { label: "Paiements" }
+          { label: "Baux" }
         ]}
       />
-      <div className="p-4 pb-28 lg:p-6 lg:pb-28">
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
-              <ClipboardList className="h-5 w-5" />
-            </span>
-            <div>
-              <h1 className="text-2xl font-bold text-white">
-                Baux &amp; paiements
-              </h1>
-              <p className="mt-1 max-w-2xl text-sm text-white/60">
-                Tous les baux actifs du portefeuille — qui a payé, qui est
-                en retard, et marquer payé en un clic.
-              </p>
-            </div>
-          </div>
-
-          {/* Sélecteur de mois */}
-          <div className="inline-flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-900 px-1 py-1">
-            <button
-              type="button"
-              onClick={() => setMois((m) => shiftMonth(m, -1))}
-              className="btn-ghost btn-xs"
-              aria-label="Mois précédent"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <span className="min-w-[140px] text-center text-sm font-semibold capitalize text-white">
-              {monthLabel(mois)}
-            </span>
-            <button
-              type="button"
-              onClick={() => setMois((m) => shiftMonth(m, 1))}
-              className="btn-ghost btn-xs"
-              aria-label="Mois suivant"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
+      <div className="space-y-4 p-4 sm:p-6">
+        {/* En-tête au MÊME format que les autres pages du pôle
+            (Paiements, Suivis annuels) : pastille + titre + sous-titre,
+            puis une rangée de tuiles de synthèse. */}
+        <header className="flex items-start gap-3">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+            <ClipboardList className="h-5 w-5" />
+          </span>
+          <div>
+            <h1 className="text-2xl font-bold text-white">Baux</h1>
+            <p className="mt-1 max-w-2xl text-sm text-white/60">
+              Une ligne par logement : créer le bail, importer le PDF
+              signé (il devient actif) et mettre fin au bail. La collecte
+              des loyers, elle, se fait sur la page Paiements.
+            </p>
           </div>
         </header>
 
-        {error ? (
-          <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-            {error}
+        {/* Tuiles de synthèse — les mêmes compteurs que le tableau. */}
+        {rows ? (
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatTile
+              label="Logements"
+              value={String(rows.length)}
+              sub="au portefeuille"
+            />
+            <StatTile
+              label="Sans bail"
+              value={String(nbSansBail)}
+              sub={nbSansBail > 0 ? "à créer 👇" : "tous couverts"}
+            />
+            <StatTile
+              label="PDF à importer"
+              value={String(nbADocumenter)}
+              sub="bail actif, document manquant"
+              tone={nbADocumenter > 0 ? "amber" : undefined}
+            />
+            <StatTile
+              label="Résiliations"
+              value={String(nbResiliations)}
+              sub={
+                nbResiliations > 0
+                  ? "signature attendue"
+                  : "rien à signaler"
+              }
+              tone={nbResiliations > 0 ? "rose" : undefined}
+            />
+          </div>
+        ) : null}
+
+        {/* MÊME bandeau que la page Paiements (composant partagé),
+            filtré sur l'immeuble quand ?immeuble_id= est présent. */}
+        <BandeauAvisRenouvellement immeubleId={immeubleId} />
+
+        <div className="rounded-2xl border border-sky-400/30 bg-sky-500/10 p-4 text-xs text-sky-200">
+          <p className="font-semibold text-white">Comment ça marche</p>
+          <p className="mt-1">
+            Le bail se prépare et se signe dans le système de la CORPIQ —
+            ici vit le SUIVI, connecté au kanban Locations (changer le
+            statut ici le change là-bas). Crée le bail, importe le PDF
+            signé (il devient actif), et mets fin au bail : l&apos;entente
+            de résiliation part pour signature en ligne (ligne ROUGE
+            jusqu&apos;à la signature, puis résiliation et relocation
+            automatiques) ou fin immédiate sans avis.
           </p>
-        ) : null}
+        </div>
 
-        {/* Tuiles de synthèse — suivent le filtre immeuble */}
-        {kpi ? (
-          <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
-            <StatTile
-              label="Attendu"
-              value={fmtMoney(kpi.total_attendu)}
-              sub={`${kpi.nb_baux} bail${kpi.nb_baux > 1 ? "s" : ""} actif${kpi.nb_baux > 1 ? "s" : ""}`}
-            />
-            <StatTile
-              label="Reçu"
-              value={fmtMoney(kpi.total_recu)}
-              sub={
-                tauxCollecte != null
-                  ? `${tauxCollecte} % collecté`
-                  : undefined
-              }
-              tone="emerald"
-            />
-            <StatTile
-              label="En retard"
-              value={String(kpi.nb_retards)}
-              sub={kpi.nb_retards > 0 ? "à relancer 👇" : "rien à signaler"}
-              tone={kpi.nb_retards > 0 ? "rose" : undefined}
-            />
-            <StatTile
-              label="En attente"
-              value={String(kpi.nb_attente)}
-              sub="avant le 5 du mois"
-            />
-            <StatTile
-              label="Solde dû"
-              value={fmtMoney(kpi.total_solde_du)}
-              sub={
-                data?.solde_depuis
-                  ? `depuis ${moisLabelCourt(data.solde_depuis)}`
-                  : "loyers échus + frais − reçus"
-              }
-              tone={kpi.total_solde_du > 0 ? "rose" : undefined}
-            />
-          </div>
-        ) : null}
-
-        <BandeauAvisRenouvellement entrepriseId={currentEntrepriseId} />
-
-        {/* Filtres */}
-        <div className="mt-5 flex flex-wrap items-center gap-2">
-          <div className="relative max-w-md flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Recherche locataire / immeuble…"
-              className="input w-full pl-9"
-            />
-          </div>
+        <div className="flex flex-wrap items-center gap-3">
           <select
-            value={immeubleFilter === "all" ? "all" : String(immeubleFilter)}
-            onChange={(e) =>
-              setImmeubleFilter(
-                e.target.value === "all" ? "all" : Number(e.target.value)
-              )
-            }
-            className="input w-auto max-w-[220px] text-sm"
-            aria-label="Filtrer par immeuble"
+            value={fImmeuble}
+            onChange={(e) => setFImmeuble(e.target.value)}
+            className="input w-auto text-sm"
           >
-            <option value="all">Tous les immeubles</option>
-            {immeubleOptions.map((imm) => (
-              <option key={imm.id} value={imm.id}>
-                {imm.name}
+            <option value="">Tous les immeubles</option>
+            {immeubles.map((i) => (
+              <option key={i.id} value={String(i.id)}>
+                {i.name}
               </option>
             ))}
           </select>
-          <FilterPill
-            label="Tous"
-            active={etatFilter === "all"}
-            onClick={() => setEtatFilter("all")}
-          />
-          <FilterPill
-            label="Payés"
-            active={etatFilter === "paye"}
-            onClick={() => setEtatFilter("paye")}
-          />
-          <FilterPill
-            label="Retards"
-            active={etatFilter === "retard"}
-            onClick={() => setEtatFilter("retard")}
-          />
-          <FilterPill
-            label="Partiels"
-            active={etatFilter === "partiel"}
-            onClick={() => setEtatFilter("partiel")}
-          />
-          <FilterPill
-            label="En attente"
-            active={etatFilter === "attente"}
-            onClick={() => setEtatFilter("attente")}
-          />
-          {data ? (
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Locataire, immeuble, logement…"
+              className="input w-56 pl-8 text-sm"
+            />
+          </div>
+          {/* Les compteurs vivent maintenant dans les tuiles d'en-tête ;
+              ici on n'affiche que le nombre de lignes FILTRÉES. */}
+          {rows ? (
             <span className="text-xs text-white/50">
-              {filteredRows.length} / {allRows.length}
+              {filtres.length} logement{filtres.length > 1 ? "s" : ""}{" "}
+              affiché{filtres.length > 1 ? "s" : ""}
             </span>
           ) : null}
         </div>
 
-        {/* Tableau */}
-        <div className="mt-4 overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
-          {loading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
-            </div>
-          ) : !data || filteredRows.length === 0 ? (
-            <div className="p-10 text-center text-sm text-white/50">
-              {allRows.length > 0 ? (
-                "Aucun bail correspondant aux filtres."
-              ) : (
-                <>
-                  Aucun bail actif dans le portefeuille
-                  {currentEntrepriseId != null ? " de cette entreprise" : ""}.
-                  Crée des baux depuis les fiches immeubles.
-                </>
-              )}
-            </div>
-          ) : (
-            // min-w : sur mobile la table défile horizontalement plutôt que
-            // de compresser la colonne d'actions (sinon les boutons s'empilent
-            // et les lignes deviennent très hautes — retour Phil v4).
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1180px] text-sm">
-                <thead className="bg-brand-950/60 text-left text-[11px] uppercase tracking-wider text-white/50">
-                  <tr>
-                    <th className="px-3 py-2.5">État</th>
-                    <th className="px-3 py-2.5">Locataire</th>
-                    <th className="px-3 py-2.5">Immeuble · log.</th>
-                    <th className="px-3 py-2.5">Statut</th>
-                    {/* Loyer / Reçu / Solde tiennent dans UNE colonne
-                        (retour Phil 2026-08-13) — plus de « Solde dû »
-                        séparé, on lit la ligne d'un coup d'œil. */}
-                    <th className="px-3 py-2.5 text-right">Loyer</th>
-                    <th className="px-3 py-2.5 text-right">Payé le</th>
-                    <th className="px-3 py-2.5"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-brand-800">
-                  {filteredRows.map((r) => (
+        {flash ? (
+          <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+            {flash}
+          </p>
+        ) : null}
+        {err ? (
+          <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+            <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+            {err}
+          </p>
+        ) : null}
+
+        {rows === null ? (
+          <p className="flex items-center gap-2 text-xs text-white/50">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+          </p>
+        ) : filtres.length === 0 ? (
+          <p className="rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
+            Aucun logement ne correspond aux filtres.
+          </p>
+        ) : (
+          <div className="overflow-x-auto rounded-2xl border border-brand-800 bg-brand-900">
+            <table className="w-full min-w-[1140px] text-left text-sm">
+              <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
+                <tr>
+                  <th className="px-4 py-2.5">Immeuble · logt</th>
+                  <th className="px-4 py-2.5">Locataire</th>
+                  <th className="px-4 py-2.5">Période</th>
+                  <th className="px-4 py-2.5 text-right">Loyer/m</th>
+                  <th className="px-4 py-2.5">Suivi</th>
+                  <th className="px-4 py-2.5 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-brand-800">
+                {filtres.map((r) => {
+                  const actifAuDossier =
+                    r.bail_id != null && r.document_id != null;
+                  return (
                     <tr
-                      // `rowKey` et pas `bail_id` : en gestion externe la
-                      // ligne suit le LOGEMENT, il n'y a pas de bail chez nous.
-                      key={rowKey(r)}
-                      // Fond TEINTÉ selon l'état (retour Phil
-                      // 2026-08-13) : gris en attente, vert payé,
-                      // jaune partiel, rouge retard — mêmes teintes
-                      // que les lignes de résiliation de la page Baux.
-                      className={`transition ${
-                        r.etat === "retard"
+                      key={r.logement_id}
+                      className={
+                        r.resiliation_en_cours
                           ? "bg-rose-500/10 hover:bg-rose-500/15"
-                          : r.etat === "partiel"
-                            ? "bg-amber-500/10 hover:bg-amber-500/15"
-                            : r.etat === "paye"
-                              ? "bg-emerald-500/10 hover:bg-emerald-500/15"
-                              : "hover:bg-brand-800/40"
-                      }`}
+                          : actifAuDossier
+                            ? "bg-emerald-500/10 hover:bg-emerald-500/15"
+                            : r.bail_id != null
+                              ? "bg-amber-500/5 hover:bg-amber-500/10"
+                              : "hover:bg-brand-950/50"
+                      }
                     >
-                      <td className="px-3 py-2.5">
-                        {r.etat === "paye" ? (
-                          <span className="badge badge-emerald">
-                            <CheckCircle2 className="h-3 w-3" /> Payé
-                          </span>
-                        ) : r.etat === "partiel" ? (
-                          <span className="badge badge-amber">
-                            <AlertTriangle className="h-3 w-3" /> Partiel
-                          </span>
-                        ) : r.etat === "retard" ? (
-                          <span className="badge badge-rose">
-                            <AlertTriangle className="h-3 w-3" /> Retard
-                          </span>
-                        ) : (
-                          <span className="badge badge-neutral">
-                            <Clock className="h-3 w-3" /> Attente
-                          </span>
-                        )}
+                      <td className="px-4 py-2.5">
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={`/immobilier/immeubles/${r.immeuble_id}` as any}
+                          className="block font-bold text-white hover:text-accent-500"
+                        >
+                          {r.immeuble_name}
+                        </Link>
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={`/immobilier/logements/${r.logement_id}` as any}
+                          className="text-[11px] font-mono text-accent-500 hover:underline"
+                        >
+                          {r.logement_numero || `#${r.logement_id}`}
+                        </Link>
                       </td>
-                      <td className="px-3 py-2.5">
-                        {r.gestion_externe ? (
-                          <BadgeGestionExterne />
-                        ) : r.locataire_id != null ? (
+                      <td className="px-4 py-2.5">
+                        {r.locataire_id != null ? (
                           <Link
                             // eslint-disable-next-line @typescript-eslint/no-explicit-any
                             href={
                               `/immobilier/locataires/${r.locataire_id}` as any
                             }
-                            className="font-medium text-accent-500 hover:underline"
-                            title="Ouvrir la fiche du locataire"
+                            className="text-accent-500 hover:underline"
                           >
-                            {r.locataire_name || `Locataire #${r.locataire_id}`}
+                            {r.locataire_nom || "—"}
                           </Link>
                         ) : (
-                          <span className="font-medium text-white">
-                            {r.locataire_name || "—"}
+                          <span className="text-white/40">
+                            {r.bail_id != null ? "—" : "Aucun bail"}
                           </span>
                         )}
-                        {r.locataire_phone ? (
-                          <a
-                            href={`tel:${r.locataire_phone}`}
-                            className="ml-2 inline-flex items-center gap-1 text-[11px] text-accent-500 hover:underline"
-                          >
-                            <Phone className="h-3 w-3" />
-                            {r.locataire_phone}
-                          </a>
-                        ) : null}
-                      </td>
-                      <td className="px-3 py-2.5 text-white/70">
-                        <Link
-                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          href={`/immobilier/immeubles/${r.immeuble_id}` as any}
-                          className="hover:text-accent-500 hover:underline"
-                        >
-                          {r.immeuble_name}
-                        </Link>
-                        {r.logement_numero ? (
-                          r.logement_id != null ? (
-                            <Link
-                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                              href={
-                                `/immobilier/logements/${r.logement_id}` as any
-                              }
-                              className="text-accent-500/80 hover:text-accent-500 hover:underline"
-                              title="Ouvrir la fiche du logement"
-                            >
-                              {" "}
-                              · {r.logement_numero}
-                            </Link>
-                          ) : (
-                            <span className="text-white/40">
-                              {" "}
-                              · {r.logement_numero}
-                            </span>
-                          )
-                        ) : null}
-                        {r.prochain_nom ? (
-                          <div className="mt-0.5 text-[10px] font-normal text-orange-300/90">
-                            Prochain : {r.prochain_nom}
+                        {r.prochain_locataire_nom ? (
+                          <div className="mt-0.5 text-[10px] text-orange-300/90">
+                            Prochain : {r.prochain_locataire_nom}
                             {r.prochain_loyer != null
-                              ? ` · ${fmtMoney(r.prochain_loyer)}`
+                              ? ` · ${money(r.prochain_loyer)}`
                               : ""}
-                            {r.prochain_debut
-                              ? ` dès le ${r.prochain_debut}`
+                            {r.prochain_date_debut
+                              ? ` dès le ${r.prochain_date_debut}`
                               : ""}
-                            {" — "}
-                            {RELOC_LABEL[r.prochain_statut || ""] ||
-                              "à venir"}
                           </div>
                         ) : null}
                       </td>
-                      <td className="px-3 py-2.5">
-                        {r.gestion_externe ? (
-                          // Pas de bail chez nous en gestion externe : la
-                          // ligne suit le LOGEMENT, forcément occupé
-                          // puisqu'un loyer y est attendu.
-                          <span className="badge badge-neutral">Occupé</span>
-                        ) : r.bail_termine_le ? (
-                          // M7 : bail résilié/terminé — la ligne reste
-                          // dans les mois couverts, et après la fin tant
-                          // que le solde n'est pas réglé (2026-08-14).
-                          <span
-                            className="badge badge-rose"
-                            title={
-                              r.bail_termine_le.slice(0, 7) < mois
-                                ? "Bail terminé avant ce mois — la ligne reste tant que le solde n'est pas réglé"
-                                : "Le bail couvrait une partie de ce mois — dernier loyer et solde encore dus"
-                            }
-                          >
-                            Bail terminé le {r.bail_termine_le}
-                          </span>
-                        ) : (
-                          <span className="badge badge-emerald">Actif</span>
-                        )}
-                        {r.prochain_statut ? (
-                          <div className="mt-0.5">
-                            <span
-                              className={`badge ${
-                                r.prochain_statut === "bail_envoye"
-                                  ? "badge-violet"
-                                  : "badge-amber"
-                              }`}
-                            >
-                              {RELOC_LABEL[r.prochain_statut] || "proposé"}
-                            </span>
-                          </div>
-                        ) : null}
+                      <td className="px-4 py-2.5 text-xs text-white/60">
+                        {r.bail_id != null
+                          ? r.au_mois
+                            ? `${r.date_debut} → au mois`
+                            : `${r.date_debut} → ${r.date_fin}`
+                          : "—"}
                       </td>
-                      <td className="px-3 py-2.5">
-                        {/* Bail TAL « Ou le ___ » : rien quand c'est le 1er
-                            (l'immense majorité), mention discrète sinon —
-                            c'est ce qui explique qu'il ne soit pas encore
-                            « en retard ». */}
-                        {/* Loyer / Reçu / Solde empilés (retour Phil
-                            2026-08-13) — la balance d'un paiement partiel
-                            se lit sur la ligne « Solde », plus besoin du
-                            « reste » séparé ni d'une colonne Solde dû. */}
-                        <CelluleLoyer
-                          loyer={r.loyer_mensuel}
-                          recu={r.montant_paye}
-                          solde={r.solde_total}
-                          fmt={fmtMoney}
-                          echeance={echeanceLabel(r.jour_echeance)}
-                          frais={r.frais_mois}
-                          onSupprimerFrais={(id) => void supprimerFrais(id)}
+                      <td className="px-4 py-2.5 text-right font-mono text-xs text-white/80">
+                        {money(r.loyer_mensuel)}
+                        {/* Bail TAL « Ou le ___ » : discret quand c'est le
+                            1er, cliquable pour modifier. */}
+                        <JourEcheanceInline
+                          bailId={r.bail_id}
+                          jour={r.jour_echeance}
+                          onChanged={load}
                         />
                       </td>
-                      {/* Le montant reçu vit maintenant dans la colonne
-                          Loyer — ici on ne garde que la DATE. */}
-                      <td className="px-3 py-2.5 text-right tabular-nums text-white/60">
-                        {r.paye_le || "—"}
-                      </td>
-                      <td className="px-3 py-2.5 text-right">
-                        {/* 3 groupes visuellement délimités (retour Phil v4) :
-                            Paiement | Documents | Bail. Les groupes Documents
-                            et Bail restent visibles même une fois payé. */}
-                        <div className="flex flex-col items-end gap-1.5">
-                          <div className="flex flex-wrap items-center justify-end gap-2">
-                            {/* ── Groupe 1 — Paiement ── */}
-                            <div className="inline-flex items-center gap-1.5 rounded-xl border border-brand-700 px-1.5 py-1">
-                              {r.gestion_externe ? (
-                                // Gestion externe : on ne fait que refléter
-                                // le rapport du gestionnaire — ni relance
-                                // (aucun courriel ne part d'ici), ni frais.
-                                <>
-                                  {r.etat !== "paye" ? (
-                                    <>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          void marquerPayeExterne(r)
-                                        }
-                                        disabled={payingId === busyKey(r)}
-                                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                                      >
-                                        {payingId === busyKey(r) ? (
-                                          <Loader2 className="h-3 w-3 animate-spin" />
-                                        ) : (
-                                          <Check className="h-3 w-3" />
-                                        )}
-                                        Marquer payé
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          void marquerPartielExterne(r)
-                                        }
-                                        disabled={payingId === busyKey(r)}
-                                        title="Enregistrer un paiement partiel (montant saisi, ajouté au cumul)"
-                                        className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
-                                      >
-                                        Partiel
-                                      </button>
-                                    </>
-                                  ) : null}
-                                  {(r.montant_paye ?? 0) > 0 ||
-                                  r.etat === "paye" ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => void corrigerExterne(r)}
-                                      disabled={payingId === busyKey(r)}
-                                      title="Erreur de saisie ? Annule les paiements du mois"
-                                      className="px-1 text-[11px] text-white/50 transition hover:text-rose-300 disabled:opacity-50"
-                                    >
-                                      Corriger
-                                    </button>
-                                  ) : null}
-                                </>
-                              ) : r.etat !== "paye" ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() => void marquerPaye(r)}
-                                    disabled={payingId === r.bail_id}
-                                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                                  >
-                                    {payingId === r.bail_id ? (
-                                      <Loader2 className="h-3 w-3 animate-spin" />
-                                    ) : (
-                                      <Check className="h-3 w-3" />
-                                    )}
-                                    Marquer payé
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => void marquerPartiel(r)}
-                                    disabled={payingId === r.bail_id}
-                                    title="Enregistrer un paiement partiel (montant saisi)"
-                                    className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
-                                  >
-                                    Partiel
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => void ajouterFrais(r)}
-                                    title="Ajouter un frais ponctuel au solde (ex. frais de retard 20 $)"
-                                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10"
-                                  >
-                                    + Frais
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => void relancer(r)}
-                                    disabled={relancingId === r.bail_id}
-                                    title="Envoyer un rappel de loyer par courriel au locataire"
-                                    className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
-                                  >
-                                    {relancingId === r.bail_id ? (
-                                      <Loader2 className="h-3 w-3 animate-spin" />
-                                    ) : (
-                                      <Mail className="h-3 w-3" />
-                                    )}
-                                    Relancer
-                                  </button>
-                                  {(r.montant_paye ?? 0) > 0 ? (
-                                    correctingId === r.bail_id ? (
-                                      <CorrectionOptions
-                                        r={r}
-                                        busy={payingId === r.bail_id}
-                                        onMontant={() => void corrigerMontant(r)}
-                                        onComplet={() => void payeAuComplet(r)}
-                                        onRetirer={() => void retirerPaiement(r)}
-                                        onClose={() => setCorrectingId(null)}
-                                      />
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          setCorrectingId(r.bail_id)
-                                        }
-                                        disabled={payingId === r.bail_id}
-                                        title="Corriger le paiement : montant, complet, ou retrait"
-                                        className="px-1 text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
-                                      >
-                                        Corriger
-                                      </button>
-                                    )
-                                  ) : null}
-                                </>
-                              ) : correctingId === r.bail_id ? (
-                                <CorrectionOptions
-                                  r={r}
-                                  busy={payingId === r.bail_id}
-                                  onMontant={() => void corrigerMontant(r)}
-                                  onComplet={() => void payeAuComplet(r)}
-                                  onRetirer={() => void retirerPaiement(r)}
-                                  onClose={() => setCorrectingId(null)}
-                                />
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => setCorrectingId(r.bail_id)}
-                                  disabled={payingId === r.bail_id}
-                                  title="Corriger le paiement : montant, complet, ou retrait"
-                                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/60 transition hover:text-rose-300 disabled:opacity-50"
-                                >
-                                  Corriger
-                                </button>
-                              )}
-                            </div>
-                            {/* Page PAIEMENTS pure (split v15) : les
-                                avis et le bail vivent sur la page
-                                « Baux » du menu. */}
-                          </div>
-                          {r.nb_relances > 0 ? (
-                            <span className="text-[10px] text-white/40">
-                              Relancé {r.nb_relances}×
-                              {r.derniere_relance_le
-                                ? ` · dernière ${r.derniere_relance_le}`
-                                : ""}
+                      <td className="px-4 py-2.5">
+                        {r.resiliation_en_cours ? (
+                          <span className="badge badge-rose">
+                            Résiliation en cours — signature attendue
+                            {r.resiliation_date
+                              ? ` (fin le ${r.resiliation_date})`
+                              : ""}
+                          </span>
+                        ) : r.bail_id == null ? (
+                          <span className="badge badge-neutral">
+                            Aucun bail
+                          </span>
+                        ) : actifAuDossier ? (
+                          <span className="badge badge-emerald">
+                            Bail au dossier
+                          </span>
+                        ) : (
+                          <span className="badge badge-amber">
+                            Actif — PDF à importer
+                          </span>
+                        )}
+                        {r.renouvellement_status &&
+                        RENOUVELLEMENT_BADGES[r.renouvellement_status] ? (
+                          <div className="mt-1">
+                            <span
+                              className={`badge ${RENOUVELLEMENT_BADGES[r.renouvellement_status].cls}`}
+                            >
+                              {
+                                RENOUVELLEMENT_BADGES[r.renouvellement_status]
+                                  .label
+                              }
                             </span>
-                          ) : null}
-                        </div>
+                          </div>
+                        ) : null}
+                        {r.dossier_id != null &&
+                        r.dossier_statut != null ? (
+                          <div className="mt-1">
+                            {/* Lecture seule — le statut de relocation se
+                                MODIFIE à la source : le kanban Locations
+                                (retour Phil 2026-08-13). */}
+                            <RelocationStatutPastille
+                              statut={r.dossier_statut}
+                              dossierId={r.dossier_id}
+                            />
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                          {r.bail_id != null ? (
+                            <>
+                              {/* Ordre voulu par Phil (2026-08-14) :
+                                  Bail · Avis · Mettre fin (réduit) ·
+                                  Remplacer · + · poubelle. Avis et
+                                  Mettre fin s'intercalent DANS
+                                  BailDocActions via entreBoutons. */}
+                              <BailDocActions
+                                bailId={r.bail_id}
+                                hasDoc={r.document_id != null}
+                                signedAt={r.signed_at}
+                                compact
+                                entreBoutons={
+                                  <>
+                                    {r.renouvellement_avis_document_id !=
+                                    null ? (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void ouvrirDoc(
+                                            r.renouvellement_avis_document_id!
+                                          )
+                                        }
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-2.5 py-1 text-xs font-semibold text-white/80 transition hover:border-white/30 hover:text-white"
+                                        title="Ouvrir l'avis de renouvellement courant (PDF)"
+                                      >
+                                        <FileDown className="h-3.5 w-3.5" />
+                                        Avis
+                                      </button>
+                                    ) : null}
+                                    {!r.resiliation_en_cours ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => setFinBailFor(r)}
+                                        className="inline-flex items-center rounded-lg border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[11px] font-semibold text-rose-300 transition hover:bg-rose-500/20"
+                                      >
+                                        Mettre fin au bail
+                                      </button>
+                                    ) : null}
+                                  </>
+                                }
+                                onChanged={() => void load()}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setCreerFor(r)}
+                                title="Préparer un NOUVEAU bail sur ce logement (prochain locataire)"
+                                className="rounded-lg border border-brand-700 bg-brand-900 p-1.5 text-white/70 transition hover:bg-brand-800"
+                              >
+                                <Plus className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void supprimerBail(r)}
+                                title="Supprimer ce bail (erreur de saisie) — pour une vraie fin de bail, utilise « Mettre fin au bail »"
+                                className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-1.5 text-rose-300 transition hover:bg-rose-500/20"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setCreerFor(r)}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
+                              >
+                                <Plus className="h-3 w-3" /> Créer un
+                                nouveau bail
+                              </button>
+                              {r.prochain_bail_id != null ? (
+                                <BailDocActions
+                                  bailId={r.prochain_bail_id}
+                                  hasDoc={r.prochain_document_id != null}
+                                  compact
+                                  onChanged={() => void load()}
+                                />
+                              ) : null}
+                            </>
+                          )}
+                        </span>
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
 
-        <p className="mt-3 text-[11px] text-white/40">
-          « Retard » = aucun paiement après le 5 du mois · « Partiel » = un
-          montant a été reçu mais le mois n&apos;est pas couvert. « Marquer
-          payé » enregistre le restant du mois en 1 clic ; « Partiel » saisit
-          un montant précis ; « + Frais » ajoute un frais ponctuel (ex. 20 $
-          de retard) au solde. La colonne « Loyer » empile le loyer du mois,
-          le « Reçu » et le « Solde » : ce dernier cumule tous les loyers
-          échus et frais du bail, moins tout ce qui a été reçu. Les lignes
-          « Gestion externe » reflètent le rapport de la compagnie de
-          gestion — pas de locataire nominatif, pas de relance.
+        <p className="text-[11px] text-white/40">
+          Importer le PDF d&apos;un bail « proposé » le rend ACTIF et
+          règle le dossier de relocation lié — partout dans Kratos.
         </p>
       </div>
 
-      {toast ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[1100] flex justify-center px-3">
-          <div className="pointer-events-auto flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm text-emerald-100 shadow-lg">
-            <CheckCircle2 className="h-4 w-4" />
-            {toast}
-          </div>
-        </div>
+      {finBailFor && finBailFor.bail_id != null ? (
+        <FinBailModal
+          bailId={finBailFor.bail_id}
+          locataireNom={finBailFor.locataire_nom}
+          immeubleName={finBailFor.immeuble_name}
+          logementNumero={finBailFor.logement_numero}
+          onClose={() => setFinBailFor(null)}
+          onDone={(msg) => {
+            setFinBailFor(null);
+            setFlash(msg);
+            void load();
+          }}
+        />
+      ) : null}
+      {creerFor ? (
+        <CreerBailModal
+          logementId={creerFor.logement_id}
+          immeubleName={creerFor.immeuble_name}
+          logementNumero={creerFor.logement_numero}
+          logementEnChambres={creerFor.logement_en_chambres}
+          onClose={() => setCreerFor(null)}
+          onDone={(statut) => {
+            setCreerFor(null);
+            setFlash(
+              statut === "actif"
+                ? "Bail créé ACTIF (déjà en vigueur) — importe le PDF signé pour l'avoir au dossier."
+                : "Bail créé (proposé) — importe le PDF signé (CORPIQ) pour le rendre actif."
+            );
+            void load();
+          }}
+        />
       ) : null}
     </>
   );
 }
 
-function FilterPill({
-  label,
-  active,
-  onClick
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-        active
-          ? "bg-brand-900 text-white"
-          : "border border-white/10 bg-brand-950 text-white/60 hover:text-white"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
+/** Tuile de synthèse — MÊME rendu que la page Paiements (`kpi-card`). */
 function StatTile({
   label,
   value,
@@ -1219,7 +567,7 @@ function StatTile({
   label: string;
   value: string;
   sub?: string;
-  tone?: "emerald" | "rose";
+  tone?: "emerald" | "amber" | "rose";
 }) {
   return (
     <div className="kpi-card">
@@ -1230,9 +578,11 @@ function StatTile({
         className={`mt-1 text-xl font-bold tabular-nums ${
           tone === "emerald"
             ? "text-emerald-300"
-            : tone === "rose"
-              ? "text-rose-300"
-              : "text-white"
+            : tone === "amber"
+              ? "text-amber-300"
+              : tone === "rose"
+                ? "text-rose-300"
+                : "text-white"
         }`}
       >
         {value}
@@ -1241,3 +591,4 @@ function StatTile({
     </div>
   );
 }
+

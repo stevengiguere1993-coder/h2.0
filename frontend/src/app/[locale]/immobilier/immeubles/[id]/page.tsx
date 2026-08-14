@@ -2319,7 +2319,7 @@ function BauxTab({
   immeubleId: number;
   highlightBailId: number | null;
 }) {
-  // MIROIR de la page Baux (/immobilier/suivi-baux) filtré sur CET
+  // MIROIR de la page Baux (/immobilier/baux) filtré sur CET
   // immeuble : mêmes lignes (une PAR LOGEMENT — bail actif + prochain),
   // mêmes badges français, mêmes actions (directive « miroir
   // bidirectionnel » : la fiche = la page principale, ni plus ni moins).
@@ -2439,7 +2439,7 @@ function BauxTab({
           </span>
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/immobilier/suivi-baux" as any}
+            href={"/immobilier/baux" as any}
             className="text-xs text-accent-500 hover:underline"
           >
             Vue complète →
@@ -3106,7 +3106,7 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
           </div>
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/immobilier/baux" as any}
+            href={"/immobilier/paiements" as any}
             className="text-xs text-accent-500 hover:underline"
           >
             Vue complète →

@@ -211,7 +211,7 @@ export default function ImmobilierDashboard() {
             </h2>
             <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
               <ATraiterTile
-                href="/immobilier/baux"
+                href="/immobilier/paiements"
                 icon={<AlertTriangle className="h-4 w-4" />}
                 label="Loyers en retard"
                 count={aTraiter.loyers_retard_nb}

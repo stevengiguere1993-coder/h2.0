@@ -2,9 +2,9 @@
 
 /**
  * Bandeau « Avis de renouvellement » — composant PARTAGÉ entre la page
- * Baux & paiements (/immobilier/baux), la page Baux
- * (/immobilier/suivi-baux) et l'onglet Baux & locataires de la fiche
- * immeuble. Même rendu partout (miroir exact) ; seule la PORTÉE change :
+ * Paiements (/immobilier/paiements), la page Baux (/immobilier/baux) et
+ * l'onglet Baux & locataires de la fiche immeuble. Même rendu partout
+ * (miroir exact) ; seule la PORTÉE change :
  *   - `entrepriseId` limite au portefeuille de l'entreprise sélectionnée ;
  *   - `immeubleId` limite aux alertes de CET immeuble.
  *

@@ -177,7 +177,7 @@ export default function ModelesDocumentsPage() {
             <p className="mt-1 text-xs text-sky-200/80">
               Sur chaque <strong>bail</strong> : menu « Générer ▾ » (fiche
               immeuble → Baux &amp; locataires, hub locataire, page
-              logement, Baux &amp; paiements). Le document se préremplit
+              logement, page Baux). Le document se préremplit
               avec les données du bail, puis se retrouve dans la
               bibliothèque du bail : signature en ligne pour les
               formulaires TAL, simple courriel avec PDF joint pour les

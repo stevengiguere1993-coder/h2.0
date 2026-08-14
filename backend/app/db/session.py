@@ -1147,7 +1147,11 @@ async def ensure_permissions_defaults_metier() -> None:
         "page:immobilier.immeubles",
         "page:immobilier.logements",
         "page:immobilier.locataires",
+        # « Baux » et « Paiements » : les deux clés (les URL des deux pages
+        # ont été remises d'aplomb le 2026-08-14 — la page Paiements est
+        # passée de la clé `immobilier.baux` à `immobilier.paiements`).
         "page:immobilier.baux",
+        "page:immobilier.paiements",
         "page:immobilier.locations",
         "page:immobilier.modeles_documents",
         "page:immobilier.finances",
