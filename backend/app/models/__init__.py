@@ -8,6 +8,7 @@ with the shared metadata for Alembic autogenerate and create_all.
 from app.models.achat import Achat
 from app.models.agenda_event import AgendaEvent
 from app.models.api_key import ApiKey  # noqa: F401
+from app.models.assistant import AssistantAction  # noqa: F401
 from app.models.audit_log import AuditLog
 from app.models.automation_setting import AutomationSetting  # noqa: F401
 from app.models.bon_item import BonItem

@@ -28,6 +28,7 @@ from app.api.v1.endpoints import (
     activity,
     ai,
     api_keys,
+    assistant,
     appointments,
     audit,
     auth,
@@ -210,6 +211,11 @@ api_router.include_router(users.router)
 # activity = lecture de l'activité du compte (auth par clé d'API).
 api_router.include_router(api_keys.router)
 api_router.include_router(activity.router)
+# Assistant IA (phase 1) : catalogue d'outils + cartes d'action à
+# confirmer. Garde JWT standard ; la permission de PAGE de chaque outil
+# est vérifiée outil par outil (catalogue filtré = exécution refusée) —
+# pas de garde de volet au niveau du routeur, l'assistant est transverse.
+api_router.include_router(assistant.router)
 api_router.include_router(clients.router)
 # Le pôle Dev Logiciel est restreint à admin/owner (Phil + Steven).
 # La garde est appliquée à TOUS les routers internes du pôle ; seuls
