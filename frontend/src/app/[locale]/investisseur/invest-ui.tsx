@@ -85,6 +85,20 @@ export type FluxRow = {
   source?: string;
 };
 
+export type DepenseCategorie = { categorie: string; total: number };
+
+export const CATEGORIE_LABELS: Record<string, string> = {
+  taxes_municipales: "Taxes municipales",
+  taxes_scolaires: "Taxes scolaires",
+  assurances: "Assurances",
+  energie: "Énergie",
+  entretien: "Entretien & réparations",
+  deneigement: "Déneigement",
+  conciergerie: "Conciergerie",
+  gestion: "Frais de gestion",
+  autre: "Autres"
+};
+
 export type ProjetDetail = {
   entreprise_id: number;
   entreprise_name: string;
@@ -94,6 +108,8 @@ export type ProjetDetail = {
   immeubles: ImmeubleRow[];
   valeur_totale: number;
   hypotheque_totale: number;
+  avances_actionnaires?: number;
+  depenses_par_categorie?: DepenseCategorie[];
   equite: number;
   loyers_mensuels: number;
   nb_logements: number;
@@ -431,5 +447,50 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/* ----------------- Dépenses par catégorie (12 mois) ----------------- */
+
+export function DepensesParCategorie({
+  items
+}: {
+  items: DepenseCategorie[];
+}) {
+  if (!items || items.length === 0) return null;
+  const total = items.reduce((s, x) => s + x.total, 0);
+  if (total <= 0) return null;
+  return (
+    <div className="mt-3 border-t border-brand-800 pt-3">
+      <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-white/40">
+        Dépenses par catégorie · 12 mois
+      </p>
+      <ul className="space-y-1.5">
+        {items.map((d) => {
+          const pct = Math.max(2, Math.round((d.total / total) * 100));
+          return (
+            <li key={d.categorie} className="text-xs">
+              <div className="mb-0.5 flex items-baseline justify-between gap-2">
+                <span className="text-white/70">
+                  {CATEGORIE_LABELS[d.categorie] || d.categorie}
+                </span>
+                <span className="font-semibold tabular-nums text-white">
+                  {fmtMoney(d.total)}
+                </span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-brand-800/60">
+                <div
+                  className="h-full rounded-full bg-[#e66767]"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-1.5 text-right text-[11px] text-white/40 tabular-nums">
+        Total : {fmtMoney(total)} / an
+      </p>
+    </div>
   );
 }
