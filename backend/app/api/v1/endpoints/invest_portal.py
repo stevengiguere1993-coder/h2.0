@@ -290,6 +290,7 @@ async def build_projet(
         "nb_baux_actifs": snap["nb_baux_actifs"],
         "taux_occupation": snap["taux_occupation"],
         "serie_mensuelle": serie_rows,
+        "revenus_mode": serie["revenus_mode"],
         "hypotheque_mensuelle": (
             serie["hypotheque_mensuelle"] if show_hypotheque else None
         ),

@@ -314,10 +314,12 @@ export default function ProjetPage() {
                 serie={data.serie_mensuelle}
                 showDepenses={data.show_depenses}
               />
-              <div className="mt-1 flex gap-4 text-xs text-white/50">
+              <div className="mt-1 flex flex-wrap gap-4 text-xs text-white/50">
                 <span className="inline-flex items-center gap-1.5">
                   <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#199e70]" />
-                  Revenus perçus
+                  {data.revenus_mode === "potentiel"
+                    ? "Loyers (unités louées)"
+                    : "Revenus perçus"}
                 </span>
                 {data.show_depenses ? (
                   <span className="inline-flex items-center gap-1.5">

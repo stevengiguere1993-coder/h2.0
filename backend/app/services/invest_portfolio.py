@@ -181,6 +181,9 @@ async def entreprise_snapshot(db: AsyncSession, entreprise_id: int) -> dict:
     tot_logements = tot_baux = 0
     paiement_hypo_mensuel = 0.0
 
+    from app.models.immobilier import LogementStatus
+    from app.services.loyer_effectif import loyer_effectif_loue
+
     for imm, own_pct in pairs:
         pct = own_pct / 100.0
         val, val_source, val_date = await valeur_immeuble(db, imm)
@@ -190,25 +193,44 @@ async def entreprise_snapshot(db: AsyncSession, entreprise_id: int) -> dict:
         # Hypothèque de 1er rang pour l'affichage (prêteur, taux, terme).
         hyp1 = min(hyps, key=lambda h: h.rang or 99) if hyps else None
 
+        # Revenu mensuel = loyer EFFECTIF des unités louées — même
+        # hiérarchie que la fiche immeuble (bail actif en interne,
+        # loyer saisi en gestion externe, cf. loyer_effectif.py).
         logements = (
             await db.execute(
-                select(Logement.id).where(Logement.immeuble_id == imm.id)
+                select(Logement).where(Logement.immeuble_id == imm.id)
             )
         ).scalars().all()
-        nb_log = len(logements)
-        baux = []
-        loyers_mensuels = 0.0
-        if logements:
-            baux = (
+        log_ids = [lg.id for lg in logements]
+        loyer_bail_par_log: dict[int, float] = {}
+        if log_ids:
+            for b in (
                 await db.execute(
                     select(Bail).where(
-                        Bail.logement_id.in_(list(logements)),
+                        Bail.logement_id.in_(log_ids),
                         Bail.status == BailStatus.ACTIF.value,
                     )
                 )
-            ).scalars().all()
-            loyers_mensuels = sum(float(b.loyer_mensuel or 0) for b in baux)
-        nb_baux = len({b.logement_id for b in baux})
+            ).scalars().all():
+                loyer_bail_par_log[b.logement_id] = (
+                    loyer_bail_par_log.get(b.logement_id, 0.0)
+                    + float(b.loyer_mensuel or 0)
+                )
+        externe = bool(getattr(imm, "gestion_externe", False))
+        loyers_mensuels = 0.0
+        nb_loues = 0
+        nb_actifs = 0
+        for lg in logements:
+            if lg.status != LogementStatus.HORS_LOC.value:
+                nb_actifs += 1
+            m = loyer_effectif_loue(
+                lg, loyer_bail_par_log.get(lg.id), externe
+            )
+            if m is not None:
+                loyers_mensuels += m
+                nb_loues += 1
+        nb_log = nb_actifs
+        nb_baux = nb_loues
 
         equite = (val or 0.0) - balance
         immeubles.append(
@@ -283,30 +305,46 @@ def _add_months(d: date, n: int) -> date:
 async def serie_mensuelle(
     db: AsyncSession, entreprise_id: int, months: int = 12
 ) -> dict:
-    """Revenus perçus / dépenses / paiement hypothécaire par mois
-    (pondérés par le % de détention). Mêmes conventions de dépenses que
-    /immobilier/finances/pnl : % des loyers converti, mensuel répété,
-    annuel réparti /12, ponctuel à sa date, taxes ×1.14975."""
+    """Série mensuelle revenus / dépenses (pondérée par le % de
+    détention), alignée sur la FICHE IMMEUBLE du pôle locatif :
+
+    - revenus : paiements ENREGISTRÉS (internes + gestion externe) s'il
+      y en a ; sinon repli sur le loyer EFFECTIF des unités louées
+      (`loyer_effectif_loue`) — un immeuble sans suivi des paiements
+      n'affiche plus 0 (mode « potentiel ») ;
+    - dépenses : récurrentes mensualisées (mensuel ×1, annuel /12,
+      % des loyers converti, taxable ×1.14975) + ponctuelles à leur
+      date ;
+    - cashflow_moyen : loyers effectifs − dépenses récurrentes −
+      hypothèque (MÊME convention que `cash_flow_mensuel` de la fiche).
+    """
+    from app.models.immobilier import PaiementExterne
+    from app.services.loyer_effectif import loyer_effectif_loue
+
     pairs = await immeubles_of_entreprise(db, entreprise_id)
     start = _add_months(_month_start(date.today()), -(months - 1))
     keys = [_add_months(start, i) for i in range(months)]
     rev: dict[date, float] = {k: 0.0 for k in keys}
     dep: dict[date, float] = {k: 0.0 for k in keys}
     hypo_mensuel = 0.0
+    loyers_effectifs = 0.0
+    dep_recurrentes = 0.0
 
     for imm, own_pct in pairs:
         pct = own_pct / 100.0
         logements = (
             await db.execute(
-                select(Logement.id).where(Logement.immeuble_id == imm.id)
+                select(Logement).where(Logement.immeuble_id == imm.id)
             )
         ).scalars().all()
-        if logements:
+        log_ids = [lg.id for lg in logements]
+
+        # Paiements ENREGISTRÉS : loyers internes (par bail) + gestion
+        # externe (par logement).
+        if log_ids:
             bail_ids = (
                 await db.execute(
-                    select(Bail.id).where(
-                        Bail.logement_id.in_(list(logements))
-                    )
+                    select(Bail.id).where(Bail.logement_id.in_(log_ids))
                 )
             ).scalars().all()
             if bail_ids:
@@ -327,21 +365,49 @@ async def serie_mensuelle(
                     k = _month_start(mois)
                     if k in rev:
                         rev[k] += float(total or 0) * pct
+            rows = (
+                await db.execute(
+                    select(
+                        PaiementExterne.mois_couvert,
+                        func.sum(PaiementExterne.montant),
+                    )
+                    .where(
+                        PaiementExterne.logement_id.in_(log_ids),
+                        PaiementExterne.mois_couvert >= start,
+                    )
+                    .group_by(PaiementExterne.mois_couvert)
+                )
+            ).all()
+            for mois, total in rows:
+                k = _month_start(mois)
+                if k in rev:
+                    rev[k] += float(total or 0) * pct
 
-        # Loyers mensuels actifs — base des dépenses en %.
-        baux_actifs = []
-        if logements:
-            baux_actifs = (
+        # Loyer effectif des unités louées — même hiérarchie que la
+        # fiche (bail actif / loyer saisi en externe).
+        loyer_bail_par_log: dict[int, float] = {}
+        if log_ids:
+            for b in (
                 await db.execute(
                     select(Bail).where(
-                        Bail.logement_id.in_(list(logements)),
+                        Bail.logement_id.in_(log_ids),
                         Bail.status == BailStatus.ACTIF.value,
                     )
                 )
-            ).scalars().all()
-        loyers_mensuels = sum(
-            float(b.loyer_mensuel or 0) for b in baux_actifs
-        )
+            ).scalars().all():
+                loyer_bail_par_log[b.logement_id] = (
+                    loyer_bail_par_log.get(b.logement_id, 0.0)
+                    + float(b.loyer_mensuel or 0)
+                )
+        externe = bool(getattr(imm, "gestion_externe", False))
+        loyers_imm = 0.0
+        for lg in logements:
+            m = loyer_effectif_loue(
+                lg, loyer_bail_par_log.get(lg.id), externe
+            )
+            if m is not None:
+                loyers_imm += m
+        loyers_effectifs += loyers_imm * pct
 
         depenses = (
             await db.execute(
@@ -353,13 +419,15 @@ async def serie_mensuelle(
         for d in depenses:
             base = float(d.montant or 0)
             if d.is_pourcentage:
-                base = loyers_mensuels * base / 100.0
+                base = loyers_imm * base / 100.0
             if d.taxable:
                 base *= 1.14975
             if d.frequence == "mensuel":
+                dep_recurrentes += base * pct
                 for k in keys:
                     dep[k] += base * pct
             elif d.frequence == "annuel":
+                dep_recurrentes += base / 12.0 * pct
                 for k in keys:
                     dep[k] += base / 12.0 * pct
             elif d.date_depense:
@@ -372,6 +440,15 @@ async def serie_mensuelle(
             float(h.paiement_mensuel or 0) for h in hyps
         ) * pct
 
+    # Mode : « recus » si au moins un paiement est enregistré sur la
+    # fenêtre, sinon « potentiel » (le graphique montre les loyers
+    # effectifs — cohérent avec le pôle locatif qui affiche les loyers
+    # même sans suivi détaillé des paiements).
+    revenus_mode = "recus" if any(v > 0 for v in rev.values()) else "potentiel"
+    if revenus_mode == "potentiel":
+        for k in keys:
+            rev[k] = loyers_effectifs
+
     rows = [
         {
             "mois": k.strftime("%Y-%m"),
@@ -381,11 +458,14 @@ async def serie_mensuelle(
         }
         for k in keys
     ]
-    cashflow_moyen = (
-        (sum(rev.values()) - sum(dep.values())) / months - hypo_mensuel
-    )
+    # Convention de la fiche immeuble : loyers effectifs − dépenses
+    # récurrentes mensualisées − hypothèque (les ponctuels n'entrent
+    # pas dans le flux récurrent).
+    cashflow_moyen = loyers_effectifs - dep_recurrentes - hypo_mensuel
     return {
         "rows": rows,
+        "revenus_mode": revenus_mode,
+        "loyers_effectifs": round(loyers_effectifs, 2),
         "hypotheque_mensuelle": round(hypo_mensuel, 2),
         "cashflow_moyen": round(cashflow_moyen, 2),
     }
