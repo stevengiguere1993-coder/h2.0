@@ -16,6 +16,7 @@ from app.api.v1 import api_router
 from app.core.config import settings
 from app.db.session import (
     close_db,
+    ensure_assistant_tables,
     ensure_contrat_gestion_tables,
     ensure_critical_columns,
     ensure_esign_tables,
@@ -81,6 +82,14 @@ async def _run_startup_tasks() -> None:
     except Exception as exc:
         logger.warning(
             "ensure_immobilier_aux_tables failed during startup: %s", exc
+        )
+
+    # Table des actions de l'assistant IA (cartes à confirmer) — idem.
+    try:
+        await ensure_assistant_tables()
+    except Exception as exc:
+        logger.warning(
+            "ensure_assistant_tables failed during startup: %s", exc
         )
 
     # Backfill borné (M9a, audit 2026-08-13) : chaque logement VACANT

@@ -832,6 +832,28 @@ async def ensure_immobilier_aux_tables() -> None:
         log.warning("ensure_immobilier_aux_tables failed: %s", exc)
 
 
+async def ensure_assistant_tables() -> None:
+    """Crée la table des actions de l'assistant IA (cartes d'action à
+    confirmer) dans sa propre transaction, pour survivre à un abort
+    d'``init_db`` — même filet que ``ensure_immobilier_aux_tables``.
+    Idempotent (``create_all`` ne touche pas une table existante)."""
+    import logging
+
+    log = logging.getLogger("db.ensure_assistant_tables")
+    try:
+        from app.db.base import Base
+        from app.models.assistant import AssistantAction  # noqa: F401
+
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda c: Base.metadata.create_all(
+                    c, tables=[AssistantAction.__table__]
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_assistant_tables failed: %s", exc)
+
+
 async def ensure_volets_whitelist_migration() -> None:
     """Migration one-shot (permissions v2, 2026-07-24) : les whitelists
     d'emails codées en dur qui AJOUTAIENT les volets entreprises /
