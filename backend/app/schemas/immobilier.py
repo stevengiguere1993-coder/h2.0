@@ -656,6 +656,10 @@ class LogementDossierImmeuble(BaseModel):
     id: int
     name: str
     address: Optional[str] = None
+    #: La fiche 360 adapte l'affichage du loyer : en gestion EXTERNE,
+    #: le loyer saisi sur le logement est la vérité (pas de bail chez
+    #: nous) — retour client 2026-08-14.
+    gestion_externe: bool = False
 
 
 class LoyerPoint(BaseModel):

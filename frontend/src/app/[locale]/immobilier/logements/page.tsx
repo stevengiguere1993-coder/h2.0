@@ -319,18 +319,29 @@ export default function LogementsPage() {
                       <td
                         className="px-4 py-3 text-right font-mono text-xs text-white/80"
                         title={
-                          l.status === "occupe"
-                            ? "Loyer du bail actif"
-                            : "Loyer demandé (prix affiché pour la relocation)"
+                          l.immeuble_gestion_externe
+                            ? "Loyer saisi sur le logement (gestion externe)"
+                            : l.status === "occupe"
+                              ? "Loyer du bail actif"
+                              : "Loyer demandé (prix de la prochaine location)"
                         }
                       >
-                        {/* Occupé → loyer RÉEL du bail ; sinon loyer
-                            demandé (miroir bidirectionnel). */}
+                        {/* Hiérarchie du loyer effectif (2026-08-14) :
+                            externe → loyer SAISI ; interne occupé →
+                            loyer RÉEL du bail ; vacant → demandé. */}
                         {fmtMoney(
-                          l.status === "occupe"
+                          !l.immeuble_gestion_externe &&
+                            l.status === "occupe"
                             ? (l.loyer_actuel ?? l.loyer_demande)
                             : l.loyer_demande
                         )}
+                        {!l.immeuble_gestion_externe &&
+                        l.status !== "occupe" &&
+                        l.loyer_demande != null ? (
+                          <span className="ml-1 text-white/40">
+                            demandé
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <StatutBadge status={l.status} />

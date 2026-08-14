@@ -29,6 +29,32 @@ export function duMois(row: PaiementRowLike): number {
   );
 }
 
+/** Montant du « Marquer payé » en 1 clic : le restant du mois — et pour
+ *  une ligne « dette seulement » (bail terminé, mois après sa fin :
+ *  loyer du mois à 0, retour client 2026-08-14), le SOLDE du bail. */
+export function montantMarquerPaye(
+  row: PaiementRowLike & { montant_paye?: number | null; solde_total?: number }
+): number {
+  const restant =
+    Math.round((duMois(row) - (row.montant_paye ?? 0)) * 100) / 100;
+  if (restant > 0) return restant;
+  if ((row.solde_total ?? 0) > 0) return row.solde_total as number;
+  return duMois(row);
+}
+
+/** Mois à imputer au paiement. Une ligne « dette seulement » (bail
+ *  terminé avant le mois affiché) : le backend refuse un paiement hors
+ *  période du bail → on impute au DERNIER mois couvert ; le trop-payé
+ *  se répartit tout seul sur les mois impayés du bail. */
+export function moisCouvertPourPaiement(
+  row: { bail_termine_le?: string | null },
+  moisAffiche: string
+): string {
+  const finMois = row.bail_termine_le?.slice(0, 7);
+  if (finMois && finMois < moisAffiche) return finMois;
+  return moisAffiche;
+}
+
 // Pastille (NON cliquable) du dernier avis de renouvellement du bail —
 // mêmes libellés sur la page Baux et dans les fiches.
 //

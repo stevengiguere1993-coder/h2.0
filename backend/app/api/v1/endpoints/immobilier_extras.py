@@ -1345,12 +1345,9 @@ async def renouvellements_overview(
                     and last_ren.nouvelle_date_fin != b.date_fin
                 ):
                     b.date_fin = last_ren.nouvelle_date_fin
-                # Miroir « loyer demandé » (2026-08-13) : un logement
-                # OCCUPÉ affiche le loyer RÉEL du bail — quand l'avis
-                # s'applique, Logement.loyer_demande suit le nouveau
-                # loyer pour que fiches et annonces restent cohérentes.
-                if logement is not None and b.loyer_mensuel is not None:
-                    logement.loyer_demande = b.loyer_mensuel
+                # Hiérarchie 2026-08-14 : « loyer demandé » = prix de la
+                # PROCHAINE location — l'avis appliqué ne l'écrase plus,
+                # les surfaces affichent le loyer du bail directement.
                 last_ren.applique_le = today
                 dirty = True
                 # Cycle réglé et appliqué : dès CE rendu, la ligne

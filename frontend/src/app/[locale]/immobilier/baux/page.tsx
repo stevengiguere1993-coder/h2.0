@@ -23,7 +23,9 @@ import {
   BadgeGestionExterne,
   CelluleLoyer,
   CorrectionOptions,
-  duMois
+  duMois,
+  moisCouvertPourPaiement,
+  montantMarquerPaye
 } from "@/components/immobilier/paiements-actions";
 
 /**
@@ -297,7 +299,9 @@ export default function BauxPage() {
         method: "POST",
         body: JSON.stringify({
           bail_id: row.bail_id,
-          mois_couvert: `${mois}-01`,
+          // Ligne « dette » d'un bail terminé : imputer au dernier mois
+          // couvert (le backend refuse un mois hors période du bail).
+          mois_couvert: `${moisCouvertPourPaiement(row, mois)}-01`,
           montant,
           paye_le: payeLe
         })
@@ -320,11 +324,10 @@ export default function BauxPage() {
   }
 
   // Payé AU COMPLET en 1 clic : le restant du mois (loyer + frais −
-  // déjà payé) — le cas le plus fréquent (retour Steven 2026-07-20).
+  // déjà payé) — et le SOLDE du bail pour une ligne « dette seulement »
+  // (bail terminé, mois après sa fin — retour client 2026-08-14).
   async function marquerPaye(row: Row) {
-    const restant =
-      Math.round((duMois(row) - (row.montant_paye ?? 0)) * 100) / 100;
-    await enregistrerPaiement(row, restant > 0 ? restant : duMois(row));
+    await enregistrerPaiement(row, montantMarquerPaye(row));
   }
 
   // Paiement PARTIEL : montant saisi (ex. 500 $ sur un loyer de 800 $).
@@ -977,11 +980,16 @@ export default function BauxPage() {
                           // puisqu'un loyer y est attendu.
                           <span className="badge badge-neutral">Occupé</span>
                         ) : r.bail_termine_le ? (
-                          // M7 : bail résilié/terminé en cours de mois
-                          // — la ligne reste dans le mois couvert.
+                          // M7 : bail résilié/terminé — la ligne reste
+                          // dans les mois couverts, et après la fin tant
+                          // que le solde n'est pas réglé (2026-08-14).
                           <span
                             className="badge badge-rose"
-                            title="Le bail couvrait une partie de ce mois — dernier loyer et solde encore dus"
+                            title={
+                              r.bail_termine_le.slice(0, 7) < mois
+                                ? "Bail terminé avant ce mois — la ligne reste tant que le solde n'est pas réglé"
+                                : "Le bail couvrait une partie de ce mois — dernier loyer et solde encore dus"
+                            }
                           >
                             Bail terminé le {r.bail_termine_le}
                           </span>
@@ -1222,10 +1230,12 @@ export default function BauxPage() {
 }
 
 function EcheancesSection({ data }: { data: EcheanceData }) {
-  // Même sémantique que partout dans Kratos (retour Phil 2026-08-13) :
-  // vert = rien à faire (la fenêtre d'envoi n'est pas encore ouverte),
-  // jaune = c'est le moment d'envoyer, rouge = la fenêtre légale se
-  // referme. L'ouverture suit le réglage « renouvellement N mois ».
+  // Retour client 2026-08-14 : le bandeau ne liste QUE l'actionnable
+  // (à envoyer / en retard). Les « à venir » (ligne verte « rien à
+  // faire ») sortent de la liste — seul le compteur de l'en-tête les
+  // mentionne. Aucune action → pas de bandeau du tout.
+  const actionnables = data.rows.filter((r) => r.statut !== "a_venir");
+  if (actionnables.length === 0) return null;
   const TONE: Record<string, { box: string; chip: string; txt: string }> = {
     en_retard: {
       box: "border-rose-500/40 bg-rose-500/5",
@@ -1236,11 +1246,6 @@ function EcheancesSection({ data }: { data: EcheanceData }) {
       box: "border-amber-500/40 bg-amber-500/5",
       chip: "badge-amber",
       txt: "À envoyer"
-    },
-    a_venir: {
-      box: "border-emerald-500/40 bg-emerald-500/5",
-      chip: "badge-emerald",
-      txt: "Rien à faire — fenêtre s'ouvre"
     }
   };
   return (
@@ -1249,7 +1254,8 @@ function EcheancesSection({ data }: { data: EcheanceData }) {
         <span>📅 Avis de renouvellement</span>
         <span className="text-xs font-normal text-white/50">
           {data.nb_en_retard > 0 ? `${data.nb_en_retard} en retard · ` : ""}
-          {data.nb_a_envoyer} à envoyer · {data.nb_a_venir} à venir
+          {data.nb_a_envoyer} à envoyer
+          {data.nb_a_venir > 0 ? ` · ${data.nb_a_venir} à venir` : ""}
         </span>
       </div>
       <p className="mb-3 text-xs text-white/50">
@@ -1257,8 +1263,8 @@ function EcheancesSection({ data }: { data: EcheanceData }) {
         entre 6 et 3 mois avant la fin du bail.
       </p>
       <div className="space-y-1.5">
-        {data.rows.map((r) => {
-          const t = TONE[r.statut] || TONE.a_venir;
+        {actionnables.map((r) => {
+          const t = TONE[r.statut] || TONE.a_envoyer;
           return (
             <div
               key={r.bail_id}
@@ -1276,10 +1282,7 @@ function EcheancesSection({ data }: { data: EcheanceData }) {
                   Fenêtre : {fmtDateShort(r.fenetre_debut)} →{" "}
                   {fmtDateShort(r.fenetre_fin)}
                 </span>
-                <span className={`badge ${t.chip}`}>
-                  {t.txt}
-                  {r.statut === "a_venir" ? ` dans ${r.jours} j` : ""}
-                </span>
+                <span className={`badge ${t.chip}`}>{t.txt}</span>
               </div>
             </div>
           );

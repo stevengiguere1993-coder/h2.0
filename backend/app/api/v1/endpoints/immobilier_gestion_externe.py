@@ -116,9 +116,15 @@ async def _rows_externes(
     if not log_ids:
         return []
 
-    # Loyer attendu par logement : bail actif si présent (il peut y en
-    # avoir même en gestion externe), sinon loyer demandé si occupé.
-    loyer_par_logement: dict[int, Optional[float]] = {}
+    # Loyer attendu par logement — hiérarchie du loyer effectif (retour
+    # client 2026-08-14) : en gestion EXTERNE, le loyer SAISI sur le
+    # logement EST la vérité. Avant, un bail actif résiduel (import,
+    # bascule interne→externe) primait alors que l'onglet Baux est caché
+    # en externe : le loyer modifié sur la fiche ne se reflétait jamais
+    # ici. Le bail ne sert plus que de filet quand rien n'est saisi.
+    from app.services.loyer_effectif import loyer_effectif
+
+    bail_par_logement: dict[int, float] = {}
     for b in (
         await db.execute(
             select(Bail).where(
@@ -127,14 +133,17 @@ async def _rows_externes(
             )
         )
     ).scalars().all():
-        loyer_par_logement[b.logement_id] = float(b.loyer_mensuel or 0)
+        bail_par_logement[b.logement_id] = float(b.loyer_mensuel or 0)
+    loyer_par_logement: dict[int, Optional[float]] = {}
     for lg in logements:
-        if lg.id not in loyer_par_logement:
-            loyer_par_logement[lg.id] = (
-                float(lg.loyer_demande)
-                if lg.status == "occupe" and lg.loyer_demande is not None
-                else None
-            )
+        loyer_bail = bail_par_logement.get(lg.id)
+        # Rien n'est attendu d'une unité ni louée (bail) ni « occupée ».
+        if loyer_bail is None and lg.status != "occupe":
+            loyer_par_logement[lg.id] = None
+            continue
+        loyer_par_logement[lg.id] = loyer_effectif(
+            lg, loyer_bail, gestion_externe=True
+        )
 
     paiements: dict[int, PaiementExterne] = {}
     for p in (
@@ -157,6 +166,12 @@ async def _rows_externes(
     for lg in logements:
         attendu = loyer_par_logement.get(lg.id)
         p = paiements.get(lg.id)
+        # Mois DÉJÀ réglé (au moins un paiement) : l'attendu FIGÉ à la
+        # saisie fait foi — changer le loyer du logement ensuite ne
+        # réécrit pas l'historique (retour client 2026-08-14). Les
+        # lignes d'avant la colonne (NULL) gardent le fallback courant.
+        if p is not None and p.loyer_attendu is not None:
+            attendu = float(p.loyer_attendu)
         recu = (
             float(p.montant)
             if p is not None and p.montant is not None
@@ -390,12 +405,34 @@ async def marquer_paiement_externe(
             created_at=datetime.now(timezone.utc),
         )
         db.add(existing)
+    # Figer l'attendu du mois à la PREMIÈRE saisie (retour client
+    # 2026-08-14) : un changement de loyer sur le logement après coup ne
+    # doit plus réécrire les mois déjà réglés. Même hiérarchie que
+    # l'affichage : loyer saisi d'abord, bail résiduel en filet.
+    if existing.loyer_attendu is None:
+        from app.services.loyer_effectif import loyer_effectif
+
+        bail_actif = (
+            await db.execute(
+                select(Bail).where(
+                    Bail.logement_id == lg.id,
+                    Bail.status == BailStatus.ACTIF.value,
+                )
+            )
+        ).scalars().first()
+        attendu_courant = loyer_effectif(
+            lg,
+            float(bail_actif.loyer_mensuel or 0) if bail_actif else None,
+            gestion_externe=True,
+        )
+        if attendu_courant is not None:
+            existing.loyer_attendu = attendu_courant
     if payload.montant is not None:
         existing.montant = round(
             float(existing.montant or 0) + payload.montant, 2
         )
     else:
-        existing.montant = None  # payé au complet (= loyer attendu)
+        existing.montant = None  # payé au complet (= loyer attendu figé)
     existing.paye_le = today
     await db.commit()
     return PaiementExterneRow(

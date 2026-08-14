@@ -1262,6 +1262,14 @@ class PaiementExterne(Base):
     montant: Mapped[Optional[float]] = mapped_column(
         Numeric(10, 2), nullable=True
     )
+    #: Loyer attendu FIGÉ au moment où le mois est marqué payé (retour
+    #: client 2026-08-14) : un changement de loyer sur le logement ne
+    #: réécrit plus l'historique des mois déjà réglés. NULL sur les
+    #: lignes d'avant → fallback lecture sur le loyer courant.
+    #: Colonne additive → ensure_critical_columns.
+    loyer_attendu: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
     paye_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     created_by_email: Mapped[Optional[str]] = mapped_column(
         String(320), nullable=True
