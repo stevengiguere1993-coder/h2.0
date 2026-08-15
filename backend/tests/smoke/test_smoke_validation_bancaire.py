@@ -55,10 +55,12 @@ from app.models.qbo_loyers import (
 )
 from app.services.qbo_validation_loyers import (
     VALIDATION_KEY,
+    _parse_montant,
     confirmer_transaction,
     decouvrir_comptes,
     etat_validation,
     lister_transactions,
+    parse_general_ledger,
     synchroniser_transactions,
 )
 
@@ -1005,3 +1007,103 @@ def test_paiement_multi_mois_deux_baux_candidats_ambigu(run, db_setup):
     assert txn.bail_id is None
     assert txn.mois_couvert is None
     assert txn.mois_couvert_fin is None
+
+
+# ── Locale fr-CA + rapports servis en Débit/Crédit ──────────────────────
+# La synchro du 2026-08-14 a lu 116 lignes et en a écarté 116 pour
+# « montant nul » : la compagnie QBO est francophone et son GL ne sort
+# pas dans le format anglo du parseur d'origine.
+
+
+def test_parse_montant_bi_locale():
+    # Anglo (référence)
+    assert _parse_montant("650.00") == 650.0
+    assert _parse_montant("1,350.00") == 1350.0
+    assert _parse_montant("-425.5") == -425.5
+    # fr-CA : virgule décimale, milliers en espace (souvent insécable),
+    # symbole dollar, négatif comptable entre parenthèses.
+    assert _parse_montant("650,00") == 650.0
+    assert _parse_montant("1 350,00") == 1350.0
+    assert _parse_montant("1 350,00 $") == 1350.0
+    assert _parse_montant("1 350,00") == 1350.0
+    assert _parse_montant("(650,00)") == -650.0
+    # Milliers anglo sans décimales — la virgule n'est PAS une décimale.
+    assert _parse_montant("1,350") == 1350.0
+    # Déchets → 0, jamais d'exception.
+    assert _parse_montant("") == 0.0
+    assert _parse_montant(None) == 0.0
+    assert _parse_montant("n/a") == 0.0
+
+
+def _gl_report_debit_credit() -> Dict[str, Any]:
+    """Rapport GL comme le sert une compagnie fr-CA dont les colonnes
+    sont Débit / Crédit (aucune colonne Montant)."""
+    return {
+        "Columns": {
+            "Column": [
+                {"ColTitle": "Date", "ColType": "tx_date"},
+                {"ColTitle": "Type de transaction", "ColType": "txn_type"},
+                {"ColTitle": "N°", "ColType": "doc_num"},
+                {"ColTitle": "Nom", "ColType": "name"},
+                {"ColTitle": "Note", "ColType": "memo"},
+                {"ColTitle": "Débit", "ColType": "debt_home_amt"},
+                {"ColTitle": "Crédit", "ColType": "credit_home_amt"},
+            ]
+        },
+        "Rows": {
+            "Row": [
+                {
+                    "type": "Section",
+                    "Header": {"ColData": [{"value": "Fiducie"}]},
+                    "Rows": {
+                        "Row": [
+                            {
+                                "type": "Data",
+                                "ColData": [
+                                    {"value": AUJOURDHUI.isoformat()},
+                                    {"value": "Dépôt", "id": "D-900"},
+                                    {"value": ""},
+                                    {"value": ""},
+                                    {"value": "Virement Interac de /ANNA ROY /"},
+                                    {"value": ""},
+                                    {"value": "1 350,00"},
+                                ],
+                            },
+                            {
+                                "type": "Data",
+                                "ColData": [
+                                    {"value": AUJOURDHUI.isoformat()},
+                                    {"value": "Virement", "id": "V-901"},
+                                    {"value": ""},
+                                    {"value": "MGV"},
+                                    {"value": "Remise du mois"},
+                                    {"value": "650,00"},
+                                    {"value": ""},
+                                ],
+                            },
+                        ]
+                    },
+                    "Summary": {"ColData": [{"value": "Total"}]},
+                }
+            ]
+        },
+    }
+
+
+def test_parse_gl_debit_credit_fr_ca():
+    entrees, ecartees = parse_general_ledger(_gl_report_debit_credit())
+    assert ecartees["lues"] == 2
+    assert ecartees["montant_nul"] == 0
+    par_id = {e["txn_id"]: e for e in entrees}
+    # Crédit 1 350,00 (fr-CA) = encaissement de 1350 $.
+    depot = par_id["D-900"]
+    assert depot["sens"] == "entree"
+    assert depot["montant"] == 1350.0
+    assert depot["payeur"] == "ANNA ROY"
+    # Débit 650,00 = remise (sortie), classée par TYPE « Virement ».
+    remise = par_id["V-901"]
+    assert remise["sens"] == "sortie"
+    assert remise["montant"] == 650.0
+    # L'instrumentation expose le format réel pour le rapport.
+    assert any("Débit|" in c for c in ecartees["colonnes"])
+    assert ecartees["exemple"][1] == "Dépôt"
