@@ -462,11 +462,40 @@ async def decouvrir_comptes(db, qbo=None) -> List[QboCompteLoyer]:
 
 
 def _parse_montant(raw: Any) -> float:
-    s = str(raw or "0").replace(",", "").replace("$", "").strip()
+    """Montant d'une cellule de rapport — tolère les DEUX locales que
+    QuickBooks sert selon la compagnie : « 1,350.00 » (anglo) et
+    « 1 350,00 $ » (fr-CA : espace — souvent insécable — pour les
+    milliers, VIRGULE décimale), plus les négatifs entre parenthèses.
+    L'ancien parseur anglo-seulement rendait 0 sur le format fr-CA →
+    116/116 lignes « montant nul » à la synchro du 2026-08-14."""
+    s = str(raw or "").strip()
+    if not s:
+        return 0.0
+    negatif = s.startswith("(") and s.endswith(")")
+    if negatif:
+        s = s[1:-1]
+    s = s.replace("$", "")
+    # Espace simple, insécable (U+00A0) et fine insécable (U+202F).
+    for espace in (" ", " ", " "):
+        s = s.replace(espace, "")
+    if "," in s and "." in s:
+        # Le séparateur le plus à droite est la décimale.
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif "," in s:
+        # Virgule suivie de 1-2 chiffres en fin = décimale fr-CA ;
+        # sinon séparateur de milliers anglo (« 1,350 »).
+        if re.search(r",\d{1,2}$", s):
+            s = s.replace(",", ".")
+        else:
+            s = s.replace(",", "")
     try:
-        return float(s) if s else 0.0
+        v = float(s)
     except ValueError:
         return 0.0
+    return -v if negatif else v
 
 
 def _colonnes_gl(report: Dict[str, Any]) -> Dict[str, int]:
@@ -489,6 +518,12 @@ def _colonnes_gl(report: Dict[str, Any]) -> Dict[str, int]:
             idx.setdefault("memo", i)
         if "montant" in titre or "amount" in titre:
             idx.setdefault("subt_nat_amount", i)
+        # Compagnie dont le GL sort en Débit / Crédit (aucune colonne
+        # Montant) — on indexe les deux pour recomposer le montant.
+        if titre == "debit":
+            idx.setdefault("debit_amt", i)
+        if titre == "credit":
+            idx.setdefault("credit_amt", i)
         if "no" == titre or "num" in titre:
             idx.setdefault("doc_num", i)
     return idx
@@ -540,7 +575,16 @@ def parse_general_ledger(
         txn_type = str(type_cell.get("value") or "").strip()
         txn_id = str(type_cell.get("id") or "").strip()
         date_raw = str(_val(cols, "tx_date").get("value") or "")[:10]
-        montant = _parse_montant(_val(cols, "subt_nat_amount").get("value"))
+        cell_montant = _val(cols, "subt_nat_amount").get("value")
+        montant = _parse_montant(cell_montant)
+        if not str(cell_montant or "").strip():
+            # Pas de colonne Montant (ou cellule vide) : GL servi en
+            # Débit / Crédit. Montant NATUREL d'un compte de passif =
+            # crédit (encaissement) − débit (remise).
+            credit = _parse_montant(_val(cols, "credit_amt").get("value"))
+            debit = _parse_montant(_val(cols, "debit_amt").get("value"))
+            if credit or debit:
+                montant = round(credit - debit, 2)
         if not txn_type or not txn_id or not date_raw:
             continue
         try:
@@ -578,6 +622,17 @@ def parse_general_ledger(
         "montant_nul": 0,
         "type_non_reconnu": 0,
         "types_inconnus": [],
+        #: Instrumentation pour le rapport : le format RÉEL reçu —
+        #: c'est ce qui a permis de comprendre le « 116 montants nuls »
+        #: (colonne Montant non reconnue) sans accès aux réponses QBO.
+        "colonnes": [
+            f"{c.get('ColTitle') or ''}|{c.get('ColType') or ''}"
+            for c in (report.get("Columns") or {}).get("Column") or []
+        ],
+        "exemple": (
+            [str(c.get("value") or "") for c in lignes[0]]
+            if lignes else []
+        ),
     }
     for e in agreges.values():
         sens, raison = classifier_type(e["txn_type"], e["montant"])
@@ -706,13 +761,25 @@ async def synchroniser_transactions(
                 detail["erreur"] = (
                     "Rapport reçu avec des lignes, mais aucune n'a pu "
                     "être interprétée (type/id/date manquants) — format "
-                    "GeneralLedger inattendu, à signaler."
+                    "GeneralLedger inattendu, à signaler. Colonnes "
+                    f"reçues : {', '.join(ecartees['colonnes'])} ; "
+                    f"première ligne : {ecartees['exemple']}"
                 )
             elif (report.get("Rows") or {}).get("Row"):
                 detail["erreur"] = (
                     "Rapport reçu avec des sections mais aucune ligne de "
                     "détail — format GeneralLedger inattendu, à signaler."
                 )
+        elif ecartees["montant_nul"] == ecartees["lues"]:
+            # 100 % des écritures à 0 $ = la colonne Montant du rapport
+            # n'est pas reconnue (ou son format de nombre) — montrer le
+            # format réel plutôt qu'un décompte muet.
+            detail["erreur"] = (
+                "Toutes les lignes lues ont un montant nul — la colonne "
+                "Montant du rapport n'est probablement pas reconnue. "
+                f"Colonnes reçues : {', '.join(ecartees['colonnes'])} ; "
+                f"première ligne : {ecartees['exemple']}"
+            )
 
         # Compte mono-immeuble : l'immeuble est connu d'avance ; multi /
         # « tous » : il sera dérivé du bail au rapprochement.
