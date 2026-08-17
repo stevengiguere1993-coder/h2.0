@@ -43,6 +43,7 @@ from sqlalchemy import delete, select
 from app.models.immobilier import (
     Bail,
     BailStatus,
+    FraisLocatif,
     Immeuble,
     Locataire,
     Logement,
@@ -204,10 +205,15 @@ def _seed_immeuble(
                 bail = Bail(
                     logement_id=lg.id,
                     locataire_id=loc.id,
-                    date_debut=AUJOURDHUI - timedelta(days=400),
+                    # « debut » optionnel : un bail RÉCENT n'a pas de
+                    # mois antérieurs en dette (cas compte QBO neuf).
+                    date_debut=b.get(
+                        "debut", AUJOURDHUI - timedelta(days=400)
+                    ),
                     date_fin=AUJOURDHUI + timedelta(days=330),
                     loyer_mensuel=b["loyer"],
                     status=BailStatus.ACTIF.value,
+                    jour_echeance=b.get("jour_echeance") or 1,
                 )
                 s.add(bail)
                 await s.flush()
@@ -401,10 +407,12 @@ def test_rapprochement_unique_auto_et_ambigu_sans_pronostic(run, db_setup):
         run,
         name="200, Rue Beaubien",
         address="200, Rue Beaubien",
+        # Baux récents : aucun mois antérieur en dette — sinon le FIFO
+        # v12 (« le solde décide ») impute au mois précédent impayé.
         baux=[
-            {"loyer": 825.0, "nom": "Jean Dupont"},
-            {"loyer": 825.0, "nom": "Marie Roy"},
-            {"loyer": 1240.0, "nom": "Paul Girard"},
+            {"loyer": 825.0, "nom": "Jean Dupont", "debut": MOIS_COURANT},
+            {"loyer": 825.0, "nom": "Marie Roy", "debut": MOIS_COURANT},
+            {"loyer": 1240.0, "nom": "Paul Girard", "debut": MOIS_COURANT},
         ],
     )
     _map_compte(run, "70", "Loyer à remettre - 200 Beaubien",
@@ -575,9 +583,10 @@ def test_etat_valide_sans_trace_et_encaisses_non_marques(run, db_setup):
         run,
         name="500, Rue Bélanger",
         address="500, Rue Bélanger",
+        # Baux récents — pas de dette antérieure (FIFO v12).
         baux=[
-            {"loyer": 780.0, "nom": "Jean Dupont"},
-            {"loyer": 1105.0, "nom": "Marie Roy"},
+            {"loyer": 780.0, "nom": "Jean Dupont", "debut": MOIS_COURANT},
+            {"loyer": 1105.0, "nom": "Marie Roy", "debut": MOIS_COURANT},
         ],
     )
     _map_compte(run, "95", "Loyer à remettre - 500 Bélanger",
@@ -1276,10 +1285,13 @@ def test_payeur_interac_tronque_et_paiement_partiel(run, db_setup):
         run,
         name="44 Kenny-Sud",
         address="44, Rue Kennedy Sud",
+        # Baux récents — pas de dette antérieure (FIFO v12).
         baux=[
-            {"loyer": 500.0, "nom": "François Paquette"},
-            {"loyer": 500.0, "nom": "Rodolphe Tallard"},
-            {"loyer": 425.0, "nom": "Xiao Yu Cao"},
+            {"loyer": 500.0, "nom": "François Paquette",
+             "debut": MOIS_COURANT},
+            {"loyer": 500.0, "nom": "Rodolphe Tallard",
+             "debut": MOIS_COURANT},
+            {"loyer": 425.0, "nom": "Xiao Yu Cao", "debut": MOIS_COURANT},
         ],
     )
     _map_compte(
@@ -1407,10 +1419,13 @@ def test_trop_paye_et_faute_de_frappe_bancaire(run, db_setup):
         run,
         name="8900 St-Hubert",
         address="8900, Rue Saint-Hubert",
+        # Baux récents — pas de dette antérieure (FIFO v12).
         baux=[
-            {"loyer": 600.0, "nom": "Mehrez Dhouib"},
-            {"loyer": 750.0, "nom": "Mario Barrette"},
-            {"loyer": 750.0, "nom": "Maritza Rivera"},
+            {"loyer": 600.0, "nom": "Mehrez Dhouib", "debut": MOIS_COURANT},
+            {"loyer": 750.0, "nom": "Mario Barrette",
+             "debut": MOIS_COURANT},
+            {"loyer": 750.0, "nom": "Maritza Rivera",
+             "debut": MOIS_COURANT},
         ],
     )
     _map_compte(
@@ -1552,4 +1567,190 @@ def test_alignement_sur_le_paiement_marque_par_l_employe(run, db_setup):
     _sync(run, qbo)
     txn = _txns(run)[0]
     assert txn.statut == "rapproche"
+    assert txn.mois_couvert == MOIS_COURANT
+
+
+# ── 14) v12 — le solde décide (retour Phil 2026-08-17) ─────────────────
+
+
+def _mois_prec_test(m: date) -> date:
+    return (m - timedelta(days=1)).replace(day=1)
+
+
+def test_avance_reelle_prend_le_mois_marque_le_plus_recent(run, db_setup):
+    """Cas Hajer (4005) : bail récent, UN dépôt le 13 du mois précédent,
+    les DEUX mois marqués payés (solde 0). Les deux marquages tombent
+    dans la fenêtre d'avance → le plus RÉCENT gagne : le locataire
+    payait le mois qui s'en venait, pas un vieux mois."""
+    _purge(run)
+    _set_config(run, active=True)
+    m_prec = _mois_prec_test(MOIS_COURANT)
+    seed = _seed_immeuble(
+        run,
+        name="4005 Saint-Laurent",
+        address="4005 Rue Saint-Laurent",
+        baux=[{"loyer": 650.0, "nom": "Hajer Hamada", "debut": m_prec}],
+    )
+    bail = seed["baux"][0]
+    _map_compte(run, "410", "4005 Saint-Laurent - Loyers à remettre",
+                seed["immeuble_id"])
+    _marquer_paye(
+        run, bail["bail_id"], m_prec, 650.0, m_prec.replace(day=23)
+    )
+    _marquer_paye(
+        run, bail["bail_id"], MOIS_COURANT, 650.0, MOIS_COURANT
+    )
+    qbo = FakeQbo(
+        gl_par_compte={
+            "410": [
+                {
+                    "id": "9001",
+                    "date": m_prec.replace(day=13).isoformat(),
+                    "montant": 650.0,
+                    "nom": "Hajer Hamada",
+                }
+            ]
+        }
+    )
+    _sync(run, qbo)
+    txn = _txns(run)[0]
+    assert txn.statut == "rapproche"
+    assert txn.bail_id == bail["bail_id"]
+    assert txn.mois_couvert == MOIS_COURANT
+
+
+def test_bail_du_le_15_impute_selon_son_echeance(run, db_setup):
+    """Bail payable le 15 (« Ou le ___ » du bail TAL) : un dépôt du 28
+    du mois précédent est un RETARD sur l'échéance du 15 de ce mois-là
+    — pas une avance sur le mois suivant (l'échéance du 1er n'existe
+    pas pour ce bail)."""
+    _purge(run)
+    _set_config(run, active=True)
+    m_prec = _mois_prec_test(MOIS_COURANT)
+    m_prec2 = _mois_prec_test(m_prec)
+    seed = _seed_immeuble(
+        run,
+        name="Immeuble Quinze",
+        address="15 Rue Echeance",
+        baux=[
+            {
+                "loyer": 900.0,
+                "nom": "Bail Quinze",
+                "debut": m_prec2,
+                "jour_echeance": 15,
+            }
+        ],
+    )
+    bail = seed["baux"][0]
+    _map_compte(run, "415", "Immeuble Quinze - Loyers à remettre",
+                seed["immeuble_id"])
+    # Antériorité réglée (aucune dette qui détournerait la txn) — à des
+    # dates trop lointaines pour l'alignement.
+    _marquer_paye(run, bail["bail_id"], m_prec2, 900.0, m_prec2)
+    _marquer_paye(run, bail["bail_id"], m_prec, 900.0,
+                  m_prec.replace(day=16))
+    qbo = FakeQbo(
+        gl_par_compte={
+            "415": [
+                {
+                    "id": "9002",
+                    "date": m_prec.replace(day=28).isoformat(),
+                    "montant": 900.0,
+                    "nom": "Bail Quinze",
+                }
+            ]
+        }
+    )
+    _sync(run, qbo)
+    txn = _txns(run)[0]
+    assert txn.statut == "rapproche"
+    assert txn.mois_couvert == m_prec
+
+
+def test_dette_reelle_prime_sur_l_alignement_d_avance(run, db_setup):
+    """« Paie le 8 avec 4 mois de retard → on ne valide pas le mois
+    courant » : le mois précédent IMPAYÉ (vraie dette) absorbe le
+    dépôt, même si le mois courant marqué payé colle à la fenêtre
+    d'alignement."""
+    _purge(run)
+    _set_config(run, active=True)
+    m_prec = _mois_prec_test(MOIS_COURANT)
+    seed = _seed_immeuble(
+        run,
+        name="Immeuble Dette",
+        address="8 Rue Retard",
+        baux=[{"loyer": 800.0, "nom": "Dette Reelle", "debut": m_prec}],
+    )
+    bail = seed["baux"][0]
+    _map_compte(run, "420", "Immeuble Dette - Loyers à remettre",
+                seed["immeuble_id"])
+    # Mois précédent PAS marqué payé (dette) ; mois courant marqué.
+    _marquer_paye(
+        run, bail["bail_id"], MOIS_COURANT, 800.0, MOIS_COURANT
+    )
+    qbo = FakeQbo(
+        gl_par_compte={
+            "420": [
+                {
+                    "id": "9003",
+                    "date": m_prec.replace(day=28).isoformat(),
+                    "montant": 800.0,
+                    "nom": "Dette Reelle",
+                }
+            ]
+        }
+    )
+    _sync(run, qbo)
+    txn = _txns(run)[0]
+    assert txn.statut == "rapproche"
+    assert txn.mois_couvert == m_prec
+
+
+def test_loyer_plus_frais_rapproche_a_la_synchro(run, db_setup):
+    """Un dépôt SANS payeur de « loyer + frais ponctuel » se rapproche
+    par le montant seul — le chargement des frais dans la synchro était
+    resté derrière un return (frais_map vide, fix v12)."""
+    _purge(run)
+    _set_config(run, active=True)
+    m_prec = _mois_prec_test(MOIS_COURANT)
+    seed = _seed_immeuble(
+        run,
+        name="Immeuble Frais",
+        address="30 Rue Ponctuelle",
+        baux=[{"loyer": 700.0, "nom": "Avec Frais", "debut": m_prec}],
+    )
+    bail = seed["baux"][0]
+    _map_compte(run, "430", "Immeuble Frais - Loyers à remettre",
+                seed["immeuble_id"])
+    _marquer_paye(run, bail["bail_id"], m_prec, 700.0, m_prec)
+
+    async def _frais():
+        async with TestSessionLocal() as s:
+            f = FraisLocatif(
+                bail_id=bail["bail_id"],
+                mois_couvert=MOIS_COURANT,
+                montant=30.0,
+                libelle="Frais de retard",
+            )
+            f.created_at = datetime.now(timezone.utc)
+            s.add(f)
+            await s.commit()
+
+    run(_frais())
+    qbo = FakeQbo(
+        gl_par_compte={
+            "430": [
+                {
+                    "id": "9004",
+                    "date": MOIS_COURANT.replace(day=3).isoformat(),
+                    "montant": 730.0,
+                    "nom": "",
+                }
+            ]
+        }
+    )
+    _sync(run, qbo)
+    txn = _txns(run)[0]
+    assert txn.statut == "rapproche"
+    assert txn.bail_id == bail["bail_id"]
     assert txn.mois_couvert == MOIS_COURANT
