@@ -220,6 +220,7 @@ async def entreprise_snapshot(db: AsyncSession, entreprise_id: int) -> dict:
 
         externe = bool(getattr(imm, "gestion_externe", False))
         loyers_mensuels = 0.0
+        loyers_potentiels = 0.0
         nb_loues = 0
         nb_actifs = 0
         logements_rows: list[dict] = []
@@ -236,6 +237,8 @@ async def entreprise_snapshot(db: AsyncSession, entreprise_id: int) -> dict:
             if m_loue is not None:
                 loyers_mensuels += m_loue
                 nb_loues += 1
+            if m_aff is not None:
+                loyers_potentiels += m_aff
             logements_rows.append(
                 {
                     "logement_id": lg.id,
@@ -258,6 +261,7 @@ async def entreprise_snapshot(db: AsyncSession, entreprise_id: int) -> dict:
                 "nb_logements": nb_log,
                 "nb_baux_actifs": nb_baux,
                 "loyers_mensuels": round(loyers_mensuels, 2),
+                "loyers_potentiels": round(loyers_potentiels, 2),
                 "valeur": val,
                 "valeur_source": val_source,
                 "valeur_date": val_date,
@@ -278,6 +282,36 @@ async def entreprise_snapshot(db: AsyncSession, entreprise_id: int) -> dict:
                 ),
                 "purchase_date": imm.purchase_date,
                 "logements": logements_rows,
+                # Détail COMPLET des hypothèques actives — section
+                # « Hypothèques » de la fiche projet.
+                "hypotheques": [
+                    {
+                        "id": h.id,
+                        "rang": h.rang,
+                        "preteur": h.preteur,
+                        "montant_initial": (
+                            float(h.montant_initial)
+                            if h.montant_initial is not None
+                            else None
+                        ),
+                        "balance": round(balance_effective(h), 2),
+                        "taux_pct": (
+                            float(h.taux_pct)
+                            if h.taux_pct is not None
+                            else None
+                        ),
+                        "type_taux": h.type_taux,
+                        "paiement_mensuel": (
+                            float(h.paiement_mensuel)
+                            if h.paiement_mensuel is not None
+                            else None
+                        ),
+                        "amortissement_mois": h.amortissement_mois,
+                        "date_debut": h.date_debut,
+                        "date_fin_terme": h.date_fin_terme,
+                    }
+                    for h in sorted(hyps, key=lambda x: x.rang or 99)
+                ],
             }
         )
         tot_valeur += (val or 0.0) * pct
@@ -740,6 +774,36 @@ async def timeline_projet(
                     "kind": "acquisition",
                     "titre": f"Acquisition — {imm.name}{prix}",
                     "description": imm.address,
+                }
+            )
+        # Financements / refinancements : chaque hypothèque ACTIVE datée
+        # devient un événement (un refi = nouvelle hypothèque au pôle
+        # locatif → il apparaît ici tout seul). On saute celle qui
+        # démarre le jour de l'achat (déjà couverte par l'acquisition).
+        for h in await hypotheques_actives(db, imm.id):
+            if h.date_debut is None:
+                continue
+            if imm.purchase_date and abs(
+                (h.date_debut - imm.purchase_date).days
+            ) <= 31:
+                continue
+            montant = (
+                f" — {int(float(h.montant_initial)):,} $".replace(",", " ")
+                if h.montant_initial
+                else ""
+            )
+            taux = (
+                f" · {float(h.taux_pct):g} %" if h.taux_pct is not None else ""
+            )
+            events.append(
+                {
+                    "date": h.date_debut.isoformat(),
+                    "kind": "refinancement",
+                    "titre": (
+                        f"Financement — {h.preteur or 'hypothèque'}"
+                        f"{montant}"
+                    ),
+                    "description": f"{imm.name}{taux}",
                 }
             )
     jalons = (
