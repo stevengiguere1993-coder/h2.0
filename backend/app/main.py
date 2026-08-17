@@ -139,6 +139,31 @@ async def _run_startup_tasks() -> None:
             "backfill reactivation baux termines failed: %s", exc
         )
 
+    # Backfill 2026-08-17 (décision Phil) : baux placeholder PlexFlow
+    # TERMINÉS mais restés à leur date de fin par défaut (2027-06-01) —
+    # ils faisaient courir un loyer fantôme chaque mois. La fin est
+    # ramenée à la veille de l'arrivée du successeur ; un paiement resté
+    # sur un mois non couvert suit, si ce mois est libre. Best-effort,
+    # idempotent (voir recaler_fins_baux_placeholder).
+    try:
+        from app.db.session import AsyncSessionLocal as _FinSession
+        from app.services.locatif_depart import (
+            recaler_fins_baux_placeholder,
+        )
+
+        async with _FinSession() as session:
+            n = await recaler_fins_baux_placeholder(session)
+            if n:
+                await session.commit()
+                logger.info(
+                    "Startup backfill: %d bail (baux) recalé(s) sur "
+                    "l'arrivée du locataire suivant", n,
+                )
+    except Exception as exc:
+        logger.warning(
+            "backfill recalage fins baux placeholder failed: %s", exc
+        )
+
     # Tables Feuille de temps (Gestion d'entreprise) — transaction isolée.
     try:
         await ensure_timesheet_tables()

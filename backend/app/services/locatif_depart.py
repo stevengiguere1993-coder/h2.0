@@ -37,7 +37,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.immobilier import (
@@ -652,6 +652,124 @@ async def reactiver_baux_termines_a_tort(db: AsyncSession) -> int:
             "Bail %s réactivé (terminé par erreur à l'import, "
             "locataire en place)", b.id,
         )
+    return n
+
+
+#: Notes apposées par le recalage ci-dessous (aussi marqueurs de trace).
+NOTE_FIN_RECALEE = (
+    "Date de fin recalée automatiquement (2026-08-17) sur l'arrivée du "
+    "locataire suivant — la date d'origine venait de l'import."
+)
+NOTE_PAIEMENT_REDATE = (
+    "Mois corrigé automatiquement (2026-08-17) : dernier mois réel du "
+    "bail (la date d'origine venait de l'import)."
+)
+
+
+async def recaler_fins_baux_placeholder(db: AsyncSession) -> int:
+    """Backfill 2026-08-17 (décision Phil) : les baux placeholder de
+    l'import PlexFlow gardaient leur date de fin par défaut (2027-06-01)
+    même une fois TERMINÉS et remplacés — Kratos leur comptait donc un
+    loyer chaque mois jusqu'en juin 2027 (soldes fantômes de 315 $ /
+    371 $, deux lignes pour le même logement).
+
+    Pour un bail terminé/résilié à date de fin FUTURE, portant la note
+    d'import PlexFlow, dont le logement a un bail ACTIF **déjà
+    commencé** : la fin est ramenée à la veille de l'arrivée du
+    successeur. Un paiement resté sur un mois que le bail ne couvre
+    plus est ré-imputé au DERNIER mois réel — seulement si ce mois n'a
+    pas déjà son paiement (sinon on n'invente rien : la ligne est
+    laissée telle quelle et journalisée, à arbitrer par un humain).
+
+    ⚠ La note PlexFlow ET le successeur déjà commencé sont des
+    garde-fous : une résiliation LÉGITIME avec date de fin future
+    (départ annoncé pour plus tard) ne doit jamais être touchée.
+
+    Idempotent : après recalage la fin est passée, le WHERE ne matche
+    plus. Retourne le nombre de baux recalés (commit à l'appelant).
+    """
+    from app.models.immobilier import PaiementLoyer
+
+    today = date.today()
+    candidats = (
+        await db.execute(
+            select(Bail).where(
+                Bail.status.in_(
+                    [
+                        BailStatus.TERMINE.value,
+                        BailStatus.RESILIE.value,
+                    ]
+                ),
+                Bail.date_fin.is_not(None),
+                Bail.date_fin > today,
+                Bail.notes.like("%PlexFlow%"),
+            )
+        )
+    ).scalars().all()
+    n = 0
+    for b in candidats:
+        debut_successeur = (
+            await db.execute(
+                select(func.min(Bail.date_debut)).where(
+                    Bail.logement_id == b.logement_id,
+                    Bail.id != b.id,
+                    Bail.status == BailStatus.ACTIF.value,
+                    Bail.date_debut.is_not(None),
+                    Bail.date_debut > b.date_debut,
+                    Bail.date_debut <= today,  # déjà en place
+                )
+            )
+        ).scalar_one_or_none()
+        if debut_successeur is None:
+            continue
+        nouvelle_fin = debut_successeur - timedelta(days=1)
+        if nouvelle_fin <= b.date_debut or nouvelle_fin >= b.date_fin:
+            continue
+        b.date_fin = nouvelle_fin
+        b.notes = _append_note(b.notes, NOTE_FIN_RECALEE)
+        b.updated_at = _now()
+        n += 1
+        log.info(
+            "Bail %s : fin recalée %s (arrivée du successeur le %s)",
+            b.id, nouvelle_fin, debut_successeur,
+        )
+
+        # Paiements restés sur un mois que le bail ne couvre plus.
+        dernier_mois = nouvelle_fin.replace(day=1)
+        orphelins = (
+            await db.execute(
+                select(PaiementLoyer).where(
+                    PaiementLoyer.bail_id == b.id,
+                    PaiementLoyer.mois_couvert > dernier_mois,
+                )
+            )
+        ).scalars().all()
+        for p in orphelins:
+            deja = (
+                await db.execute(
+                    select(func.count())
+                    .select_from(PaiementLoyer)
+                    .where(
+                        PaiementLoyer.bail_id == b.id,
+                        PaiementLoyer.mois_couvert == dernier_mois,
+                    )
+                )
+            ).scalar_one()
+            if deja:
+                # Le dernier mois a déjà son paiement : on n'invente
+                # rien (trop-payé à arbitrer par un humain).
+                log.info(
+                    "Bail %s : paiement %s (mois %s) LAISSÉ tel quel — "
+                    "le mois %s est déjà payé",
+                    b.id, p.id, p.mois_couvert, dernier_mois,
+                )
+                continue
+            log.info(
+                "Bail %s : paiement %s ré-imputé %s → %s",
+                b.id, p.id, p.mois_couvert, dernier_mois,
+            )
+            p.mois_couvert = dernier_mois
+            p.notes = _append_note(p.notes, NOTE_PAIEMENT_REDATE)
     return n
 
 
