@@ -294,8 +294,7 @@ async def sync_entreprise(db: AsyncSession, entreprise_id: int) -> dict:
             }
         )
 
-    await db.flush()
-    return {
+    resultat = {
         "statut": "ok",
         "projet_nom": p.name,
         "avances_total": round(total, 2),
@@ -305,6 +304,16 @@ async def sync_entreprise(db: AsyncSession, entreprise_id: int) -> dict:
         "sans_compte": sans_compte,
         "non_apparies": non_apparies,
     }
+    # Résumé persistant — la console affiche l'état de la dernière
+    # sync en tout temps (pas seulement dans la bannière du clic).
+    import json as _json
+    from datetime import datetime, timezone
+
+    profil.qbo_sync_at = datetime.now(timezone.utc)
+    profil.qbo_sync_json = _json.dumps(resultat, ensure_ascii=False)
+
+    await db.flush()
+    return resultat
 
 
 async def sync_all(db: AsyncSession) -> dict:

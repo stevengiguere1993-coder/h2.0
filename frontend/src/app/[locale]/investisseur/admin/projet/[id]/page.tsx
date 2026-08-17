@@ -79,11 +79,28 @@ type ParticipationRow = {
   flux: FluxRow[];
 };
 
+type QboSyncState = {
+  at: string | null;
+  statut?: string;
+  projet_nom?: string;
+  avances_total?: number;
+  apparies?: {
+    compte: string;
+    solde: number;
+    investisseur: string;
+    nb_flux: number;
+    participation_id: number;
+  }[];
+  sans_compte?: { compte: string; solde: number; partenaire: string }[];
+  non_apparies?: string[];
+} | null;
+
 type AdminProjet = {
   entreprise_id: number;
   name: string;
   drive_folder_id: string | null;
   phase: string;
+  qbo_sync: QboSyncState;
   profil: {
     description: string | null;
     phase_override: string | null;
@@ -754,13 +771,74 @@ export default function AdminProjetPage() {
                   Synchroniser QuickBooks
                 </button>
               </div>
-              <p className="mb-3 text-[11px] text-white/35">
+              <p className="mb-2 text-[11px] text-white/35">
                 Noms et % de parts : fiche entreprise (Parts &amp;
                 actionnaires). Apports et remboursements : avances
                 d&apos;actionnaires du QuickBooks lié. Rien ne se saisit
                 ici — la console gère seulement la visibilité et les
                 comptes.
               </p>
+
+              {/* État persistant de la dernière sync QBO */}
+              {data.qbo_sync ? (
+                <div className="mb-3 rounded-xl border border-brand-800 bg-brand-950/40 px-3 py-2.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                    Synchronisation QuickBooks —{" "}
+                    {data.qbo_sync.at
+                      ? new Date(data.qbo_sync.at).toLocaleString(
+                          "fr-CA",
+                          {
+                            day: "numeric",
+                            month: "short",
+                            hour: "2-digit",
+                            minute: "2-digit"
+                          }
+                        )
+                      : "—"}{" "}
+                    · avances totales{" "}
+                    {fmtMoney(data.qbo_sync.avances_total ?? 0)}
+                  </p>
+                  <ul className="mt-1.5 space-y-1 text-[11px]">
+                    {(data.qbo_sync.apparies || []).map((a) => (
+                      <li key={a.compte} className="text-white/60">
+                        <span className="text-emerald-400">✓</span>{" "}
+                        {a.compte} → <b>{a.investisseur}</b>{" "}
+                        <span className="tabular-nums">
+                          ({fmtMoney(a.solde)}
+                          {a.nb_flux > 0
+                            ? ` · ${a.nb_flux} mouvement${
+                                a.nb_flux > 1 ? "s" : ""
+                              } importés`
+                            : " · aucun mouvement"}
+                          )
+                        </span>
+                      </li>
+                    ))}
+                    {(data.qbo_sync.sans_compte || []).map((s) => (
+                      <li key={s.compte} className="text-amber-400">
+                        ⚠ {fmtMoney(s.solde)} dans « {s.compte} » —{" "}
+                        {s.partenaire} n&apos;a pas encore de compte
+                        investisseur : courriel dans la fiche entreprise
+                        → « Créer le compte &amp; activer » →
+                        resynchronisez.
+                      </li>
+                    ))}
+                    {(data.qbo_sync.non_apparies || []).map((n) => (
+                      <li key={n} className="text-rose-400">
+                        ✕ « {n} » — aucun actionnaire au nom
+                        correspondant (rapprochez les noms côté QBO ou
+                        fiche entreprise).
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="mb-3 rounded-xl border border-dashed border-brand-700 bg-brand-950/40 px-3 py-2 text-[11px] text-white/40">
+                  Jamais synchronisé — cliquez « Synchroniser
+                  QuickBooks » (la sync roule aussi automatiquement
+                  chaque nuit).
+                </p>
+              )}
 
               {/* Actionnaires de la fiche entreprise — activation 1 clic */}
               {data.partenaires.length > 0 ? (
@@ -861,6 +939,12 @@ export default function AdminProjetPage() {
                     <ParticipationCard
                       key={p.id}
                       p={p}
+                      syncDone={!!data.qbo_sync}
+                      syncApparie={
+                        data.qbo_sync?.apparies?.find(
+                          (a) => a.participation_id === p.id
+                        ) || null
+                      }
                       onChanged={load}
                       onRemove={() => void removeParticipation(p)}
                       onVoirComme={() =>
@@ -1128,11 +1212,19 @@ export default function AdminProjetPage() {
 
 function ParticipationCard({
   p,
+  syncDone,
+  syncApparie,
   onChanged,
   onRemove,
   onVoirComme
 }: {
   p: ParticipationRow;
+  syncDone: boolean;
+  syncApparie: {
+    compte: string;
+    solde: number;
+    nb_flux: number;
+  } | null;
   onChanged: () => Promise<void>;
   onRemove: () => void;
   onVoirComme: () => void;
@@ -1247,11 +1339,24 @@ function ParticipationCard({
               </li>
             ))}
           </ul>
+        ) : syncApparie ? (
+          <p className="text-xs text-white/40">
+            Compte d&apos;avances apparié : « {syncApparie.compte} » —
+            solde {fmtMoney(syncApparie.solde)}, aucun mouvement à
+            importer. Ses apports apparaîtront dès que des avances
+            seront enregistrées dans QuickBooks.
+          </p>
+        ) : syncDone ? (
+          <p className="text-xs text-amber-400">
+            Aucun compte d&apos;avances QuickBooks ne correspond à son
+            nom lors de la dernière synchronisation — vérifiez le nom
+            du compte dans QBO (section optimisation → Avances des
+            actionnaires).
+          </p>
         ) : (
           <p className="text-xs text-white/40">
             Aucun apport trouvé — cliquez « Synchroniser QuickBooks »
-            ci-dessus (le compte d&apos;avances doit porter un nom
-            proche du sien).
+            ci-dessus (la sync roule aussi chaque nuit).
           </p>
         )}
       </div>
