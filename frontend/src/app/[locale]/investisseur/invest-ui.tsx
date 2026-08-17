@@ -43,6 +43,20 @@ export type Portefeuille = {
   projets: ProjetCard[];
 };
 
+export type HypothequeRow = {
+  id: number;
+  rang: number | null;
+  preteur: string | null;
+  montant_initial: number | null;
+  balance: number;
+  taux_pct: number | null;
+  type_taux: string | null;
+  paiement_mensuel: number | null;
+  amortissement_mois: number | null;
+  date_debut: string | null;
+  date_fin_terme: string | null;
+};
+
 export type ImmeubleRow = {
   immeuble_id: number;
   name: string;
@@ -50,6 +64,7 @@ export type ImmeubleRow = {
   nb_logements: number;
   nb_baux_actifs: number;
   loyers_mensuels: number;
+  loyers_potentiels?: number;
   valeur: number | null;
   valeur_source: string | null;
   valeur_date: string | null;
@@ -59,6 +74,7 @@ export type ImmeubleRow = {
   hypotheque_fin_terme: string | null;
   equite: number;
   ownership_pct: number;
+  hypotheques?: HypothequeRow[];
 };
 
 export type SerieMois = {
@@ -491,6 +507,99 @@ export function DepensesParCategorie({
       <p className="mt-1.5 text-right text-[11px] text-white/40 tabular-nums">
         Total : {fmtMoney(total)} / an
       </p>
+    </div>
+  );
+}
+
+/* --------------------- Section Hypothèques --------------------- */
+
+export function HypothequesCard({
+  immeubles
+}: {
+  immeubles: ImmeubleRow[];
+}) {
+  const rows = immeubles.flatMap((im) =>
+    (im.hypotheques || []).map((h) => ({ im, h }))
+  );
+  return (
+    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+      <h2 className="mb-3 text-sm font-semibold text-white">Hypothèques</h2>
+      {rows.length === 0 ? (
+        <p className="text-xs text-white/40">
+          Aucune hypothèque active sur les immeubles de la compagnie.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {rows.map(({ im, h }) => (
+            <div
+              key={h.id}
+              className="rounded-xl border border-brand-800 bg-brand-950/50 p-3"
+            >
+              <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                <p className="text-sm font-semibold text-white">
+                  {h.preteur || "Créancier —"}
+                  {h.rang && h.rang > 1 ? (
+                    <span className="ml-1.5 text-xs font-normal text-white/40">
+                      {h.rang}ᵉ rang
+                    </span>
+                  ) : null}
+                </p>
+                <p className="text-xs text-white/40">
+                  {im.address || im.name}
+                </p>
+              </div>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs tabular-nums sm:grid-cols-3">
+                <div>
+                  <dt className="text-white/40">Solde actuel</dt>
+                  <dd className="font-bold text-white">
+                    {fmtMoney(h.balance)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-white/40">Solde de départ</dt>
+                  <dd className="font-semibold text-white/80">
+                    {fmtMoney(h.montant_initial)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-white/40">Taux</dt>
+                  <dd className="font-semibold text-white/80">
+                    {h.taux_pct !== null
+                      ? `${h.taux_pct.toLocaleString("fr-CA", {
+                          maximumFractionDigits: 2
+                        })} %${
+                          h.type_taux ? ` (${h.type_taux})` : ""
+                        }`
+                      : "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-white/40">Paiement</dt>
+                  <dd className="font-semibold text-white/80">
+                    {h.paiement_mensuel !== null
+                      ? `${fmtMoney(h.paiement_mensuel)}/mois`
+                      : "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-white/40">Fin du terme</dt>
+                  <dd className="font-semibold text-white/80">
+                    {fmtDate(h.date_fin_terme)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-white/40">Amortissement</dt>
+                  <dd className="font-semibold text-white/80">
+                    {h.amortissement_mois
+                      ? `${Math.round(h.amortissement_mois / 12)} ans`
+                      : "—"}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

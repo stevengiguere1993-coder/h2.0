@@ -33,6 +33,8 @@ import {
   fmtDate,
   fmtMoney,
   fmtPct,
+  HypothequesCard,
+  ImmeubleRow,
   PhaseBadge,
   RevDepChart,
   SerieMois,
@@ -82,29 +84,14 @@ type AdminProjet = {
     show_cashflow: boolean;
     avances_actionnaires: number | null;
   };
-  immeubles: {
-    immeuble_id: number;
-    name: string;
-    address: string | null;
-    nb_logements: number;
-    nb_baux_actifs: number;
-    loyers_mensuels: number;
-    valeur: number | null;
-    valeur_source: string | null;
-    valeur_date: string | null;
-    hypotheque_balance: number;
-    hypotheque_preteur: string | null;
-    hypotheque_taux_pct: number | null;
-    hypotheque_fin_terme: string | null;
-    equite: number;
-    ownership_pct: number;
+  immeubles: (ImmeubleRow & {
     logements: {
       logement_id: number;
       numero: string | null;
       loue: boolean;
       loyer: number | null;
     }[];
-  }[];
+  })[];
   valeur_totale: number;
   hypotheque_totale: number;
   avances_actionnaires: number;
@@ -391,10 +378,15 @@ export default function AdminProjetPage() {
           </div>
         ) : null}
 
-        <div className="mb-5 flex flex-wrap items-center gap-3">
+        <div className="mb-1 flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-bold text-white">{data.name}</h1>
           <PhaseBadge phase={data.phase} />
         </div>
+        <p className="mb-5 text-xs text-white/40">
+          Tableau de bord consolidé — tous les immeubles et
+          investissements de la compagnie s&apos;additionnent ici. C&apos;est
+          ce que verront ses investisseurs.
+        </p>
 
         {/* ── Dashboard du projet (visible même sans investisseur) ── */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -443,17 +435,7 @@ export default function AdminProjetPage() {
               {data.nb_baux_actifs} / {data.nb_logements || "—"}
             </p>
             <p className="mt-1 text-xs text-white/50">
-              loyers {fmtMoney(data.loyers_mensuels)}/mois · cash-flow{" "}
-              <span
-                className={
-                  data.cashflow_moyen >= 0
-                    ? "text-emerald-400"
-                    : "text-rose-400"
-                }
-              >
-                {data.cashflow_moyen >= 0 ? "+" : ""}
-                {fmtMoney(data.cashflow_moyen)}/mois
-              </span>
+              loyers {fmtMoney(data.loyers_mensuels)}/mois
             </p>
           </div>
         </div>
@@ -512,22 +494,8 @@ export default function AdminProjetPage() {
                           {im.address || im.name}
                         </p>
                         <p className="text-xs text-white/40">
-                          {im.hypotheque_preteur
-                            ? `${im.hypotheque_preteur}${
-                                im.hypotheque_taux_pct !== null
-                                  ? ` · ${im.hypotheque_taux_pct.toLocaleString(
-                                      "fr-CA",
-                                      { maximumFractionDigits: 2 }
-                                    )} %`
-                                  : ""
-                              }${
-                                im.hypotheque_fin_terme
-                                  ? ` · terme ${fmtDate(
-                                      im.hypotheque_fin_terme
-                                    )}`
-                                  : ""
-                              } · solde ${fmtMoney(im.hypotheque_balance)}`
-                            : "aucune hypothèque active"}
+                          {im.nb_baux_actifs} / {im.nb_logements || "—"}{" "}
+                          loués
                           {im.ownership_pct !== 100
                             ? ` · détenu à ${im.ownership_pct} %`
                             : ""}
@@ -541,6 +509,15 @@ export default function AdminProjetPage() {
                       </td>
                       <td className="px-4 py-3 text-right text-white/80">
                         {fmtMoney(im.loyers_mensuels)}
+                        {(im.loyers_potentiels ?? 0) >
+                        im.loyers_mensuels + 1 ? (
+                          <span
+                            className="block text-[11px] text-amber-400"
+                            title="Loyer si toutes les unités étaient louées"
+                          >
+                            pot. {fmtMoney(im.loyers_potentiels ?? 0)}
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 text-right text-white/80">
                         {fmtMoney(im.valeur)}
@@ -599,6 +576,46 @@ export default function AdminProjetPage() {
                     ) : null}
                   </Fragment>
                 ))}
+                {data.immeubles.length > 1 ? (
+                  <tr className="border-t-2 border-brand-700 bg-brand-950/40 font-semibold">
+                    <td className="px-4 py-3 text-white">TOTAL</td>
+                    <td className="px-4 py-3 text-right text-white">
+                      {data.immeubles.reduce(
+                        (s, im) => s + im.nb_logements,
+                        0
+                      ) || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right text-white">
+                      {fmtMoney(
+                        data.immeubles.reduce(
+                          (s, im) => s + im.loyers_mensuels,
+                          0
+                        )
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right text-white">
+                      {fmtMoney(
+                        data.immeubles.reduce(
+                          (s, im) => s + (im.valeur || 0),
+                          0
+                        )
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right text-white">
+                      {fmtMoney(
+                        data.immeubles.reduce(
+                          (s, im) => s + im.hypotheque_balance,
+                          0
+                        )
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right text-emerald-400">
+                      {fmtMoney(
+                        data.immeubles.reduce((s, im) => s + im.equite, 0)
+                      )}
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
@@ -612,12 +629,29 @@ export default function AdminProjetPage() {
           ) : null}
         </div>
 
-        {/* Revenus / dépenses + timeline */}
-        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+        {/* Timeline + hypothèques */}
+        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+            <h2 className="mb-1 text-sm font-semibold text-white">
+              Timeline du projet
+            </h2>
+            <p className="mb-4 text-[11px] text-white/35">
+              Automatique : acquisitions (dates d&apos;achat des
+              immeubles), financements (hypothèques du pôle locatif),
+              flux des investisseurs, phase d&apos;optimisation — plus
+              vos jalons manuels ci-dessous.
+            </p>
+            <Timeline events={data.timeline} />
+          </div>
+          <HypothequesCard immeubles={data.immeubles} />
+        </div>
+
+        {/* Revenus / dépenses : normalisés (pôle locatif) vs réels (QBO) */}
+        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
           <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white">
             <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
               <h2 className="text-sm font-semibold">
-                Revenus et dépenses · 12 derniers mois
+                Revenus et dépenses normalisés
               </h2>
               <span className="text-xs text-white/50 tabular-nums">
                 Cash-flow moyen :{" "}
@@ -633,6 +667,10 @@ export default function AdminProjetPage() {
                 </b>
               </span>
             </div>
+            <p className="mb-2 text-[11px] text-white/35">
+              Pôle gestion locative — loyers et dépenses récurrentes,
+              12 derniers mois.
+            </p>
             <RevDepChart serie={data.serie_mensuelle} showDepenses />
             <div className="mt-1 flex flex-wrap gap-4 text-xs text-white/50">
               <span className="inline-flex items-center gap-1.5">
@@ -648,12 +686,7 @@ export default function AdminProjetPage() {
             </div>
             <DepensesParCategorie items={data.depenses_par_categorie} />
           </div>
-          <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-            <h2 className="mb-4 text-sm font-semibold text-white">
-              Timeline du projet
-            </h2>
-            <Timeline events={data.timeline} />
-          </div>
+          <QboReelsPanel entrepriseId={entrepriseId} />
         </div>
 
         <h2 className="mb-3 mt-8 text-base font-semibold text-white">
@@ -1012,6 +1045,199 @@ export default function AdminProjetPage() {
   );
 }
 
+/* ──────── Revenus / dépenses RÉELS (QuickBooks — optimisation) ──────── */
+
+type QboReels = {
+  statut: "aucun_projet" | "sans_qbo" | "erreur" | "connecte";
+  projet_nom?: string;
+  erreur?: string;
+  rows?: {
+    mois: string;
+    revenus: number;
+    depenses: number;
+    hypotheque: number;
+    ecart: number;
+  }[];
+  total?: {
+    revenus: number;
+    depenses: number;
+    hypotheque: number;
+    ecart: number;
+  } | null;
+};
+
+function QboReelsPanel({ entrepriseId }: { entrepriseId: number }) {
+  const [reels, setReels] = useState<QboReels | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch(`/api/v1/invest/admin/projets/${entrepriseId}/qbo-reels`)
+      .then(async (res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          setFailed(true);
+          return;
+        }
+        setReels((await res.json()) as QboReels);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [entrepriseId]);
+
+  const naBox = (titre: string, texte: string) => (
+    <div className="rounded-xl border border-dashed border-brand-700 bg-brand-950/40 px-4 py-6 text-center">
+      <p className="text-sm font-semibold text-white/70">{titre}</p>
+      <p className="mx-auto mt-1 max-w-sm text-xs text-white/40">
+        {texte}
+      </p>
+    </div>
+  );
+
+  const rows = reels?.rows || [];
+  const showHyp =
+    rows.some((r) => Math.abs(r.hypotheque) >= 0.01) ||
+    Math.abs(reels?.total?.hypotheque || 0) >= 0.01;
+
+  return (
+    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white">
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold">
+          Revenus et dépenses réels
+        </h2>
+        {reels?.statut === "connecte" && reels.projet_nom ? (
+          <span className="text-xs text-white/40">
+            QuickBooks · {reels.projet_nom}
+          </span>
+        ) : null}
+      </div>
+      <p className="mb-3 text-[11px] text-white/35">
+        Importations QuickBooks du projet lié dans la section
+        optimisation (gestion d&apos;entreprise) — 12 derniers mois.
+      </p>
+
+      {failed ? (
+        naBox(
+          "Chargement impossible",
+          "Les données réelles n'ont pas pu être chargées — réessayez plus tard."
+        )
+      ) : reels === null ? (
+        <div className="flex justify-center py-10">
+          <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+        </div>
+      ) : reels.statut === "aucun_projet" ? (
+        naBox(
+          "Non applicable — pas encore rentré",
+          "Cette compagnie n'a aucun projet dans la section optimisation " +
+            "de gestion d'entreprise. Créez-y le projet et connectez " +
+            "QuickBooks pour voir les chiffres réels ici."
+        )
+      ) : reels.statut === "sans_qbo" ? (
+        naBox(
+          "QuickBooks non connecté",
+          `Le projet « ${reels.projet_nom} » existe dans la section ` +
+            "optimisation, mais aucune connexion QuickBooks n'est " +
+            "choisie dans ses réglages."
+        )
+      ) : reels.statut === "erreur" ? (
+        naBox(
+          "Lecture QuickBooks impossible",
+          reels.erreur ||
+            "Erreur de lecture — vérifiez la connexion QuickBooks dans la section optimisation."
+        )
+      ) : rows.length === 0 ? (
+        naBox(
+          "Aucune donnée sur la période",
+          "QuickBooks est connecté mais le rapport des 12 derniers mois est vide."
+        )
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs tabular-nums">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-wider text-white/40">
+                <th className="py-1.5 pr-2 font-medium">Mois</th>
+                <th className="py-1.5 pl-2 text-right font-medium">
+                  Revenus
+                </th>
+                <th className="py-1.5 pl-2 text-right font-medium">
+                  Dépenses
+                </th>
+                {showHyp ? (
+                  <th className="py-1.5 pl-2 text-right font-medium">
+                    Hypothèque
+                  </th>
+                ) : null}
+                <th className="py-1.5 pl-2 text-right font-medium">
+                  Écart
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr
+                  key={r.mois}
+                  className="border-t border-brand-800/60"
+                >
+                  <td className="py-1.5 pr-2 text-white/70">{r.mois}</td>
+                  <td className="py-1.5 pl-2 text-right text-white/80">
+                    {fmtMoney(r.revenus)}
+                  </td>
+                  <td className="py-1.5 pl-2 text-right text-white/80">
+                    {fmtMoney(r.depenses)}
+                  </td>
+                  {showHyp ? (
+                    <td className="py-1.5 pl-2 text-right text-white/80">
+                      {fmtMoney(r.hypotheque)}
+                    </td>
+                  ) : null}
+                  <td
+                    className={`py-1.5 pl-2 text-right font-semibold ${
+                      r.ecart >= 0 ? "text-emerald-400" : "text-rose-400"
+                    }`}
+                  >
+                    {r.ecart >= 0 ? "+" : ""}
+                    {fmtMoney(r.ecart)}
+                  </td>
+                </tr>
+              ))}
+              {reels.total ? (
+                <tr className="border-t-2 border-brand-700 font-semibold">
+                  <td className="py-2 pr-2 text-white">TOTAL</td>
+                  <td className="py-2 pl-2 text-right text-white">
+                    {fmtMoney(reels.total.revenus)}
+                  </td>
+                  <td className="py-2 pl-2 text-right text-white">
+                    {fmtMoney(reels.total.depenses)}
+                  </td>
+                  {showHyp ? (
+                    <td className="py-2 pl-2 text-right text-white">
+                      {fmtMoney(reels.total.hypotheque)}
+                    </td>
+                  ) : null}
+                  <td
+                    className={`py-2 pl-2 text-right ${
+                      reels.total.ecart >= 0
+                        ? "text-emerald-400"
+                        : "text-rose-400"
+                    }`}
+                  >
+                    {reels.total.ecart >= 0 ? "+" : ""}
+                    {fmtMoney(reels.total.ecart)}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─────────────────── Carte participation + flux ─────────────────── */
 
 function ParticipationCard({
@@ -1246,6 +1472,13 @@ function ParticipationCard({
           </button>
         </form>
         {err ? <p className="mt-1 text-xs text-rose-400">{err}</p> : null}
+        <p className="mt-2 text-[10px] text-white/35">
+          Un flux = un événement réel (apport, remboursement,
+          distribution) — c&apos;est ce qui nourrit le capital investi,
+          la valeur des parts et le TRI. À venir : proposition
+          automatique de ces flux depuis QuickBooks (aucune double
+          saisie).
+        </p>
       </div>
     </div>
   );

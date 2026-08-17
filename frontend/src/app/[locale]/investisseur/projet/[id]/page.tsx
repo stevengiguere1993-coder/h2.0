@@ -24,6 +24,7 @@ import {
   fmtDate,
   fmtMoney,
   fmtPct,
+  HypothequesCard,
   investApiBase,
   PhaseBadge,
   ProjetDetail,
@@ -143,12 +144,16 @@ export default function ProjetPage() {
         ) : null}
 
         {/* En-tête */}
-        <div className="mb-5 flex flex-wrap items-center gap-3">
+        <div className="mb-1 flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-bold text-white">
             {data.entreprise_name}
           </h1>
           <PhaseBadge phase={data.phase} />
         </div>
+        <p className="mb-5 text-xs text-white/40">
+          Tableau de bord consolidé de votre investissement — tous les
+          immeubles de la compagnie s&apos;additionnent ici.
+        </p>
         {data.description ? (
           <p className="mb-5 max-w-3xl whitespace-pre-line text-sm text-white/70">
             {data.description}
@@ -250,29 +255,25 @@ export default function ProjetPage() {
                       <p className="font-medium text-white">
                         {im.address || im.name}
                       </p>
-                      {data.show_hypotheque && im.hypotheque_preteur ? (
-                        <p className="text-xs text-white/40">
-                          {im.hypotheque_preteur}
-                          {im.hypotheque_taux_pct !== null
-                            ? ` · ${im.hypotheque_taux_pct.toLocaleString(
-                                "fr-CA",
-                                { maximumFractionDigits: 2 }
-                              )} %`
-                            : ""}
-                          {im.hypotheque_fin_terme
-                            ? ` · terme ${fmtDate(
-                                im.hypotheque_fin_terme
-                              )}`
-                            : ""}
-                          {` · solde ${fmtMoney(im.hypotheque_balance)}`}
-                        </p>
-                      ) : null}
+                      <p className="text-xs text-white/40">
+                        {im.nb_baux_actifs} / {im.nb_logements} loué
+                        {im.nb_baux_actifs > 1 ? "s" : ""}
+                        {im.ownership_pct !== 100
+                          ? ` · détenu à ${im.ownership_pct} %`
+                          : ""}
+                      </p>
                     </td>
                     <td className="px-4 py-3 text-right text-white/80">
                       {im.nb_logements || "—"}
                     </td>
                     <td className="px-4 py-3 text-right text-white/80">
                       {fmtMoney(im.loyers_mensuels)}
+                      {(im.loyers_potentiels ?? 0) >
+                      im.loyers_mensuels + 1 ? (
+                        <span className="block text-[11px] text-white/40">
+                          pot. {fmtMoney(im.loyers_potentiels)}
+                        </span>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3 text-right text-white/80">
                       {fmtMoney(im.valeur)}
@@ -285,6 +286,46 @@ export default function ProjetPage() {
                     </td>
                   </tr>
                 ))}
+                {data.immeubles.length > 1 ? (
+                  <tr className="border-t-2 border-brand-700 bg-brand-950/50 font-semibold">
+                    <td className="px-4 py-3 text-white">TOTAL</td>
+                    <td className="px-4 py-3 text-right text-white">
+                      {data.immeubles.reduce(
+                        (s, im) => s + im.nb_logements,
+                        0
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right text-white">
+                      {fmtMoney(
+                        data.immeubles.reduce(
+                          (s, im) => s + im.loyers_mensuels,
+                          0
+                        )
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right text-white">
+                      {fmtMoney(
+                        data.immeubles.reduce(
+                          (s, im) => s + (im.valeur || 0),
+                          0
+                        )
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right text-white">
+                      {fmtMoney(
+                        data.immeubles.reduce(
+                          (s, im) => s + im.hypotheque_balance,
+                          0
+                        )
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right text-emerald-400">
+                      {fmtMoney(
+                        data.immeubles.reduce((s, im) => s + im.equite, 0)
+                      )}
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
@@ -348,6 +389,11 @@ export default function ProjetPage() {
               </h2>
               <Timeline events={data.timeline} />
             </div>
+
+            {/* Hypothèques */}
+            {data.show_hypotheque ? (
+              <HypothequesCard immeubles={data.immeubles} />
+            ) : null}
           </div>
 
           {/* Colonne droite */}
@@ -390,7 +436,16 @@ export default function ProjetPage() {
                   </div>
                 ) : null}
                 <div className="flex justify-between">
-                  <dt className="text-white/60">Valeur de mes parts</dt>
+                  <dt className="text-white/60">
+                    Valeur de mes parts
+                    <span className="block text-[10px] font-normal text-white/35">
+                      équité de la compagnie ×{" "}
+                      {data.parts_pct.toLocaleString("fr-CA", {
+                        maximumFractionDigits: 1
+                      })}{" "}
+                      %
+                    </span>
+                  </dt>
                   <dd className="font-bold text-white">
                     {fmtMoney(data.valeur_parts)}
                   </dd>

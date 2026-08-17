@@ -1125,6 +1125,73 @@ async def delete_document(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+# ─────────────── Réels QuickBooks (section optimisation) ───────────────
+
+
+@router.get(
+    "/projets/{entreprise_id}/qbo-reels",
+    summary="Revenus/dépenses RÉELS (QuickBooks via le projet "
+    "d'optimisation de la compagnie) — 12 derniers mois",
+)
+async def qbo_reels(
+    entreprise_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    """Statuts possibles :
+    - aucun_projet : la compagnie n'a rien dans la section optimisation
+      (gestion d'entreprise) → « non applicable » côté UI ;
+    - sans_qbo     : projet présent mais aucune connexion QuickBooks
+      choisie dans ses réglages ;
+    - erreur       : QBO configuré mais lecture impossible (token…) ;
+    - connecte     : série mensuelle réelle {mois, revenus, depenses,
+      ecart} sur les 12 derniers mois."""
+    from datetime import date as _date, timedelta as _timedelta
+
+    from app.models.optimisation import OptimisationProjet
+
+    await _load_entreprise(db, entreprise_id)
+    projets = (
+        await db.execute(
+            select(OptimisationProjet)
+            .where(OptimisationProjet.entreprise_id == entreprise_id)
+            .order_by(
+                (OptimisationProjet.status == "actif").desc(),
+                OptimisationProjet.id.desc(),
+            )
+        )
+    ).scalars().all()
+    if not projets:
+        return {"statut": "aucun_projet"}
+    p = next((x for x in projets if x.qbo_scope), None)
+    if p is None:
+        return {
+            "statut": "sans_qbo",
+            "projet_nom": projets[0].name,
+        }
+    try:
+        from app.services.qbo_optimisation import cashflow_mensuel
+
+        start = (_date.today() - _timedelta(days=365)).replace(day=1)
+        cf = await cashflow_mensuel(
+            p.qbo_scope,
+            start.isoformat(),
+            _date.today().isoformat(),
+            hypotheque_account_id=p.qbo_hypotheque_account_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — message propre à l'UI
+        log.info("invest qbo-reels entreprise #%s: %s", entreprise_id, exc)
+        return {
+            "statut": "erreur",
+            "projet_nom": p.name,
+            "erreur": str(exc)[:300],
+        }
+    return {
+        "statut": "connecte",
+        "projet_nom": p.name,
+        "rows": (cf or {}).get("mois", []),
+        "total": (cf or {}).get("total"),
+    }
+
+
 # ─────────── Activation d'un actionnaire (depuis un projet) ───────────
 
 
