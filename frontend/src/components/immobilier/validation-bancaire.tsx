@@ -79,8 +79,30 @@ export type TxnATraiter = {
   date_txn: string;
   montant: number;
   description: string | null;
+  /** Pré-sélection IA à CONFIRMER — jamais validée automatiquement. */
+  suggestion_bail_id?: number | null;
+  suggestion_confiance?: number | null;
   candidats: CandidatBail[];
 };
+
+/** Badge « IA n % » à côté d'un sélecteur de bail pré-rempli par la
+ *  suggestion. Rien si aucune suggestion. */
+export function BadgeSuggestionIA({
+  t
+}: {
+  t: { suggestion_bail_id?: number | null; suggestion_confiance?: number | null };
+}) {
+  if (!t.suggestion_bail_id) return null;
+  const pct = Math.round((t.suggestion_confiance ?? 0) * 100);
+  return (
+    <span
+      className="badge badge-neutral"
+      title="Bail pré-sélectionné par l'IA d'après le payeur, le montant et l'historique — vérifie puis Confirmer. L'IA ne valide jamais toute seule."
+    >
+      IA{pct > 0 ? ` ${pct} %` : ""}
+    </span>
+  );
+}
 
 export type ValidationEtat = {
   active: boolean;
@@ -242,7 +264,8 @@ export function EncartValidationBancaire({
   const aTraiter = etat.a_traiter ?? [];
 
   async function confirmer(t: TxnATraiter) {
-    const bailId = choix[t.txn_id] ?? t.candidats[0]?.bail_id;
+    const bailId =
+      choix[t.txn_id] ?? t.suggestion_bail_id ?? t.candidats[0]?.bail_id;
     if (!bailId) return;
     setBusyId(t.txn_id);
     setErr(null);
@@ -366,9 +389,13 @@ export function EncartValidationBancaire({
                   </span>
                   {t.candidats.length > 0 ? (
                     <span className="ml-auto inline-flex items-center gap-1.5">
+                      <BadgeSuggestionIA t={t} />
                       <select
                         value={String(
-                          choix[t.txn_id] ?? t.candidats[0]?.bail_id ?? ""
+                          choix[t.txn_id] ??
+                            t.suggestion_bail_id ??
+                            t.candidats[0]?.bail_id ??
+                            ""
                         )}
                         onChange={(ev) =>
                           setChoix((c) => ({
@@ -430,6 +457,9 @@ export type FilTransaction = {
   payeur: string | null;
   description: string | null;
   doc_num: string | null;
+  /** Pré-sélection IA à CONFIRMER — jamais validée automatiquement. */
+  suggestion_bail_id?: number | null;
+  suggestion_confiance?: number | null;
   compte_id: number;
   compte_nom: string;
   immeuble_id: number | null;
@@ -597,7 +627,8 @@ function FilBancaireModal({
   }, [charger]);
 
   async function confirmer(t: FilTransaction) {
-    const bailId = choix[t.txn_id] ?? t.candidats[0]?.bail_id;
+    const bailId =
+      choix[t.txn_id] ?? t.suggestion_bail_id ?? t.candidats[0]?.bail_id;
     if (!bailId) return;
     setBusyId(t.txn_id);
     setErr(null);
@@ -804,8 +835,11 @@ function FilLigne({
           <span className="badge badge-amber">plusieurs baux possibles</span>
           {t.candidats.length > 0 ? (
             <span className="ml-auto inline-flex items-center gap-1.5">
+              <BadgeSuggestionIA t={t} />
               <select
-                value={String(choix ?? t.candidats[0]?.bail_id ?? "")}
+                value={String(
+                  choix ?? t.suggestion_bail_id ?? t.candidats[0]?.bail_id ?? ""
+                )}
                 onChange={(ev) => onChoix(Number(ev.target.value))}
                 className="rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
                 aria-label="Choisir le bail"

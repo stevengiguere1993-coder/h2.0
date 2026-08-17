@@ -224,6 +224,16 @@ class QboTransactionLoyer(Base):
     rapproche_par: Mapped[Optional[str]] = mapped_column(
         String(16), nullable=True
     )
+    #: SUGGESTION IA (v7) pour une transaction ambiguë/non rapprochée :
+    #: bail pré-sélectionné dans le menu, à CONFIRMER par un humain —
+    #: jamais d'auto-validation par l'IA (on parle d'argent). Colonnes
+    #: additives → ensure_critical_columns.
+    suggestion_bail_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    suggestion_confiance: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

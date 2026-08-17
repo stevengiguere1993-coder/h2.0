@@ -510,6 +510,9 @@ async def ensure_critical_columns() -> None:
         ("qbo_transactions_loyers", "payeur", "VARCHAR(255)"),
         ("qbo_transactions_loyers", "ignore_raison", "VARCHAR(64)"),
         ("qbo_transactions_loyers", "mois_couvert_fin", "DATE"),
+        # v7 — suggestion IA (pré-sélection à confirmer, jamais auto).
+        ("qbo_transactions_loyers", "suggestion_bail_id", "INTEGER"),
+        ("qbo_transactions_loyers", "suggestion_confiance", "DOUBLE PRECISION"),
     )
     for table, column, col_type in critical_columns:
         try:

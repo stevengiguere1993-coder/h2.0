@@ -34,6 +34,7 @@ v2 (retours Phil 2026-08-14) :
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List
 
@@ -1306,3 +1307,88 @@ def test_payeur_interac_tronque_et_paiement_partiel(run, db_setup):
     assert txns["D-811"].statut == "rapproche"
     assert txns["D-811"].bail_id == cao["bail_id"]
     assert txns["D-811"].mois_couvert == MOIS_COURANT
+
+
+# ── v7 : suggestions IA (pré-sélection, jamais d'auto-validation) ───────
+
+
+def test_suggestion_ia_pre_selectionne_sans_valider(run, db_setup, monkeypatch):
+    """Deux baux au même loyer, payeur inconnu de Kratos (conjoint) →
+    ambigu. L'IA SUGGÈRE un bail (stocké, exposé au fil), mais le statut
+    reste « ambigu » tant qu'un humain n'a pas confirmé. Un bail hors
+    candidats proposé par l'IA est REJETÉ (garde-fou)."""
+    import app.services.qbo_validation_ia as ia_mod
+
+    _purge(run)
+    _set_config(run, active=True)
+    seed = _seed_immeuble(
+        run,
+        name="8900 St-Hubert",
+        address="8900, Rue Saint-Hubert",
+        baux=[
+            {"loyer": 750.0, "nom": "Maritza Alejandra Perez"},
+            {"loyer": 750.0, "nom": "Mario Barette"},
+        ],
+    )
+    _map_compte(
+        run, "31", "8900 St-Hubert - Loyers à remettre", seed["immeuble_id"]
+    )
+    maritza, _mario = seed["baux"]
+
+    class FauxResultat:
+        provider = "fake"
+
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    async def faux_complete(**kwargs):
+        # L'IA choisit le bail de Maritza + propose aussi un bail
+        # inexistant (999999) qui doit être écarté par le garde-fou.
+        txn_ids = [
+            e["txn_id"]
+            for e in json.loads(
+                kwargs["prompt"].split(
+                    "## Transactions à rapprocher (avec leurs candidats)\n"
+                )[1].rsplit("\n\nRetourne", 1)[0]
+            )
+        ]
+        return FauxResultat(
+            json.dumps(
+                [
+                    {
+                        "txn_id": txn_ids[0],
+                        "bail_id": maritza["bail_id"],
+                        "confiance": 0.85,
+                    },
+                    {"txn_id": -1, "bail_id": 999999, "confiance": 0.9},
+                ]
+            )
+        )
+
+    monkeypatch.setattr(ia_mod, "is_configured", lambda: True)
+    monkeypatch.setattr(ia_mod, "complete", faux_complete)
+
+    qbo = FakeQbo(
+        gl_par_compte={
+            "31": [
+                {"date": MOIS_COURANT.isoformat(), "id": "D-970",
+                 "memo": "Virement Interac de /J TREMBLAY /",
+                 "montant": 750.0},
+            ]
+        }
+    )
+    stats = _sync(run, qbo)
+    assert stats["suggestions_ia"] == 1
+    txn = _txns(run)[0]
+    assert txn.statut == "ambigu"  # l'IA ne valide JAMAIS
+    assert txn.suggestion_bail_id == maritza["bail_id"]
+    assert float(txn.suggestion_confiance) == 0.85
+
+    # Le fil bancaire expose la suggestion pour la pré-sélection UI.
+    async def _fil():
+        async with TestSessionLocal() as s:
+            return await lister_transactions(s)
+
+    data = run(_fil())
+    ligne = data["transactions"][0]
+    assert ligne["suggestion_bail_id"] == maritza["bail_id"]
