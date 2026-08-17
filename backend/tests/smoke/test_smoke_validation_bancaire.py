@@ -1107,3 +1107,117 @@ def test_parse_gl_debit_credit_fr_ca():
     # L'instrumentation expose le format réel pour le rapport.
     assert any("Débit|" in c for c in ecartees["colonnes"])
     assert ecartees["exemple"][1] == "Dépôt"
+
+
+class FakeQboColonneMontantSupprimee(FakeQbo):
+    """Reproduit le comportement observé en prod le 2026-08-17 : QBO
+    honore la liste `columns` mais en SUPPRIME `subt_nat_amount`
+    (locale fr-CA) → réponse sans aucune colonne de montant. Le rappel
+    SANS `columns` sert le format par défaut, ici en Débit/Crédit."""
+
+    async def report(self, name: str, **params: str) -> Dict[str, Any]:
+        assert name == "GeneralLedger"
+        self.reports_demandes.append(str(params.get("account") or ""))
+        if params.get("columns"):
+            # 5 colonnes honorées, montant supprimé — ColTypes
+            # GÉNÉRIQUES comme en vrai (Date/String), pas tx_date.
+            return {
+                "Columns": {
+                    "Column": [
+                        {"ColTitle": "Date", "ColType": "Date"},
+                        {"ColTitle": "Type d'opération", "ColType": "String"},
+                        {"ColTitle": "N°", "ColType": "String"},
+                        {"ColTitle": "Nom", "ColType": "String"},
+                        {"ColTitle": "Mémo/description", "ColType": "String"},
+                    ]
+                },
+                "Rows": {
+                    "Row": [
+                        {
+                            "type": "Section",
+                            "Rows": {
+                                "Row": [
+                                    {
+                                        "type": "Data",
+                                        "ColData": [
+                                            {"value": AUJOURDHUI.isoformat()},
+                                            {"value": "Dépôt", "id": "D-950"},
+                                            {"value": ""},
+                                            {"value": ""},
+                                            {"value": "Virement Interac de /LEA GIRARD /"},
+                                        ],
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                },
+            }
+        return _gl_report_debit_credit_defaut()
+
+
+def _gl_report_debit_credit_defaut() -> Dict[str, Any]:
+    """Le MÊME dépôt, servi par le rappel sans `columns` : format par
+    défaut fr-CA avec Débit/Crédit et montant « 650,00 »."""
+    return {
+        "Columns": {
+            "Column": [
+                {"ColTitle": "Date", "ColType": "Date"},
+                {"ColTitle": "Type d'opération", "ColType": "String"},
+                {"ColTitle": "N°", "ColType": "String"},
+                {"ColTitle": "Nom", "ColType": "String"},
+                {"ColTitle": "Mémo/description", "ColType": "String"},
+                {"ColTitle": "Débit", "ColType": "Money"},
+                {"ColTitle": "Crédit", "ColType": "Money"},
+            ]
+        },
+        "Rows": {
+            "Row": [
+                {
+                    "type": "Section",
+                    "Rows": {
+                        "Row": [
+                            {
+                                "type": "Data",
+                                "ColData": [
+                                    {"value": AUJOURDHUI.isoformat()},
+                                    {"value": "Dépôt", "id": "D-950"},
+                                    {"value": ""},
+                                    {"value": ""},
+                                    {"value": "Virement Interac de /LEA GIRARD /"},
+                                    {"value": ""},
+                                    {"value": "650,00"},
+                                ],
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+    }
+
+
+def test_sync_repli_sans_columns_quand_montant_supprime(run, db_setup):
+    """La synchro détecte « 100 % montants nuls », rappelle le GL sans
+    `columns` et importe avec le format par défaut Débit/Crédit."""
+    _purge(run)
+    _set_config(run, active=True)
+    seed = _seed_immeuble(
+        run,
+        name="1647 Desautels",
+        address="1647, Rue Desautels",
+        baux=[{"loyer": 650.0, "nom": "Léa Girard"}],
+    )
+    _map_compte(
+        run, "77", "1647 Desautels - Loyers à remettre", seed["immeuble_id"]
+    )
+    qbo = FakeQboColonneMontantSupprimee()
+    stats = _sync(run, qbo)
+    # Deux appels pour le compte : l'initial (montant supprimé) + le
+    # repli sans columns.
+    assert qbo.reports_demandes == ["77", "77"]
+    assert stats["importees"] == 1
+    txn = _txns(run)[0]
+    assert float(txn.montant) == 650.0
+    assert txn.sens == "entree"
+    assert txn.payeur == "LEA GIRARD"

@@ -744,6 +744,28 @@ async def synchroniser_transactions(
             continue
         stats["comptes"] += 1
         entrees, ecartees = parse_general_ledger(report)
+        if ecartees["lues"] > 0 and ecartees["montant_nul"] == ecartees["lues"]:
+            # QBO fr-CA IGNORE `subt_nat_amount` dans la liste `columns`
+            # (constaté 2026-08-17 : les 5 autres colonnes demandées
+            # reviennent, AUCUNE colonne de montant). On redemande SANS
+            # liste → QBO sert son format par défaut (Montant ou
+            # Débit/Crédit), que le parseur lit dans les deux locales.
+            try:
+                report_defaut = await qbo.report(
+                    "GeneralLedger",
+                    start_date=debut,
+                    end_date=fin,
+                    account=str(compte.qbo_account_id),
+                )
+                entrees_d, ecartees_d = parse_general_ledger(report_defaut)
+                if (
+                    ecartees_d["lues"] > 0
+                    and ecartees_d["montant_nul"] < ecartees_d["lues"]
+                ):
+                    report = report_defaut
+                    entrees, ecartees = entrees_d, ecartees_d
+            except Exception:  # noqa: BLE001 — on garde la 1re réponse,
+                pass  # le rapport détaillé montrera son format brut.
         detail["lues"] = ecartees["lues"]
         detail["raisons"]["montant_nul"] = ecartees["montant_nul"]
         detail["raisons"]["type_non_reconnu"] = ecartees[
