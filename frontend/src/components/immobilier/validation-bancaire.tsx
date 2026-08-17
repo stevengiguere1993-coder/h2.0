@@ -68,6 +68,8 @@ export type EncaisseNonMarque = {
   mois_couvert: string;
   date_txn: string;
   montant: number;
+  /** > 1 = UN paiement multi-mois, une ligne PAR mois (pas un doublon). */
+  nb_mois_couverts?: number;
   description: string | null;
 };
 
@@ -345,6 +347,9 @@ export function EncartValidationBancaire({
                   <span className="text-white/50">
                     reçu le {e.date_txn} · mois{" "}
                     {e.mois_couvert.slice(0, 7)}
+                    {(e.nb_mois_couverts ?? 1) > 1
+                      ? ` (1 paiement couvrant ${e.nb_mois_couverts} mois — une ligne par mois)`
+                      : ""}
                   </span>
                   <span className="text-white/40">
                     → marque le mois payé sur la ligne du locataire

@@ -1163,6 +1163,9 @@ def _match_deterministe(
     paye_map: Dict[Tuple[int, date], float],
     frais_map: Dict[Tuple[int, date], float],
     couverts_map: Optional[Dict[Tuple[int, date], float]] = None,
+    paiements_dates: Optional[
+        Dict[int, List[Tuple[date, date, float]]]
+    ] = None,
 ) -> Tuple[str, Optional[int], Optional[date], Optional[date]]:
     """→ (statut, bail_id, mois_couvert, mois_couvert_fin). Règles :
 
@@ -1194,9 +1197,30 @@ def _match_deterministe(
         loyer = float(bail.loyer_mensuel or 0)
         return couverts.get((bail.id, m), 0.0) >= loyer - _TOL > 0
 
+    def _mois_du_paiement_marque(bail: Bail) -> Optional[date]:
+        """ALIGNEMENT des deux validations : si l'employé a marqué un
+        paiement du même montant à ± 5 jours de la date bancaire, le
+        mois qu'IL a désigné gagne — c'est lui qui sait quel mois le
+        locataire payait (loyer d'août reçu le 31 juillet, compte QBO
+        neuf sans historique de juin pour couvrir juillet)."""
+        meilleurs: List[Tuple[int, date]] = []
+        for ple, m, montant_p in (paiements_dates or {}).get(bail.id, []):
+            ecart = abs((ple - txn.date_txn).days)
+            if ecart <= 5 and abs(montant_p - montant) <= _TOL:
+                if not _mois_couvert_par_banque(bail, m):
+                    meilleurs.append((ecart, m))
+        if not meilleurs:
+            return None
+        meilleurs.sort()
+        return meilleurs[0][1]
+
     plausibles: List[Tuple[Bail, date, date]] = []
     for bail in baux:
         trouve = False
+        mois_marque = _mois_du_paiement_marque(bail)
+        if mois_marque is not None:
+            plausibles.append((bail, mois_marque, mois_marque))
+            continue
         for m in mois_ordre:
             if not _bail_couvre(bail, m):
                 continue
@@ -1290,6 +1314,9 @@ def _match_deterministe(
             ]
             if len(vises) == 1:
                 bail = vises[0]
+                mois_marque = _mois_du_paiement_marque(bail)
+                if mois_marque is not None:
+                    return "rapproche", bail.id, mois_marque, None
                 repli: Optional[date] = None
                 for m in mois_ordre:
                     if not _bail_couvre(bail, m) or _mois_couvert_par_banque(
@@ -1387,14 +1414,13 @@ async def rapprocher_compte(
             )
         ).scalars().all()
     )
-    if not txns:
-        return 0
     baux, logement_imm = await _baux_des_immeubles(db, immeuble_ids)
     bail_ids = [b.id for b in baux]
     locataires: Dict[int, Locataire] = {}
     aliases: List[QboAliasPayeur] = []
     paye_map: Dict[Tuple[int, date], float] = {}
     frais_map: Dict[Tuple[int, date], float] = {}
+    paiements_dates: Dict[int, List[Tuple[date, date, float]]] = {}
     if bail_ids:
         for loc in (
             await db.execute(
@@ -1429,6 +1455,60 @@ async def rapprocher_compte(
             )
         ).all():
             paye_map[(bid, m)] = float(total or 0)
+        # Paiements marqués AVEC leur date — pour ALIGNER une
+        # transaction bancaire sur le mois que l'employé a désigné
+        # (1re validation). Un compte QBO neuf n'a pas d'historique :
+        # sans cet alignement, le loyer d'août payé le 31 juillet
+        # s'imputait à juillet (libre côté banque) alors que l'employé
+        # l'avait enregistré sur août (constaté au 8900).
+        for bid, ple, m, montant_p in (
+            await db.execute(
+                select(
+                    PaiementLoyer.bail_id,
+                    PaiementLoyer.paye_le,
+                    PaiementLoyer.mois_couvert,
+                    PaiementLoyer.montant,
+                ).where(
+                    PaiementLoyer.bail_id.in_(bail_ids),
+                    PaiementLoyer.paye_le.isnot(None),
+                )
+            )
+        ).all():
+            paiements_dates.setdefault(int(bid), []).append(
+                (ple, m, float(montant_p or 0))
+            )
+
+    # Rejeu CIBLÉ : une rapprochée AUTO dont l'imputation CONTREDIT un
+    # paiement marqué par l'employé (± 5 jours, même montant, autre
+    # mois) est remise en jeu — le marquage arrive souvent APRÈS la
+    # synchro, et c'est lui qui sait quel mois le locataire payait
+    # (loyers d'août posés sur juillet avant la v10). Les autres
+    # rapprochées restent STABLES, le manuel intouchable.
+    if not forcer and bail_ids:
+        deja = {t.id for t in txns}
+        for t in (
+            await db.execute(
+                select(QboTransactionLoyer).where(
+                    QboTransactionLoyer.compte_id == compte.id,
+                    QboTransactionLoyer.statut == "rapproche",
+                    QboTransactionLoyer.rapproche_par == "auto",
+                )
+            )
+        ).scalars().all():
+            if t.id in deja or not t.bail_id:
+                continue
+            couverts_actuels = set(mois_couverts_txn(t))
+            for ple, m, montant_p in paiements_dates.get(t.bail_id, []):
+                if (
+                    abs((ple - t.date_txn).days) <= 5
+                    and abs(montant_p - float(t.montant or 0)) <= _TOL
+                    and m not in couverts_actuels
+                ):
+                    txns.append(t)
+                    break
+
+    if not txns:
+        return 0
         for bid, m, total in (
             await db.execute(
                 select(
@@ -1447,6 +1527,10 @@ async def rapprocher_compte(
 
     # Mois déjà couverts par une transaction bancaire RAPPROCHÉE (tous
     # comptes confondus) : un mois pris n'accepte plus d'imputation.
+    # ⚠ On EXCLUT les transactions du lot rejoué (forcer=True remet
+    # tout l'auto en jeu) — sinon chacune verrait son propre mois comme
+    # occupé et se bloquerait elle-même.
+    ids_rejouees = {t.id for t in txns}
     couverts_map: Dict[Tuple[int, date], float] = {}
     if bail_ids:
         for t in (
@@ -1457,6 +1541,8 @@ async def rapprocher_compte(
                 )
             )
         ).scalars().all():
+            if t.id in ids_rejouees:
+                continue
             for m in mois_couverts_txn(t):
                 couverts_map[(t.bail_id, m)] = couverts_map.get(
                     (t.bail_id, m), 0.0
@@ -1471,7 +1557,7 @@ async def rapprocher_compte(
     for txn in txns:
         statut, bail_id, mois, mois_fin = _match_deterministe(
             txn, baux, locataires, aliases, paye_map, frais_map,
-            couverts_map,
+            couverts_map, paiements_dates,
         )
         txn.statut = statut
         txn.bail_id = bail_id
@@ -1809,6 +1895,9 @@ async def etat_validation(db, mois: date) -> Dict[str, Any]:
                     "mois_couvert": m.isoformat(),
                     "date_txn": t.date_txn.isoformat(),
                     "montant": float(t.montant or 0),
+                    #: > 1 = UN paiement multi-mois → une ligne PAR mois
+                    #: à marquer (pas un doublon).
+                    "nb_mois_couverts": len(mois_couverts_txn(t)),
                     "description": t.description,
                 }
             )
