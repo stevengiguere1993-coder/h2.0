@@ -288,6 +288,7 @@ async def build_projet(
             i["hypotheque_preteur"] = None
             i["hypotheque_taux_pct"] = None
             i["hypotheque_fin_terme"] = None
+            i["hypotheques"] = []
 
     serie_rows = serie["rows"]
     if not show_depenses:
