@@ -171,9 +171,11 @@ export default function PortefeuillePage() {
               className="input min-w-0 flex-1 text-xs sm:max-w-xs"
             >
               <option value="global">
-                Vue globale — tous les investissements
+                Vue globale — toutes les compagnies du pôle
               </option>
-              <option value="me">Mes participations</option>
+              <option value="me">
+                Mes participations — mes projets activés à mon nom
+              </option>
               {investisseurs.length > 0 ? (
                 <optgroup label="Voir comme un investisseur">
                   {investisseurs.map((i) => (
@@ -221,14 +223,16 @@ export default function PortefeuillePage() {
             <TrendingUp className="mx-auto h-9 w-9 text-white/30" />
             <h2 className="mt-4 text-lg font-semibold text-white">
               {isGlobal
-                ? "Aucune participation enregistrée"
+                ? "Aucune compagnie dans le pôle"
                 : mode === "me"
-                ? "Aucune participation à votre nom"
+                ? "Aucun projet activé à votre nom"
                 : "Aucun investissement pour l'instant"}
             </h2>
             <p className="mx-auto mt-2 max-w-md text-sm text-white/60">
-              {isGlobal || isAdmin
-                ? "Ouvrez la console admin, choisissez un projet et ajoutez une participation (capital + % de parts) — tout le reste s'assemble tout seul."
+              {isGlobal
+                ? "La vue globale montre toutes les compagnies qui ont des immeubles (pôle locatif) — liez un immeuble à une compagnie et elle apparaîtra ici."
+                : mode === "me" && isAdmin
+                ? "« Mes participations » ne montre que les projets où VOUS êtes activé comme actionnaire (console admin → projet → activez-vous, puis « Visible dans son portail »). Vos compagnies restent toutes visibles dans la vue globale."
                 : "Vos projets apparaîtront ici dès qu'une participation vous sera attribuée."}
             </p>
             {isAdmin ? (
