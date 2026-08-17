@@ -442,6 +442,8 @@ type CompteLoyer = {
 type ValidationConfig = {
   active: boolean;
   alerte_jours: number;
+  avance_jours: number;
+  retard_jours: number;
   comptes: CompteLoyer[];
   immeubles: { id: number; name: string }[];
 };
@@ -491,6 +493,11 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
   const [cfg, setCfg] = useState<ValidationConfig | null>(null);
   const [active, setActive] = useState(false);
   const [jours, setJours] = useState(5);
+  // Fenêtre d'alignement transaction ↔ paiement marqué : un dépôt peut
+  // précéder le « payé le » de l'employé (loyer payé d'avance) ou le
+  // suivre (dépôt différé) — réglable selon les habitudes des payeurs.
+  const [avance, setAvance] = useState(21);
+  const [retard, setRetard] = useState(5);
   // Sélection locale par compte : immeubles cochés + case « tous » +
   // interrupteur.
   const [selections, setSelections] = useState<
@@ -506,6 +513,8 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
     setCfg(d);
     setActive(d.active);
     setJours(d.alerte_jours);
+    setAvance(d.avance_jours ?? 21);
+    setRetard(d.retard_jours ?? 5);
     const sel: Record<number, SelectionCompte> = {};
     for (const c of d.comptes) {
       // Préremplissage : le confirmé, sinon la SUGGESTION (liste
@@ -556,7 +565,12 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ active, alerte_jours: jours })
+          body: JSON.stringify({
+            active,
+            alerte_jours: jours,
+            avance_jours: avance,
+            retard_jours: retard
+          })
         }
       );
       if (r.status === 403) {
@@ -720,7 +734,7 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
                   Activer la validation bancaire
                 </span>
               </label>
-              <div className="flex items-center gap-2 text-sm text-white/60">
+              <div className="flex flex-wrap items-center gap-2 text-sm text-white/60">
                 <span>⚠ « sans trace bancaire » après</span>
                 <input
                   type="number"
@@ -731,6 +745,46 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
                   onChange={(e) =>
                     setJours(
                       Math.max(1, parseInt(e.target.value || "5", 10) || 5)
+                    )
+                  }
+                  className="w-16 rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white focus:border-accent-500 focus:outline-none disabled:opacity-60"
+                />
+                <span>jours</span>
+                <span
+                  className="ml-3"
+                  title="Un dépôt bancaire est associé au mois marqué payé par l'employé s'il PRÉCÈDE la date « payé le » d'au plus N jours — les locataires qui paient d'avance."
+                >
+                  · paiement d&apos;avance toléré
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={60}
+                  value={avance}
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    setAvance(
+                      Math.max(0, parseInt(e.target.value || "21", 10) || 0)
+                    )
+                  }
+                  className="w-16 rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white focus:border-accent-500 focus:outline-none disabled:opacity-60"
+                />
+                <span>jours</span>
+                <span
+                  className="ml-3"
+                  title="Un dépôt bancaire est associé au mois marqué payé par l'employé s'il SUIT la date « payé le » d'au plus N jours — dépôt différé à la banque."
+                >
+                  · dépôt différé toléré
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={30}
+                  value={retard}
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    setRetard(
+                      Math.max(0, parseInt(e.target.value || "5", 10) || 0)
                     )
                   }
                   className="w-16 rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white focus:border-accent-500 focus:outline-none disabled:opacity-60"

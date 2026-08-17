@@ -80,6 +80,12 @@ log = logging.getLogger(__name__)
 VALIDATION_KEY = "immo.validation_bancaire"
 #: « ⚠ Payé — sans trace bancaire » après N jours (défaut, réglable).
 DEFAUT_ALERTE_JOURS = 5
+#: Fenêtre d'ALIGNEMENT transaction ↔ paiement marqué (réglable) : un
+#: dépôt peut PRÉCÉDER la date « payé le » de l'employé jusqu'à
+#: ``avance`` jours (loyer payé d'avance — 3 semaines constatées au
+#: 4005) et la SUIVRE jusqu'à ``retard`` jours (dépôt différé).
+DEFAUT_AVANCE_JOURS = 21
+DEFAUT_RETARD_JOURS = 5
 #: Fenêtre glissante de la synchro (jours).
 FENETRE_SYNC_JOURS = 90
 #: Tolérance de comparaison des montants ($).
@@ -218,15 +224,23 @@ async def get_validation_config() -> Dict[str, Any]:
     from app.services.automation_state import get_automation_config
 
     cfg = await get_automation_config(VALIDATION_KEY)
-    try:
-        jours = int(cfg.get("alerte_jours", DEFAUT_ALERTE_JOURS))
-    except (TypeError, ValueError):
-        jours = DEFAUT_ALERTE_JOURS
-    if jours < 1:
-        jours = DEFAUT_ALERTE_JOURS
+
+    def _entier(cle: str, defaut: int, mini: int, maxi: int) -> int:
+        try:
+            v = int(cfg.get(cle, defaut))
+        except (TypeError, ValueError):
+            return defaut
+        return v if mini <= v <= maxi else defaut
+
     return {
         "active": bool(cfg.get("active", False)),
-        "alerte_jours": jours,
+        "alerte_jours": _entier("alerte_jours", DEFAUT_ALERTE_JOURS, 1, 60),
+        "avance_jours": _entier(
+            "avance_jours", DEFAUT_AVANCE_JOURS, 0, 60
+        ),
+        "retard_jours": _entier(
+            "retard_jours", DEFAUT_RETARD_JOURS, 0, 30
+        ),
     }
 
 
@@ -1172,6 +1186,22 @@ def _match_multi_mois(
     return None
 
 
+def _mois_naturel(d: date, bail: Bail) -> date:
+    """Mois dont l'ÉCHÉANCE du bail (« Ou le ___ » du bail TAL, défaut
+    le 1er) est la plus proche de la date bancaire : un dépôt de fin
+    juillet est un loyer d'AOÛT payé d'avance, pas un juillet en retard
+    — et pour un bail payable le 15, un dépôt du 12 vise l'échéance du
+    15 qui s'en vient. La dette réelle, elle, prime toujours (FIFO)."""
+    je = int(getattr(bail, "jour_echeance", None) or 1)
+    je = min(max(je, 1), 28)
+    m = d.replace(day=1)
+    ech = m.replace(day=je)
+    ech_suiv = _mois_suiv(m).replace(day=je)
+    if abs((d - ech_suiv).days) < abs((d - ech).days):
+        return _mois_suiv(m)
+    return m
+
+
 def _match_deterministe(
     txn: QboTransactionLoyer,
     baux: List[Bail],
@@ -1183,6 +1213,8 @@ def _match_deterministe(
     paiements_dates: Optional[
         Dict[int, List[Tuple[date, date, float]]]
     ] = None,
+    avance_jours: int = DEFAUT_AVANCE_JOURS,
+    retard_jours: int = DEFAUT_RETARD_JOURS,
 ) -> Tuple[str, Optional[int], Optional[date], Optional[date]]:
     """→ (statut, bail_id, mois_couvert, mois_couvert_fin). Règles :
 
@@ -1200,8 +1232,6 @@ def _match_deterministe(
        moins un candidat.
     3. Un seul bail candidat → rapproché AUTO ; plusieurs → « ambigu »
        (pas de pronostic) ; aucun → « non rapproché »."""
-    m0 = txn.date_txn.replace(day=1)
-    mois_ordre = [m0, _mois_prec(m0), _mois_suiv(m0)]
     montant = float(txn.montant or 0)
     couverts = couverts_map or {}
 
@@ -1214,25 +1244,66 @@ def _match_deterministe(
         loyer = float(bail.loyer_mensuel or 0)
         return couverts.get((bail.id, m), 0.0) >= loyer - _TOL > 0
 
+    def _du_restant_bail(bail: Bail, m: date) -> float:
+        loyer = float(bail.loyer_mensuel or 0)
+        du = loyer + frais_map.get((bail.id, m), 0.0)
+        return round(du - paye_map.get((bail.id, m), 0.0), 2)
+
+    def _dette_anterieure(bail: Bail, avant: date) -> bool:
+        """Reste-t-il un VRAI dû (mois échu ni marqué payé ni couvert
+        par la banque) avant ``avant`` ? Le solde décide (retour Phil) :
+        « paie le 8 avec 4 mois de retard » → l'argent va à la dette,
+        jamais au mois courant/suivant."""
+        m = avant
+        for _ in range(_MULTI_MOIS_FENETRE):
+            m = _mois_prec(m)
+            if not _bail_couvre(bail, m):
+                return False
+            if (
+                _du_restant_bail(bail, m) > _TOL
+                and not _mois_couvert_par_banque(bail, m)
+            ):
+                return True
+        return False
+
     def _mois_du_paiement_marque(bail: Bail) -> Optional[date]:
         """ALIGNEMENT des deux validations : si l'employé a marqué un
-        paiement du même montant à ± 5 jours de la date bancaire, le
-        mois qu'IL a désigné gagne — c'est lui qui sait quel mois le
-        locataire payait (loyer d'août reçu le 31 juillet, compte QBO
-        neuf sans historique de juin pour couvrir juillet)."""
-        meilleurs: List[Tuple[int, date]] = []
+        paiement du même montant dont la date colle à la transaction
+        (le dépôt peut précéder « payé le » de ``avance_jours`` — loyer
+        payé d'avance — ou le suivre de ``retard_jours``), le mois
+        qu'IL a désigné gagne. Plusieurs marquages compatibles → le
+        plus RÉCENT (le flux courant passe par la banque ; les vieux
+        mois se sont réglés avant l'arrivée du compte). Jamais quand il
+        reste une dette réelle antérieure — elle prime (FIFO)."""
+        candidats: List[date] = []
         for ple, m, montant_p in (paiements_dates or {}).get(bail.id, []):
-            ecart = abs((ple - txn.date_txn).days)
-            if ecart <= 5 and abs(montant_p - montant) <= _TOL:
-                if not _mois_couvert_par_banque(bail, m):
-                    meilleurs.append((ecart, m))
-        if not meilleurs:
+            delta = (ple - txn.date_txn).days
+            if (
+                -retard_jours <= delta <= avance_jours
+                and abs(montant_p - montant) <= _TOL
+                and not _mois_couvert_par_banque(bail, m)
+            ):
+                candidats.append(m)
+        if not candidats:
             return None
-        meilleurs.sort()
-        return meilleurs[0][1]
+        mois = max(candidats)
+        if _dette_anterieure(bail, mois):
+            return None
+        return mois
 
     plausibles: List[Tuple[Bail, date, date]] = []
     for bail in baux:
+        m0b = _mois_naturel(txn.date_txn, bail)
+        # LE SOLDE DÉCIDE : la dette réelle d'un mois antérieur passe
+        # en tête (FIFO) ; sinon l'ordre naturel — « solde à 0, paie
+        # tôt » = avance sur le mois qui s'en vient, jamais l'ancien.
+        base = [m0b, _mois_prec(m0b), _mois_suiv(m0b)]
+        dettes = [
+            m
+            for m in base
+            if m < m0b and _du_restant_bail(bail, m) > _TOL
+        ]
+        mois_ordre = dettes + [m for m in base if m not in dettes]
         trouve = False
         mois_marque = _mois_du_paiement_marque(bail)
         if mois_marque is not None:
@@ -1254,7 +1325,7 @@ def _match_deterministe(
             # dette restante (loyer en retard) — jamais sur un simple
             # « montant == loyer », sinon un paiement d'avance glisse
             # vers l'arrière au lieu du mois suivant.
-            est_prec = m < m0
+            est_prec = m < m0b
             if (
                 (not est_prec and abs(montant - loyer) <= _TOL)
                 or (not est_prec and abs(montant - du_mois) <= _TOL)
@@ -1265,7 +1336,7 @@ def _match_deterministe(
                 break  # préférence de mois : le premier plausible suffit
         if not trouve:
             multi = _match_multi_mois(
-                bail, m0, montant, paye_map, frais_map, couverts
+                bail, m0b, montant, paye_map, frais_map, couverts
             )
             if multi is not None:
                 plausibles.append((bail, multi[0], multi[1]))
@@ -1334,8 +1405,16 @@ def _match_deterministe(
                 mois_marque = _mois_du_paiement_marque(bail)
                 if mois_marque is not None:
                     return "rapproche", bail.id, mois_marque, None
+                m0b = _mois_naturel(txn.date_txn, bail)
+                base = [m0b, _mois_prec(m0b), _mois_suiv(m0b)]
+                dettes = [
+                    m
+                    for m in base
+                    if m < m0b and _du_restant_bail(bail, m) > _TOL
+                ]
+                ordre_bail = dettes + [m for m in base if m not in dettes]
                 repli: Optional[date] = None
-                for m in mois_ordre:
+                for m in ordre_bail:
                     if not _bail_couvre(bail, m) or _mois_couvert_par_banque(
                         bail, m
                     ):
@@ -1494,10 +1573,32 @@ async def rapprocher_compte(
             paiements_dates.setdefault(int(bid), []).append(
                 (ple, m, float(montant_p or 0))
             )
+        # Frais ponctuels par (bail, mois) — « montant == loyer +
+        # frais » à la synchro. (Rechargé ICI : un remaniement l'avait
+        # laissé derrière un return, frais_map restait vide.)
+        for bid, m, total in (
+            await db.execute(
+                select(
+                    FraisLocatif.bail_id,
+                    FraisLocatif.mois_couvert,
+                    func.sum(FraisLocatif.montant),
+                )
+                .where(FraisLocatif.bail_id.in_(bail_ids))
+                .group_by(FraisLocatif.bail_id, FraisLocatif.mois_couvert)
+            )
+        ).all():
+            frais_map[(bid, m)] = float(total or 0)
+
+    # Fenêtre d'alignement (réglable dans Paramètres → Gestion
+    # locative) : avance = dépôt avant le « payé le » de l'employé,
+    # retard = dépôt différé après.
+    cfg = await get_validation_config()
+    avance_jours = int(cfg.get("avance_jours", DEFAUT_AVANCE_JOURS))
+    retard_jours = int(cfg.get("retard_jours", DEFAUT_RETARD_JOURS))
 
     # Rejeu CIBLÉ : une rapprochée AUTO dont l'imputation CONTREDIT un
-    # paiement marqué par l'employé (± 5 jours, même montant, autre
-    # mois) est remise en jeu — le marquage arrive souvent APRÈS la
+    # paiement marqué par l'employé (fenêtre avance/retard, même
+    # montant, mois PLUS RÉCENT) est remise en jeu — le marquage arrive souvent APRÈS la
     # synchro, et c'est lui qui sait quel mois le locataire payait
     # (loyers d'août posés sur juillet avant la v10). Les autres
     # rapprochées restent STABLES, le manuel intouchable.
@@ -1516,28 +1617,24 @@ async def rapprocher_compte(
                 continue
             couverts_actuels = set(mois_couverts_txn(t))
             for ple, m, montant_p in paiements_dates.get(t.bail_id, []):
+                delta = (ple - t.date_txn).days
                 if (
-                    abs((ple - t.date_txn).days) <= 5
+                    -retard_jours <= delta <= avance_jours
                     and abs(montant_p - float(t.montant or 0)) <= _TOL
                     and m not in couverts_actuels
+                    # Seulement vers un mois PLUS RÉCENT : le re-match
+                    # préfère le plus récent — rejouer vers l'arrière
+                    # redonnerait le même résultat à chaque synchro.
+                    and (
+                        not couverts_actuels
+                        or m > max(couverts_actuels)
+                    )
                 ):
                     txns.append(t)
                     break
 
     if not txns:
         return 0
-        for bid, m, total in (
-            await db.execute(
-                select(
-                    FraisLocatif.bail_id,
-                    FraisLocatif.mois_couvert,
-                    func.sum(FraisLocatif.montant),
-                )
-                .where(FraisLocatif.bail_id.in_(bail_ids))
-                .group_by(FraisLocatif.bail_id, FraisLocatif.mois_couvert)
-            )
-        ).all():
-            frais_map[(bid, m)] = float(total or 0)
 
     baux_by_id = {b.id: b for b in baux}
     immeuble_defaut = immeuble_ids[0] if len(immeuble_ids) == 1 else None
@@ -1575,6 +1672,7 @@ async def rapprocher_compte(
         statut, bail_id, mois, mois_fin = _match_deterministe(
             txn, baux, locataires, aliases, paye_map, frais_map,
             couverts_map, paiements_dates,
+            avance_jours=avance_jours, retard_jours=retard_jours,
         )
         txn.statut = statut
         txn.bail_id = bail_id

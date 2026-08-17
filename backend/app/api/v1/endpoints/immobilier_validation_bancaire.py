@@ -37,6 +37,8 @@ from app.models.qbo_loyers import (
 )
 from app.services.qbo_validation_loyers import (
     DEFAUT_ALERTE_JOURS,
+    DEFAUT_AVANCE_JOURS,
+    DEFAUT_RETARD_JOURS,
     VALIDATION_KEY,
     confirmer_transaction,
     decouvrir_comptes,
@@ -119,6 +121,8 @@ class ImmeubleOption(BaseModel):
 class ConfigRead(BaseModel):
     active: bool
     alerte_jours: int
+    avance_jours: int
+    retard_jours: int
     comptes: List[CompteRead]
     #: Immeubles proposables (actifs, hors gestion externe).
     immeubles: List[ImmeubleOption]
@@ -129,6 +133,20 @@ class ConfigWrite(BaseModel):
     alerte_jours: int = Field(
         default=DEFAUT_ALERTE_JOURS, ge=1, le=60,
         description="⚠ « sans trace bancaire » après N jours.",
+    )
+    avance_jours: int = Field(
+        default=DEFAUT_AVANCE_JOURS, ge=0, le=60,
+        description=(
+            "Un dépôt peut PRÉCÉDER la date « payé le » de l'employé "
+            "de N jours (loyer payé d'avance) et rester aligné."
+        ),
+    )
+    retard_jours: int = Field(
+        default=DEFAUT_RETARD_JOURS, ge=0, le=30,
+        description=(
+            "Un dépôt peut SUIVRE la date « payé le » de N jours "
+            "(dépôt différé) et rester aligné."
+        ),
     )
 
 
@@ -250,6 +268,8 @@ async def _config_read(db) -> ConfigRead:
     return ConfigRead(
         active=cfg["active"],
         alerte_jours=cfg["alerte_jours"],
+        avance_jours=cfg["avance_jours"],
+        retard_jours=cfg["retard_jours"],
         comptes=reads,
         immeubles=[ImmeubleOption(id=i.id, name=i.name) for i in imms],
     )
@@ -270,13 +290,20 @@ async def put_config(
     await set_automation_config(
         db,
         VALIDATION_KEY,
-        {"active": payload.active, "alerte_jours": payload.alerte_jours},
+        {
+            "active": payload.active,
+            "alerte_jours": payload.alerte_jours,
+            "avance_jours": payload.avance_jours,
+            "retard_jours": payload.retard_jours,
+        },
         user_id=user.id,
     )
     await db.commit()
     log.info(
-        "Validation bancaire loyers : active=%s alerte_jours=%s par %s",
-        payload.active, payload.alerte_jours, user.email,
+        "Validation bancaire loyers : active=%s alerte_jours=%s "
+        "avance=%s retard=%s par %s",
+        payload.active, payload.alerte_jours, payload.avance_jours,
+        payload.retard_jours, user.email,
     )
     return await _config_read(db)
 
