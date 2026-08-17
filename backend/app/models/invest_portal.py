@@ -155,6 +155,18 @@ class InvestProjetProfil(Base, TimestampUpdateMixin):
         Numeric(12, 2), nullable=True
     )
 
+    #: Dernière synchronisation QuickBooks (avances d'actionnaires) :
+    #: horodatage + résumé JSON {statut, projet_nom, avances_total,
+    #: apparies, sans_compte, non_apparies, erreur?} — affiché dans la
+    #: console pour que l'état de la sync soit toujours visible.
+    #: Colonnes additives.
+    qbo_sync_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    qbo_sync_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+
     # ── Interrupteurs de transparence (défauts = transparent) ──
     show_depenses: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
