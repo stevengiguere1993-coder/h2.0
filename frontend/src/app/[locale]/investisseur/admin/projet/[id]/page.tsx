@@ -292,6 +292,21 @@ export default function AdminProjetPage() {
               `${a.investisseur} (${a.nb_flux} flux)`
           )
           .join(", ");
+        const sansCompte = (body.sans_compte || [])
+          .map(
+            (s: {
+              compte: string;
+              solde: number;
+              partenaire: string;
+            }) =>
+              `${Math.round(s.solde).toLocaleString("fr-CA")} $ dans « ${
+                s.compte
+              } » appartiennent à ${s.partenaire}, qui n'a pas encore ` +
+              "de compte investisseur — ajoutez son courriel dans la " +
+              "fiche entreprise, « Créer le compte & activer », puis " +
+              "resynchronisez"
+          )
+          .join(" · ");
         const rest =
           (body.non_apparies || []).length > 0
             ? ` Comptes non appariés : ${body.non_apparies.join(", ")} — ` +
@@ -302,6 +317,7 @@ export default function AdminProjetPage() {
           `Synchronisé depuis « ${body.projet_nom} » : avances totales ` +
             `${Math.round(body.avances_total).toLocaleString("fr-CA")} $` +
             (ap ? ` · flux mis à jour : ${ap}.` : ".") +
+            (sansCompte ? ` ⚠ ${sansCompte}.` : "") +
             rest
         );
       }

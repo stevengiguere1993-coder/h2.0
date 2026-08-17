@@ -80,6 +80,35 @@ def _norm_nom(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", s).strip()
 
 
+#: Mots génériques ignorés dans l'appariement par nom — ce qui reste
+#: doit identifier l'actionnaire (« Forget-Léon immobilier inc. » →
+#: {forget, leon}).
+_STOPWORDS = {
+    "inc", "ltee", "llc", "cie", "co", "les", "des", "de", "du", "la",
+    "le", "et", "au", "aux", "avance", "avances", "actionnaire",
+    "actionnaires", "effets", "payer", "immobilier", "immobiliers",
+    "immobiliere", "investissement", "investissements", "gestion",
+    "groupe", "services", "service", "compagnie", "entreprise",
+    "entreprises", "holding", "holdings", "capital",
+}
+
+
+def _tokens(s: str) -> set[str]:
+    """Jetons identifiants d'un nom (sans mots génériques). Ordre des
+    mots indifférent : « Léon-Forget » ≈ « Forget-Léon immobilier »."""
+    toks = {t for t in _norm_nom(s).split() if len(t) >= 3}
+    identifiants = toks - _STOPWORDS
+    return identifiants or toks
+
+
+def _match(candidat_noms: set[frozenset], compte_tokens: set[str]) -> bool:
+    """Vrai si UN des jeux de jetons du candidat est inclus dans les
+    jetons du compte QBO."""
+    return any(
+        noms and noms <= compte_tokens for noms in candidat_noms
+    )
+
+
 async def sync_entreprise(db: AsyncSession, entreprise_id: int) -> dict:
     """Synchronise UNE compagnie. Retourne un dict avec ``statut`` :
     aucun_projet | sans_qbo | erreur | ok (+ apparies / non_apparies).
@@ -118,7 +147,8 @@ async def sync_entreprise(db: AsyncSession, entreprise_id: int) -> dict:
         await db.flush()
     profil.avances_actionnaires = round(total, 2)
 
-    # 2. Appariement compte ↔ investisseur par nom.
+    # 2. Appariement compte ↔ investisseur par JETONS de nom (ordre des
+    # mots indifférent, mots génériques ignorés).
     directory = await partner_directory(db, entreprise_id)
     parts = (
         await db.execute(
@@ -127,30 +157,67 @@ async def sync_entreprise(db: AsyncSession, entreprise_id: int) -> dict:
             .order_by(InvestParticipation.id)
         )
     ).scalars().all()
-    candidats: list[tuple[InvestParticipation, set[str]]] = []
+    candidats: list[tuple[InvestParticipation, set[frozenset]]] = []
     for part in parts:
-        noms: set[str] = set()
+        noms: set[frozenset] = set()
         dirrow = directory["by_user"].get(part.user_id)
         if dirrow:
-            noms.add(_norm_nom(dirrow["name"]))
+            noms.add(frozenset(_tokens(dirrow["name"])))
         u = await db.get(User, part.user_id)
         if u:
-            noms.add(_norm_nom(f"{u.first_name or ''} {u.last_name or ''}"))
+            noms.add(
+                frozenset(
+                    _tokens(f"{u.first_name or ''} {u.last_name or ''}")
+                )
+            )
             if u.last_name and len(u.last_name) > 3:
-                noms.add(_norm_nom(u.last_name))
-        candidats.append((part, {n for n in noms if len(n) > 3}))
+                noms.add(frozenset(_tokens(u.last_name)))
+        candidats.append((part, {n for n in noms if n}))
+
+    # Actionnaires de la fiche SANS participation (pas de compte
+    # activé) — pour expliquer où dort l'argent non synchronisé.
+    part_user_ids = {p.user_id for p in parts}
+    sans_participation: list[tuple[str, set[frozenset]]] = []
+    for row in directory["rows"]:
+        if row["user_id"] in part_user_ids and row["user_id"] is not None:
+            continue
+        toks = frozenset(_tokens(row["name"]))
+        if toks:
+            sans_participation.append((row["name"], {toks}))
 
     apparies: list[dict] = []
     non_apparies: list[str] = []
+    sans_compte: list[dict] = []
     for compte in comptes:
-        nom_compte = _norm_nom(str(compte.get("nom") or ""))
+        compte_tokens = _tokens(str(compte.get("nom") or ""))
+        mois_rows_c = compte.get("mois") or []
+        inactif = abs(float(compte.get("solde") or 0)) < 0.005 and all(
+            abs(float(r.get("variation") or 0)) < 0.005
+            for r in mois_rows_c
+        )
         matches = [
             part
             for part, noms in candidats
-            if any(n in nom_compte or nom_compte in n for n in noms)
+            if _match(noms, compte_tokens)
         ]
         if len(matches) != 1:
-            non_apparies.append(str(compte.get("nom") or "?"))
+            if inactif:
+                continue  # compte à zéro sans mouvement — pas de bruit
+            proprietaires = [
+                nom
+                for nom, noms in sans_participation
+                if _match(noms, compte_tokens)
+            ]
+            if len(proprietaires) == 1:
+                sans_compte.append(
+                    {
+                        "compte": compte.get("nom"),
+                        "solde": compte.get("solde"),
+                        "partenaire": proprietaires[0],
+                    }
+                )
+            else:
+                non_apparies.append(str(compte.get("nom") or "?"))
             continue
         part = matches[0]
 
@@ -233,6 +300,9 @@ async def sync_entreprise(db: AsyncSession, entreprise_id: int) -> dict:
         "projet_nom": p.name,
         "avances_total": round(total, 2),
         "apparies": apparies,
+        # Compte QBO reconnu comme appartenant à un actionnaire de la
+        # fiche qui n'a PAS encore de compte investisseur activé.
+        "sans_compte": sans_compte,
         "non_apparies": non_apparies,
     }
 
