@@ -116,6 +116,29 @@ async def _run_startup_tasks() -> None:
             "backfill dossiers unites vacantes failed: %s", exc
         )
 
+    # Backfill 2026-08-17 : baux placeholder PlexFlow « terminés » par
+    # erreur à l'import du 12 août alors que le locataire est en place
+    # (paie encore, aucun successeur) — réactivés. Best-effort,
+    # idempotent (voir reactiver_baux_termines_a_tort).
+    try:
+        from app.db.session import AsyncSessionLocal as _ReactSession
+        from app.services.locatif_depart import (
+            reactiver_baux_termines_a_tort,
+        )
+
+        async with _ReactSession() as session:
+            n = await reactiver_baux_termines_a_tort(session)
+            if n:
+                await session.commit()
+                logger.info(
+                    "Startup backfill: %d bail (baux) réactivé(s) — "
+                    "terminés par erreur à l'import", n,
+                )
+    except Exception as exc:
+        logger.warning(
+            "backfill reactivation baux termines failed: %s", exc
+        )
+
     # Tables Feuille de temps (Gestion d'entreprise) — transaction isolée.
     try:
         await ensure_timesheet_tables()
