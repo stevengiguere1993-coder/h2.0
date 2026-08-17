@@ -194,6 +194,9 @@ class SyncResult(BaseModel):
     #: Suggestions IA posées sur le reliquat ambigu/non rapproché
     #: (pré-sélection à CONFIRMER — jamais d'auto-validation).
     suggestions_ia: int = 0
+    #: Pourquoi zéro suggestion, le cas échéant (IA non configurée,
+    #: erreur fournisseur, réponse illisible…) — jamais de zéro muet.
+    suggestions_ia_info: Optional[str] = None
     details: List[SyncCompteDetail] = []
     comptes_ignores: List[SyncCompteIgnore] = []
 

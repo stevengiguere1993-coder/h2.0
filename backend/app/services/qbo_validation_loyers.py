@@ -959,14 +959,18 @@ async def synchroniser_transactions(
 
     # Suggestions IA (v7) sur le reliquat ambigu/non rapproché — l'IA
     # PRÉ-SÉLECTIONNE, l'humain confirme. Jamais bloquant : sans clé IA
-    # ou en cas d'erreur, zéro suggestion et la synchro reste valide.
+    # ou en cas d'erreur, zéro suggestion et la synchro reste valide —
+    # mais le POURQUOI du zéro est toujours rapporté (v8).
     try:
         from app.services.qbo_validation_ia import suggerer_ia
 
-        stats["suggestions_ia"] = await suggerer_ia(db)
+        stats["suggestions_ia"], stats["suggestions_ia_info"] = (
+            await suggerer_ia(db)
+        )
     except Exception as exc:  # noqa: BLE001
         log.warning("Suggestions IA non posées : %s", exc)
         stats["suggestions_ia"] = 0
+        stats["suggestions_ia_info"] = f"erreur : {str(exc)[:180]}"
     return stats
 
 
@@ -1044,9 +1048,15 @@ def _nom_correspond(desc: str, nom_locataire: str) -> bool:
     repondus = [
         t for t in desc_mots if any(m.startswith(t) for m in mots)
     ]
-    if len(repondus) != len(desc_mots):
-        return False
-    return len(repondus) >= 2 or len(repondus[0]) >= 6
+    if len(repondus) == len(desc_mots) and (
+        len(repondus) >= 2 or len(repondus[0]) >= 6
+    ):
+        return True
+    # Faute de frappe bancaire (« MARIO BARETTE » pour Mario Barrette,
+    # constaté en prod) : similarité globale très élevée.
+    return (
+        SequenceMatcher(None, " ".join(desc_mots), nom).ratio() >= 0.86
+    )
 
 
 #: Fenêtre de rattrapage du rapprochement MULTI-MOIS (mois échus
@@ -1199,12 +1209,14 @@ def _match_deterministe(
             fin if fin != debut else None,
         )
     if not baux_distincts:
-        # PAIEMENT PARTIEL (constaté en prod : 200 $ sur un loyer de
-        # 425 $) : aucun montant plausible, mais le payeur désigne
-        # EXACTEMENT UN locataire → rapproché au premier mois (date,
-        # puis précédent, puis suivant) où il reste un dû que le
-        # montant ne dépasse pas. Déterministe : un seul nom qui
-        # colle, jamais de choix entre deux baux.
+        # MONTANT ATYPIQUE mais payeur qui désigne EXACTEMENT UN
+        # locataire (constaté en prod : 200 $ PARTIEL sur un loyer de
+        # 425 $, et 850 $ TROP-payé sur un loyer de 600 $ — « MEHREZ
+        # DHOUIB » refusé à tort par le plafond du dû). Le nom identifie
+        # la personne : on rapproche au premier mois (date, puis
+        # précédent, puis suivant) où il reste un dû, sinon au mois de
+        # la date. Déterministe : un seul nom qui colle, jamais de
+        # choix entre deux baux.
         if desc and montant > _TOL:
             vises = [
                 b
@@ -1217,17 +1229,22 @@ def _match_deterministe(
             ]
             if len(vises) == 1:
                 bail = vises[0]
+                repli: Optional[date] = None
                 for m in mois_ordre:
                     if not _bail_couvre(bail, m):
                         continue
+                    if repli is None:
+                        repli = m
                     du_restant = round(
                         float(bail.loyer_mensuel or 0)
                         + frais_map.get((bail.id, m), 0.0)
                         - paye_map.get((bail.id, m), 0.0),
                         2,
                     )
-                    if du_restant > _TOL and montant <= du_restant + _TOL:
+                    if du_restant > _TOL:
                         return "rapproche", bail.id, m, None
+                if repli is not None:
+                    return "rapproche", bail.id, repli, None
         return "non_rapproche", None, None, None
     return "ambigu", None, None, None
 
