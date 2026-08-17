@@ -44,10 +44,11 @@ import { authedFetch } from "@/lib/auth";
 
 export type ValidationBail = {
   bail_id: number;
-  statut: "valide" | "sans_trace";
+  statut: "valide" | "sans_trace" | "verifie_manuel";
   date_txn?: string;
   montant?: number;
   paye_le?: string;
+  verifie_par?: string | null;
 };
 
 export type CandidatBail = {
@@ -124,13 +125,53 @@ function fmtMontant(n: number): string {
 
 /** Pastille discrète à côté de l'état existant d'une ligne. Rien si le
  *  bail n'a pas de validation (feature inactive, immeuble non mappé,
- *  paiement récent encore sans trace…). */
+ *  paiement récent encore sans trace…). Avec ``bailId``/``mois``/
+ *  ``onChange``, la pastille ⚠ devient CLIQUABLE : un clic pose un
+ *  « vérifié manuellement » pour CE bail-mois (persisté) — la pastille
+ *  s'éteint et n'importune plus, rien ne s'accumule de mois en mois.
+ *  Recliquer la pastille grise annule la vérification. */
 export function PastilleValidationBancaire({
-  v
+  v,
+  bailId,
+  mois,
+  onChange
 }: {
   v: ValidationBail | undefined;
+  bailId?: number;
+  /** 1er du mois affiché, ISO (« 2026-08-01 »). */
+  mois?: string;
+  onChange?: () => void;
 }) {
+  const [busy, setBusy] = useState(false);
   if (!v) return null;
+
+  const cliquable = bailId != null && !!mois && !!onChange;
+
+  async function poserVerif(retirer: boolean) {
+    if (!cliquable || busy) return;
+    const question = retirer
+      ? "Annuler le « vérifié manuellement » de ce mois ? La pastille ⚠ reviendra."
+      : "Confirmer que ce mois est correct malgré l'absence de trace bancaire ? La pastille ⚠ s'éteindra pour ce locataire-mois.";
+    if (!window.confirm(question)) return;
+    setBusy(true);
+    try {
+      const r = await authedFetch(
+        retirer
+          ? `/api/v1/immobilier/validation-bancaire/verifs?bail_id=${bailId}&mois=${mois}`
+          : "/api/v1/immobilier/validation-bancaire/verifs",
+        retirer
+          ? { method: "DELETE" }
+          : {
+              method: "POST",
+              body: JSON.stringify({ bail_id: bailId, mois })
+            }
+      );
+      if (r.ok) onChange?.();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (v.statut === "valide") {
     return (
       <span
@@ -143,15 +184,37 @@ export function PastilleValidationBancaire({
       </span>
     );
   }
+  if (v.statut === "verifie_manuel") {
+    return (
+      <button
+        type="button"
+        disabled={!cliquable || busy}
+        onClick={() => void poserVerif(true)}
+        className="badge badge-neutral"
+        title={`Vérifié manuellement${
+          v.verifie_par ? ` par ${v.verifie_par}` : ""
+        } — aucune trace bancaire, mais un humain a confirmé que c'est correct. Clique pour annuler.`}
+      >
+        <CheckCheck className="h-3 w-3" /> Vérifié à la main
+      </button>
+    );
+  }
   return (
-    <span
+    <button
+      type="button"
+      disabled={!cliquable || busy}
+      onClick={() => void poserVerif(false)}
       className="badge badge-amber"
       title={`Marqué payé le ${
         v.paye_le || "?"
-      } mais aucune transaction bancaire rapprochée dans QuickBooks — à vérifier avec l'adjointe.`}
+      } mais aucune transaction bancaire rapprochée dans QuickBooks — à vérifier avec l'adjointe.${
+        cliquable
+          ? " Clique pour marquer « vérifié manuellement » : la pastille s'éteint pour ce mois."
+          : ""
+      }`}
     >
       <AlertTriangle className="h-3 w-3" /> Payé — sans trace bancaire
-    </span>
+    </button>
   );
 }
 

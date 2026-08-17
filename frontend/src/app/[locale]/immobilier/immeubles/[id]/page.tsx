@@ -3214,6 +3214,9 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                       <div className="mt-0.5">
                         <PastilleValidationBancaire
                           v={valMap.get(r.bail_id)}
+                          bailId={r.bail_id}
+                          mois={`${mois}-01`}
+                          onChange={() => void load()}
                         />
                       </div>
                     ) : null}

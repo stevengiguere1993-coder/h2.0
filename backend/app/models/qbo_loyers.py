@@ -261,3 +261,32 @@ class QboAliasPayeur(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class QboVerifManuelle(Base):
+    """« Vérifié manuellement » : un humain confirme qu'un mois marqué
+    payé SANS trace bancaire est correct (payé comptant, publication
+    tardive de l'adjointe, cas connu…). Éteint la pastille ⚠ pour CE
+    bail-mois précis — chaque mois se règle une fois et n'importune
+    plus, le suivi ne s'accumule pas de mois en mois (retour Phil
+    2026-08-17). Réversible (suppression = la pastille ⚠ revient)."""
+
+    __tablename__ = "qbo_verifs_manuelles"
+    __table_args__ = (
+        UniqueConstraint("bail_id", "mois", name="uq_qbo_verif_manuelle"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    bail_id: Mapped[int] = mapped_column(
+        ForeignKey("imm_baux.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    #: 1er jour du mois vérifié.
+    mois: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    #: Courriel de la personne qui a vérifié (affiché au survol).
+    verifie_par: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

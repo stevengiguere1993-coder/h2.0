@@ -1221,3 +1221,88 @@ def test_sync_repli_sans_columns_quand_montant_supprime(run, db_setup):
     assert float(txn.montant) == 650.0
     assert txn.sens == "entree"
     assert txn.payeur == "LEA GIRARD"
+
+
+# ── v6 : dédup fiducie/sous-comptes, préfixe Interac, partiels ──────────
+
+
+def test_dedup_fiducie_parent_compte_specifique_gagne(run, db_setup):
+    """La fiducie est le compte PARENT : son GL inclut les écritures des
+    sous-comptes → la même écriture arrivait DEUX fois. La dédup garde
+    la ligne du compte SPÉCIFIQUE (l'immeuble est connu) et la fiducie
+    ne réimporte pas."""
+    _purge(run)
+    _set_config(run, active=True)
+    seed = _seed_immeuble(
+        run,
+        name="8900 St-Hubert",
+        address="8900, Rue Saint-Hubert",
+        baux=[{"loyer": 650.0, "nom": "John-Munster Dupont"}],
+    )
+    _map_compte(
+        run, "22", "8900 St-Hubert - Loyers à remettre", seed["immeuble_id"]
+    )
+    _map_compte(run, "18", "Fonds en Fiducie", [], tous=True)
+    ecriture = {
+        "date": MOIS_COURANT.isoformat(),
+        "id": "D-800",
+        "memo": "Virement Interac de /JOHN-MUNSTER D /",
+        "montant": 650.0,
+    }
+    # Le parent sert la MÊME écriture que le sous-compte.
+    qbo = FakeQbo(gl_par_compte={"22": [ecriture], "18": [ecriture]})
+    stats = _sync(run, qbo)
+    assert stats["importees"] == 1
+    txns = _txns(run)
+    assert len(txns) == 1
+    assert txns[0].qbo_account_id == "22"  # compte spécifique
+    assert txns[0].statut == "rapproche"
+    # Resynchro : toujours une seule ligne, zéro doublon fusionné.
+    stats2 = _sync(run, qbo)
+    assert stats2["importees"] == 0
+    assert len(_txns(run)) == 1
+
+
+def test_payeur_interac_tronque_et_paiement_partiel(run, db_setup):
+    """Payeurs Interac TRONQUÉS (~14 caractères, constaté en prod) :
+    « FRANCOIS PAQUE » désigne François Paquette par PRÉFIXE — ça
+    départage deux baux au même loyer. Et un paiement PARTIEL (200 $
+    sur 425 $) se rapproche quand le payeur désigne un seul bail."""
+    _purge(run)
+    _set_config(run, active=True)
+    seed = _seed_immeuble(
+        run,
+        name="44 Kenny-Sud",
+        address="44, Rue Kennedy Sud",
+        baux=[
+            {"loyer": 500.0, "nom": "François Paquette"},
+            {"loyer": 500.0, "nom": "Rodolphe Tallard"},
+            {"loyer": 425.0, "nom": "Xiao Yu Cao"},
+        ],
+    )
+    _map_compte(
+        run, "26", "44 Kenny-Sud - Loyers à remettre", seed["immeuble_id"]
+    )
+    qbo = FakeQbo(
+        gl_par_compte={
+            "26": [
+                # Deux baux à 500 $ — le préfixe tronqué départage.
+                {"date": MOIS_COURANT.isoformat(), "id": "D-810",
+                 "memo": "Virement Interac de /FRANCOIS PAQUE /",
+                 "montant": 500.0},
+                # Partiel : 200 $ sur un loyer de 425 $, payeur unique.
+                {"date": MOIS_COURANT.isoformat(), "id": "D-811",
+                 "memo": "Virement Interac de /XIAO YU CAO /",
+                 "montant": 200.0},
+            ]
+        }
+    )
+    _sync(run, qbo)
+    txns = {t.qbo_txn_id: t for t in _txns(run)}
+    # Même ordre que la liste passée à _seed_immeuble.
+    paquette, _tallard, cao = seed["baux"]
+    assert txns["D-810"].statut == "rapproche"
+    assert txns["D-810"].bail_id == paquette["bail_id"]
+    assert txns["D-811"].statut == "rapproche"
+    assert txns["D-811"].bail_id == cao["bail_id"]
+    assert txns["D-811"].mois_couvert == MOIS_COURANT

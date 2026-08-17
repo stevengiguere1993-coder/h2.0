@@ -888,6 +888,9 @@ export default function PaiementsPage() {
                           <div className="mt-1">
                             <PastilleValidationBancaire
                               v={valMap.get(r.bail_id)}
+                              bailId={r.bail_id}
+                              mois={`${mois}-01`}
+                              onChange={() => void load()}
                             />
                           </div>
                         ) : null}

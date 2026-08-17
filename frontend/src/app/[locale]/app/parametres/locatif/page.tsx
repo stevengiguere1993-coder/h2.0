@@ -474,6 +474,7 @@ type SyncRapport = {
   importees: number;
   mises_a_jour: number;
   ignorees: number;
+  doublons_fusionnes: number;
   details: SyncCompteDetail[];
   comptes_ignores: SyncCompteIgnore[];
 };
@@ -658,7 +659,7 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
       setRapport(d);
       const sautes = d.comptes_ignores?.length ?? 0;
       setMsg(
-        `Synchro terminée : ${d.comptes} compte${d.comptes > 1 ? "s" : ""} lu${d.comptes > 1 ? "s" : ""}, ${d.importees} transaction${d.importees > 1 ? "s" : ""} importée${d.importees > 1 ? "s" : ""}, ${d.mises_a_jour} mise${d.mises_a_jour > 1 ? "s" : ""} à jour, ${d.ignorees} ignorée${d.ignorees > 1 ? "s" : ""} — détail ci-dessous.` +
+        `Synchro terminée : ${d.comptes} compte${d.comptes > 1 ? "s" : ""} lu${d.comptes > 1 ? "s" : ""}, ${d.importees} transaction${d.importees > 1 ? "s" : ""} importée${d.importees > 1 ? "s" : ""}, ${d.mises_a_jour} mise${d.mises_a_jour > 1 ? "s" : ""} à jour, ${d.ignorees} ignorée${d.ignorees > 1 ? "s" : ""}${(d.doublons_fusionnes ?? 0) > 0 ? `, ${d.doublons_fusionnes} doublon${d.doublons_fusionnes > 1 ? "s" : ""} fiducie/immeuble fusionné${d.doublons_fusionnes > 1 ? "s" : ""}` : ""} — détail ci-dessous.` +
           (d.importees === 0 && sautes > 0
             ? ` ⚠ ${sautes} compte${sautes > 1 ? "s" : ""} non lu${sautes > 1 ? "s" : ""} (désactivé ou sans immeuble) — c'est souvent là que sont les transactions attendues, voir le rapport.`
             : "")

@@ -1001,6 +1001,7 @@ async def ensure_validation_bancaire_tables() -> None:
             QboCompteImmeuble,
             QboCompteLoyer,
             QboTransactionLoyer,
+            QboVerifManuelle,
         )
 
         async with engine.begin() as conn:
@@ -1012,6 +1013,7 @@ async def ensure_validation_bancaire_tables() -> None:
                         QboCompteImmeuble.__table__,
                         QboTransactionLoyer.__table__,
                         QboAliasPayeur.__table__,
+                        QboVerifManuelle.__table__,
                     ],
                 )
             )
