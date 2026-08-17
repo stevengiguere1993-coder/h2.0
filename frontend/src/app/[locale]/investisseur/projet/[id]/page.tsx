@@ -20,15 +20,15 @@ import {
 import { authedFetch } from "@/lib/auth";
 import { InvestisseurTopbar } from "../../layout";
 import {
-  DepensesParCategorie,
   fmtDate,
   fmtMoney,
   fmtPct,
   HypothequesCard,
   investApiBase,
+  NormalisesPanel,
   PhaseBadge,
   ProjetDetail,
-  RevDepChart,
+  QboReelsPanel,
   Timeline,
   useApercu
 } from "../../invest-ui";
@@ -334,53 +334,26 @@ export default function ProjetPage() {
         <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-[1.15fr_0.85fr]">
           {/* Colonne gauche */}
           <div className="min-w-0 space-y-4">
-            {/* Revenus / dépenses */}
-            <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white">
-              <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
-                <h2 className="text-sm font-semibold">
-                  Revenus{data.show_depenses ? " et dépenses" : ""} · 12
-                  derniers mois
-                </h2>
-                {data.show_cashflow && data.cashflow_moyen !== null ? (
-                  <span className="text-xs text-white/50 tabular-nums">
-                    Cash-flow moyen :{" "}
-                    <b
-                      className={
-                        data.cashflow_moyen >= 0
-                          ? "text-emerald-400"
-                          : "text-rose-400"
-                      }
-                    >
-                      {data.cashflow_moyen >= 0 ? "+" : ""}
-                      {fmtMoney(data.cashflow_moyen)}/mois
-                    </b>
-                  </span>
-                ) : null}
-              </div>
-              <RevDepChart
-                serie={data.serie_mensuelle}
-                showDepenses={data.show_depenses}
+            {/* Revenus / dépenses normalisés (pôle locatif) */}
+            <NormalisesPanel
+              serie={data.serie_mensuelle}
+              revenusMode={data.revenus_mode}
+              cashflowMoyen={data.cashflow_moyen}
+              depensesParCategorie={data.depenses_par_categorie}
+              showDepenses={data.show_depenses}
+              showCashflow={data.show_cashflow}
+            />
+
+            {/* Revenus / dépenses réels (QuickBooks) */}
+            {data.show_cashflow ? (
+              <QboReelsPanel
+                fetchPath={
+                  apercu
+                    ? `/api/v1/invest/admin/projets/${entrepriseId}/qbo-reels`
+                    : `/api/v1/invest/me/projets/${entrepriseId}/qbo-reels`
+                }
               />
-              <div className="mt-1 flex flex-wrap gap-4 text-xs text-white/50">
-                <span className="inline-flex items-center gap-1.5">
-                  <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#199e70]" />
-                  {data.revenus_mode === "potentiel"
-                    ? "Loyers (unités louées)"
-                    : "Revenus perçus"}
-                </span>
-                {data.show_depenses ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#e66767]" />
-                    Dépenses
-                  </span>
-                ) : null}
-              </div>
-              {data.show_depenses ? (
-                <DepensesParCategorie
-                  items={data.depenses_par_categorie || []}
-                />
-              ) : null}
-            </div>
+            ) : null}
 
             {/* Timeline */}
             <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
@@ -532,10 +505,11 @@ export default function ProjetPage() {
                         ) : null}
                       </span>
                       <span className="font-bold tabular-nums text-white">
-                        {a.parts_pct.toLocaleString("fr-CA", {
-                          maximumFractionDigits: 1
-                        })}{" "}
-                        %
+                        {a.parts_pct !== null
+                          ? `${a.parts_pct.toLocaleString("fr-CA", {
+                              maximumFractionDigits: 1
+                            })} %`
+                          : "—"}
                       </span>
                     </li>
                   ))}
