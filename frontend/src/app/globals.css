@@ -217,7 +217,9 @@ html[data-portal-theme="light"] .bg-brand-800 { background-color: #eef2f6 !impor
 html[data-portal-theme="light"] .bg-brand-700 { background-color: #e2e8f0 !important; }
 
 /* Variantes d'opacité fréquentes sur bg-brand-9xx (utilisées avec /40, /60, /95) */
+html[data-portal-theme="light"] .bg-brand-950\/30 { background-color: rgb(255 255 255 / 0.5) !important; }
 html[data-portal-theme="light"] .bg-brand-950\/40 { background-color: rgb(255 255 255 / 0.6) !important; }
+html[data-portal-theme="light"] .bg-brand-950\/50 { background-color: rgb(255 255 255 / 0.7) !important; }
 html[data-portal-theme="light"] .bg-brand-950\/60 { background-color: rgb(255 255 255 / 0.8) !important; }
 html[data-portal-theme="light"] .bg-brand-950\/80 { background-color: rgb(255 255 255 / 0.9) !important; }
 html[data-portal-theme="light"] .bg-brand-950\/95 { background-color: rgb(255 255 255 / 0.95) !important; }

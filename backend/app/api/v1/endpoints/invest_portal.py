@@ -30,13 +30,15 @@ from app.models.invest_portal import (
     InvestFlux,
     InvestParticipation,
 )
-from app.models.user import User
 from app.services.invest_portfolio import (
+    effective_parts_pct,
     entreprise_snapshot,
     flux_signes,
     get_or_default_profil,
     kpis_participation,
+    partner_directory,
     phase_projet,
+    qbo_reels_data,
     serie_mensuelle,
     serie_valeur_totale,
     timeline_projet,
@@ -101,12 +103,14 @@ async def build_portefeuille(db: AsyncSession, user_id: int) -> dict:
         flux = await _flux_of(db, part.id)
         pairs.append((part, flux))
         snap = await entreprise_snapshot(db, part.entreprise_id)
-        pct = float(part.parts_pct) / 100.0
+        directory = await partner_directory(db, part.entreprise_id)
+        pct_eff = effective_parts_pct(part, directory)
+        pct = pct_eff / 100.0
         valeur_parts = round(snap["equite"] * pct, 2)
         k = kpis_participation(flux, valeur_parts)
         profil = await get_or_default_profil(db, part.entreprise_id)
         phase = await phase_projet(db, part.entreprise_id, profil)
-        serie = await serie_mensuelle(db, part.entreprise_id)
+        serie = await serie_mensuelle(db, part.entreprise_id, months=12)
         show_cashflow = profil.show_cashflow if profil else True
         cash_part = (
             round(serie["cashflow_moyen"] * pct, 2)
@@ -130,7 +134,7 @@ async def build_portefeuille(db: AsyncSession, user_id: int) -> dict:
                     if snap["immeubles"]
                     else None
                 ),
-                "parts_pct": float(part.parts_pct),
+                "parts_pct": pct_eff,
                 "valeur_parts": valeur_parts,
                 "cashflow_moyen_part": cash_part,
                 "statut": part.statut,
@@ -201,7 +205,9 @@ async def build_projet(
     show_cashflow = profil.show_cashflow if profil else True
 
     snap = await entreprise_snapshot(db, entreprise_id)
-    pct = float(part.parts_pct) / 100.0
+    directory = await partner_directory(db, entreprise_id)
+    pct_eff = effective_parts_pct(part, directory)
+    pct = pct_eff / 100.0
     valeur_parts = round(snap["equite"] * pct, 2)
     flux = await _flux_of(db, part.id)
     k = kpis_participation(flux, valeur_parts)
@@ -209,67 +215,23 @@ async def build_projet(
     serie = await serie_mensuelle(db, entreprise_id)
     timeline = await timeline_projet(db, entreprise_id, flux, phase)
 
-    # Co-actionnaires de CETTE compagnie (jamais les autres projets).
-    # Le nom saisi dans « Parts & actionnaires » (fiche entreprise)
-    # PRIME sur le nom du compte : c'est souvent un holding (« Groupe X
-    # Investissement ») dont le compte de connexion reste la personne.
+    # Co-actionnaires de CETTE compagnie : la liste RÉELLE de « Parts &
+    # actionnaires » (fiche entreprise) — noms et % tels que saisis là,
+    # jamais de ligne inventée. `is_me` = l'actionnaire apparié au
+    # compte connecté.
     actionnaires: list[dict] = []
     if show_actionnaires:
-        from app.models.entreprise import EntreprisePartner
-
-        override_by_user: dict[int, str] = {}
-        override_by_email: dict[str, str] = {}
-        for pr in (
-            await db.execute(
-                select(EntreprisePartner).where(
-                    EntreprisePartner.entreprise_id == entreprise_id
-                )
-            )
-        ).scalars():
-            nm = (pr.partner_name or "").strip()
-            if not nm:
-                continue
-            if pr.user_id:
-                override_by_user[pr.user_id] = nm
-            if pr.partner_email:
-                override_by_email[pr.partner_email.strip().lower()] = nm
-
-        all_parts = (
-            await db.execute(
-                select(InvestParticipation, User)
-                .join(User, User.id == InvestParticipation.user_id)
-                .where(
-                    InvestParticipation.entreprise_id == entreprise_id,
-                    InvestParticipation.statut == "actif",
-                )
-                .order_by(InvestParticipation.parts_pct.desc())
-            )
-        ).all()
-        total_pct = 0.0
-        for p, u in all_parts:
-            name = (
-                override_by_user.get(u.id)
-                or override_by_email.get((u.email or "").lower())
-                or f"{u.first_name or ''} {u.last_name or ''}".strip()
-                or u.email
-            )
+        for row in directory["rows"]:
             actionnaires.append(
                 {
-                    "name": name,
-                    "parts_pct": float(p.parts_pct),
-                    "is_me": u.id == user_id,
+                    "name": row["name"],
+                    "parts_pct": row["ownership_pct"],
+                    "is_me": row["user_id"] == user_id,
                 }
             )
-            total_pct += float(p.parts_pct)
-        reste = round(100.0 - total_pct, 3)
-        if reste > 0.01:
-            actionnaires.append(
-                {
-                    "name": "Groupe Horizon",
-                    "parts_pct": reste,
-                    "is_me": False,
-                }
-            )
+        actionnaires.sort(
+            key=lambda a: -(a["parts_pct"] or 0.0)
+        )
 
     docs = (
         await db.execute(
@@ -330,7 +292,7 @@ async def build_projet(
             serie["cashflow_moyen"] if show_cashflow else None
         ),
         "timeline": timeline,
-        "parts_pct": float(part.parts_pct),
+        "parts_pct": pct_eff,
         "valeur_parts": valeur_parts,
         **k,
         "flux": [
@@ -384,6 +346,42 @@ async def my_projet(
     entreprise_id: int, db: DBSession, user: CurrentUser
 ) -> dict:
     return await build_projet(db, user.id, entreprise_id)
+
+
+@router.get(
+    "/me/projets/{entreprise_id}/qbo-reels",
+    summary="Revenus/dépenses RÉELS (QuickBooks) du projet — investisseur",
+)
+async def my_projet_qbo_reels(
+    entreprise_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    """Même série que la console admin, pour un projet où
+    l'investisseur a une participation visible. Respecte les réglages
+    de publication : masqué si `show_cashflow` est décoché ; le détail
+    par compte est retiré si `show_depenses` est décoché."""
+    part = (
+        await db.execute(
+            select(InvestParticipation.id).where(
+                InvestParticipation.user_id == user.id,
+                InvestParticipation.entreprise_id == entreprise_id,
+                InvestParticipation.is_visible.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if part is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Projet introuvable."
+        )
+    profil = await get_or_default_profil(db, entreprise_id)
+    if profil is not None and not profil.show_cashflow:
+        return {"statut": "masque"}
+    data = await qbo_reels_data(db, entreprise_id)
+    if profil is not None and not profil.show_depenses:
+        for r in data.get("rows") or []:
+            r.pop("details", None)
+        if isinstance(data.get("total"), dict):
+            data["total"].pop("details", None)
+    return data
 
 
 @router.get(
