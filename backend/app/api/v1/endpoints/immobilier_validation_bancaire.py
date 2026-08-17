@@ -33,6 +33,7 @@ from app.models.qbo_loyers import (
     QboCompteImmeuble,
     QboCompteLoyer,
     QboTransactionLoyer,
+    QboVerifManuelle,
 )
 from app.services.qbo_validation_loyers import (
     DEFAUT_ALERTE_JOURS,
@@ -187,8 +188,17 @@ class SyncResult(BaseModel):
     importees: int = 0
     mises_a_jour: int = 0
     ignorees: int = 0
+    #: Doublons hérités fusionnés (même écriture via la fiducie ET le
+    #: compte par immeuble — le compte spécifique gagne).
+    doublons_fusionnes: int = 0
     details: List[SyncCompteDetail] = []
     comptes_ignores: List[SyncCompteIgnore] = []
+
+
+class VerifManuelleBody(BaseModel):
+    bail_id: int
+    #: 1er du mois vérifié.
+    mois: date
 
 
 # ── Paramètres (manager+) ──────────────────────────────────────────────
@@ -393,6 +403,61 @@ async def sync_maintenant(db: DBSession, user: CurrentUser) -> SyncResult:
         raise HTTPException(status_code=503, detail=str(exc))
     await db.commit()
     return SyncResult(ok=True, **stats)
+
+
+# ── « Vérifié manuellement » (anti-accumulation des ⚠ sans trace) ──────
+
+
+@router.post("/verifs", status_code=status.HTTP_204_NO_CONTENT)
+async def poser_verif_manuelle(
+    payload: VerifManuelleBody, db: DBSession, user: CurrentUser
+) -> None:
+    """Un humain confirme qu'un mois marqué payé SANS trace bancaire est
+    correct → la pastille ⚠ s'éteint pour CE bail-mois. Idempotent."""
+    from app.models.immobilier import Bail
+
+    if await db.get(Bail, payload.bail_id) is None:
+        raise HTTPException(status_code=404, detail="Bail introuvable.")
+    mois = payload.mois.replace(day=1)
+    existante = (
+        await db.execute(
+            select(QboVerifManuelle).where(
+                QboVerifManuelle.bail_id == payload.bail_id,
+                QboVerifManuelle.mois == mois,
+            )
+        )
+    ).scalar_one_or_none()
+    if existante is None:
+        db.add(
+            QboVerifManuelle(
+                bail_id=payload.bail_id,
+                mois=mois,
+                verifie_par=user.email,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        await db.commit()
+
+
+@router.delete("/verifs", status_code=status.HTTP_204_NO_CONTENT)
+async def retirer_verif_manuelle(
+    db: DBSession,
+    user: CurrentUser,
+    bail_id: int,
+    mois: date,
+) -> None:
+    """Annule un « vérifié manuellement » — la pastille ⚠ revient."""
+    existante = (
+        await db.execute(
+            select(QboVerifManuelle).where(
+                QboVerifManuelle.bail_id == bail_id,
+                QboVerifManuelle.mois == mois.replace(day=1),
+            )
+        )
+    ).scalar_one_or_none()
+    if existante is not None:
+        await db.delete(existante)
+        await db.commit()
 
 
 # ── Fil bancaire (visualiseur — lecture de la base, zéro appel QBO) ────

@@ -71,6 +71,7 @@ from app.models.qbo_loyers import (
     QboCompteImmeuble,
     QboCompteLoyer,
     QboTransactionLoyer,
+    QboVerifManuelle,
 )
 
 log = logging.getLogger(__name__)
@@ -653,6 +654,40 @@ def parse_general_ledger(
     return entrees, ecartees
 
 
+async def _fusionner_doublons(
+    db, compte_est_tous: Dict[int, bool]
+) -> int:
+    """Fusionne les doublons HÉRITÉS d'avant la dédup globale : la même
+    écriture QBO importée via la fiducie (compte parent) ET via le
+    compte par immeuble. On garde en priorité la ligne confirmée
+    MANUELLEMENT, sinon celle du compte SPÉCIFIQUE, sinon la plus
+    ancienne — les autres sont supprimées. Idempotent (plus rien à
+    fusionner dès la 2e synchro). Retourne le nombre de suppressions."""
+    rows = (
+        await db.execute(select(QboTransactionLoyer))
+    ).scalars().all()
+    groupes: Dict[Tuple[str, str], List[QboTransactionLoyer]] = {}
+    for t in rows:
+        groupes.setdefault((t.qbo_txn_type, t.qbo_txn_id), []).append(t)
+    supprimees = 0
+    for grp in groupes.values():
+        if len(grp) < 2:
+            continue
+        grp.sort(
+            key=lambda t: (
+                0 if t.rapproche_par == "manuel" else 1,
+                1 if compte_est_tous.get(t.compte_id, False) else 0,
+                t.id,
+            )
+        )
+        for t in grp[1:]:
+            await db.delete(t)
+            supprimees += 1
+    if supprimees:
+        await db.flush()
+    return supprimees
+
+
 async def synchroniser_transactions(
     db, qbo=None, *, jours: int = FENETRE_SYNC_JOURS
 ) -> Dict[str, Any]:
@@ -697,6 +732,7 @@ async def synchroniser_transactions(
         "importees": 0,
         "mises_a_jour": 0,
         "ignorees": 0,
+        "doublons_fusionnes": 0,
         "details": [],
         "comptes_ignores": comptes_ignores,
     }
@@ -704,6 +740,26 @@ async def synchroniser_transactions(
         return stats
     if qbo is None:
         qbo = await qbo_locatif()
+
+    # ── Dédoublonnage GLOBAL par écriture QBO ──────────────────────────
+    # La fiducie est souvent le compte PARENT des comptes par immeuble :
+    # son grand livre INCLUT leurs écritures (constaté en prod
+    # 2026-08-17 — chaque Interac importé DEUX fois, et le doublon
+    # fiducie, candidat sur TOUS les immeubles, restait ambigu à coup
+    # sûr). Une même écriture ne vit qu'UNE fois, rattachée de
+    # préférence au compte SPÉCIFIQUE (il identifie l'immeuble).
+    compte_est_tous = {c.id: bool(c.tous_les_immeubles) for c in tous_comptes}
+    # Les comptes spécifiques se synchronisent AVANT la fiducie.
+    comptes.sort(key=lambda c: bool(c.tous_les_immeubles))
+    stats["doublons_fusionnes"] = await _fusionner_doublons(
+        db, compte_est_tous
+    )
+    global_idx: Dict[Tuple[str, str], QboTransactionLoyer] = {
+        (t.qbo_txn_type, t.qbo_txn_id): t
+        for t in (
+            await db.execute(select(QboTransactionLoyer))
+        ).scalars().all()
+    }
 
     aujourdhui = datetime.now(timezone.utc).date()
     debut = (aujourdhui - timedelta(days=jours)).isoformat()
@@ -808,43 +864,61 @@ async def synchroniser_transactions(
         imm_ids = await immeubles_du_compte(db, compte, liens)
         immeuble_defaut = imm_ids[0] if len(imm_ids) == 1 else None
 
-        existantes = {
-            (t.qbo_txn_type, t.qbo_txn_id): t
-            for t in (
-                await db.execute(
-                    select(QboTransactionLoyer).where(
-                        QboTransactionLoyer.compte_id == compte.id
-                    )
-                )
-            ).scalars().all()
-        }
         for e in entrees:
             est_sortie = e["sens"] == "sortie"
             if est_sortie:
                 detail["ignorees"] += 1
                 detail["raisons"]["sortie_argent"] += 1
-            txn = existantes.get((e["txn_type"], e["txn_id"]))
+            cle = (e["txn_type"], e["txn_id"])
+            txn = global_idx.get(cle)
+            if txn is not None and txn.compte_id != compte.id:
+                if (
+                    not compte.tous_les_immeubles
+                    and compte_est_tous.get(txn.compte_id, False)
+                ):
+                    # Importée jadis via la fiducie (parent), l'écriture
+                    # arrive maintenant par le compte SPÉCIFIQUE →
+                    # réaffectation (l'immeuble devient connu) ; le
+                    # rapprochement AUTO est rejoué, le manuel jamais.
+                    txn.compte_id = compte.id
+                    txn.qbo_account_id = compte.qbo_account_id
+                    if txn.rapproche_par != "manuel":
+                        txn.immeuble_id = immeuble_defaut
+                        if not est_sortie:
+                            txn.statut = "non_rapproche"
+                            txn.bail_id = None
+                            txn.mois_couvert = None
+                            txn.mois_couvert_fin = None
+                            txn.rapproche_par = None
+                    if not est_sortie:
+                        stats["mises_a_jour"] += 1
+                        detail["mises_a_jour"] += 1
+                elif not est_sortie:
+                    # Déjà rattachée à un compte au moins aussi précis
+                    # (la fiducie relit l'écriture d'un sous-compte).
+                    detail["raisons"]["deja_importee"] += 1
+                continue
             if txn is None:
-                db.add(
-                    QboTransactionLoyer(
-                        qbo_txn_type=e["txn_type"],
-                        qbo_txn_id=e["txn_id"],
-                        qbo_account_id=compte.qbo_account_id,
-                        compte_id=compte.id,
-                        immeuble_id=immeuble_defaut,
-                        date_txn=e["date"],
-                        montant=e["montant"],
-                        sens=e["sens"],
-                        description=e["description"],
-                        payeur=e["payeur"],
-                        doc_num=e["doc_num"],
-                        # Sortie d'argent (virement de remise…) : gardée
-                        # pour le fil bancaire, JAMAIS candidate au
-                        # rapprochement — pas un loyer.
-                        statut="ignoree" if est_sortie else "non_rapproche",
-                        ignore_raison=e["ignore_raison"],
-                    )
+                txn = QboTransactionLoyer(
+                    qbo_txn_type=e["txn_type"],
+                    qbo_txn_id=e["txn_id"],
+                    qbo_account_id=compte.qbo_account_id,
+                    compte_id=compte.id,
+                    immeuble_id=immeuble_defaut,
+                    date_txn=e["date"],
+                    montant=e["montant"],
+                    sens=e["sens"],
+                    description=e["description"],
+                    payeur=e["payeur"],
+                    doc_num=e["doc_num"],
+                    # Sortie d'argent (virement de remise…) : gardée
+                    # pour le fil bancaire, JAMAIS candidate au
+                    # rapprochement — pas un loyer.
+                    statut="ignoree" if est_sortie else "non_rapproche",
+                    ignore_raison=e["ignore_raison"],
                 )
+                db.add(txn)
+                global_idx[cle] = txn
                 if not est_sortie:
                     stats["importees"] += 1
                     detail["importees"] += 1
@@ -935,7 +1009,12 @@ def _alias_correspond(desc: str, alias: str) -> bool:
 
 def _nom_correspond(desc: str, nom_locataire: str) -> bool:
     """Le texte payeur désigne-t-il ce locataire ? Nom complet en
-    sous-chaîne, ou TOUS ses mots (≥ 3 lettres) présents."""
+    sous-chaîne, TOUS ses mots (≥ 3 lettres) présents, ou — cas Interac
+    RÉEL constaté en prod — le payeur TRONQUÉ (~14 caractères :
+    « FRANCOIS PAQUE » pour François Paquette) répond par PRÉFIXE :
+    chaque mot du payeur est le préfixe d'un mot du nom (ordre
+    prénom/nom indifférent), avec au moins deux mots qui répondent, ou
+    un seul d'au moins 6 lettres."""
     nom = _norm_payeur(nom_locataire)
     if not desc or not nom:
         return False
@@ -944,8 +1023,19 @@ def _nom_correspond(desc: str, nom_locataire: str) -> bool:
     mots = [t for t in nom.split() if len(t) >= 3]
     if not mots:
         return False
-    desc_mots = set(desc.split())
-    return all(t in desc_mots for t in mots)
+    desc_mots = [t for t in desc.split() if len(t) >= 3]
+    if desc_mots and all(t in set(desc_mots) for t in mots):
+        return True
+    # Troncature Interac : TOUS les mots du payeur doivent être des
+    # préfixes de mots du nom — un mot étranger = quelqu'un d'autre.
+    if not desc_mots:
+        return False
+    repondus = [
+        t for t in desc_mots if any(m.startswith(t) for m in mots)
+    ]
+    if len(repondus) != len(desc_mots):
+        return False
+    return len(repondus) >= 2 or len(repondus[0]) >= 6
 
 
 #: Fenêtre de rattrapage du rapprochement MULTI-MOIS (mois échus
@@ -1098,6 +1188,35 @@ def _match_deterministe(
             fin if fin != debut else None,
         )
     if not baux_distincts:
+        # PAIEMENT PARTIEL (constaté en prod : 200 $ sur un loyer de
+        # 425 $) : aucun montant plausible, mais le payeur désigne
+        # EXACTEMENT UN locataire → rapproché au premier mois (date,
+        # puis précédent, puis suivant) où il reste un dû que le
+        # montant ne dépasse pas. Déterministe : un seul nom qui
+        # colle, jamais de choix entre deux baux.
+        if desc and montant > _TOL:
+            vises = [
+                b
+                for b in baux
+                if b.locataire_id in locataires
+                and _nom_correspond(
+                    desc,
+                    locataires[b.locataire_id].full_name or "",
+                )
+            ]
+            if len(vises) == 1:
+                bail = vises[0]
+                for m in mois_ordre:
+                    if not _bail_couvre(bail, m):
+                        continue
+                    du_restant = round(
+                        float(bail.loyer_mensuel or 0)
+                        + frais_map.get((bail.id, m), 0.0)
+                        - paye_map.get((bail.id, m), 0.0),
+                        2,
+                    )
+                    if du_restant > _TOL and montant <= du_restant + _TOL:
+                        return "rapproche", bail.id, m, None
         return "non_rapproche", None, None, None
     return "ambigu", None, None, None
 
@@ -1490,6 +1609,18 @@ async def etat_validation(db, mois: date) -> Dict[str, Any]:
         ):
             rapprochees_mois.setdefault(t.bail_id, []).append(t)
 
+    # « Vérifié manuellement » du mois affiché (anti-accumulation).
+    verifs = {
+        v.bail_id: v
+        for v in (
+            await db.execute(
+                select(QboVerifManuelle).where(
+                    QboVerifManuelle.mois == month_start
+                )
+            )
+        ).scalars().all()
+    }
+
     validations: List[Dict[str, Any]] = []
     for b in baux:
         if _imm_du_bail(b) is None:
@@ -1512,13 +1643,28 @@ async def etat_validation(db, mois: date) -> Dict[str, Any]:
         else:
             paye_le = max(p.paye_le for p in ps)
             if (aujourdhui - paye_le).days > cfg["alerte_jours"]:
-                validations.append(
-                    {
-                        "bail_id": b.id,
-                        "statut": "sans_trace",
-                        "paye_le": paye_le.isoformat(),
-                    }
-                )
+                verif = verifs.get(b.id)
+                if verif is not None:
+                    # Un humain a déjà vérifié CE bail-mois : la
+                    # pastille ⚠ s'éteint, remplacée par un « vérifié
+                    # à la main » discret — rien ne traîne d'un mois à
+                    # l'autre.
+                    validations.append(
+                        {
+                            "bail_id": b.id,
+                            "statut": "verifie_manuel",
+                            "paye_le": paye_le.isoformat(),
+                            "verifie_par": verif.verifie_par,
+                        }
+                    )
+                else:
+                    validations.append(
+                        {
+                            "bail_id": b.id,
+                            "statut": "sans_trace",
+                            "paye_le": paye_le.isoformat(),
+                        }
+                    )
 
     # Encart 1 : encaissés (banque) non marqués (Kratos). Un paiement
     # multi-mois sort UNE ligne par mois couvert non marqué.
