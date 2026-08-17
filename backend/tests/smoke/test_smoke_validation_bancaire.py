@@ -1502,3 +1502,54 @@ def test_imputation_mois_deja_couvert_glisse_au_suivant(run, db_setup):
     assert txns["D-1101"].mois_couvert == MOIS_COURANT  # a glissé ✓
     assert txns["D-1102"].statut == "rapproche"
     assert txns["D-1102"].bail_id == maritza["bail_id"]
+
+
+def test_alignement_sur_le_paiement_marque_par_l_employe(run, db_setup):
+    """Cas 8900 (captures Phil, 2e vague) : le compte QBO est NEUF —
+    aucune transaction de juin pour couvrir juillet. L'employé a marqué
+    juillet payé (début juillet) ET août payé (1er août). L'Interac du
+    31 juillet est le loyer d'AOÛT : il doit s'aligner sur le paiement
+    marqué le plus proche (± 5 jours), pas sur le mois de la date. Et
+    forcer=True : une resynchro CORRIGE une imputation antérieure."""
+    _purge(run)
+    _set_config(run, active=True)
+    mois_prec = (MOIS_COURANT - timedelta(days=1)).replace(day=1)
+    seed = _seed_immeuble(
+        run,
+        name="8900 St-Hubert",
+        address="8900, Rue Saint-Hubert",
+        baux=[{"loyer": 650.0, "nom": "Norbert Yotshi"}],
+    )
+    _map_compte(
+        run, "60", "8900 St-Hubert - Loyers à remettre", seed["immeuble_id"]
+    )
+    norbert = seed["baux"][0]
+    # L'employé marque juillet payé (2 juillet) et août payé (1er août).
+    _marquer_paye(
+        run, norbert["bail_id"], mois_prec, 650.0,
+        mois_prec + timedelta(days=1),
+    )
+    _marquer_paye(
+        run, norbert["bail_id"], MOIS_COURANT, 650.0, MOIS_COURANT
+    )
+    fin_mois_prec = _mois_suiv(mois_prec) - timedelta(days=1)
+    qbo = FakeQbo(
+        gl_par_compte={
+            "60": [
+                # SEULE transaction du compte neuf : l'Interac du 31
+                # juillet — c'est le loyer d'août (marqué le 1er août).
+                {"date": fin_mois_prec.isoformat(), "id": "D-1200",
+                 "memo": "Virement Interac de /NORBERT YOTSHI/",
+                 "montant": 650.0},
+            ]
+        }
+    )
+    _sync(run, qbo)
+    txn = _txns(run)[0]
+    assert txn.bail_id == norbert["bail_id"]
+    assert txn.mois_couvert == MOIS_COURANT  # aligné sur le marquage ✓
+    # Resynchro : stable (forcer=True ne fait pas flip-flopper).
+    _sync(run, qbo)
+    txn = _txns(run)[0]
+    assert txn.statut == "rapproche"
+    assert txn.mois_couvert == MOIS_COURANT
