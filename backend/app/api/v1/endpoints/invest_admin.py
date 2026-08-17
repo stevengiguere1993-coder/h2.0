@@ -64,7 +64,6 @@ from app.services.invest_portfolio import (
     flux_signes,
     get_or_default_profil,
     kpis_participation,
-    optimisation_projet_qbo,
     partner_directory,
     phase_projet,
     qbo_reels_data,
@@ -390,6 +389,18 @@ async def portefeuille_global(db: DBSession, user: CurrentUser) -> dict:
     for p in parts:
         by_ent.setdefault(p.entreprise_id, []).append(p)
 
+    # Vue direction = TOUTES les compagnies actives du pôle (celles qui
+    # ont des immeubles), même sans investisseur activé — celles-là
+    # apparaissent détenues à 100 % (équité complète), mais ne comptent
+    # pas dans les KPIs « capital investi / TRI » qui restent l'argent
+    # des investisseurs.
+    for ent_id in (
+        await db.execute(
+            select(Entreprise.id).where(Entreprise.is_active.is_(True))
+        )
+    ).scalars():
+        by_ent.setdefault(ent_id, [])
+
     pairs: list[tuple[InvestParticipation, list[InvestFlux]]] = []
     projets: list[dict] = []
     tot_capital_actuel = tot_capital_total = 0.0
@@ -402,6 +413,8 @@ async def portefeuille_global(db: DBSession, user: CurrentUser) -> dict:
         if ent is None:
             continue
         snap = await entreprise_snapshot(db, eid)
+        if not snap["immeubles"] and not plist:
+            continue  # entreprise sans immeuble ni investisseur — hors pôle
         directory = await partner_directory(db, eid)
         flux_combined: list[InvestFlux] = []
         pct_total = 0.0
@@ -418,7 +431,13 @@ async def portefeuille_global(db: DBSession, user: CurrentUser) -> dict:
             flux_combined.extend(fl)
             pairs.append((p, fl))
             pct_total += effective_parts_pct(p, directory)
-        valeur_parts = round(snap["equite"] * pct_total / 100.0, 2)
+        if plist:
+            valeur_parts = round(snap["equite"] * pct_total / 100.0, 2)
+        else:
+            # Aucun investisseur activé : la compagnie est montrée
+            # détenue à 100 % (équité complète).
+            pct_total = 100.0
+            valeur_parts = snap["equite"]
         k = kpis_participation(flux_combined, valeur_parts)
         profil = await get_or_default_profil(db, eid)
         phase = await phase_projet(db, eid, profil)
@@ -447,14 +466,18 @@ async def portefeuille_global(db: DBSession, user: CurrentUser) -> dict:
                 **k,
             }
         )
-        tot_capital_actuel += k["capital_actuel"]
-        tot_capital_total += k["capital_investi_total"]
-        tot_rembourse += k["capital_rembourse"]
-        tot_distrib += k["distributions_recues"]
-        tot_valeur_parts += valeur_parts
-        flux_global.extend(flux_signes(flux_combined))
-        if valeur_parts:
-            flux_global.append((_date.today(), valeur_parts))
+        # Les compagnies sans investisseur activé apparaissent dans la
+        # liste mais n'entrent pas dans les KPIs d'en-tête (qui restent
+        # « l'argent des investisseurs »).
+        if plist:
+            tot_capital_actuel += k["capital_actuel"]
+            tot_capital_total += k["capital_investi_total"]
+            tot_rembourse += k["capital_rembourse"]
+            tot_distrib += k["distributions_recues"]
+            tot_valeur_parts += valeur_parts
+            flux_global.extend(flux_signes(flux_combined))
+            if valeur_parts:
+                flux_global.append((_date.today(), valeur_parts))
 
     tri_global = xirr(flux_global)
     return {
@@ -1187,48 +1210,6 @@ async def qbo_reels(
 # ───────── Synchronisation QuickBooks (avances d'actionnaires) ─────────
 
 
-_MOIS_TOKENS = {
-    # anglais (libellés de colonnes QBO par défaut)
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
-    # français
-    "janv": 1, "fevr": 2, "mars": 3, "avr": 4, "mai": 5, "juin": 6,
-    "juil": 7, "aout": 8, "sept": 9, "octo": 10, "nove": 11, "dece": 12,
-}
-
-
-def _parse_mois_qbo(label: str) -> Optional[date]:
-    """« Jul 2025 » / « juil. 2025 » → date(2025, 7, 1). None si le
-    libellé ne ressemble pas à un mois."""
-    import unicodedata
-
-    m = re.search(r"([A-Za-zÀ-ÿ]+)\.?\s+(\d{4})", label or "")
-    if not m:
-        return None
-    tok = "".join(
-        c
-        for c in unicodedata.normalize("NFD", m.group(1).lower())
-        if unicodedata.category(c) != "Mn"
-    )
-    for prefix, num in _MOIS_TOKENS.items():
-        if tok.startswith(prefix) or (
-            len(tok) >= 3 and prefix.startswith(tok)
-        ):
-            return date(int(m.group(2)), num, 1)
-    return None
-
-
-def _norm_nom(s: str) -> str:
-    import unicodedata
-
-    s = "".join(
-        c
-        for c in unicodedata.normalize("NFD", (s or "").lower())
-        if unicodedata.category(c) != "Mn"
-    )
-    return re.sub(r"[^a-z0-9]+", " ", s).strip()
-
-
 @router.post(
     "/projets/{entreprise_id}/sync-qbo",
     summary="Synchronise les avances d'actionnaires QuickBooks : "
@@ -1237,169 +1218,14 @@ def _norm_nom(s: str) -> str:
 async def sync_qbo_avances(
     entreprise_id: int, db: DBSession, user: CurrentUser
 ) -> dict:
-    """Lecture des comptes « avances d'actionnaires » du QuickBooks lié
-    au projet d'optimisation de la compagnie :
-
-    1. le TOTAL des avances remplace `profil.avances_actionnaires`
-       (équité = valeur − hypothèques − avances) ;
-    2. chaque compte est apparié à un investisseur par NOM (fiche
-       entreprise / compte) ; ses variations mensuelles deviennent des
-       flux `source=qbo` (hausse = apport, baisse = remboursement) —
-       les flux qbo précédents sont remplacés, les flux manuels ne sont
-       pas touchés. Aucune double saisie."""
+    """Délègue à `invest_qbo_sync.sync_entreprise` (aussi exécuté par
+    le méga-cron quotidien) — voir ce service pour la mécanique."""
     await _load_entreprise(db, entreprise_id)
-    p, premier = await optimisation_projet_qbo(db, entreprise_id)
-    if premier is None:
-        return {"statut": "aucun_projet"}
-    if p is None:
-        return {"statut": "sans_qbo", "projet_nom": premier.name}
+    from app.services.invest_qbo_sync import sync_entreprise
 
-    from app.services.qbo_optimisation import avances_actionnaires
-
-    try:
-        av = await avances_actionnaires(
-            p.qbo_scope,
-            (p.date_debut or date(2000, 1, 1)).isoformat(),
-            date.today().isoformat(),
-            p.avances_accounts_json,
-        )
-    except Exception as exc:  # noqa: BLE001 — message propre à l'UI
-        log.info("invest sync-qbo entreprise #%s: %s", entreprise_id, exc)
-        return {
-            "statut": "erreur",
-            "projet_nom": p.name,
-            "erreur": str(exc)[:300],
-        }
-
-    comptes = av.get("comptes") or []
-    total = float(av.get("total") or 0.0)
-
-    # 1. Avances totales → profil (équité).
-    profil = await get_or_default_profil(db, entreprise_id)
-    if profil is None:
-        profil = InvestProjetProfil(entreprise_id=entreprise_id)
-        db.add(profil)
-        await db.flush()
-    profil.avances_actionnaires = round(total, 2)
-
-    # 2. Appariement compte ↔ investisseur par nom.
-    directory = await partner_directory(db, entreprise_id)
-    parts = (
-        await db.execute(
-            select(InvestParticipation)
-            .where(InvestParticipation.entreprise_id == entreprise_id)
-            .order_by(InvestParticipation.id)
-        )
-    ).scalars().all()
-    candidats: list[tuple[InvestParticipation, set[str]]] = []
-    for part in parts:
-        noms: set[str] = set()
-        dirrow = directory["by_user"].get(part.user_id)
-        if dirrow:
-            noms.add(_norm_nom(dirrow["name"]))
-        u = await db.get(User, part.user_id)
-        if u:
-            noms.add(_norm_nom(f"{u.first_name or ''} {u.last_name or ''}"))
-            if u.last_name and len(u.last_name) > 3:
-                noms.add(_norm_nom(u.last_name))
-        candidats.append((part, {n for n in noms if len(n) > 3}))
-
-    apparies: list[dict] = []
-    non_apparies: list[str] = []
-    for compte in comptes:
-        nom_compte = _norm_nom(str(compte.get("nom") or ""))
-        matches = [
-            part
-            for part, noms in candidats
-            if any(n in nom_compte or nom_compte in n for n in noms)
-        ]
-        if len(matches) != 1:
-            non_apparies.append(str(compte.get("nom") or "?"))
-            continue
-        part = matches[0]
-
-        # Remplace les flux qbo de cette participation (idempotent).
-        anciens = (
-            await db.execute(
-                select(InvestFlux).where(
-                    InvestFlux.participation_id == part.id,
-                    InvestFlux.source == "qbo",
-                )
-            )
-        ).scalars().all()
-        for f in anciens:
-            await db.delete(f)
-
-        nb = 0
-        mois_rows = compte.get("mois") or []
-        # Solde AVANT le premier mois affiché = apport initial (compte
-        # ouvert avant la période demandée).
-        if mois_rows:
-            r0 = mois_rows[0]
-            initial = float(r0.get("solde") or 0) - float(
-                r0.get("variation") or 0
-            )
-            d0 = _parse_mois_qbo(str(r0.get("mois") or ""))
-            if abs(initial) > 0.005 and d0 is not None:
-                db.add(
-                    InvestFlux(
-                        participation_id=part.id,
-                        type=(
-                            InvestFluxType.APPORT.value
-                            if initial > 0
-                            else InvestFluxType.REMBOURSEMENT.value
-                        ),
-                        montant=round(abs(initial), 2),
-                        date_flux=d0,
-                        note=f"QBO · {compte.get('nom')} (solde initial)",
-                        source="qbo",
-                    )
-                )
-                nb += 1
-        for r in mois_rows:
-            variation = float(r.get("variation") or 0)
-            if abs(variation) < 0.005:
-                continue
-            d = _parse_mois_qbo(str(r.get("mois") or ""))
-            if d is None:
-                continue
-            db.add(
-                InvestFlux(
-                    participation_id=part.id,
-                    type=(
-                        InvestFluxType.APPORT.value
-                        if variation > 0
-                        else InvestFluxType.REMBOURSEMENT.value
-                    ),
-                    montant=round(abs(variation), 2),
-                    date_flux=d,
-                    note=f"QBO · {compte.get('nom')}",
-                    source="qbo",
-                )
-            )
-            nb += 1
-        dirrow = directory["by_user"].get(part.user_id)
-        apparies.append(
-            {
-                "compte": compte.get("nom"),
-                "solde": compte.get("solde"),
-                "participation_id": part.id,
-                "investisseur": (
-                    dirrow["name"] if dirrow else str(part.user_id)
-                ),
-                "nb_flux": nb,
-            }
-        )
-
-    await db.flush()
+    r = await sync_entreprise(db, entreprise_id)
     await db.commit()
-    return {
-        "statut": "ok",
-        "projet_nom": p.name,
-        "avances_total": round(total, 2),
-        "apparies": apparies,
-        "non_apparies": non_apparies,
-    }
+    return r
 
 
 # ─────────── Activation d'un actionnaire (depuis un projet) ───────────

@@ -719,6 +719,18 @@ async def trigger_all_daily(
 
     await _safe("esign-reminders", _run_esign_reminders, details)
 
+    # Portail investisseur : avances d'actionnaires QuickBooks →
+    # équité + flux (apports/remboursements) de chaque investisseur.
+    async def _run_invest_qbo_sync():
+        from app.services.invest_qbo_sync import sync_all
+
+        async with AsyncSessionLocal() as db:
+            r = await sync_all(db)
+            await db.commit()
+            return r
+
+    await _safe("invest-qbo-sync", _run_invest_qbo_sync, details)
+
     # Jobs QG / immobilier (utilisent une session DB managée)
     async def _run_qg_daily_pulse():
         from app.services.qg_daily_pulse import generate_for_all_active

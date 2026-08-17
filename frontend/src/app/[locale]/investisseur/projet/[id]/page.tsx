@@ -135,7 +135,7 @@ export default function ProjetPage() {
         ]}
       />
 
-      <div className="mx-auto w-full max-w-5xl p-4 lg:p-6">
+      <div className="mx-auto w-full max-w-6xl p-4 lg:p-6">
         {apercu ? (
           <div className="mb-4 flex items-center gap-2 rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2.5 text-sm text-sky-400">
             <Eye className="h-4 w-4 shrink-0" />
@@ -331,39 +331,32 @@ export default function ProjetPage() {
           </div>
         </div>
 
-        <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+        {/* Revenus / dépenses : normalisés (pôle locatif) et réels (QBO) */}
+        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <NormalisesPanel
+            serie={data.serie_mensuelle}
+            revenusMode={data.revenus_mode}
+            cashflowMoyen={data.cashflow_moyen}
+            depensesParCategorie={data.depenses_par_categorie}
+            showDepenses={data.show_depenses}
+            showCashflow={data.show_cashflow}
+          />
+          {data.show_cashflow ? (
+            <QboReelsPanel
+              fetchPath={
+                apercu
+                  ? `/api/v1/invest/admin/projets/${entrepriseId}/qbo-reels`
+                  : `/api/v1/invest/me/projets/${entrepriseId}/qbo-reels`
+              }
+            />
+          ) : null}
+        </div>
+
+        {/* Ma participation + histoire, puis hypothèques + actionnaires */}
+        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
           {/* Colonne gauche */}
           <div className="min-w-0 space-y-4">
-            {/* Revenus / dépenses normalisés (pôle locatif) */}
-            <NormalisesPanel
-              serie={data.serie_mensuelle}
-              revenusMode={data.revenus_mode}
-              cashflowMoyen={data.cashflow_moyen}
-              depensesParCategorie={data.depenses_par_categorie}
-              showDepenses={data.show_depenses}
-              showCashflow={data.show_cashflow}
-            />
-
-            {/* Revenus / dépenses réels (QuickBooks) */}
-            {data.show_cashflow ? (
-              <QboReelsPanel
-                fetchPath={
-                  apercu
-                    ? `/api/v1/invest/admin/projets/${entrepriseId}/qbo-reels`
-                    : `/api/v1/invest/me/projets/${entrepriseId}/qbo-reels`
-                }
-              />
-            ) : null}
-
-            {/* Timeline */}
-            <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-              <h2 className="mb-4 text-sm font-semibold text-white">
-                L&apos;histoire du projet
-              </h2>
-              <Timeline events={data.timeline} />
-            </div>
-
-            {/* Hypothèques */}
+            <ParticipationHero data={data} />
             {data.show_hypotheque ? (
               <HypothequesCard immeubles={data.immeubles} />
             ) : null}
@@ -371,119 +364,13 @@ export default function ProjetPage() {
 
           {/* Colonne droite */}
           <div className="min-w-0 space-y-4">
-            {/* Ma participation */}
-            <div className="rounded-2xl border border-accent-500/40 bg-brand-900 p-4">
-              <h2 className="mb-3 text-sm font-semibold text-white">
-                Ma participation
+            {/* L'histoire du projet */}
+            <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+              <h2 className="mb-4 text-sm font-semibold text-white">
+                L&apos;histoire du projet
               </h2>
-              <dl className="space-y-2 text-sm tabular-nums">
-                <div className="flex justify-between">
-                  <dt className="text-white/60">Part de la compagnie</dt>
-                  <dd className="font-bold text-white">
-                    {data.parts_pct.toLocaleString("fr-CA", {
-                      maximumFractionDigits: 1
-                    })}{" "}
-                    %
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-white/60">Capital investi</dt>
-                  <dd className="font-bold text-white">
-                    {fmtMoney(data.capital_investi_total)}
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-white/60">Capital remboursé</dt>
-                  <dd className="font-bold text-white">
-                    {fmtMoney(data.capital_rembourse)}
-                  </dd>
-                </div>
-                {data.distributions_recues > 0 ? (
-                  <div className="flex justify-between">
-                    <dt className="text-white/60">
-                      Distributions reçues
-                    </dt>
-                    <dd className="font-bold text-white">
-                      {fmtMoney(data.distributions_recues)}
-                    </dd>
-                  </div>
-                ) : null}
-                <div className="flex justify-between">
-                  <dt className="text-white/60">
-                    Valeur de mes parts
-                    <span className="block text-[10px] font-normal text-white/35">
-                      équité de la compagnie ×{" "}
-                      {data.parts_pct.toLocaleString("fr-CA", {
-                        maximumFractionDigits: 1
-                      })}{" "}
-                      %
-                    </span>
-                  </dt>
-                  <dd className="font-bold text-white">
-                    {fmtMoney(data.valeur_parts)}
-                  </dd>
-                </div>
-                <div className="flex justify-between border-t border-brand-800 pt-2">
-                  <dt className="text-white/60">TVPI</dt>
-                  <dd className="font-bold text-white">
-                    {data.tvpi !== null
-                      ? `${data.tvpi.toLocaleString("fr-CA", {
-                          maximumFractionDigits: 2
-                        })}×`
-                      : "—"}
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-white/60">TRI réalisé</dt>
-                  <dd
-                    className={`font-bold ${
-                      (data.tri_pct ?? 0) >= 0
-                        ? "text-emerald-400"
-                        : "text-rose-400"
-                    }`}
-                  >
-                    {fmtPct(data.tri_pct)}
-                  </dd>
-                </div>
-              </dl>
+              <Timeline events={data.timeline} />
             </div>
-
-            {/* Mouvements */}
-            {data.flux.length > 0 ? (
-              <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
-                <h2 className="mb-3 text-sm font-semibold text-white">
-                  Mouvements
-                </h2>
-                <ul className="space-y-2">
-                  {data.flux.map((f) => (
-                    <li
-                      key={f.id}
-                      className="flex items-center justify-between gap-2 border-b border-brand-800/60 pb-2 text-sm last:border-0 last:pb-0"
-                    >
-                      <div>
-                        <p className="font-medium text-white">
-                          {f.label || FLUX_LABELS[f.type] || f.type}
-                        </p>
-                        <p className="text-xs text-white/40">
-                          {fmtDate(f.date_flux)}
-                          {f.note ? ` · ${f.note}` : ""}
-                        </p>
-                      </div>
-                      <span
-                        className={`font-bold tabular-nums ${
-                          f.type === "apport"
-                            ? "text-white/80"
-                            : "text-emerald-400"
-                        }`}
-                      >
-                        {f.type === "apport" ? "−" : "+"}
-                        {fmtMoney(f.montant)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
 
             {/* Actionnaires */}
             {data.show_actionnaires && data.actionnaires.length > 0 ? (
@@ -524,33 +411,31 @@ export default function ProjetPage() {
             {/* Documents */}
             {data.documents.length > 0 ? (
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
-                <h2 className="mb-2 text-sm font-semibold text-white">
+                <h2 className="mb-3 text-sm font-semibold text-white">
                   Documents
                 </h2>
-                <ul>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {data.documents.map((d) => (
-                    <li key={d.id}>
-                      <button
-                        type="button"
-                        onClick={() => void openDocument(d.id, d.title)}
-                        className="flex w-full items-center gap-2.5 border-b border-brand-800/60 py-2.5 text-left last:border-0 hover:opacity-80"
-                      >
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-brand-800 bg-brand-950 text-accent-500">
-                          <FileText className="h-4 w-4" />
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => void openDocument(d.id, d.title)}
+                      className="group flex items-center gap-2.5 rounded-xl border border-brand-800 bg-brand-950/50 p-3 text-left transition hover:border-accent-500/60"
+                    >
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
+                        <FileText className="h-4 w-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-white group-hover:text-accent-500">
+                          {d.title}
                         </span>
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium text-white">
-                            {d.title}
-                          </span>
-                          <span className="text-[11px] text-white/40">
-                            PDF ·{" "}
-                            {(d.size_bytes / 1024 / 1024).toFixed(1)} Mo
-                          </span>
+                        <span className="text-[11px] text-white/40">
+                          PDF · {(d.size_bytes / 1024 / 1024).toFixed(1)} Mo
                         </span>
-                      </button>
-                    </li>
+                      </span>
+                    </button>
                   ))}
-                </ul>
+                </div>
               </div>
             ) : null}
           </div>
@@ -563,5 +448,174 @@ export default function ProjetPage() {
         </p>
       </div>
     </>
+  );
+}
+
+/* ─────────────────── Ma participation (carte héro) ─────────────────── */
+
+function ParticipationHero({ data }: { data: ProjetDetail }) {
+  const enAttente =
+    data.flux.length === 0 && data.capital_investi_total === 0;
+
+  return (
+    <div className="rounded-2xl border border-accent-500/40 bg-brand-900 p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-white">
+          Ma participation
+        </h2>
+        <span className="inline-flex items-center rounded-full border border-accent-500/50 bg-accent-500/10 px-2.5 py-0.5 text-[11px] font-bold tabular-nums text-accent-500">
+          {data.parts_pct.toLocaleString("fr-CA", {
+            maximumFractionDigits: 1
+          })}{" "}
+          % de la compagnie
+        </span>
+      </div>
+
+      {/* Les deux chiffres qui comptent */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-xl border border-brand-800 bg-brand-950/50 p-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+            Valeur de mes parts
+          </p>
+          <p className="mt-1 text-2xl font-bold tabular-nums text-white">
+            {fmtMoney(data.valeur_parts)}
+          </p>
+          <p className="mt-0.5 text-[10px] text-white/35">
+            équité de la compagnie ×{" "}
+            {data.parts_pct.toLocaleString("fr-CA", {
+              maximumFractionDigits: 1
+            })}{" "}
+            %
+          </p>
+        </div>
+        <div className="rounded-xl border border-brand-800 bg-brand-950/50 p-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+            Capital encore investi
+          </p>
+          <p className="mt-1 text-2xl font-bold tabular-nums text-white">
+            {enAttente ? "—" : fmtMoney(data.capital_actuel)}
+          </p>
+          <p className="mt-0.5 text-[10px] text-white/35">
+            apports − remboursements
+          </p>
+        </div>
+      </div>
+
+      {enAttente ? (
+        <div className="mt-3 rounded-xl border border-dashed border-amber-500/40 bg-amber-500/5 px-3.5 py-3">
+          <p className="text-xs font-semibold text-amber-400">
+            Apports en attente de synchronisation
+          </p>
+          <p className="mt-0.5 text-[11px] text-white/45">
+            Vos apports proviennent des avances d&apos;actionnaires du
+            QuickBooks de la compagnie et se mettent à jour
+            automatiquement chaque nuit — le capital investi, le TVPI et
+            le TRI apparaîtront dès la première synchronisation.
+          </p>
+        </div>
+      ) : (
+        <dl className="mt-4 space-y-2.5 border-t border-brand-800 pt-3 text-sm tabular-nums">
+          <div className="flex justify-between gap-3">
+            <dt className="text-white/60">
+              Capital investi (total)
+              <span className="block text-[10px] font-normal text-white/35">
+                somme de vos apports — avances d&apos;actionnaires
+                (QuickBooks)
+              </span>
+            </dt>
+            <dd className="font-bold text-white">
+              {fmtMoney(data.capital_investi_total)}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-white/60">
+              Capital remboursé
+              <span className="block text-[10px] font-normal text-white/35">
+                avances remboursées par la compagnie (ex. après
+                refinancement)
+              </span>
+            </dt>
+            <dd className="font-bold text-white">
+              {fmtMoney(data.capital_rembourse)}
+            </dd>
+          </div>
+          {data.distributions_recues > 0 ? (
+            <div className="flex justify-between gap-3">
+              <dt className="text-white/60">Distributions reçues</dt>
+              <dd className="font-bold text-white">
+                {fmtMoney(data.distributions_recues)}
+              </dd>
+            </div>
+          ) : null}
+          <div className="flex justify-between gap-3 border-t border-brand-800 pt-2.5">
+            <dt className="text-white/60">
+              TVPI
+              <span className="block text-[10px] font-normal text-white/35">
+                (remboursé + distributions + valeur des parts) ÷ investi
+              </span>
+            </dt>
+            <dd className="font-bold text-white">
+              {data.tvpi !== null
+                ? `${data.tvpi.toLocaleString("fr-CA", {
+                    maximumFractionDigits: 2
+                  })}×`
+                : "—"}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-white/60">
+              TRI réalisé
+              <span className="block text-[10px] font-normal text-white/35">
+                rendement annualisé de vos flux datés (méthode XIRR)
+              </span>
+            </dt>
+            <dd
+              className={`font-bold ${
+                (data.tri_pct ?? 0) >= 0
+                  ? "text-emerald-400"
+                  : "text-rose-400"
+              }`}
+            >
+              {fmtPct(data.tri_pct)}
+            </dd>
+          </div>
+        </dl>
+      )}
+
+      {/* Mouvements */}
+      {data.flux.length > 0 ? (
+        <div className="mt-4 border-t border-brand-800 pt-3">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+            Mouvements
+          </p>
+          <ul className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
+            {data.flux.map((f) => (
+              <li
+                key={f.id}
+                className="flex items-center justify-between gap-2 text-xs"
+              >
+                <span className="min-w-0 truncate text-white/70">
+                  {fmtDate(f.date_flux)} —{" "}
+                  {f.label || FLUX_LABELS[f.type] || f.type}
+                  {f.note ? (
+                    <span className="text-white/35"> · {f.note}</span>
+                  ) : null}
+                </span>
+                <b
+                  className={`shrink-0 tabular-nums ${
+                    f.type === "apport"
+                      ? "text-white/80"
+                      : "text-emerald-400"
+                  }`}
+                >
+                  {f.type === "apport" ? "−" : "+"}
+                  {fmtMoney(f.montant)}
+                </b>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
   );
 }
