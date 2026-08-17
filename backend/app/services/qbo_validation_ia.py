@@ -18,7 +18,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select
 
@@ -71,12 +71,15 @@ def _parse_json_tableau(raw: str) -> Optional[List[Dict[str, Any]]]:
     return data if isinstance(data, list) else None
 
 
-async def suggerer_ia(db) -> int:
+async def suggerer_ia(db) -> Tuple[int, Optional[str]]:
     """Pose ``suggestion_bail_id``/``suggestion_confiance`` sur les
     transactions ambiguës/non rapprochées qui n'en ont pas encore.
-    Retourne le nombre de suggestions posées. Ne commit pas."""
+    Retourne (nombre de suggestions posées, info) — ``info`` explique
+    tout résultat à zéro (IA non configurée, erreur, réponse
+    illisible…) : un zéro muet au rapport est inacceptable. Ne commit
+    pas."""
     if not is_configured():
-        return 0
+        return 0, "IA non configurée sur le serveur (aucune clé API IA)"
 
     plancher = (
         datetime.now(timezone.utc).date()
@@ -100,7 +103,7 @@ async def suggerer_ia(db) -> int:
         ).scalars().all()
     )
     if not txns:
-        return 0
+        return 0, None  # rien en attente — pas une anomalie
 
     # Candidats par transaction = baux des immeubles couverts par SON
     # compte (même périmètre que le rapprochement déterministe).
@@ -160,7 +163,7 @@ async def suggerer_ia(db) -> int:
         if candidats_par_compte.get(t.compte_id)
     ]
     if not lot:
-        return 0
+        return 0, "transactions en attente sans compte/candidats"
 
     prompt = (
         "## Alias appris (provenance confirmée par un humain)\n"
@@ -178,15 +181,15 @@ async def suggerer_ia(db) -> int:
         )
     except AIProviderError as exc:
         log.warning("Suggestions IA loyers indisponibles : %s", exc)
-        return 0
+        return 0, f"fournisseur IA indisponible : {str(exc)[:180]}"
     except Exception as exc:  # noqa: BLE001 — jamais bloquant
         log.warning("Suggestions IA loyers, erreur inattendue : %s", exc)
-        return 0
+        return 0, f"erreur IA inattendue : {str(exc)[:180]}"
 
     parsed = _parse_json_tableau(res.text)
     if not parsed:
         log.warning("Suggestions IA loyers : réponse illisible")
-        return 0
+        return 0, "réponse IA illisible (pas un tableau JSON)"
 
     par_id = {t.id: t for t in txns}
     posees = 0
@@ -210,4 +213,4 @@ async def suggerer_ia(db) -> int:
         posees += 1
     if posees:
         await db.flush()
-    return posees
+    return posees, None

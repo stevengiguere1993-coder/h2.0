@@ -476,6 +476,7 @@ type SyncRapport = {
   ignorees: number;
   doublons_fusionnes: number;
   suggestions_ia: number;
+  suggestions_ia_info: string | null;
   details: SyncCompteDetail[];
   comptes_ignores: SyncCompteIgnore[];
 };
@@ -871,6 +872,13 @@ function ValidationBancaireSection({ canEdit }: { canEdit: boolean }) {
                       non lu — {i.raison}
                     </li>
                   ))}
+                  {/* L'IA n'a rien suggéré ? Le POURQUOI est toujours
+                      affiché — jamais de zéro muet. */}
+                  {rapport.suggestions_ia_info ? (
+                    <li className="text-xs text-sky-300/90">
+                      Suggestions IA : {rapport.suggestions_ia_info}
+                    </li>
+                  ) : null}
                 </ul>
               </details>
             ) : null}

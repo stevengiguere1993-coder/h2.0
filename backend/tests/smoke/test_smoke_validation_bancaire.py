@@ -1392,3 +1392,46 @@ def test_suggestion_ia_pre_selectionne_sans_valider(run, db_setup, monkeypatch):
     data = run(_fil())
     ligne = data["transactions"][0]
     assert ligne["suggestion_bail_id"] == maritza["bail_id"]
+
+
+def test_trop_paye_et_faute_de_frappe_bancaire(run, db_setup):
+    """Deux cas RÉELS des captures Phil 2026-08-17 :
+    - « MEHREZ DHOUIB » 850 $ sur un loyer de 600 $ (trop-payé) : le nom
+      désigne UN locataire → rapproché malgré le montant atypique ;
+    - « MARIO BARETTE » (faute de frappe bancaire, un seul R) pour
+      Mario Barrette, deux baux au même loyer → la similarité départage."""
+    _purge(run)
+    _set_config(run, active=True)
+    seed = _seed_immeuble(
+        run,
+        name="8900 St-Hubert",
+        address="8900, Rue Saint-Hubert",
+        baux=[
+            {"loyer": 600.0, "nom": "Mehrez Dhouib"},
+            {"loyer": 750.0, "nom": "Mario Barrette"},
+            {"loyer": 750.0, "nom": "Maritza Rivera"},
+        ],
+    )
+    _map_compte(
+        run, "40", "8900 St-Hubert - Loyers à remettre", seed["immeuble_id"]
+    )
+    qbo = FakeQbo(
+        gl_par_compte={
+            "40": [
+                {"date": MOIS_COURANT.isoformat(), "id": "D-990",
+                 "memo": "Virement Interac de /MEHREZ DHOUIB /",
+                 "montant": 850.0},
+                {"date": MOIS_COURANT.isoformat(), "id": "D-991",
+                 "memo": "Virement Interac de /MARIO BARETTE /",
+                 "montant": 750.0},
+            ]
+        }
+    )
+    _sync(run, qbo)
+    txns = {t.qbo_txn_id: t for t in _txns(run)}
+    mehrez, mario, _maritza = seed["baux"]
+    assert txns["D-990"].statut == "rapproche"
+    assert txns["D-990"].bail_id == mehrez["bail_id"]
+    assert txns["D-990"].mois_couvert == MOIS_COURANT
+    assert txns["D-991"].statut == "rapproche"
+    assert txns["D-991"].bail_id == mario["bail_id"]
