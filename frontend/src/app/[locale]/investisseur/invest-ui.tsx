@@ -4,7 +4,10 @@
    projet, aperçu admin). Graphiques SVG faits main (pas de lib), encre
    sur `currentColor` pour rester lisibles dans les deux thèmes. */
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+
+import { authedFetch } from "@/lib/auth";
 
 /* ----------------------------- Types ----------------------------- */
 
@@ -147,7 +150,11 @@ export type ProjetDetail = {
   tri_pct: number | null;
   tvpi: number | null;
   flux: FluxRow[];
-  actionnaires: { name: string; parts_pct: number; is_me: boolean }[];
+  actionnaires: {
+    name: string;
+    parts_pct: number | null;
+    is_me: boolean;
+  }[];
   show_depenses: boolean;
   show_hypotheque: boolean;
   show_actionnaires: boolean;
@@ -598,6 +605,446 @@ export function HypothequesCard({
               </dl>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------- Filtre de période partagé (par année) ------------- */
+
+function anneesDe(labels: string[]): string[] {
+  return Array.from(
+    new Set(labels.map((l) => /(\d{4})/.exec(l)?.[1] || ""))
+  )
+    .filter(Boolean)
+    .sort()
+    .reverse();
+}
+
+function PeriodeSelect({
+  annees,
+  value,
+  onChange
+}: {
+  annees: string[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  if (annees.length < 2) return null;
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="input w-auto text-xs"
+      title="Filtrer par période"
+    >
+      <option value="12m">12 derniers mois</option>
+      {annees.map((a) => (
+        <option key={a} value={a}>
+          {a}
+        </option>
+      ))}
+      <option value="">Depuis le début</option>
+    </select>
+  );
+}
+
+/* ------- Revenus & dépenses NORMALISÉS (pôle locatif) ------- */
+
+export function NormalisesPanel({
+  serie,
+  revenusMode,
+  cashflowMoyen,
+  depensesParCategorie,
+  showDepenses,
+  showCashflow
+}: {
+  serie: SerieMois[];
+  revenusMode?: "recus" | "potentiel";
+  cashflowMoyen: number | null;
+  depensesParCategorie?: DepenseCategorie[];
+  showDepenses: boolean;
+  showCashflow: boolean;
+}) {
+  const [periode, setPeriode] = useState("12m");
+  const annees = useMemo(
+    () => anneesDe(serie.map((r) => r.mois)),
+    [serie]
+  );
+  const vue = useMemo(() => {
+    if (periode === "12m") return serie.slice(-12);
+    if (!periode) return serie;
+    return serie.filter((r) => r.mois.startsWith(periode));
+  }, [serie, periode]);
+  const totaux = useMemo(
+    () => ({
+      revenus: vue.reduce((s, r) => s + r.revenus, 0),
+      depenses: vue.reduce((s, r) => s + (r.depenses ?? 0), 0)
+    }),
+    [vue]
+  );
+
+  return (
+    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white">
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">
+          Revenus et dépenses normalisés
+        </h2>
+        <PeriodeSelect
+          annees={annees}
+          value={periode}
+          onChange={setPeriode}
+        />
+      </div>
+      <p className="mb-2 text-[11px] text-white/35">
+        Pôle gestion locative — loyers et dépenses récurrentes.
+        {showCashflow && cashflowMoyen !== null ? (
+          <>
+            {" "}
+            Cash-flow moyen :{" "}
+            <b
+              className={
+                cashflowMoyen >= 0 ? "text-emerald-400" : "text-rose-400"
+              }
+            >
+              {cashflowMoyen >= 0 ? "+" : ""}
+              {fmtMoney(cashflowMoyen)}/mois
+            </b>
+          </>
+        ) : null}
+      </p>
+      <RevDepChart serie={vue} showDepenses={showDepenses} />
+      <div className="mt-1 flex flex-wrap gap-4 text-xs text-white/50">
+        <span className="inline-flex items-center gap-1.5">
+          <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#199e70]" />
+          {revenusMode === "potentiel"
+            ? "Loyers (unités louées — paiements détaillés non suivis)"
+            : "Revenus perçus"}
+        </span>
+        {showDepenses ? (
+          <span className="inline-flex items-center gap-1.5">
+            <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#e66767]" />
+            Dépenses
+          </span>
+        ) : null}
+        <span className="ml-auto tabular-nums text-white/40">
+          Période : {fmtMoney(totaux.revenus)}
+          {showDepenses ? ` − ${fmtMoney(totaux.depenses)}` : ""}
+        </span>
+      </div>
+      {showDepenses && depensesParCategorie ? (
+        <DepensesParCategorie items={depensesParCategorie} />
+      ) : null}
+    </div>
+  );
+}
+
+/* ------- Revenus & dépenses RÉELS (QuickBooks — optimisation) ------- */
+
+export type QboReelsRow = {
+  mois: string;
+  revenus: number;
+  depenses: number;
+  hypotheque?: number;
+  ecart: number;
+  details?: { nom: string; type: string; montant: number }[];
+};
+
+export type QboReels = {
+  statut:
+    | "aucun_projet"
+    | "sans_qbo"
+    | "erreur"
+    | "connecte"
+    | "masque";
+  projet_nom?: string;
+  erreur?: string;
+  rows?: QboReelsRow[];
+  total?: {
+    revenus: number;
+    depenses: number;
+    hypotheque?: number;
+    ecart: number;
+  } | null;
+};
+
+export function QboReelsPanel({ fetchPath }: { fetchPath: string }) {
+  const [reels, setReels] = useState<QboReels | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [periode, setPeriode] = useState("12m");
+  const [ouverts, setOuverts] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch(fetchPath)
+      .then(async (res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          setFailed(true);
+          return;
+        }
+        setReels((await res.json()) as QboReels);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchPath]);
+
+  const rows = useMemo(() => reels?.rows || [], [reels]);
+  const annees = useMemo(
+    () => anneesDe(rows.map((r) => r.mois)),
+    [rows]
+  );
+  const vue = useMemo(() => {
+    if (periode === "12m") return rows.slice(-12);
+    if (!periode) return rows;
+    return rows.filter(
+      (r) => (/(\d{4})/.exec(r.mois)?.[1] || "") === periode
+    );
+  }, [rows, periode]);
+  // Total RECALCULÉ sur les mois affichés (celui du backend couvre
+  // toute la période).
+  const total = useMemo(() => {
+    const somme = (f: (r: QboReelsRow) => number) =>
+      Math.round(vue.reduce((s, r) => s + f(r), 0) * 100) / 100;
+    return {
+      revenus: somme((r) => r.revenus),
+      depenses: somme((r) => r.depenses),
+      hypotheque: somme((r) => r.hypotheque || 0),
+      ecart: somme((r) => r.ecart)
+    };
+  }, [vue]);
+  const showHyp = vue.some((r) => Math.abs(r.hypotheque || 0) >= 0.01);
+  const hasDetails = vue.some((r) => (r.details || []).length > 0);
+
+  function basculer(cle: string) {
+    setOuverts((prev) => {
+      const next = new Set(prev);
+      if (next.has(cle)) next.delete(cle);
+      else next.add(cle);
+      return next;
+    });
+  }
+
+  const naBox = (titre: string, texte: string) => (
+    <div className="rounded-xl border border-dashed border-brand-700 bg-brand-950/40 px-4 py-6 text-center">
+      <p className="text-sm font-semibold text-white/70">{titre}</p>
+      <p className="mx-auto mt-1 max-w-sm text-xs text-white/40">
+        {texte}
+      </p>
+    </div>
+  );
+
+  function DetailsRow({
+    details,
+    colSpan
+  }: {
+    details: { nom: string; type: string; montant: number }[];
+    colSpan: number;
+  }) {
+    if (!details.length) return null;
+    return (
+      <tr>
+        <td colSpan={colSpan} className="pb-2">
+          <div className="ml-3 space-y-0.5 border-l border-brand-800 pl-3">
+            {details.map((d, i) => (
+              <div
+                key={i}
+                className="flex items-center justify-between gap-2 text-[11px]"
+              >
+                <span className="text-white/50">{d.nom}</span>
+                <span
+                  className={`tabular-nums ${
+                    d.type === "revenu"
+                      ? "text-emerald-400"
+                      : "text-rose-400"
+                  }`}
+                >
+                  {d.type === "revenu" ? "+" : "−"}
+                  {fmtMoney(Math.abs(d.montant))}
+                </span>
+              </div>
+            ))}
+          </div>
+        </td>
+      </tr>
+    );
+  }
+
+  if (reels?.statut === "masque") return null;
+
+  const nbCols = 3 + (showHyp ? 1 : 0) + 1;
+
+  return (
+    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white">
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">
+          Revenus et dépenses réels
+        </h2>
+        {reels?.statut === "connecte" ? (
+          <PeriodeSelect
+            annees={annees}
+            value={periode}
+            onChange={setPeriode}
+          />
+        ) : null}
+      </div>
+      <p className="mb-3 text-[11px] text-white/35">
+        Importations QuickBooks du projet lié dans la section
+        optimisation (gestion d&apos;entreprise)
+        {reels?.statut === "connecte" && reels.projet_nom
+          ? ` — ${reels.projet_nom}`
+          : ""}
+        {hasDetails ? " — cliquez un mois pour le détail par compte" : ""}
+        .
+      </p>
+
+      {failed ? (
+        naBox(
+          "Chargement impossible",
+          "Les données réelles n'ont pas pu être chargées — réessayez plus tard."
+        )
+      ) : reels === null ? (
+        <div className="flex justify-center py-10">
+          <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+        </div>
+      ) : reels.statut === "aucun_projet" ? (
+        naBox(
+          "Non applicable — pas encore rentré",
+          "Cette compagnie n'a aucun projet dans la section optimisation " +
+            "de gestion d'entreprise. Créez-y le projet et connectez " +
+            "QuickBooks pour voir les chiffres réels ici."
+        )
+      ) : reels.statut === "sans_qbo" ? (
+        naBox(
+          "QuickBooks non connecté",
+          `Le projet « ${reels.projet_nom} » existe dans la section ` +
+            "optimisation, mais aucune connexion QuickBooks n'est " +
+            "choisie dans ses réglages."
+        )
+      ) : reels.statut === "erreur" ? (
+        naBox(
+          "Lecture QuickBooks impossible",
+          reels.erreur ||
+            "Erreur de lecture — vérifiez la connexion QuickBooks dans la section optimisation."
+        )
+      ) : vue.length === 0 ? (
+        naBox(
+          "Aucune donnée sur la période",
+          "QuickBooks est connecté mais le rapport est vide pour cette période."
+        )
+      ) : (
+        <div className="max-h-[420px] overflow-y-auto overflow-x-auto">
+          <table className="w-full min-w-[420px] text-xs tabular-nums">
+            <thead className="sticky top-0 bg-brand-900">
+              <tr className="text-left text-[10px] uppercase tracking-wider text-white/40">
+                <th className="py-1.5 pr-2 font-medium">Mois</th>
+                <th className="py-1.5 pl-2 text-right font-medium">
+                  Revenus
+                </th>
+                <th className="py-1.5 pl-2 text-right font-medium">
+                  Dépenses
+                </th>
+                {showHyp ? (
+                  <th className="py-1.5 pl-2 text-right font-medium">
+                    Hypothèque
+                  </th>
+                ) : null}
+                <th className="py-1.5 pl-2 text-right font-medium">
+                  Écart
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {vue.map((r) => (
+                <Fragment key={r.mois}>
+                  <tr
+                    className={`border-t border-brand-800/60 ${
+                      (r.details || []).length
+                        ? "cursor-pointer hover:bg-white/[0.03]"
+                        : ""
+                    }`}
+                    onClick={() =>
+                      (r.details || []).length && basculer(r.mois)
+                    }
+                    title={
+                      (r.details || []).length
+                        ? "Cliquer pour voir le détail par compte"
+                        : undefined
+                    }
+                  >
+                    <td className="py-1.5 pr-2 text-white/70">
+                      <span className="inline-flex items-center gap-1">
+                        {(r.details || []).length ? (
+                          ouverts.has(r.mois) ? (
+                            <ChevronDown className="h-3 w-3 opacity-50" />
+                          ) : (
+                            <ChevronRight className="h-3 w-3 opacity-50" />
+                          )
+                        ) : null}
+                        {r.mois}
+                      </span>
+                    </td>
+                    <td className="py-1.5 pl-2 text-right text-white/80">
+                      {fmtMoney(r.revenus)}
+                    </td>
+                    <td className="py-1.5 pl-2 text-right text-white/80">
+                      {fmtMoney(r.depenses)}
+                    </td>
+                    {showHyp ? (
+                      <td className="py-1.5 pl-2 text-right text-white/80">
+                        {fmtMoney(r.hypotheque || 0)}
+                      </td>
+                    ) : null}
+                    <td
+                      className={`py-1.5 pl-2 text-right font-semibold ${
+                        r.ecart >= 0
+                          ? "text-emerald-400"
+                          : "text-rose-400"
+                      }`}
+                    >
+                      {r.ecart >= 0 ? "+" : ""}
+                      {fmtMoney(r.ecart)}
+                    </td>
+                  </tr>
+                  {ouverts.has(r.mois) ? (
+                    <DetailsRow
+                      details={r.details || []}
+                      colSpan={nbCols}
+                    />
+                  ) : null}
+                </Fragment>
+              ))}
+              <tr className="border-t-2 border-brand-700 font-semibold">
+                <td className="py-2 pr-2 text-white">TOTAL</td>
+                <td className="py-2 pl-2 text-right text-white">
+                  {fmtMoney(total.revenus)}
+                </td>
+                <td className="py-2 pl-2 text-right text-white">
+                  {fmtMoney(total.depenses)}
+                </td>
+                {showHyp ? (
+                  <td className="py-2 pl-2 text-right text-white">
+                    {fmtMoney(total.hypotheque)}
+                  </td>
+                ) : null}
+                <td
+                  className={`py-2 pl-2 text-right ${
+                    total.ecart >= 0
+                      ? "text-emerald-400"
+                      : "text-rose-400"
+                  }`}
+                >
+                  {total.ecart >= 0 ? "+" : ""}
+                  {fmtMoney(total.ecart)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       )}
     </div>

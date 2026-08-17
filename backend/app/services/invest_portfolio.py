@@ -60,6 +60,83 @@ def month_label(d: date) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Annuaire « Parts & actionnaires » — SOURCE DE VÉRITÉ des parts
+# ─────────────────────────────────────────────────────────────────────
+
+
+async def partner_directory(
+    db: AsyncSession, entreprise_id: int
+) -> dict:
+    """Actionnaires déclarés dans la fiche entreprise (gestion
+    d'entreprise) : la seule source des noms et des % de parts.
+
+    Retourne {"rows": [...], "by_user": {user_id: row}} où chaque row =
+    {partner_id, name, ownership_pct, email, user_id}. Le `partner_name`
+    saisi (souvent un holding) PRIME sur le nom du compte lié."""
+    from app.models.entreprise import EntreprisePartner
+    from app.models.user import User
+
+    rows: list[dict] = []
+    by_user: dict[int, dict] = {}
+    for pr in (
+        await db.execute(
+            select(EntreprisePartner)
+            .where(EntreprisePartner.entreprise_id == entreprise_id)
+            .order_by(EntreprisePartner.id)
+        )
+    ).scalars():
+        pu = None
+        if pr.user_id:
+            pu = await db.get(User, pr.user_id)
+        if pu is None and pr.partner_email:
+            pu = (
+                await db.execute(
+                    select(User).where(
+                        func.lower(User.email)
+                        == pr.partner_email.strip().lower()
+                    )
+                )
+            ).scalar_one_or_none()
+        name = (pr.partner_name or "").strip() or (
+            f"{pu.first_name or ''} {pu.last_name or ''}".strip()
+            or pu.email
+            if pu
+            else "—"
+        )
+        row = {
+            "partner_id": pr.id,
+            "name": name,
+            "ownership_pct": (
+                float(pr.ownership_pct)
+                if pr.ownership_pct is not None
+                else None
+            ),
+            "email": (
+                (pu.email if pu else pr.partner_email) or ""
+            ).strip().lower()
+            or None,
+            "user_id": pu.id if pu else None,
+        }
+        rows.append(row)
+        if pu is not None and pu.id not in by_user:
+            by_user[pu.id] = row
+    return {"rows": rows, "by_user": by_user}
+
+
+def effective_parts_pct(
+    part: InvestParticipation, directory: Optional[dict]
+) -> float:
+    """% de parts EFFECTIF d'une participation : celui de la fiche
+    entreprise (Parts & actionnaires) quand l'actionnaire y est apparié,
+    sinon le % stocké sur la participation."""
+    if directory:
+        row = directory["by_user"].get(part.user_id)
+        if row and row["ownership_pct"] is not None:
+            return float(row["ownership_pct"])
+    return float(part.parts_pct)
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Immeubles d'une compagnie (avec % de détention)
 # ─────────────────────────────────────────────────────────────────────
 
@@ -364,10 +441,15 @@ def _add_months(d: date, n: int) -> date:
 
 
 async def serie_mensuelle(
-    db: AsyncSession, entreprise_id: int, months: int = 12
+    db: AsyncSession, entreprise_id: int, months: Optional[int] = None
 ) -> dict:
     """Série mensuelle revenus / dépenses (pondérée par le % de
-    détention), alignée sur la FICHE IMMEUBLE du pôle locatif :
+    détention), alignée sur la FICHE IMMEUBLE du pôle locatif.
+
+    ``months=None`` = fenêtre AUTO : depuis le premier achat d'immeuble
+    (plafonnée à 72 mois, plancher 12) — le frontend filtre ensuite par
+    année. Passer un entier pour une fenêtre fixe (ex. 12 pour les
+    cartes du portefeuille).
 
     - revenus : paiements ENREGISTRÉS (internes + gestion externe) s'il
       y en a ; sinon repli sur le loyer EFFECTIF des unités louées
@@ -383,6 +465,20 @@ async def serie_mensuelle(
     from app.services.loyer_effectif import loyer_effectif_loue
 
     pairs = await immeubles_of_entreprise(db, entreprise_id)
+    if months is None:
+        months = 12
+        achats = [
+            imm.purchase_date for imm, _ in pairs if imm.purchase_date
+        ]
+        if achats:
+            premier = _month_start(min(achats))
+            auj = _month_start(date.today())
+            ecart = (
+                (auj.year - premier.year) * 12
+                + (auj.month - premier.month)
+                + 1
+            )
+            months = max(12, min(72, ecart))
     start = _add_months(_month_start(date.today()), -(months - 1))
     keys = [_add_months(start, i) for i in range(months)]
     rev: dict[date, float] = {k: 0.0 for k in keys}
@@ -478,6 +574,12 @@ async def serie_mensuelle(
                 )
             )
         ).scalars().all()
+        # Les récurrentes ne s'étalent pas avant l'achat de l'immeuble.
+        imm_debut = (
+            _month_start(imm.purchase_date)
+            if imm.purchase_date
+            else keys[0]
+        )
         for d in depenses:
             base = float(d.montant or 0)
             if d.is_pourcentage:
@@ -491,19 +593,24 @@ async def serie_mensuelle(
                     par_categorie.get(cat, 0.0) + base * 12 * pct
                 )
                 for k in keys:
-                    dep[k] += base * pct
+                    if k >= imm_debut:
+                        dep[k] += base * pct
             elif d.frequence == "annuel":
                 dep_recurrentes += base / 12.0 * pct
                 par_categorie[cat] = par_categorie.get(cat, 0.0) + base * pct
                 for k in keys:
-                    dep[k] += base / 12.0 * pct
+                    if k >= imm_debut:
+                        dep[k] += base / 12.0 * pct
             elif d.date_depense:
                 k = _month_start(d.date_depense)
                 if k in dep:
                     dep[k] += base * pct
-                    par_categorie[cat] = (
-                        par_categorie.get(cat, 0.0) + base * pct
-                    )
+                    # Le palmarès par catégorie reste sur 12 mois même
+                    # quand la série couvre plus loin.
+                    if k >= _add_months(_month_start(date.today()), -11):
+                        par_categorie[cat] = (
+                            par_categorie.get(cat, 0.0) + base * pct
+                        )
 
         hyps = await hypotheques_actives(db, imm.id)
         hypo_mensuel += sum(
@@ -516,8 +623,12 @@ async def serie_mensuelle(
     # même sans suivi détaillé des paiements).
     revenus_mode = "recus" if any(v > 0 for v in rev.values()) else "potentiel"
     if revenus_mode == "potentiel":
+        achats = [
+            imm.purchase_date for imm, _ in pairs if imm.purchase_date
+        ]
+        depuis = _month_start(min(achats)) if achats else keys[0]
         for k in keys:
-            rev[k] = loyers_effectifs
+            rev[k] = loyers_effectifs if k >= depuis else 0.0
 
     rows = [
         {
@@ -707,6 +818,13 @@ async def serie_valeur_totale(
     all_flux = [f for _, fl in participations for f in fl]
     if not all_flux:
         return []
+    # % effectifs (fiche entreprise) — annuaire par compagnie, une fois.
+    directories: dict[int, dict] = {}
+    for part, _fl in participations:
+        if part.entreprise_id not in directories:
+            directories[part.entreprise_id] = await partner_directory(
+                db, part.entreprise_id
+            )
     first = min(f.date_flux for f in all_flux)
     today = date.today()
     # Points trimestriels du premier flux à aujourd'hui (max ~40 pts).
@@ -721,7 +839,9 @@ async def serie_valeur_totale(
     for at in points:
         total = 0.0
         for part, fl in participations:
-            pct = float(part.parts_pct) / 100.0
+            pct = effective_parts_pct(
+                part, directories.get(part.entreprise_id)
+            ) / 100.0
             started = any(
                 f.date_flux <= at
                 for f in fl
@@ -865,3 +985,77 @@ async def get_or_default_profil(
             )
         )
     ).scalar_one_or_none()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Revenus / dépenses RÉELS (QuickBooks du projet d'optimisation)
+# ─────────────────────────────────────────────────────────────────────
+
+
+async def optimisation_projet_qbo(
+    db: AsyncSession, entreprise_id: int
+) -> tuple[Optional[OptimisationProjet], Optional[OptimisationProjet]]:
+    """(projet avec connexion QBO, premier projet tout court) de la
+    compagnie — actifs d'abord."""
+    projets = (
+        await db.execute(
+            select(OptimisationProjet)
+            .where(OptimisationProjet.entreprise_id == entreprise_id)
+            .order_by(
+                (OptimisationProjet.status == "actif").desc(),
+                OptimisationProjet.id.desc(),
+            )
+        )
+    ).scalars().all()
+    if not projets:
+        return None, None
+    avec_qbo = next((x for x in projets if x.qbo_scope), None)
+    return avec_qbo, projets[0]
+
+
+async def qbo_reels_data(db: AsyncSession, entreprise_id: int) -> dict:
+    """Série mensuelle RÉELLE (QuickBooks) de la compagnie, via son
+    projet de la section optimisation — depuis l'ouverture du projet
+    (ou le premier achat d'immeuble). Statuts :
+
+    - aucun_projet : rien dans la section optimisation → « non
+      applicable / pas encore rentré » côté UI ;
+    - sans_qbo     : projet présent mais aucune connexion QuickBooks ;
+    - erreur       : lecture QBO impossible (token, réseau…) ;
+    - connecte     : rows {mois, revenus, depenses, hypotheque, ecart,
+      details} + total de période."""
+    p, premier = await optimisation_projet_qbo(db, entreprise_id)
+    if premier is None:
+        return {"statut": "aucun_projet"}
+    if p is None:
+        return {"statut": "sans_qbo", "projet_nom": premier.name}
+    debut = p.date_debut
+    if debut is None:
+        achats = [
+            imm.purchase_date
+            for imm, _ in await immeubles_of_entreprise(db, entreprise_id)
+            if imm.purchase_date
+        ]
+        debut = min(achats) if achats else date(2000, 1, 1)
+    try:
+        from app.services.qbo_optimisation import cashflow_mensuel
+
+        cf = await cashflow_mensuel(
+            p.qbo_scope,
+            debut.isoformat(),
+            date.today().isoformat(),
+            hypotheque_account_id=p.qbo_hypotheque_account_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — message propre à l'UI
+        log.info("invest qbo-reels entreprise #%s: %s", entreprise_id, exc)
+        return {
+            "statut": "erreur",
+            "projet_nom": p.name,
+            "erreur": str(exc)[:300],
+        }
+    return {
+        "statut": "connecte",
+        "projet_nom": p.name,
+        "rows": (cf or {}).get("mois", []),
+        "total": (cf or {}).get("total"),
+    }

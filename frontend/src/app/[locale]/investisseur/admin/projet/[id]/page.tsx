@@ -2,13 +2,14 @@
 
 /* Console admin — fiche d'un projet (compagnie).
 
-   - Participations : ajouter un investisseur (compte créé + invitation
-     courriel au besoin), % de parts, visibilité, flux (apports,
-     remboursements, distributions) → nourrit le TRI.
-   - Publication : description, phase, interrupteurs de transparence.
-   - Jalons manuels de la timeline.
-   - Documents partagés : upload PDF ou fichiers COCHÉS depuis le Drive
-     de la compagnie (copie au partage — jamais le Drive complet). */
+   Lecture seule sur les données financières : noms et % de parts
+   viennent de la fiche entreprise (Parts & actionnaires), les apports/
+   remboursements des avances d'actionnaires QuickBooks (bouton
+   « Synchroniser QuickBooks »). La console gère : activation des
+   comptes, visibilité par projet, publication (description, phase,
+   transparence), jalons manuels et documents partagés (upload PDF ou
+   fichiers COCHÉS depuis le Drive de la compagnie — copie au partage,
+   jamais le Drive complet). */
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
@@ -19,7 +20,7 @@ import {
   FolderOpen,
   Loader2,
   Paperclip,
-  Plus,
+  RefreshCw,
   Trash2,
   X
 } from "lucide-react";
@@ -29,14 +30,14 @@ import { useConfirm } from "@/components/confirm-dialog";
 import { InvestisseurTopbar } from "../../../layout";
 import {
   DepenseCategorie,
-  DepensesParCategorie,
   fmtDate,
   fmtMoney,
   fmtPct,
   HypothequesCard,
   ImmeubleRow,
+  NormalisesPanel,
   PhaseBadge,
-  RevDepChart,
+  QboReelsPanel,
   SerieMois,
   Timeline,
   TimelineEvent
@@ -57,6 +58,7 @@ type ParticipationRow = {
   user_name: string;
   user_email: string | null;
   parts_pct: number;
+  parts_source: "fiche" | "manuel";
   statut: string;
   is_visible: boolean;
   notes: string | null;
@@ -163,10 +165,10 @@ export default function AdminProjetPage() {
   const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
 
-  const [addOpen, setAddOpen] = useState(false);
   const [driveOpen, setDriveOpen] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [busyActiver, setBusyActiver] = useState<number | null>(null);
+  const [busySync, setBusySync] = useState(false);
   const [expandedImm, setExpandedImm] = useState<number | null>(null);
 
   const load = useCallback(async () => {
@@ -251,13 +253,55 @@ export default function AdminProjetPage() {
     if (res.ok) await load();
   }
 
-  async function removeFlux(fluxId: number) {
-    if (!(await confirm({ title: "Supprimer ce flux ?" }))) return;
-    const res = await authedFetch(
-      `/api/v1/invest/admin/flux/${fluxId}`,
-      { method: "DELETE" }
-    );
-    if (res.ok) await load();
+  async function syncQbo() {
+    setBusySync(true);
+    setBanner(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/invest/admin/projets/${entrepriseId}/sync-qbo`,
+        { method: "POST" }
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body) {
+        setBanner("Synchronisation QuickBooks échouée.");
+        return;
+      }
+      if (body.statut === "aucun_projet") {
+        setBanner(
+          "Non applicable — cette compagnie n'a pas de projet dans la " +
+            "section optimisation (gestion d'entreprise)."
+        );
+      } else if (body.statut === "sans_qbo") {
+        setBanner(
+          `Le projet « ${body.projet_nom} » n'a pas de connexion ` +
+            "QuickBooks dans ses réglages."
+        );
+      } else if (body.statut === "erreur") {
+        setBanner(`Lecture QuickBooks impossible : ${body.erreur || "?"}`);
+      } else {
+        const ap = (body.apparies || [])
+          .map(
+            (a: { investisseur: string; nb_flux: number }) =>
+              `${a.investisseur} (${a.nb_flux} flux)`
+          )
+          .join(", ");
+        const rest =
+          (body.non_apparies || []).length > 0
+            ? ` Comptes non appariés : ${body.non_apparies.join(", ")} — ` +
+              "renommez le compte QBO ou l'actionnaire pour que les " +
+              "noms se ressemblent."
+            : "";
+        setBanner(
+          `Synchronisé depuis « ${body.projet_nom} » : avances totales ` +
+            `${Math.round(body.avances_total).toLocaleString("fr-CA")} $` +
+            (ap ? ` · flux mis à jour : ${ap}.` : ".") +
+            rest
+        );
+      }
+      await load();
+    } finally {
+      setBusySync(false);
+    }
   }
 
   async function removeJalon(id: number) {
@@ -648,45 +692,17 @@ export default function AdminProjetPage() {
 
         {/* Revenus / dépenses : normalisés (pôle locatif) vs réels (QBO) */}
         <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white">
-            <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
-              <h2 className="text-sm font-semibold">
-                Revenus et dépenses normalisés
-              </h2>
-              <span className="text-xs text-white/50 tabular-nums">
-                Cash-flow moyen :{" "}
-                <b
-                  className={
-                    data.cashflow_moyen >= 0
-                      ? "text-emerald-400"
-                      : "text-rose-400"
-                  }
-                >
-                  {data.cashflow_moyen >= 0 ? "+" : ""}
-                  {fmtMoney(data.cashflow_moyen)}/mois
-                </b>
-              </span>
-            </div>
-            <p className="mb-2 text-[11px] text-white/35">
-              Pôle gestion locative — loyers et dépenses récurrentes,
-              12 derniers mois.
-            </p>
-            <RevDepChart serie={data.serie_mensuelle} showDepenses />
-            <div className="mt-1 flex flex-wrap gap-4 text-xs text-white/50">
-              <span className="inline-flex items-center gap-1.5">
-                <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#199e70]" />
-                {data.revenus_mode === "potentiel"
-                  ? "Loyers (unités louées — paiements détaillés non suivis)"
-                  : "Revenus perçus"}
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#e66767]" />
-                Dépenses
-              </span>
-            </div>
-            <DepensesParCategorie items={data.depenses_par_categorie} />
-          </div>
-          <QboReelsPanel entrepriseId={entrepriseId} />
+          <NormalisesPanel
+            serie={data.serie_mensuelle}
+            revenusMode={data.revenus_mode}
+            cashflowMoyen={data.cashflow_moyen}
+            depensesParCategorie={data.depenses_par_categorie}
+            showDepenses
+            showCashflow
+          />
+          <QboReelsPanel
+            fetchPath={`/api/v1/invest/admin/projets/${entrepriseId}/qbo-reels`}
+          />
         </div>
 
         <h2 className="mb-3 mt-8 text-base font-semibold text-white">
@@ -696,20 +712,32 @@ export default function AdminProjetPage() {
           {/* ── Colonne gauche : participations ── */}
           <div className="min-w-0 space-y-4">
             <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
-              <div className="mb-3 flex items-center justify-between">
+              <div className="mb-1 flex items-center justify-between gap-2">
                 <h2 className="text-sm font-semibold text-white">
                   Actionnaires &amp; participations
                 </h2>
                 <button
                   type="button"
-                  onClick={() => setAddOpen(true)}
-                  className="btn-secondary btn-xs inline-flex items-center gap-1"
-                  title="Pour un investisseur qui n'est pas dans Parts & actionnaires"
+                  onClick={() => void syncQbo()}
+                  disabled={busySync}
+                  className="btn-outline-accent btn-xs inline-flex items-center gap-1"
+                  title="Lit les comptes d'avances d'actionnaires du QuickBooks lié (section optimisation) : met à jour les avances totales (équité) et les apports/remboursements de chaque investisseur"
                 >
-                  <Plus className="h-3 w-3" />
-                  Autre investisseur
+                  {busySync ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3 w-3" />
+                  )}
+                  Synchroniser QuickBooks
                 </button>
               </div>
+              <p className="mb-3 text-[11px] text-white/35">
+                Noms et % de parts : fiche entreprise (Parts &amp;
+                actionnaires). Apports et remboursements : avances
+                d&apos;actionnaires du QuickBooks lié. Rien ne se saisit
+                ici — la console gère seulement la visibilité et les
+                comptes.
+              </p>
 
               {/* Actionnaires de la fiche entreprise — activation 1 clic */}
               {data.partenaires.length > 0 ? (
@@ -792,8 +820,8 @@ export default function AdminProjetPage() {
                   </ul>
                   <p className="mt-2 text-[10px] text-white/35">
                     Synchronisé depuis la fiche entreprise. Après
-                    activation : ajoutez l&apos;apport dans sa carte
-                    ci-dessous, puis cochez « Visible dans son portail ».
+                    activation : « Synchroniser QuickBooks » pour ses
+                    apports, puis « Visible dans son portail ».
                   </p>
                 </div>
               ) : null}
@@ -802,7 +830,7 @@ export default function AdminProjetPage() {
                 <p className="py-4 text-center text-sm text-white/50">
                   {data.partenaires.length > 0
                     ? "Aucune participation active — activez un actionnaire ci-dessus."
-                    : "Aucun actionnaire dans la fiche entreprise (Parts & actionnaires) — ajoutez-les là, ou utilisez « Autre investisseur »."}
+                    : "Aucun actionnaire dans la fiche entreprise (Parts & actionnaires) — ajoutez-les là (gestion d'entreprise), ils apparaîtront ici."}
                 </p>
               ) : (
                 <div className="space-y-3">
@@ -812,7 +840,6 @@ export default function AdminProjetPage() {
                       p={p}
                       onChanged={load}
                       onRemove={() => void removeParticipation(p)}
-                      onRemoveFlux={(fid) => void removeFlux(fid)}
                       onVoirComme={() =>
                         router.push(
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -837,10 +864,19 @@ export default function AdminProjetPage() {
           {/* ── Colonne droite : publication + documents ── */}
           <div className="min-w-0 space-y-4">
             <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
-              <h2 className="mb-3 text-sm font-semibold text-white">
-                Publication
+              <h2 className="text-sm font-semibold text-white">
+                Publication — ce que voit l&apos;investisseur
               </h2>
-              <label className="label">Présentation du projet</label>
+              <p className="mb-3 mt-1 text-[11px] text-white/35">
+                Toute la fiche est calculée automatiquement (pôle
+                locatif, gestion d&apos;entreprise, QuickBooks). Cette
+                carte contrôle seulement l&apos;habillage et le niveau
+                de transparence de ce que l&apos;investisseur voit.
+              </p>
+
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                Mot de présentation
+              </p>
               <textarea
                 defaultValue={data.profil.description || ""}
                 onBlur={(e) => {
@@ -850,11 +886,14 @@ export default function AdminProjetPage() {
                   }
                 }}
                 rows={3}
-                placeholder="Petit texte affiché en tête de la fiche projet…"
+                placeholder="Affiché en tête de sa fiche projet — ex. : « Immeuble de 12 logements acquis en 2021, optimisé puis refinancé en 2023. »"
                 className="input w-full text-xs"
               />
+
               <div className="mt-3">
-                <label className="label">Phase affichée</label>
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                  Phase affichée
+                </p>
                 <select
                   value={data.profil.phase_override || ""}
                   onChange={(e) =>
@@ -869,10 +908,11 @@ export default function AdminProjetPage() {
                   <option value="long_terme">Détention long terme</option>
                 </select>
               </div>
+
               <div className="mt-3">
-                <label className="label">
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
                   Avances aux actionnaires ($)
-                </label>
+                </p>
                 <input
                   type="number"
                   min="0"
@@ -888,29 +928,54 @@ export default function AdminProjetPage() {
                   className="input w-full text-xs tabular-nums"
                 />
                 <p className="mt-1 text-[10px] text-white/35">
-                  Soustraites de l&apos;équité : équité = valeur −
-                  hypothèques − avances.
+                  Équité = valeur − hypothèques − avances. Rempli
+                  automatiquement par « Synchroniser QuickBooks » ;
+                  modifiable à la main tant que la compagnie n&apos;a
+                  pas de connexion QBO.
                 </p>
               </div>
-              <div className="mt-3 space-y-2">
+
+              <p className="mb-1 mt-4 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                Transparence
+              </p>
+              <div className="space-y-2">
                 {(
                   [
-                    ["show_depenses", "Dépenses détaillées visibles"],
+                    [
+                      "show_depenses",
+                      "Dépenses détaillées",
+                      "graphique des dépenses, palmarès par catégorie et détail par compte QBO"
+                    ],
                     [
                       "show_hypotheque",
-                      "Détails d'hypothèque visibles (prêteur, taux, terme)"
+                      "Détails d'hypothèque",
+                      "section Hypothèques (créancier, soldes, taux, terme)"
                     ],
-                    ["show_actionnaires", "Liste des actionnaires visible"],
-                    ["show_cashflow", "Cash-flow visible"]
+                    [
+                      "show_actionnaires",
+                      "Liste des actionnaires",
+                      "co-actionnaires de SA compagnie seulement, jamais les autres projets"
+                    ],
+                    [
+                      "show_cashflow",
+                      "Cash-flow",
+                      "cash-flow moyen + tableau des réels QuickBooks"
+                    ]
                   ] as const
-                ).map(([key, label]) => (
+                ).map(([key, label, hint]) => (
                   <label
                     key={key}
-                    className="flex items-center justify-between gap-2 text-xs text-white/70"
+                    className="flex items-start justify-between gap-2 text-xs text-white/70"
                   >
-                    <span>{label}</span>
+                    <span>
+                      {label}
+                      <span className="block text-[10px] text-white/35">
+                        {hint}
+                      </span>
+                    </span>
                     <input
                       type="checkbox"
+                      className="mt-0.5"
                       checked={data.profil[key]}
                       onChange={(e) =>
                         void patchProfil({ [key]: e.target.checked })
@@ -936,9 +1001,10 @@ export default function AdminProjetPage() {
                       } else {
                         setBanner(
                           "Aucun dossier Drive lié à cette compagnie — " +
-                            "collez le lien de son dossier Google Drive " +
-                            "dans la fiche entreprise (gestion " +
-                            "d'entreprise), puis revenez cocher les " +
+                            "ouvrez sa fiche dans gestion d'entreprise " +
+                            "et liez son dossier dans la section " +
+                            "« Documents Drive » (le même dossier sera " +
+                            "utilisé ici), puis revenez cocher les " +
                             "fichiers à partager."
                         );
                       }
@@ -1019,17 +1085,6 @@ export default function AdminProjetPage() {
         </div>
       </div>
 
-      {addOpen ? (
-        <AddParticipationModal
-          entrepriseId={entrepriseId}
-          onClose={() => setAddOpen(false)}
-          onAdded={async (msg) => {
-            setAddOpen(false);
-            if (msg) setBanner(msg);
-            await load();
-          }}
-        />
-      ) : null}
       {driveOpen && data.drive_folder_id ? (
         <DrivePickerModal
           entrepriseId={entrepriseId}
@@ -1045,268 +1100,25 @@ export default function AdminProjetPage() {
   );
 }
 
-/* ──────── Revenus / dépenses RÉELS (QuickBooks — optimisation) ──────── */
-
-type QboReels = {
-  statut: "aucun_projet" | "sans_qbo" | "erreur" | "connecte";
-  projet_nom?: string;
-  erreur?: string;
-  rows?: {
-    mois: string;
-    revenus: number;
-    depenses: number;
-    hypotheque: number;
-    ecart: number;
-  }[];
-  total?: {
-    revenus: number;
-    depenses: number;
-    hypotheque: number;
-    ecart: number;
-  } | null;
-};
-
-function QboReelsPanel({ entrepriseId }: { entrepriseId: number }) {
-  const [reels, setReels] = useState<QboReels | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    authedFetch(`/api/v1/invest/admin/projets/${entrepriseId}/qbo-reels`)
-      .then(async (res) => {
-        if (cancelled) return;
-        if (!res.ok) {
-          setFailed(true);
-          return;
-        }
-        setReels((await res.json()) as QboReels);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [entrepriseId]);
-
-  const naBox = (titre: string, texte: string) => (
-    <div className="rounded-xl border border-dashed border-brand-700 bg-brand-950/40 px-4 py-6 text-center">
-      <p className="text-sm font-semibold text-white/70">{titre}</p>
-      <p className="mx-auto mt-1 max-w-sm text-xs text-white/40">
-        {texte}
-      </p>
-    </div>
-  );
-
-  const rows = reels?.rows || [];
-  const showHyp =
-    rows.some((r) => Math.abs(r.hypotheque) >= 0.01) ||
-    Math.abs(reels?.total?.hypotheque || 0) >= 0.01;
-
-  return (
-    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white">
-      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold">
-          Revenus et dépenses réels
-        </h2>
-        {reels?.statut === "connecte" && reels.projet_nom ? (
-          <span className="text-xs text-white/40">
-            QuickBooks · {reels.projet_nom}
-          </span>
-        ) : null}
-      </div>
-      <p className="mb-3 text-[11px] text-white/35">
-        Importations QuickBooks du projet lié dans la section
-        optimisation (gestion d&apos;entreprise) — 12 derniers mois.
-      </p>
-
-      {failed ? (
-        naBox(
-          "Chargement impossible",
-          "Les données réelles n'ont pas pu être chargées — réessayez plus tard."
-        )
-      ) : reels === null ? (
-        <div className="flex justify-center py-10">
-          <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
-        </div>
-      ) : reels.statut === "aucun_projet" ? (
-        naBox(
-          "Non applicable — pas encore rentré",
-          "Cette compagnie n'a aucun projet dans la section optimisation " +
-            "de gestion d'entreprise. Créez-y le projet et connectez " +
-            "QuickBooks pour voir les chiffres réels ici."
-        )
-      ) : reels.statut === "sans_qbo" ? (
-        naBox(
-          "QuickBooks non connecté",
-          `Le projet « ${reels.projet_nom} » existe dans la section ` +
-            "optimisation, mais aucune connexion QuickBooks n'est " +
-            "choisie dans ses réglages."
-        )
-      ) : reels.statut === "erreur" ? (
-        naBox(
-          "Lecture QuickBooks impossible",
-          reels.erreur ||
-            "Erreur de lecture — vérifiez la connexion QuickBooks dans la section optimisation."
-        )
-      ) : rows.length === 0 ? (
-        naBox(
-          "Aucune donnée sur la période",
-          "QuickBooks est connecté mais le rapport des 12 derniers mois est vide."
-        )
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs tabular-nums">
-            <thead>
-              <tr className="text-left text-[10px] uppercase tracking-wider text-white/40">
-                <th className="py-1.5 pr-2 font-medium">Mois</th>
-                <th className="py-1.5 pl-2 text-right font-medium">
-                  Revenus
-                </th>
-                <th className="py-1.5 pl-2 text-right font-medium">
-                  Dépenses
-                </th>
-                {showHyp ? (
-                  <th className="py-1.5 pl-2 text-right font-medium">
-                    Hypothèque
-                  </th>
-                ) : null}
-                <th className="py-1.5 pl-2 text-right font-medium">
-                  Écart
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr
-                  key={r.mois}
-                  className="border-t border-brand-800/60"
-                >
-                  <td className="py-1.5 pr-2 text-white/70">{r.mois}</td>
-                  <td className="py-1.5 pl-2 text-right text-white/80">
-                    {fmtMoney(r.revenus)}
-                  </td>
-                  <td className="py-1.5 pl-2 text-right text-white/80">
-                    {fmtMoney(r.depenses)}
-                  </td>
-                  {showHyp ? (
-                    <td className="py-1.5 pl-2 text-right text-white/80">
-                      {fmtMoney(r.hypotheque)}
-                    </td>
-                  ) : null}
-                  <td
-                    className={`py-1.5 pl-2 text-right font-semibold ${
-                      r.ecart >= 0 ? "text-emerald-400" : "text-rose-400"
-                    }`}
-                  >
-                    {r.ecart >= 0 ? "+" : ""}
-                    {fmtMoney(r.ecart)}
-                  </td>
-                </tr>
-              ))}
-              {reels.total ? (
-                <tr className="border-t-2 border-brand-700 font-semibold">
-                  <td className="py-2 pr-2 text-white">TOTAL</td>
-                  <td className="py-2 pl-2 text-right text-white">
-                    {fmtMoney(reels.total.revenus)}
-                  </td>
-                  <td className="py-2 pl-2 text-right text-white">
-                    {fmtMoney(reels.total.depenses)}
-                  </td>
-                  {showHyp ? (
-                    <td className="py-2 pl-2 text-right text-white">
-                      {fmtMoney(reels.total.hypotheque)}
-                    </td>
-                  ) : null}
-                  <td
-                    className={`py-2 pl-2 text-right ${
-                      reels.total.ecart >= 0
-                        ? "text-emerald-400"
-                        : "text-rose-400"
-                    }`}
-                  >
-                    {reels.total.ecart >= 0 ? "+" : ""}
-                    {fmtMoney(reels.total.ecart)}
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
 /* ─────────────────── Carte participation + flux ─────────────────── */
 
 function ParticipationCard({
   p,
   onChanged,
   onRemove,
-  onRemoveFlux,
   onVoirComme
 }: {
   p: ParticipationRow;
   onChanged: () => Promise<void>;
   onRemove: () => void;
-  onRemoveFlux: (fluxId: number) => void;
   onVoirComme: () => void;
 }) {
-  const [fluxType, setFluxType] = useState("apport");
-  const [fluxMontant, setFluxMontant] = useState("");
-  const [fluxDate, setFluxDate] = useState(
-    new Date().toISOString().slice(0, 10)
-  );
-  const [fluxNote, setFluxNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
   async function patch(body: Record<string, unknown>) {
     const res = await authedFetch(
       `/api/v1/invest/admin/participations/${p.id}`,
       { method: "PATCH", body: JSON.stringify(body) }
     );
     if (res.ok) await onChanged();
-  }
-
-  async function addFlux(e: React.FormEvent) {
-    e.preventDefault();
-    const montant = Number(fluxMontant.replace(",", "."));
-    if (!montant || montant <= 0) {
-      setErr("Montant invalide.");
-      return;
-    }
-    setBusy(true);
-    setErr(null);
-    try {
-      const res = await authedFetch(
-        `/api/v1/invest/admin/participations/${p.id}/flux`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            type: fluxType,
-            montant,
-            date_flux: fluxDate,
-            note: fluxNote.trim() || null
-          })
-        }
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        setErr(
-          typeof body?.detail === "string"
-            ? body.detail
-            : "Ajout du flux échoué."
-        );
-        return;
-      }
-      setFluxMontant("");
-      setFluxNote("");
-      await onChanged();
-    } finally {
-      setBusy(false);
-    }
   }
 
   return (
@@ -1320,7 +1132,18 @@ function ParticipationCard({
             </span>
           </p>
           <p className="text-xs text-white/50 tabular-nums">
-            Capital actuel {fmtMoney(p.capital_actuel)} · valeur des
+            Parts{" "}
+            {p.parts_pct.toLocaleString("fr-CA", {
+              maximumFractionDigits: 1
+            })}{" "}
+            %{" "}
+            <span className="text-white/35">
+              ({p.parts_source === "fiche"
+                ? "fiche entreprise"
+                : "saisi ici — ajoutez-le dans Parts & actionnaires"}
+              )
+            </span>{" "}
+            · capital actuel {fmtMoney(p.capital_actuel)} · valeur des
             parts {fmtMoney(p.valeur_parts)} · TRI {fmtPct(p.tri_pct)}
           </p>
         </div>
@@ -1346,22 +1169,6 @@ function ParticipationCard({
 
       <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
         <label className="flex items-center gap-1.5 text-white/60">
-          Parts
-          <input
-            type="number"
-            step="0.1"
-            min="0.1"
-            max="100"
-            defaultValue={p.parts_pct}
-            onBlur={(e) => {
-              const v = Number(e.target.value);
-              if (v && v !== p.parts_pct) void patch({ parts_pct: v });
-            }}
-            className="input w-20 text-xs tabular-nums"
-          />
-          %
-        </label>
-        <label className="flex items-center gap-1.5 text-white/60">
           <input
             type="checkbox"
             checked={p.is_visible}
@@ -1382,10 +1189,10 @@ function ParticipationCard({
         </label>
       </div>
 
-      {/* Flux */}
+      {/* Flux (lecture seule — alimentés par la synchronisation QBO) */}
       <div className="mt-3 border-t border-brand-800 pt-2">
         {p.flux.length > 0 ? (
-          <ul className="mb-2 space-y-1">
+          <ul className="space-y-1">
             {p.flux.map((f) => (
               <li
                 key={f.id}
@@ -1394,91 +1201,35 @@ function ParticipationCard({
                 <span className="text-white/70">
                   {fmtDate(f.date_flux)} —{" "}
                   {FLUX_LABELS[f.type] || f.type}
+                  {f.source === "qbo" ? (
+                    <span className="ml-1 rounded border border-sky-500/40 bg-sky-500/10 px-1 text-[9px] font-bold uppercase text-sky-400">
+                      QBO
+                    </span>
+                  ) : null}
                   {f.note ? (
                     <span className="text-white/40"> · {f.note}</span>
                   ) : null}
                 </span>
-                <span className="flex items-center gap-2">
-                  <b
-                    className={`tabular-nums ${
-                      f.type === "apport"
-                        ? "text-white/80"
-                        : "text-emerald-400"
-                    }`}
-                  >
-                    {f.type === "apport" ? "−" : "+"}
-                    {fmtMoney(f.montant)}
-                  </b>
-                  <button
-                    type="button"
-                    onClick={() => onRemoveFlux(f.id)}
-                    className="rounded p-0.5 text-white/30 hover:text-rose-400"
-                    aria-label="Supprimer le flux"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
+                <b
+                  className={`tabular-nums ${
+                    f.type === "apport"
+                      ? "text-white/80"
+                      : "text-emerald-400"
+                  }`}
+                >
+                  {f.type === "apport" ? "−" : "+"}
+                  {fmtMoney(f.montant)}
+                </b>
               </li>
             ))}
           </ul>
         ) : (
-          <p className="mb-2 text-xs text-white/40">
-            Aucun flux — ajoutez l&apos;apport initial ci-dessous.
+          <p className="text-xs text-white/40">
+            Aucun apport trouvé — cliquez « Synchroniser QuickBooks »
+            ci-dessus (le compte d&apos;avances doit porter un nom
+            proche du sien).
           </p>
         )}
-        <form
-          onSubmit={addFlux}
-          className="flex flex-wrap items-center gap-1.5"
-        >
-          <select
-            value={fluxType}
-            onChange={(e) => setFluxType(e.target.value)}
-            className="input text-xs"
-          >
-            <option value="apport">Apport</option>
-            <option value="remboursement">Remboursement</option>
-            <option value="dividende">Distribution</option>
-            <option value="sortie">Sortie</option>
-          </select>
-          <input
-            value={fluxMontant}
-            onChange={(e) => setFluxMontant(e.target.value)}
-            placeholder="Montant $"
-            inputMode="decimal"
-            className="input w-24 text-xs tabular-nums"
-          />
-          <input
-            type="date"
-            value={fluxDate}
-            onChange={(e) => setFluxDate(e.target.value)}
-            className="input text-xs"
-          />
-          <input
-            value={fluxNote}
-            onChange={(e) => setFluxNote(e.target.value)}
-            placeholder="Note (optionnel)"
-            className="input min-w-0 flex-1 text-xs"
-          />
-          <button
-            type="submit"
-            disabled={busy}
-            className="btn-outline-accent btn-xs"
-          >
-            {busy ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              "Ajouter"
-            )}
-          </button>
-        </form>
-        {err ? <p className="mt-1 text-xs text-rose-400">{err}</p> : null}
-        <p className="mt-2 text-[10px] text-white/35">
-          Un flux = un événement réel (apport, remboursement,
-          distribution) — c&apos;est ce qui nourrit le capital investi,
-          la valeur des parts et le TRI. À venir : proposition
-          automatique de ces flux depuis QuickBooks (aucune double
-          saisie).
-        </p>
       </div>
     </div>
   );
@@ -1614,290 +1365,6 @@ function JalonsCard({
             ) : (
               "Ajouter"
             )}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-/* ──────────────── Modal ajout de participation ──────────────── */
-
-function AddParticipationModal({
-  entrepriseId,
-  onClose,
-  onAdded
-}: {
-  entrepriseId: number;
-  onClose: () => void;
-  onAdded: (banner: string | null) => Promise<void>;
-}) {
-  const [existing, setExisting] = useState<
-    { user_id: number; name: string; email: string }[]
-  >([]);
-  const [mode, setMode] = useState<"nouveau" | "existant">("nouveau");
-  const [existingId, setExistingId] = useState("");
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [pct, setPct] = useState("");
-  const [apport, setApport] = useState("");
-  const [apportDate, setApportDate] = useState(
-    new Date().toISOString().slice(0, 10)
-  );
-  const [visible, setVisible] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    authedFetch("/api/v1/invest/admin/investisseurs")
-      .then(async (res) => {
-        if (res.ok) {
-          setExisting(
-            (await res.json()) as {
-              user_id: number;
-              name: string;
-              email: string;
-            }[]
-          );
-        }
-      })
-      .catch(() => undefined);
-  }, []);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setErr(null);
-    const pctNum = Number(pct.replace(",", "."));
-    if (!pctNum || pctNum <= 0 || pctNum > 100) {
-      setErr("Pourcentage de parts invalide (0–100).");
-      return;
-    }
-    const body: Record<string, unknown> = {
-      entreprise_id: entrepriseId,
-      parts_pct: pctNum,
-      is_visible: visible
-    };
-    if (mode === "existant") {
-      if (!existingId) {
-        setErr("Choisissez un investisseur.");
-        return;
-      }
-      body.user_id = Number(existingId);
-    } else {
-      if (!firstName.trim() || !lastName.trim() || !email.trim()) {
-        setErr("Prénom, nom et courriel requis.");
-        return;
-      }
-      body.new_investor = {
-        first_name: firstName.trim(),
-        last_name: lastName.trim(),
-        email: email.trim(),
-        phone: phone.trim() || null
-      };
-    }
-    const apportNum = Number(apport.replace(",", "."));
-    if (apportNum > 0) {
-      body.apport_initial = apportNum;
-      body.apport_date = apportDate;
-    }
-    setBusy(true);
-    try {
-      const res = await authedFetch(
-        "/api/v1/invest/admin/participations",
-        { method: "POST", body: JSON.stringify(body) }
-      );
-      const payload = await res.json().catch(() => null);
-      if (!res.ok) {
-        setErr(
-          typeof payload?.detail === "string"
-            ? payload.detail
-            : `Erreur HTTP ${res.status}`
-        );
-        return;
-      }
-      let banner: string | null = null;
-      if (payload?.invitation_sent) {
-        banner = `Invitation envoyée à ${payload.user_email}.`;
-      } else if (payload?.temp_password) {
-        banner =
-          `Compte créé mais courriel non configuré — transmettez ce ` +
-          `mot de passe temporaire : ${payload.temp_password}`;
-      }
-      await onAdded(banner);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={() => !busy && onClose()}
-    >
-      <form
-        onSubmit={submit}
-        onClick={(e) => e.stopPropagation()}
-        className="max-h-[85vh] w-full max-w-md space-y-3 overflow-y-auto rounded-2xl border border-brand-800 bg-brand-900 p-5"
-      >
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-white">
-            Ajouter un investisseur
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-ghost btn-xs"
-            disabled={busy}
-          >
-            ✕
-          </button>
-        </div>
-
-        <div className="flex gap-1">
-          {(
-            [
-              ["nouveau", "Nouveau compte"],
-              ["existant", "Investisseur existant"]
-            ] as const
-          ).map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setMode(key)}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
-                mode === key
-                  ? "bg-accent-500 text-brand-950"
-                  : "text-white/60 hover:bg-white/5 hover:text-white"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {mode === "existant" ? (
-          <div>
-            <label className="label">Investisseur</label>
-            <select
-              value={existingId}
-              onChange={(e) => setExistingId(e.target.value)}
-              className="input w-full text-xs"
-            >
-              <option value="">— Choisir —</option>
-              {existing.map((u) => (
-                <option key={u.user_id} value={String(u.user_id)}>
-                  {u.name} ({u.email})
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : (
-          <>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="label">Prénom</label>
-                <input
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                  className="input w-full text-xs"
-                />
-              </div>
-              <div>
-                <label className="label">Nom</label>
-                <input
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                  className="input w-full text-xs"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="label">Courriel</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="input w-full text-xs"
-              />
-              <p className="mt-1 text-[10px] text-white/35">
-                Le compte (accès portail seulement) est créé avec un mot
-                de passe aléatoire envoyé par courriel.
-              </p>
-            </div>
-            <div>
-              <label className="label">Téléphone (optionnel)</label>
-              <input
-                type="tel"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                className="input w-full text-xs"
-              />
-            </div>
-          </>
-        )}
-
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="label">Parts (%)</label>
-            <input
-              value={pct}
-              onChange={(e) => setPct(e.target.value)}
-              placeholder="ex. 50"
-              inputMode="decimal"
-              className="input w-full text-xs tabular-nums"
-            />
-          </div>
-          <div>
-            <label className="label">Apport initial ($, optionnel)</label>
-            <input
-              value={apport}
-              onChange={(e) => setApport(e.target.value)}
-              placeholder="ex. 250000"
-              inputMode="decimal"
-              className="input w-full text-xs tabular-nums"
-            />
-          </div>
-        </div>
-        {apport ? (
-          <div>
-            <label className="label">Date de l&apos;apport</label>
-            <input
-              type="date"
-              value={apportDate}
-              onChange={(e) => setApportDate(e.target.value)}
-              className="input w-full text-xs"
-            />
-          </div>
-        ) : null}
-        <label className="flex items-center gap-2 text-xs text-white/70">
-          <input
-            type="checkbox"
-            checked={visible}
-            onChange={(e) => setVisible(e.target.checked)}
-          />
-          Visible immédiatement dans son portail
-        </label>
-
-        {err ? <p className="text-xs text-rose-400">{err}</p> : null}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-secondary btn-sm"
-            disabled={busy}
-          >
-            Annuler
-          </button>
-          <button
-            type="submit"
-            disabled={busy}
-            className="btn-accent btn-sm inline-flex items-center gap-1.5"
-          >
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-            Ajouter
           </button>
         </div>
       </form>
