@@ -11,7 +11,14 @@
    fichiers COCHÉS depuis le Drive de la compagnie — copie au partage,
    jamais le Drive complet). */
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import { useParams } from "next/navigation";
 import { useRouter } from "@/i18n/navigation";
 import {
@@ -1089,6 +1096,7 @@ export default function AdminProjetPage() {
         <DrivePickerModal
           entrepriseId={entrepriseId}
           folderId={data.drive_folder_id}
+          sharedTitles={data.documents.map((d) => d.title)}
           onClose={() => setDriveOpen(false)}
           onShared={async () => {
             setDriveOpen(false);
@@ -1377,11 +1385,13 @@ function JalonsCard({
 function DrivePickerModal({
   entrepriseId,
   folderId,
+  sharedTitles,
   onClose,
   onShared
 }: {
   entrepriseId: number;
   folderId: string;
+  sharedTitles: string[];
   onClose: () => void;
   onShared: () => Promise<void>;
 }) {
@@ -1389,12 +1399,23 @@ function DrivePickerModal({
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const [recherche, setRecherche] = useState("");
   const [busy, setBusy] = useState(false);
   const [stack, setStack] = useState<{ id: string; name: string }[]>([
     { id: folderId, name: "Dossier du projet" }
   ]);
+  // id → nom de TOUS les fichiers vus (la sélection survit à la
+  // navigation entre dossiers).
+  const nomsRef = useRef<Record<string, string>>({});
 
   const current = stack[stack.length - 1];
+  const dejaPartage = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of sharedTitles) {
+      set.add(t.toLowerCase().replace(/\.pdf$/i, "").trim());
+    }
+    return set;
+  }, [sharedTitles]);
 
   const loadFolder = useCallback(async (fid: string) => {
     setLoading(true);
@@ -1411,6 +1432,9 @@ function DrivePickerModal({
       }
       const data = (await res.json()) as { files: DriveFileT[] };
       setFiles(data.files || []);
+      for (const f of data.files || []) {
+        nomsRef.current[f.id] = f.name;
+      }
     } catch (e) {
       setErr(
         e instanceof Error
@@ -1430,6 +1454,12 @@ function DrivePickerModal({
     return f.mime_type || f.mimeType || "";
   }
 
+  const visibles = useMemo(() => {
+    const q = recherche.trim().toLowerCase();
+    if (!q) return files;
+    return files.filter((f) => f.name.toLowerCase().includes(q));
+  }, [files, recherche]);
+
   async function share() {
     const ids = Object.keys(checked).filter((k) => checked[k]);
     if (ids.length === 0) return;
@@ -1437,18 +1467,18 @@ function DrivePickerModal({
     setErr(null);
     try {
       for (const fid of ids) {
-        const f = files.find((x) => x.id === fid);
+        const nom = nomsRef.current[fid];
         const res = await authedFetch(
           `/api/v1/invest/admin/projets/${entrepriseId}/documents/from-drive`,
           {
             method: "POST",
-            body: JSON.stringify({ file_id: fid, title: f?.name || null })
+            body: JSON.stringify({ file_id: fid, title: nom || null })
           }
         );
         if (!res.ok) {
           const body = await res.json().catch(() => null);
           setErr(
-            `${f?.name || fid} : ` +
+            `${nom || fid} : ` +
               (typeof body?.detail === "string"
                 ? body.detail
                 : `erreur HTTP ${res.status}`)
@@ -1492,7 +1522,7 @@ function DrivePickerModal({
           du partage, les investisseurs ne touchent jamais au Drive.
         </p>
 
-        {/* Fil d'Ariane des dossiers */}
+        {/* Fil d'Ariane + recherche */}
         <div className="mb-2 flex flex-wrap items-center gap-1 text-xs">
           {stack.map((s, i) => (
             <span key={s.id} className="flex items-center gap-1">
@@ -1511,6 +1541,12 @@ function DrivePickerModal({
             </span>
           ))}
         </div>
+        <input
+          value={recherche}
+          onChange={(e) => setRecherche(e.target.value)}
+          placeholder="Rechercher dans ce dossier…"
+          className="input mb-2 w-full text-xs"
+        />
 
         <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-brand-800">
           {loading ? (
@@ -1519,15 +1555,20 @@ function DrivePickerModal({
             </div>
           ) : err ? (
             <p className="p-4 text-xs text-rose-400">{err}</p>
-          ) : files.length === 0 ? (
+          ) : visibles.length === 0 ? (
             <p className="p-4 text-center text-xs text-white/40">
-              Dossier vide.
+              {recherche
+                ? "Aucun fichier ne correspond à la recherche."
+                : "Dossier vide."}
             </p>
           ) : (
             <ul>
-              {files.map((f) => {
+              {visibles.map((f) => {
                 const isFolder =
                   mime(f) === "application/vnd.google-apps.folder";
+                const partage = dejaPartage.has(
+                  f.name.toLowerCase().replace(/\.pdf$/i, "").trim()
+                );
                 return (
                   <li
                     key={f.id}
@@ -1545,7 +1586,11 @@ function DrivePickerModal({
                         {f.name}
                       </button>
                     ) : (
-                      <label className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-white hover:bg-white/5">
+                      <label
+                        className={`flex cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-white/5 ${
+                          partage ? "text-white/40" : "text-white"
+                        }`}
+                      >
                         <input
                           type="checkbox"
                           checked={!!checked[f.id]}
@@ -1558,6 +1603,11 @@ function DrivePickerModal({
                         />
                         <FileText className="h-4 w-4 shrink-0 text-white/40" />
                         <span className="min-w-0 truncate">{f.name}</span>
+                        {partage ? (
+                          <span className="ml-auto shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-400">
+                            ✓ déjà partagé
+                          </span>
+                        ) : null}
                       </label>
                     )}
                   </li>
