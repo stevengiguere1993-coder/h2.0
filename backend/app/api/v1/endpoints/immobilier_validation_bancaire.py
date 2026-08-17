@@ -191,6 +191,9 @@ class SyncResult(BaseModel):
     #: Doublons hérités fusionnés (même écriture via la fiducie ET le
     #: compte par immeuble — le compte spécifique gagne).
     doublons_fusionnes: int = 0
+    #: Suggestions IA posées sur le reliquat ambigu/non rapproché
+    #: (pré-sélection à CONFIRMER — jamais d'auto-validation).
+    suggestions_ia: int = 0
     details: List[SyncCompteDetail] = []
     comptes_ignores: List[SyncCompteIgnore] = []
 

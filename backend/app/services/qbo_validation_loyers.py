@@ -956,6 +956,17 @@ async def synchroniser_transactions(
         await rapprocher_compte(db, compte, liens=liens)
     await db.flush()
     stats["ignorees"] = sum(d["ignorees"] for d in stats["details"])
+
+    # Suggestions IA (v7) sur le reliquat ambigu/non rapproché — l'IA
+    # PRÉ-SÉLECTIONNE, l'humain confirme. Jamais bloquant : sans clé IA
+    # ou en cas d'erreur, zéro suggestion et la synchro reste valide.
+    try:
+        from app.services.qbo_validation_ia import suggerer_ia
+
+        stats["suggestions_ia"] = await suggerer_ia(db)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Suggestions IA non posées : %s", exc)
+        stats["suggestions_ia"] = 0
     return stats
 
 
@@ -1741,6 +1752,8 @@ async def etat_validation(db, mois: date) -> Dict[str, Any]:
                 "montant": float(t.montant or 0),
                 "description": t.description,
                 "payeur": t.payeur,
+                "suggestion_bail_id": t.suggestion_bail_id,
+                "suggestion_confiance": t.suggestion_confiance,
                 "candidats": sorted(
                     candidats,
                     key=lambda c: (
@@ -1939,6 +1952,8 @@ async def lister_transactions(
                 "payeur": t.payeur,
                 "description": t.description,
                 "doc_num": t.doc_num,
+                "suggestion_bail_id": t.suggestion_bail_id,
+                "suggestion_confiance": t.suggestion_confiance,
                 "compte_id": t.compte_id,
                 "compte_nom": (
                     compte.qbo_account_name if compte else ""
