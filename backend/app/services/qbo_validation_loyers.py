@@ -1041,21 +1041,54 @@ def _nom_correspond(desc: str, nom_locataire: str) -> bool:
     desc_mots = [t for t in desc.split() if len(t) >= 3]
     if desc_mots and all(t in set(desc_mots) for t in mots):
         return True
-    # Troncature Interac : TOUS les mots du payeur doivent être des
-    # préfixes de mots du nom — un mot étranger = quelqu'un d'autre.
+    # Troncature Interac + fautes de frappe bancaires : TOUS les mots du
+    # payeur doivent RÉPONDRE à un mot du nom — un mot étranger =
+    # quelqu'un d'autre.
     if not desc_mots:
         return False
     repondus = [
-        t for t in desc_mots if any(m.startswith(t) for m in mots)
+        t
+        for t in desc_mots
+        if any(_token_similaire(t, m) for m in mots)
     ]
     if len(repondus) == len(desc_mots) and (
         len(repondus) >= 2 or len(repondus[0]) >= 6
     ):
         return True
-    # Faute de frappe bancaire (« MARIO BARETTE » pour Mario Barrette,
-    # constaté en prod) : similarité globale très élevée.
+    # Dernier filet : similarité globale très élevée.
     return (
         SequenceMatcher(None, " ".join(desc_mots), nom).ratio() >= 0.86
+    )
+
+
+def _token_similaire(a: str, b: str) -> bool:
+    """Deux mots se répondent : préfixe (troncature Interac) dans un
+    sens ou l'autre, ou quasi-identiques (« BOUREL » ↔ « Bourrelle »,
+    « BARETTE » ↔ « Barrette » — fautes bancaires constatées)."""
+    return (
+        b.startswith(a)
+        or a.startswith(b)
+        or SequenceMatcher(None, a, b).ratio() >= 0.75
+    )
+
+
+def _nom_designe(desc: str, nom_locataire: str) -> bool:
+    """Version FAIBLE : au moins UN mot distinctif (≥ 5 lettres) du
+    payeur répond à un mot du nom du locataire. Utilisée seulement pour
+    DÉPARTAGER des candidats dont le MONTANT colle déjà (« MARITZA
+    ALEJAN » → Maritza Rivera : Alejandra est un 2e prénom inconnu de
+    Kratos, mais « maritza » désigne une seule candidate au bon
+    loyer). L'unicité parmi les candidats fait la sécurité."""
+    if _nom_correspond(desc, nom_locataire):
+        return True
+    nom = _norm_payeur(nom_locataire)
+    if not desc or not nom:
+        return False
+    mots_nom = [t for t in nom.split() if len(t) >= 3]
+    return any(
+        any(_token_similaire(t, m) for m in mots_nom)
+        for t in desc.split()
+        if len(t) >= 5
     )
 
 
@@ -1070,6 +1103,7 @@ def _match_multi_mois(
     montant: float,
     paye_map: Dict[Tuple[int, date], float],
     frais_map: Dict[Tuple[int, date], float],
+    couverts: Optional[Dict[Tuple[int, date], float]] = None,
 ) -> Optional[Tuple[date, date]]:
     """Paiement de rattrapage : le montant règle-t-il la somme des dus
     (loyers + frais, moins le déjà payé) de PLUSIEURS mois consécutifs
@@ -1085,6 +1119,9 @@ def _match_multi_mois(
         return None
 
     def _du_restant(m: date) -> float:
+        # Mois déjà couvert par une autre transaction bancaire = réglé.
+        if couverts and couverts.get((bail.id, m), 0.0) >= loyer - _TOL:
+            return 0.0
         du = loyer + frais_map.get((bail.id, m), 0.0)
         return round(du - paye_map.get((bail.id, m), 0.0), 2)
 
@@ -1125,6 +1162,7 @@ def _match_deterministe(
     aliases: List[QboAliasPayeur],
     paye_map: Dict[Tuple[int, date], float],
     frais_map: Dict[Tuple[int, date], float],
+    couverts_map: Optional[Dict[Tuple[int, date], float]] = None,
 ) -> Tuple[str, Optional[int], Optional[date], Optional[date]]:
     """→ (statut, bail_id, mois_couvert, mois_couvert_fin). Règles :
 
@@ -1145,12 +1183,24 @@ def _match_deterministe(
     m0 = txn.date_txn.replace(day=1)
     mois_ordre = [m0, _mois_prec(m0), _mois_suiv(m0)]
     montant = float(txn.montant or 0)
+    couverts = couverts_map or {}
+
+    def _mois_couvert_par_banque(bail: Bail, m: date) -> bool:
+        """Le mois a déjà sa transaction bancaire (une autre) : il
+        n'accepte plus d'imputation — le paiement du 31 juillet fait
+        POUR août glisse sur août au lieu d'écraser juillet (constaté
+        en prod : toute la fin de mois s'imputait au mois de la date
+        déjà réglé, et août restait « sans trace »)."""
+        loyer = float(bail.loyer_mensuel or 0)
+        return couverts.get((bail.id, m), 0.0) >= loyer - _TOL > 0
 
     plausibles: List[Tuple[Bail, date, date]] = []
     for bail in baux:
         trouve = False
         for m in mois_ordre:
             if not _bail_couvre(bail, m):
+                continue
+            if _mois_couvert_par_banque(bail, m):
                 continue
             loyer = float(bail.loyer_mensuel or 0)
             if loyer <= 0:
@@ -1159,16 +1209,23 @@ def _match_deterministe(
             paye = paye_map.get((bail.id, m), 0.0)
             du_mois = round(loyer + frais, 2)
             du_restant = round(du_mois - paye, 2)
+            # Le mois PRÉCÉDENT n'est plausible que s'il a une VRAIE
+            # dette restante (loyer en retard) — jamais sur un simple
+            # « montant == loyer », sinon un paiement d'avance glisse
+            # vers l'arrière au lieu du mois suivant.
+            est_prec = m < m0
             if (
-                abs(montant - loyer) <= _TOL
-                or abs(montant - du_mois) <= _TOL
+                (not est_prec and abs(montant - loyer) <= _TOL)
+                or (not est_prec and abs(montant - du_mois) <= _TOL)
                 or (du_restant > _TOL and abs(montant - du_restant) <= _TOL)
             ):
                 plausibles.append((bail, m, m))
                 trouve = True
                 break  # préférence de mois : le premier plausible suffit
         if not trouve:
-            multi = _match_multi_mois(bail, m0, montant, paye_map, frais_map)
+            multi = _match_multi_mois(
+                bail, m0, montant, paye_map, frais_map, couverts
+            )
             if multi is not None:
                 plausibles.append((bail, multi[0], multi[1]))
 
@@ -1186,11 +1243,15 @@ def _match_deterministe(
             if restreints:
                 plausibles = restreints
         else:
+            # Désignation FAIBLE (un mot distinctif suffit) : ici le
+            # montant colle déjà, le nom ne sert qu'à DÉPARTAGER —
+            # « MARITZA ALEJAN » (2e prénom inconnu de Kratos) désigne
+            # Maritza Rivera parmi les candidats au bon loyer.
             nom_baux = {
                 b.id
                 for b in baux
                 if b.locataire_id in locataires
-                and _nom_correspond(
+                and _nom_designe(
                     desc, locataires[b.locataire_id].full_name or ""
                 )
             }
@@ -1231,7 +1292,9 @@ def _match_deterministe(
                 bail = vises[0]
                 repli: Optional[date] = None
                 for m in mois_ordre:
-                    if not _bail_couvre(bail, m):
+                    if not _bail_couvre(bail, m) or _mois_couvert_par_banque(
+                        bail, m
+                    ):
                         continue
                     if repli is None:
                         repli = m
@@ -1381,10 +1444,34 @@ async def rapprocher_compte(
 
     baux_by_id = {b.id: b for b in baux}
     immeuble_defaut = immeuble_ids[0] if len(immeuble_ids) == 1 else None
+
+    # Mois déjà couverts par une transaction bancaire RAPPROCHÉE (tous
+    # comptes confondus) : un mois pris n'accepte plus d'imputation.
+    couverts_map: Dict[Tuple[int, date], float] = {}
+    if bail_ids:
+        for t in (
+            await db.execute(
+                select(QboTransactionLoyer).where(
+                    QboTransactionLoyer.bail_id.in_(bail_ids),
+                    QboTransactionLoyer.statut == "rapproche",
+                )
+            )
+        ).scalars().all():
+            for m in mois_couverts_txn(t):
+                couverts_map[(t.bail_id, m)] = couverts_map.get(
+                    (t.bail_id, m), 0.0
+                ) + float(t.montant or 0) / max(
+                    1, len(mois_couverts_txn(t))
+                )
+
     n_auto = 0
+    # Ordre CHRONOLOGIQUE : le paiement de juillet prend juillet, celui
+    # de fin juillet fait pour août glisse sur août.
+    txns.sort(key=lambda t: (t.date_txn, t.id))
     for txn in txns:
         statut, bail_id, mois, mois_fin = _match_deterministe(
-            txn, baux, locataires, aliases, paye_map, frais_map
+            txn, baux, locataires, aliases, paye_map, frais_map,
+            couverts_map,
         )
         txn.statut = statut
         txn.bail_id = bail_id
@@ -1403,6 +1490,14 @@ async def rapprocher_compte(
             txn.immeuble_id = immeuble_defaut
         if statut == "rapproche":
             n_auto += 1
+            # Les mois pris par CE rapprochement sont couverts pour la
+            # suite du lot (deux paiements identiques du même locataire
+            # → un par mois, jamais deux sur le même).
+            couverts = mois_couverts_txn(txn)
+            for m in couverts:
+                couverts_map[(bail_id, m)] = couverts_map.get(
+                    (bail_id, m), 0.0
+                ) + float(txn.montant or 0) / max(1, len(couverts))
     await db.flush()
     return n_auto
 

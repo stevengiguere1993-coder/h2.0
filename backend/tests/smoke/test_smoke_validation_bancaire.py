@@ -56,6 +56,7 @@ from app.models.qbo_loyers import (
 )
 from app.services.qbo_validation_loyers import (
     VALIDATION_KEY,
+    _mois_suiv,
     _parse_montant,
     confirmer_transaction,
     decouvrir_comptes,
@@ -1435,3 +1436,69 @@ def test_trop_paye_et_faute_de_frappe_bancaire(run, db_setup):
     assert txns["D-990"].mois_couvert == MOIS_COURANT
     assert txns["D-991"].statut == "rapproche"
     assert txns["D-991"].bail_id == mario["bail_id"]
+
+
+def test_imputation_mois_deja_couvert_glisse_au_suivant(run, db_setup):
+    """LE cas des captures Phil 2026-08-17 : le loyer de juillet est
+    payé début juillet, puis le loyer d'AOÛT est payé le 31 juillet.
+    Sans garde, les deux s'imputaient à juillet (montant == loyer) et
+    août restait « sans trace ». Avec la garde : un mois couvert par
+    une transaction bancaire n'accepte plus d'imputation — le paiement
+    du 31 juillet glisse sur août. + « MARITZA ALEJAN » (2e prénom
+    inconnu de Kratos) départage deux baux au même loyer."""
+    _purge(run)
+    _set_config(run, active=True)
+    mois_prec = (MOIS_COURANT - timedelta(days=1)).replace(day=1)
+    seed = _seed_immeuble(
+        run,
+        name="8900 St-Hubert",
+        address="8900, Rue Saint-Hubert",
+        baux=[
+            {"loyer": 650.0, "nom": "Oscar Ngando"},
+            {"loyer": 750.0, "nom": "Maritza Rivera"},
+            {"loyer": 750.0, "nom": "Mario Barrette"},
+        ],
+    )
+    _map_compte(
+        run, "50", "8900 St-Hubert - Loyers à remettre", seed["immeuble_id"]
+    )
+    oscar, maritza, _mario = seed["baux"]
+    # Les mois antérieurs sont réglés (marqués payés par l'employé) —
+    # comme en prod : la seule dette possible est le mois courant.
+    deux_mois_avant = (mois_prec - timedelta(days=1)).replace(day=1)
+    _marquer_paye(
+        run, oscar["bail_id"], deux_mois_avant, 650.0,
+        deux_mois_avant + timedelta(days=2),
+    )
+    _marquer_paye(
+        run, oscar["bail_id"], mois_prec, 650.0,
+        mois_prec + timedelta(days=2),
+    )
+    fin_mois_prec = _mois_suiv(mois_prec) - timedelta(days=1)
+    qbo = FakeQbo(
+        gl_par_compte={
+            "50": [
+                # Loyer du mois précédent, payé au début du mois.
+                {"date": mois_prec.isoformat(), "id": "D-1100",
+                 "memo": "Virement Interac de /OSCAR NGANDO M/",
+                 "montant": 650.0},
+                # Loyer du mois COURANT, payé le dernier jour du mois
+                # précédent → doit glisser sur le mois courant.
+                {"date": fin_mois_prec.isoformat(), "id": "D-1101",
+                 "memo": "Virement Interac de /OSCAR NGANDO M/",
+                 "montant": 650.0},
+                # 2e prénom inconnu de Kratos, deux baux à 750 $.
+                {"date": MOIS_COURANT.isoformat(), "id": "D-1102",
+                 "memo": "Virement Interac de /MARITZA ALEJAN/",
+                 "montant": 750.0},
+            ]
+        }
+    )
+    _sync(run, qbo)
+    txns = {t.qbo_txn_id: t for t in _txns(run)}
+    assert txns["D-1100"].bail_id == oscar["bail_id"]
+    assert txns["D-1100"].mois_couvert == mois_prec
+    assert txns["D-1101"].bail_id == oscar["bail_id"]
+    assert txns["D-1101"].mois_couvert == MOIS_COURANT  # a glissé ✓
+    assert txns["D-1102"].statut == "rapproche"
+    assert txns["D-1102"].bail_id == maritza["bail_id"]
