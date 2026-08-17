@@ -2147,12 +2147,22 @@ function LoyersMoisSection({
                   <span className="badge badge-neutral">Attente</span>
                 )}
                 {r.bail_termine_le ? (
-                  // M7 : bail résilié/terminé en cours de mois.
+                  // M7 : bail résilié/terminé en cours de mois. Une date
+                  // de fin FUTURE = départ avant terme : la date
+                  // contractuelle serait trompeuse.
                   <span
                     className="badge badge-rose"
-                    title="Le bail couvrait une partie de ce mois — dernier loyer et solde encore dus"
+                    title={
+                      r.bail_termine_le >
+                      new Date().toLocaleDateString("sv-SE")
+                        ? "Locataire parti avant la fin prévue du bail — la ligne reste tant que le solde n'est pas réglé"
+                        : "Le bail couvrait une partie de ce mois — dernier loyer et solde encore dus"
+                    }
                   >
-                    Bail terminé le {r.bail_termine_le}
+                    {r.bail_termine_le >
+                    new Date().toLocaleDateString("sv-SE")
+                      ? "Bail terminé (avant terme)"
+                      : `Bail terminé le ${r.bail_termine_le}`}
                   </span>
                 ) : null}
                 <span className="text-xs text-white/70">

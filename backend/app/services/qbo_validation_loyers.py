@@ -1016,6 +1016,23 @@ def _bail_couvre(bail: Bail, m: date) -> bool:
     return True
 
 
+def _candidat_selecteur(bail: Bail) -> bool:
+    """Le bail a-t-il sa place dans le MENU des rapprochements manuels ?
+    Les actifs, toujours ; un terminé/résilié reste proposé tant que sa
+    fin est récente (± 90 jours) ou future — le locataire parti qui paie
+    sa dette par Interac doit pouvoir être confirmé sur SON bail."""
+    if bail.status == BailStatus.ACTIF.value:
+        return True
+    if bail.status not in (
+        BailStatus.TERMINE.value,
+        BailStatus.RESILIE.value,
+    ):
+        return False
+    if bail.date_fin is None:
+        return False
+    return bail.date_fin >= date.today() - timedelta(days=90)
+
+
 def _alias_correspond(desc: str, alias: str) -> bool:
     if not desc or not alias:
         return False
@@ -1911,7 +1928,7 @@ async def etat_validation(db, mois: date) -> Dict[str, Any]:
     candidats_par_imm: Dict[int, List[Dict[str, Any]]] = {}
     for b in baux:
         imm = _imm_du_bail(b)
-        if imm is None or b.status != BailStatus.ACTIF.value:
+        if imm is None or not _candidat_selecteur(b):
             continue
         infos = _infos_bail(b.id)
         candidats_par_imm.setdefault(imm.id, []).append(
@@ -2099,12 +2116,12 @@ async def lister_transactions(
         ).all():
             mois_marques.add((bid, m))
 
-    # Candidats (baux ACTIFS) par immeuble — pour le sélecteur des
-    # ambiguës directement dans le fil.
+    # Candidats par immeuble — pour le sélecteur des ambiguës
+    # directement dans le fil (actifs + terminés récents, v11).
     candidats_par_imm: Dict[int, List[Dict[str, Any]]] = {}
     for b in baux:
         lg = logements.get(b.logement_id)
-        if lg is None or b.status != BailStatus.ACTIF.value:
+        if lg is None or not _candidat_selecteur(b):
             continue
         loc = locataires.get(b.locataire_id)
         candidats_par_imm.setdefault(lg.immeuble_id, []).append(

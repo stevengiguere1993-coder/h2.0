@@ -977,15 +977,23 @@ export default function PaiementsPage() {
                           // M7 : bail résilié/terminé — la ligne reste
                           // dans les mois couverts, et après la fin tant
                           // que le solde n'est pas réglé (2026-08-14).
+                          // Une date de fin FUTURE = départ avant terme :
+                          // la date contractuelle serait trompeuse.
                           <span
                             className="badge badge-rose"
                             title={
-                              r.bail_termine_le.slice(0, 7) < mois
-                                ? "Bail terminé avant ce mois — la ligne reste tant que le solde n'est pas réglé"
-                                : "Le bail couvrait une partie de ce mois — dernier loyer et solde encore dus"
+                              r.bail_termine_le >
+                              new Date().toLocaleDateString("sv-SE")
+                                ? "Locataire parti avant la fin prévue du bail — la ligne reste tant que le solde n'est pas réglé"
+                                : r.bail_termine_le.slice(0, 7) < mois
+                                  ? "Bail terminé avant ce mois — la ligne reste tant que le solde n'est pas réglé"
+                                  : "Le bail couvrait une partie de ce mois — dernier loyer et solde encore dus"
                             }
                           >
-                            Bail terminé le {r.bail_termine_le}
+                            {r.bail_termine_le >
+                            new Date().toLocaleDateString("sv-SE")
+                              ? "Bail terminé (avant terme)"
+                              : `Bail terminé le ${r.bail_termine_le}`}
                           </span>
                         ) : (
                           <span className="badge badge-emerald">Actif</span>

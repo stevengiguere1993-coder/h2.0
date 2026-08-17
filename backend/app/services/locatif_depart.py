@@ -579,6 +579,82 @@ async def reconduire_tacitement_baux_echus(
     return dirty
 
 
+#: Note apposée par la réactivation ci-dessous — sert aussi de marqueur
+#: d'idempotence (un bail déjà réactivé ne rematche plus le WHERE).
+NOTE_REACTIVE_IMPORT = (
+    "Réactivé automatiquement (2026-08-17) — terminé par erreur à "
+    "l'import, locataire en place."
+)
+
+
+async def reactiver_baux_termines_a_tort(db: AsyncSession) -> int:
+    """Backfill 2026-08-17 : l'import des données réelles du 12 août a
+    marqué « termine » des baux placeholder PlexFlow encore VIVANTS
+    (locataire en place, loyers marqués payés chaque mois, aucun bail
+    successeur) — le suivi des loyers affichait « Bail terminé le
+    2027-06-01 » sur des locataires en place (retour Phil 2026-08-17).
+
+    Réactive un bail « termine » qui cumule TOUS ces signes de vie :
+    date de fin FUTURE, note d'import PlexFlow, aucun autre bail actif
+    sur le logement, et un loyer marqué payé ce mois-ci ou le mois
+    dernier. Idempotent : une fois « actif », il ne matche plus.
+    Retourne le nombre de baux réactivés (commit à la charge de
+    l'appelant).
+    """
+    from app.models.immobilier import PaiementLoyer
+
+    today = date.today()
+    seuil = today.replace(day=1) - timedelta(days=1)
+    seuil = seuil.replace(day=1)  # 1er du mois précédent
+    candidats = (
+        await db.execute(
+            select(Bail).where(
+                Bail.status == BailStatus.TERMINE.value,
+                Bail.date_fin.is_not(None),
+                Bail.date_fin > today,
+                Bail.notes.like("%PlexFlow%"),
+            )
+        )
+    ).scalars().all()
+    n = 0
+    for b in candidats:
+        successeur = (
+            await db.execute(
+                select(Bail.id)
+                .where(
+                    Bail.logement_id == b.logement_id,
+                    Bail.id != b.id,
+                    Bail.status == BailStatus.ACTIF.value,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if successeur is not None:
+            continue  # le locataire est vraiment parti, remplacé
+        paiement_recent = (
+            await db.execute(
+                select(PaiementLoyer.id)
+                .where(
+                    PaiementLoyer.bail_id == b.id,
+                    PaiementLoyer.mois_couvert >= seuil,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if paiement_recent is None:
+            continue  # plus d'encaissement — rien ne prouve la vie
+        b.status = BailStatus.ACTIF.value
+        b.notes = _append_note(b.notes, NOTE_REACTIVE_IMPORT)
+        b.updated_at = _now()
+        await recaler_statut_logement(db, b.logement_id)
+        n += 1
+        log.info(
+            "Bail %s réactivé (terminé par erreur à l'import, "
+            "locataire en place)", b.id,
+        )
+    return n
+
+
 async def terminer_baux_echus_avant(
     db: AsyncSession,
     logement_id: int,
