@@ -26,6 +26,7 @@ import {
   Ruler,
   Trash2,
   User,
+  UserCheck,
   Users
 } from "lucide-react";
 
@@ -176,6 +177,7 @@ export default function ProspectDetailPage() {
   const [notesSavedAt, setNotesSavedAt] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [refreshingFb, setRefreshingFb] = useState(false);
+  const [converting, setConverting] = useState(false);
   const [users, setUsers] = useState<
     { id: number; email: string; first_name?: string | null; last_name?: string | null }[]
   >([]);
@@ -435,6 +437,29 @@ export default function ProspectDetailPage() {
     }
   }
 
+  async function convertToClient() {
+    if (!p) return;
+    setConverting(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/contact/${p.id}/convert-to-client`,
+        { method: "POST" }
+      );
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const body = (await res.json()) as {
+        client_id: number;
+        created: boolean;
+      };
+      const locale =
+        (params as { locale?: string })?.locale === "en" ? "en" : "fr";
+      router.push(`/${locale}/app/clients/${body.client_id}`);
+    } catch {
+      setConverting(false);
+      setError("Conversion en client échouée. Réessaie.");
+    }
+  }
+
   async function refreshFromFacebook() {
     if (!p) return;
     setRefreshingFb(true);
@@ -579,6 +604,20 @@ export default function ProspectDetailPage() {
                     ))}
                   </select>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => void convertToClient()}
+                  disabled={converting}
+                  className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2.5 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20 hover:text-emerald-200 disabled:opacity-50"
+                  title="Crée la fiche client à partir de ce prospect (coordonnées + documents du formulaire) — s'il existe déjà, ouvre sa fiche"
+                >
+                  {converting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <UserCheck className="h-4 w-4" />
+                  )}
+                  Convertir en client
+                </button>
                 <Link
                   // Prefilled with the prospect ID so the form auto-
                   // links the new soumission. eslint disable for the

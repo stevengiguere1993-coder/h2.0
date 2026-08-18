@@ -774,3 +774,65 @@ async def confirm_by_token(
         cr.validated_at = datetime.utcnow()
     await db.flush()
     return ContactPublicRead.model_validate(cr)
+
+
+# ─────────────── Conversion d'un prospect en CLIENT ───────────────
+
+
+@router.post(
+    "/{contact_id}/convert-to-client",
+    summary="Convertit le prospect en client (idempotent — réutilise "
+    "le client déjà lié le cas échéant)",
+)
+async def convert_prospect_to_client(
+    contact_id: int, db: DBSession, user: RequireManager
+) -> dict:
+    """Bouton « Convertir en client » de la fiche prospect. Crée un
+    Client à partir des coordonnées du prospect (nom, courriel,
+    téléphone, adresse) avec le lien retour `contact_request_id` — les
+    photos/documents du formulaire suivent déjà via ce lien sur la
+    fiche client. Si un client existe déjà pour ce prospect (ou avec le
+    même courriel), on le retourne au lieu d'en créer un doublon."""
+    from app.models.client import Client
+
+    cr = await db.get(ContactRequest, contact_id)
+    if cr is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Prospect introuvable."
+        )
+
+    existing = (
+        await db.execute(
+            select(Client).where(Client.contact_request_id == contact_id)
+        )
+    ).scalar_one_or_none()
+    if existing is None and (cr.email or "").strip():
+        from sqlalchemy import func as _func
+
+        existing = (
+            await db.execute(
+                select(Client).where(
+                    _func.lower(Client.email) == cr.email.strip().lower()
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None and existing.contact_request_id is None:
+            existing.contact_request_id = cr.id
+            await db.flush()
+    if existing is not None:
+        return {
+            "client_id": existing.id,
+            "created": False,
+            "name": existing.name,
+        }
+
+    client = Client(
+        name=cr.name,
+        email=cr.email,
+        phone=cr.phone,
+        address=cr.address,
+        contact_request_id=cr.id,
+    )
+    db.add(client)
+    await db.flush()
+    return {"client_id": client.id, "created": True, "name": client.name}
