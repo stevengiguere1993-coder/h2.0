@@ -439,7 +439,10 @@ def make_crud_router(
         db: DBSession,
         _: AuthRead,
         skip: int = Query(0, ge=0),
-        limit: int = Query(100, ge=1, le=500),
+        # Plafond 2000 : les pages kanban chargent les lookups complets
+        # (clients, projets) — 500 tronquait déjà les projets (cartes de
+        # facture sans adresse ni client).
+        limit: int = Query(100, ge=1, le=2000),
     ):
         crud = GenericCrud(db, model)
         items = await crud.list(skip=skip, limit=limit)
