@@ -291,6 +291,9 @@ class BonTravailUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     scope_md: Optional[str] = None
+    # Client facturé — modifiable depuis la fiche du bon (la facture du
+    # bon porte ensuite ce client, comme la facturation normale).
+    client_id: Optional[int] = None
     amount: Optional[float] = None
     status: Optional[str] = None
     sent_to_email: Optional[EmailStr] = None

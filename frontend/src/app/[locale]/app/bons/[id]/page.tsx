@@ -185,6 +185,10 @@ export default function BonDetailPage() {
   // #1 — édition de l'exécutant/assignation directement sur la fiche.
   const [sousTraitants, setSousTraitants] = useState<SousTraitant[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
+  // Client facturé — choisi directement sur la fiche du bon ; la
+  // facture du bon portera ce client (comme la facturation normale).
+  const [clients, setClients] = useState<Client[]>([]);
+  const [clientBusy, setClientBusy] = useState(false);
   const [bonPhotos, setBonPhotos] = useState<
     { id: number; caption: string | null }[]
   >([]);
@@ -268,13 +272,19 @@ export default function BonDetailPage() {
     let cancelled = false;
     async function loadCatalogs() {
       try {
-        const [sRes, uRes] = await Promise.all([
+        const [sRes, uRes, cRes] = await Promise.all([
           authedFetch("/api/v1/sous-traitants?limit=500"),
-          authedFetch("/api/v1/users")
+          authedFetch("/api/v1/users"),
+          authedFetch("/api/v1/clients?limit=1000")
         ]);
         if (cancelled) return;
         if (sRes.ok) setSousTraitants((await sRes.json()) as SousTraitant[]);
         if (uRes.ok) setUsers((await uRes.json()) as UserOption[]);
+        if (cRes.ok) {
+          const cl = (await cRes.json()) as Client[];
+          cl.sort((a, b) => a.name.localeCompare(b.name, "fr"));
+          setClients(cl);
+        }
       } catch {
         /* ignore — l'édition exécutant restera indisponible */
       }
@@ -589,6 +599,33 @@ export default function BonDetailPage() {
   // bon, crée la facture (brouillon) et importe les heures punchées
   // (approuvées) + les achats/matériel refacturables, puis ouvre la
   // facture dans Facturation.
+  async function changeClient(clientId: number | null) {
+    if (!b) return;
+    setClientBusy(true);
+    try {
+      const res = await authedFetch(`/api/v1/bons-travail/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ client_id: clientId })
+      });
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      setB((prev) => (prev ? { ...prev, client_id: clientId } : prev));
+      const cd = clients.find((c) => c.id === clientId) || null;
+      setClient(cd);
+      if (cd?.email) setSendTo(cd.email);
+      // Propage le client sur le projet lié et ses factures existantes
+      // sans client (le bon a déjà un projet dès qu'il a des coûts).
+      if (b.project_id && clientId) {
+        await authedFetch(`/api/v1/bons-travail/${id}/ensure-project`, {
+          method: "POST"
+        }).catch(() => undefined);
+      }
+    } catch {
+      setSendNotice("Changement de client échoué.");
+    } finally {
+      setClientBusy(false);
+    }
+  }
+
   async function createFacture() {
     if (!b) return;
     setFactureBusy(true);
@@ -755,18 +792,44 @@ export default function BonDetailPage() {
                         : "À classifier"}
                   </p>
                 ) : null}
-                {client ? (
-                  <p className="mt-1 text-xs text-white/50">
-                    Client :{" "}
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-white/50">
+                  <span>Client facturé :</span>
+                  <select
+                    value={b.client_id ?? ""}
+                    disabled={clientBusy}
+                    onChange={(e) =>
+                      void changeClient(
+                        e.target.value ? Number(e.target.value) : null
+                      )
+                    }
+                    className="input w-auto max-w-[16rem] text-xs"
+                    title="La facture du bon sera émise à ce client"
+                  >
+                    <option value="">— Aucun client —</option>
+                    {clients.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                    {b.client_id &&
+                    !clients.some((c) => c.id === b.client_id) &&
+                    client ? (
+                      <option value={b.client_id}>{client.name}</option>
+                    ) : null}
+                  </select>
+                  {clientBusy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-accent-500" />
+                  ) : null}
+                  {client ? (
                     <Link
                       // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       href={`/app/clients/${client.id}` as any}
                       className="font-medium text-accent-400 underline decoration-dotted hover:text-accent-300"
                     >
-                      {client.name}
+                      ouvrir la fiche
                     </Link>
-                  </p>
-                ) : null}
+                  ) : null}
+                </div>
                 {b.created_by_user_id ? (
                   <p className="mt-1 text-xs text-white/50">
                     Créé par{" "}
