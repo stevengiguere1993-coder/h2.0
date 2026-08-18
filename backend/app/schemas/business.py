@@ -430,6 +430,9 @@ class FactureUpdate(BaseModel):
     # ponctuelle, alignement sur la séquence QBO, fusion). Conflit
     # d'unicité géré par la contrainte SQL — l'API renverra une 4xx.
     reference: Optional[str] = None
+    # Client facturé — réparable depuis l'en-tête de la facture quand il
+    # manque (ex. facture née d'un bon de travail sans client).
+    client_id: Optional[int] = None
     subtotal: Optional[float] = None
     tps: Optional[float] = None
     tvq: Optional[float] = None

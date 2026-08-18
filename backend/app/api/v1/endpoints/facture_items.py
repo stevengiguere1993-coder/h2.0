@@ -61,36 +61,11 @@ async def _recompute_facture_totals(db, facture_id: int) -> None:
 
 _KIND_PATTERN = "^(service|extra|rabais|frais)$"
 
-# Ordre de regroupement par défaut À L'IMPORT seulement : services
-# d'abord, puis extras, puis frais, et rabais en dernier. L'ordre reste
-# ensuite ENTIÈREMENT LIBRE — l'admin réordonne ses lignes comme il
-# veut (flèches ↑↓), tous types confondus (retour Phil 2026-08-18).
-_KIND_ORDER = {"service": 0, "extra": 1, "frais": 2, "rabais": 3}
-
-
-async def _reorder_items_by_kind(db, facture_id: int) -> None:
-    """Regroupe les lignes de la facture par type, dans l'ordre
-    service → extra → frais → rabais, en réassignant leur `position`.
-    L'ordre relatif au sein d'un même type est conservé. Utilisé
-    SEULEMENT à l'import depuis le projet (mise en ordre initiale) —
-    jamais sur les lectures/éditions, qui respectent l'ordre choisi."""
-    items = (
-        await db.execute(
-            select(FactureItem)
-            .where(FactureItem.facture_id == facture_id)
-            .order_by(FactureItem.position.asc(), FactureItem.id.asc())
-        )
-    ).scalars().all()
-    # sorted() est stable : à type égal, l'ordre (position, id) de la
-    # requête ci-dessus est préservé.
-    ordered = sorted(items, key=lambda it: _KIND_ORDER.get(it.kind, 99))
-    changed = False
-    for idx, it in enumerate(ordered):
-        if it.position != idx:
-            it.position = idx
-            changed = True
-    if changed:
-        await db.flush()
+# L'ordre des lignes est ENTIÈREMENT LIBRE, tous types confondus :
+# l'admin réordonne avec les flèches ↑↓ et les imports AJOUTENT en fin
+# de liste (retour Phil 2026-08-18 — l'ancien regroupement forcé
+# service → extra → frais → rabais grisait les flèches et cachait les
+# nouveaux items au milieu de la liste).
 
 
 class FactureItemCreate(BaseModel):
