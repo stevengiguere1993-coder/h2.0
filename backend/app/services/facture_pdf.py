@@ -472,6 +472,7 @@ def _render_bytes(
     tax_qst: Optional[str] = None,
     contract: Optional[ContractSummary] = None,
     statement: Optional[Statement] = None,
+    work_address: Optional[str] = None,
 ) -> bytes:
     rl = _lazy_reportlab()
     colors = rl["colors"]
@@ -560,16 +561,34 @@ def _render_bytes(
     story.append(header_tbl)
     story.append(Spacer(1, 14))
 
+    # « FACTURÉ À » (coordonnées complètes du client) à gauche, « LIEU
+    # DES TRAVAUX » (adresse du chantier — projet/bon lié) à droite.
     if client is not None:
         lines = [f"<b>{client.name}</b>"]
-        if client.email: lines.append(client.email)
-        if client.phone: lines.append(client.phone)
         if client.address: lines.append(client.address)
+        if client.phone: lines.append(client.phone)
+        if client.email: lines.append(client.email)
     else:
         lines = ["<b>Client</b>"]
-    story.append(Paragraph("FACTURÉ À", s["accent"]))
-    for line in lines:
-        story.append(Paragraph(line, s["body"]))
+    bill_cell: list = [Paragraph("FACTURÉ À", s["accent"])]
+    bill_cell.extend(Paragraph(line, s["body"]) for line in lines)
+    if work_address:
+        work_cell: list = [
+            Paragraph("LIEU DES TRAVAUX", s["accent"]),
+            Paragraph(_multiline(work_address), s["body"]),
+        ]
+        bill_tbl = Table(
+            [[bill_cell, work_cell]],
+            colWidths=[doc.width * 0.55, doc.width * 0.45],
+        )
+        bill_tbl.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        story.append(bill_tbl)
+    else:
+        story.extend(bill_cell)
     story.append(Spacer(1, 10))
 
     # Items
@@ -909,11 +928,38 @@ async def render_facture_pdf(
     statement = (
         await _load_statement(db, fa) if include_statement else None
     )
+    # Lieu des travaux : adresse du projet lié, repli sur l'adresse du
+    # bon de travail rattaché à ce projet.
+    work_address: Optional[str] = None
+    if fa.project_id:
+        from sqlalchemy import select as _sel_wa
+
+        from app.models.project import Project as _ProjWA
+
+        work_address = (
+            await db.execute(
+                _sel_wa(_ProjWA.address).where(
+                    _ProjWA.id == fa.project_id
+                )
+            )
+        ).scalar_one_or_none()
+        if not work_address:
+            from app.models.bon_travail import BonTravail as _BonWA
+
+            work_address = (
+                await db.execute(
+                    _sel_wa(_BonWA.address)
+                    .where(_BonWA.project_id == fa.project_id)
+                    .order_by(_BonWA.id)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
     pdf = _render_bytes(
         fa, items, client,
         tax_gst=gst, tax_qst=qst,
         contract=contract,
         statement=statement,
+        work_address=(work_address or "").strip() or None,
     )
     return fa, pdf
 
