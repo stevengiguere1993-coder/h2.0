@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.email_graph import get_mailer
-from app.models.immobilier import Bail, Locataire
+from app.models.immobilier import Bail, Locataire, Logement
 from app.services.public_links import public_base
 
 log = logging.getLogger(__name__)
@@ -81,13 +81,31 @@ async def send_bail_for_signature(
     # menait à un 404 (mismatch détecté 2026-07-17).
     url = f"{public_base()}/sign-bail/{bail.signature_token}"
 
+    # Audit 2026-08-17 : passe par la porte UNIQUE des courriels au
+    # locataire — profil d'expéditeur (le locataire répond au
+    # gestionnaire, pas à la boîte système) + les DEUX traces.
+    from app.services.locatif_mail import (
+        EnvoiLocataireError,
+        envoyer_au_locataire,
+    )
+
+    logement = await db.get(Logement, bail.logement_id)
+    sujet = "Votre bail à signer — Horizon Services Immobiliers"
     try:
-        await mailer.send(
-            to=recipients,
-            subject="Votre bail à signer — Horizon Services Immobiliers",
-            html_body=_body_html(bail, loc_name, url),
-            reply_to=mailer.sender,
+        await envoyer_au_locataire(
+            db,
+            destinataires=recipients,
+            sujet=sujet,
+            corps_html=_body_html(bail, loc_name, url),
+            type_envoi="bail_signature",
+            locataire_id=bail.locataire_id,
+            locataire_nom=loc_name or None,
+            bail_id=bail.id,
+            immeuble_id=logement.immeuble_id if logement else None,
+            resume_fiche=f"Bail envoyé pour signature (à {recipients[0]})",
         )
+    except EnvoiLocataireError as exc:
+        raise BailSendError(str(exc)) from exc
     except Exception as exc:  # pragma: no cover - réseau
         log.exception("Envoi bail %s échoué", bail_id)
         raise BailSendError(f"Envoi courriel échoué : {exc}") from exc
