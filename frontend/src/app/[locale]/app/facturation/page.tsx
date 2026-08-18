@@ -98,6 +98,10 @@ export default function FacturationPage() {
       { name: string; address: string | null; kind: string | null }
     >
   >(new Map());
+  // project_id du bon → référence RÉELLE + adresse du bon de travail.
+  const [bonByProject, setBonByProject] = useState<
+    Map<number, { reference: string; address: string | null }>
+  >(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -133,7 +137,13 @@ export default function FacturationPage() {
           address: string | null;
           kind: string | null;
         };
-        const [data, cs, psReg, psBons] = await Promise.all([
+        type BonLite = {
+          id: number;
+          reference: string;
+          project_id: number | null;
+          address: string | null;
+        };
+        const [data, cs, psReg, psBons, bons] = await Promise.all([
           fetchAllPages<Facture>("/api/v1/factures"),
           fetchAllPages<{ id: number; name: string }>(
             "/api/v1/clients"
@@ -144,7 +154,10 @@ export default function FacturationPage() {
           // de facture d'un BT montrent son numéro et son adresse.
           fetchAllPages<ProjLite>(
             "/api/v1/projects?kind=bon_travail"
-          ).catch(() => [])
+          ).catch(() => []),
+          // Référence RÉELLE du bon (les vieux projets de bons ne
+          // portent pas « BT-… — » dans leur nom) + adresse du bon.
+          fetchAllPages<BonLite>("/api/v1/bons-travail").catch(() => [])
         ]);
         const ps = [...psReg, ...psBons];
         if (!cancelled) {
@@ -163,6 +176,16 @@ export default function FacturationPage() {
                   kind: p.kind || null
                 }
               ])
+            )
+          );
+          setBonByProject(
+            new Map(
+              bons
+                .filter((b) => b.project_id)
+                .map((b) => [
+                  b.project_id as number,
+                  { reference: b.reference, address: b.address || null }
+                ])
             )
           );
         }
@@ -356,6 +379,11 @@ export default function FacturationPage() {
                                 ? projectInfos.get(f.project_id) ?? null
                                 : null
                             }
+                            bonInfo={
+                              f.project_id
+                                ? bonByProject.get(f.project_id) ?? null
+                                : null
+                            }
                             dragging={dragging === f.id}
                             onDragStart={() => setDragging(f.id)}
                             onDragEnd={() => {
@@ -384,6 +412,7 @@ function Card({
   fa,
   clientName,
   projectInfo,
+  bonInfo,
   dragging,
   onDragStart,
   onDragEnd,
@@ -398,6 +427,7 @@ function Card({
     address: string | null;
     kind: string | null;
   } | null;
+  bonInfo: { reference: string; address: string | null } | null;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -466,15 +496,22 @@ function Card({
           un BT l'adresse du chantier ; le numéro de facture reste en
           jaune plus bas. */}
       {(() => {
-        const isBon = projectInfo?.kind === "bon_travail";
-        const btRef = isBon
-          ? (projectInfo?.name || "").split(" — ")[0]
-          : null;
+        // Facture d'un bon : la référence RÉELLE du bon (bonInfo) prime
+        // — les vieux projets de bons ne portent pas « BT-… » dans leur
+        // nom, l'extraire du nom était fragile.
+        const isBon =
+          bonInfo !== null || projectInfo?.kind === "bon_travail";
+        const btRef =
+          bonInfo?.reference ||
+          (projectInfo?.name || "").split(" — ")[0] ||
+          null;
+        const adresse =
+          bonInfo?.address || projectInfo?.address || null;
         return (
           <>
             <h3 className="truncate text-sm font-bold text-white">
               {isBon
-                ? btRef || projectInfo?.name
+                ? btRef || projectInfo?.name || fa.reference
                 : projectInfo
                 ? projectInfo.address || projectInfo.name
                 : fa.reference}
@@ -484,9 +521,9 @@ function Card({
                 {clientName}
               </p>
             ) : null}
-            {isBon && projectInfo?.address ? (
+            {isBon && adresse ? (
               <p className="mt-0.5 truncate text-[11px] text-white/45">
-                {projectInfo.address}
+                {adresse}
               </p>
             ) : null}
           </>

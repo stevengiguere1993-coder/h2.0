@@ -593,5 +593,26 @@ async def convert_project_to_facture(
     from app.api.v1.endpoints.facture_items import _recompute_facture_totals
 
     await _recompute_facture_totals(db, facture.id)
+
+    # Facture créée depuis un BON DE TRAVAIL : le bon « complété — à
+    # refacturer » passe à « facturé » — sa carte change de colonne
+    # toute seule sur le kanban (même règle que l'import multi-bons).
+    if (getattr(project, "kind", None) or "") == "bon_travail":
+        from app.models.bon_travail import (
+            BonTravail as _BonSt,
+            BonTravailStatus as _BSt,
+        )
+
+        for _b in (
+            await db.execute(
+                select(_BonSt).where(
+                    _BonSt.project_id == project.id,
+                    _BonSt.status == _BSt.COMPLETE_A_REFACTURER.value,
+                )
+            )
+        ).scalars():
+            _b.status = _BSt.FACTURE.value
+        await db.flush()
+
     await db.refresh(facture)
     return FactureRead.model_validate(facture)
