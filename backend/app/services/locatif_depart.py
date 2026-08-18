@@ -618,6 +618,13 @@ async def reactiver_baux_termines_a_tort(db: AsyncSession) -> int:
     ).scalars().all()
     n = 0
     for b in candidats:
+        # Un dossier de RELOCATION actif = le départ est ACTÉ (avis
+        # reçu, annonce, visites…) et le logement se vide : on ne
+        # ressuscite pas le bail, même s'il reste un dernier loyer
+        # encaissé (retour Phil 2026-08-17 : « j'ai des unités
+        # vacantes, mais encore présentes dans les baux »).
+        if await dossier_relocation_actif(db, b.logement_id) is not None:
+            continue
         successeur = (
             await db.execute(
                 select(Bail.id)
@@ -651,6 +658,77 @@ async def reactiver_baux_termines_a_tort(db: AsyncSession) -> int:
         log.info(
             "Bail %s réactivé (terminé par erreur à l'import, "
             "locataire en place)", b.id,
+        )
+    return n
+
+
+#: Note du correctif ci-dessous (garde la trace de l'aller-retour).
+NOTE_REACTIVATION_ANNULEE = (
+    "Réactivation annulée (2026-08-17) — le logement est en cours de "
+    "relocation : le locataire était bien parti."
+)
+
+
+async def annuler_reactivations_erronees(db: AsyncSession) -> int:
+    """Correctif 2026-08-17 : le backfill de réactivation a ressuscité
+    des baux dont le locataire était en réalité PARTI — leur dernier
+    loyer encaissé avait été pris pour une preuve de vie. Effet de
+    bord : le logement repassait « occupé » alors qu'il est vacant
+    (retour Phil : « j'ai des unités vacantes, mais encore présentes
+    dans les baux »).
+
+    Un bail ACTIF portant la note de réactivation, dont le logement a
+    un dossier de relocation ACTIF, est re-terminé : sa date de fin est
+    ramenée à la fin du dernier mois encaissé (sinon à la veille de
+    l'ouverture du dossier) — sans quoi il porterait un loyer fantôme —
+    et le statut du logement est recalculé (→ vacant).
+
+    Idempotent : une fois re-terminé, le bail n'est plus ACTIF donc il
+    ne rematche pas. La note de réactivation reste en place : elle
+    documente l'aller-retour.
+    """
+    from app.models.immobilier import PaiementLoyer
+
+    candidats = (
+        await db.execute(
+            select(Bail).where(
+                Bail.status == BailStatus.ACTIF.value,
+                Bail.notes.like("%Réactivé automatiquement%"),
+            )
+        )
+    ).scalars().all()
+    n = 0
+    for b in candidats:
+        dossier = await dossier_relocation_actif(db, b.logement_id)
+        if dossier is None:
+            continue  # réactivation légitime : le locataire est là
+        dernier_mois = (
+            await db.execute(
+                select(func.max(PaiementLoyer.mois_couvert)).where(
+                    PaiementLoyer.bail_id == b.id
+                )
+            )
+        ).scalar_one_or_none()
+        if dernier_mois is not None:
+            # Dernier jour du mois encaissé.
+            fin = (dernier_mois + timedelta(days=32)).replace(
+                day=1
+            ) - timedelta(days=1)
+        else:
+            ouvert_le = getattr(dossier, "created_at", None)
+            base = ouvert_le.date() if ouvert_le else date.today()
+            fin = base - timedelta(days=1)
+        b.status = BailStatus.TERMINE.value
+        if b.date_fin is None or fin < b.date_fin:
+            b.date_fin = fin
+        b.notes = _append_note(b.notes, NOTE_REACTIVATION_ANNULEE)
+        b.updated_at = _now()
+        await recaler_statut_logement(db, b.logement_id)
+        n += 1
+        log.info(
+            "Bail %s : réactivation ANNULÉE (dossier de relocation %s "
+            "actif) — fin ramenée au %s, logement recalé",
+            b.id, dossier.id, fin,
         )
     return n
 
