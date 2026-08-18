@@ -11,6 +11,7 @@ import {
   Wrench
 } from "lucide-react";
 
+import { AddressInput } from "@/components/address-input";
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
@@ -374,17 +375,17 @@ export default function NewBonPage() {
                     <label htmlFor="client-adresse" className="label">
                       Adresse des travaux
                     </label>
-                    <input
+                    <AddressInput
                       id="client-adresse"
                       value={clientAddress}
-                      onChange={(e) => setClientAddress(e.target.value)}
+                      onChange={setClientAddress}
                       placeholder="Ex. 1647, Rue Desautels, Montréal, QC"
-                      className="input"
                     />
                     <p className="mt-1 text-xs text-white/50">
-                      Pré-remplie avec l&apos;adresse du client —
-                      modifiable si le chantier est ailleurs. Incluez la
-                      ville (elle sort sur la facture).
+                      Tape pour l&apos;autocomplete (l&apos;adresse
+                      complète avec la ville sort sur la facture) —
+                      pré-remplie avec l&apos;adresse du client,
+                      modifiable si le chantier est ailleurs.
                     </p>
                   </div>
                 </>
