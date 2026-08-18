@@ -192,7 +192,9 @@ async def import_into_facture(
                     # de soumission (soumission_item_id) pour la facturation
                     # par étapes et l'affichage d'avancement.
                     unit_price = float(it.unit_price)
-                    qty = round(float(it.quantity) * ratio, 3)
+                    # 6 décimales (précision de la colonne) — à 3, un
+                    # gros prix unitaire faisait dériver le montant.
+                    qty = round(float(it.quantity) * ratio, 6)
                     line_total = round(qty * unit_price, 2)
                     db.add(
                         FactureItem(

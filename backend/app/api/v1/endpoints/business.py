@@ -272,6 +272,101 @@ async def _heal_facture_clients(db, factures) -> None:
         await db.flush()
 
 
+async def _heal_facture_devis_overrun(db, fa) -> None:
+    """Auto-réparation d'un BROUILLON : si le cumul facturé d'un item de
+    soumission (toutes factures non annulées du projet) dépasse son
+    montant au devis d'un PETIT écart (≤ 10 $ — un artefact d'arrondi de
+    quantité, pas un choix délibéré), la ligne du brouillon est réduite
+    du surplus (quantité recalculée à 6 décimales). Corrige les factures
+    créées avant le passage des quantités à 6 décimales — ex. « 29
+    Besner » facturé 4,04 $ au-dessus du devis."""
+    if (fa.status or "") != "draft" or not fa.project_id:
+        return
+    from sqlalchemy import func, select
+
+    from app.models.facture import Facture as _Fac, FactureStatus as _FSt
+    from app.models.facture_item import FactureItem as _FIt
+    from app.models.soumission_item import SoumissionItem as _SIt
+
+    lignes = [
+        r
+        for r in (
+            await db.execute(
+                select(_FIt).where(
+                    _FIt.facture_id == fa.id,
+                    _FIt.soumission_item_id.isnot(None),
+                    _FIt.kind != "extra",
+                )
+            )
+        ).scalars()
+    ]
+    if not lignes:
+        return
+    sids = {int(r.soumission_item_id) for r in lignes}
+    sm_total = {
+        int(sid): float(tot or 0)
+        for sid, tot in (
+            await db.execute(
+                select(_SIt.id, _SIt.total).where(_SIt.id.in_(list(sids)))
+            )
+        ).all()
+    }
+    fac_ids = [
+        fid
+        for fid in (
+            await db.execute(
+                select(_Fac.id).where(
+                    _Fac.project_id == fa.project_id,
+                    _Fac.status != _FSt.VOID.value,
+                )
+            )
+        ).scalars()
+    ]
+    cumul = {
+        int(sid): float(tot or 0)
+        for sid, tot in (
+            await db.execute(
+                select(
+                    _FIt.soumission_item_id,
+                    func.coalesce(func.sum(_FIt.total), 0),
+                )
+                .where(
+                    _FIt.facture_id.in_(fac_ids),
+                    _FIt.soumission_item_id.in_(list(sids)),
+                    _FIt.kind != "extra",
+                )
+                .group_by(_FIt.soumission_item_id)
+            )
+        ).all()
+    }
+    changed = False
+    vus: set[int] = set()
+    for ligne in sorted(lignes, key=lambda r: -float(r.total or 0)):
+        sid = int(ligne.soumission_item_id)
+        if sid in vus:
+            continue
+        vus.add(sid)
+        surplus = round(cumul.get(sid, 0.0) - sm_total.get(sid, 0.0), 2)
+        if not (0.005 < surplus <= 10.0):
+            continue
+        reduction = min(surplus, float(ligne.total or 0))
+        if reduction <= 0.005:
+            continue
+        new_total = round(float(ligne.total) - reduction, 2)
+        up = float(ligne.unit_price or 0)
+        if up > 0:
+            ligne.quantity = round(new_total / up, 6)
+        ligne.total = new_total
+        changed = True
+    if changed:
+        from app.api.v1.endpoints.facture_items import (
+            _recompute_facture_totals,
+        )
+
+        await db.flush()
+        await _recompute_facture_totals(db, fa.id)
+
+
 def make_crud_router(
     *,
     prefix: str,
@@ -500,6 +595,7 @@ def make_crud_router(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
         if model is Facture:
             await _heal_facture_clients(db, [obj])
+            await _heal_facture_devis_overrun(db, obj)
         return read_schema.model_validate(obj)
 
     @router.patch("/{item_id}")
