@@ -225,6 +225,14 @@ export default function FactureDetailPage() {
   }
 
   const [importOpen, setImportOpen] = useState(false);
+  // Facturation multi-bons : importer les heures/achats d'un ou
+  // plusieurs bons de travail dans CETTE facture.
+  const [bonOpen, setBonOpen] = useState(false);
+  // Réparation du client manquant depuis l'en-tête (ex. facture née
+  // d'un bon sans client).
+  const [clientOptions, setClientOptions] = useState<Client[]>([]);
+  const [clientPickOpen, setClientPickOpen] = useState(false);
+  const [clientPickBusy, setClientPickBusy] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
   const [importIncludeSoumission, setImportIncludeSoumission] = useState(true);
   const [importSoumissionPct, setImportSoumissionPct] = useState("100");
@@ -362,6 +370,50 @@ export default function FactureDetailPage() {
   const tps = +(subtotal * TPS_RATE).toFixed(2);
   const tvq = +(subtotal * TVQ_RATE).toFixed(2);
   const total = +(subtotal + tps + tvq).toFixed(2);
+
+  async function refreshFacture() {
+    const r = await authedFetch(`/api/v1/factures/${id}`);
+    if (!r.ok) return;
+    const fd = (await r.json()) as Facture;
+    setF(fd);
+    if (fd.client_id && (!client || client.id !== fd.client_id)) {
+      const cr = await authedFetch(`/api/v1/clients/${fd.client_id}`);
+      if (cr.ok) {
+        const cd = (await cr.json()) as Client;
+        setClient(cd);
+        if (cd.email) setSendTo(cd.email);
+      }
+    }
+  }
+
+  async function openClientPick() {
+    setClientPickOpen(true);
+    if (clientOptions.length === 0) {
+      const r = await authedFetch("/api/v1/clients?limit=1000");
+      if (r.ok) {
+        const cl = (await r.json()) as Client[];
+        cl.sort((a, b) => a.name.localeCompare(b.name, "fr"));
+        setClientOptions(cl);
+      }
+    }
+  }
+
+  async function setFactureClient(clientId: number) {
+    setClientPickBusy(true);
+    try {
+      const r = await authedFetch(`/api/v1/factures/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ client_id: clientId })
+      });
+      if (!r.ok) throw new Error(`http_${r.status}`);
+      setClientPickOpen(false);
+      await refreshFacture();
+    } catch {
+      setError("Association du client échouée.");
+    } finally {
+      setClientPickBusy(false);
+    }
+  }
 
   async function updateStatus(newStatus: string) {
     if (!f) return;
@@ -852,7 +904,47 @@ export default function FactureDetailPage() {
                   </h1>
                 )}
                 <p className="mt-1 text-xs text-white/50">
-                  {client ? `Client : ${client.name} · ` : ""}
+                  {client ? (
+                    <>Client : {client.name} · </>
+                  ) : clientPickOpen ? (
+                    <span className="mr-2 inline-flex items-center gap-1.5">
+                      Client :
+                      <select
+                        disabled={clientPickBusy}
+                        defaultValue=""
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            void setFactureClient(Number(e.target.value));
+                          }
+                        }}
+                        className="input w-auto max-w-[14rem] text-xs"
+                      >
+                        <option value="">
+                          {clientOptions.length
+                            ? "— Choisir —"
+                            : "Chargement…"}
+                        </option>
+                        {clientOptions.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                      ·
+                    </span>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void openClientPick()}
+                        className="text-amber-400 underline decoration-dotted hover:text-amber-300"
+                        title="Cette facture n'a pas de client — associez-le ici (ou choisissez-le sur le bon de travail lié)"
+                      >
+                        ⚠ Aucun client — associer
+                      </button>{" "}
+                      ·{" "}
+                    </>
+                  )}
                   {project ? (
                     <>
                       Projet :{" "}
@@ -1446,7 +1538,7 @@ export default function FactureDetailPage() {
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                   Items de la facture
                 </h2>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   {f.project_id ? (
                     <button
                       type="button"
@@ -1456,6 +1548,14 @@ export default function FactureDetailPage() {
                       Importer du projet
                     </button>
                   ) : null}
+                  <button
+                    type="button"
+                    onClick={() => setBonOpen(true)}
+                    className="btn-secondary text-xs"
+                    title="Ajoute les heures et achats d'un bon de travail à CETTE facture — répétez pour facturer plusieurs bons ensemble"
+                  >
+                    Importer un bon
+                  </button>
                   <button
                     type="button"
                     onClick={addItem}
@@ -1535,6 +1635,17 @@ export default function FactureDetailPage() {
           </>
         ) : null}
       </div>
+
+      {bonOpen && f ? (
+        <BonPickerModal
+          factureId={Number(f.id)}
+          onClose={() => setBonOpen(false)}
+          onImported={async () => {
+            await reloadItems();
+            await refreshFacture();
+          }}
+        />
+      ) : null}
 
       {importOpen && f ? (
         <div
@@ -2163,6 +2274,225 @@ function ItemRow({
           </span>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/* ─────────── Modal : importer un bon de travail (multi-BT) ─────────── */
+
+type BonMini = {
+  id: number;
+  reference: string;
+  title: string;
+  status: string;
+  client_id: number | null;
+  address: string | null;
+};
+
+const BON_STATUS_LABELS: Record<string, string> = {
+  draft: "Brouillon",
+  accepte_a_planifier: "Accepté à planifier",
+  planifie: "Planifié",
+  complete_a_refacturer: "Complété — à refacturer",
+  facture: "Facturé",
+  sent: "Envoyé",
+  signed: "Signé"
+};
+
+const BON_STATUS_ORDER: Record<string, number> = {
+  complete_a_refacturer: 0,
+  planifie: 1,
+  accepte_a_planifier: 2,
+  signed: 3,
+  sent: 4,
+  draft: 5,
+  facture: 6
+};
+
+function BonPickerModal({
+  factureId,
+  onClose,
+  onImported
+}: {
+  factureId: number;
+  onClose: () => void;
+  onImported: () => Promise<void>;
+}) {
+  const [bons, setBons] = useState<BonMini[]>([]);
+  const [clientNames, setClientNames] = useState<Map<number, string>>(
+    new Map()
+  );
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [done, setDone] = useState<Record<number, string>>({});
+  const [err, setErr] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [bRes, cRes] = await Promise.all([
+          authedFetch("/api/v1/bons-travail?limit=500"),
+          authedFetch("/api/v1/clients?limit=1000")
+        ]);
+        if (cancelled) return;
+        if (bRes.ok) {
+          const all = (await bRes.json()) as BonMini[];
+          all.sort(
+            (a, b) =>
+              (BON_STATUS_ORDER[a.status] ?? 9) -
+                (BON_STATUS_ORDER[b.status] ?? 9) ||
+              b.id - a.id
+          );
+          setBons(all.filter((x) => x.status !== "cancelled"));
+        }
+        if (cRes.ok) {
+          const cl = (await cRes.json()) as { id: number; name: string }[];
+          setClientNames(new Map(cl.map((c) => [c.id, c.name])));
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const visibles = bons.filter((b) => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return true;
+    const cn = b.client_id ? clientNames.get(b.client_id) || "" : "";
+    return (
+      b.reference.toLowerCase().includes(needle) ||
+      b.title.toLowerCase().includes(needle) ||
+      cn.toLowerCase().includes(needle) ||
+      (b.address || "").toLowerCase().includes(needle)
+    );
+  });
+
+  async function importBon(bon: BonMini) {
+    setBusy(bon.id);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/factures/${factureId}/import-bon`,
+        { method: "POST", body: JSON.stringify({ bon_id: bon.id }) }
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        setErr(
+          typeof body?.detail === "string"
+            ? body.detail
+            : `Import de ${bon.reference} échoué.`
+        );
+        return;
+      }
+      setDone((prev) => ({
+        ...prev,
+        [bon.id]:
+          body.added > 0
+            ? `${body.added} ligne${body.added > 1 ? "s" : ""} importée${
+                body.added > 1 ? "s" : ""
+              }`
+            : "rien à importer (déjà facturé ?)"
+      }));
+      await onImported();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4"
+      onClick={() => (busy === null ? onClose() : null)}
+    >
+      <div
+        className="mt-10 flex max-h-[80vh] w-full max-w-lg flex-col rounded-2xl border border-brand-800 bg-brand-950 p-6 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-bold text-white">
+          Importer un bon de travail
+        </h3>
+        <p className="mt-1 text-xs text-white/60">
+          Les heures approuvées et les achats refacturables du bon
+          s&apos;ajoutent à CETTE facture, coiffés de sa demande de
+          départ. Importez plusieurs bons pour une facture groupée —
+          même client obligatoire.
+        </p>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Rechercher (numéro, titre, client, adresse)…"
+          className="input mt-3 w-full text-xs"
+        />
+        {err ? (
+          <p className="mt-2 text-xs text-rose-400">{err}</p>
+        ) : null}
+        <div className="mt-3 min-h-0 flex-1 overflow-y-auto rounded-lg border border-brand-800">
+          {loading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+            </div>
+          ) : visibles.length === 0 ? (
+            <p className="p-4 text-center text-xs text-white/40">
+              Aucun bon de travail.
+            </p>
+          ) : (
+            <ul>
+              {visibles.map((b) => (
+                <li
+                  key={b.id}
+                  className="flex items-center justify-between gap-3 border-b border-brand-800/60 px-3 py-2.5 last:border-0"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-white">
+                      {b.reference} — {b.title}
+                    </p>
+                    <p className="truncate text-[11px] text-white/45">
+                      {BON_STATUS_LABELS[b.status] || b.status}
+                      {b.client_id
+                        ? ` · ${clientNames.get(b.client_id) || ""}`
+                        : " · aucun client"}
+                      {b.address ? ` · ${b.address}` : ""}
+                    </p>
+                  </div>
+                  {done[b.id] ? (
+                    <span className="shrink-0 text-[11px] font-semibold text-emerald-400">
+                      ✓ {done[b.id]}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void importBon(b)}
+                      disabled={busy !== null}
+                      className="btn-outline-accent btn-xs shrink-0"
+                    >
+                      {busy === b.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        "Importer"
+                      )}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="mt-3 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy !== null}
+            className="btn-secondary btn-sm"
+          >
+            Fermer
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

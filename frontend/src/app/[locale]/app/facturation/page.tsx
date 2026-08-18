@@ -91,9 +91,12 @@ export default function FacturationPage() {
   const [clientNames, setClientNames] = useState<Map<number, string>>(
     new Map()
   );
-  const [projectNames, setProjectNames] = useState<Map<number, string>>(
-    new Map()
-  );
+  const [projectInfos, setProjectInfos] = useState<
+    Map<
+      number,
+      { name: string; address: string | null; kind: string | null }
+    >
+  >(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -120,9 +123,9 @@ export default function FacturationPage() {
       setError(null);
       try {
         const [fRes, cRes, pRes] = await Promise.all([
-          authedFetch("/api/v1/factures?limit=500"),
-          authedFetch("/api/v1/clients?limit=500"),
-          authedFetch("/api/v1/projects?limit=500")
+          authedFetch("/api/v1/factures?limit=1000"),
+          authedFetch("/api/v1/clients?limit=2000"),
+          authedFetch("/api/v1/projects?limit=2000")
         ]);
         if (!fRes.ok) throw new Error(`http_${fRes.status}`);
         const data = (await fRes.json()) as Facture[];
@@ -134,16 +137,26 @@ export default function FacturationPage() {
               id: number;
               name: string;
               address: string | null;
+              kind: string | null;
             }>)
           : [];
         if (!cancelled) {
           setItems(data);
           setClientNames(new Map(cs.map((c) => [c.id, c.name])));
-          // On stocke l'adresse comme « nom » du projet — c'est ce
-          // qu'on veut afficher en tête des cartes (fallback : nom
-          // interne si l'adresse n'est pas renseignée).
-          setProjectNames(
-            new Map(ps.map((p) => [p.id, p.address || p.name]))
+          // Nom + adresse + nature du projet : les cartes affichent
+          // l'adresse en tête, et le numéro de BT quand la facture
+          // vient d'un bon de travail (kind="bon_travail").
+          setProjectInfos(
+            new Map(
+              ps.map((p) => [
+                p.id,
+                {
+                  name: p.name,
+                  address: p.address || null,
+                  kind: p.kind || null
+                }
+              ])
+            )
           );
         }
       } catch {
@@ -163,7 +176,8 @@ export default function FacturationPage() {
     if (!q) return items;
     return items.filter((f) => {
       const cn = f.client_id ? (clientNames.get(f.client_id) || "") : "";
-      const pn = f.project_id ? (projectNames.get(f.project_id) || "") : "";
+      const pi = f.project_id ? projectInfos.get(f.project_id) : undefined;
+      const pn = pi ? `${pi.name} ${pi.address || ""}` : "";
       return (
         f.reference.toLowerCase().includes(q) ||
         String(f.total || "").includes(q) ||
@@ -171,7 +185,7 @@ export default function FacturationPage() {
         pn.toLowerCase().includes(q)
       );
     });
-  }, [items, search, clientNames, projectNames]);
+  }, [items, search, clientNames, projectInfos]);
 
   const byColumn = useMemo(() => {
     const map: Record<string, Facture[]> = Object.fromEntries(
@@ -330,9 +344,9 @@ export default function FacturationPage() {
                                 ? clientNames.get(f.client_id) ?? null
                                 : null
                             }
-                            projectName={
+                            projectInfo={
                               f.project_id
-                                ? projectNames.get(f.project_id) ?? null
+                                ? projectInfos.get(f.project_id) ?? null
                                 : null
                             }
                             dragging={dragging === f.id}
@@ -362,7 +376,7 @@ export default function FacturationPage() {
 function Card({
   fa,
   clientName,
-  projectName,
+  projectInfo,
   dragging,
   onDragStart,
   onDragEnd,
@@ -372,7 +386,11 @@ function Card({
 }: {
   fa: Facture;
   clientName: string | null;
-  projectName: string | null;
+  projectInfo: {
+    name: string;
+    address: string | null;
+    kind: string | null;
+  } | null;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -436,17 +454,47 @@ function Card({
       >
         <GripVertical className="h-4 w-4" />
       </div>
-      {/* Adresse du projet (top). Fallback sur la référence
-          de la facture si pas de projet lié — pour ne jamais
-          afficher une carte vide. */}
-      <h3 className="truncate text-sm font-semibold text-white">
-        {projectName || fa.reference}
-      </h3>
-      {clientName ? (
-        <p className="mt-0.5 truncate text-[11px] text-white/60">
-          {clientName}
-        </p>
-      ) : null}
+      {/* Facture d'un BON DE TRAVAIL : badge « BT-xx » + demande +
+          client + adresse. Sinon : adresse du projet (fallback nom /
+          référence de la facture) + client. */}
+      {(() => {
+        const isBon = projectInfo?.kind === "bon_travail";
+        const btRef = isBon
+          ? (projectInfo?.name || "").split(" — ")[0]
+          : null;
+        const demande = isBon
+          ? (projectInfo?.name || "")
+              .split(" — ")
+              .slice(1)
+              .join(" — ") || projectInfo?.name
+          : null;
+        return (
+          <>
+            {isBon && btRef ? (
+              <span className="mb-1 inline-flex items-center rounded-full border border-amber-500/50 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-400">
+                {btRef}
+              </span>
+            ) : null}
+            <h3 className="truncate text-sm font-semibold text-white">
+              {isBon
+                ? demande
+                : projectInfo
+                ? projectInfo.address || projectInfo.name
+                : fa.reference}
+            </h3>
+            {clientName ? (
+              <p className="mt-0.5 truncate text-[11px] text-white/60">
+                {clientName}
+              </p>
+            ) : null}
+            {isBon && projectInfo?.address ? (
+              <p className="mt-0.5 truncate text-[11px] text-white/45">
+                {projectInfo.address}
+              </p>
+            ) : null}
+          </>
+        );
+      })()}
       {/* Numéro de facture + montant. Si `total` n'est pas en
           DB (cas legacy / sync QBO partielle), on retombe sur la
           somme subtotal+tps+tvq, puis sur subtotal seul. */}
