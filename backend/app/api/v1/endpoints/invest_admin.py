@@ -143,6 +143,27 @@ class FromDriveRequest(BaseModel):
 # ─────────────────────────── Helpers ───────────────────────────
 
 
+def _qbo_sync_state(
+    profil: Optional[InvestProjetProfil],
+) -> Optional[dict]:
+    """Résumé de la dernière sync QBO (avances) stocké sur le profil —
+    None si jamais synchronisé avec succès."""
+    if profil is None or not profil.qbo_sync_json:
+        return None
+    import json as _json
+
+    try:
+        resume = _json.loads(profil.qbo_sync_json)
+    except Exception:  # noqa: BLE001 — JSON corrompu = pas d'état
+        return None
+    return {
+        "at": (
+            profil.qbo_sync_at.isoformat() if profil.qbo_sync_at else None
+        ),
+        **resume,
+    }
+
+
 async def _load_entreprise(db, entreprise_id: int) -> Entreprise:
     ent = await db.get(Entreprise, entreprise_id)
     if ent is None:
@@ -713,6 +734,8 @@ async def get_projet(
                 else None
             ),
         },
+        # État de la dernière synchronisation QuickBooks (persistant).
+        "qbo_sync": _qbo_sync_state(profil),
         **snap,
         "serie_mensuelle": serie["rows"],
         "revenus_mode": serie["revenus_mode"],

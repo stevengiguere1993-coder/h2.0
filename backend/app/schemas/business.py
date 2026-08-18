@@ -291,6 +291,9 @@ class BonTravailUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     scope_md: Optional[str] = None
+    # Client facturé — modifiable depuis la fiche du bon (la facture du
+    # bon porte ensuite ce client, comme la facturation normale).
+    client_id: Optional[int] = None
     amount: Optional[float] = None
     status: Optional[str] = None
     sent_to_email: Optional[EmailStr] = None
@@ -427,6 +430,9 @@ class FactureUpdate(BaseModel):
     # ponctuelle, alignement sur la séquence QBO, fusion). Conflit
     # d'unicité géré par la contrainte SQL — l'API renverra une 4xx.
     reference: Optional[str] = None
+    # Client facturé — réparable depuis l'en-tête de la facture quand il
+    # manque (ex. facture née d'un bon de travail sans client).
+    client_id: Optional[int] = None
     subtotal: Optional[float] = None
     tps: Optional[float] = None
     tvq: Optional[float] = None

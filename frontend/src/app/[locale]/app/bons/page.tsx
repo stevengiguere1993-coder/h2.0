@@ -1,11 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ClipboardCheck, HardHat, Loader2, Plus, Wrench } from "lucide-react";
+import {
+  ClipboardCheck,
+  HardHat,
+  Loader2,
+  Plus,
+  Trash2,
+  Wrench
+} from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 import { Link, useRouter } from "@/i18n/navigation";
 
 type Bon = {
@@ -70,6 +78,7 @@ function money(n: number | string | null): string {
 export default function BonsPage() {
   const { onOpenSidebar } = useAppLayout();
   const router = useRouter();
+  const confirmDialog = useConfirm();
   const [items, setItems] = useState<Bon[]>([]);
   const [users, setUsers] = useState<UserLite[]>([]);
   const [loading, setLoading] = useState(true);
@@ -156,6 +165,32 @@ export default function BonsPage() {
     for (const id of Object.keys(map)) map[id].sort(cmp);
     return map;
   }, [filtered]);
+
+  async function deleteBon(b: Bon) {
+    if (
+      !(await confirmDialog({
+        title: `Supprimer le bon ${b.reference} ?`,
+        description:
+          "Le bon et ses lignes seront supprimés. Les factures déjà " +
+          "créées à partir de ce bon ne sont pas touchées.",
+        confirmLabel: "Supprimer",
+        destructive: true
+      }))
+    ) {
+      return;
+    }
+    const prev = items;
+    setItems((xs) => xs.filter((x) => x.id !== b.id));
+    try {
+      const res = await authedFetch(`/api/v1/bons-travail/${b.id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) throw new Error();
+    } catch {
+      setItems(prev);
+      setError("Suppression échouée. Réessaie.");
+    }
+  }
 
   async function moveTo(bonId: number, status: string) {
     const current = items.find((b) => b.id === bonId);
@@ -310,18 +345,30 @@ export default function BonsPage() {
                                   `/app/bons/${b.id}` as any
                                 );
                             }}
-                            className={`block cursor-pointer rounded-lg border p-3 transition ${
+                            className={`group relative block cursor-pointer rounded-lg border p-3 transition ${
                               b.is_urgent
                                 ? "border-rose-500/70 bg-rose-500/10 hover:border-rose-400"
                                 : "border-brand-800 bg-brand-950 hover:border-accent-500"
                             }`}
                           >
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void deleteBon(b);
+                              }}
+                              className="absolute right-1.5 top-1.5 rounded p-1 text-white/25 opacity-60 transition hover:bg-rose-500/10 hover:text-rose-400 focus:opacity-100 group-hover:opacity-100 sm:opacity-0"
+                              aria-label={`Supprimer le bon ${b.reference}`}
+                              title="Supprimer ce bon"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
                             {b.is_urgent ? (
                               <span className="badge badge-rose mb-1 uppercase tracking-wider">
                                 ⚠ Urgence
                               </span>
                             ) : null}
-                            <h3 className="truncate text-sm font-semibold text-white">
+                            <h3 className="truncate pr-6 text-sm font-semibold text-white">
                               {b.address || "Adresse non renseignée"}
                             </h3>
                             <p className="mt-0.5 truncate text-xs text-white/70">

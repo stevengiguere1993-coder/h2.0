@@ -140,6 +140,24 @@ async def convert_project_to_facture(
     db.add(facture)
     await db.flush()
 
+    # Projet lié à un BON DE TRAVAIL : la « demande de départ » (titre
+    # du bon) coiffe chaque ligne importée, avec la sous-description
+    # (« Main-d'œuvre », matériel…) en dessous — le client comprend
+    # d'un coup d'œil à quelle demande la ligne se rattache.
+    bon_demande: Optional[str] = None
+    if (getattr(project, "kind", None) or "") == "bon_travail":
+        from app.models.bon_travail import BonTravail as _BonDesc
+
+        _bt = (
+            await db.execute(
+                select(_BonDesc)
+                .where(_BonDesc.project_id == project.id)
+                .order_by(_BonDesc.id)
+            )
+        ).scalars().first()
+        if _bt is not None:
+            bon_demande = (_bt.title or "").strip() or None
+
     pos = 0
 
     # 1) Prix fixe — items de la soumission acceptée liée au projet.
@@ -309,7 +327,10 @@ async def convert_project_to_facture(
                     unit_price = float(it.unit_price)
                     if unit_price > 0:
                         unit = it.unit
-                        qty = round(delta_i / unit_price, 3)
+                        # 6 décimales (précision de la colonne) : à 3,
+                        # un gros prix unitaire dérivait de plusieurs
+                        # dollars et dépassait le devis.
+                        qty = round(delta_i / unit_price, 6)
                         line_total = round(qty * unit_price, 2)
                     else:
                         qty = 1.0
@@ -416,14 +437,16 @@ async def convert_project_to_facture(
                 b_amount = round(b_amount, 2)
                 if b_hours <= 0:
                     continue
+                if bon_demande:
+                    desc_h = f"{bon_demande}\nMain-d'œuvre"
+                elif key == "projet":
+                    desc_h = "Main-d'œuvre"
+                else:
+                    desc_h = "Main-d'œuvre — bons de travail"
                 item = FactureItem(
                     facture_id=facture.id,
                     position=pos,
-                    description=(
-                        "Main-d'œuvre"
-                        if key == "projet"
-                        else "Main-d'œuvre — bons de travail"
-                    ),
+                    description=desc_h,
                     unit="h",
                     quantity=b_hours,
                     unit_price=round(b_amount / b_hours, 2),
@@ -498,6 +521,10 @@ async def convert_project_to_facture(
             # INTERNE : on l'applique au montant (`billed`) mais on ne
             # l'affiche JAMAIS dans la description vue par le client.
             label = f"{line_prefix} — {base_desc}"
+            if bon_demande:
+                # Facture d'un bon : la demande de départ coiffe la
+                # sous-description matériel/sous-traitance.
+                label = f"{bon_demande}\n{label}"
             contract = (
                 contracts_by_st.get(ac.sous_traitant_id or 0)
                 if ac.kind == "sub_invoice"
@@ -569,5 +596,26 @@ async def convert_project_to_facture(
     from app.api.v1.endpoints.facture_items import _recompute_facture_totals
 
     await _recompute_facture_totals(db, facture.id)
+
+    # Facture créée depuis un BON DE TRAVAIL : le bon « complété — à
+    # refacturer » passe à « facturé » — sa carte change de colonne
+    # toute seule sur le kanban (même règle que l'import multi-bons).
+    if (getattr(project, "kind", None) or "") == "bon_travail":
+        from app.models.bon_travail import (
+            BonTravail as _BonSt,
+            BonTravailStatus as _BSt,
+        )
+
+        for _b in (
+            await db.execute(
+                select(_BonSt).where(
+                    _BonSt.project_id == project.id,
+                    _BonSt.status == _BSt.COMPLETE_A_REFACTURER.value,
+                )
+            )
+        ).scalars():
+            _b.status = _BSt.FACTURE.value
+        await db.flush()
+
     await db.refresh(facture)
     return FactureRead.model_validate(facture)

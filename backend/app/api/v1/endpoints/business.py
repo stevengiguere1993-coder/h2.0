@@ -236,6 +236,137 @@ def _maybe_correct_billable_bg() -> None:
         pass
 
 
+async def _heal_facture_clients(db, factures) -> None:
+    """Auto-réparation : une facture SANS client dont le projet lié en a
+    un hérite du client du projet (le client d'un bon de travail / d'un
+    projet est la vérité — sa facture doit le porter). Idempotent,
+    appliqué à la lecture pour réparer aussi l'existant."""
+    from sqlalchemy import select
+
+    from app.models.project import Project as _Proj
+
+    orphans = [
+        f
+        for f in factures
+        if getattr(f, "client_id", None) is None
+        and getattr(f, "project_id", None)
+    ]
+    if not orphans:
+        return
+    pids = {f.project_id for f in orphans}
+    rows = (
+        await db.execute(
+            select(_Proj.id, _Proj.client_id).where(
+                _Proj.id.in_(list(pids))
+            )
+        )
+    ).all()
+    cmap = {pid: cid for pid, cid in rows if cid}
+    changed = False
+    for f in orphans:
+        cid = cmap.get(f.project_id)
+        if cid:
+            f.client_id = cid
+            changed = True
+    if changed:
+        await db.flush()
+
+
+async def _heal_facture_devis_overrun(db, fa) -> None:
+    """Auto-réparation d'un BROUILLON : si le cumul facturé d'un item de
+    soumission (toutes factures non annulées du projet) dépasse son
+    montant au devis d'un PETIT écart (≤ 10 $ — un artefact d'arrondi de
+    quantité, pas un choix délibéré), la ligne du brouillon est réduite
+    du surplus (quantité recalculée à 6 décimales). Corrige les factures
+    créées avant le passage des quantités à 6 décimales — ex. « 29
+    Besner » facturé 4,04 $ au-dessus du devis."""
+    if (fa.status or "") != "draft" or not fa.project_id:
+        return
+    from sqlalchemy import func, select
+
+    from app.models.facture import Facture as _Fac, FactureStatus as _FSt
+    from app.models.facture_item import FactureItem as _FIt
+    from app.models.soumission_item import SoumissionItem as _SIt
+
+    lignes = [
+        r
+        for r in (
+            await db.execute(
+                select(_FIt).where(
+                    _FIt.facture_id == fa.id,
+                    _FIt.soumission_item_id.isnot(None),
+                    _FIt.kind != "extra",
+                )
+            )
+        ).scalars()
+    ]
+    if not lignes:
+        return
+    sids = {int(r.soumission_item_id) for r in lignes}
+    sm_total = {
+        int(sid): float(tot or 0)
+        for sid, tot in (
+            await db.execute(
+                select(_SIt.id, _SIt.total).where(_SIt.id.in_(list(sids)))
+            )
+        ).all()
+    }
+    fac_ids = [
+        fid
+        for fid in (
+            await db.execute(
+                select(_Fac.id).where(
+                    _Fac.project_id == fa.project_id,
+                    _Fac.status != _FSt.VOID.value,
+                )
+            )
+        ).scalars()
+    ]
+    cumul = {
+        int(sid): float(tot or 0)
+        for sid, tot in (
+            await db.execute(
+                select(
+                    _FIt.soumission_item_id,
+                    func.coalesce(func.sum(_FIt.total), 0),
+                )
+                .where(
+                    _FIt.facture_id.in_(fac_ids),
+                    _FIt.soumission_item_id.in_(list(sids)),
+                    _FIt.kind != "extra",
+                )
+                .group_by(_FIt.soumission_item_id)
+            )
+        ).all()
+    }
+    changed = False
+    vus: set[int] = set()
+    for ligne in sorted(lignes, key=lambda r: -float(r.total or 0)):
+        sid = int(ligne.soumission_item_id)
+        if sid in vus:
+            continue
+        vus.add(sid)
+        surplus = round(cumul.get(sid, 0.0) - sm_total.get(sid, 0.0), 2)
+        if not (0.005 < surplus <= 10.0):
+            continue
+        reduction = min(surplus, float(ligne.total or 0))
+        if reduction <= 0.005:
+            continue
+        new_total = round(float(ligne.total) - reduction, 2)
+        up = float(ligne.unit_price or 0)
+        if up > 0:
+            ligne.quantity = round(new_total / up, 6)
+        ligne.total = new_total
+        changed = True
+    if changed:
+        from app.api.v1.endpoints.facture_items import (
+            _recompute_facture_totals,
+        )
+
+        await db.flush()
+        await _recompute_facture_totals(db, fa.id)
+
+
 def make_crud_router(
     *,
     prefix: str,
@@ -439,7 +570,10 @@ def make_crud_router(
         db: DBSession,
         _: AuthRead,
         skip: int = Query(0, ge=0),
-        limit: int = Query(100, ge=1, le=500),
+        # Plafond 2000 : les pages kanban chargent les lookups complets
+        # (clients, projets) — 500 tronquait déjà les projets (cartes de
+        # facture sans adresse ni client).
+        limit: int = Query(100, ge=1, le=2000),
     ):
         crud = GenericCrud(db, model)
         items = await crud.list(skip=skip, limit=limit)
@@ -450,6 +584,7 @@ def make_crud_router(
             _maybe_correct_billable_bg()
         elif model is Facture:
             _maybe_dedupe_factures_bg()
+            await _heal_facture_clients(db, items)
         return [read_schema.model_validate(i) for i in items]
 
     @router.get("/{item_id}")
@@ -458,6 +593,9 @@ def make_crud_router(
         obj = await crud.get(item_id)
         if obj is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+        if model is Facture:
+            await _heal_facture_clients(db, [obj])
+            await _heal_facture_devis_overrun(db, obj)
         return read_schema.model_validate(obj)
 
     @router.patch("/{item_id}")

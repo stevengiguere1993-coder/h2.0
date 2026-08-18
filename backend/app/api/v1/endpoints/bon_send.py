@@ -87,6 +87,39 @@ async def ensure_bon_project(
     if bon is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Bon introuvable.")
     proj = await _ensure_bon_project(db, bon)
+    # Propagation : le client (et l'adresse) du bon suivent sur le
+    # projet lié ET sur ses factures pas encore réglées qui n'ont pas de
+    # client — le client apparaît sur la facture comme dans la
+    # facturation normale, même s'il a été choisi APRÈS la création.
+    if bon.client_id and proj.client_id != bon.client_id:
+        proj.client_id = bon.client_id
+    elif proj.client_id and not bon.client_id:
+        # Sens inverse : le client a été choisi sur la FICHE PROJET du
+        # bon → le bon en hérite (une seule vérité).
+        bon.client_id = proj.client_id
+    if bon.address and not proj.address:
+        proj.address = bon.address
+    if bon.client_id:
+        from sqlalchemy import select as _select
+
+        from app.models.facture import Facture, FactureStatus
+
+        for fac in (
+            await db.execute(
+                _select(Facture).where(
+                    Facture.project_id == proj.id,
+                    Facture.client_id.is_(None),
+                    Facture.status.notin_(
+                        [
+                            FactureStatus.PAID.value,
+                            FactureStatus.VOID.value,
+                        ]
+                    ),
+                )
+            )
+        ).scalars():
+            fac.client_id = bon.client_id
+    await db.flush()
     # Sous-client QB « BT-xx — titre » sous le client mère, en arrière-plan
     # (best-effort ; la 1ʳᵉ facture/coût le créerait de toute façon).
     if proj.client_id:

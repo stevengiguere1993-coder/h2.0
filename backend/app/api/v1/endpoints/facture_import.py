@@ -192,7 +192,9 @@ async def import_into_facture(
                     # de soumission (soumission_item_id) pour la facturation
                     # par étapes et l'affichage d'avancement.
                     unit_price = float(it.unit_price)
-                    qty = round(float(it.quantity) * ratio, 3)
+                    # 6 décimales (précision de la colonne) — à 3, un
+                    # gros prix unitaire faisait dériver le montant.
+                    qty = round(float(it.quantity) * ratio, 6)
                     line_total = round(qty * unit_price, 2)
                     db.add(
                         FactureItem(
@@ -430,10 +432,8 @@ async def import_into_facture(
     # → rabais) — cohérent avec l'ajout manuel.
     from app.api.v1.endpoints.facture_items import (
         _recompute_facture_totals,
-        _reorder_items_by_kind,
     )
 
-    await _reorder_items_by_kind(db, facture_id)
     # Recalcule subtotal/TPS/TVQ/total STOCKÉS depuis les items importés.
     # Sans ça, Facture.total restait à l'ancienne valeur → le kanban (qui
     # lit le total en base) affichait un montant différent de l'éditeur
@@ -450,3 +450,241 @@ async def import_into_facture(
 
         _asyncio.create_task(push_facture_now(int(fa.id)))
     return ImportResult(added=added)
+
+
+# ─────────── Import d'un BON DE TRAVAIL dans une facture ───────────
+# Permet de facturer PLUSIEURS bons sur la même facture : on crée la
+# facture depuis un premier bon (ou à la main), puis on importe chaque
+# bon supplémentaire — ses heures et ses achats arrivent en lignes
+# coiffées de la demande de départ du bon.
+
+
+class ImportBonRequest(BaseModel):
+    bon_id: int
+
+
+class ImportBonResult(BaseModel):
+    added: int
+    bon_reference: str
+    #: True si la facture a hérité du client du bon (elle n'en avait pas).
+    client_set: bool
+
+
+@router.post(
+    "/{facture_id}/import-bon",
+    response_model=ImportBonResult,
+    summary="Importe les heures + achats d'un bon de travail dans une "
+    "facture existante (facturation multi-bons)",
+)
+async def import_bon_into_facture(
+    facture_id: int,
+    data: ImportBonRequest,
+    db: DBSession,
+    _: CurrentUser,
+) -> ImportBonResult:
+    from app.api.v1.endpoints.facture_items import (
+        _ensure_facture_editable,
+        _recompute_facture_totals,
+    )
+    from app.models.bon_travail import BonTravail, BonTravailStatus
+    from app.services.bon_project import ensure_bon_project
+
+    fa = await _ensure_facture_editable(db, facture_id)
+    bon = await db.get(BonTravail, data.bon_id)
+    if bon is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Bon de travail introuvable."
+        )
+    # Garde-fou : jamais deux clients différents sur la même facture.
+    if (
+        fa.client_id
+        and bon.client_id
+        and int(fa.client_id) != int(bon.client_id)
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Ce bon appartient à un autre client que la facture — "
+            "faites-lui sa propre facture.",
+        )
+    proj = await ensure_bon_project(db, bon)
+
+    client_set = False
+    if not fa.client_id and bon.client_id:
+        fa.client_id = bon.client_id
+        client_set = True
+
+    demande = (bon.title or "").strip() or bon.reference
+
+    existing = (
+        await db.execute(
+            select(FactureItem.position).where(
+                FactureItem.facture_id == facture_id
+            )
+        )
+    ).scalars().all()
+    pos = (max(existing) + 1) if existing else 0
+    added = 0
+    now = datetime.now(timezone.utc)
+
+    # 1) Heures punchées du bon (approuvées, pas encore facturées) —
+    #    pointées sur le bon directement ou sur son projet lié.
+    from sqlalchemy import or_ as _or
+
+    punches = (
+        await db.execute(
+            select(Punch)
+            .where(
+                _or(
+                    Punch.bon_travail_id == bon.id,
+                    Punch.project_id == proj.id,
+                )
+            )
+            .where(Punch.approved.is_(True))
+            .where(Punch.hours.is_not(None))
+            .where(Punch.invoiced_at.is_(None))
+        )
+    ).scalars().all()
+    if punches:
+        emp_ids = {p.employe_id for p in punches}
+        emps = {
+            e.id: e
+            for e in (
+                await db.execute(
+                    select(Employe).where(Employe.id.in_(emp_ids))
+                )
+            ).scalars().all()
+        }
+        b_hours = 0.0
+        b_amount = 0.0
+        for p in punches:
+            emp = emps.get(p.employe_id)
+            if p.bon_travail_id:
+                rate = BON_HOURS_RATE
+            elif emp and emp.billing_rate is not None:
+                rate = max(float(emp.billing_rate), HOURS_RATE_FLOOR)
+            elif emp and emp.hourly_rate:
+                rate = max(float(emp.hourly_rate), HOURS_RATE_FLOOR)
+            else:
+                rate = HOURS_RATE_FLOOR
+            h = float(p.hours or 0)
+            b_hours += h
+            b_amount += h * rate
+        b_hours = round(b_hours, 2)
+        b_amount = round(b_amount, 2)
+        if b_hours > 0:
+            item = FactureItem(
+                facture_id=facture_id,
+                position=pos,
+                description=f"{demande}\nMain-d'œuvre",
+                unit="h",
+                quantity=b_hours,
+                unit_price=round(b_amount / b_hours, 2),
+                total=b_amount,
+                kind="extra",
+            )
+            db.add(item)
+            await db.flush()
+            for p in punches:
+                p.invoiced_at = now
+                p.facture_item_id = item.id
+            pos += 1
+            added += 1
+
+    # 2) Achats refacturables du bon (via son projet lié), avec markup /
+    #    contrat sous-traitant — mêmes règles que la facture d'un bon.
+    achats = (
+        await db.execute(
+            select(Achat)
+            .where(Achat.project_id == proj.id)
+            .where(Achat.is_billable.is_(True))
+            .where(Achat.invoiced_at.is_(None))
+            .order_by(Achat.id.asc())
+        )
+    ).scalars().all()
+    sub_ids = {a.sous_traitant_id for a in achats if a.sous_traitant_id}
+    contracts_by_st: dict[int, ProjectSubcontractorContract] = {}
+    if sub_ids:
+        contracts_by_st = {
+            c.sous_traitant_id: c
+            for c in (
+                await db.execute(
+                    select(ProjectSubcontractorContract)
+                    .where(
+                        ProjectSubcontractorContract.project_id == proj.id
+                    )
+                    .where(
+                        ProjectSubcontractorContract.sous_traitant_id.in_(
+                            sub_ids
+                        )
+                    )
+                )
+            ).scalars().all()
+        }
+    merged: dict[str, FactureItem] = {}
+    for ac in achats:
+        billed, _rule = _compute_billed_amount(ac, {}, contracts_by_st)
+        base_desc = ac.description or f"Achat {ac.reference or ac.id}"
+        label = (
+            f"{demande}\n{achat_line_prefix(ac.kind)} — {base_desc}"
+        )
+        contract = (
+            contracts_by_st.get(ac.sous_traitant_id or 0)
+            if ac.kind == "sub_invoice"
+            else None
+        )
+        is_hourly = bool(
+            contract is not None and contract.billing_mode == "flat_hourly"
+        )
+        if not is_hourly:
+            prev = merged.get(_merge_label_key(label))
+            if prev is not None:
+                prev.total = round(float(prev.total) + billed, 2)
+                prev.unit_price = prev.total
+                ac.invoiced_at = now
+                ac.facture_item_id = prev.id
+                continue
+        if is_hourly:
+            unit, qty, up = "h", float(ac.hours or 0), float(
+                contract.flat_hourly_rate or 0
+            )
+        else:
+            unit, qty, up = "lot", 1.0, billed
+        item = FactureItem(
+            facture_id=facture_id,
+            position=pos,
+            description=label,
+            unit=unit,
+            quantity=qty,
+            unit_price=up,
+            total=billed,
+            kind="extra",
+        )
+        db.add(item)
+        await db.flush()
+        if not is_hourly:
+            merged[_merge_label_key(label)] = item
+        ac.invoiced_at = now
+        ac.facture_item_id = item.id
+        pos += 1
+        added += 1
+        if ac.qbo_bill_id or ac.qbo_purchase_id:
+            import asyncio as _asyncio
+
+            from app.services.achat_qbo import flip_qbo_billable_now
+
+            _asyncio.create_task(flip_qbo_billable_now(int(ac.id), False))
+
+    # Bon « complété à refacturer » → « facturé » (kanban à jour).
+    if bon.status == BonTravailStatus.COMPLETE_A_REFACTURER.value:
+        bon.status = BonTravailStatus.FACTURE.value
+
+    await _recompute_facture_totals(db, facture_id)
+    if (fa.status or "") not in ("draft", "void"):
+        import asyncio as _asyncio2
+
+        from app.services.qbo_auto_sync import push_facture_now
+
+        _asyncio2.create_task(push_facture_now(int(fa.id)))
+    return ImportBonResult(
+        added=added, bon_reference=bon.reference, client_set=client_set
+    )

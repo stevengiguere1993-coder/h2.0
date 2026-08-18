@@ -76,11 +76,37 @@ async def _load_client(
 async def _build_lines(
     qbo, items: list[FactureItem], fallback_name: str
 ) -> list[Dict[str, Any]]:
+    from decimal import ROUND_HALF_UP, Decimal
+
     lines: list[Dict[str, Any]] = []
     for it in items:
-        amount = round(float(it.quantity) * float(it.unit_price), 2)
         qty = float(it.quantity)
-        unit_price = float(it.unit_price)
+        # Le montant STOCKÉ de la ligne est la vérité (c'est lui qui
+        # fait le total Kratos). L'ancien round(qty × prix) Python
+        # (arrondi bancaire + floats binaires) divergeait parfois d'un
+        # cent du calcul de QBO → refus 6070 « montant ≠ prix unitaire
+        # × quantité » (vu sur 933.01). On envoie le montant réel et un
+        # prix unitaire recalculé en haute précision pour que
+        # Qty × UnitPrice retombe exactement dessus côté QBO.
+        _total = (
+            float(it.total)
+            if it.total is not None
+            else float(it.quantity) * float(it.unit_price)
+        )
+        amount = float(
+            Decimal(str(_total)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+        )
+        if qty > 0:
+            unit_price = float(
+                (Decimal(str(amount)) / Decimal(str(qty))).quantize(
+                    Decimal("0.0000001"), rounding=ROUND_HALF_UP
+                )
+            )
+        else:
+            qty = 1.0
+            unit_price = amount
         name = (it.description or "").strip()[:100] or fallback_name
         qbo_item = await qbo.ensure_item(name, description=it.description)
         item_id = str(qbo_item.get("Id") or "")

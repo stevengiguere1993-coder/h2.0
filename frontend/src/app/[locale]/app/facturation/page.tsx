@@ -13,6 +13,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { fetchAllPages } from "@/lib/fetch-all";
 import { Link } from "@/i18n/navigation";
 
 type Facture = {
@@ -91,9 +92,16 @@ export default function FacturationPage() {
   const [clientNames, setClientNames] = useState<Map<number, string>>(
     new Map()
   );
-  const [projectNames, setProjectNames] = useState<Map<number, string>>(
-    new Map()
-  );
+  const [projectInfos, setProjectInfos] = useState<
+    Map<
+      number,
+      { name: string; address: string | null; kind: string | null }
+    >
+  >(new Map());
+  // project_id du bon → référence RÉELLE + adresse du bon de travail.
+  const [bonByProject, setBonByProject] = useState<
+    Map<number, { reference: string; address: string | null }>
+  >(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -119,31 +127,66 @@ export default function FacturationPage() {
       setLoading(true);
       setError(null);
       try {
-        const [fRes, cRes, pRes] = await Promise.all([
-          authedFetch("/api/v1/factures?limit=500"),
-          authedFetch("/api/v1/clients?limit=500"),
-          authedFetch("/api/v1/projects?limit=500")
+        // Pagination par pages de 500 (fetchAllPages) : compatible
+        // avec tout backend déployé (l'appel direct ?limit=1000 cassait
+        // la page pendant la fenêtre de déploiement) et couvre plus de
+        // 500 clients/projets.
+        type ProjLite = {
+          id: number;
+          name: string;
+          address: string | null;
+          kind: string | null;
+        };
+        type BonLite = {
+          id: number;
+          reference: string;
+          project_id: number | null;
+          address: string | null;
+        };
+        const [data, cs, psReg, psBons, bons] = await Promise.all([
+          fetchAllPages<Facture>("/api/v1/factures"),
+          fetchAllPages<{ id: number; name: string }>(
+            "/api/v1/clients"
+          ).catch(() => []),
+          fetchAllPages<ProjLite>("/api/v1/projects").catch(() => []),
+          // La liste des projets EXCLUT les bons de travail par défaut
+          // — il faut les demander explicitement pour que les cartes
+          // de facture d'un BT montrent son numéro et son adresse.
+          fetchAllPages<ProjLite>(
+            "/api/v1/projects?kind=bon_travail"
+          ).catch(() => []),
+          // Référence RÉELLE du bon (les vieux projets de bons ne
+          // portent pas « BT-… — » dans leur nom) + adresse du bon.
+          fetchAllPages<BonLite>("/api/v1/bons-travail").catch(() => [])
         ]);
-        if (!fRes.ok) throw new Error(`http_${fRes.status}`);
-        const data = (await fRes.json()) as Facture[];
-        const cs = cRes.ok
-          ? ((await cRes.json()) as Array<{ id: number; name: string }>)
-          : [];
-        const ps = pRes.ok
-          ? ((await pRes.json()) as Array<{
-              id: number;
-              name: string;
-              address: string | null;
-            }>)
-          : [];
+        const ps = [...psReg, ...psBons];
         if (!cancelled) {
           setItems(data);
           setClientNames(new Map(cs.map((c) => [c.id, c.name])));
-          // On stocke l'adresse comme « nom » du projet — c'est ce
-          // qu'on veut afficher en tête des cartes (fallback : nom
-          // interne si l'adresse n'est pas renseignée).
-          setProjectNames(
-            new Map(ps.map((p) => [p.id, p.address || p.name]))
+          // Nom + adresse + nature du projet : les cartes affichent
+          // l'adresse en tête, et le numéro de BT quand la facture
+          // vient d'un bon de travail (kind="bon_travail").
+          setProjectInfos(
+            new Map(
+              ps.map((p) => [
+                p.id,
+                {
+                  name: p.name,
+                  address: p.address || null,
+                  kind: p.kind || null
+                }
+              ])
+            )
+          );
+          setBonByProject(
+            new Map(
+              bons
+                .filter((b) => b.project_id)
+                .map((b) => [
+                  b.project_id as number,
+                  { reference: b.reference, address: b.address || null }
+                ])
+            )
           );
         }
       } catch {
@@ -163,7 +206,8 @@ export default function FacturationPage() {
     if (!q) return items;
     return items.filter((f) => {
       const cn = f.client_id ? (clientNames.get(f.client_id) || "") : "";
-      const pn = f.project_id ? (projectNames.get(f.project_id) || "") : "";
+      const pi = f.project_id ? projectInfos.get(f.project_id) : undefined;
+      const pn = pi ? `${pi.name} ${pi.address || ""}` : "";
       return (
         f.reference.toLowerCase().includes(q) ||
         String(f.total || "").includes(q) ||
@@ -171,7 +215,7 @@ export default function FacturationPage() {
         pn.toLowerCase().includes(q)
       );
     });
-  }, [items, search, clientNames, projectNames]);
+  }, [items, search, clientNames, projectInfos]);
 
   const byColumn = useMemo(() => {
     const map: Record<string, Facture[]> = Object.fromEntries(
@@ -330,9 +374,14 @@ export default function FacturationPage() {
                                 ? clientNames.get(f.client_id) ?? null
                                 : null
                             }
-                            projectName={
+                            projectInfo={
                               f.project_id
-                                ? projectNames.get(f.project_id) ?? null
+                                ? projectInfos.get(f.project_id) ?? null
+                                : null
+                            }
+                            bonInfo={
+                              f.project_id
+                                ? bonByProject.get(f.project_id) ?? null
                                 : null
                             }
                             dragging={dragging === f.id}
@@ -362,7 +411,8 @@ export default function FacturationPage() {
 function Card({
   fa,
   clientName,
-  projectName,
+  projectInfo,
+  bonInfo,
   dragging,
   onDragStart,
   onDragEnd,
@@ -372,7 +422,12 @@ function Card({
 }: {
   fa: Facture;
   clientName: string | null;
-  projectName: string | null;
+  projectInfo: {
+    name: string;
+    address: string | null;
+    kind: string | null;
+  } | null;
+  bonInfo: { reference: string; address: string | null } | null;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -436,17 +491,44 @@ function Card({
       >
         <GripVertical className="h-4 w-4" />
       </div>
-      {/* Adresse du projet (top). Fallback sur la référence
-          de la facture si pas de projet lié — pour ne jamais
-          afficher une carte vide. */}
-      <h3 className="truncate text-sm font-semibold text-white">
-        {projectName || fa.reference}
-      </h3>
-      {clientName ? (
-        <p className="mt-0.5 truncate text-[11px] text-white/60">
-          {clientName}
-        </p>
-      ) : null}
+      {/* Format des cartes : en GRAS le numéro de BT (ou le nom/
+          adresse du projet) ; dessous le client (pas gras) ; puis pour
+          un BT l'adresse du chantier ; le numéro de facture reste en
+          jaune plus bas. */}
+      {(() => {
+        // Facture d'un bon : la référence RÉELLE du bon (bonInfo) prime
+        // — les vieux projets de bons ne portent pas « BT-… » dans leur
+        // nom, l'extraire du nom était fragile.
+        const isBon =
+          bonInfo !== null || projectInfo?.kind === "bon_travail";
+        const btRef =
+          bonInfo?.reference ||
+          (projectInfo?.name || "").split(" — ")[0] ||
+          null;
+        const adresse =
+          bonInfo?.address || projectInfo?.address || null;
+        return (
+          <>
+            <h3 className="truncate text-sm font-bold text-white">
+              {isBon
+                ? btRef || projectInfo?.name || fa.reference
+                : projectInfo
+                ? projectInfo.address || projectInfo.name
+                : fa.reference}
+            </h3>
+            {clientName ? (
+              <p className="mt-0.5 truncate text-[11px] font-normal text-white/70">
+                {clientName}
+              </p>
+            ) : null}
+            {isBon && adresse ? (
+              <p className="mt-0.5 truncate text-[11px] text-white/45">
+                {adresse}
+              </p>
+            ) : null}
+          </>
+        );
+      })()}
       {/* Numéro de facture + montant. Si `total` n'est pas en
           DB (cas legacy / sync QBO partielle), on retombe sur la
           somme subtotal+tps+tvq, puis sur subtotal seul. */}
