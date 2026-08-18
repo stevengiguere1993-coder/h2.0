@@ -241,6 +241,8 @@ async def _heal_facture_clients(db, factures) -> None:
     un hérite du client du projet (le client d'un bon de travail / d'un
     projet est la vérité — sa facture doit le porter). Idempotent,
     appliqué à la lecture pour réparer aussi l'existant."""
+    from sqlalchemy import select
+
     from app.models.project import Project as _Proj
 
     orphans = [
