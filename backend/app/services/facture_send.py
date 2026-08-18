@@ -162,5 +162,36 @@ async def send_facture(
         # pour que la date affichée soit la date réelle d'expédition.
         fa.issued_at = datetime.now(timezone.utc)
         await db.flush()
+
+    # Facture d'un BON DE TRAVAIL envoyée au client → le bon passe en
+    # « facturé » (kanban à jour), quel que soit son stade dans le
+    # cycle interne (brouillon, accepté, planifié, à refacturer).
+    # Annulé et statuts legacy signés ne bougent pas.
+    if fa.project_id:
+        from sqlalchemy import select as _sel_bt
+
+        from app.models.bon_travail import (
+            BonTravail as _BT,
+            BonTravailStatus as _BSt,
+        )
+
+        for _b in (
+            await db.execute(
+                _sel_bt(_BT).where(
+                    _BT.project_id == fa.project_id,
+                    _BT.status.in_(
+                        [
+                            _BSt.DRAFT.value,
+                            _BSt.ACCEPTE_A_PLANIFIER.value,
+                            _BSt.PLANIFIE.value,
+                            _BSt.COMPLETE_A_REFACTURER.value,
+                        ]
+                    ),
+                )
+            )
+        ).scalars():
+            _b.status = _BSt.FACTURE.value
+        await db.flush()
+
     await db.refresh(fa)
     return fa
