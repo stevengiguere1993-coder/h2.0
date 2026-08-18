@@ -61,15 +61,19 @@ async def _recompute_facture_totals(db, facture_id: int) -> None:
 
 _KIND_PATTERN = "^(service|extra|rabais|frais)$"
 
-# Ordre d'affichage imposé des lignes de facture : services d'abord,
-# puis extras, puis frais, et rabais en dernier.
+# Ordre de regroupement par défaut À L'IMPORT seulement : services
+# d'abord, puis extras, puis frais, et rabais en dernier. L'ordre reste
+# ensuite ENTIÈREMENT LIBRE — l'admin réordonne ses lignes comme il
+# veut (flèches ↑↓), tous types confondus (retour Phil 2026-08-18).
 _KIND_ORDER = {"service": 0, "extra": 1, "frais": 2, "rabais": 3}
 
 
 async def _reorder_items_by_kind(db, facture_id: int) -> None:
     """Regroupe les lignes de la facture par type, dans l'ordre
     service → extra → frais → rabais, en réassignant leur `position`.
-    L'ordre relatif au sein d'un même type est conservé."""
+    L'ordre relatif au sein d'un même type est conservé. Utilisé
+    SEULEMENT à l'import depuis le projet (mise en ordre initiale) —
+    jamais sur les lectures/éditions, qui respectent l'ordre choisi."""
     items = (
         await db.execute(
             select(FactureItem)
@@ -171,10 +175,9 @@ async def reorder_items(
     db: DBSession,
     _: CurrentUser,
 ) -> List[FactureItemRead]:
-    """Assigne position = index de chaque id dans la liste fournie, puis
-    regroupe par type (service → extra → frais → rabais, tri stable) :
-    l'ordre relatif choisi par l'utilisateur est conservé au sein de
-    chaque type. Les ids absents de la liste passent à la fin."""
+    """Assigne position = index de chaque id dans la liste fournie —
+    l'ordre est LIBRE, tous types confondus. Les ids absents de la
+    liste passent à la fin."""
     await _ensure_facture_editable(db, facture_id)
     rows = (
         await db.execute(
@@ -185,7 +188,6 @@ async def reorder_items(
     for r in rows:
         r.position = order.get(int(r.id), len(order) + int(r.id))
     await db.flush()
-    await _reorder_items_by_kind(db, facture_id)
     fresh = (
         await db.execute(
             select(FactureItem)
@@ -205,9 +207,6 @@ async def list_items(
     facture_id: int, db: DBSession, _: CurrentUser
 ) -> List[FactureItemRead]:
     await _ensure_facture(db, facture_id)
-    # Auto-réparation : regroupe les lignes par type même pour les
-    # factures créées avant cette règle d'ordre.
-    await _reorder_items_by_kind(db, facture_id)
     rows = (
         await db.execute(
             select(FactureItem)
@@ -282,8 +281,8 @@ async def create_item(
     if data.kind == "rabais" and unit_price > 0:
         unit_price = -abs(unit_price)
     total = round(qty * unit_price, 2)
-    # Ajout en fin de liste ; le regroupement par type est appliqué
-    # juste après par _reorder_items_by_kind.
+    # Ajout en FIN de liste — l'item apparaît là où l'admin regarde,
+    # il le remonte ensuite avec les flèches s'il veut.
     existing = (
         await db.execute(
             select(FactureItem.position).where(
@@ -305,7 +304,6 @@ async def create_item(
     db.add(item)
     await db.flush()
     await _recompute_facture_totals(db, facture_id)
-    await _reorder_items_by_kind(db, facture_id)
     await db.refresh(item)
     _autopush_if_emise(fa)
     return FactureItemRead.model_validate(item)
@@ -349,8 +347,6 @@ async def update_item(
         item.total = round(float(item.quantity) * float(item.unit_price), 2)
     await db.flush()
     await _recompute_facture_totals(db, facture_id)
-    # Un changement de type peut déplacer la ligne dans un autre groupe.
-    await _reorder_items_by_kind(db, facture_id)
     await db.refresh(item)
     _autopush_if_emise(fa)
     return FactureItemRead.model_validate(item)

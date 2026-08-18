@@ -551,9 +551,15 @@ export default function FactureDetailPage() {
         })
       });
       if (!res.ok) throw new Error();
-      // Le backend regroupe les lignes par type — on recharge pour
-      // afficher le nouvel item à sa place.
+      const created = (await res.json()) as Item;
       await reloadItems();
+      // L'item s'ajoute en FIN de liste — on l'amène à l'écran pour
+      // que l'ajout soit visible (surtout sur mobile).
+      requestAnimationFrame(() => {
+        document
+          .getElementById(`fitem-${created.id}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
     } catch {
       setError("Ajout d'item échoué.");
     } finally {
@@ -590,18 +596,13 @@ export default function FactureDetailPage() {
     }
   }
 
-  // Déplace une ligne vers le haut / le bas (échange avec sa voisine du
-  // MÊME type — l'ordre service → extra → frais → rabais est imposé,
-  // mais l'ordre est libre à l'intérieur de chaque groupe).
+  // Déplace une ligne vers le haut / le bas — ordre LIBRE, tous types
+  // confondus (le PDF suit exactement cet ordre).
   async function moveItem(item_id: number, dir: -1 | 1) {
     const idx = items.findIndex((x) => x.id === item_id);
     if (idx < 0) return;
     const other = idx + dir;
     if (other < 0 || other >= items.length) return;
-    if (
-      (items[other].kind || "service") !== (items[idx].kind || "service")
-    )
-      return;
     const orderIds = items.map((x) => x.id);
     [orderIds[idx], orderIds[other]] = [orderIds[other], orderIds[idx]];
     setItemBusy(item_id);
@@ -1478,26 +1479,19 @@ export default function FactureDetailPage() {
               ) : (
                 <div className="divide-y divide-brand-800">
                   {items.map((it, idx) => (
-                    <ItemRow
-                      key={it.id}
-                      item={it}
-                      busy={itemBusy === it.id}
-                      onPatch={(patch) => patchItem(it.id, patch)}
-                      onDelete={() => deleteItem(it.id)}
-                      suggestions={suggestions}
-                      canUp={
-                        idx > 0 &&
-                        (items[idx - 1].kind || "service") ===
-                          (it.kind || "service")
-                      }
-                      canDown={
-                        idx < items.length - 1 &&
-                        (items[idx + 1].kind || "service") ===
-                          (it.kind || "service")
-                      }
-                      onMoveUp={() => moveItem(it.id, -1)}
-                      onMoveDown={() => moveItem(it.id, 1)}
-                    />
+                    <div key={it.id} id={`fitem-${it.id}`}>
+                      <ItemRow
+                        item={it}
+                        busy={itemBusy === it.id}
+                        onPatch={(patch) => patchItem(it.id, patch)}
+                        onDelete={() => deleteItem(it.id)}
+                        suggestions={suggestions}
+                        canUp={idx > 0}
+                        canDown={idx < items.length - 1}
+                        onMoveUp={() => moveItem(it.id, -1)}
+                        onMoveDown={() => moveItem(it.id, 1)}
+                      />
+                    </div>
                   ))}
                 </div>
               )}
