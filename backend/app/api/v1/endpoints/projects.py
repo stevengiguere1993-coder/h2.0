@@ -367,6 +367,49 @@ async def update_project(
                 exc,
             )
 
+    # Le CLIENT du projet suit sur le bon de travail lié et sur les
+    # factures du projet qui n'ont pas encore de client — la facture
+    # d'un BT porte toujours le client du BT (retour Phil 2026-08-18).
+    if "client_id" in data.model_fields_set and project.client_id:
+        try:
+            from app.models.bon_travail import BonTravail as _BT
+            from app.models.facture import (
+                Facture as _Fac,
+                FactureStatus as _FacSt,
+            )
+
+            for bon in (
+                await db.execute(
+                    _sel(_BT).where(
+                        _BT.project_id == project.id,
+                        _BT.client_id.is_(None),
+                    )
+                )
+            ).scalars():
+                bon.client_id = project.client_id
+            for fac in (
+                await db.execute(
+                    _sel(_Fac).where(
+                        _Fac.project_id == project.id,
+                        _Fac.client_id.is_(None),
+                        _Fac.status.notin_(
+                            [
+                                _FacSt.PAID.value,
+                                _FacSt.VOID.value,
+                            ]
+                        ),
+                    )
+                )
+            ).scalars():
+                fac.client_id = project.client_id
+            await db.flush()
+        except Exception as exc:  # noqa: BLE001 — effet secondaire isolé
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Propagation client projet %s: %s", project.id, exc
+            )
+
     out = ProjectRead.model_validate(project)
     out.responsible_name = await _responsible_name(
         db, project.responsible_user_id
