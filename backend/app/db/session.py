@@ -540,6 +540,11 @@ async def ensure_critical_columns() -> None:
         # multi-lignes (listes).
         ("facture_items", "description", "TEXT"),
         ("soumission_items", "description", "TEXT"),
+        # Quantité à 6 décimales : la facturation progressive porte
+        # l'avancement sur la quantité — à 3 décimales, un gros prix
+        # unitaire dérivait de plusieurs dollars (devis dépassé de
+        # 4,04 $ sur « 29 Besner »).
+        ("facture_items", "quantity", "NUMERIC(12,6)"),
         ("voice_phone_numbers", "forward_to_e164", "VARCHAR(255)"),
         ("voice_phone_numbers", "urgency_forward_e164", "VARCHAR(255)"),
         ("voice_phone_numbers", "closer_forward_e164", "VARCHAR(255)"),

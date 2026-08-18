@@ -23,7 +23,10 @@ class FactureItem(Base, TimestampUpdateMixin):
     # Texte long autorisé (listes multi-lignes saisies dans l'éditeur).
     description: Mapped[str] = mapped_column(Text, nullable=False)
     unit: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    quantity: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False, default=1)
+    # 6 décimales : la facturation progressive porte l'avancement sur la
+    # quantité (prix unitaire du devis conservé) — 3 décimales faisaient
+    # dériver les gros prix unitaires de plusieurs dollars.
+    quantity: Mapped[float] = mapped_column(Numeric(12, 6), nullable=False, default=1)
     unit_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     total: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
 

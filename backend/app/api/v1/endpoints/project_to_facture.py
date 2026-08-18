@@ -327,7 +327,10 @@ async def convert_project_to_facture(
                     unit_price = float(it.unit_price)
                     if unit_price > 0:
                         unit = it.unit
-                        qty = round(delta_i / unit_price, 3)
+                        # 6 décimales (précision de la colonne) : à 3,
+                        # un gros prix unitaire dérivait de plusieurs
+                        # dollars et dépassait le devis.
+                        qty = round(delta_i / unit_price, 6)
                         line_total = round(qty * unit_price, 2)
                     else:
                         qty = 1.0
