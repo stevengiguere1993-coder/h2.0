@@ -127,18 +127,26 @@ export default function FacturationPage() {
         // avec tout backend déployé (l'appel direct ?limit=1000 cassait
         // la page pendant la fenêtre de déploiement) et couvre plus de
         // 500 clients/projets.
-        const [data, cs, ps] = await Promise.all([
+        type ProjLite = {
+          id: number;
+          name: string;
+          address: string | null;
+          kind: string | null;
+        };
+        const [data, cs, psReg, psBons] = await Promise.all([
           fetchAllPages<Facture>("/api/v1/factures"),
           fetchAllPages<{ id: number; name: string }>(
             "/api/v1/clients"
           ).catch(() => []),
-          fetchAllPages<{
-            id: number;
-            name: string;
-            address: string | null;
-            kind: string | null;
-          }>("/api/v1/projects").catch(() => [])
+          fetchAllPages<ProjLite>("/api/v1/projects").catch(() => []),
+          // La liste des projets EXCLUT les bons de travail par défaut
+          // — il faut les demander explicitement pour que les cartes
+          // de facture d'un BT montrent son numéro et son adresse.
+          fetchAllPages<ProjLite>(
+            "/api/v1/projects?kind=bon_travail"
+          ).catch(() => [])
         ]);
+        const ps = [...psReg, ...psBons];
         if (!cancelled) {
           setItems(data);
           setClientNames(new Map(cs.map((c) => [c.id, c.name])));
@@ -453,17 +461,14 @@ function Card({
       >
         <GripVertical className="h-4 w-4" />
       </div>
-      {/* Format des cartes : en GRAS le numéro de BT ou le nom du
-          projet ; dessous (pas gras) le client ; le numéro de facture
-          reste en jaune plus bas. Pour un BT : demande + adresse en
-          sous-lignes. */}
+      {/* Format des cartes : en GRAS le numéro de BT (ou le nom/
+          adresse du projet) ; dessous le client (pas gras) ; puis pour
+          un BT l'adresse du chantier ; le numéro de facture reste en
+          jaune plus bas. */}
       {(() => {
         const isBon = projectInfo?.kind === "bon_travail";
         const btRef = isBon
           ? (projectInfo?.name || "").split(" — ")[0]
-          : null;
-        const demande = isBon
-          ? (projectInfo?.name || "").split(" — ").slice(1).join(" — ")
           : null;
         return (
           <>
@@ -474,11 +479,6 @@ function Card({
                 ? projectInfo.address || projectInfo.name
                 : fa.reference}
             </h3>
-            {isBon && demande ? (
-              <p className="mt-0.5 truncate text-[11px] text-white/45">
-                {demande}
-              </p>
-            ) : null}
             {clientName ? (
               <p className="mt-0.5 truncate text-[11px] font-normal text-white/70">
                 {clientName}
