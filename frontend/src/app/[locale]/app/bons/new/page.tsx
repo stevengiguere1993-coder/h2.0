@@ -2,27 +2,42 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter as useNextRouter } from "next/navigation";
-import { ArrowLeft, HardHat, Loader2, Wrench } from "lucide-react";
+import {
+  ArrowLeft,
+  Building2,
+  HardHat,
+  Loader2,
+  UserRound,
+  Wrench
+} from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { fetchAllPages } from "@/lib/fetch-all";
 
 type Entreprise = { id: number; name: string };
 type Immeuble = { id: number; name: string; address: string };
 type Logement = { id: number; numero: string };
 type SousTraitant = { id: number; full_name: string };
 type User = { id: number; email: string; full_name?: string | null };
+type ClientT = { id: number; name: string; address: string | null };
 
 export default function NewBonPage() {
   const { onOpenSidebar } = useAppLayout();
   const router = useNextRouter();
 
-  // Rattachement : compagnie → immeuble → appartement.
+  // Rattachement : une de NOS compagnies (immeuble → appartement) OU un
+  // CLIENT (travaux chez lui, facturés à son nom).
+  const [rattachement, setRattachement] = useState<
+    "compagnie" | "client"
+  >("compagnie");
   const [entrepriseId, setEntrepriseId] = useState("");
   const [immeubleId, setImmeubleId] = useState("");
   const [logementId, setLogementId] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientAddress, setClientAddress] = useState("");
   // Exécutant.
   const [executantType, setExecutantType] = useState("nos_hommes");
   const [sousTraitantId, setSousTraitantId] = useState("");
@@ -36,6 +51,7 @@ export default function NewBonPage() {
   const [photos, setPhotos] = useState<File[]>([]);
 
   const [entreprises, setEntreprises] = useState<Entreprise[]>([]);
+  const [clients, setClients] = useState<ClientT[]>([]);
   const [immeubles, setImmeubles] = useState<Immeuble[]>([]);
   const [logements, setLogements] = useState<Logement[]>([]);
   const [sousTraitants, setSousTraitants] = useState<SousTraitant[]>([]);
@@ -51,16 +67,21 @@ export default function NewBonPage() {
     let cancelled = false;
     async function load() {
       try {
-        const [eRes, sRes, uRes, dRes] = await Promise.all([
+        const [eRes, sRes, uRes, dRes, cl] = await Promise.all([
           authedFetch("/api/v1/entreprises?limit=500"),
           authedFetch("/api/v1/sous-traitants?limit=500"),
           authedFetch("/api/v1/users"),
-          authedFetch("/api/v1/construction/bon-defaults")
+          authedFetch("/api/v1/construction/bon-defaults"),
+          fetchAllPages<ClientT>("/api/v1/clients").catch(
+            () => [] as ClientT[]
+          )
         ]);
         if (cancelled) return;
         if (eRes.ok) setEntreprises((await eRes.json()) as Entreprise[]);
         if (sRes.ok) setSousTraitants((await sRes.json()) as SousTraitant[]);
         if (uRes.ok) setUsers((await uRes.json()) as User[]);
+        cl.sort((a, b) => a.name.localeCompare(b.name, "fr"));
+        setClients(cl);
         // Marge par défaut configurable (Paramètres → Bons de travail) —
         // pré-remplit le champ ; retombe sur "10" si absent/indispo.
         if (dRes.ok) {
@@ -142,6 +163,16 @@ export default function NewBonPage() {
     [immeubles, immeubleId]
   );
 
+  // Choisir un client pré-remplit l'adresse des travaux avec la sienne
+  // (modifiable — le chantier peut être ailleurs).
+  function onPickClient(id: string) {
+    setClientId(id);
+    const c = clients.find((x) => String(x.id) === id);
+    if (c?.address && !clientAddress.trim()) {
+      setClientAddress(c.address);
+    }
+  }
+
   function buildAddress(): string | undefined {
     if (!selectedImmeuble) return undefined;
     const base = selectedImmeuble.address || selectedImmeuble.name;
@@ -155,12 +186,17 @@ export default function NewBonPage() {
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
-    if (!entrepriseId) {
-      setError("Choisis la compagnie propriétaire.");
-      return;
-    }
-    if (!immeubleId) {
-      setError("Choisis l'immeuble concerné.");
+    if (rattachement === "compagnie") {
+      if (!entrepriseId) {
+        setError("Choisis la compagnie propriétaire.");
+        return;
+      }
+      if (!immeubleId) {
+        setError("Choisis l'immeuble concerné.");
+        return;
+      }
+    } else if (!clientId) {
+      setError("Choisis le client.");
       return;
     }
     if (!title.trim()) {
@@ -179,19 +215,26 @@ export default function NewBonPage() {
         // Bon interne : aucune signature client.
         requires_signature: false,
         origin: "construction",
-        owner_entreprise_id: Number(entrepriseId),
-        immeuble_id: Number(immeubleId),
         executant_type: executantType,
         bon_type: "temps_materiel",
         marge_pct: margePct ? Number(margePct) : 0
       };
-      if (logementId) payload.logement_id = Number(logementId);
+      if (rattachement === "compagnie") {
+        payload.owner_entreprise_id = Number(entrepriseId);
+        payload.immeuble_id = Number(immeubleId);
+        if (logementId) payload.logement_id = Number(logementId);
+        const addr = buildAddress();
+        if (addr) payload.address = addr;
+      } else {
+        // Bon rattaché à un CLIENT : sa facture partira à son nom (le
+        // client suit sur le projet lié puis la facture).
+        payload.client_id = Number(clientId);
+        if (clientAddress.trim()) payload.address = clientAddress.trim();
+      }
       if (executantType === "sous_traitant")
         payload.sous_traitant_id = Number(sousTraitantId);
       if (description.trim()) payload.description = description.trim();
       if (assigneeId) payload.assignee_user_id = Number(assigneeId);
-      const addr = buildAddress();
-      if (addr) payload.address = addr;
 
       const res = await authedFetch("/api/v1/bons-travail", {
         method: "POST",
@@ -247,8 +290,8 @@ export default function NewBonPage() {
           Nouveau bon de travail
         </h1>
         <p className="mt-1 text-sm text-white/60">
-          Entretien d&apos;un de nos immeubles. La référence est générée
-          automatiquement.
+          Entretien d&apos;un de nos immeubles ou travaux chez un
+          client. La référence est générée automatiquement.
         </p>
 
         <form onSubmit={onSubmit} className="mt-6 max-w-2xl space-y-6">
@@ -258,6 +301,95 @@ export default function NewBonPage() {
               Rattachement
             </legend>
             <div className="space-y-4">
+              {/* Nos immeubles OU un client */}
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setRattachement("compagnie")}
+                  className={`flex items-center gap-2 rounded-xl border p-3 text-left transition ${
+                    rattachement === "compagnie"
+                      ? "border-accent-500 bg-brand-900"
+                      : "border-brand-800 bg-brand-900/60 hover:border-brand-700"
+                  }`}
+                >
+                  <Building2 className="h-5 w-5 text-emerald-300" />
+                  <span>
+                    <span className="block text-sm font-semibold text-white">
+                      Compagnie propriétaire
+                    </span>
+                    <span className="block text-[11px] text-white/50">
+                      entretien d&apos;un de nos immeubles
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRattachement("client")}
+                  className={`flex items-center gap-2 rounded-xl border p-3 text-left transition ${
+                    rattachement === "client"
+                      ? "border-accent-500 bg-brand-900"
+                      : "border-brand-800 bg-brand-900/60 hover:border-brand-700"
+                  }`}
+                >
+                  <UserRound className="h-5 w-5 text-sky-300" />
+                  <span>
+                    <span className="block text-sm font-semibold text-white">
+                      Client
+                    </span>
+                    <span className="block text-[11px] text-white/50">
+                      travaux facturés à un client
+                    </span>
+                  </span>
+                </button>
+              </div>
+
+              {rattachement === "client" ? (
+                <>
+                  <div>
+                    <label htmlFor="client" className="label">
+                      Client <span className="text-rose-400">*</span>
+                    </label>
+                    <select
+                      id="client"
+                      value={clientId}
+                      onChange={(e) => onPickClient(e.target.value)}
+                      className="input"
+                    >
+                      <option value="">
+                        {clients.length === 0
+                          ? "Chargement…"
+                          : "— Choisir —"}
+                      </option>
+                      {clients.map((c) => (
+                        <option key={c.id} value={String(c.id)}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-white/50">
+                      La facture du bon partira à son nom.
+                    </p>
+                  </div>
+                  <div>
+                    <label htmlFor="client-adresse" className="label">
+                      Adresse des travaux
+                    </label>
+                    <input
+                      id="client-adresse"
+                      value={clientAddress}
+                      onChange={(e) => setClientAddress(e.target.value)}
+                      placeholder="Ex. 1647, Rue Desautels, Montréal, QC"
+                      className="input"
+                    />
+                    <p className="mt-1 text-xs text-white/50">
+                      Pré-remplie avec l&apos;adresse du client —
+                      modifiable si le chantier est ailleurs. Incluez la
+                      ville (elle sort sur la facture).
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
               <div>
                 <label htmlFor="entreprise" className="label">
                   Compagnie propriétaire{" "}
@@ -268,7 +400,6 @@ export default function NewBonPage() {
                   value={entrepriseId}
                   onChange={(e) => setEntrepriseId(e.target.value)}
                   className="input"
-                  required
                 >
                   <option value="">— Choisir —</option>
                   {entreprises.map((c) => (
@@ -335,6 +466,8 @@ export default function NewBonPage() {
                   </p>
                 </div>
               </div>
+                </>
+              )}
             </div>
           </fieldset>
 
