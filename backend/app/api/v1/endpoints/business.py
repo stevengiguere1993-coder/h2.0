@@ -236,6 +236,40 @@ def _maybe_correct_billable_bg() -> None:
         pass
 
 
+async def _heal_facture_clients(db, factures) -> None:
+    """Auto-réparation : une facture SANS client dont le projet lié en a
+    un hérite du client du projet (le client d'un bon de travail / d'un
+    projet est la vérité — sa facture doit le porter). Idempotent,
+    appliqué à la lecture pour réparer aussi l'existant."""
+    from app.models.project import Project as _Proj
+
+    orphans = [
+        f
+        for f in factures
+        if getattr(f, "client_id", None) is None
+        and getattr(f, "project_id", None)
+    ]
+    if not orphans:
+        return
+    pids = {f.project_id for f in orphans}
+    rows = (
+        await db.execute(
+            select(_Proj.id, _Proj.client_id).where(
+                _Proj.id.in_(list(pids))
+            )
+        )
+    ).all()
+    cmap = {pid: cid for pid, cid in rows if cid}
+    changed = False
+    for f in orphans:
+        cid = cmap.get(f.project_id)
+        if cid:
+            f.client_id = cid
+            changed = True
+    if changed:
+        await db.flush()
+
+
 def make_crud_router(
     *,
     prefix: str,
@@ -453,6 +487,7 @@ def make_crud_router(
             _maybe_correct_billable_bg()
         elif model is Facture:
             _maybe_dedupe_factures_bg()
+            await _heal_facture_clients(db, items)
         return [read_schema.model_validate(i) for i in items]
 
     @router.get("/{item_id}")
@@ -461,6 +496,8 @@ def make_crud_router(
         obj = await crud.get(item_id)
         if obj is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+        if model is Facture:
+            await _heal_facture_clients(db, [obj])
         return read_schema.model_validate(obj)
 
     @router.patch("/{item_id}")

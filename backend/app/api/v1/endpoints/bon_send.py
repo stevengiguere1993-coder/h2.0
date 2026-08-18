@@ -93,6 +93,10 @@ async def ensure_bon_project(
     # facturation normale, même s'il a été choisi APRÈS la création.
     if bon.client_id and proj.client_id != bon.client_id:
         proj.client_id = bon.client_id
+    elif proj.client_id and not bon.client_id:
+        # Sens inverse : le client a été choisi sur la FICHE PROJET du
+        # bon → le bon en hérite (une seule vérité).
+        bon.client_id = proj.client_id
     if bon.address and not proj.address:
         proj.address = bon.address
     if bon.client_id:

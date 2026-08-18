@@ -454,36 +454,34 @@ function Card({
       >
         <GripVertical className="h-4 w-4" />
       </div>
-      {/* Facture d'un BON DE TRAVAIL : badge « BT-xx » + demande +
-          client + adresse. Sinon : adresse du projet (fallback nom /
-          référence de la facture) + client. */}
+      {/* Format des cartes : en GRAS le numéro de BT ou le nom du
+          projet ; dessous (pas gras) le client ; le numéro de facture
+          reste en jaune plus bas. Pour un BT : demande + adresse en
+          sous-lignes. */}
       {(() => {
         const isBon = projectInfo?.kind === "bon_travail";
         const btRef = isBon
           ? (projectInfo?.name || "").split(" — ")[0]
           : null;
         const demande = isBon
-          ? (projectInfo?.name || "")
-              .split(" — ")
-              .slice(1)
-              .join(" — ") || projectInfo?.name
+          ? (projectInfo?.name || "").split(" — ").slice(1).join(" — ")
           : null;
         return (
           <>
-            {isBon && btRef ? (
-              <span className="mb-1 inline-flex items-center rounded-full border border-amber-500/50 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-400">
-                {btRef}
-              </span>
-            ) : null}
-            <h3 className="truncate text-sm font-semibold text-white">
+            <h3 className="truncate text-sm font-bold text-white">
               {isBon
-                ? demande
+                ? btRef || projectInfo?.name
                 : projectInfo
                 ? projectInfo.address || projectInfo.name
                 : fa.reference}
             </h3>
+            {isBon && demande ? (
+              <p className="mt-0.5 truncate text-[11px] text-white/45">
+                {demande}
+              </p>
+            ) : null}
             {clientName ? (
-              <p className="mt-0.5 truncate text-[11px] text-white/60">
+              <p className="mt-0.5 truncate text-[11px] font-normal text-white/70">
                 {clientName}
               </p>
             ) : null}
