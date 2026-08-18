@@ -13,6 +13,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { fetchAllPages } from "@/lib/fetch-all";
 import { Link } from "@/i18n/navigation";
 
 type Facture = {
@@ -122,24 +123,22 @@ export default function FacturationPage() {
       setLoading(true);
       setError(null);
       try {
-        const [fRes, cRes, pRes] = await Promise.all([
-          authedFetch("/api/v1/factures?limit=1000"),
-          authedFetch("/api/v1/clients?limit=2000"),
-          authedFetch("/api/v1/projects?limit=2000")
+        // Pagination par pages de 500 (fetchAllPages) : compatible
+        // avec tout backend déployé (l'appel direct ?limit=1000 cassait
+        // la page pendant la fenêtre de déploiement) et couvre plus de
+        // 500 clients/projets.
+        const [data, cs, ps] = await Promise.all([
+          fetchAllPages<Facture>("/api/v1/factures"),
+          fetchAllPages<{ id: number; name: string }>(
+            "/api/v1/clients"
+          ).catch(() => []),
+          fetchAllPages<{
+            id: number;
+            name: string;
+            address: string | null;
+            kind: string | null;
+          }>("/api/v1/projects").catch(() => [])
         ]);
-        if (!fRes.ok) throw new Error(`http_${fRes.status}`);
-        const data = (await fRes.json()) as Facture[];
-        const cs = cRes.ok
-          ? ((await cRes.json()) as Array<{ id: number; name: string }>)
-          : [];
-        const ps = pRes.ok
-          ? ((await pRes.json()) as Array<{
-              id: number;
-              name: string;
-              address: string | null;
-              kind: string | null;
-            }>)
-          : [];
         if (!cancelled) {
           setItems(data);
           setClientNames(new Map(cs.map((c) => [c.id, c.name])));

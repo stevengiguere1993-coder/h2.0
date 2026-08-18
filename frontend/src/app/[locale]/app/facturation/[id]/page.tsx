@@ -22,6 +22,7 @@ import { PaymentsPanel } from "@/components/payments-panel";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { fetchAllPages } from "@/lib/fetch-all";
 import { TPS_RATE, TVQ_RATE } from "@/lib/tax";
 import { useConfirm } from "@/components/confirm-dialog";
 
@@ -389,11 +390,12 @@ export default function FactureDetailPage() {
   async function openClientPick() {
     setClientPickOpen(true);
     if (clientOptions.length === 0) {
-      const r = await authedFetch("/api/v1/clients?limit=1000");
-      if (r.ok) {
-        const cl = (await r.json()) as Client[];
+      try {
+        const cl = await fetchAllPages<Client>("/api/v1/clients");
         cl.sort((a, b) => a.name.localeCompare(b.name, "fr"));
         setClientOptions(cl);
+      } catch {
+        /* le select restera sur « Chargement… » — réessayer */
       }
     }
   }
@@ -2332,25 +2334,23 @@ function BonPickerModal({
     let cancelled = false;
     (async () => {
       try {
-        const [bRes, cRes] = await Promise.all([
-          authedFetch("/api/v1/bons-travail?limit=500"),
-          authedFetch("/api/v1/clients?limit=1000")
+        const [all, cl] = await Promise.all([
+          fetchAllPages<BonMini>("/api/v1/bons-travail").catch(
+            () => [] as BonMini[]
+          ),
+          fetchAllPages<{ id: number; name: string }>(
+            "/api/v1/clients"
+          ).catch(() => [] as { id: number; name: string }[])
         ]);
         if (cancelled) return;
-        if (bRes.ok) {
-          const all = (await bRes.json()) as BonMini[];
-          all.sort(
-            (a, b) =>
-              (BON_STATUS_ORDER[a.status] ?? 9) -
-                (BON_STATUS_ORDER[b.status] ?? 9) ||
-              b.id - a.id
-          );
-          setBons(all.filter((x) => x.status !== "cancelled"));
-        }
-        if (cRes.ok) {
-          const cl = (await cRes.json()) as { id: number; name: string }[];
-          setClientNames(new Map(cl.map((c) => [c.id, c.name])));
-        }
+        all.sort(
+          (a, b) =>
+            (BON_STATUS_ORDER[a.status] ?? 9) -
+              (BON_STATUS_ORDER[b.status] ?? 9) ||
+            b.id - a.id
+        );
+        setBons(all.filter((x) => x.status !== "cancelled"));
+        setClientNames(new Map(cl.map((c) => [c.id, c.name])));
       } finally {
         if (!cancelled) setLoading(false);
       }

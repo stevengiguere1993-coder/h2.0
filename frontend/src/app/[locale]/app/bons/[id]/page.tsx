@@ -28,6 +28,7 @@ import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { fetchAllPages } from "@/lib/fetch-all";
 import { useConfirm } from "@/components/confirm-dialog";
 
 type Bon = {
@@ -272,19 +273,18 @@ export default function BonDetailPage() {
     let cancelled = false;
     async function loadCatalogs() {
       try {
-        const [sRes, uRes, cRes] = await Promise.all([
+        const [sRes, uRes, cl] = await Promise.all([
           authedFetch("/api/v1/sous-traitants?limit=500"),
           authedFetch("/api/v1/users"),
-          authedFetch("/api/v1/clients?limit=1000")
+          fetchAllPages<Client>("/api/v1/clients").catch(
+            () => [] as Client[]
+          )
         ]);
         if (cancelled) return;
         if (sRes.ok) setSousTraitants((await sRes.json()) as SousTraitant[]);
         if (uRes.ok) setUsers((await uRes.json()) as UserOption[]);
-        if (cRes.ok) {
-          const cl = (await cRes.json()) as Client[];
-          cl.sort((a, b) => a.name.localeCompare(b.name, "fr"));
-          setClients(cl);
-        }
+        cl.sort((a, b) => a.name.localeCompare(b.name, "fr"));
+        setClients(cl);
       } catch {
         /* ignore — l'édition exécutant restera indisponible */
       }
