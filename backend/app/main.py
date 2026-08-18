@@ -164,6 +164,30 @@ async def _run_startup_tasks() -> None:
             "backfill recalage fins baux placeholder failed: %s", exc
         )
 
+    # Correctif 2026-08-17 (retour Phil) : le backfill de réactivation
+    # a ressuscité des baux dont le logement était en RELOCATION (unité
+    # vacante) — « j'ai des unités vacantes, mais encore présentes dans
+    # les baux ». On re-termine ces baux et on recale le logement.
+    # Best-effort, idempotent (voir annuler_reactivations_erronees).
+    try:
+        from app.db.session import AsyncSessionLocal as _AnnulSession
+        from app.services.locatif_depart import (
+            annuler_reactivations_erronees,
+        )
+
+        async with _AnnulSession() as session:
+            n = await annuler_reactivations_erronees(session)
+            if n:
+                await session.commit()
+                logger.info(
+                    "Startup backfill: %d réactivation(s) annulée(s) — "
+                    "logement en relocation", n,
+                )
+    except Exception as exc:
+        logger.warning(
+            "backfill annulation reactivations failed: %s", exc
+        )
+
     # Tables Feuille de temps (Gestion d'entreprise) — transaction isolée.
     try:
         await ensure_timesheet_tables()

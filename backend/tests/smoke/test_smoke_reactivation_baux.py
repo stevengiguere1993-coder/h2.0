@@ -24,14 +24,18 @@ from app.models.immobilier import (
     BailStatus,
     Immeuble,
     Locataire,
+    LocationDossier,
+    LocationDossierStatut,
     Logement,
     LogementStatus,
     PaiementLoyer,
 )
 from app.services.locatif_depart import (
     NOTE_FIN_RECALEE,
+    NOTE_REACTIVATION_ANNULEE,
     NOTE_PAIEMENT_REDATE,
     NOTE_REACTIVE_IMPORT,
+    annuler_reactivations_erronees,
     reactiver_baux_termines_a_tort,
     recaler_fins_baux_placeholder,
 )
@@ -376,3 +380,139 @@ def test_resiliation_legitime_a_date_future_non_touchee(run, db_setup):
     bail = _bail(run, ids["bail_id"])
     assert bail.date_fin > today
     assert NOTE_FIN_RECALEE not in (bail.notes or "")
+
+
+# ── v14 : unité VACANTE (relocation en cours) — jamais réactivée ───────
+
+
+def _seed_en_relocation(run, *, numero: str) -> dict:
+    """Bail placeholder TERMINÉ + paiement récent (donc « vivant » au
+    sens v11) MAIS logement VACANT avec un dossier de relocation actif
+    — le locataire est parti pour de bon."""
+
+    today = date.today()
+
+    async def _go() -> dict:
+        async with TestSessionLocal() as s:
+            imm = Immeuble(
+                name=f"Immeuble Reloc {numero}",
+                address=f"{numero} rue Vacante",
+                is_active=True,
+            )
+            s.add(imm)
+            await s.flush()
+            lg = Logement(
+                immeuble_id=imm.id,
+                numero=numero,
+                status=LogementStatus.VACANT.value,
+            )
+            s.add(lg)
+            await s.flush()
+            loc = Locataire(full_name=f"Parti {numero}")
+            s.add(loc)
+            await s.flush()
+            bail = Bail(
+                logement_id=lg.id,
+                locataire_id=loc.id,
+                date_debut=today.replace(day=1) - timedelta(days=90),
+                date_fin=today + timedelta(days=250),
+                loyer_mensuel=700.0,
+                status=BailStatus.TERMINE.value,
+                notes=NOTE_IMPORT,
+            )
+            s.add(bail)
+            await s.flush()
+            s.add(
+                PaiementLoyer(
+                    bail_id=bail.id,
+                    mois_couvert=today.replace(day=1),
+                    montant=700.0,
+                    paye_le=today,
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            d = LocationDossier(
+                logement_id=lg.id,
+                bail_id=bail.id,
+                statut=LocationDossierStatut.AVIS_RECU.value,
+                notes="Créé automatiquement — unité vacante.",
+            )
+            d.created_at = datetime.now(timezone.utc)
+            d.updated_at = datetime.now(timezone.utc)
+            s.add(d)
+            await s.commit()
+            return {"bail_id": bail.id, "logement_id": lg.id}
+
+    return run(_go())
+
+
+def _logement(run, logement_id: int) -> Logement:
+    async def _go():
+        async with TestSessionLocal() as s:
+            return await s.get(Logement, logement_id)
+
+    return run(_go())
+
+
+def _annuler(run) -> int:
+    async def _go() -> int:
+        async with TestSessionLocal() as s:
+            n = await annuler_reactivations_erronees(s)
+            await s.commit()
+            return n
+
+    return run(_go())
+
+
+def test_unite_en_relocation_jamais_reactivee(run, db_setup):
+    """Garde-fou : un dossier de relocation actif = départ acté. Même
+    avec un loyer encaissé ce mois-ci, le bail RESTE terminé et le
+    logement RESTE vacant."""
+    ids = _seed_en_relocation(run, numero="V-1")
+    _reactiver(run)
+    bail = _bail(run, ids["bail_id"])
+    assert bail.status == BailStatus.TERMINE.value
+    assert NOTE_REACTIVE_IMPORT not in (bail.notes or "")
+    assert (
+        _logement(run, ids["logement_id"]).status
+        == LogementStatus.VACANT.value
+    )
+
+
+def test_reactivation_erronee_est_annulee_et_logement_revacante(
+    run, db_setup
+):
+    """Retour en arrière : un bail réactivé À TORT (logement en
+    relocation) est re-terminé, sa fin ramenée à la fin du dernier mois
+    encaissé, et le logement repasse VACANT."""
+    today = date.today()
+    ids = _seed_en_relocation(run, numero="V-2")
+
+    # Simule l'état laissé par le backfill fautif.
+    async def _casser():
+        async with TestSessionLocal() as s:
+            b = await s.get(Bail, ids["bail_id"])
+            b.status = BailStatus.ACTIF.value
+            b.notes = (b.notes or "") + "\n" + NOTE_REACTIVE_IMPORT
+            lg = await s.get(Logement, ids["logement_id"])
+            lg.status = LogementStatus.OCCUPE.value
+            await s.commit()
+
+    run(_casser())
+
+    assert _annuler(run) >= 1
+    bail = _bail(run, ids["bail_id"])
+    assert bail.status == BailStatus.TERMINE.value
+    assert NOTE_REACTIVATION_ANNULEE in (bail.notes or "")
+    # Fin ramenée au dernier jour du mois encaissé (mois courant).
+    fin_attendue = (
+        today.replace(day=1) + timedelta(days=32)
+    ).replace(day=1) - timedelta(days=1)
+    assert bail.date_fin == fin_attendue
+    assert (
+        _logement(run, ids["logement_id"]).status
+        == LogementStatus.VACANT.value
+    )
+
+    # Idempotent : plus rien à annuler au second passage.
+    assert _annuler(run) == 0
