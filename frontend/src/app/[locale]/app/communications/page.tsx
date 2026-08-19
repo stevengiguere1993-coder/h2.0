@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
@@ -194,6 +195,11 @@ export default function CommunicationsPage() {
               {d.label}
             </button>
           ))}
+          {/* Notifications push : les SMS/appels reçus réveillent le
+              téléphone (PWA installée) — à activer une fois par appareil. */}
+          <span className="ml-auto">
+            <PushNotificationsToggle />
+          </span>
         </div>
 
         {error ? (
