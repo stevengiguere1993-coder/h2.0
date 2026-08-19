@@ -27,6 +27,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
+import { AddressInput } from "@/components/address-input";
 import { authedFetch } from "@/lib/auth";
 import { fetchAllPages } from "@/lib/fetch-all";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -177,6 +178,9 @@ export default function BonDetailPage() {
 
   const [recap, setRecap] = useState<Recap | null>(null);
   const [workNotes, setWorkNotes] = useState("");
+  // Adresse des travaux — éditable directement sous le numéro de BT.
+  const [addrDraft, setAddrDraft] = useState("");
+  const [addrSaving, setAddrSaving] = useState(false);
   const [notesSaving, setNotesSaving] = useState(false);
   const [notesSaved, setNotesSaved] = useState(false);
   // Description du bon — éditable après création (Construction).
@@ -244,6 +248,7 @@ export default function BonDetailPage() {
           });
         }
         setWorkNotes(bd.work_notes || "");
+        setAddrDraft(bd.address || "");
         setDesc(bd.description || "");
         if ((bd.kind ?? "construction") === "interne") void loadPhotos();
         if (rRes.ok) setRecap((await rRes.json()) as Recap);
@@ -599,6 +604,32 @@ export default function BonDetailPage() {
   // bon, crée la facture (brouillon) et importe les heures punchées
   // (approuvées) + les achats/matériel refacturables, puis ouvre la
   // facture dans Facturation.
+  async function saveAddress() {
+    if (!b) return;
+    const next = addrDraft.trim();
+    setAddrSaving(true);
+    try {
+      const res = await authedFetch(`/api/v1/bons-travail/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ address: next || null })
+      });
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      setB((prev) => (prev ? { ...prev, address: next || null } : prev));
+      setAddrDraft(next);
+      // Propage l'adresse sur le projet lié (utilisée par le PDF de
+      // facture — bloc « Lieu des travaux »).
+      if (b.project_id && next) {
+        await authedFetch(`/api/v1/bons-travail/${id}/ensure-project`, {
+          method: "POST"
+        }).catch(() => undefined);
+      }
+    } catch {
+      setSendNotice("Enregistrement de l'adresse échoué.");
+    } finally {
+      setAddrSaving(false);
+    }
+  }
+
   async function changeClient(clientId: number | null) {
     if (!b) return;
     setClientBusy(true);
@@ -781,10 +812,36 @@ export default function BonDetailPage() {
               <div>
                 <h1 className="text-2xl font-bold text-white">{b.reference}</h1>
                 <p className="mt-1 text-sm text-white/70">{b.title}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-white/50">
+                  <span>Adresse :</span>
+                  <div className="w-72 max-w-full">
+                    <AddressInput
+                      id="bon-address"
+                      value={addrDraft}
+                      onChange={setAddrDraft}
+                      placeholder="Adresse des travaux…"
+                      className="input text-xs"
+                    />
+                  </div>
+                  {addrDraft.trim() !== (b.address || "") ? (
+                    <button
+                      type="button"
+                      onClick={() => void saveAddress()}
+                      disabled={addrSaving}
+                      className="btn-accent btn-sm text-xs"
+                      title="Enregistrer l'adresse des travaux"
+                    >
+                      {addrSaving ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Save className="h-3.5 w-3.5" />
+                      )}
+                      Enregistrer
+                    </button>
+                  ) : null}
+                </div>
                 {isInternal ? (
                   <p className="mt-1 text-xs text-white/50">
-                    {b.address || "Adresse non renseignée"}
-                    {" · "}
                     {b.executant_type === "sous_traitant"
                       ? "Sous-traitant"
                       : b.executant_type === "nos_hommes"
