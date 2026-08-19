@@ -225,6 +225,38 @@ class ReglagesEnvoi(BaseModel):
     profil_defaut: str = ""
 
 
+class ExpediteurEffectif(BaseModel):
+    """Ce que le locataire verra RÉELLEMENT dans son « De : »."""
+
+    from_email: str = ""
+    from_name: str = ""
+    #: Là où atterrit une RÉPONSE du locataire. Vide = boîte système.
+    reply_to: str = ""
+
+
+@router.get("/expediteur", response_model=ExpediteurEffectif)
+async def get_expediteur_effectif(
+    db: DBSession, user: CurrentUser
+) -> ExpediteurEffectif:
+    """Expéditeur RÉSOLU (profil par défaut appliqué, replis compris).
+
+    Sert l'aperçu affiché avant un envoi CONTEXTUEL — depuis la fiche
+    d'un locataire, la page Assurances, un bouton DPA… (retour Phil
+    2026-08-19 : « je dis pas nécessairement de me rendre jusqu'à la
+    page de communication à chaque fois »). L'aperçu doit montrer ce qui
+    partira vraiment : on appelle donc la MÊME fonction que le chemin
+    d'envoi, jamais une copie des réglages bruts — sinon l'aperçu
+    dériverait de la réalité sans que personne ne le voie.
+    """
+    _require_volet(user)
+    from_email, from_name, reply_to = await expediteur_defaut()
+    return ExpediteurEffectif(
+        from_email=from_email or "",
+        from_name=from_name or "",
+        reply_to=reply_to or "",
+    )
+
+
 @router.get("/reglages", response_model=ReglagesEnvoi)
 async def get_reglages(db: DBSession, user: CurrentUser) -> ReglagesEnvoi:
     _require_volet(user)

@@ -27,6 +27,7 @@ import type { LucideIcon } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 
 import { Link, useRouter } from "@/i18n/navigation";
+import { ApercuEnvoiModal } from "@/components/immobilier/apercu-envoi";
 import { authedFetch } from "@/lib/auth";
 import {
   AuMoisToggle,
@@ -263,8 +264,12 @@ export default function LocataireDetailPage({
   // suivi du statut (Règle H1, perception Desjardins).
   const [dpaBusy, setDpaBusy] = useState(false);
   const [dpaMsg, setDpaMsg] = useState<string | null>(null);
+  //: Aperçu avant envoi (retour Phil 2026-08-19) — ce bouton n'avait
+  //: AUCUNE confirmation : un clic et la documentation partait.
+  const [dpaApercu, setDpaApercu] = useState(false);
 
   async function dpaEnvoyer() {
+    setDpaApercu(false);
     setDpaBusy(true);
     setDpaMsg(null);
     try {
@@ -1679,6 +1684,24 @@ export default function LocataireDetailPage({
                   {dpaMsg}
                 </p>
               ) : null}
+              {dpaApercu ? (
+                <ApercuEnvoiModal
+                  titre="Prélèvement préautorisé (DPA)"
+                  description={
+                    "Un courriel expliquant le prélèvement automatique, " +
+                    "avec le formulaire d'accord en pièce jointe. Le " +
+                    "locataire est invité à RÉPONDRE à ce courriel avec " +
+                    "le formulaire signé — vérifie donc l'adresse de " +
+                    "réponse ci-dessous."
+                  }
+                  destinataireNom={loc.full_name || "Locataire"}
+                  destinataireEmail={loc.email}
+                  libelleEnvoi="Envoyer la documentation"
+                  busy={dpaBusy}
+                  onAnnuler={() => setDpaApercu(false)}
+                  onConfirmer={() => void dpaEnvoyer()}
+                />
+              ) : null}
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -1691,7 +1714,7 @@ export default function LocataireDetailPage({
                 <button
                   type="button"
                   disabled={dpaBusy || !(loc.email || "").trim()}
-                  onClick={() => void dpaEnvoyer()}
+                  onClick={() => setDpaApercu(true)}
                   title={
                     (loc.email || "").trim()
                       ? "Envoyer la documentation DPA par courriel au locataire (manuel)"
