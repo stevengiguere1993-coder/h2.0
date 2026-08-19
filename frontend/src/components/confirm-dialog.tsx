@@ -26,6 +26,9 @@ type Options = {
   confirmLabel?: string;
   cancelLabel?: string;
   destructive?: boolean;
+  // Action positive (envoi, validation…) : bouton de confirmation VERT
+  // au lieu du rouge destructif. Implique destructive=false.
+  success?: boolean;
 };
 
 type Ctx = (opts: Options | string) => Promise<boolean>;
@@ -70,9 +73,11 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
             <div className="flex items-start gap-3">
               <div
                 className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
-                  opts.destructive !== false
-                    ? "bg-rose-500/15 text-rose-300"
-                    : "bg-accent-500/15 text-accent-300"
+                  opts.success
+                    ? "bg-emerald-500/15 text-emerald-300"
+                    : opts.destructive !== false
+                      ? "bg-rose-500/15 text-rose-300"
+                      : "bg-accent-500/15 text-accent-300"
                 }`}
               >
                 <AlertTriangle className="h-5 w-5" />
@@ -103,16 +108,22 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
                 }}
                 disabled={busy}
                 className={`text-sm ${
-                  opts.destructive !== false
-                    ? "inline-flex items-center rounded-lg bg-rose-500 px-3 py-2 font-semibold text-white hover:bg-rose-600 disabled:opacity-60"
-                    : "btn-accent"
+                  opts.success
+                    ? "inline-flex items-center rounded-lg bg-emerald-600 px-3 py-2 font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                    : opts.destructive !== false
+                      ? "inline-flex items-center rounded-lg bg-rose-500 px-3 py-2 font-semibold text-white hover:bg-rose-600 disabled:opacity-60"
+                      : "btn-accent"
                 }`}
               >
                 {busy ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 ) : null}
                 {opts.confirmLabel ||
-                  (opts.destructive !== false ? "Supprimer" : "Confirmer")}
+                  (opts.success
+                    ? "Confirmer"
+                    : opts.destructive !== false
+                      ? "Supprimer"
+                      : "Confirmer")}
               </button>
             </div>
           </div>
