@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -305,6 +306,7 @@ async def public_sign(
     # fin du bail) / refuse (les modifications, et renouvelle). Le PDF
     # conservé est estampillé — X sur le choix, signature, date, IP.
     cycle = cycle_avant
+    estampille_faite = False
     if cycle is not None and cycle.status in (
         "propose",
         "en_negociation",
@@ -329,9 +331,23 @@ async def public_sign(
                 )
         try:
             await _estampiller_pdf(db, doc, choix)
+            estampille_faite = True
         except Exception:  # noqa: BLE001 — la réponse prime sur le PDF
             log.exception(
                 "Estampillage de la page réponse échoué (doc %s)", doc.id
+            )
+    # Audit 2026-08-19 : les CINQ autres types signables (non-reconduction,
+    # reprise, travaux majeurs, consentement, réponse à une cession)
+    # n'imprimaient RIEN dans le PDF — la signature n'existait qu'en base,
+    # donc le document archivé ne prouvait rien par lui-même. Ils reçoivent
+    # désormais une attestation de signature en dernière page, AVANT le
+    # dépôt Drive et avant l'envoi de la copie au locataire.
+    if not estampille_faite:
+        try:
+            await _apposer_attestation(db, doc)
+        except Exception:  # noqa: BLE001 — la signature prime sur le PDF
+            log.exception(
+                "Attestation de signature échouée (doc %s)", doc.id
             )
     # Entente de résiliation SIGNÉE → le bail se résilie à la date
     # convenue et un dossier de relocation s'ouvre automatiquement
@@ -408,7 +424,12 @@ async def public_sign(
     # l'échec était invisible).
     copie_ok = False
     copie_err: Optional[str] = None
-    if doc.type == "avis_modification":
+    # Audit 2026-08-19 : le renvoi de la copie signée ne visait QUE
+    # l'avis de modification. Un locataire qui signait une reprise, une
+    # non-reconduction, des travaux majeurs, un consentement ou une
+    # réponse à une cession ne recevait rien du tout — alors que c'est
+    # précisément sa preuve à lui.
+    if doc.type not in SIGNATURE_NON_REQUISE:
         try:
             await _envoyer_copie_signee(db, doc)
             copie_ok = True
@@ -469,14 +490,21 @@ async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
     # Même porte que tous les autres courriels au locataire : profil
     # d'expéditeur (une réponse doit joindre le gestionnaire) et double
     # trace. Signature sur page PUBLIQUE → pas d'auteur authentifié.
+    titre = (doc.titre or "document").strip()
+    fichier = (
+        re.sub(r"[^a-z0-9]+", "-", _sans_accents(titre).lower()).strip("-")
+        or "document"
+    )
     await envoyer_au_locataire(
         db,
         destinataires=[dest],
-        sujet="Merci d'avoir signé — votre copie de l'avis",
+        sujet=f"Merci d'avoir signé — votre copie : {titre}",
         corps_html=(
             f"<p>Bonjour {nom},</p>"
-            "<p>Merci d'avoir signé ! Voici votre version signée de "
-            "l'avis — conservez-la pour vos dossiers.</p>"
+            f"<p>Merci d'avoir signé ! Voici votre version signée de "
+            f"« {titre} » — conservez-la pour vos dossiers.</p>"
+            "<p>La dernière page atteste de votre signature "
+            "électronique (date, heure et horodatage).</p>"
             "<p>Cordialement,<br/>Horizon Services Immobiliers</p>"
         ),
         type_envoi="copie_signee",
@@ -486,12 +514,12 @@ async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
         immeuble_id=doc.immeuble_id,
         immeuble_nom=imm_nom,
         resume_fiche=(
-            "Copie signée de l'avis transmise au locataire après sa "
-            "signature en ligne."
+            f"Copie signée de « {titre} » transmise au locataire après "
+            "sa signature en ligne."
         ),
         attachments=[
             EmailAttachment(
-                name="avis-modification-signe.pdf",
+                name=f"{fichier}-signe.pdf"[:120],
                 content_bytes=d2.pdf_blob,
                 content_type="application/pdf",
             )
@@ -506,6 +534,66 @@ async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
         await db.rollback()
 
 
+def _sans_accents(txt: str) -> str:
+    import unicodedata
+
+    return "".join(
+        c
+        for c in unicodedata.normalize("NFKD", txt)
+        if not unicodedata.combining(c)
+    )
+
+
+async def _apposer_attestation(db, doc: ImmDocument) -> None:
+    """Ajoute l'attestation de signature en DERNIÈRE page du PDF.
+
+    Le document original reste intégralement lisible ; l'attestation
+    porte le nom, la signature manuscrite, l'horodatage, l'IP, le moment
+    d'ouverture du lien et le fondement légal (RLRQ c. C-1.1, art. 2827
+    C.c.Q.) — c'est ce qui rend le PDF probant par lui-même.
+    """
+    from sqlalchemy.orm import undefer
+
+    from app.services.tal_officiel import apposer_attestation_signature
+
+    # ``pdf_blob`` ET ``signature_image`` sont des colonnes DIFFÉRÉES :
+    # les lire au vol déclencherait un chargement paresseux interdit en
+    # asynchrone (MissingGreenlet). On les charge donc explicitement.
+    d2 = (
+        await db.execute(
+            select(ImmDocument)
+            .options(
+                undefer(ImmDocument.pdf_blob),
+                undefer(ImmDocument.signature_image),
+            )
+            .where(ImmDocument.id == doc.id)
+        )
+    ).scalar_one()
+    if not d2.pdf_blob:
+        return
+
+    def _fr(dt) -> Optional[str]:
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(ZoneInfo("America/Toronto")).strftime(
+            "%Y-%m-%d %H:%M %Z"
+        )
+
+    d2.pdf_blob = apposer_attestation_signature(
+        bytes(d2.pdf_blob),
+        titre_document=doc.titre or "Document",
+        locataire_nom=doc.signed_by_name,
+        signature_png=(
+            bytes(d2.signature_image) if d2.signature_image else None
+        ),
+        signe_le_txt=_fr(doc.signed_at) or "",
+        ip=doc.signature_ip,
+        ouvert_le_txt=_fr(doc.ouvert_le),
+    )
+
+
 async def _estampiller_pdf(db, doc: ImmDocument, choix: str) -> None:
     """Remplace la page « Réponse du locataire » du PDF conservé par la
     version estampillée (choix coché, signature, date, IP) — le
@@ -517,7 +605,10 @@ async def _estampiller_pdf(db, doc: ImmDocument, choix: str) -> None:
     d2 = (
         await db.execute(
             select(ImmDocument)
-            .options(undefer(ImmDocument.pdf_blob))
+            .options(
+                undefer(ImmDocument.pdf_blob),
+                undefer(ImmDocument.signature_image),
+            )
             .where(ImmDocument.id == doc.id)
         )
     ).scalar_one()
@@ -530,7 +621,7 @@ async def _estampiller_pdf(db, doc: ImmDocument, choix: str) -> None:
         d2.pdf_blob,
         locataire_nom=doc.signed_by_name,
         choix=choix,
-        signature_png=doc.signature_image,
+        signature_png=d2.signature_image,
         signe_le_txt=quand.strftime("%Y-%m-%d %H:%M %Z"),
         ip=doc.signature_ip,
     )

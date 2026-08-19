@@ -578,10 +578,11 @@ def test_gestion_externe_exclue_par_defaut(
     client, auth_headers, comm_seed, fake_mailer, run
 ):
     """« Comment ça l'immeuble 1-3-5 Elgin y apparaît ? Il est gestion
-    externe pourtant » (retour Phil 2026-08-13) : la gestion externe
-    sort du sélecteur « À qui » PAR DÉFAUT, la case
-    ``inclure_gestion_externe`` la ramène — et l'envoi suit la même
-    règle (pas de destinataire fantôme)."""
+    externe pourtant » (retour Phil 2026-08-13), puis décision du
+    2026-08-19 : la case « Inclure les immeubles en gestion externe »
+    est RETIRÉE. Ces immeubles sortent TOUJOURS du sélecteur « À qui »
+    et l'envoi les refuse même si la requête tente de les viser — le
+    filtre est appliqué côté serveur, pas seulement à l'écran."""
 
     async def _seed() -> dict:
         async with TestSessionLocal() as s:
@@ -624,19 +625,16 @@ def test_gestion_externe_exclue_par_defaut(
     ).json()
     assert all(b["immeuble_id"] != ext["immeuble_id"] for b in blocs)
 
-    # (b) Case cochée : il réapparaît avec ses locataires.
+    # (b) L'ancienne échappatoire ne rouvre plus rien : le paramètre
+    # n'existe plus, le serveur filtre quoi qu'il arrive.
     blocs2 = client.get(
         "/api/v1/immobilier/communications/destinataires"
         "?inclure_gestion_externe=true",
         headers=auth_headers,
     ).json()
-    bloc = next(
-        (b for b in blocs2 if b["immeuble_id"] == ext["immeuble_id"]), None
-    )
-    assert bloc is not None
-    assert [x["nom"] for x in bloc["locataires"]] == ["Externe Comm"]
+    assert all(b["immeuble_id"] != ext["immeuble_id"] for b in blocs2)
 
-    # (c) Envoi sans la case : rien ne part vers la gestion externe.
+    # (c) Envoi visant l'immeuble externe : rien ne part.
     r = client.post(
         "/api/v1/immobilier/communications/envoyer",
         headers=auth_headers,
@@ -650,7 +648,8 @@ def test_gestion_externe_exclue_par_defaut(
     assert r.status_code == 422, r.text
     assert fake_mailer.sent == []
 
-    # (d) Avec la case : l'envoi passe.
+    # (d) Même en rejouant l'ancien drapeau dans le corps de la requête,
+    # l'envoi reste refusé : la porte est condamnée côté serveur.
     r2 = client.post(
         "/api/v1/immobilier/communications/envoyer",
         headers=auth_headers,
@@ -662,6 +661,20 @@ def test_gestion_externe_exclue_par_defaut(
             "inclure_gestion_externe": True,
         },
     )
-    assert r2.status_code == 200, r2.text
-    assert r2.json()["envoyes"] == 1
-    assert fake_mailer.sent[-1]["to"] == ["externe@test.local"]
+    assert r2.status_code == 422, r2.text
+    assert fake_mailer.sent == []
+
+    # (e) Viser le LOCATAIRE directement par son id ne contourne rien
+    # non plus — c'est le chemin qu'un identifiant forgé emprunterait.
+    r3 = client.post(
+        "/api/v1/immobilier/communications/envoyer",
+        headers=auth_headers,
+        json={
+            "type": "demande_assurance",
+            "immeuble_ids": [],
+            "locataire_ids": [ext["locataire_id"]],
+            "from_email": "info@immohorizon.com",
+        },
+    )
+    assert r3.status_code == 422, r3.text
+    assert fake_mailer.sent == []

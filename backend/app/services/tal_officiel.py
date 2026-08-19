@@ -617,6 +617,143 @@ def estampiller_page_reponse(
     return out.getvalue()
 
 
+def page_attestation_signature(
+    titre_document: str,
+    locataire_nom: Optional[str],
+    signature_png: Optional[bytes],
+    signe_le_txt: str,
+    ip: Optional[str] = None,
+    ouvert_le_txt: Optional[str] = None,
+) -> bytes:
+    """Page « Attestation de signature electronique » (reportlab).
+
+    Audit 2026-08-19 : seul l'avis de modification voyait sa signature
+    RENDUE dans le PDF (page reponse estampillee). Les cinq autres types
+    signables — avis de non-reconduction, reprise, travaux majeurs,
+    consentement aux communications, reponse a une cession — etaient
+    signes en base sans qu'aucune trace n'apparaisse dans le document
+    archive ni dans la copie remise au locataire. Devant un tribunal, le
+    PDF ne prouvait rien par lui-meme.
+
+    Cette page se greffe en DERNIERE page du document signe : nom,
+    signature manuscrite, horodatage, adresse IP, moment d'ouverture du
+    lien, et le fondement legal de la signature electronique.
+    """
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas as _rl_canvas
+
+    buf = io.BytesIO()
+    c = _rl_canvas.Canvas(buf, pagesize=letter)
+    w, h = letter
+    y = h - 80
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(60, y, "Attestation de signature électronique")
+    c.setDash(2, 3)
+    c.setLineWidth(0.8)
+    c.line(60, y - 8, w - 60, y - 8)
+    c.setDash()
+
+    y -= 42
+    c.setFont("Helvetica", 10.5)
+    c.drawString(60, y, "Document signé :")
+    c.setFont("Helvetica-Bold", 10.5)
+    c.drawString(160, y, (titre_document or "Document")[:70])
+
+    y -= 60
+    if signature_png:
+        try:
+            img = ImageReader(io.BytesIO(signature_png))
+            c.drawImage(
+                img, 235, y - 6, width=180, height=54, mask="auto",
+                preserveAspectRatio=True, anchor="sw",
+            )
+        except Exception:  # noqa: BLE001 — la ligne signée reste valide
+            log.exception("Image de signature illisible — ignorée")
+    c.setStrokeColorRGB(0, 0, 0)
+    c.setLineWidth(0.8)
+    c.line(60, y - 10, 195, y - 10)
+    c.line(225, y - 10, 480, y - 10)
+    c.setFont("Helvetica", 10)
+    c.drawString(62, y - 4, (signe_le_txt or "").split(" ")[0])
+    c.setFillColorRGB(0.4, 0.4, 0.4)
+    c.setFont("Helvetica", 8.5)
+    c.drawString(60, y - 22, "Date")
+    c.setFillColorRGB(0, 0, 0)
+    c.setFont("Helvetica", 10)
+    nom = (locataire_nom or "").strip()
+    c.drawString(225, y - 22, f"{nom} " if nom else "")
+    c.setFillColorRGB(0.4, 0.4, 0.4)
+    c.setFont("Helvetica", 8.5)
+    c.drawString(225 + (len(nom) * 5.2 if nom else 0), y - 22, "(Locataire)")
+
+    c.setFillColorRGB(0.38, 0.38, 0.38)
+    c.setFont("Helvetica", 7.5)
+    yb = 84
+    if ouvert_le_txt:
+        c.drawString(60, yb, f"Lien ouvert par le destinataire le {ouvert_le_txt}.")
+        yb -= 10
+    c.drawString(
+        60, yb,
+        f"Signé électroniquement le {signe_le_txt}"
+        + (f" — adresse IP {ip}" if ip else "") + ".",
+    )
+    yb -= 10
+    c.drawString(
+        60, yb,
+        "Transmis au locataire par courriel avec suivi d'envoi, "
+        "d'ouverture et de signature (Kratos / Horizon Services "
+        "Immobiliers).",
+    )
+    yb -= 10
+    c.drawString(
+        60, yb,
+        "Signature électronique au sens de la Loi concernant le cadre "
+        "juridique des technologies de l'information (RLRQ, c. C-1.1) "
+        "et de l'art. 2827 C.c.Q.",
+    )
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def apposer_attestation_signature(
+    pdf_bytes: bytes,
+    titre_document: str,
+    locataire_nom: Optional[str],
+    signature_png: Optional[bytes],
+    signe_le_txt: str,
+    ip: Optional[str] = None,
+    ouvert_le_txt: Optional[str] = None,
+) -> bytes:
+    """Ajoute l'attestation de signature en DERNIERE page du document.
+
+    Contrairement a ``estampiller_page_reponse``, rien n'est remplace :
+    le document original reste integralement lisible, l'attestation
+    s'ajoute. Applicable a n'importe quel type de document signable.
+    """
+    from pypdf import PdfReader, PdfWriter
+
+    page = page_attestation_signature(
+        titre_document=titre_document,
+        locataire_nom=locataire_nom,
+        signature_png=signature_png,
+        signe_le_txt=signe_le_txt,
+        ip=ip,
+        ouvert_le_txt=ouvert_le_txt,
+    )
+    writer = PdfWriter()
+    writer.append(PdfReader(io.BytesIO(pdf_bytes)))
+    writer.append(PdfReader(io.BytesIO(page)))
+    try:
+        writer.set_need_appearances_writer(True)
+    except Exception:  # noqa: BLE001
+        pass
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
 def validate_template(form_type: str, pdf_bytes: bytes) -> list[str]:
     """Champs requis MANQUANTS dans un PDF modèle de remplacement
     (liste vide = compatible)."""
