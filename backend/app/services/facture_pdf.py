@@ -86,6 +86,13 @@ class Statement:
     extras_billed: float = 0.0
     # Langue de rendu du relevé : « fr » (défaut) ou « en ».
     lang: str = "fr"
+    # Coordonnées complètes du client + lieu des travaux — mêmes
+    # informations que le bloc « FACTURÉ À / LIEU DES TRAVAUX » de la
+    # facture, pour que le relevé et la facture concordent.
+    client_address: Optional[str] = None
+    client_phone: Optional[str] = None
+    client_email: Optional[str] = None
+    work_address: Optional[str] = None
 
 log = logging.getLogger(__name__)
 
@@ -426,6 +433,22 @@ async def _build_statement(
     # « trop-payé » dès qu'il y avait des extras sur les factures.
     remaining = round(billed_to_date - paid_to_date, 2)
 
+    # Lieu des travaux — même résolution que la facture PDF : adresse
+    # du projet, repli sur l'adresse du bon de travail rattaché.
+    work_address: Optional[str] = (project.address or "").strip() or None
+    if not work_address:
+        from app.models.bon_travail import BonTravail as _BonWA
+
+        work_address = (
+            await db.execute(
+                select(_BonWA.address)
+                .where(_BonWA.project_id == project.id)
+                .order_by(_BonWA.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        work_address = (work_address or "").strip() or None
+
     return Statement(
         project_name=project.name,
         soumission_reference=sm.reference if sm else None,
@@ -437,6 +460,10 @@ async def _build_statement(
         remaining_balance=remaining,
         extras_billed=extras_billed,
         lang=lang,
+        client_address=(getattr(client, "address", None) or "").strip() or None,
+        client_phone=(getattr(client, "phone", None) or "").strip() or None,
+        client_email=(getattr(client, "email", None) or "").strip() or None,
+        work_address=work_address,
     )
 
 
@@ -1017,6 +1044,7 @@ def _render_statement_bytes(statement: Statement) -> bytes:
             "client": "CLIENT",
             "project": "Projet :",
             "quote": "Soumission :",
+            "work_site": "LIEU DES TRAVAUX",
             "h_date": "Date",
             "h_desc": "Description",
             "h_detail": "Détail",
@@ -1037,6 +1065,7 @@ def _render_statement_bytes(statement: Statement) -> bytes:
             "client": "CLIENT",
             "project": "Project:",
             "quote": "Quote:",
+            "work_site": "WORK SITE",
             "h_date": "Date",
             "h_desc": "Description",
             "h_detail": "Detail",
@@ -1092,17 +1121,42 @@ def _render_statement_bytes(statement: Statement) -> bytes:
     story.append(header_tbl)
     story.append(Spacer(1, 14))
 
+    # Bloc client — mêmes informations que le « FACTURÉ À » de la
+    # facture (nom, adresse, téléphone, courriel), avec le lieu des
+    # travaux à droite quand il est connu.
     info: list[str] = []
     if statement.client_name:
         info.append(f"<b>{statement.client_name}</b>")
+    if statement.client_address:
+        info.append(statement.client_address)
+    if statement.client_phone:
+        info.append(statement.client_phone)
+    if statement.client_email:
+        info.append(statement.client_email)
     if statement.project_name:
         info.append(f"{tr['project']} {statement.project_name}")
     if statement.soumission_reference:
         info.append(f"{tr['quote']} {statement.soumission_reference}")
     if info:
-        story.append(Paragraph(tr["client"], s["accent"]))
-        for line in info:
-            story.append(Paragraph(line, s["body"]))
+        client_cell: list = [Paragraph(tr["client"], s["accent"])]
+        client_cell.extend(Paragraph(line, s["body"]) for line in info)
+        if statement.work_address:
+            work_cell: list = [
+                Paragraph(tr["work_site"], s["accent"]),
+                Paragraph(_multiline(statement.work_address), s["body"]),
+            ]
+            client_tbl = Table(
+                [[client_cell, work_cell]],
+                colWidths=[doc.width * 0.55, doc.width * 0.45],
+            )
+            client_tbl.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ]))
+            story.append(client_tbl)
+        else:
+            story.extend(client_cell)
         story.append(Spacer(1, 12))
 
     if statement.lines:
