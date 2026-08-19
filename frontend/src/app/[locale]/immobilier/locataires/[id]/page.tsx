@@ -1815,6 +1815,7 @@ type LoyerMoisRow = {
   logement_numero: string | null;
   locataire_id: number | null;
   locataire_name?: string | null;
+  locataire_email?: string | null;
   loyer_mensuel: number;
   montant_paye: number | null;
   paye_le: string | null;
@@ -1844,6 +1845,9 @@ function LoyersMoisSection({
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [relancingId, setRelancingId] = useState<number | null>(null);
+  //: Relance en attente de confirmation (aperçu partagé).
+  const [relanceApercu, setRelanceApercu] =
+    useState<LoyerMoisRow | null>(null);
   const [correctingId, setCorrectingId] = useState<number | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
@@ -2050,6 +2054,10 @@ function LoyersMoisSection({
   // Rappel de loyer par courriel — même endpoint/payload que la page
   // Paiements (« Relancer » partout).
   async function relancer(row: LoyerMoisRow) {
+    setRelanceApercu(row);
+  }
+
+  async function envoyerRelance(row: LoyerMoisRow) {
     setRelancingId(row.bail_id);
     setInfo(null);
     setErr(null);
@@ -2071,6 +2079,7 @@ function LoyersMoisSection({
     } catch (e) {
       setErr(`Relance échouée : ${(e as Error).message}`);
     } finally {
+      setRelanceApercu(null);
       setRelancingId(null);
     }
   }
@@ -2085,6 +2094,22 @@ function LoyersMoisSection({
 
   return (
     <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      {relanceApercu ? (
+        <ApercuEnvoiModal
+          titre="Relance de loyer"
+          description={
+            "Un rappel de loyer. Le niveau s'incrémente à chaque " +
+            "relance du même mois — ces envois servent de preuve au " +
+            "TAL, donc vérifie que le loyer est bien impayé."
+          }
+          destinataireNom={relanceApercu.locataire_name || "Locataire"}
+          destinataireEmail={relanceApercu.locataire_email}
+          libelleEnvoi="Envoyer la relance"
+          busy={relancingId === relanceApercu.bail_id}
+          onAnnuler={() => setRelanceApercu(null)}
+          onConfirmer={() => void envoyerRelance(relanceApercu)}
+        />
+      ) : null}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
           Loyer du mois

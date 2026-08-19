@@ -39,6 +39,7 @@ import { ImmobilierTopbar, useImmobilierLayout } from "../../layout";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { ContratGestionTab } from "./contrat-gestion-tab";
 import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
+import { ApercuEnvoiModal } from "@/components/immobilier/apercu-envoi";
 import { BandeauBailManquant } from "@/components/immobilier/bandeau-bail-manquant";
 import {
   fmtPieces,
@@ -2757,6 +2758,7 @@ type LoyerRow = {
   logement_numero: string | null;
   locataire_id: number | null;
   locataire_name: string | null;
+  locataire_email: string | null;
   loyer_mensuel: number;
   /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
   jour_echeance?: number | null;
@@ -2789,6 +2791,10 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
   const [err, setErr] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<number | null>(null);
   const [relancingId, setRelancingId] = useState<number | null>(null);
+  //: Relance en attente de confirmation (aperçu partagé).
+  const [relanceApercu, setRelanceApercu] = useState<LoyerRow | null>(
+    null
+  );
   const [correctingId, setCorrectingId] = useState<number | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   // 2e validation (banque via QuickBooks) — null = aucune pastille.
@@ -3026,6 +3032,10 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
   // Graph (expéditeur = boîte configurée, cf. Paramètres). Rien
   // d'automatique — chaque envoi est un clic (retour Phil 2026-07-10).
   async function relancer(row: LoyerRow) {
+    setRelanceApercu(row);
+  }
+
+  async function envoyerRelance(row: LoyerRow) {
     setRelancingId(row.bail_id);
     setInfo(null);
     setErr(null);
@@ -3049,6 +3059,7 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
     } catch (e) {
       setErr(`Rappel échoué : ${(e as Error).message}`);
     } finally {
+      setRelanceApercu(null);
       setRelancingId(null);
     }
   }
@@ -3079,6 +3090,23 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
 
   return (
     <Section title={`Paiements — ${moisLisible}`}>
+      {relanceApercu ? (
+        <ApercuEnvoiModal
+          titre="Relance de loyer"
+          description={
+            `Un rappel de loyer pour ${moisLisible}. Le niveau ` +
+            "s'incrémente à chaque relance du même mois — ces envois " +
+            "servent de preuve au TAL, donc vérifie que le loyer est " +
+            "bien impayé."
+          }
+          destinataireNom={relanceApercu.locataire_name || "Locataire"}
+          destinataireEmail={relanceApercu.locataire_email}
+          libelleEnvoi="Envoyer la relance"
+          busy={relancingId === relanceApercu.bail_id}
+          onAnnuler={() => setRelanceApercu(null)}
+          onConfirmer={() => void envoyerRelance(relanceApercu)}
+        />
+      ) : null}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-3 text-xs text-white/60">
           <span>
