@@ -38,6 +38,7 @@ import {
   CreerBailModal,
   AnnulerDepartModal,
   FinBailModal,
+  ResiliationSuivi,
   JourEcheanceInline,
   RelocationStatutPastille,
   type SuiviBailRow
@@ -386,12 +387,7 @@ export default function BauxPage() {
                       </td>
                       <td className="px-4 py-2.5">
                         {r.resiliation_en_cours ? (
-                          <span className="badge badge-rose">
-                            Résiliation en cours — signature attendue
-                            {r.resiliation_date
-                              ? ` (fin le ${r.resiliation_date})`
-                              : ""}
-                          </span>
+                          <ResiliationSuivi row={r} />
                         ) : r.bail_id == null ? (
                           <span className="badge badge-neutral">
                             Aucun bail

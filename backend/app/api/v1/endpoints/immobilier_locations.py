@@ -1115,6 +1115,13 @@ class SuiviBailRow(BaseModel):
     # Entente de résiliation envoyée, en attente de signature → ligne
     # ROUGE sur la page Baux.
     resiliation_en_cours: bool = False
+    #: SUIVI de l'entente de résiliation en attente (retour Phil
+    #: 2026-08-19 : « si c'est pas signé il est pas encore mis fin »).
+    #: Une entente envoyée mais jamais ouverte n'a pas le même sens
+    #: qu'une entente ouverte et laissée sans réponse.
+    resiliation_document_id: Optional[int] = None
+    resiliation_envoye_le: Optional[datetime] = None
+    resiliation_ouvert_le: Optional[datetime] = None
     resiliation_date: Optional[date] = None
     # Dernier avis de renouvellement du bail actif (pastille + bouton
     # « Avis » sur la page Baux).
@@ -1225,7 +1232,7 @@ async def suivi_baux(
                 dfin = _json.loads(dr.params_json or "{}").get("date_fin")
             except Exception:  # noqa: BLE001
                 dfin = None
-            resil_by_bail[dr.bail_id] = dfin
+            resil_by_bail[dr.bail_id] = (dfin, dr)
 
     # Dernier avis de renouvellement par bail (même sémantique que
     # Suivis annuels : avis_envoye_le le plus récent, ex-æquo par id).
@@ -1311,9 +1318,22 @@ async def suivi_baux(
                     else None
                 ),
                 resiliation_en_cours=bool(b and b.id in resil_by_bail),
+                resiliation_document_id=(
+                    resil_by_bail[b.id][1].id
+                    if b and b.id in resil_by_bail else None
+                ),
+                resiliation_envoye_le=(
+                    resil_by_bail[b.id][1].envoye_le
+                    if b and b.id in resil_by_bail else None
+                ),
+                resiliation_ouvert_le=(
+                    resil_by_bail[b.id][1].ouvert_le
+                    if b and b.id in resil_by_bail else None
+                ),
                 resiliation_date=(
-                    date.fromisoformat(resil_by_bail[b.id])
+                    date.fromisoformat(resil_by_bail[b.id][0])
                     if b and resil_by_bail.get(b.id)
+                    and resil_by_bail[b.id][0]
                     else None
                 ),
                 renouvellement_status=(

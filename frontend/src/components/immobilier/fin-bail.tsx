@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { FileSignature, Info, Loader2, X } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { ExpediteurResume } from "@/components/immobilier/apercu-envoi";
 import { authedFetch } from "@/lib/auth";
 
 /** Ligne renvoyée par l'API `GET /api/v1/immobilier/suivi-baux` — une
@@ -50,6 +51,13 @@ export type SuiviBailRow = {
   dossier_statut: string | null;
   resiliation_en_cours: boolean;
   resiliation_date: string | null;
+  /** Suivi de l'entente en attente de signature : une entente envoyée
+   *  mais jamais ouverte n'a pas le même sens qu'une entente ouverte et
+   *  laissée sans réponse — dans le second cas, le locataire a vu et
+   *  n'a pas signé (retour Phil 2026-08-19). */
+  resiliation_document_id?: number | null;
+  resiliation_envoye_le?: string | null;
+  resiliation_ouvert_le?: string | null;
   renouvellement_status: string | null;
   renouvellement_avis_document_id: number | null;
 };
@@ -447,6 +455,12 @@ export function FinBailModal({
               </span>
             </label>
           </div>
+          {mode === "avis" ? (
+            /* L'entente part par courriel au locataire : on montre d'où
+               elle part et où atterrit sa réponse, comme partout
+               ailleurs (retour Phil 2026-08-19). */
+            <ExpediteurResume note="L'envoi sera tracé dans Communications et sur la fiche du locataire." />
+          ) : null}
           <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
             ⚠️ Un dossier de relocation s&apos;ouvrira AUTOMATIQUEMENT
             dans le kanban Locations (dès maintenant en fin immédiate, à
@@ -954,5 +968,46 @@ export function AnnulerDepartModal({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * État d'une entente de résiliation en attente de signature.
+ *
+ * Retour Phil 2026-08-19 : « si c'est pas signé il est pas encore mis
+ * fin » — mais la ligne rouge ne disait pas si le locataire avait seulement
+ * ouvert le lien. Or c'est toute la différence : une entente jamais
+ * ouverte se relance, une entente ouverte et non signée se discute.
+ */
+export function ResiliationSuivi({
+  row
+}: {
+  row: Pick<
+    SuiviBailRow,
+    | "resiliation_date"
+    | "resiliation_envoye_le"
+    | "resiliation_ouvert_le"
+  >;
+}) {
+  const jour = (iso?: string | null) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime())
+      ? iso.slice(0, 10)
+      : d.toLocaleDateString("fr-CA", { day: "numeric", month: "short" });
+  };
+  const etat = row.resiliation_ouvert_le
+    ? `ouverte le ${jour(row.resiliation_ouvert_le)}, pas signée`
+    : row.resiliation_envoye_le
+      ? `envoyée le ${jour(row.resiliation_envoye_le)}, pas encore ouverte`
+      : "signature attendue";
+  return (
+    <span
+      className="badge badge-rose"
+      title="Le bail n'est PAS terminé tant que l'entente n'est pas signée"
+    >
+      Résiliation en cours — {etat}
+      {row.resiliation_date ? ` (fin le ${row.resiliation_date})` : ""}
+    </span>
   );
 }

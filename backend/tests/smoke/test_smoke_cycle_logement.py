@@ -316,3 +316,79 @@ def test_annuler_depart_sans_depart_en_cours(client, auth_headers, run):
         headers=auth_headers,
     )
     assert r.status_code == 409, r.text
+
+
+def test_suivi_entente_resiliation(client, auth_headers, run):
+    """« Si c'est pas signé il est pas encore mis fin » (Phil).
+
+    La ligne rouge disait seulement « signature attendue ». Or une
+    entente jamais ouverte se relance, tandis qu'une entente ouverte et
+    non signée se discute : ce n'est pas le même geste, donc la ligne
+    doit porter les deux horodatages.
+    """
+    from datetime import datetime, timezone
+
+    from app.models.immobilier import ImmDocument
+
+    async def _seed() -> dict:
+        async with TestSessionLocal() as s:
+            imm = Immeuble(
+                name="Immeuble Entente", address="30 rue Entente",
+                city="Montréal", is_active=True,
+            )
+            s.add(imm)
+            await s.flush()
+            ids = {"immeuble_id": imm.id}
+            for numero, ouvert in (("1", False), ("2", True)):
+                lg = Logement(
+                    immeuble_id=imm.id, numero=numero,
+                    status=LogementStatus.OCCUPE.value,
+                )
+                loc = Locataire(full_name=f"Locataire Entente {numero}")
+                s.add_all([lg, loc])
+                await s.flush()
+                b = Bail(
+                    logement_id=lg.id, locataire_id=loc.id,
+                    date_debut=date.today() - timedelta(days=200),
+                    date_fin=date.today() + timedelta(days=160),
+                    loyer_mensuel=1000.0, status=BailStatus.ACTIF.value,
+                )
+                s.add(b)
+                await s.flush()
+                s.add(
+                    ImmDocument(
+                        bail_id=b.id, locataire_id=loc.id,
+                        immeuble_id=imm.id,
+                        type="avis_resiliation",
+                        titre="Entente de résiliation",
+                        params_json='{"date_fin": "2026-10-31"}',
+                        envoye_le=datetime(
+                            2026, 8, 10, 12, 0, tzinfo=timezone.utc
+                        ),
+                        ouvert_le=(
+                            datetime(2026, 8, 12, 9, 0, tzinfo=timezone.utc)
+                            if ouvert else None
+                        ),
+                    )
+                )
+                ids[numero] = b.id
+            await s.commit()
+            return ids
+
+    ids = run(_seed())
+    r = client.get(
+        f"/api/v1/immobilier/suivi-baux?immeuble_id={ids['immeuble_id']}",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    par_bail = {x["bail_id"]: x for x in r.json() if x.get("bail_id")}
+
+    jamais_ouverte = par_bail[ids["1"]]
+    assert jamais_ouverte["resiliation_en_cours"] is True
+    assert jamais_ouverte["resiliation_envoye_le"] is not None
+    assert jamais_ouverte["resiliation_ouvert_le"] is None
+    # La date convenue vient des paramètres du document.
+    assert jamais_ouverte["resiliation_date"] == "2026-10-31"
+
+    vue_non_signee = par_bail[ids["2"]]
+    assert vue_non_signee["resiliation_ouvert_le"] is not None

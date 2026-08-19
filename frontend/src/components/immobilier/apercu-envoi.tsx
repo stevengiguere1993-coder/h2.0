@@ -203,3 +203,49 @@ export function ApercuEnvoiModal({
     </div>
   );
 }
+
+/**
+ * Bloc « De / Réponses » seul, pour les écrans qui ont déjà leur propre
+ * confirmation et n'ont pas besoin d'une modale par-dessus une modale
+ * (l'entente de résiliation, par exemple).
+ *
+ * Même source que ApercuEnvoiModal : l'expéditeur RÉSOLU par le serveur.
+ * Retour Phil 2026-08-19 : « je n'ai pas eu le pop que j'ai partout
+ * ailleurs avec le destinataire, la personne qui l'a envoyé, etc. »
+ */
+export function ExpediteurResume({ note }: { note?: string }) {
+  const [exp, setExp] = useState<Expediteur | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          "/api/v1/immobilier/communications/expediteur"
+        );
+        if (r.ok) setExp((await r.json()) as Expediteur);
+      } catch {
+        /* l'écran reste utilisable sans le résumé */
+      }
+    })();
+  }, []);
+
+  return (
+    <div className="rounded-lg border border-brand-800 bg-brand-900/40 px-3 py-2 text-[11px] text-white/70">
+      <div className="flex gap-2">
+        <span className="w-16 shrink-0 text-white/40">De</span>
+        <span>
+          {exp
+            ? `${exp.from_name || "Horizon Services Immobiliers"} ${exp.from_email || "(boîte système)"}`
+            : "…"}
+        </span>
+      </div>
+      <div className="flex gap-2">
+        <span className="w-16 shrink-0 text-white/40">Réponses</span>
+        <span>{exp ? exp.reply_to || "boîte système" : "…"}</span>
+      </div>
+      {note ? (
+        <p className="mt-1 text-white/40">{note}</p>
+      ) : null}
+    </div>
+  );
+}
