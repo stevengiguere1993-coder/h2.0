@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DBSession
+from app.core.permissions import visible_immeuble_ids
 from app.integrations.email_graph import get_mailer
 from app.models.immobilier import (
     Bail,
@@ -410,3 +411,164 @@ async def demander_preuve_assurance(
         log.exception("Audit imm_communications échoué")
     await db.commit()
     return AssuranceDemandeResult(locataire_id=lo.id, envoye_a=dest)
+
+
+# ─── Consentement aux communications électroniques ─────────────────────
+
+
+class ConsentementRow(BaseModel):
+    locataire_id: int
+    locataire_nom: str
+    locataire_email: Optional[str] = None
+    bail_id: Optional[int] = None
+    immeuble_id: Optional[int] = None
+    immeuble_name: Optional[str] = None
+    logement_numero: Optional[str] = None
+    document_id: Optional[int] = None
+    #: "signe" | "refuse" | "ouvert" | "envoye" | "pret" | "aucun"
+    statut: str
+    envoye_le: Optional[datetime] = None
+    ouvert_le: Optional[datetime] = None
+    signe_le: Optional[datetime] = None
+    refuse_le: Optional[datetime] = None
+
+
+class ConsentementOverview(BaseModel):
+    rows: List[ConsentementRow] = []
+    nb_signe: int = 0
+    nb_refuse: int = 0
+    nb_en_attente: int = 0
+    nb_jamais_envoye: int = 0
+
+
+@router.get("/consentements/overview", response_model=ConsentementOverview)
+async def consentements_overview(
+    db: DBSession, user: CurrentUser
+) -> ConsentementOverview:
+    """Où en est le consentement aux communications électroniques de
+    chaque locataire à bail actif.
+
+    Retour Phil 2026-08-19 : le document était bien PRÉPARÉ à la création
+    du bail — il dormait dans la section Documents en « brouillon » —
+    mais rien ne disait qu'il fallait l'envoyer, ni qui avait consenti.
+    « Ça va tomber entre les craques. »
+
+    Le consentement peut aussi être REFUSÉ : c'est un consentement, pas
+    une formalité. Le refus est un état à part entière ici, pas une
+    absence de réponse.
+    """
+    _require_volet(user)
+    from app.models.immobilier import Bail, BailStatus, ImmDocument, Logement
+
+    baux = (
+        await db.execute(
+            select(Bail).where(Bail.status == BailStatus.ACTIF.value)
+        )
+    ).scalars().all()
+    if not baux:
+        return ConsentementOverview()
+
+    log_by_id = {
+        lg.id: lg
+        for lg in (
+            await db.execute(
+                select(Logement).where(
+                    Logement.id.in_([b.logement_id for b in baux])
+                )
+            )
+        ).scalars().all()
+    }
+    imm_by_id = {
+        im.id: im
+        for im in (
+            await db.execute(
+                select(Immeuble).where(
+                    Immeuble.id.in_(
+                        [lg.immeuble_id for lg in log_by_id.values()]
+                    ),
+                    # La gestion externe ne nous appartient pas.
+                    Immeuble.gestion_externe.isnot(True),
+                )
+            )
+        ).scalars().all()
+    }
+    visible = await visible_immeuble_ids(db, user)
+    loc_by_id = {
+        lo.id: lo
+        for lo in (
+            await db.execute(
+                select(Locataire).where(
+                    Locataire.id.in_([b.locataire_id for b in baux])
+                )
+            )
+        ).scalars().all()
+    }
+    docs = (
+        await db.execute(
+            select(ImmDocument).where(
+                ImmDocument.type == "consentement_communications",
+                ImmDocument.locataire_id.in_(list(loc_by_id.keys())),
+            )
+        )
+    ).scalars().all()
+    # Le PLUS RÉCENT par locataire fait foi.
+    doc_by_loc: dict = {}
+    for d in sorted(docs, key=lambda x: x.id):
+        doc_by_loc[d.locataire_id] = d
+
+    rows: List[ConsentementRow] = []
+    for b in baux:
+        lg = log_by_id.get(b.logement_id)
+        im = imm_by_id.get(lg.immeuble_id) if lg else None
+        if im is None:
+            continue
+        if visible is not None and im.id not in visible:
+            continue
+        lo = loc_by_id.get(b.locataire_id)
+        if lo is None:
+            continue
+        d = doc_by_loc.get(lo.id)
+        if d is None:
+            statut = "aucun"
+        elif d.signed_at is not None:
+            statut = "signe"
+        elif getattr(d, "refuse_le", None) is not None:
+            statut = "refuse"
+        elif d.ouvert_le is not None:
+            statut = "ouvert"
+        elif d.envoye_le is not None:
+            statut = "envoye"
+        else:
+            statut = "pret"
+        rows.append(
+            ConsentementRow(
+                locataire_id=lo.id,
+                locataire_nom=lo.full_name,
+                locataire_email=lo.email,
+                bail_id=b.id,
+                immeuble_id=im.id,
+                immeuble_name=im.name,
+                logement_numero=(lg.numero if lg else None),
+                document_id=(d.id if d else None),
+                statut=statut,
+                envoye_le=(d.envoye_le if d else None),
+                ouvert_le=(d.ouvert_le if d else None),
+                signe_le=(d.signed_at if d else None),
+                refuse_le=(getattr(d, "refuse_le", None) if d else None),
+            )
+        )
+    # Ce qui reste à faire d'abord.
+    ordre = {"aucun": 0, "pret": 1, "envoye": 2, "ouvert": 3,
+             "refuse": 4, "signe": 5}
+    rows.sort(key=lambda r: (ordre.get(r.statut, 9), r.locataire_nom))
+    return ConsentementOverview(
+        rows=rows,
+        nb_signe=sum(1 for r in rows if r.statut == "signe"),
+        nb_refuse=sum(1 for r in rows if r.statut == "refuse"),
+        nb_en_attente=sum(
+            1 for r in rows if r.statut in ("envoye", "ouvert")
+        ),
+        nb_jamais_envoye=sum(
+            1 for r in rows if r.statut in ("aucun", "pret")
+        ),
+    )

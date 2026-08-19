@@ -176,6 +176,16 @@ async def _to_public(db: AsyncSession, doc: ImmDocument) -> PublicDocument:
         ):
             refus_possible = True
             choix_requis = True
+    else:
+        # Document signable SANS cycle (consentement aux communications
+        # électroniques…) : le refus est possible et se porte sur le
+        # document lui-même. Un consentement qu'on ne pourrait pas
+        # refuser ne serait pas un consentement.
+        if doc.type not in SIGNATURE_NON_REQUISE:
+            if doc.refuse_le is not None:
+                refuse_le = doc.refuse_le.date()
+            elif doc.signed_at is None:
+                refus_possible = True
     return PublicDocument(
         titre=doc.titre,
         type=doc.type,
@@ -242,10 +252,28 @@ async def public_refuse(
         )
     cycle = await _cycle_du_doc(db, doc)
     if cycle is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail="Ce document ne peut pas être refusé en ligne.",
-        )
+        # Refus GÉNÉRIQUE (2026-08-19). Avant, seul un avis de
+        # modification — qui porte un cycle de renouvellement —
+        # pouvait être refusé. Un locataire à qui on demandait son
+        # CONSENTEMENT aux communications électroniques n'avait donc
+        # aucun moyen de dire non : la page ne proposait que « signer ».
+        # Pour un consentement, c'est absurde — il est refusable par
+        # nature, et Phil l'avait anticipé (« ça se peut qu'il refuse »).
+        if doc.type in SIGNATURE_NON_REQUISE:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Ce document ne demande pas de réponse.",
+            )
+        if doc.refuse_le is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail="Le refus a déjà été enregistré.",
+            )
+        doc.refuse_le = datetime.now(timezone.utc)
+        doc.refuse_par = (data.motif or "").strip()[:255] or None
+        await db.commit()
+        await db.refresh(doc)
+        return await _to_public(db, doc)
     if cycle.status == "refuse":
         raise HTTPException(
             status.HTTP_409_CONFLICT,

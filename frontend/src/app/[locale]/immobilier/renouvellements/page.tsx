@@ -119,6 +119,196 @@ function demandeEnCours(r: AssuranceRow): boolean {
   );
 }
 
+type ConsentementRow = {
+  locataire_id: number;
+  locataire_nom: string;
+  locataire_email: string | null;
+  bail_id: number | null;
+  immeuble_id: number | null;
+  immeuble_name: string | null;
+  logement_numero: string | null;
+  document_id: number | null;
+  statut: string;
+  envoye_le: string | null;
+  ouvert_le: string | null;
+  signe_le: string | null;
+  refuse_le: string | null;
+};
+
+type ConsentementOverview = {
+  rows: ConsentementRow[];
+  nb_signe: number;
+  nb_refuse: number;
+  nb_en_attente: number;
+  nb_jamais_envoye: number;
+};
+
+const CONSENT_BADGE: Record<string, [string, string]> = {
+  signe: ["badge-emerald", "Signé"],
+  refuse: ["badge-rose", "Refusé"],
+  ouvert: ["badge-sky", "Ouvert, pas signé"],
+  envoye: ["badge-amber", "Envoyé"],
+  pret: ["badge-neutral", "Prêt — jamais envoyé"],
+  aucun: ["badge-neutral", "Aucun document"]
+};
+
+/**
+ * Consentement aux communications électroniques.
+ *
+ * Retour Phil 2026-08-19 : le document était bien préparé à la création
+ * du bail — il dormait en « brouillon » dans la section Documents — mais
+ * rien ne disait qu'il fallait l'envoyer, ni qui avait consenti.
+ * « Ça va tomber entre les craques. »
+ *
+ * L'onglet vit à côté des Assurances : même page, même réflexe annuel.
+ * Le REFUS y est un état à part entière — pas une absence de réponse :
+ * un locataire qui refuse doit continuer de recevoir ses avis par la
+ * poste, et c'est une information qu'on ne peut pas déduire du silence.
+ */
+function ConsentementsTab() {
+  const [data, setData] = useState<ConsentementOverview | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          "/api/v1/immobilier/consentements/overview"
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        setData((await r.json()) as ConsentementOverview);
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    })();
+  }, []);
+
+  if (err) {
+    return <p className="mt-4 text-sm text-rose-300">{err}</p>;
+  }
+  if (!data) {
+    return (
+      <p className="mt-4 flex items-center gap-2 text-xs text-white/50">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+      </p>
+    );
+  }
+
+  const needle = q.trim().toLowerCase();
+  const rows = data.rows.filter(
+    (r) =>
+      !needle ||
+      `${r.locataire_nom} ${r.immeuble_name || ""} ${r.logement_numero || ""}`
+        .toLowerCase()
+        .includes(needle)
+  );
+
+  return (
+    <div className="mt-4">
+      <div className="grid grid-cols-4 gap-3">
+        {(
+          [
+            ["Signés", data.nb_signe, "text-emerald-300"],
+            ["Refusés", data.nb_refuse, "text-rose-300"],
+            ["En attente", data.nb_en_attente, "text-amber-300"],
+            ["Jamais envoyés", data.nb_jamais_envoye, "text-white/70"]
+          ] as const
+        ).map(([label, n, cls]) => (
+          <div
+            key={label}
+            className="rounded-2xl border border-brand-800 bg-brand-900 p-4"
+          >
+            <p className="text-[11px] uppercase tracking-wider text-white/50">
+              {label}
+            </p>
+            <p className={`mt-1 text-2xl font-bold ${cls}`}>{n}</p>
+          </div>
+        ))}
+      </div>
+
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Chercher un locataire, un immeuble…"
+        className="input mt-4 w-full max-w-sm text-sm"
+      />
+
+      <div className="mt-3 overflow-x-auto rounded-2xl border border-brand-800">
+        <table className="w-full min-w-[720px] text-sm">
+          <thead className="bg-brand-950 text-left text-[11px] uppercase tracking-wider text-white/50">
+            <tr>
+              <th className="px-3 py-2.5 font-semibold">Locataire</th>
+              <th className="px-3 py-2.5 font-semibold">Immeuble · logt</th>
+              <th className="px-3 py-2.5 font-semibold">État</th>
+              <th className="px-3 py-2.5 font-semibold">Détail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={4}
+                  className="px-3 py-10 text-center text-white/50"
+                >
+                  Aucun locataire.
+                </td>
+              </tr>
+            ) : (
+              rows.map((r) => {
+                const [cls, label] = CONSENT_BADGE[r.statut] || [
+                  "badge-neutral",
+                  r.statut
+                ];
+                return (
+                  <tr
+                    key={r.locataire_id}
+                    className="border-b border-brand-800/60 last:border-b-0"
+                  >
+                    <td className="px-3 py-2.5">
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={`/immobilier/locataires/${r.locataire_id}` as any}
+                        className="font-medium text-white hover:text-accent-500"
+                      >
+                        {r.locataire_nom}
+                      </Link>
+                      {r.locataire_email ? null : (
+                        <span className="ml-2 text-[11px] text-rose-300">
+                          aucun courriel
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-white/70">
+                      {r.immeuble_name || "—"}
+                      {r.logement_numero ? ` · ${r.logement_numero}` : ""}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className={`badge ${cls}`}>{label}</span>
+                    </td>
+                    <td className="px-3 py-2.5 text-xs text-white/50">
+                      {r.signe_le
+                        ? `Signé le ${r.signe_le.slice(0, 10)}`
+                        : r.refuse_le
+                          ? `Refusé le ${r.refuse_le.slice(0, 10)} — les avis partent par la poste`
+                          : r.ouvert_le
+                            ? `Ouvert le ${r.ouvert_le.slice(0, 10)}`
+                            : r.envoye_le
+                              ? `Envoyé le ${r.envoye_le.slice(0, 10)}`
+                              : "À envoyer depuis la fiche du locataire (section Documents)"}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+
 function AssurancesTab() {
   const [data, setData] = useState<AssuranceOverview | null>(null);
   const [q, setQ] = useState("");
@@ -603,7 +793,7 @@ function fmtCurrency(n: number | null | undefined): string {
 export default function RenouvellementsPage() {
   const [list, setList] = useState<RenouvellementOverview[] | null>(null);
   const [tab, setTab] = useState<
-    "renouvellements" | "releves31" | "assurances"
+    "renouvellements" | "releves31" | "assurances" | "consentements"
   >("renouvellements");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "todo" | "envoye">("all");
@@ -930,7 +1120,9 @@ Nouvelle date de fin :`,
                 ? "Baux qui se terminent dans les 12 prochains mois. Rien ne part tout seul : chaque avis de modification (PDF + courriel) s'envoie à la main, bail par bail, après vérification."
                 : tab === "releves31"
                   ? "Relevés 31 (Revenu Québec) : un par LOCATAIRE ayant occupé un logement pendant l'année — deux occupants successifs = deux relevés. Copie à remettre avant le dernier jour de février."
-                  : "Preuve d'assurance habitation de chaque locataire, à revalider une fois par année : demande la preuve par courriel puis confirme-la ici."}
+                  : tab === "assurances"
+                    ? "Preuve d'assurance habitation de chaque locataire, à revalider une fois par année : demande la preuve par courriel puis confirme-la ici."
+                    : "Consentement aux communications électroniques : sans lui, les avis doivent partir par la poste. Le document est préparé à la création du bail, mais il ne part QUE si tu l'envoies — et le locataire peut refuser."}
             </p>
           </div>
         </header>
@@ -941,7 +1133,8 @@ Nouvelle date de fin :`,
             [
               ["renouvellements", "Renouvellements"],
               ["releves31", "Relevés 31"],
-              ["assurances", "Assurances"]
+              ["assurances", "Assurances"],
+              ["consentements", "Consentements"]
             ] as const
           ).map(([key, label]) => (
             <button
@@ -961,6 +1154,7 @@ Nouvelle date de fin :`,
 
         {tab === "releves31" ? <Releves31Tab /> : null}
         {tab === "assurances" ? <AssurancesTab /> : null}
+        {tab === "consentements" ? <ConsentementsTab /> : null}
 
         {/* Contenu Renouvellements — masqué (pas démonté) sur les autres
             onglets pour garder l'état des filtres. */}
