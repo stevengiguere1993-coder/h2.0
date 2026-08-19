@@ -513,6 +513,7 @@ async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
         bail_id=doc.bail_id,
         immeuble_id=doc.immeuble_id,
         immeuble_nom=imm_nom,
+        document_id=doc.id,
         resume_fiche=(
             f"Copie signée de « {titre} » transmise au locataire après "
             "sa signature en ligne."

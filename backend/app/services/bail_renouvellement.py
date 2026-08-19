@@ -375,6 +375,7 @@ async def send_renouvellement_for_bail(
                     immeuble_id=(
                         logement.immeuble_id if logement is not None else None
                     ),
+                    document_id=(doc.id if doc is not None else None),
                     resume_fiche=(
                         "Avis de modification du bail envoyé "
                         f"(à {ctx.locataire_email})"

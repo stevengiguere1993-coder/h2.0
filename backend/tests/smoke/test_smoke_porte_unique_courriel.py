@@ -21,7 +21,6 @@ APP = Path(__file__).resolve().parents[2] / "app"
 # Portée : tout ce qui parle au locataire.
 CIBLES = [
     *(APP / "api" / "v1" / "endpoints").glob("immobilier*.py"),
-    APP / "api" / "v1" / "endpoints" / "public_bail.py",
     APP / "api" / "v1" / "endpoints" / "public_document.py",
     *(APP / "services").glob("bail_*.py"),
     *(APP / "services").glob("locatif_*.py"),
@@ -66,7 +65,6 @@ def test_les_chemins_connus_importent_bien_la_porte() -> None:
         "api/v1/endpoints/immobilier.py",          # DPA + relance de loyer
         "api/v1/endpoints/immobilier_documents.py",  # signature + courriel
         "api/v1/endpoints/public_document.py",     # copie signée
-        "services/bail_sign.py",                   # bail à signer
         "services/bail_renouvellement.py",         # avis de renouvellement
     }
     manquants = [

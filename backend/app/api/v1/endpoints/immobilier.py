@@ -1962,33 +1962,6 @@ async def retirer_entreprise_portefeuille(
 # ── Signature de bail ──────────────────────────────────────────────────
 
 
-class _BailSendRequest(BaseModel):
-    to: Optional[List[str]] = None  # défaut : courriel du locataire
-
-
-@router.post("/baux/{bail_id}/send")
-async def send_bail(
-    bail_id: int,
-    payload: _BailSendRequest,
-    db: DBSession,
-    user: CurrentUser,
-) -> dict:
-    """Envoie le bail au locataire pour signature électronique (lien
-    public). Retourne le statut d'envoi."""
-    _require_volet(user)
-    from app.services.bail_sign import BailSendError, send_bail_for_signature
-
-    try:
-        bail = await send_bail_for_signature(db, bail_id, to=payload.to)
-    except BailSendError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    await db.commit()
-    return {
-        "sent_to": bail.sent_to_email,
-        "signature_token": bail.signature_token,
-    }
-
-
 @router.get("/baux/{bail_id}/document")
 async def download_bail_document(
     bail_id: int,
@@ -2031,30 +2004,17 @@ async def download_bail_document(
                 },
             )
 
-    if bail.signed_at is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail=(
-                "Aucun bail au dossier — importe le bail signé "
-                "(bouton « Importer le bail »)."
-            ),
-        )
-    from app.services.bail_signed_pdf import render_bail_signed_pdf
-
-    pdf = await render_bail_signed_pdf(db, bail_id)
-    if not pdf:
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Generation du PDF impossible.",
-        )
-    return Response(
-        content=pdf,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": (
-                f'inline; filename="Bail_{bail_id}_signe.pdf"'
-            )
-        },
+    # Les baux sont signés HORS de Kratos (CORPIQ papier/externe) : le
+    # seul bail au dossier est celui qu'on IMPORTE. Le rendu d'un bail
+    # « signé dans Kratos » a été retiré le 2026-08-19 — il n'a jamais
+    # servi (aucune signature en base) et laissait croire qu'un bail
+    # pouvait exister sans avoir été joint.
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail=(
+            "Aucun bail au dossier — importe le bail signé "
+            "(bouton « Importer le bail »)."
+        ),
     )
 
 
@@ -5004,6 +4964,124 @@ async def relancer_loyer(
         await db.rollback()
 
     return RelanceLoyerResult(niveau=niveau, destinataire=dest, mois=month_label)
+
+
+# ── Baux sans bail au dossier ─────────────────────────────────────────
+
+
+class BailSansDocRow(BaseModel):
+    bail_id: int
+    immeuble: str
+    immeuble_id: int
+    logement: str
+    locataire: str
+    date_debut: date
+    #: Jours écoulés depuis l'entrée — plus c'est vieux, plus ça presse.
+    jours: int
+
+
+class BailSansDocOverview(BaseModel):
+    rows: List[BailSansDocRow]
+    nb: int
+
+
+@router.get("/baux/sans-document", response_model=BailSansDocOverview)
+async def baux_sans_document(
+    db: DBSession,
+    user: CurrentUser,
+    entreprise_id: Optional[int] = None,
+    immeuble_id: Optional[int] = None,
+) -> BailSansDocOverview:
+    """Baux ACTIFS dont le bail signé n'a jamais été importé.
+
+    Les baux sont signés HORS de Kratos : le seul exemplaire au dossier
+    est celui qu'on importe à l'entrée du locataire. Un garde-fou existe
+    déjà — un dossier de relocation ne passe pas à « Reloué » sans son
+    bail — mais il ne couvre QUE ce chemin : un bail créé directement
+    « déjà en vigueur » y échappe. L'audit du 2026-08-19 a trouvé 8 baux
+    actifs sans bail au dossier, tous récents (avril à août 2026).
+
+    D'où cette liste : le garde-fou bloque ce qu'il peut, celle-ci rend
+    visible ce qui est déjà passé à travers.
+
+    Gestion externe exclue : leurs baux ne sont pas chez nous.
+    """
+    _require_volet(user)
+    today = datetime.now(timezone.utc).date()
+
+    imm_q = select(Immeuble).where(
+        Immeuble.is_active.is_(True),
+        Immeuble.gestion_externe.isnot(True),
+    )
+    if entreprise_id is not None:
+        imm_q = imm_q.where(
+            Immeuble.owner_entreprise_id == int(entreprise_id)
+        )
+    if immeuble_id is not None:
+        imm_q = imm_q.where(Immeuble.id == int(immeuble_id))
+    immeubles = (await db.execute(imm_q)).scalars().all()
+    visible = await visible_immeuble_ids(db, user)
+    if visible is not None:
+        immeubles = [i for i in immeubles if i.id in visible]
+    imm_by_id = {i.id: i for i in immeubles}
+    if not imm_by_id:
+        return BailSansDocOverview(rows=[], nb=0)
+
+    logements = (
+        await db.execute(
+            select(Logement).where(
+                Logement.immeuble_id.in_(list(imm_by_id.keys()))
+            )
+        )
+    ).scalars().all()
+    log_by_id = {lg.id: lg for lg in logements}
+    if not log_by_id:
+        return BailSansDocOverview(rows=[], nb=0)
+
+    baux = (
+        await db.execute(
+            select(Bail).where(
+                Bail.logement_id.in_(list(log_by_id.keys())),
+                Bail.status == BailStatus.ACTIF.value,
+                Bail.document_id.is_(None),
+            )
+        )
+    ).scalars().all()
+    if not baux:
+        return BailSansDocOverview(rows=[], nb=0)
+
+    locs = (
+        await db.execute(
+            select(Locataire).where(
+                Locataire.id.in_([b.locataire_id for b in baux])
+            )
+        )
+    ).scalars().all()
+    loc_by_id = {lo.id: lo for lo in locs}
+
+    rows: List[BailSansDocRow] = []
+    for b in baux:
+        lg = log_by_id.get(b.logement_id)
+        im = imm_by_id.get(lg.immeuble_id) if lg else None
+        if im is None or lg is None:
+            continue
+        lo = loc_by_id.get(b.locataire_id)
+        debut = b.date_debut or today
+        rows.append(
+            BailSansDocRow(
+                bail_id=b.id,
+                immeuble=im.name,
+                immeuble_id=im.id,
+                logement=lg.numero or "—",
+                locataire=(lo.full_name if lo else "—"),
+                date_debut=debut,
+                jours=(today - debut).days,
+            )
+        )
+    # Le plus ancien d'abord : c'est celui qu'on risque de ne jamais
+    # retrouver.
+    rows.sort(key=lambda r: r.date_debut)
+    return BailSansDocOverview(rows=rows, nb=len(rows))
 
 
 # ── Échéances de bail (avis de renouvellement) ─────────────────────────

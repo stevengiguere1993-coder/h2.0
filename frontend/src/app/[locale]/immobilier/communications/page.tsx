@@ -102,6 +102,11 @@ type AuditRow = {
   statut: string;
   created_by_email?: string | null;
   created_by_nom?: string | null;
+  document_id?: number | null;
+  document_ouvert_le?: string | null;
+  document_signe_le?: string | null;
+  document_signe_par?: string | null;
+  document_signature_requise?: boolean;
   created_at?: string | null;
 };
 
@@ -142,7 +147,6 @@ const TYPES_AUTOMATIQUES = [
   { value: "document_signature", label: "Document à signer" },
   { value: "copie_signee", label: "Copie signée transmise" },
   { value: "document_courriel", label: "Document transmis" },
-  { value: "bail_signature", label: "Bail à signer" },
   { value: "relance_loyer", label: "Relance de loyer" },
   { value: "dpa", label: "Prélèvement préautorisé (DPA)" }
 ] as const;
@@ -164,6 +168,50 @@ function fmtDate(iso?: string | null): string {
     dateStyle: "medium",
     timeStyle: "short"
   });
+}
+
+//: Suivi d'un envoi. Un courriel SIMPLE ne dit rien de plus que
+//: « parti » : personne ne peut confirmer qu'il a été lu. Un envoi qui
+//: portait un DOCUMENT, lui, sait quand le locataire a ouvert le lien
+//: et quand il a signé — c'est ce qui tient devant un tribunal.
+function SuiviCell({ r }: { r: AuditRow }) {
+  if (r.statut !== "envoye") {
+    return <span className="text-rose-300">Échec</span>;
+  }
+  if (!r.document_id) {
+    return (
+      <span className="text-white/35" title="Courriel simple — l'ouverture n'est pas traçable">
+        Envoyé
+      </span>
+    );
+  }
+  if (r.document_signe_le) {
+    return (
+      <span
+        className="text-emerald-300"
+        title={`Signé par ${r.document_signe_par || "le locataire"} le ${fmtDate(r.document_signe_le)}`}
+      >
+        ✓ Signé {fmtDate(r.document_signe_le)}
+      </span>
+    );
+  }
+  if (r.document_ouvert_le) {
+    return (
+      <span className="text-sky-300">
+        Ouvert {fmtDate(r.document_ouvert_le)}
+        {r.document_signature_requise ? (
+          <span className="block text-[10px] text-white/40">
+            pas encore signé
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+  return (
+    <span className="text-amber-300/80" title="Le lien n'a pas encore été ouvert">
+      Pas encore ouvert
+    </span>
+  );
 }
 
 export default function CommunicationsPage() {
@@ -1233,6 +1281,7 @@ export default function CommunicationsPage() {
                     <th className="px-3 py-2">Locataire</th>
                     <th className="px-3 py-2">Immeuble</th>
                     <th className="px-3 py-2">Sujet</th>
+                    <th className="px-3 py-2">Suivi</th>
                     <th className="px-3 py-2">Par</th>
                     <th className="px-3 py-2" />
                   </tr>
@@ -1265,6 +1314,9 @@ export default function CommunicationsPage() {
                       </td>
                       <td className="max-w-[260px] truncate px-3 py-2 text-white/70">
                         {r.sujet}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2 text-xs">
+                        <SuiviCell r={r} />
                       </td>
                       <td
                         className="px-3 py-2 text-white/50"

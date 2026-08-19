@@ -113,7 +113,6 @@ from app.api.v1.endpoints import (
     project_tasks,
     project_to_facture,
     projects,
-    public_bail,
     public_document,
     public_esign,
     public_bon,
@@ -289,7 +288,6 @@ api_router.include_router(public_facture.router)
 api_router.include_router(contract_sign.router)
 api_router.include_router(contract_sign.docs_router)
 api_router.include_router(public_bon.router)
-api_router.include_router(public_bail.router)
 api_router.include_router(public_document.router)
 # eSign public — signature de documents (pôle Gestion d'entreprise).
 # Ne PAS protéger : les signataires externes n'ont pas de compte.

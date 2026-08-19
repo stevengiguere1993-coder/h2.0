@@ -143,6 +143,10 @@ async def ensure_critical_columns() -> None:
         log.warning("ensure_critical_columns create_all failed: %s", exc)
 
     critical_columns = (
+        # Suivi des ouvertures/signatures dans l'historique Communications
+        # (audit 2026-08-19). Sans elle, GET /immobilier/communications
+        # plante sur une base créée avant l'ajout.
+        ("imm_communications", "document_id", "INTEGER"),
         # Sans cette colonne, GET /api/v1/contact (pipeline construction)
         # plante → « Impossible de charger les prospects » (régression #785).
         ("contact_requests", "lost_reason", "VARCHAR(120)"),
