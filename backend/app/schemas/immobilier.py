@@ -168,6 +168,12 @@ class LogementRead(LogementBase):
     #: logements) — un logement OCCUPÉ affiche ce loyer, pas le
     #: « loyer demandé » qui ne vaut que pour la relocation (vacant).
     loyer_actuel: Optional[float] = None
+    #: Date à laquelle le logement se libère, quand un départ est ACTÉ
+    #: (dossier de relocation ouvert). « Occupé » et « occupé mais libre
+    #: le 31 août » ne sont pas le même état — retour Phil 2026-08-19.
+    #: ⚠️ Une fin de bail seule ne remplit PAS ce champ : au Québec un
+    #: bail se reconduit tacitement, échéance ≠ départ.
+    libre_le: Optional[date] = None
 
 
 # ─── Locataire ──────────────────────────────────────────────────────────

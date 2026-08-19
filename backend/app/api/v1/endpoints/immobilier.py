@@ -2063,12 +2063,17 @@ async def list_logements(
                 (b.date_debut or date.min) > (cur.date_debut or date.min)
             ):
                 loyer_actif[b.logement_id] = b
+    # Départs ACTÉS : un logement occupé dont le locataire part le 31
+    # août n'est pas dans le même état qu'un logement occupé tout court.
+    from app.services.locatif_depart import libere_le
+
     out: List[LogementRead] = []
     for r in rows:
         lr = LogementRead.model_validate(r)
         b = loyer_actif.get(r.id)
         if b is not None and b.loyer_mensuel is not None:
             lr.loyer_actuel = float(b.loyer_mensuel)
+        lr.libre_le = await libere_le(db, r.id)
         out.append(lr)
     return out
 

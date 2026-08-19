@@ -61,7 +61,23 @@ function fmtMoney(n: number | null | undefined): string {
   }).format(n);
 }
 
-function StatutBadge({ status }: { status: string }) {
+function fmtJour(iso?: string | null): string {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1).toLocaleDateString("fr-CA", {
+    day: "numeric",
+    month: "short"
+  });
+}
+
+function StatutBadge({
+  status,
+  libreLe
+}: {
+  status: string;
+  /** Départ ACTÉ : le logement se libère à cette date. */
+  libreLe?: string | null;
+}) {
   const map: Record<string, { cls: string; label: string }> = {
     occupe: { cls: "badge-emerald", label: "Occupé" },
     vacant: { cls: "badge-amber", label: "Vacant" },
@@ -69,6 +85,19 @@ function StatutBadge({ status }: { status: string }) {
     hors_location: { cls: "badge-neutral", label: "Hors loc." }
   };
   const t = map[status] || { cls: "badge-neutral", label: status };
+  // Un logement occupé dont le départ est acté n'est pas dans le même
+  // état qu'un logement occupé tout court : c'est celui-là qu'il faut
+  // relouer (retour Phil 2026-08-19).
+  if (libreLe && status === "occupe") {
+    return (
+      <span
+        className="badge badge-amber"
+        title={`Départ confirmé — le logement se libère le ${libreLe}`}
+      >
+        Occupé · libre le {fmtJour(libreLe)}
+      </span>
+    );
+  }
   return <span className={`badge ${t.cls}`}>{t.label}</span>;
 }
 
@@ -344,7 +373,7 @@ export default function LogementsPage() {
                         ) : null}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <StatutBadge status={l.status} />
+                        <StatutBadge status={l.status} libreLe={l.libre_le} />
                       </td>
                     </tr>
                   ))}

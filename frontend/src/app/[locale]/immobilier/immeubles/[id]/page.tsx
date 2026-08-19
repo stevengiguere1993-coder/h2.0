@@ -59,6 +59,7 @@ import {
 import {
   CreerBailModal,
   echeanceLabel,
+  AnnulerDepartModal,
   FinBailModal,
   JourEcheanceInline,
   LOUER_INDEFINIMENT_INFO,
@@ -2337,6 +2338,11 @@ function BauxTab({
   const [err, setErr] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [finBailFor, setFinBailFor] = useState<SuiviBailRow | null>(null);
+  //: Ligne dont on s'apprête à ANNULER le départ (l'inverse de
+  //: « mettre fin au bail », proposé quand le départ est acté).
+  const [annulerDepartFor, setAnnulerDepartFor] = useState<SuiviBailRow | null>(
+    null
+  );
   const [creerFor, setCreerFor] = useState<SuiviBailRow | null>(null);
 
   const load = useCallback(async () => {
@@ -2630,7 +2636,20 @@ function BauxTab({
                       <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
                         {r.bail_id != null ? (
                           <>
-                            {!r.resiliation_en_cours ? (
+                            {r.resiliation_en_cours ? null : r.dossier_id !=
+                              null ? (
+                              // Départ déjà acté : « Mettre fin au bail »
+                              // n'a plus d'effet. Le geste utile ici est
+                              // l'inverse (retour Phil 2026-08-19).
+                              <button
+                                type="button"
+                                onClick={() => setAnnulerDepartFor(r)}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20"
+                                title="Le départ est déjà confirmé — annuler le départ si le locataire reste"
+                              >
+                                Annuler le départ
+                              </button>
+                            ) : (
                               <button
                                 type="button"
                                 onClick={() => setFinBailFor(r)}
@@ -2638,7 +2657,7 @@ function BauxTab({
                               >
                                 Mettre fin au bail
                               </button>
-                            ) : null}
+                            )}
                             <BailDocActions
                               bailId={r.bail_id}
                               hasDoc={r.document_id != null}
@@ -2713,6 +2732,16 @@ function BauxTab({
         règle le dossier de relocation lié — partout dans Kratos.
       </p>
 
+      {annulerDepartFor ? (
+        <AnnulerDepartModal
+          row={annulerDepartFor}
+          onClose={() => setAnnulerDepartFor(null)}
+          onDone={() => {
+            setAnnulerDepartFor(null);
+            void load();
+          }}
+        />
+      ) : null}
       {finBailFor && finBailFor.bail_id != null ? (
         <FinBailModal
           bailId={finBailFor.bail_id}

@@ -46,6 +46,12 @@ export type LogementFicheData = {
    *  Un logement OCCUPÉ affiche ce loyer — le « loyer demandé » ne
    *  vaut que pour la relocation (vacant). */
   loyer_actuel?: number | null;
+  /** Date à laquelle le logement se libère, quand un départ est ACTÉ.
+   *  « Occupé » et « occupé mais libre le 31 août » ne sont pas le même
+   *  état : le second demande de préparer la relocation. Une simple fin
+   *  de bail ne remplit PAS ce champ — au Québec un bail se reconduit
+   *  tacitement, échéance n'est pas départ. */
+  libre_le?: string | null;
   notes?: string | null;
 };
 
