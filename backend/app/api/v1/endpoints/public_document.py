@@ -447,14 +447,11 @@ async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
     from app.api.v1.endpoints.immobilier_documents import (
         _resolve_destinataire,
     )
-    from app.integrations.email_graph import EmailAttachment, GraphMailer
+    from app.integrations.email_graph import EmailAttachment
+    from app.models.immobilier import Immeuble
+    from app.services.locatif_mail import envoyer_au_locataire
 
     locataire, dest = await _resolve_destinataire(db, doc, None)
-    mailer = GraphMailer()
-    if not mailer.ready:
-        raise RuntimeError("Microsoft Graph n'est pas configuré.")
-    if not dest:
-        raise RuntimeError("Le locataire n'a pas de courriel.")
     d2 = (
         await db.execute(
             select(ImmDocument)
@@ -465,14 +462,32 @@ async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
     if not d2.pdf_blob:
         raise RuntimeError("PDF signé introuvable.")
     nom = (locataire.full_name if locataire else "") or "Madame, Monsieur"
-    await mailer.send(
-        to=[dest],
-        subject="Merci d'avoir signé — votre copie de l'avis",
-        html_body=(
+    imm_nom = None
+    if doc.immeuble_id:
+        im = await db.get(Immeuble, doc.immeuble_id)
+        imm_nom = im.name if im else None
+    # Même porte que tous les autres courriels au locataire : profil
+    # d'expéditeur (une réponse doit joindre le gestionnaire) et double
+    # trace. Signature sur page PUBLIQUE → pas d'auteur authentifié.
+    await envoyer_au_locataire(
+        db,
+        destinataires=[dest],
+        sujet="Merci d'avoir signé — votre copie de l'avis",
+        corps_html=(
             f"<p>Bonjour {nom},</p>"
             "<p>Merci d'avoir signé ! Voici votre version signée de "
             "l'avis — conservez-la pour vos dossiers.</p>"
             "<p>Cordialement,<br/>Horizon Services Immobiliers</p>"
+        ),
+        type_envoi="copie_signee",
+        locataire_id=(locataire.id if locataire else None),
+        locataire_nom=(locataire.full_name if locataire else None),
+        bail_id=doc.bail_id,
+        immeuble_id=doc.immeuble_id,
+        immeuble_nom=imm_nom,
+        resume_fiche=(
+            "Copie signée de l'avis transmise au locataire après sa "
+            "signature en ligne."
         ),
         attachments=[
             EmailAttachment(
@@ -482,6 +497,13 @@ async def _envoyer_copie_signee(db, doc: ImmDocument) -> None:
             )
         ],
     )
+    # L'appelant a déjà commité la signature : les traces sont à valider
+    # ici. Best-effort — une trace perdue ne doit pas faire croire au
+    # locataire que sa copie n'est pas partie.
+    try:
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        await db.rollback()
 
 
 async def _estampiller_pdf(db, doc: ImmDocument, choix: str) -> None:

@@ -2991,10 +2991,14 @@ async def _dpa_contexte(db, locataire_id: int) -> dict:
     loyer = float(bail.loyer_mensuel) if bail and bail.loyer_mensuel else None
     adresse = ""
     creancier = "Le locateur"
+    immeuble_id = None
+    immeuble_nom = None
     if bail is not None:
         lg = await db.get(Logement, bail.logement_id)
         im = await db.get(Immeuble, lg.immeuble_id) if lg else None
         if im is not None:
+            immeuble_id = im.id
+            immeuble_nom = im.name
             adresse = f"{im.address}{', app. ' + lg.numero if lg else ''}"
             ownership = (
                 await db.execute(
@@ -3012,6 +3016,9 @@ async def _dpa_contexte(db, locataire_id: int) -> dict:
         "loyer": loyer,
         "adresse": adresse,
         "creancier": creancier,
+        "bail_id": bail.id if bail is not None else None,
+        "immeuble_id": immeuble_id,
+        "immeuble_nom": immeuble_nom,
     }
 
 
@@ -3058,8 +3065,12 @@ async def dpa_envoyer(
     rien d'automatique) : courriel + formulaire d'accord PDF en pièce
     jointe. Le statut passe à « documentation envoyée »."""
     _require_volet(user)
-    from app.integrations.email_graph import EmailAttachment, GraphMailer
+    from app.integrations.email_graph import EmailAttachment
     from app.services.dpa_form import generate_dpa_pdf
+    from app.services.locatif_mail import (
+        EnvoiLocataireError,
+        envoyer_au_locataire,
+    )
 
     ctx = await _dpa_contexte(db, locataire_id)
     loc = ctx["locataire"]
@@ -3067,12 +3078,6 @@ async def dpa_envoyer(
         raise HTTPException(
             status_code=422,
             detail="Le locataire n'a pas de courriel — ajoute-le d'abord.",
-        )
-    mailer = GraphMailer()
-    if not mailer.ready:
-        raise HTTPException(
-            status_code=503,
-            detail="Envoi courriel non configuré (Microsoft Graph).",
         )
 
     pdf = generate_dpa_pdf(
@@ -3099,11 +3104,26 @@ async def dpa_envoyer(
     remboursement sont détaillés dans le formulaire (www.paiements.ca).</p>
     <p>Cordialement,<br/>{ctx["creancier"]}</p>
     """.strip()
+    # Le corps demande au locataire de RETOURNER le formulaire signé « en
+    # répondant à ce courriel » : le reply-to doit donc pointer sur le
+    # gestionnaire (profil d'expéditeur), pas sur la boîte générique.
     try:
-        await mailer.send(
-            to=[loc.email],
-            subject="Paiement du loyer par prélèvement préautorisé (DPA)",
-            html_body=body_html,
+        await envoyer_au_locataire(
+            db,
+            destinataires=[loc.email],
+            sujet="Paiement du loyer par prélèvement préautorisé (DPA)",
+            corps_html=body_html,
+            type_envoi="dpa",
+            locataire_id=loc.id,
+            locataire_nom=loc.full_name,
+            bail_id=ctx.get("bail_id"),
+            immeuble_id=ctx.get("immeuble_id"),
+            immeuble_nom=ctx.get("immeuble_nom"),
+            auteur_email=user.email,
+            resume_fiche=(
+                "Documentation DPA envoyée (formulaire d'accord de débit "
+                "préautorisé en pièce jointe)."
+            ),
             attachments=[
                 EmailAttachment(
                     name="accord-dpa.pdf",
@@ -3112,6 +3132,8 @@ async def dpa_envoyer(
                 )
             ],
         )
+    except EnvoiLocataireError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=502, detail=f"Envoi du courriel échoué : {exc}"
@@ -4902,7 +4924,10 @@ async def relancer_loyer(
         "<p>Cordialement,<br/>Horizon Services Immobiliers</p>"
     )
 
-    from app.integrations.email_graph import get_mailer
+    from app.services.locatif_mail import (
+        EnvoiLocataireError,
+        envoyer_au_locataire,
+    )
 
     # P-13 : on PERSISTE la relance (commit) AVANT d'envoyer le courriel —
     # la ligne sert de garde d'idempotence. L'index unique (bail, mois,
@@ -4934,10 +4959,26 @@ async def relancer_loyer(
     # gestionnaire voit l'erreur ; l'anti double-clic + l'index évitent tout
     # renvoi accidentel) — jamais de double courriel au locataire.
     try:
-        await get_mailer().send(
-            to=[dest],
-            subject=f"Rappel de loyer — {mois_fr}",
-            html_body=html,
+        await envoyer_au_locataire(
+            db,
+            destinataires=[dest],
+            sujet=f"Rappel de loyer — {mois_fr}",
+            corps_html=html,
+            type_envoi="relance_loyer",
+            locataire_id=loc.id,
+            locataire_nom=loc.full_name,
+            bail_id=bail.id,
+            immeuble_id=immeuble.id if immeuble else None,
+            immeuble_nom=immeuble.name if immeuble else None,
+            auteur_email=getattr(user, "email", None),
+            resume_fiche=f"{label} de loyer — {mois_fr} ({loyer:,.0f} $).",
+        )
+    except EnvoiLocataireError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Relance enregistrée, mais l'envoi est impossible : {exc}"
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
@@ -4947,6 +4988,15 @@ async def relancer_loyer(
                 f"({exc}). Vérifie la config courriel ou réessaie plus tard."
             ),
         )
+
+    # La ligne RelanceLoyer est déjà commitée (garde d'idempotence) ; il
+    # reste à valider les DEUX traces ajoutées par le service (journal
+    # d'audit + fil de la fiche du locataire). Best-effort : une trace
+    # perdue ne doit pas transformer un envoi réussi en erreur.
+    try:
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        await db.rollback()
 
     return RelanceLoyerResult(niveau=niveau, destinataire=dest, mois=month_label)
 

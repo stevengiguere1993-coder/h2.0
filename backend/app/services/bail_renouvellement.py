@@ -356,10 +356,29 @@ async def send_renouvellement_for_bail(
                     if bcc_to_sender and mailer.sender
                     else None
                 )
-                await mailer.send(
-                    to=[ctx.locataire_email],
-                    subject=subject,
-                    html_body=body_html,
+                # Audit 2026-08-17 : porte UNIQUE des courriels au
+                # locataire — profil d'expéditeur (les réponses vont au
+                # gestionnaire) + trace d'audit + fil de la fiche.
+                from app.services.locatif_mail import (
+                    envoyer_au_locataire,
+                )
+
+                _fe, _fn, _rt = await envoyer_au_locataire(
+                    db,
+                    destinataires=[ctx.locataire_email],
+                    sujet=subject,
+                    corps_html=body_html,
+                    type_envoi="avis_renouvellement",
+                    locataire_id=bail.locataire_id,
+                    locataire_nom=ctx.locataire_nom or None,
+                    bail_id=bail.id,
+                    immeuble_id=(
+                        logement.immeuble_id if logement is not None else None
+                    ),
+                    resume_fiche=(
+                        "Avis de modification du bail envoyé "
+                        f"(à {ctx.locataire_email})"
+                    ),
                     bcc=bcc,
                     request_read_receipt=request_read_receipt,
                     attachments=[
@@ -370,6 +389,7 @@ async def send_renouvellement_for_bail(
                         )
                     ],
                 )
+                expediteur = _fe or expediteur
                 sent = True
                 if doc is not None:
                     doc.envoye_le = datetime.now(timezone.utc)

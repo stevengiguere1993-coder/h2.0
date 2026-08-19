@@ -125,8 +125,9 @@ _TAL_LABELS = {
     "consentement_communications": (
         "Consentement communications électroniques",
         "Consentement du locataire à recevoir avis et documents par "
-        "courriel (RLRQ, c. C-1.1) — envoyé pour signature en ligne à "
-        "la création du bail.",
+        "courriel (RLRQ, c. C-1.1). PRÉPARÉ automatiquement au dossier "
+        "à la création du bail — jamais envoyé tout seul : c'est le "
+        "bouton « Envoyer pour signature » de la fiche qui décide.",
     ),
 }
 

@@ -464,19 +464,36 @@ async def envoyer_signature(
         await db.flush()
     url = f"{public_base()}/sign-document/{d.signature_token}"
 
-    mailer = get_mailer()
+    # Audit 2026-08-17 : porte UNIQUE des courriels au locataire
+    # (profil d'expéditeur + journal d'audit + fil de la fiche).
+    from app.services.locatif_mail import (
+        EnvoiLocataireError,
+        envoyer_au_locataire,
+    )
+
     try:
-        await mailer.send(
-            to=[dest],
-            subject=(
-                f"{d.titre} — Horizon Services Immobiliers"
-            ),
-            html_body=_mail_html(
+        await envoyer_au_locataire(
+            db,
+            destinataires=[dest],
+            sujet=f"{d.titre} — Horizon Services Immobiliers",
+            corps_html=_mail_html(
                 d.titre,
                 locataire.full_name if locataire else "",
                 url,
             ),
-            reply_to=mailer.sender,
+            type_envoi="document_signature",
+            locataire_id=d.locataire_id,
+            locataire_nom=(locataire.full_name if locataire else None),
+            bail_id=d.bail_id,
+            immeuble_id=d.immeuble_id,
+            auteur_email=getattr(user, "email", None),
+            resume_fiche=(
+                f"Document envoyé pour signature : {d.titre} (à {dest})"
+            ),
+        )
+    except EnvoiLocataireError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         )
     except Exception as exc:  # noqa: BLE001 — réseau/Graph
         log.exception("Envoi document %s échoué", doc_id)
@@ -488,22 +505,8 @@ async def envoyer_signature(
     d.envoye_le = _now()
     d.envoye_a = dest[:320]
 
-    # Journal des communications du locataire (best-effort).
-    if locataire is not None:
-        try:
-            db.add(
-                LocataireCommunication(
-                    locataire_id=locataire.id,
-                    kind="courriel",
-                    contenu=(
-                        f"Document envoyé pour signature : {d.titre} "
-                        f"(à {dest})"
-                    ),
-                    auteur=user.email,
-                )
-            )
-        except Exception:  # noqa: BLE001
-            pass
+    # (La trace — journal d'audit + fil de la fiche locataire — est
+    # posée par envoyer_au_locataire : plus de doublon ici.)
 
     await db.commit()
     await db.refresh(d)
@@ -610,18 +613,29 @@ async def envoyer_courriel(
         await db.flush()
     url = f"{public_base()}/sign-document/{d.signature_token}"
 
-    mailer = get_mailer()
+    from app.services.locatif_mail import (
+        EnvoiLocataireError,
+        envoyer_au_locataire,
+    )
+
     try:
-        await mailer.send(
-            to=[dest],
-            subject=f"{d.titre} — Horizon Services Immobiliers",
-            html_body=_mail_html_piece_jointe(
+        await envoyer_au_locataire(
+            db,
+            destinataires=[dest],
+            sujet=f"{d.titre} — Horizon Services Immobiliers",
+            corps_html=_mail_html_piece_jointe(
                 d.titre,
                 locataire.full_name if locataire else "",
                 d.type,
                 url,
             ),
-            reply_to=mailer.sender,
+            type_envoi="document_courriel",
+            locataire_id=d.locataire_id,
+            locataire_nom=(locataire.full_name if locataire else None),
+            bail_id=d.bail_id,
+            immeuble_id=d.immeuble_id,
+            auteur_email=getattr(user, "email", None),
+            resume_fiche=f"Document envoyé par courriel : {d.titre} (à {dest})",
             attachments=[
                 EmailAttachment(
                     name=f"{d.type.replace('_', '-')}.pdf",
@@ -640,21 +654,7 @@ async def envoyer_courriel(
     d.envoye_le = _now()
     d.envoye_a = dest[:320]
 
-    if locataire is not None:
-        try:
-            db.add(
-                LocataireCommunication(
-                    locataire_id=locataire.id,
-                    kind="courriel",
-                    contenu=(
-                        f"Document envoyé par courriel : {d.titre} "
-                        f"(à {dest})"
-                    ),
-                    auteur=user.email,
-                )
-            )
-        except Exception:  # noqa: BLE001
-            pass
+    # (Trace posée par envoyer_au_locataire — pas de doublon ici.)
 
     await db.commit()
     await db.refresh(d)
