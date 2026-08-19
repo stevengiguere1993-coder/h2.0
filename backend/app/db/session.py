@@ -409,7 +409,9 @@ async def ensure_critical_columns() -> None:
         ("imm_location_visites", "candidat_email", "VARCHAR(320)"),
         ("imm_location_visites", "candidat_phone", "VARCHAR(50)"),
         ("imm_location_dossiers", "nouveau_bail_id", "INTEGER"),
-        # DPA (dépôt préautorisé) du loyer — suivi sur le locataire
+        # Prélèvement préautorisé — colonnes INERTES (fonctionnalité
+        # retirée le 2026-08-19, en attente de Rotessa) : conservées
+        # pour ne pas casser une base existante.
         # (Règle H1 Paiements Canada, perception Desjardins).
         (
             "imm_locataires",

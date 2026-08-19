@@ -2592,15 +2592,8 @@ async def update_locataire(
     if obj is None:
         raise HTTPException(status_code=404, detail="Locataire introuvable.")
     data = payload.model_dump(exclude_unset=True)
-    if "dpa_statut" in data and data["dpa_statut"] not in (
-        "aucun", "envoye", "actif", "refuse"
-    ):
-        raise HTTPException(status_code=422, detail="Statut DPA invalide.")
     for k, v in data.items():
         setattr(obj, k, v)
-    # Marquer l'accord signé/actif date automatiquement la signature.
-    if data.get("dpa_statut") == "actif" and obj.dpa_signe_le is None:
-        obj.dpa_signe_le = _now().date()
     obj.updated_at = _now()
     await db.commit()
     await db.refresh(obj)
@@ -2929,202 +2922,14 @@ async def delete_locataire_communication(
     await db.commit()
 
 
-# ─── Dépôt préautorisé (DPA) — Règle H1, perception Desjardins ─────────
-
-
-async def _dpa_contexte(db, locataire_id: int) -> dict:
-    """Contexte du DPA depuis le bail ACTIF du locataire : loyer,
-    adresse du logement, entreprise propriétaire (créancier)."""
-    loc = await db.get(Locataire, locataire_id)
-    if loc is None:
-        raise HTTPException(status_code=404, detail="Locataire introuvable.")
-    bail = (
-        await db.execute(
-            select(Bail)
-            .where(
-                Bail.locataire_id == locataire_id,
-                Bail.status == BailStatus.ACTIF.value,
-            )
-            .order_by(Bail.date_debut.desc())
-        )
-    ).scalars().first()
-    loyer = float(bail.loyer_mensuel) if bail and bail.loyer_mensuel else None
-    adresse = ""
-    creancier = "Le locateur"
-    immeuble_id = None
-    immeuble_nom = None
-    if bail is not None:
-        lg = await db.get(Logement, bail.logement_id)
-        im = await db.get(Immeuble, lg.immeuble_id) if lg else None
-        if im is not None:
-            immeuble_id = im.id
-            immeuble_nom = im.name
-            adresse = f"{im.address}{', app. ' + lg.numero if lg else ''}"
-            ownership = (
-                await db.execute(
-                    select(ImmeubleOwnership)
-                    .where(ImmeubleOwnership.immeuble_id == im.id)
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if ownership is not None:
-                ent = await db.get(Entreprise, ownership.entreprise_id)
-                if ent is not None:
-                    creancier = ent.name
-    return {
-        "locataire": loc,
-        "loyer": loyer,
-        "adresse": adresse,
-        "creancier": creancier,
-        "bail_id": bail.id if bail is not None else None,
-        "immeuble_id": immeuble_id,
-        "immeuble_nom": immeuble_nom,
-    }
-
-
-@router.get("/locataires/{locataire_id}/dpa/pdf")
-async def dpa_pdf(
-    locataire_id: int, db: DBSession, user: CurrentUser
-) -> Response:
-    """Formulaire d'accord DPA prérempli (PDF) — à faire remplir et
-    signer par le locataire (renseignements bancaires + spécimen)."""
-    _require_volet(user)
-    from app.services.dpa_form import generate_dpa_pdf
-
-    ctx = await _dpa_contexte(db, locataire_id)
-    pdf = generate_dpa_pdf(
-        locataire_nom=ctx["locataire"].full_name,
-        logement_adresse=ctx["adresse"],
-        creancier_nom=ctx["creancier"],
-        loyer_mensuel=ctx["loyer"],
-    )
-    return Response(
-        content=pdf,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="accord-dpa-{locataire_id}.pdf"'
-            )
-        },
-    )
-
-
-class DpaEnvoiResult(BaseModel):
-    courriel_envoye: bool
-    destinataire: Optional[str] = None
-
-
-@router.post(
-    "/locataires/{locataire_id}/dpa/envoyer",
-    response_model=DpaEnvoiResult,
-)
-async def dpa_envoyer(
-    locataire_id: int, db: DBSession, user: CurrentUser
-) -> DpaEnvoiResult:
-    """Envoi MANUEL de la documentation DPA au locataire (bouton —
-    rien d'automatique) : courriel + formulaire d'accord PDF en pièce
-    jointe. Le statut passe à « documentation envoyée »."""
-    _require_volet(user)
-    from app.integrations.email_graph import EmailAttachment
-    from app.services.dpa_form import generate_dpa_pdf
-    from app.services.locatif_mail import (
-        EnvoiLocataireError,
-        envoyer_au_locataire,
-    )
-
-    ctx = await _dpa_contexte(db, locataire_id)
-    loc = ctx["locataire"]
-    if not (loc.email or "").strip():
-        raise HTTPException(
-            status_code=422,
-            detail="Le locataire n'a pas de courriel — ajoute-le d'abord.",
-        )
-
-    pdf = generate_dpa_pdf(
-        locataire_nom=loc.full_name,
-        logement_adresse=ctx["adresse"],
-        creancier_nom=ctx["creancier"],
-        loyer_mensuel=ctx["loyer"],
-    )
-    body_html = f"""
-    <p>Bonjour {loc.full_name},</p>
-    <p>Pour simplifier le paiement de votre loyer, nous vous proposons le
-    <b>prélèvement bancaire préautorisé (DPA)</b> : le loyer est prélevé
-    automatiquement de votre compte chaque mois — plus de chèque ni de
-    virement à penser.</p>
-    <p>Pour y adhérer :</p>
-    <ol>
-      <li>Remplissez et signez le formulaire ci-joint
-      (« Accord de débit préautorisé ») ;</li>
-      <li>Joignez un spécimen de chèque portant la mention « ANNULÉ » ;</li>
-      <li>Retournez le tout en répondant à ce courriel.</li>
-    </ol>
-    <p>Vous pouvez annuler cette autorisation en tout temps avec un
-    préavis écrit de 30 jours. Vos droits d'annulation et de
-    remboursement sont détaillés dans le formulaire (www.paiements.ca).</p>
-    <p>Cordialement,<br/>{ctx["creancier"]}</p>
-    """.strip()
-    # Le corps demande au locataire de RETOURNER le formulaire signé « en
-    # répondant à ce courriel » : le reply-to doit donc pointer sur le
-    # gestionnaire (profil d'expéditeur), pas sur la boîte générique.
-    try:
-        await envoyer_au_locataire(
-            db,
-            destinataires=[loc.email],
-            sujet="Paiement du loyer par prélèvement préautorisé (DPA)",
-            corps_html=body_html,
-            type_envoi="dpa",
-            locataire_id=loc.id,
-            locataire_nom=loc.full_name,
-            bail_id=ctx.get("bail_id"),
-            immeuble_id=ctx.get("immeuble_id"),
-            immeuble_nom=ctx.get("immeuble_nom"),
-            auteur_email=user.email,
-            resume_fiche=(
-                "Documentation DPA envoyée (formulaire d'accord de débit "
-                "préautorisé en pièce jointe)."
-            ),
-            attachments=[
-                EmailAttachment(
-                    name="accord-dpa.pdf",
-                    content_bytes=pdf,
-                    content_type="application/pdf",
-                )
-            ],
-        )
-    except EnvoiLocataireError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=502, detail=f"Envoi du courriel échoué : {exc}"
-        )
-
-    loc.dpa_statut = "envoye"
-    loc.dpa_envoye_le = _now().date()
-    loc.updated_at = _now()
-
-    # Conserve le PDF envoyé dans la bibliothèque de documents.
-    try:
-        from app.api.v1.endpoints.immobilier_documents import save_document
-
-        doc = await save_document(
-            db,
-            bail_id=None,
-            locataire_id=loc.id,
-            immeuble_id=None,
-            doc_type="dpa",
-            titre="Accord de débit préautorisé (DPA)",
-            params=None,
-            pdf=pdf,
-            created_by_email=user.email,
-        )
-        doc.envoye_le = _now()
-        doc.envoye_a = loc.email
-    except Exception:  # noqa: BLE001 — l'envoi prime sur l'archivage
-        pass
-
-    await db.commit()
-    return DpaEnvoiResult(courriel_envoye=True, destinataire=loc.email)
+# ─── Prélèvement préautorisé ───────────────────────────────────────────
+# Retiré le 2026-08-19 : la documentation DPA « maison » (formulaire
+# d'accord + envoi manuel + suivi de statut) ne collectait rien — elle
+# ne faisait que de la paperasse. La perception réelle passera par
+# Rotessa, qui recueille lui-même l'autorisation et les coordonnées
+# bancaires (décision Phil et ses partenaires, 2026-08-19). Laisser une
+# demi-fonctionnalité en place aurait fait croire à un prélèvement qui
+# n'existe pas. Les colonnes dpa_* du modèle restent, inertes.
 
 
 def _fmt_money_pdf(n) -> str:

@@ -485,7 +485,7 @@ api_router.include_router(
 api_router.include_router(
     immobilier_import_excel.router, dependencies=DEP_IMMOBILIER
 )
-# Documents locatifs conservés (avis TAL, trousse, DPA) + envoi signature.
+# Documents locatifs conservés (avis TAL, trousse) + envoi signature.
 api_router.include_router(
     immobilier_documents.router, dependencies=DEP_IMMOBILIER
 )

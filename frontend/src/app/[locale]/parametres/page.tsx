@@ -224,7 +224,7 @@ const SECTIONS: Section[] = [
       },
       {
         title: "Modèles de documents (locatif)",
-        desc: "Trousse bail, avis TAL, DPA… — aperçu de chaque modèle et où les générer.",
+        desc: "Trousse bail, avis TAL… — aperçu de chaque modèle et où les générer.",
         href: "/immobilier/modeles-documents",
         icon: FileSignature,
         minRole: "manager"

@@ -1,4 +1,4 @@
-"""Documents locatifs conservés (avis TAL, trousse bail, DPA…).
+"""Documents locatifs conservés (avis TAL, trousse bail…).
 
     GET    /immobilier/baux/{bail_id}/documents
     GET    /immobilier/locataires/{locataire_id}/documents
@@ -6,7 +6,7 @@
     DELETE /immobilier/documents/{id}
     POST   /immobilier/documents/{id}/envoyer-signature
 
-Chaque génération (Générer ▾ / envoi DPA) enregistre le PDF + ses
+Chaque génération (Générer ▾) enregistre le PDF + ses
 paramètres dans ``imm_documents`` ; l'envoi pour signature crée un lien
 public tokenisé /document/{token} (page publique + preuve d'ouverture +
 signature — voir public_document.py).
@@ -131,7 +131,7 @@ async def save_document(
     created_by_email: Optional[str],
 ) -> ImmDocument:
     """Enregistre un document généré (appelé par les endpoints de
-    génération — extras TAL, DPA). Flush seulement : le commit appartient
+    génération — extras TAL). Flush seulement : le commit appartient
     à l'appelant."""
     obj = ImmDocument(
         bail_id=bail_id,
