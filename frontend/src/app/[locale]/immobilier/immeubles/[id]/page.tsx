@@ -2700,14 +2700,32 @@ function BauxTab({
                           </>
                         ) : (
                           <>
-                            <button
-                              type="button"
-                              onClick={() => setCreerFor(r)}
-                              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
-                            >
-                              <Plus className="h-3 w-3" /> Créer un
-                              nouveau bail
-                            </button>
+                            {/* Un logement en RELOCATION se suit dans
+                                Locations : créer un bail ici
+                                fabriquerait un deuxième chemin qui
+                                contourne le dossier et son garde-fou
+                                d'import (retour Phil 2026-08-19). */}
+                            {r.dossier_id != null ? (
+                              <Link
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                href={
+                                  `/immobilier/locations?focus=${r.dossier_id}` as any
+                                }
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/40 bg-violet-500/10 px-2.5 py-1 text-xs font-semibold text-violet-200 transition hover:bg-violet-500/20"
+                                title="Ce logement est en relocation — le bail se crée et s'importe depuis le dossier"
+                              >
+                                Suivre dans Locations →
+                              </Link>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setCreerFor(r)}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
+                              >
+                                <Plus className="h-3 w-3" /> Créer un
+                                nouveau bail
+                              </button>
+                            )}
                             {r.prochain_bail_id != null ? (
                               <BailDocActions
                                 bailId={r.prochain_bail_id}
