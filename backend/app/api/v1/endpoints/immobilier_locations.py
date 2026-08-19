@@ -607,11 +607,22 @@ async def update_dossier(
     if data.get("statut") == LocationDossierStatut.RELOUE.value:
         if obj.nouveau_bail_id is not None:
             nb = await db.get(Bail, obj.nouveau_bail_id)
-            if nb is not None and nb.document_id is None:
+            # Le blocage reste la réponse PAR DÉFAUT : dans la
+            # quasi-totalité des cas, un bail sans document est un
+            # oubli. Mais il se franchit — en déclarant une exception
+            # motivée (POST /baux/{id}/exception-document), qui reste
+            # signée et datée.
+            if (
+                nb is not None
+                and nb.document_id is None
+                and not (nb.sans_document_motif or "").strip()
+            ):
                 raise HTTPException(
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
                     "Importe d'abord le bail signé — le dossier "
-                    "passera à « Reloué » automatiquement.",
+                    "passera à « Reloué » automatiquement. S'il n'y a "
+                    "vraiment aucun bail à joindre, déclare une "
+                    "exception motivée.",
                 )
         if obj.reloue_le is None:
             obj.reloue_le = _now().date()
