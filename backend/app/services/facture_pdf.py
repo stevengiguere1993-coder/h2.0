@@ -109,6 +109,20 @@ def _money(n: Optional[float | int]) -> str:
     return f"{float(n):,.2f} $".replace(",", " ")
 
 
+def _format_phone(raw: Optional[str]) -> str:
+    """Téléphone lisible « (450) 601-2875 » — même règle que le
+    frontend (formatPhone) : on retire le +1 / la ponctuation et on
+    formate les 10 chiffres locaux. Format inconnu → tel quel."""
+    if not raw:
+        return ""
+    digits = "".join(c for c in raw if c.isdigit())
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) != 10:
+        return raw
+    return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+
+
 def _date(d: Optional[datetime | date]) -> str:
     if d is None:
         return "—"
@@ -593,7 +607,7 @@ def _render_bytes(
     if client is not None:
         lines = [f"<b>{client.name}</b>"]
         if client.address: lines.append(client.address)
-        if client.phone: lines.append(client.phone)
+        if client.phone: lines.append(_format_phone(client.phone))
         if client.email: lines.append(client.email)
     else:
         lines = ["<b>Client</b>"]
@@ -1042,8 +1056,6 @@ def _render_statement_bytes(statement: Statement) -> bytes:
             "title": "ÉTAT DE COMPTE",
             "issued": "Émis le",
             "client": "CLIENT",
-            "project": "Projet :",
-            "quote": "Soumission :",
             "work_site": "LIEU DES TRAVAUX",
             "h_date": "Date",
             "h_desc": "Description",
@@ -1063,8 +1075,6 @@ def _render_statement_bytes(statement: Statement) -> bytes:
             "title": "ACCOUNT STATEMENT",
             "issued": "Issued on",
             "client": "CLIENT",
-            "project": "Project:",
-            "quote": "Quote:",
             "work_site": "WORK SITE",
             "h_date": "Date",
             "h_desc": "Description",
@@ -1130,13 +1140,9 @@ def _render_statement_bytes(statement: Statement) -> bytes:
     if statement.client_address:
         info.append(statement.client_address)
     if statement.client_phone:
-        info.append(statement.client_phone)
+        info.append(_format_phone(statement.client_phone))
     if statement.client_email:
         info.append(statement.client_email)
-    if statement.project_name:
-        info.append(f"{tr['project']} {statement.project_name}")
-    if statement.soumission_reference:
-        info.append(f"{tr['quote']} {statement.soumission_reference}")
     if info:
         client_cell: list = [Paragraph(tr["client"], s["accent"])]
         client_cell.extend(Paragraph(line, s["body"]) for line in info)
