@@ -476,10 +476,27 @@ async def envoyer(
                 status_code=422,
                 detail="Message libre : sujet et corps obligatoires.",
             )
-    if payload.type == "avis_acces" and payload.acces_date is None:
-        raise HTTPException(
-            status_code=422, detail="Avis d'accès : indique la date."
-        )
+    if payload.type == "avis_acces":
+        # Le motif et la plage horaire sont EXIGÉS par la loi (art. 1932
+        # et 1933 C.c.Q. : l'avis doit préciser le moment et la raison)
+        # — un avis sans eux ne vaut rien devant le TAL, et le gabarit
+        # écrirait « Motif : — ». Retour Phil 2026-08-19.
+        manque = []
+        if payload.acces_date is None:
+            manque.append("la date")
+        if not (payload.acces_plage or "").strip():
+            manque.append("la plage horaire")
+        if not (payload.acces_motif or "").strip():
+            manque.append("le motif")
+        if manque:
+            liste = (
+                manque[0] if len(manque) == 1
+                else ", ".join(manque[:-1]) + " et " + manque[-1]
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=f"Avis d'accès : indique {liste}.",
+            )
 
     cibles = await _resoudre_destinataires(
         db,

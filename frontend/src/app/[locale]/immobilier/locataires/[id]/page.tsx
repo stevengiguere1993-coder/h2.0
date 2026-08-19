@@ -263,6 +263,35 @@ export default function LocataireDetailPage({
   // Assurance locataire — confirmation annuelle (retour Steven 2026-07-20).
   // Passe par les endpoints dédiés pour que chaque confirmation/demande
   // soit JOURNALISÉE (historique visible plus bas — retour 2026-07-22).
+  //: Demande de preuve d'assurance — MÊME endpoint que la page des
+  //: suivis annuels, donc même profil d'expéditeur et mêmes traces.
+  //: Retour Phil 2026-08-19 : on pouvait confirmer depuis la fiche,
+  //: mais pas demander — il fallait aller ailleurs pour le geste le
+  //: plus courant.
+  const [assurApercu, setAssurApercu] = useState(false);
+
+  async function assuranceDemander() {
+    setActionBusy(true);
+    setActionMsg(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/locataires/${locataireId}/assurance/demande`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      setAssurApercu(false);
+      setActionMsg(`Demande de preuve d'assurance envoyée à ${loc?.email}.`);
+      await loadDossier();
+    } catch (e) {
+      setActionMsg((e as Error).message);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
   async function assuranceConfirmer(clear = false) {
     setActionBusy(true);
     try {
@@ -1526,6 +1555,36 @@ export default function LocataireDetailPage({
                 renouvellement du bail, c&apos;est le bon moment.
               </p>
               <div className="flex flex-wrap items-center gap-2">
+                {assurApercu ? (
+                  <ApercuEnvoiModal
+                    titre="Demande de preuve d'assurance"
+                    description={
+                      "Un courriel demandant la preuve d'assurance " +
+                      "habitation à jour pour son logement. Rien " +
+                      "d'autre ne part — et rien n'est envoyé " +
+                      "automatiquement."
+                    }
+                    destinataireNom={loc.full_name || "Locataire"}
+                    destinataireEmail={loc.email}
+                    libelleEnvoi="Envoyer la demande"
+                    busy={actionBusy}
+                    onAnnuler={() => setAssurApercu(false)}
+                    onConfirmer={() => void assuranceDemander()}
+                  />
+                ) : null}
+                <button
+                  type="button"
+                  disabled={actionBusy || !(loc.email || "").trim()}
+                  onClick={() => setAssurApercu(true)}
+                  title={
+                    (loc.email || "").trim()
+                      ? "Demander la preuve d'assurance par courriel"
+                      : "Ajoute d'abord le courriel du locataire"
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1.5 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+                >
+                  <Mail className="h-3.5 w-3.5" /> Demander la preuve
+                </button>
                 <button
                   type="button"
                   disabled={actionBusy}

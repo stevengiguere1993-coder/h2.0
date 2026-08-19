@@ -22,8 +22,16 @@
  */
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, Loader2, Mail, Send, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ExternalLink,
+  Loader2,
+  Mail,
+  Send,
+  X
+} from "lucide-react";
 
+import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 
 type Expediteur = {
@@ -154,10 +162,23 @@ export function ApercuEnvoiModal({
             </p>
           ) : null}
 
-          <p className="text-[11px] text-white/40">
-            L&apos;envoi sera tracé dans Communications et sur la fiche du
-            locataire.
-          </p>
+          <div className="space-y-1.5">
+            <p className="text-[11px] text-white/40">
+              L&apos;envoi sera tracé dans Communications et sur la fiche du
+              locataire.
+            </p>
+            {/* L'expéditeur ne se change pas ici : il vient du profil
+                configuré. Pour en changer, ou pour composer un envoi
+                groupé, c'est la page Communications — d'où ce raccourci
+                plutôt qu'un champ modifiable (retour Phil 2026-08-19). */}
+            <Link
+              href={"/immobilier/communications" as never}
+              className="inline-flex items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] font-semibold text-amber-200 transition hover:bg-amber-500/20"
+            >
+              <ExternalLink className="h-3 w-3" />
+              Ouvrir la page Communications
+            </Link>
+          </div>
         </div>
 
         <div className="flex justify-end gap-2 border-t border-brand-800 px-5 py-3">

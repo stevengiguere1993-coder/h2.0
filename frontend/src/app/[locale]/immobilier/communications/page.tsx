@@ -585,6 +585,13 @@ export default function CommunicationsPage() {
     }
   };
 
+  //: Un avis d'accès sans date, sans plage ou sans motif ne vaut
+  //: rien devant le TAL — on bloque l'envoi plutôt que de laisser
+  //: partir un avis inopposable (retour Phil 2026-08-19).
+  const accesIncomplet =
+    type === "avis_acces" &&
+    (!accesDate.trim() || !accesPlage.trim() || !accesMotif.trim());
+
   return (
     <>
       <ImmobilierTopbar
@@ -914,7 +921,7 @@ export default function CommunicationsPage() {
                 </div>
                 <div>
                   <label className="text-xs font-medium text-white/60">
-                    Plage horaire
+                    Plage horaire *
                   </label>
                   <input
                     value={accesPlage}
@@ -925,7 +932,7 @@ export default function CommunicationsPage() {
                 </div>
                 <div>
                   <label className="text-xs font-medium text-white/60">
-                    Motif
+                    Motif *
                   </label>
                   <input
                     value={accesMotif}
@@ -1067,7 +1074,14 @@ export default function CommunicationsPage() {
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <button
               className="btn-accent btn-sm"
-              disabled={sending || effectifs.length === 0}
+              disabled={
+                sending || effectifs.length === 0 || accesIncomplet
+              }
+              title={
+                accesIncomplet
+                  ? "Avis d'accès : la date, la plage horaire et le motif sont obligatoires (art. 1932-1933 C.c.Q.)"
+                  : undefined
+              }
               onClick={() => void envoyer()}
             >
               {sending ? (
