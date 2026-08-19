@@ -370,14 +370,37 @@ export default function SignDocumentPage() {
         data.refus_possible &&
         !data.choix_requis ? (
           <section className="mt-6 rounded-xl border border-rose-500/30 bg-rose-500/5 p-6">
-            <h2 className="text-base font-semibold text-white">
-              Vous refusez la modification ?
-            </h2>
-            <p className="mt-1 text-sm text-white/70">
-              Vous disposez d&apos;un (1) mois après la réception de
-              l&apos;avis pour répondre. Sans réponse dans ce délai,
-              vous serez réputé avoir accepté les modifications.
-            </p>
+            {/* Le refus ne veut pas dire la même chose selon le
+                document : un avis de modification a un délai légal et
+                une présomption d'acceptation, un consentement se
+                décline simplement. Servir le texte de l'avis à
+                quelqu'un qui décline un consentement serait faux et
+                inquiétant (2026-08-19). */}
+            {data.type === "avis_modification" ? (
+              <>
+                <h2 className="text-base font-semibold text-white">
+                  Vous refusez la modification ?
+                </h2>
+                <p className="mt-1 text-sm text-white/70">
+                  Vous disposez d&apos;un (1) mois après la réception de
+                  l&apos;avis pour répondre. Sans réponse dans ce délai,
+                  vous serez réputé avoir accepté les modifications.
+                </p>
+              </>
+            ) : (
+              <>
+                <h2 className="text-base font-semibold text-white">
+                  Vous préférez refuser ?
+                </h2>
+                <p className="mt-1 text-sm text-white/70">
+                  Vous n&apos;êtes pas obligé de signer. Si vous
+                  refusez, nous continuerons de vous transmettre les
+                  documents relatifs à votre bail par la poste. Votre
+                  refus est enregistré et vous pouvez changer
+                  d&apos;idée en nous écrivant.
+                </p>
+              </>
+            )}
             <div className="mt-4">
               <label htmlFor="refus_motif" className="text-xs text-white/70">
                 Motif (optionnel)

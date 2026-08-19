@@ -147,6 +147,9 @@ async def ensure_critical_columns() -> None:
         # (audit 2026-08-19). Sans elle, GET /immobilier/communications
         # plante sur une base créée avant l'ajout.
         ("imm_communications", "document_id", "INTEGER"),
+        # Refus d'un document signable (consentement notamment).
+        ("imm_documents", "refuse_le", "TIMESTAMP WITH TIME ZONE"),
+        ("imm_documents", "refuse_par", "VARCHAR(255)"),
         # Exception « bail sans document » (audit 2026-08-19) : sans
         # ces colonnes, la page Baux et le bandeau plantent.
         # Depot de garantie : date de reception et detenteur

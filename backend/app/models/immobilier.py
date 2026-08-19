@@ -1213,6 +1213,18 @@ class ImmDocument(Base, TimestampUpdateMixin):
     signature_image = deferred(
         mapped_column(LargeBinary, nullable=True)
     )
+    #: REFUS du locataire. Jusqu'au 2026-08-19, seul un avis de
+    #: modification pouvait être refusé (via son cycle de
+    #: renouvellement) : un locataire à qui on demandait son
+    #: consentement aux communications électroniques n'avait aucun
+    #: moyen de dire non — alors que c'est précisément un consentement,
+    #: donc refusable par nature. Colonnes additives.
+    refuse_le: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    refuse_par: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
     signature_image_content_type: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
     )
