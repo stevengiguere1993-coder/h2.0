@@ -791,9 +791,11 @@ export default function FactureDetailPage() {
   async function sendStatement() {
     if (!f?.project_id) return;
     if (
-      !(await confirm(
-        "Envoyer l'état de compte du projet au client par courriel ?"
-      ))
+      !(await confirm({
+        title: "Envoyer l'état de compte du projet au client par courriel ?",
+        confirmLabel: "Envoyer",
+        success: true
+      }))
     )
       return;
     setStmtSendBusy(true);
