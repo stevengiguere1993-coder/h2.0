@@ -4389,6 +4389,24 @@ async def _twilio_incoming_sms_impl(request: Request, db: DBSession) -> Response
                     href=href,
                 )
             )
+        # PUSH téléphone (PWA installée) — sans ça la notif d'un texto
+        # n'existait que dans la cloche de l'app : personne n'était
+        # averti sur son appareil (les appels, eux, poussaient déjà).
+        # tag par expéditeur → plusieurs SMS du même numéro se
+        # remplacent au lieu de s'empiler. Best-effort.
+        try:
+            from app.integrations.webpush import push_to_users
+
+            await push_to_users(
+                db,
+                user_ids=list(user_ids),
+                title=f"SMS de {identified.name or from_e164}",
+                body=preview or "(MMS sans texte)",
+                href=href,
+                tag=f"sms-{from_e164}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("SMS push failed: %s", exc)
     except Exception as exc:  # noqa: BLE001
         log.warning("SMS notification failed: %s", exc)
 

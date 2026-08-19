@@ -10,7 +10,7 @@
  *   in the background when the network returns.
  */
 
-const VERSION = "hsi-v6";
+const VERSION = "hsi-v7";
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const SHELL_CACHE = `${VERSION}-shell`;
 
@@ -167,7 +167,22 @@ self.addEventListener("push", (event) => {
     renotify: true,
     data: { href: data.href || "/" }
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    (async () => {
+      await self.registration.showNotification(title, options);
+      // Pastille sur l'icône de l'app installée (Badging API —
+      // iOS 16.4+ écran d'accueil, Android/Chrome). Sans compteur
+      // fiable côté SW, on pose la marque générique ; elle est
+      // effacée à l'ouverture de l'app ou au clic sur la notif.
+      try {
+        if (self.navigator && self.navigator.setAppBadge) {
+          await self.navigator.setAppBadge();
+        }
+      } catch {
+        /* Badging non supporté — la notification suffit. */
+      }
+    })()
+  );
 });
 
 // Clic sur une notification → focus une fenêtre Horizon existante OU
@@ -177,6 +192,13 @@ self.addEventListener("notificationclick", (event) => {
   const targetHref = (event.notification.data && event.notification.data.href) || "/";
   event.waitUntil(
     (async () => {
+      try {
+        if (self.navigator && self.navigator.clearAppBadge) {
+          await self.navigator.clearAppBadge();
+        }
+      } catch {
+        /* ignore */
+      }
       const all = await self.clients.matchAll({
         type: "window",
         includeUncontrolled: true

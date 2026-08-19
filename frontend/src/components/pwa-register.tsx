@@ -22,6 +22,24 @@ export function PwaRegister() {
   const [showIosHint, setShowIosHint] = useState(false);
   const [installed, setInstalled] = useState(false);
 
+  // Efface la pastille de l'icône (posée par le SW à la réception d'un
+  // push) dès que l'app est ouverte ou revient au premier plan.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const nav = navigator as Navigator & {
+      clearAppBadge?: () => Promise<void>;
+    };
+    const clearBadge = () => {
+      nav.clearAppBadge?.().catch(() => undefined);
+    };
+    clearBadge();
+    const onVis = () => {
+      if (document.visibilityState === "visible") clearBadge();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     if ("serviceWorker" in navigator) {
