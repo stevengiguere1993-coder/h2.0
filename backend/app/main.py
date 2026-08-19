@@ -188,6 +188,27 @@ async def _run_startup_tasks() -> None:
             "backfill annulation reactivations failed: %s", exc
         )
 
+    # Le statut d'un logement est DÉRIVÉ de ses baux mais STOCKÉ : il se
+    # périme dès qu'une transition oublie de le recalculer. Constat du
+    # 2026-08-19 — un logement affichait « réservé » alors que le bail
+    # proposé qui le réservait avait une date de début passée et que le
+    # candidat avait été retiré. Ce recalage global est le filet ; il ne
+    # dispense pas d'appeler recaler_statut_logement au bon moment.
+    try:
+        from app.db.session import AsyncSessionLocal as _StatutSession
+        from app.services.locatif_depart import (
+            recaler_tous_les_statuts_logements,
+        )
+
+        async with _StatutSession() as session:
+            n = await recaler_tous_les_statuts_logements(session)
+            if n:
+                logger.info(
+                    "Startup backfill: %d statut(s) de logement recalé(s)", n
+                )
+    except Exception as exc:
+        logger.warning("backfill statuts logements failed: %s", exc)
+
     # Tables Feuille de temps (Gestion d'entreprise) — transaction isolée.
     try:
         await ensure_timesheet_tables()

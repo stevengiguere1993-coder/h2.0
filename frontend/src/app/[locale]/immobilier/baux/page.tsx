@@ -36,6 +36,7 @@ import { BandeauBailManquant } from "@/components/immobilier/bandeau-bail-manqua
 import { BailDocActions } from "@/components/immobilier/tal-avis";
 import {
   CreerBailModal,
+  AnnulerDepartModal,
   FinBailModal,
   JourEcheanceInline,
   RelocationStatutPastille,
@@ -66,6 +67,11 @@ export default function BauxPage() {
   const [fImmeuble, setFImmeuble] = useState("");
   const [search, setSearch] = useState("");
   const [finBailFor, setFinBailFor] = useState<Row | null>(null);
+  //: Ligne dont on s'apprête à ANNULER le départ (l'inverse de
+  //: « mettre fin au bail », proposé quand le départ est acté).
+  const [annulerDepartFor, setAnnulerDepartFor] = useState<Row | null>(
+    null
+  );
   const [creerFor, setCreerFor] = useState<Row | null>(null);
 
   const load = useCallback(async () => {
@@ -457,7 +463,23 @@ export default function BauxPage() {
                                         Avis
                                       </button>
                                     ) : null}
-                                    {!r.resiliation_en_cours ? (
+                                    {r.resiliation_en_cours ? null : r
+                                        .dossier_id != null ? (
+                                      // Départ déjà acté : « Mettre fin
+                                      // au bail » n'a plus d'effet et
+                                      // laisse croire à une action. Le
+                                      // geste utile ici, c'est l'inverse
+                                      // — le locataire a changé d'idée
+                                      // (retour Phil 2026-08-19).
+                                      <button
+                                        type="button"
+                                        onClick={() => setAnnulerDepartFor(r)}
+                                        className="inline-flex items-center rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-300 transition hover:bg-amber-500/20"
+                                        title="Le départ est déjà confirmé — annuler le départ si le locataire reste"
+                                      >
+                                        Annuler le départ
+                                      </button>
+                                    ) : (
                                       <button
                                         type="button"
                                         onClick={() => setFinBailFor(r)}
@@ -465,7 +487,7 @@ export default function BauxPage() {
                                       >
                                         Mettre fin au bail
                                       </button>
-                                    ) : null}
+                                    )}
                                   </>
                                 }
                                 onChanged={() => void load()}
@@ -523,6 +545,16 @@ export default function BauxPage() {
         </p>
       </div>
 
+      {annulerDepartFor ? (
+        <AnnulerDepartModal
+          row={annulerDepartFor}
+          onClose={() => setAnnulerDepartFor(null)}
+          onDone={() => {
+            setAnnulerDepartFor(null);
+            void load();
+          }}
+        />
+      ) : null}
       {finBailFor && finBailFor.bail_id != null ? (
         <FinBailModal
           bailId={finBailFor.bail_id}

@@ -19,6 +19,7 @@ from app.models.immobilier import (
     Bail,
     BailRenouvellement,
     BailStatus,
+    LocationDossierStatut,
     Evaluation,
     EvaluationKind,
     Hypotheque,
@@ -1041,6 +1042,102 @@ async def _envoyer_entente_resiliation(db, bail, date_fin: date, user) -> bool:
         user=user,
     )
     return True
+
+
+class AnnulerDepartResult(BaseModel):
+    bail_id: int
+    dossier_annule_id: Optional[int] = None
+    bail_reactive: bool = False
+    logement_statut: Optional[str] = None
+
+
+@router.post(
+    "/baux/{bail_id}/annuler-depart", response_model=AnnulerDepartResult
+)
+async def annuler_depart(
+    bail_id: int, db: DBSession, user: CurrentUser
+) -> AnnulerDepartResult:
+    """Annule un DÉPART confirmé : le locataire reste.
+
+    Retour Phil 2026-08-19 : sur un bail dont le départ est déjà acté,
+    « Mettre fin au bail » restait proposé — geste sans effet qui laisse
+    croire à une action. L'action utile à ce moment-là est l'INVERSE :
+    revenir en arrière parce que le locataire a changé d'idée.
+
+    Garde-fou : dès qu'un CANDIDAT est retenu pour la suite, annuler
+    n'est plus anodin — on aurait deux locataires sur le même logement.
+    Le refus est explicite et dit quoi faire (repasser le dossier de
+    relocation à « annulé » depuis la page Locations, ce qui oblige à
+    régler d'abord le sort du candidat).
+    """
+    _require_volet(user)
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        raise HTTPException(status_code=404, detail="Bail introuvable.")
+
+    from app.services.locatif_depart import (
+        dossier_relocation_actif,
+        recaler_statut_logement,
+    )
+
+    dossier = await dossier_relocation_actif(db, bail.logement_id)
+    if dossier is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Aucun départ en cours sur ce logement.",
+        )
+
+    engages = (
+        LocationDossierStatut.CANDIDAT_RETENU.value,
+        LocationDossierStatut.BAIL_A_ENVOYER.value,
+        LocationDossierStatut.BAIL_ENVOYE.value,
+    )
+    if dossier.statut in engages or dossier.nouveau_bail_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Un candidat est déjà retenu pour ce logement — annuler "
+                "le départ mettrait deux locataires sur la même unité. "
+                "Règle d'abord le sort du candidat dans la page "
+                "Locations, puis annule le dossier de relocation."
+            ),
+        )
+
+    dossier.statut = LocationDossierStatut.ANNULE.value
+    dossier.updated_at = datetime.now(timezone.utc)
+    note = (dossier.notes or "").strip()
+    marque = (
+        f"Départ annulé le {datetime.now(timezone.utc).date().isoformat()} par "
+        f"{getattr(user, 'email', None) or 'un gestionnaire'} — le "
+        "locataire reste."
+    )
+    dossier.notes = (
+        (note + chr(10) + marque).strip() if note else marque
+    )
+
+    # Le bail a pu être fermé par la résiliation : on le rouvre.
+    reactive = False
+    if bail.status in (
+        BailStatus.RESILIE.value, BailStatus.TERMINE.value
+    ):
+        bail.status = BailStatus.ACTIF.value
+        bail.updated_at = datetime.now(timezone.utc)
+        reactive = True
+
+    await db.flush()
+    await recaler_statut_logement(db, bail.logement_id)
+    lg = await db.get(Logement, bail.logement_id)
+    await db.commit()
+    log.info(
+        "Départ annulé sur le bail %s (dossier %s) par %s",
+        bail_id, dossier.id, getattr(user, "email", None),
+    )
+    return AnnulerDepartResult(
+        bail_id=bail.id,
+        dossier_annule_id=dossier.id,
+        bail_reactive=reactive,
+        logement_statut=(lg.status if lg else None),
+    )
 
 
 @router.post("/baux/{bail_id}/resilier", response_model=ResilierResult)

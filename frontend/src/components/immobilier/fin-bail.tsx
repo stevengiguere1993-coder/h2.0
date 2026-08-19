@@ -837,3 +837,122 @@ export function CreerBailModal({
     </div>
   );
 }
+
+/**
+ * Annuler un DÉPART déjà confirmé — l'opération inverse de FinBailModal.
+ *
+ * Retour Phil 2026-08-19 : sur un bail dont le départ est acté, le
+ * bouton « Mettre fin au bail » restait proposé — un geste sans effet
+ * qui laisse croire à une action. Ce qui manque à ce moment-là, c'est
+ * le retour en arrière : le locataire a changé d'idée.
+ *
+ * Ce n'est pas anodin, d'où la liste explicite des conséquences avant
+ * de confirmer. Le serveur refuse en plus l'annulation dès qu'un
+ * candidat est retenu : on aurait deux locataires sur la même unité.
+ */
+export function AnnulerDepartModal({
+  row,
+  onClose,
+  onDone
+}: {
+  row: SuiviBailRow;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function annuler() {
+    if (row.bail_id == null) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${row.bail_id}/annuler-depart`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const t = await r.text();
+        let msg = t.slice(0, 400) || `HTTP ${r.status}`;
+        try {
+          const j = JSON.parse(t) as { detail?: string };
+          if (j.detail) msg = j.detail;
+        } catch {
+          /* réponse non JSON : on garde le texte brut */
+        }
+        throw new Error(msg);
+      }
+      onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="my-8 w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-amber-300">
+            Annuler le départ
+          </h2>
+          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="space-y-3 px-5 py-4 text-sm">
+          <p className="text-white/80">
+            Le départ de{" "}
+            <b className="text-white">
+              {row.locataire_nom || "ce locataire"}
+            </b>{" "}
+            ({row.immeuble_name} · {row.logement_numero}) a été confirmé.
+            Annuler signifie qu&apos;il <b className="text-white">reste</b>.
+          </p>
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-100/85">
+            <p className="mb-1.5 font-semibold">Ce qui va se passer :</p>
+            <ul className="list-inside list-disc space-y-1">
+              <li>le dossier de relocation passe à « annulé » ;</li>
+              <li>
+                si le bail avait été fermé, il redevient <b>actif</b> ;
+              </li>
+              <li>le logement redevient occupé.</li>
+            </ul>
+          </div>
+          <p className="text-[11px] text-white/45">
+            Si un candidat est déjà retenu pour ce logement,
+            l&apos;annulation sera refusée — il faut d&apos;abord régler
+            son sort dans la page Locations, sinon deux locataires se
+            retrouveraient sur la même unité.
+          </p>
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              {err}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex justify-end gap-2 border-t border-brand-800 px-5 py-3">
+          <button type="button" onClick={onClose} className="btn-secondary btn-sm">
+            Garder le départ
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void annuler()}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Oui, le locataire reste
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

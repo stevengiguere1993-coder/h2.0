@@ -892,3 +892,75 @@ async def terminer_baux_echus_avant(
             "suivant au %s", b.id, b.date_fin, date_debut,
         )
     return n
+
+
+async def recaler_tous_les_statuts_logements(db: AsyncSession) -> int:
+    """Recalcule le statut de TOUS les logements. Retourne le nombre
+    de corrections.
+
+    Le statut d'un logement est dérivé de ses baux — mais il est stocké,
+    donc il se périme dès qu'une transition oublie de le recalculer.
+    Constat du 2026-08-19 : un logement affichait « réservé » alors que
+    le bail proposé qui le réservait avait une date de début PASSÉE et
+    que le candidat avait été retiré. La règle donnait « vacant » ;
+    personne ne l'avait rejouée.
+
+    D'où ce recalage au démarrage : il coûte une requête par logement
+    (une centaine), il est idempotent, et il garantit qu'un statut
+    périmé ne survit pas au prochain déploiement. Ce n'est PAS une
+    excuse pour oublier l'appel au bon moment — c'est le filet.
+    """
+    ids = [
+        r[0]
+        for r in (
+            await db.execute(
+                select(Logement.id).where(
+                    Logement.status != LogementStatus.HORS_LOC.value
+                )
+            )
+        ).all()
+    ]
+    corriges = 0
+    for logement_id in ids:
+        lg = await db.get(Logement, logement_id)
+        if lg is None:
+            continue
+        avant = lg.status
+        await recaler_statut_logement(db, logement_id)
+        if lg.status != avant:
+            corriges += 1
+            log.info(
+                "Statut du logement %s recalé : %s → %s",
+                logement_id, avant, lg.status,
+            )
+    if corriges:
+        await db.commit()
+    return corriges
+
+
+async def libere_le(
+    db: AsyncSession, logement_id: int
+) -> Optional[date]:
+    """Date à laquelle le logement se libère, si un départ est ACTÉ.
+
+    Retour Phil 2026-08-19 : « le statut du logement ne devrait plus
+    être juste occupé mais comme occupé et le statut après le bail qui
+    va être vacant ». Un logement occupé dont le locataire part le 31
+    août n'est pas dans le même état qu'un logement occupé tout court —
+    et c'est cette différence qui permet de préparer la relocation.
+
+    ⚠️ Un bail qui arrive à échéance n'est PAS un départ : au Québec il
+    se reconduit tacitement. Seul un départ acté (dossier de relocation
+    ouvert) libère le logement. La date vient du dossier ; à défaut, de
+    la fin du bail qu'il vise.
+    """
+    dossier = await dossier_relocation_actif(db, logement_id)
+    if dossier is None:
+        return None
+    if dossier.date_depart is not None:
+        return dossier.date_depart
+    if dossier.bail_id is not None:
+        bail = await db.get(Bail, dossier.bail_id)
+        if bail is not None and bail.date_fin is not None:
+            return bail.date_fin
+    return None
