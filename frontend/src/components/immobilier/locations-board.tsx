@@ -481,6 +481,22 @@ export function LocationsBoard({
             setImportBailFor(null);
             void load();
           }}
+          onException={async (motif) => {
+            const bailId = importBailFor.nouveau_bail_id;
+            const dossierId = importBailFor.id;
+            const r = await authedFetch(
+              `/api/v1/immobilier/baux/${bailId}/exception-document`,
+              { method: "POST", body: JSON.stringify({ motif }) }
+            );
+            if (!r.ok) {
+              const t = await r.text();
+              throw new Error(t.slice(0, 240) || `HTTP ${r.status}`);
+            }
+            // L'exception levée, la transition passe le garde-fou.
+            await patchDossier(dossierId, { statut: "reloue" });
+            setImportBailFor(null);
+            void load();
+          }}
         />
       ) : null}
 
@@ -2002,16 +2018,38 @@ function PickDossierPourBailModal({
 function ImportBailSigneModal({
   d,
   onClose,
-  onDone
+  onDone,
+  onException
 }: {
   d: Dossier;
   onClose: () => void;
   onDone: () => void;
+  //: Déclare l'exception puis fait avancer le dossier — l'import, lui,
+  //: passe à « Reloué » tout seul côté serveur.
+  onException: (motif: string) => Promise<void>;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [dateEntree, setDateEntree] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  //: Volet EXCEPTION, replié par défaut : le bail reste la règle, on
+  //: ne met pas les deux chemins sur le même pied.
+  const [exception, setException] = useState(false);
+  const [motif, setMotif] = useState("");
+
+  async function declarer() {
+    const m = motif.trim();
+    if (m.length < 3) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await onException(m);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function importer() {
     if (!file || !d.nouveau_bail_id) return;
@@ -2106,6 +2144,61 @@ function ImportBailSigneModal({
               Importer — passe à « Reloué »
             </button>
           </div>
+
+          {/* Échappatoire ASSUMÉE : il existe de vrais cas sans bail à
+              joindre, et bloquer sec ferait perdre plus que ça protège.
+              Elle est repliée, coûte un motif écrit, et reste signée —
+              un oubli ne s'y glisse pas sans qu'on l'ait voulu. */}
+          {exception ? (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
+              <p className="mb-2 text-xs font-semibold text-amber-200">
+                ⚠️ Exception — aucun bail à joindre
+              </p>
+              <p className="mb-2 text-[11px] text-amber-100/70">
+                Le dossier passera à « Reloué » sans bail. Sans lui, tu
+                n&apos;as aucune preuve du loyer ni des conditions
+                convenues. Le motif ci-dessous reste au dossier, avec
+                ton nom et la date.
+              </p>
+              <input
+                type="text"
+                value={motif}
+                onChange={(e) => setMotif(e.target.value)}
+                maxLength={255}
+                placeholder="Pourquoi n'y a-t-il pas de bail ? (obligatoire)"
+                className={`${INPUT_CLS} w-full`}
+              />
+              <div className="mt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setException(false)}
+                  className="btn-ghost btn-xs"
+                >
+                  Revenir à l&apos;import
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || motif.trim().length < 3}
+                  onClick={() => void declarer()}
+                  className="btn-secondary btn-sm disabled:opacity-50"
+                >
+                  {busy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : null}
+                  Déclarer l&apos;exception et passer à « Reloué »
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setException(true)}
+              className="text-left text-[11px] text-white/40 underline decoration-dotted underline-offset-2 hover:text-white/70"
+            >
+              Il n&apos;y a vraiment aucun bail à joindre — déclarer une
+              exception
+            </button>
+          )}
         </div>
       </div>
     </div>

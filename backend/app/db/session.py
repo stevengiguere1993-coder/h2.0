@@ -147,6 +147,11 @@ async def ensure_critical_columns() -> None:
         # (audit 2026-08-19). Sans elle, GET /immobilier/communications
         # plante sur une base créée avant l'ajout.
         ("imm_communications", "document_id", "INTEGER"),
+        # Exception « bail sans document » (audit 2026-08-19) : sans
+        # ces colonnes, la page Baux et le bandeau plantent.
+        ("imm_baux", "sans_document_motif", "VARCHAR(255)"),
+        ("imm_baux", "sans_document_par", "VARCHAR(255)"),
+        ("imm_baux", "sans_document_le", "TIMESTAMP WITH TIME ZONE"),
         # Sans cette colonne, GET /api/v1/contact (pipeline construction)
         # plante → « Impossible de charger les prospects » (régression #785).
         ("contact_requests", "lost_reason", "VARCHAR(120)"),

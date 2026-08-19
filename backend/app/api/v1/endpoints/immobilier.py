@@ -4966,6 +4966,79 @@ async def relancer_loyer(
     return RelanceLoyerResult(niveau=niveau, destinataire=dest, mois=month_label)
 
 
+# ── Exception « aucun bail à joindre » ────────────────────────────────
+
+
+class ExceptionBailIn(BaseModel):
+    #: Pourquoi ce bail n'aura pas de document. Obligatoire : une
+    #: exception sans raison est un oubli déguisé.
+    motif: str = Field(..., min_length=3, max_length=255)
+
+
+class ExceptionBailOut(BaseModel):
+    bail_id: int
+    motif: Optional[str] = None
+    par: Optional[str] = None
+    le: Optional[datetime] = None
+
+
+@router.post(
+    "/baux/{bail_id}/exception-document", response_model=ExceptionBailOut
+)
+async def declarer_exception_bail(
+    bail_id: int, payload: ExceptionBailIn, db: DBSession, user: CurrentUser
+) -> ExceptionBailOut:
+    """Déclare qu'il n'y a AUCUN bail à joindre à ce dossier.
+
+    Le bail au dossier reste la règle : sans lui, aucune preuve du loyer
+    ni des conditions convenues. Mais il existe des cas réels sans
+    document — et bloquer sec ferait perdre plus qu'il ne protège
+    (retour Phil 2026-08-19). L'exception se déclare donc, avec un motif
+    obligatoire, et reste signée et datée : elle sort de la liste des
+    manquants sans disparaître du dossier.
+    """
+    _require_volet(user)
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bail introuvable.")
+    if bail.document_id is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Ce bail a déjà un document au dossier — aucune exception "
+            "n'est nécessaire.",
+        )
+    bail.sans_document_motif = payload.motif.strip()[:255]
+    bail.sans_document_par = getattr(user, "email", None)
+    bail.sans_document_le = _now()
+    await db.commit()
+    return ExceptionBailOut(
+        bail_id=bail.id,
+        motif=bail.sans_document_motif,
+        par=bail.sans_document_par,
+        le=bail.sans_document_le,
+    )
+
+
+@router.delete(
+    "/baux/{bail_id}/exception-document", response_model=ExceptionBailOut
+)
+async def retirer_exception_bail(
+    bail_id: int, db: DBSession, user: CurrentUser
+) -> ExceptionBailOut:
+    """Retire l'exception — le bail redevient « manquant » et
+    réapparaît dans l'alerte (ex. le document a finalement été
+    retrouvé, ou l'exception était une erreur)."""
+    _require_volet(user)
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bail introuvable.")
+    bail.sans_document_motif = None
+    bail.sans_document_par = None
+    bail.sans_document_le = None
+    await db.commit()
+    return ExceptionBailOut(bail_id=bail.id)
+
+
 # ── Baux sans bail au dossier ─────────────────────────────────────────
 
 
@@ -4978,11 +5051,20 @@ class BailSansDocRow(BaseModel):
     date_debut: date
     #: Jours écoulés depuis l'entrée — plus c'est vieux, plus ça presse.
     jours: int
+    #: Rempli seulement pour les exceptions assumées.
+    motif: Optional[str] = None
+    motif_par: Optional[str] = None
 
 
 class BailSansDocOverview(BaseModel):
     rows: List[BailSansDocRow]
     nb: int
+    #: Baux dont l'absence de document est ASSUMÉE. Ils sortent de la
+    #: liste actionnable — sinon l'alerte crie pour rien et on finit par
+    #: ne plus la lire — mais restent comptés, et leurs motifs sont
+    #: consultables.
+    nb_exceptions: int = 0
+    exceptions: List[BailSansDocRow] = []
 
 
 @router.get("/baux/sans-document", response_model=BailSansDocOverview)
@@ -5060,6 +5142,7 @@ async def baux_sans_document(
     loc_by_id = {lo.id: lo for lo in locs}
 
     rows: List[BailSansDocRow] = []
+    exceptions: List[BailSansDocRow] = []
     for b in baux:
         lg = log_by_id.get(b.logement_id)
         im = imm_by_id.get(lg.immeuble_id) if lg else None
@@ -5067,21 +5150,29 @@ async def baux_sans_document(
             continue
         lo = loc_by_id.get(b.locataire_id)
         debut = b.date_debut or today
-        rows.append(
-            BailSansDocRow(
-                bail_id=b.id,
-                immeuble=im.name,
-                immeuble_id=im.id,
-                logement=lg.numero or "—",
-                locataire=(lo.full_name if lo else "—"),
-                date_debut=debut,
-                jours=(today - debut).days,
-            )
+        motif = (b.sans_document_motif or "").strip() or None
+        ligne = BailSansDocRow(
+            bail_id=b.id,
+            immeuble=im.name,
+            immeuble_id=im.id,
+            logement=lg.numero or "—",
+            locataire=(lo.full_name if lo else "—"),
+            date_debut=debut,
+            jours=(today - debut).days,
+            motif=motif,
+            motif_par=b.sans_document_par if motif else None,
         )
+        (exceptions if motif else rows).append(ligne)
     # Le plus ancien d'abord : c'est celui qu'on risque de ne jamais
     # retrouver.
     rows.sort(key=lambda r: r.date_debut)
-    return BailSansDocOverview(rows=rows, nb=len(rows))
+    exceptions.sort(key=lambda r: r.date_debut)
+    return BailSansDocOverview(
+        rows=rows,
+        nb=len(rows),
+        nb_exceptions=len(exceptions),
+        exceptions=exceptions,
+    )
 
 
 # ── Échéances de bail (avis de renouvellement) ─────────────────────────

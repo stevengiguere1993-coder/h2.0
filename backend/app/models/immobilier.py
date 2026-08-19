@@ -694,6 +694,22 @@ class Bail(Base, TimestampUpdateMixin):
         Integer, nullable=True, index=True
     )
 
+    #: EXCEPTION déclarée : ce bail n'aura PAS de document au dossier,
+    #: et c'est assumé (retour Phil 2026-08-19 : « il pourrait y avoir
+    #: des situations exceptionnelles où il y en a pas, faudrait pas que
+    #: ce soit un frein à la création »). Le blocage reste la réponse
+    #: par défaut — dans la quasi-totalité des cas c'est un oubli — mais
+    #: il se franchit en déclarant un motif, qui reste signé et daté.
+    sans_document_motif: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    sans_document_par: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    sans_document_le: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Signature électronique du bail (lien tokenisé envoyé au locataire).
