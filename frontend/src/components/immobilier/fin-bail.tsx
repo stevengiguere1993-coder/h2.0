@@ -49,6 +49,8 @@ export type SuiviBailRow = {
   prochain_statut: string | null;
   dossier_id: number | null;
   dossier_statut: string | null;
+  /** Motif d'exception « aucun bail à joindre », s'il a été déclaré. */
+  sans_document_motif?: string | null;
   resiliation_en_cours: boolean;
   resiliation_date: string | null;
   /** Suivi de l'entente en attente de signature : une entente envoyée

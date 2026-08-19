@@ -4861,6 +4861,10 @@ class BailSansDocRow(BaseModel):
     bail_id: int
     immeuble: str
     immeuble_id: int
+    #: Cible du clic : c'est sur la fiche du LOGEMENT que le bail se
+    #: trouve et que son import se fait. Une alerte ne doit pas porter
+    #: l'action, elle doit y mener (règle Phil 2026-08-19).
+    logement_id: Optional[int] = None
     logement: str
     locataire: str
     date_debut: date
@@ -4970,6 +4974,7 @@ async def baux_sans_document(
             bail_id=b.id,
             immeuble=im.name,
             immeuble_id=im.id,
+            logement_id=lg.id,
             logement=lg.numero or "—",
             locataire=(lo.full_name if lo else "—"),
             date_debut=debut,

@@ -1182,6 +1182,10 @@ class SuiviBailRow(BaseModel):
     dossier_statut: Optional[str] = None
     # Entente de résiliation envoyée, en attente de signature → ligne
     # ROUGE sur la page Baux.
+    #: Motif d'EXCEPTION « aucun bail à joindre », s'il a été déclaré.
+    #: Sert au bouton d'exception, qui vit là où le bail vit — pas dans
+    #: l'alerte (règle Phil 2026-08-19).
+    sans_document_motif: Optional[str] = None
     resiliation_en_cours: bool = False
     #: SUIVI de l'entente de résiliation en attente (retour Phil
     #: 2026-08-19 : « si c'est pas signé il est pas encore mis fin »).
@@ -1384,6 +1388,9 @@ async def suivi_baux(
                     dossier_par_log[lg.id].statut
                     if lg.id in dossier_par_log
                     else None
+                ),
+                sans_document_motif=(
+                    getattr(b, "sans_document_motif", None) if b else None
                 ),
                 resiliation_en_cours=bool(b and b.id in resil_by_bail),
                 resiliation_document_id=(
