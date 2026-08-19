@@ -678,3 +678,86 @@ def test_gestion_externe_exclue_par_defaut(
     )
     assert r3.status_code == 422, r3.text
     assert fake_mailer.sent == []
+
+
+def test_historique_porte_le_suivi_du_document(client, auth_headers, run):
+    """L'historique doit dire OÙ EN EST chaque envoi (retour Phil
+    2026-08-19 : « il faut absolument que j'aie un suivi quelque part »).
+
+    Un courriel simple ne peut rien dire de plus que « parti » —
+    personne ne peut confirmer qu'il a été lu. Un envoi qui portait un
+    DOCUMENT sait, lui, quand le lien a été ouvert et quand il a été
+    signé : c'est ce qui tient devant un tribunal.
+    """
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
+    from app.models.immobilier import ImmDocument
+
+    marqueur = f"suivi-{_uuid.uuid4().hex[:8]}"
+
+    async def _seed() -> None:
+        async with TestSessionLocal() as s:
+            ouvert = datetime(2026, 8, 18, 14, 30, tzinfo=timezone.utc)
+            signe = datetime(2026, 8, 18, 14, 42, tzinfo=timezone.utc)
+            # (a) document OUVERT mais pas encore signé
+            d1 = ImmDocument(
+                type="avis_reprise", titre="Reprise (suivi)",
+                ouvert_le=ouvert,
+            )
+            # (b) document SIGNÉ
+            d2 = ImmDocument(
+                type="avis_reprise", titre="Reprise signée (suivi)",
+                ouvert_le=ouvert, signed_at=signe,
+                signed_by_name="Locataire Signeur",
+            )
+            # (c) document d'INFORMATION : aucune signature attendue
+            d3 = ImmDocument(
+                type="avis_acces", titre="Accès (suivi)", ouvert_le=ouvert,
+            )
+            s.add_all([d1, d2, d3])
+            await s.flush()
+            for i, doc in enumerate([d1, d2, d3, None]):
+                s.add(
+                    ImmCommunication(
+                        group_id=str(_uuid.uuid4()),
+                        type="document_signature" if doc else "libre",
+                        sujet=f"{marqueur} {i}",
+                        corps="<p>x</p>",
+                        destinataire_email="suivi@test.local",
+                        document_id=doc.id if doc else None,
+                        created_at=datetime.now(timezone.utc),
+                    )
+                )
+            await s.commit()
+
+    run(_seed())
+    r = client.get(
+        f"/api/v1/immobilier/communications?q={marqueur}",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    par_sujet = {x["sujet"]: x for x in r.json()}
+    assert len(par_sujet) == 4, par_sujet
+
+    ouvert_non_signe = par_sujet[f"{marqueur} 0"]
+    assert ouvert_non_signe["document_ouvert_le"] is not None
+    assert ouvert_non_signe["document_signe_le"] is None
+    assert ouvert_non_signe["document_signature_requise"] is True
+
+    signe = par_sujet[f"{marqueur} 1"]
+    assert signe["document_signe_le"] is not None
+    assert signe["document_signe_par"] == "Locataire Signeur"
+
+    # Un document d'information est « ouvert », jamais « pas encore
+    # signé » — ce serait un faux reproche.
+    info = par_sujet[f"{marqueur} 2"]
+    assert info["document_ouvert_le"] is not None
+    assert info["document_signature_requise"] is False
+
+    # Courriel simple : aucun suivi possible, et surtout aucune
+    # invention de suivi.
+    simple = par_sujet[f"{marqueur} 3"]
+    assert simple["document_id"] is None
+    assert simple["document_ouvert_le"] is None
+    assert simple["document_signature_requise"] is False

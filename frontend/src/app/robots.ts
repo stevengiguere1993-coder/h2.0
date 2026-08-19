@@ -34,7 +34,6 @@ const DISALLOW_INTERNAL = [
   "/promesse-achat",
   "/valider-demande",
   "/sign-nda",
-  "/sign-bail",
   "/sign-document",
   "/sign-offer",
   "/sign-devlog",

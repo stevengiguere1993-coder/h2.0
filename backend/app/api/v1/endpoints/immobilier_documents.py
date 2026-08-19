@@ -486,6 +486,7 @@ async def envoyer_signature(
             locataire_nom=(locataire.full_name if locataire else None),
             bail_id=d.bail_id,
             immeuble_id=d.immeuble_id,
+            document_id=d.id,
             auteur_email=getattr(user, "email", None),
             resume_fiche=(
                 f"Document envoyé pour signature : {d.titre} (à {dest})"
@@ -634,6 +635,7 @@ async def envoyer_courriel(
             locataire_nom=(locataire.full_name if locataire else None),
             bail_id=d.bail_id,
             immeuble_id=d.immeuble_id,
+            document_id=d.id,
             auteur_email=getattr(user, "email", None),
             resume_fiche=f"Document envoyé par courriel : {d.titre} (à {dest})",
             attachments=[

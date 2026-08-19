@@ -32,6 +32,7 @@ import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../layout";
 import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
+import { BandeauBailManquant } from "@/components/immobilier/bandeau-bail-manquant";
 import { BailDocActions } from "@/components/immobilier/tal-avis";
 import {
   CreerBailModal,
@@ -219,6 +220,7 @@ export default function BauxPage() {
         {/* MÊME bandeau que la page Paiements (composant partagé),
             filtré sur l'immeuble quand ?immeuble_id= est présent. */}
         <BandeauAvisRenouvellement immeubleId={immeubleId} />
+        <BandeauBailManquant immeubleId={immeubleId} />
 
         <div className="rounded-2xl border border-sky-400/30 bg-sky-500/10 p-4 text-xs text-sky-200">
           <p className="font-semibold text-white">Comment ça marche</p>

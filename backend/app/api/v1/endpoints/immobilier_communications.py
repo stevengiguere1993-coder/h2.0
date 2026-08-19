@@ -731,6 +731,18 @@ class CommunicationRow(BaseModel):
     #: profil n'a pas de nom ; l'UI retombe alors sur le courriel.
     created_by_nom: Optional[str] = None
     created_at: Optional[datetime] = None
+    #: SUIVI du document transmis, quand il y en a un (retour Phil
+    #: 2026-08-19 : « il faut absolument que j'aie un suivi quelque
+    #: part »). Un courriel simple n'en a pas — on sait qu'il est parti,
+    #: pas qu'il a été lu.
+    document_id: Optional[int] = None
+    #: Horodatage de la PREMIÈRE ouverture du lien par le locataire.
+    document_ouvert_le: Optional[datetime] = None
+    document_signe_le: Optional[datetime] = None
+    document_signe_par: Optional[str] = None
+    #: Le document attend-il une signature ? Un document d'information
+    #: n'en attend pas — « pas encore signé » y serait un faux reproche.
+    document_signature_requise: bool = False
 
 
 @router.get("", response_model=List[CommunicationRow])
@@ -783,9 +795,32 @@ async def list_communications(
             if u.first_name or u.last_name:
                 noms[u.email] = u.display_name
 
+    # Suivi : ouverture du lien et signature, pour les envois qui
+    # portaient un document. Une seule requête pour tout le lot.
+    from app.models.immobilier import ImmDocument
+    from app.services.tal_forms import SIGNATURE_NON_REQUISE
+
+    doc_ids = {r.document_id for r in rows if r.document_id}
+    docs: Dict[int, ImmDocument] = {}
+    if doc_ids:
+        drows = (
+            await db.execute(
+                select(ImmDocument).where(ImmDocument.id.in_(doc_ids))
+            )
+        ).scalars().all()
+        docs = {d.id: d for d in drows}
+
     out: List[CommunicationRow] = []
     for r in rows:
         row = CommunicationRow.model_validate(r, from_attributes=True)
         row.created_by_nom = noms.get(r.created_by_email or "")
+        d = docs.get(r.document_id) if r.document_id else None
+        if d is not None:
+            row.document_ouvert_le = d.ouvert_le
+            row.document_signe_le = d.signed_at
+            row.document_signe_par = d.signed_by_name
+            row.document_signature_requise = (
+                d.type not in SIGNATURE_NON_REQUISE
+            )
         out.append(row)
     return out

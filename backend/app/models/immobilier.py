@@ -409,6 +409,15 @@ class ImmCommunication(Base):
     type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     sujet: Mapped[str] = mapped_column(String(255), nullable=False)
     corps: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Document transmis par ce courriel, quand il y en a un. Sert au
+    #: SUIVI : c'est par lui que l'historique sait si le locataire a
+    #: ouvert le lien et s'il a signé (retour Phil 2026-08-19 : « il
+    #: faut absolument que j'aie un suivi quelque part »).
+    document_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("imm_documents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     locataire_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("imm_locataires.id", ondelete="SET NULL"),

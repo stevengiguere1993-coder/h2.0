@@ -20,6 +20,7 @@ import { ApercuEnvoiModal } from "@/components/immobilier/apercu-envoi";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
+import { BandeauBailManquant } from "@/components/immobilier/bandeau-bail-manquant";
 import { echeanceLabel } from "@/components/immobilier/fin-bail";
 import {
   BadgeGestionExterne,
@@ -774,6 +775,7 @@ export default function PaiementsPage() {
           />
         ) : null}
         <BandeauAvisRenouvellement entrepriseId={currentEntrepriseId} />
+        <BandeauBailManquant entrepriseId={currentEntrepriseId} />
 
         {/* Filtres */}
         <div className="mt-5 flex flex-wrap items-center gap-2">
