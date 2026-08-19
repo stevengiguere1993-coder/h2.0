@@ -344,7 +344,11 @@ class Locataire(Base, TimestampUpdateMixin):
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # ── Dépôt préautorisé (DPA) — Règle H1 de Paiements Canada.
+    # ── Prélèvement préautorisé — colonnes INERTES depuis le
+    # 2026-08-19. La documentation « maison » a été retirée : elle ne
+    # collectait rien. La perception passera par Rotessa. Les colonnes
+    # restent (aucune migration) et seront réutilisées ou remplacées à
+    # ce moment-là.
     # Suivi de l'accord de prélèvement du loyer (perception Desjardins) :
     # 'aucun' | 'envoye' (documentation transmise) | 'actif' (accord
     # signé reçu) | 'refuse'. Colonnes additives → ensure_critical_columns.
@@ -1130,7 +1134,7 @@ class RelanceLoyer(Base, TimestampUpdateMixin):
 class ImmDocument(Base, TimestampUpdateMixin):
     """Document locatif GÉNÉRÉ et CONSERVÉ (avis TAL, trousse bail, DPA…).
 
-    Chaque génération depuis « Générer ▾ » (ou l'envoi DPA) enregistre le
+    Chaque génération depuis « Générer ▾ » enregistre le
     PDF + ses paramètres : l'utilisateur peut le revoir, le modifier
     (régénération = nouvelle ligne) et l'envoyer pour SIGNATURE via un
     lien public tokenisé — retour Phil 2026-07-17 (« ces documents-là,

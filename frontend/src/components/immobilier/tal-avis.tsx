@@ -1279,7 +1279,7 @@ export function DocsList({
 }
 
 /** Section « Documents » des fiches LOCATAIRE et LOGEMENT (retour Phil
- * 2026-07-20) : TOUT ce qui a été généré/envoyé (avis TAL, DPA, lettres…)
+ * 2026-07-20) : TOUT ce qui a été généré/envoyé (avis TAL, lettres…)
  * au même endroit, avec la génération par bail HORS tableau (le menu
  * « Générer ▾ » n'est plus coupé par un conteneur défilant). */
 export function DocumentsSection({
@@ -1386,8 +1386,7 @@ export function DocumentsSection({
                 Locataires
               </Link>{" "}
               montre qui habite où — supprime le doublon avec la
-              poubelle. Le DPA, lui, se génère depuis la section Dépôt
-              préautorisé ci-dessus.
+              poubelle.
             </>
           ) : (
             <>

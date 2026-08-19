@@ -136,18 +136,7 @@ export default function ModelesDocumentsPage() {
     }
   }
 
-  const tous: TalForm[] = [
-    ...(forms || []),
-    {
-      code: "dpa",
-      label: "Accord de débit préautorisé (DPA)",
-      description:
-        "Formulaire d'adhésion au prélèvement automatique du loyer "
-        + "(Règle H1 Paiements Canada) — s'envoie depuis la fiche du "
-        + "locataire, section DPA.",
-      signature_requise: true
-    }
-  ];
+  const tous: TalForm[] = [...(forms || [])];
 
   return (
     <>

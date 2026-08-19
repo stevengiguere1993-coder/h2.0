@@ -148,7 +148,6 @@ const TYPES_AUTOMATIQUES = [
   { value: "copie_signee", label: "Copie signée transmise" },
   { value: "document_courriel", label: "Document transmis" },
   { value: "relance_loyer", label: "Relance de loyer" },
-  { value: "dpa", label: "Prélèvement préautorisé (DPA)" }
 ] as const;
 
 //: Tout ce qui peut apparaître dans l'historique = composable + envoyé
