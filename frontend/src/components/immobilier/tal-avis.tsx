@@ -1542,6 +1542,7 @@ export function BailDocActions({
   allowImportInitial = true,
   compact = false,
   entreBoutons,
+  exceptionMotif,
   onChanged
 }: {
   bailId: number;
@@ -1558,11 +1559,56 @@ export function BailDocActions({
    *  voulu par Phil sur la page Baux (2026-08-14) : Bail · Avis ·
    *  Mettre fin · Remplacer. */
   entreBoutons?: ReactNode;
+  /** Motif d'EXCEPTION déjà déclaré (« aucun bail à joindre »). Quand
+   *  il est fourni, le bouton d'exception apparaît ici — c'est-à-dire
+   *  là où le bail vit, et non dans une alerte : une alerte y mène, elle
+   *  n'agit pas (règle Phil 2026-08-19). */
+  exceptionMotif?: string | null;
   onChanged?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const ouvrable = hasDoc || Boolean(signedAt);
+  const [saisieException, setSaisieException] = useState(false);
+  const [motif, setMotif] = useState("");
+
+  async function declarerException() {
+    const m = motif.trim();
+    if (m.length < 3) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/exception-document`,
+        { method: "POST", body: JSON.stringify({ motif: m }) }
+      );
+      if (!r.ok) throw new Error((await r.text()).slice(0, 160));
+      setSaisieException(false);
+      setMotif("");
+      onChanged?.();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function retirerException() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/exception-document`,
+        { method: "DELETE" }
+      );
+      if (!r.ok) throw new Error((await r.text()).slice(0, 160));
+      onChanged?.();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function ouvrir() {
     setBusy(true);
@@ -1664,6 +1710,76 @@ export function BailDocActions({
           busy={busy}
           onPick={demanderDate}
         />
+      ) : null}
+      {/* Exception « aucun bail à joindre » — ici, là où le bail vit.
+          Sans objet si un document est déjà au dossier. */}
+      {!hasDoc && !signedAt ? (
+        exceptionMotif ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void retirerException()}
+            className="btn-ghost btn-xs"
+            title={`Exception déclarée : « ${exceptionMotif} » — cliquer pour la retirer`}
+          >
+            Exception ✕
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setSaisieException(true)}
+            className="btn-ghost btn-xs"
+            title="Déclarer qu'il n'y a aucun bail à joindre à ce dossier"
+          >
+            Exception
+          </button>
+        )
+      ) : null}
+      {saisieException ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setSaisieException(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-bold text-amber-200">
+              ⚠️ Aucun bail à joindre
+            </h3>
+            <p className="mt-1 text-xs text-white/55">
+              Sans bail au dossier, tu n&apos;as aucune preuve du loyer ni
+              des conditions convenues. Le motif reste au dossier, avec
+              ton nom et la date.
+            </p>
+            <input
+              type="text"
+              value={motif}
+              onChange={(e) => setMotif(e.target.value)}
+              maxLength={255}
+              placeholder="Pourquoi n'y a-t-il pas de bail ? (obligatoire)"
+              className="input mt-2 w-full text-xs"
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setSaisieException(false)}
+                className="btn-ghost btn-xs"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                disabled={busy || motif.trim().length < 3}
+                onClick={() => void declarerException()}
+                className="btn-secondary btn-sm disabled:opacity-50"
+              >
+                Déclarer l&apos;exception
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
       {err ? (
         <span className="text-[10px] text-rose-300" title={err}>

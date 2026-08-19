@@ -2661,6 +2661,7 @@ function BauxTab({
                             <BailDocActions
                               bailId={r.bail_id}
                               hasDoc={r.document_id != null}
+                              exceptionMotif={r.sans_document_motif}
                               signedAt={r.signed_at}
                               compact
                               onChanged={() => void load()}
