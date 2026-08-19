@@ -227,3 +227,58 @@ def test_repli_reply_to_sur_la_boite_systeme(run, db_setup, monkeypatch):
 
     run(_go())
     assert fake.sent[0]["reply_to"] == "systeme@immohorizon.com"
+
+
+@pytest.mark.asyncio
+async def test_les_traces_respectent_la_taille_des_colonnes(profil):
+    """Garde-fou contre un bug qui a coûté cher (2026-08-19).
+
+    La porte écrivait un ``group_id`` de 36 caractères (uuid4 avec
+    tirets) dans une colonne ``VARCHAR(32)``. Postgres refusait CHAQUE
+    trace — et comme l'INSERT ne part qu'au flush, l'erreur explosait
+    chez l'appelant, APRÈS l'envoi du courriel : le jeton de signature
+    déjà expédié au locataire était annulé avec la transaction, d'où un
+    « lien invalide » dans sa boîte et un « internal server error » à
+    l'écran. Quatre symptômes, une seule cause.
+
+    Rien ne l'a signalé avant la production parce que les tests tournent
+    sur **SQLite, qui n'applique pas les longueurs de VARCHAR**. Ce test
+    les vérifie donc explicitement, sur les valeurs réellement écrites.
+    """
+    from sqlalchemy import String
+
+    async with TestSessionLocal() as s:
+        await envoyer_au_locataire(
+            s,
+            destinataires=["taille@test.local"],
+            sujet="S" * 400,
+            corps_html="<p>x</p>",
+            type_envoi="document_signature",
+            locataire_nom="N" * 400,
+            immeuble_nom="I" * 400,
+            auteur_email="a" * 400,
+            resume_fiche="R" * 4000,
+        )
+        await s.commit()
+        obj = (
+            await s.execute(
+                select(ImmCommunication).order_by(
+                    ImmCommunication.id.desc()
+                )
+            )
+        ).scalars().first()
+        assert obj is not None, "la trace doit exister"
+
+        trop_long = []
+        for col in ImmCommunication.__table__.columns:
+            if not isinstance(col.type, String) or col.type.length is None:
+                continue
+            val = getattr(obj, col.name, None)
+            if isinstance(val, str) and len(val) > col.type.length:
+                trop_long.append(
+                    f"{col.name}: {len(val)} > {col.type.length}"
+                )
+        assert not trop_long, (
+            "Valeurs plus longues que leur colonne — Postgres refuserait "
+            f"l'INSERT : {', '.join(trop_long)}"
+        )

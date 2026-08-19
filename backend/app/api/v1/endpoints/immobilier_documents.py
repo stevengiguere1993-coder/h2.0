@@ -461,7 +461,14 @@ async def envoyer_signature(
 
     if not d.signature_token:
         d.signature_token = secrets.token_urlsafe(32)
-        await db.flush()
+        # COMMIT avant l'envoi, pas un simple flush : le lien part dans
+        # la boîte du locataire et n'en ressortira jamais. Si la
+        # transaction échoue APRÈS l'envoi, un flush laisserait le
+        # locataire avec un lien dont le jeton n'existe nulle part —
+        # « lien invalide » (bug du 2026-08-19 : deux consentements
+        # reçus, aucun jeton en base).
+        await db.commit()
+        await db.refresh(d)
     url = f"{public_base()}/sign-document/{d.signature_token}"
 
     # Audit 2026-08-17 : porte UNIQUE des courriels au locataire
@@ -611,7 +618,14 @@ async def envoyer_courriel(
     # signature : suivi d'ouverture universel (retour Phil 2026-07-20).
     if not d.signature_token:
         d.signature_token = secrets.token_urlsafe(32)
-        await db.flush()
+        # COMMIT avant l'envoi, pas un simple flush : le lien part dans
+        # la boîte du locataire et n'en ressortira jamais. Si la
+        # transaction échoue APRÈS l'envoi, un flush laisserait le
+        # locataire avec un lien dont le jeton n'existe nulle part —
+        # « lien invalide » (bug du 2026-08-19 : deux consentements
+        # reçus, aucun jeton en base).
+        await db.commit()
+        await db.refresh(d)
     url = f"{public_base()}/sign-document/{d.signature_token}"
 
     from app.services.locatif_mail import (

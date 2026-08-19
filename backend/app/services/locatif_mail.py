@@ -27,7 +27,7 @@ cron. Rien ne part vers un locataire sans un clic humain.
 from __future__ import annotations
 
 import logging
-import uuid as _uuid
+import secrets
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional, Sequence
 
@@ -118,43 +118,62 @@ async def envoyer_au_locataire(
         kwargs["request_read_receipt"] = True
     await mailer.send(**kwargs)
 
+    async def _tracer(objet, quoi: str) -> None:
+        """Pose UNE trace dans un point de reprise (SAVEPOINT).
+
+        Le courriel est DÉJÀ parti quand on arrive ici : une trace qui
+        échoue ne doit ni remonter en erreur, ni — surtout — empoisonner
+        la transaction de l'appelant. Un simple ``try`` autour de
+        ``db.add`` ne protège de rien : l'INSERT ne part qu'au ``flush``,
+        donc l'erreur explose plus tard, chez l'appelant (bug du
+        2026-08-19 : un ``group_id`` de 36 caractères dans une colonne
+        de 32 faisait échouer CHAQUE trace, ce qui annulait au passage
+        le jeton de signature déjà envoyé au locataire — lien mort dans
+        sa boîte, et « internal server error » à l'écran).
+        """
+        try:
+            async with db.begin_nested():
+                db.add(objet)
+        except Exception:  # noqa: BLE001 — la trace ne casse jamais l'envoi
+            log.exception("Trace %s échouée (%s)", quoi, type_envoi)
+
     # 1) Journal d'audit de la page Communications.
-    try:
-        db.add(
-            ImmCommunication(
-                group_id=str(_uuid.uuid4()),
-                type=type_envoi[:32],
-                sujet=sujet[:255],
-                corps=corps_html,
-                locataire_id=locataire_id,
-                bail_id=bail_id,
-                immeuble_id=immeuble_id,
-                document_id=document_id,
-                locataire_nom=(locataire_nom or None),
-                immeuble_nom=(immeuble_nom or None),
-                destinataire_email=dest[0][:320],
-                from_email=from_email,
-                created_by_email=auteur_email,
-                created_at=_now(),
-            )
-        )
-    except Exception:  # noqa: BLE001 — la trace ne casse jamais l'envoi
-        log.exception("Trace ImmCommunication échouée (%s)", type_envoi)
+    # ⚠️ group_id : MÊME format que la page Communications
+    # (``secrets.token_hex(8)`` = 16 caractères). La colonne est un
+    # VARCHAR(32) — un uuid4 avec tirets (36) ne rentre pas, et SQLite
+    # (tests) ne fait pas respecter la longueur, donc rien ne le signale
+    # avant la production.
+    await _tracer(
+        ImmCommunication(
+            group_id=secrets.token_hex(8),
+            type=type_envoi[:32],
+            sujet=sujet[:255],
+            corps=corps_html,
+            locataire_id=locataire_id,
+            bail_id=bail_id,
+            immeuble_id=immeuble_id,
+            document_id=document_id,
+            locataire_nom=(locataire_nom or None)
+            and locataire_nom[:255],
+            immeuble_nom=(immeuble_nom or None) and immeuble_nom[:255],
+            destinataire_email=dest[0][:320],
+            from_email=(from_email or None) and from_email[:320],
+            created_by_email=(auteur_email or None) and auteur_email[:256],
+            created_at=_now(),
+        ),
+        "ImmCommunication",
+    )
 
     # 2) Fil de la fiche du locataire.
     if locataire_id is not None:
-        try:
-            db.add(
-                LocataireCommunication(
-                    locataire_id=locataire_id,
-                    kind="courriel",
-                    contenu=(resume_fiche or sujet)[:2000],
-                    auteur=auteur_email,
-                )
-            )
-        except Exception:  # noqa: BLE001
-            log.exception(
-                "Trace LocataireCommunication échouée (%s)", type_envoi
-            )
+        await _tracer(
+            LocataireCommunication(
+                locataire_id=locataire_id,
+                kind="courriel",
+                contenu=(resume_fiche or sujet)[:2000],
+                auteur=(auteur_email or None) and auteur_email[:255],
+            ),
+            "LocataireCommunication",
+        )
 
     return from_email, from_name, reply_to
