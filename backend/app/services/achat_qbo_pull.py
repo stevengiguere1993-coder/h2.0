@@ -110,6 +110,9 @@ async def _find_or_create_fournisseur(
         address=qbo_addr,
         qbo_vendor_id=vendor_id,
         active=True,
+        # Créé par un IMPORT QB : lié à l'achat mais HORS annuaire —
+        # la section Fournisseurs n'est pas un miroir des Vendors QB.
+        in_directory=False,
     )
     db.add(new_f)
     await db.flush()

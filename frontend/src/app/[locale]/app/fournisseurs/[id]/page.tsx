@@ -21,6 +21,7 @@ type Fournisseur = {
   website: string | null;
   address: string | null;
   active: boolean;
+  in_directory?: boolean;
   notes: string | null;
   payment_terms_days: number | null;
   qbo_expense_account: string | null;
@@ -49,6 +50,7 @@ export default function FournisseurDetailPage() {
   const [website, setWebsite] = useState("");
   const [address, setAddress] = useState("");
   const [active, setActive] = useState(true);
+  const [inDirectory, setInDirectory] = useState(true);
   const [notes, setNotes] = useState("");
   const [paymentTermsDays, setPaymentTermsDays] = useState("");
   const [qboExpenseAccount, setQboExpenseAccount] = useState("");
@@ -72,6 +74,7 @@ export default function FournisseurDetailPage() {
         setWebsite(data.website || "");
         setAddress(data.address || "");
         setActive(data.active);
+        setInDirectory(data.in_directory !== false);
         setNotes(data.notes || "");
         setPaymentTermsDays(
           data.payment_terms_days != null
@@ -102,6 +105,7 @@ export default function FournisseurDetailPage() {
       website !== (f.website || "") ||
       address !== (f.address || "") ||
       active !== f.active ||
+      inDirectory !== (f.in_directory !== false) ||
       notes !== (f.notes || "") ||
       paymentTermsDays !==
         (f.payment_terms_days != null
@@ -119,6 +123,7 @@ export default function FournisseurDetailPage() {
     website,
     address,
     active,
+    inDirectory,
     notes,
     paymentTermsDays,
     qboExpenseAccount
@@ -139,6 +144,7 @@ export default function FournisseurDetailPage() {
         website: website.trim() || null,
         address: address.trim() || null,
         active,
+        in_directory: inDirectory,
         notes: notes.trim() || null,
         payment_terms_days: ptd === "" ? null : Number(ptd),
         qbo_expense_account: qboExpenseAccount.trim() || null
@@ -208,6 +214,17 @@ export default function FournisseurDetailPage() {
                     onChange={(e) => setActive(e.target.checked)}
                   />
                   Actif
+                </label>
+                <label
+                  className="inline-flex items-center gap-2 text-sm text-white/70"
+                  title="Affiché dans la section Fournisseurs (annuaire du chargé de projet). Décoché : la fiche reste liée à ses achats mais disparaît de la liste — rien n'est touché dans QuickBooks."
+                >
+                  <input
+                    type="checkbox"
+                    checked={inDirectory}
+                    onChange={(e) => setInDirectory(e.target.checked)}
+                  />
+                  Dans l&apos;annuaire
                 </label>
                 <button
                   type="button"

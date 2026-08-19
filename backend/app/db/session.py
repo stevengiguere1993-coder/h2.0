@@ -567,6 +567,44 @@ async def ensure_critical_columns() -> None:
                 exc,
             )
 
+    # Annuaire fournisseurs (retour Phil 2026-08-18) : la section
+    # Fournisseurs n'est PAS un miroir des Vendors QuickBooks — c'est
+    # l'annuaire téléphonique du chargé de projet. Ajout ONE-SHOT de la
+    # colonne in_directory + backfill : les fiches importées de QB sans
+    # aucune info d'annuaire (ni téléphone, ni contact, ni notes)
+    # sortent de l'annuaire (le lien avec leurs achats est conservé).
+    # Le backfill ne tourne QU'À la création de la colonne — remettre
+    # une fiche dans l'annuaire ensuite n'est jamais écrasé.
+    try:
+        async with engine.begin() as conn:
+            exists = (
+                await conn.execute(
+                    text(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name='fournisseurs' "
+                        "AND column_name='in_directory'"
+                    )
+                )
+            ).scalar()
+            if not exists:
+                await conn.execute(
+                    text(
+                        "ALTER TABLE fournisseurs ADD COLUMN "
+                        "in_directory BOOLEAN NOT NULL DEFAULT TRUE"
+                    )
+                )
+                await conn.execute(
+                    text(
+                        "UPDATE fournisseurs SET in_directory = FALSE "
+                        "WHERE qbo_vendor_id IS NOT NULL "
+                        "AND COALESCE(phone, '') = '' "
+                        "AND COALESCE(contact_name, '') = '' "
+                        "AND COALESCE(notes, '') = ''"
+                    )
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure fournisseurs.in_directory failed: %s", exc)
+
     # Backfill 2026-07 : les anciens bons de travail (créés avant la refonte,
     # non liés à une correction de projet) passent en bon INTERNE et leurs
     # statuts legacy sont mappés vers le nouveau cycle → ils apparaissent

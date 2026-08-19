@@ -18,6 +18,7 @@ type Fournisseur = {
   category: string | null;
   website: string | null;
   active: boolean;
+  in_directory?: boolean;
   notes: string | null;
   created_at: string;
 };
@@ -38,7 +39,11 @@ export default function FournisseursPage() {
         const res = await authedFetch("/api/v1/fournisseurs?limit=500");
         if (!res.ok) throw new Error(`http_${res.status}`);
         const data = (await res.json()) as Fournisseur[];
-        if (!cancelled) setItems(data);
+        // Annuaire du chargé de projet : les fiches créées
+        // automatiquement par les imports QuickBooks (in_directory
+        // false) restent liées aux achats mais n'apparaissent pas ici.
+        if (!cancelled)
+          setItems(data.filter((f) => f.in_directory !== false));
       } catch {
         if (!cancelled) setError("Impossible de charger les fournisseurs.");
       } finally {
