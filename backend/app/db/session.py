@@ -149,6 +149,10 @@ async def ensure_critical_columns() -> None:
         ("imm_communications", "document_id", "INTEGER"),
         # Exception « bail sans document » (audit 2026-08-19) : sans
         # ces colonnes, la page Baux et le bandeau plantent.
+        # Depot de garantie : date de reception et detenteur
+        # (import manuel 2026-08-19).
+        ("imm_baux", "depot_recu_le", "DATE"),
+        ("imm_baux", "depot_detenteur", "VARCHAR(120)"),
         ("imm_baux", "sans_document_motif", "VARCHAR(255)"),
         ("imm_baux", "sans_document_par", "VARCHAR(255)"),
         ("imm_baux", "sans_document_le", "TIMESTAMP WITH TIME ZONE"),

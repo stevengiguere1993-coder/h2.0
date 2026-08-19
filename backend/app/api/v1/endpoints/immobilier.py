@@ -3373,6 +3373,9 @@ class DepotRow(BaseModel):
     # "detenu" | "a_rendre" | "rendu" | "aucun" (bail actif sans dépôt
     # saisi — permet de le saisir directement depuis la page Dépôts).
     statut: str
+    #: Quand le dépôt a été reçu, et chez qui l'argent dort.
+    depot_recu_le: Optional[date] = None
+    depot_detenteur: Optional[str] = None
     depot_rendu_le: Optional[date] = None
     date_debut: date
     date_fin: date
@@ -3495,6 +3498,8 @@ async def depots_overview(
             locataire_name=loc.full_name if loc else None,
             montant=montant,
             statut=statut,
+            depot_recu_le=b.depot_recu_le,
+            depot_detenteur=b.depot_detenteur,
             depot_rendu_le=b.depot_rendu_le,
             date_debut=b.date_debut,
             date_fin=b.date_fin,
