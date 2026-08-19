@@ -289,6 +289,9 @@ class BailUpdate(BaseModel):
     date_fin: Optional[date] = None
     loyer_mensuel: Optional[float] = Field(default=None, ge=0)
     depot_garantie: Optional[float] = Field(default=None, ge=0)
+    #: Date de RÉCEPTION du dépôt, et qui détient l'argent.
+    depot_recu_le: Optional[date] = None
+    depot_detenteur: Optional[str] = Field(default=None, max_length=120)
     # Date de remise du dépôt (page Dépôts → « Marquer rendu »).
     depot_rendu_le: Optional[date] = None
     chauffage_inclus: Optional[bool] = None

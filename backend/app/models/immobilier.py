@@ -639,6 +639,18 @@ class Bail(Base, TimestampUpdateMixin):
     depot_garantie: Mapped[Optional[float]] = mapped_column(
         Numeric(10, 2), nullable=True
     )
+    #: Date à laquelle le dépôt a été REÇU du locataire. Distincte de
+    #: la date de début du bail : un dépôt se verse souvent à la
+    #: signature, des mois avant l'entrée.
+    depot_recu_le: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
+    #: Qui DÉTIENT l'argent (ex. « MGV Developpement »). Un dépôt est
+    #: l'argent du locataire : savoir chez qui il dort n'est pas un
+    #: détail au moment de le rendre.
+    depot_detenteur: Mapped[Optional[str]] = mapped_column(
+        String(120), nullable=True
+    )
     # Date de REMISE du dépôt au locataire (bail terminé → dépôt rendu).
     # NULL = toujours détenu (ou à rendre si le bail est terminé/résilié).
     depot_rendu_le: Mapped[Optional[date]] = mapped_column(Date, nullable=True)

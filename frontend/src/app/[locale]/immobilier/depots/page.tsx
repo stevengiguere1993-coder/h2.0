@@ -33,6 +33,8 @@ type DepotRow = {
   locataire_name: string | null;
   montant: number;
   statut: string; // "detenu" | "a_rendre" | "rendu" | "aucun"
+  depot_recu_le: string | null;
+  depot_detenteur: string | null;
   depot_rendu_le: string | null;
   date_debut: string;
   date_fin: string;
@@ -277,6 +279,7 @@ export default function DepotsPage() {
                 <th className="px-3 py-2.5 font-semibold">Immeuble · logt</th>
                 <th className="px-3 py-2.5 font-semibold">Période</th>
                 <th className="px-3 py-2.5 text-right font-semibold">Dépôt</th>
+                <th className="px-3 py-2.5 font-semibold">Reçu · détenu par</th>
                 <th className="px-3 py-2.5 text-right font-semibold">Statut</th>
                 <th className="px-3 py-2.5 text-right font-semibold">Rendu</th>
               </tr>
@@ -284,14 +287,14 @@ export default function DepotsPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-3 py-10 text-center text-white/50">
+                  <td colSpan={7} className="px-3 py-10 text-center text-white/50">
                     <Loader2 className="mr-1 inline h-4 w-4 animate-spin" />{" "}
                     Chargement…
                   </td>
                 </tr>
               ) : !data || filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-3 py-12 text-center text-white/50">
+                  <td colSpan={7} className="px-3 py-12 text-center text-white/50">
                     {data && data.rows.length > 0
                       ? "Aucun dépôt correspondant aux filtres."
                       : "Aucun dépôt de garantie enregistré."}
@@ -367,6 +370,21 @@ export default function DepotsPage() {
                           return ok;
                         }}
                       />
+                    </td>
+                    {/* Un dépôt est l'argent du locataire : savoir quand
+                        il est entré et chez qui il dort n'est pas un
+                        détail au moment de le rendre. */}
+                    <td className="px-3 py-2.5 text-xs text-white/60">
+                      {r.montant > 0 ? (
+                        <>
+                          {r.depot_recu_le || "date inconnue"}
+                          <span className="block text-[11px] text-white/40">
+                            {r.depot_detenteur || "détenteur non précisé"}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-white/25">—</span>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 text-right">
                       {r.statut === "a_rendre" ? (
