@@ -184,6 +184,7 @@ export default function FactureDetailPage() {
   const [includeStatement, setIncludeStatement] = useState(false);
   const [sendBusy, setSendBusy] = useState(false);
   const [sendNotice, setSendNotice] = useState<string | null>(null);
+  const [stmtSendBusy, setStmtSendBusy] = useState(false);
   const [sendTo, setSendTo] = useState("");
   const [sendCc, setSendCc] = useState("");
   const [sendSubject, setSendSubject] = useState("");
@@ -787,6 +788,38 @@ export default function FactureDetailPage() {
     }
   }
 
+  async function sendStatement() {
+    if (!f?.project_id) return;
+    if (
+      !(await confirm(
+        "Envoyer l'état de compte du projet au client par courriel ?"
+      ))
+    )
+      return;
+    setStmtSendBusy(true);
+    setSendNotice(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${f.project_id}/statement/send`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          detail?: string;
+        } | null;
+        throw new Error(body?.detail || `http_${res.status}`);
+      }
+      const data = (await res.json()) as { to: string };
+      setSendNotice(`État de compte envoyé à ${data.to}.`);
+    } catch (err) {
+      setSendNotice(
+        `Envoi de l'état de compte échoué : ${(err as Error).message.slice(0, 240)}`
+      );
+    } finally {
+      setStmtSendBusy(false);
+    }
+  }
+
   async function sendToClient() {
     if (!f) return;
     const to = sendTo
@@ -1120,6 +1153,29 @@ export default function FactureDetailPage() {
                     </p>
                     <p className="mt-0.5 text-xs text-white/60">
                       Relevé du projet (PDF) tel qu&apos;envoyé au client.
+                    </p>
+                  </div>
+                </button>
+              ) : null}
+              {f.project_id ? (
+                <button
+                  type="button"
+                  onClick={() => void sendStatement()}
+                  disabled={stmtSendBusy}
+                  className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500 disabled:opacity-60"
+                >
+                  {stmtSendBusy ? (
+                    <Loader2 className="mt-0.5 h-5 w-5 flex-shrink-0 animate-spin text-accent-500" />
+                  ) : (
+                    <Mail className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
+                  )}
+                  <div>
+                    <p className="text-sm font-semibold text-white">
+                      Renvoyer l&apos;état de compte
+                    </p>
+                    <p className="mt-0.5 text-xs text-white/60">
+                      Envoie le relevé seul au client (PDF par courriel), sans
+                      la facture.
                     </p>
                   </div>
                 </button>
