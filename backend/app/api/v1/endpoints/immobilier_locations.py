@@ -33,6 +33,7 @@ from app.core.permissions import visible_immeuble_ids
 from app.models.immobilier import (
     Bail,
     BailRenouvellement,
+    BailStatus,
     Immeuble,
     Locataire,
     LocationAnnonce,
@@ -516,6 +517,52 @@ async def create_dossier(
     return await _to_row(db, obj)
 
 
+async def _bail_propose_orphelin(
+    db, dossier: LocationDossier
+) -> Optional[Bail]:
+    """Bail PROPOSÉ de ce logement qui n'appartient à aucun autre
+    dossier actif — donc celui de ce dossier-ci.
+
+    Sert à réparer un lien perdu plutôt qu'à bloquer l'utilisateur. On
+    reste prudent : un bail déjà revendiqué par un autre dossier n'est
+    jamais volé, et sans candidat retenu il n'y a rien à rattacher.
+    """
+    if dossier.statut in (
+        LocationDossierStatut.AVIS_RECU.value,
+        LocationDossierStatut.ANNONCE_PUBLIEE.value,
+        LocationDossierStatut.VISITES.value,
+    ):
+        return None
+    revendiques = {
+        r[0]
+        for r in (
+            await db.execute(
+                select(LocationDossier.nouveau_bail_id).where(
+                    LocationDossier.id != dossier.id,
+                    LocationDossier.nouveau_bail_id.is_not(None),
+                    LocationDossier.statut.notin_(
+                        list(DOSSIER_STATUTS_REGLES)
+                    ),
+                )
+            )
+        ).all()
+    }
+    candidats = (
+        await db.execute(
+            select(Bail)
+            .where(
+                Bail.logement_id == dossier.logement_id,
+                Bail.status == BailStatus.PROPOSE.value,
+            )
+            .order_by(Bail.id.desc())
+        )
+    ).scalars().all()
+    for b in candidats:
+        if b.id not in revendiques:
+            return b
+    return None
+
+
 @router.patch("/locations/{dossier_id}", response_model=DossierRow)
 async def update_dossier(
     dossier_id: int,
@@ -543,11 +590,28 @@ async def update_dossier(
             )
             and obj.nouveau_bail_id is None
         ):
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "Aucun bail créé sur ce dossier — convertis le "
-                "candidat retenu d'abord.",
-            )
+            # RÉPARATION avant refus (audit 2026-08-19). Un aller-retour
+            # sur le kanban détachait le bail créé à la conversion, mais
+            # le bail, lui, survivait : le dossier se retrouvait avec un
+            # candidat retenu, un bail orphelin, et ce garde-fou qui
+            # répondait « convertis le candidat d'abord » — impasse dont
+            # Phil ne pouvait plus sortir. Si un bail PROPOSÉ traîne sur
+            # ce logement sans appartenir à un autre dossier actif, il
+            # est manifestement celui de ce dossier : on le rattache.
+            orphelin = await _bail_propose_orphelin(db, obj)
+            if orphelin is not None:
+                obj.nouveau_bail_id = orphelin.id
+                log.info(
+                    "Dossier %s : bail proposé %s rattaché (lien perdu "
+                    "lors d'un aller-retour du kanban)",
+                    obj.id, orphelin.id,
+                )
+            else:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "Aucun bail créé sur ce dossier — convertis le "
+                    "candidat retenu d'abord.",
+                )
         if obj.statut == LocationDossierStatut.RELOUE.value:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -575,18 +639,22 @@ async def update_dossier(
                     "Un autre dossier de relocation est déjà actif "
                     "sur ce logement.",
                 )
-        # m2 (audit 2026-08-13) : reculer une carte AVANT « Bail à
-        # envoyer » détache le bail créé à la conversion — sinon le
-        # dossier garde un lien fantôme et les gardes « bail requis »
-        # raisonnent sur un état impossible. Le bail « proposé » reste
-        # visible sur la page Baux (le désistement gère sa suppression).
+        # m2 (audit 2026-08-13, corrigé le 2026-08-19) : reculer une
+        # carte AVANT le candidat retenu détache le bail créé à la
+        # conversion — à ce stade on abandonne le candidat lui-même,
+        # donc le lien n'a plus de sens.
+        #
+        # ⚠️ « Candidat retenu » est EXCLU de cette liste. Y revenir ne
+        # renie pas le candidat : il est toujours retenu, et son bail
+        # existe toujours. Détacher le lien à ce moment-là fabriquait
+        # exactement l'impasse rapportée par Phil — carte bloquée, et
+        # « créer le locataire » proposé pour un locataire déjà créé.
         if (
             nouveau_statut
             in (
                 LocationDossierStatut.AVIS_RECU.value,
                 LocationDossierStatut.ANNONCE_PUBLIEE.value,
                 LocationDossierStatut.VISITES.value,
-                LocationDossierStatut.CANDIDAT_RETENU.value,
             )
             and obj.nouveau_bail_id is not None
         ):

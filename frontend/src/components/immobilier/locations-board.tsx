@@ -647,7 +647,6 @@ function DossierModal({
   const [showConvert, setShowConvert] = useState(false);
 
   const [annPlateforme, setAnnPlateforme] = useState("Marketplace");
-  const [annUrl, setAnnUrl] = useState("");
   const [visNom, setVisNom] = useState("");
   const [visEmail, setVisEmail] = useState("");
   const [visPhone, setVisPhone] = useState("");
@@ -930,7 +929,7 @@ function DossierModal({
           </div>
         ) : null}
 
-        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="mt-4 grid gap-4">
           {/* Annonces */}
           <div className="rounded-xl border border-brand-800 bg-brand-900 p-3.5">
             <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-accent-500">
@@ -1000,23 +999,20 @@ function DossierModal({
                   )
                 )}
               </select>
-              <input
-                value={annUrl}
-                onChange={(e) => setAnnUrl(e.target.value)}
-                placeholder="Lien (optionnel)"
-                className={`${INPUT_CLS} min-w-0 flex-1`}
-              />
+              {/* Le lien de l'annonce a été retiré (retour Phil
+                  2026-08-19 : « je pense pas qu'on a besoin de mettre
+                  l'adresse URL de l'annonce Facebook »). Consigner la
+                  PLATEFORME suffit à savoir où on a publié ; le lien
+                  vieillit mal et personne ne le rouvrait. Les liens
+                  déjà saisis restent affichés. */}
               <button
                 type="button"
                 disabled={busy}
                 onClick={async () => {
-                  if (
-                    await api(`/${d.id}/annonces`, "POST", {
-                      plateforme: annPlateforme,
-                      url: annUrl.trim() || null
-                    })
-                  )
-                    setAnnUrl("");
+                  await api(`/${d.id}/annonces`, "POST", {
+                    plateforme: annPlateforme,
+                    url: null
+                  });
                 }}
                 className="btn-secondary btn-sm disabled:opacity-50"
               >
@@ -1026,37 +1022,6 @@ function DossierModal({
           </div>
 
           {/* Notes */}
-          <div className="rounded-xl border border-brand-800 bg-brand-900 p-3.5">
-            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-accent-500">
-              Notes de suivi
-            </h4>
-            <textarea
-              rows={5}
-              value={notesDraft}
-              onChange={(e) => setNotesDraft(e.target.value)}
-              placeholder="État du logement, peinture à faire, candidat à relancer…"
-              className="block w-full rounded-md border border-brand-800 bg-brand-950 px-3 py-2 text-xs text-white outline-none focus:border-accent-500"
-            />
-            <button
-              type="button"
-              disabled={savingNotes || notesDraft === (d.notes || "")}
-              onClick={async () => {
-                setSavingNotes(true);
-                await onPatch({
-                  notes: notesDraft.trim() ? notesDraft : null
-                });
-                setSavingNotes(false);
-              }}
-              className="btn-secondary btn-sm mt-1.5 disabled:opacity-40"
-            >
-              {savingNotes ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Check className="h-3.5 w-3.5" />
-              )}
-              Enregistrer
-            </button>
-          </div>
         </div>
 
         {/* Visites & candidats (avec enquêtes de prélocation) */}
@@ -1139,6 +1104,41 @@ function DossierModal({
         </div>
 
         {/* Pied de fiche : actions destructives discrètes */}
+        {/* Notes de suivi — EN BAS (retour Phil 2026-08-19) : ce
+            sont des remarques d'appoint, elles ne doivent pas
+            occuper le haut du panneau devant les candidats. */}
+      <div className="rounded-xl border border-brand-800 bg-brand-900 p-3.5">
+        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-accent-500">
+          Notes de suivi
+        </h4>
+        <textarea
+          rows={5}
+          value={notesDraft}
+          onChange={(e) => setNotesDraft(e.target.value)}
+          placeholder="État du logement, peinture à faire, candidat à relancer…"
+          className="block w-full rounded-md border border-brand-800 bg-brand-950 px-3 py-2 text-xs text-white outline-none focus:border-accent-500"
+        />
+        <button
+          type="button"
+          disabled={savingNotes || notesDraft === (d.notes || "")}
+          onClick={async () => {
+            setSavingNotes(true);
+            await onPatch({
+              notes: notesDraft.trim() ? notesDraft : null
+            });
+            setSavingNotes(false);
+          }}
+          className="btn-secondary btn-sm mt-1.5 disabled:opacity-40"
+        >
+          {savingNotes ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Check className="h-3.5 w-3.5" />
+          )}
+          Enregistrer
+        </button>
+      </div>
+
         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-brand-800 pt-3">
           <button
             type="button"
