@@ -19,6 +19,16 @@ class Fournisseur(Base, TimestampUpdateMixin):
     category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # e.g. plumbing, lumber, tiles
     website: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    # ANNUAIRE du chargé de projet : seules les fiches in_directory=True
+    # apparaissent dans la section Fournisseurs. Les fiches créées
+    # automatiquement par les imports QuickBooks (pull des coûts/achats)
+    # restent liées aux achats mais HORS annuaire — la section n'est pas
+    # un miroir des Vendors QB. Colonne additive (backfill one-shot au
+    # premier démarrage : fiches QB sans téléphone/contact/notes →
+    # False).
+    in_directory: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     notes: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
     # Delai de paiement par defaut (net-N jours) sur les achats payes
     # par facture fournisseur (payment_method = bill_to_pay). NULL =

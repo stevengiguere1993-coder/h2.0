@@ -139,6 +139,9 @@ async def _fournisseur_id_for(
         name=(vendor_name or "").strip()[:255],
         qbo_vendor_id=str(vendor_qbo_id) if vendor_qbo_id else None,
         active=True,
+        # Créé par le PULL des coûts QB : lié aux achats importés mais
+        # HORS annuaire (la section = annuaire du chargé de projet).
+        in_directory=False,
     )
     db.add(f)
     await db.flush()
