@@ -1,8 +1,7 @@
 """Page COMMUNICATIONS — Gestion locative (retour Phil 2026-07-27).
 
     GET  /immobilier/communications/destinataires  → immeubles + locataires
-         (gestion externe EXCLUE par défaut ;
-          ?inclure_gestion_externe=true la ramène)
+         (immeubles en gestion externe TOUJOURS exclus)
     GET  /immobilier/communications/reglages       → expéditeur par défaut
     PUT  /immobilier/communications/reglages       (manager+)
     POST /immobilier/communications/envoyer        → envoi individualisé
@@ -140,17 +139,18 @@ class ImmeubleDestinatairesOut(BaseModel):
 async def list_destinataires(
     db: DBSession,
     user: CurrentUser,
-    inclure_gestion_externe: bool = False,
 ) -> List[ImmeubleDestinatairesOut]:
     """Tous les locataires à bail ACTIF, groupés par immeuble — la
     matière du sélecteur « À qui ».
 
-    La GESTION EXTERNE est exclue PAR DÉFAUT (retour Phil 2026-08-13 :
-    « comment ça l'immeuble 1-3-5 Elgin y apparaît ? Il est gestion
-    externe pourtant ») : c'est le gestionnaire tiers qui parle à ses
-    locataires. La case « Inclure les immeubles en gestion externe » du
-    sélecteur les fait réapparaître — un avis d'accès reste parfois
-    pertinent même quand la perception est déléguée."""
+    La GESTION EXTERNE est TOUJOURS exclue (décision Phil 2026-08-19,
+    après le retour du 2026-08-13 « comment ça l'immeuble 1-3-5 Elgin y
+    apparaît ? Il est gestion externe pourtant ») : c'est le
+    gestionnaire tiers qui parle à ses locataires, et nous n'avons de
+    toute façon presque aucun de leurs courriels. La case « Inclure les
+    immeubles en gestion externe » a été retirée — elle n'ajoutait
+    quasiment personne tout en ouvrant la porte à un envoi hors
+    mandat."""
     _require_volet(user)
     query = (
         select(Bail, Locataire, Logement, Immeuble)
@@ -163,8 +163,7 @@ async def list_destinataires(
         )
         .order_by(Immeuble.name.asc(), Logement.numero.asc())
     )
-    if not inclure_gestion_externe:
-        query = query.where(Immeuble.gestion_externe.isnot(True))
+    query = query.where(Immeuble.gestion_externe.isnot(True))
     rows = (await db.execute(query)).all()
     mois_courant = _now().date().replace(day=1)
     dus = await _du_du_mois(db, [b.id for b, _l, _lg, _i in rows], mois_courant)
@@ -224,6 +223,38 @@ class ReglagesEnvoi(BaseModel):
     #: défaut ») — pré-sélectionné pour tous, l'employé peut en choisir un
     #: autre parmi la liste mais ne peut pas en créer.
     profil_defaut: str = ""
+
+
+class ExpediteurEffectif(BaseModel):
+    """Ce que le locataire verra RÉELLEMENT dans son « De : »."""
+
+    from_email: str = ""
+    from_name: str = ""
+    #: Là où atterrit une RÉPONSE du locataire. Vide = boîte système.
+    reply_to: str = ""
+
+
+@router.get("/expediteur", response_model=ExpediteurEffectif)
+async def get_expediteur_effectif(
+    db: DBSession, user: CurrentUser
+) -> ExpediteurEffectif:
+    """Expéditeur RÉSOLU (profil par défaut appliqué, replis compris).
+
+    Sert l'aperçu affiché avant un envoi CONTEXTUEL — depuis la fiche
+    d'un locataire, la page Assurances, un bouton DPA… (retour Phil
+    2026-08-19 : « je dis pas nécessairement de me rendre jusqu'à la
+    page de communication à chaque fois »). L'aperçu doit montrer ce qui
+    partira vraiment : on appelle donc la MÊME fonction que le chemin
+    d'envoi, jamais une copie des réglages bruts — sinon l'aperçu
+    dériverait de la réalité sans que personne ne le voie.
+    """
+    _require_volet(user)
+    from_email, from_name, reply_to = await expediteur_defaut()
+    return ExpediteurEffectif(
+        from_email=from_email or "",
+        from_name=from_name or "",
+        reply_to=reply_to or "",
+    )
 
 
 @router.get("/reglages", response_model=ReglagesEnvoi)
@@ -307,11 +338,6 @@ class EnvoyerIn(BaseModel):
     #: Label d'un PROFIL approuvé des réglages — seule façon pour un
     #: non-manager de choisir un autre expéditeur que le défaut.
     profil: Optional[str] = Field(default=None, max_length=80)
-    #: Miroir de la case du sélecteur « À qui » : les immeubles en
-    #: gestion externe sont exclus par défaut (leur gestionnaire tiers
-    #: parle à ses locataires).
-    inclure_gestion_externe: bool = False
-
 
 class EnvoyerOut(BaseModel):
     group_id: str
@@ -328,16 +354,14 @@ async def _resoudre_destinataires(
     db,
     immeuble_ids: List[int],
     locataire_ids: List[int],
-    inclure_gestion_externe: bool = False,
 ) -> List[tuple]:
     """(bail, locataire, logement, immeuble) des baux ACTIFS visés —
     union immeubles ∪ locataires, dédupliquée par locataire.
 
     Même règle que ``list_destinataires`` : la gestion externe est
-    EXCLUE par défaut, et le drapeau du formulaire (case « Inclure les
-    immeubles en gestion externe ») la ramène. Le filtre est appliqué
-    ici aussi pour que l'envoi corresponde exactement à ce que le
-    sélecteur montrait — pas de destinataire fantôme."""
+    TOUJOURS exclue. Le filtre est appliqué ici AUSSI (et pas seulement
+    dans le sélecteur) pour qu'un identifiant forgé dans la requête ne
+    puisse pas viser un locataire hors mandat."""
     if not immeuble_ids and not locataire_ids:
         return []
     q = (
@@ -348,8 +372,7 @@ async def _resoudre_destinataires(
         .where(Bail.status == BailStatus.ACTIF.value)
         .order_by(Immeuble.name.asc(), Logement.numero.asc())
     )
-    if not inclure_gestion_externe:
-        q = q.where(Immeuble.gestion_externe.isnot(True))
+    q = q.where(Immeuble.gestion_externe.isnot(True))
     rows = (await db.execute(q)).all()
     vus: set[int] = set()
     out: List[tuple] = []
@@ -462,7 +485,6 @@ async def envoyer(
         db,
         payload.immeuble_ids,
         payload.locataire_ids,
-        payload.inclure_gestion_externe,
     )
     if not cibles:
         raise HTTPException(

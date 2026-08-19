@@ -4262,6 +4262,10 @@ class LoyerOverviewRow(BaseModel):
     locataire_id: Optional[int] = None
     locataire_name: Optional[str] = None
     locataire_phone: Optional[str] = None
+    #: Sert l'aperçu affiché avant une relance de loyer : le
+    #: gestionnaire doit voir À QUELLE adresse le rappel partira avant
+    #: de l'envoyer (retour Phil 2026-08-19).
+    locataire_email: Optional[str] = None
     loyer_mensuel: float
     #: Jour d'échéance du loyer (bail TAL « Ou le ___ ») — affiché
     #: « payable le X » à côté du loyer quand ce n'est pas le 1er, et
@@ -4690,6 +4694,7 @@ async def loyers_overview(
                 locataire_id=loc.id if loc else None,
                 locataire_name=loc.full_name if loc else None,
                 locataire_phone=loc.phone if loc else None,
+                locataire_email=loc.email if loc else None,
                 loyer_mensuel=loyer,
                 jour_echeance=b.jour_echeance or 1,
                 paiement_id=dernier.id if dernier else None,

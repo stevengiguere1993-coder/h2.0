@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { ApercuEnvoiModal } from "@/components/immobilier/apercu-envoi";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
@@ -63,6 +64,7 @@ type Row = {
   locataire_id: number | null;
   locataire_name: string | null;
   locataire_phone: string | null;
+  locataire_email: string | null;
   loyer_mensuel: number;
   /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
   jour_echeance?: number | null;
@@ -137,6 +139,8 @@ function externeToRow(x: RowExterne): Row {
     locataire_id: null,
     locataire_name: null,
     locataire_phone: null,
+    // Gestion externe : aucun locataire chez nous, donc aucun courriel.
+    locataire_email: null,
     loyer_mensuel: x.loyer_mensuel,
     jour_echeance: 1,
     paiement_id: null,
@@ -211,6 +215,8 @@ export default function PaiementsPage() {
   const [error, setError] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<number | null>(null);
   const [relancingId, setRelancingId] = useState<number | null>(null);
+  //: Ligne dont la relance attend confirmation (aperçu ouvert).
+  const [relanceApercu, setRelanceApercu] = useState<Row | null>(null);
   const [correctingId, setCorrectingId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -449,7 +455,14 @@ export default function PaiementsPage() {
     }
   }
 
+  //: Le bouton ouvre un aperçu — ce rappel n'avait AUCUNE
+  //: confirmation, un clic de travers relançait un locataire à jour
+  //: (retour Phil 2026-08-19).
   async function relancer(row: Row) {
+    setRelanceApercu(row);
+  }
+
+  async function envoyerRelance(row: Row) {
     setRelancingId(row.bail_id);
     try {
       const r = await authedFetch("/api/v1/immobilier/loyers/relance", {
@@ -464,6 +477,7 @@ export default function PaiementsPage() {
       flash(
         `Relance ${res.niveau} envoyée à ${res.destinataire}`
       );
+      setRelanceApercu(null);
       await load();
     } catch (e) {
       setError(`Relance échouée : ${(e as Error).message}`);
@@ -743,6 +757,22 @@ export default function PaiementsPage() {
           </div>
         ) : null}
 
+        {relanceApercu ? (
+          <ApercuEnvoiModal
+            titre="Relance de loyer"
+            description={
+              `Un rappel de loyer pour ${mois}. Le niveau s'incrémente ` +
+              "à chaque relance du même mois — ces envois servent de " +
+              "preuve au TAL, donc vérifie que le loyer est bien impayé."
+            }
+            destinataireNom={relanceApercu.locataire_name || "Locataire"}
+            destinataireEmail={relanceApercu.locataire_email}
+            libelleEnvoi="Envoyer la relance"
+            busy={relancingId === relanceApercu.bail_id}
+            onAnnuler={() => setRelanceApercu(null)}
+            onConfirmer={() => void envoyerRelance(relanceApercu)}
+          />
+        ) : null}
         <BandeauAvisRenouvellement entrepriseId={currentEntrepriseId} />
 
         {/* Filtres */}

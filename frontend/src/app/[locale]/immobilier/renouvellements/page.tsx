@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { ApercuEnvoiModal } from "@/components/immobilier/apercu-envoi";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "../layout";
 
@@ -124,6 +125,8 @@ function AssurancesTab() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  //: Ligne dont l'envoi est en cours de confirmation (aperçu ouvert).
+  const [apercu, setApercu] = useState<AssuranceRow | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -190,13 +193,14 @@ function AssurancesTab() {
     }
   }
 
+  //: L'envoi part d'ICI (pas de détour par la page Communications —
+  //: retour Phil 2026-08-19), mais un aperçu montre d'abord à qui et
+  //: DEPUIS QUELLE ADRESSE le courriel partira.
   async function demander(row: AssuranceRow) {
-    if (
-      !window.confirm(
-        `Envoyer un courriel à ${row.locataire_nom} (${row.locataire_email}) pour demander sa preuve d'assurance habitation ?`
-      )
-    )
-      return;
+    setApercu(row);
+  }
+
+  async function envoyerDemande(row: AssuranceRow) {
     setBusyId(row.locataire_id);
     setMsg(null);
     try {
@@ -207,6 +211,7 @@ function AssurancesTab() {
       if (!r.ok)
         throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
       setMsg(`Demande de preuve envoyée à ${row.locataire_email}.`);
+      setApercu(null);
       await load();
     } catch (e) {
       setErr(`Envoi échoué : ${(e as Error).message}`);
@@ -235,6 +240,22 @@ function AssurancesTab() {
 
   return (
     <div className="mt-4">
+      {apercu ? (
+        <ApercuEnvoiModal
+          titre="Demande de preuve d'assurance"
+          description={
+            "Un courriel demandant la preuve d'assurance habitation à " +
+            "jour. Rien d'autre ne part — et rien n'est envoyé " +
+            "automatiquement."
+          }
+          destinataireNom={apercu.locataire_nom}
+          destinataireEmail={apercu.locataire_email}
+          libelleEnvoi="Envoyer la demande"
+          busy={busyId === apercu.locataire_id}
+          onAnnuler={() => setApercu(null)}
+          onConfirmer={() => void envoyerDemande(apercu)}
+        />
+      ) : null}
       {data ? (
         <div className="grid grid-cols-3 gap-3">
           <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">

@@ -132,8 +132,30 @@ const TYPES = [
   }
 ] as const;
 
+//: L'historique ne contient PAS que ce qui part d'ici : depuis l'audit
+//: du 2026-08-19, tout courriel au locataire y atterrit, d'où qu'il
+//: parte (fiche, bail, avis de renouvellement, relance…). Sans ces
+//: libellés, ces lignes s'affichaient avec leur code brut
+//: (« relance_loyer »). L'ordre suit celui du menu de filtre.
+const TYPES_AUTOMATIQUES = [
+  { value: "avis_renouvellement", label: "Avis de renouvellement" },
+  { value: "document_signature", label: "Document à signer" },
+  { value: "copie_signee", label: "Copie signée transmise" },
+  { value: "document_courriel", label: "Document transmis" },
+  { value: "bail_signature", label: "Bail à signer" },
+  { value: "relance_loyer", label: "Relance de loyer" },
+  { value: "dpa", label: "Prélèvement préautorisé (DPA)" }
+] as const;
+
+//: Tout ce qui peut apparaître dans l'historique = composable + envoyé
+//: depuis ailleurs.
+const TYPES_HISTORIQUE = [...TYPES, ...TYPES_AUTOMATIQUES] as ReadonlyArray<{
+  value: string;
+  label: string;
+}>;
+
 function typeLabel(t: string): string {
-  return TYPES.find((x) => x.value === t)?.label || t;
+  return TYPES_HISTORIQUE.find((x) => x.value === t)?.label || t;
 }
 
 function fmtDate(iso?: string | null): string {
@@ -162,7 +184,6 @@ export default function CommunicationsPage() {
   // Gestion externe : masquée par défaut (c'est le gestionnaire tiers
   // qui parle à ses locataires). La case la ramène — et le drapeau part
   // avec l'envoi pour que le backend applique la même règle.
-  const [avecExterne, setAvecExterne] = useState(false);
 
   // Quoi
   const [type, setType] = useState<string>("rappel_paiement");
@@ -232,10 +253,7 @@ export default function CommunicationsPage() {
   useEffect(() => {
     void (async () => {
       const [rd, rr] = await Promise.all([
-        authedFetch(
-          "/api/v1/immobilier/communications/destinataires" +
-            (avecExterne ? "?inclure_gestion_externe=true" : "")
-        ),
+        authedFetch("/api/v1/immobilier/communications/destinataires"),
         authedFetch("/api/v1/immobilier/communications/reglages")
       ]);
       if (rd.ok) setBlocs(await rd.json());
@@ -246,13 +264,14 @@ export default function CommunicationsPage() {
         if (cfg.profil_defaut) setProfilSel(cfg.profil_defaut);
       }
     })();
-  }, [avecExterne]);
+  }, []);
 
-  // Décocher la case retire les immeubles externes de la liste : leurs
-  // sélections doivent partir avec eux, sinon on enverrait à des gens
-  // devenus invisibles (le backend les filtrerait de toute façon).
+  // Filet : la gestion externe est TOUJOURS hors liste (décision Phil
+  // 2026-08-19). Si une sélection en mémoire vise un immeuble devenu
+  // invisible, elle part avec lui — sinon on enverrait à des gens que
+  // l'écran ne montre plus (le backend les filtrerait de toute façon).
   useEffect(() => {
-    if (avecExterne || !blocs) return;
+    if (!blocs) return;
     const visibles = new Set(blocs.map((b) => b.immeuble_id));
     const locVisibles = new Set(
       blocs.flatMap((b) => b.locataires.map((l) => l.locataire_id))
@@ -264,7 +283,7 @@ export default function CommunicationsPage() {
         if (!locVisibles.has(id)) next.delete(id);
       return next;
     });
-  }, [avecExterne, blocs]);
+  }, [blocs]);
 
   useEffect(() => {
     void loadAudit();
@@ -489,7 +508,6 @@ export default function CommunicationsPage() {
             profil: profilSel || undefined,
             // Miroir de la case : l'envoi vise exactement ce que le
             // sélecteur montrait.
-            inclure_gestion_externe: avecExterne
           })
         }
       );
@@ -612,24 +630,14 @@ export default function CommunicationsPage() {
               </div>
             </div>
 
-            {/* Gestion externe : hors liste par défaut — c'est leur
-                gestionnaire qui écrit à ces locataires. */}
-            <label className="mb-2 flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2 text-xs text-white/80">
-              <input
-                type="checkbox"
-                checked={avecExterne}
-                onChange={(e) => setAvecExterne(e.target.checked)}
-                className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent-500,#f59e0b)]"
-              />
-              <span>
-                Inclure les immeubles en gestion externe
-                <span className="block text-[10px] text-white/45">
-                  Décoché (défaut) : leur gestionnaire s&apos;occupe de
-                  ses locataires. Coche si l&apos;avis part quand même de
-                  nous (ex. avis d&apos;accès pour des travaux).
-                </span>
-              </span>
-            </label>
+            {/* Gestion externe : jamais dans la liste — c'est leur
+                gestionnaire qui écrit à ces locataires, et nous
+                n'avons quasiment aucun de leurs courriels. */}
+            <p className="mb-2 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2 text-[10px] text-white/45">
+              Les immeubles en gestion externe ne sont pas listés :
+              c&apos;est leur gestionnaire qui communique avec ses
+              locataires.
+            </p>
 
             {blocs === null ? (
               <div className="flex items-center gap-2 py-6 text-xs text-white/50">
@@ -1190,7 +1198,7 @@ export default function CommunicationsPage() {
               className="input py-1.5 text-sm"
             >
               <option value="">Tous les types</option>
-              {TYPES.map((t) => (
+              {TYPES_HISTORIQUE.map((t) => (
                 <option key={t.value} value={t.value}>
                   {t.label}
                 </option>
