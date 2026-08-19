@@ -761,3 +761,84 @@ def test_historique_porte_le_suivi_du_document(client, auth_headers, run):
     assert simple["document_id"] is None
     assert simple["document_ouvert_le"] is None
     assert simple["document_signature_requise"] is False
+
+
+def test_avis_acces_exige_motif_et_plage(client, auth_headers, comm_seed,
+                                         fake_mailer):
+    """Un avis d'accès sans motif ni plage horaire ne vaut rien devant le
+    TAL : la loi exige le moment ET la raison (art. 1932-1933 C.c.Q.).
+    L'envoi est refusé plutôt que de laisser partir un avis inopposable
+    — et le gabarit écrirait « Motif : — » (retour Phil 2026-08-19).
+    """
+    base = {
+        "type": "avis_acces",
+        "immeuble_ids": [comm_seed["immeuble_id"]],
+        "locataire_ids": [],
+        "from_email": "info@immohorizon.com",
+        "acces_date": "2026-09-03",
+    }
+    # Ni plage ni motif.
+    r = client.post(
+        "/api/v1/immobilier/communications/envoyer",
+        headers=auth_headers, json=base,
+    )
+    assert r.status_code == 422, r.text
+    assert "plage horaire" in r.text and "motif" in r.text
+    assert fake_mailer.sent == []
+
+    # Motif seul : la plage manque toujours.
+    r2 = client.post(
+        "/api/v1/immobilier/communications/envoyer",
+        headers=auth_headers,
+        json={**base, "acces_motif": "inspection des détecteurs"},
+    )
+    assert r2.status_code == 422, r2.text
+    assert fake_mailer.sent == []
+
+    # Complet : l'envoi passe.
+    r3 = client.post(
+        "/api/v1/immobilier/communications/envoyer",
+        headers=auth_headers,
+        json={
+            **base,
+            "acces_motif": "inspection des détecteurs",
+            "acces_plage": "entre 9 h et 12 h",
+        },
+    )
+    assert r3.status_code == 200, r3.text
+    assert fake_mailer.sent, "le courriel doit partir"
+
+
+def test_les_lettres_portent_salutation_et_politesse():
+    """Retour Phil 2026-08-19 : l'avis d'accès et la demande d'assurance
+    étaient « moins bien écrits » que la relance de loyer — ils
+    partaient sans « Bonjour » ni « Cordialement ». L'enveloppe est
+    ajoutée au RENDU, donc elle ne peut pas être supprimée par
+    inadvertance en modifiant un gabarit depuis Paramètres.
+    """
+    from datetime import date as _date
+
+    from app.services.tal_forms import TalContext, render_lettre_courriel
+
+    ctx = TalContext(
+        locateur_nom="Horizon Services Immobiliers",
+        locataire_nom="Jean Tremblay",
+        logement_adresse="123 rue Exemple",
+        logement_numero="4",
+        logement_ville="Montréal",
+        acces_date=_date(2026, 9, 3),
+        acces_plage="entre 9 h et 12 h",
+        acces_motif="inspection annuelle",
+        mois_concerne=_date(2026, 9, 1),
+        montant_du=1250.0,
+    )
+    for form in ("avis_acces", "demande_assurance", "rappel_paiement"):
+        _sujet, corps = render_lettre_courriel(form, ctx)
+        assert corps.startswith("Bonjour Jean,"), form
+        assert corps.rstrip().endswith("Horizon Services Immobiliers"), form
+        assert "Cordialement," in corps, form
+
+    # La demande d'assurance doit NOMMER le logement : une attestation
+    # vise une adresse précise.
+    _s, corps_assur = render_lettre_courriel("demande_assurance", ctx)
+    assert "123 rue Exemple" in corps_assur

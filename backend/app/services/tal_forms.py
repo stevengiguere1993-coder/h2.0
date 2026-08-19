@@ -306,10 +306,14 @@ GABARITS_DEFAUT: dict[str, dict] = {
     "demande_assurance": {
         "titre": "Preuve d'assurance habitation",
         "paragraphes": [
+            # Retour Phil 2026-08-19 : le locataire doit savoir DE
+            # QUEL logement on parle — une attestation d'assurance
+            # vise une adresse précise.
             "Dans le cadre du suivi annuel de votre dossier, merci de "
             "nous faire parvenir une **preuve de votre assurance "
-            "habitation** (responsabilité civile) en vigueur — une copie "
-            "ou une photo de votre attestation d'assurance suffit.",
+            "habitation** (responsabilité civile) en vigueur pour le "
+            "logement situé au **{adresse}** — une copie ou une photo "
+            "de votre attestation d'assurance suffit.",
             "Vous pouvez simplement répondre à ce courriel avec le "
             "document.",
         ],
@@ -588,4 +592,36 @@ def render_lettre_courriel(
     corps = "\n\n".join(
         _remplir(str(p)) for p in paragraphes if str(p).strip()
     )
-    return _remplir(str(titre)), corps
+    return _remplir(str(titre)), enveloppe_courriel(
+        variables.get("locataire"), corps, variables.get("locateur")
+    )
+
+
+def enveloppe_courriel(
+    nom_locataire: Optional[str],
+    corps: str,
+    locateur: Optional[str] = None,
+) -> str:
+    """Ajoute la salutation et la formule de politesse au corps.
+
+    Retour Phil 2026-08-19 : l'avis d'accès et la demande d'assurance
+    étaient « moins bien écrits » que la relance de loyer — celle-ci
+    commence par « Bonjour {nom} » et finit par « Cordialement ».
+    Les lettres de la page Communications, elles, partaient nues.
+
+    L'enveloppe est ajoutée au RENDU, jamais rangée dans le gabarit :
+    sinon quelqu'un qui modifie le texte depuis Paramètres pourrait
+    supprimer la politesse sans s'en rendre compte.
+    """
+    nom = (nom_locataire or "").strip()
+    # Prénom seul : « Bonjour Jean » se lit mieux que « Bonjour Jean
+    # Tremblay ». Un bail à deux noms garde la formule complète.
+    if nom and "," not in nom and " et " not in nom.lower():
+        nom = nom.split(" ")[0]
+    salutation = f"Bonjour {nom}," if nom else "Bonjour,"
+    signature = (locateur or "").strip() or "Horizon Services Immobiliers"
+    sep = chr(10) + chr(10)
+    return (
+        salutation + sep + corps + sep + "Cordialement," + chr(10)
+        + signature
+    )
