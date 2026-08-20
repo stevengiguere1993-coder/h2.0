@@ -41,6 +41,7 @@ import { ContratGestionTab } from "./contrat-gestion-tab";
 import { BandeauAvisRenouvellement } from "@/components/immobilier/bandeau-avis";
 import { ApercuEnvoiModal } from "@/components/immobilier/apercu-envoi";
 import { BandeauBailManquant } from "@/components/immobilier/bandeau-bail-manquant";
+import { BandeauDepotARembourser } from "@/components/immobilier/bandeau-depot";
 import {
   fmtPieces,
   LogementFiche
@@ -2428,6 +2429,7 @@ function BauxTab({
           limité aux alertes de CET immeuble. */}
       <BandeauAvisRenouvellement immeubleId={immeubleId} />
       <BandeauBailManquant immeubleId={immeubleId} />
+      <BandeauDepotARembourser immeubleId={immeubleId} />
 
       {rows ? (
         <div className="flex flex-wrap items-center justify-between gap-2">

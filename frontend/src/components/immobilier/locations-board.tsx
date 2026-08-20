@@ -1467,6 +1467,43 @@ function ConvertModal({
   const [dateNaissance, setDateNaissance] = useState("");
   const [nas, setNas] = useState("");
   const [ancienneAdresse, setAncienneAdresse] = useState("");
+  //: Dépôt de l'ANCIEN locataire encore détenu sur ce logement. Phil a
+  //: refusé un verrou ici (« ça peut être un petit peu gossant ») : on
+  //: le RAPPELLE au bon moment, sans jamais empêcher la relocation.
+  const [depotADue, setDepotADue] = useState<{
+    montant: number;
+    locataire: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/immobilier/depots/overview?immeuble_id=${d.immeuble_id}`
+        );
+        if (!r.ok) return;
+        const data = (await r.json()) as {
+          rows: {
+            logement_id: number | null;
+            statut: string;
+            montant: number;
+            locataire_name: string | null;
+          }[];
+        };
+        const ligne = (data.rows || []).find(
+          (x) => x.statut === "a_rendre" && x.logement_id === d.logement_id
+        );
+        if (ligne) {
+          setDepotADue({
+            montant: ligne.montant,
+            locataire: ligne.locataire_name
+          });
+        }
+      } catch {
+        /* le rappel est un plus : son absence ne bloque rien */
+      }
+    })();
+  }, [d.immeuble_id, d.logement_id]);
   // Locataire EXISTANT (déjà client) : le bail s'attache à sa fiche.
   const [modeExistant, setModeExistant] = useState(
     candidat.locataire_id != null
@@ -1700,6 +1737,24 @@ function ConvertModal({
                 />
               </label>
             </div>
+            {depotADue ? (
+              /* Rappel, pas verrou : le dépôt de l'ancien locataire est
+                 dû dès son départ, et c'est l'oubli le plus courant
+                 (« il oublie tout le temps de venir l'enlever à la
+                 fin »). On le dit ici, au moment où on pense au
+                 logement — la relocation n'est jamais bloquée. */
+              <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100/85">
+                💰 Le dépôt de{" "}
+                <b>{depotADue.locataire || "l'ancien locataire"}</b> (
+                {new Intl.NumberFormat("fr-CA", {
+                  style: "currency",
+                  currency: "CAD",
+                  maximumFractionDigits: 0
+                }).format(depotADue.montant)}
+                ) n&apos;a pas encore été remboursé pour ce logement. Ça
+                n&apos;empêche pas la relocation — mais il lui est dû.
+              </p>
+            ) : null}
             <div className="grid grid-cols-2 gap-3">
               <label className="text-[11px] font-semibold text-white/60">
                 Date de naissance *

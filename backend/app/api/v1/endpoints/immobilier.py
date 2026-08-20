@@ -3202,18 +3202,28 @@ class DepotOverview(BaseModel):
 
 @router.get("/depots/overview", response_model=DepotOverview)
 async def depots_overview(
-    db: DBSession, user: CurrentUser, entreprise_id: Optional[int] = None
+    db: DBSession,
+    user: CurrentUser,
+    entreprise_id: Optional[int] = None,
+    immeuble_id: Optional[int] = None,
 ) -> DepotOverview:
-    """Suivi des dépôts de garantie : détenus vs à rendre. Un dépôt
-    n'est « à rendre » que si le logement a été REMIS EN LOCATION à un
-    autre locataire — pas simplement parce que le bail est terminé."""
+    """Suivi des dépôts de garantie : détenus vs à rendre.
+
+    Un dépôt n'est « à rendre » que si le locataire est PARTI — la fin
+    d'un bail ne suffit pas (au Québec il se reconduit tacitement). On
+    le sait de deux façons : le logement a été reloué à quelqu'un
+    d'autre, ou son départ était acté et la date est passée.
+    """
     _require_volet(user)
+    today = _now().date()
 
     # Gestion externe : dépôts suivis par le gestionnaire tiers → exclu
     # (isnot(True) couvre les NULL legacy).
     imm_q = select(Immeuble).where(Immeuble.gestion_externe.isnot(True))
     if entreprise_id is not None:
         imm_q = imm_q.where(Immeuble.owner_entreprise_id == int(entreprise_id))
+    if immeuble_id is not None:
+        imm_q = imm_q.where(Immeuble.id == int(immeuble_id))
     immeubles = (await db.execute(imm_q)).scalars().all()
     visible = await visible_immeuble_ids(db, user)
     if visible is not None:
@@ -3257,6 +3267,35 @@ async def depots_overview(
         BailStatus.TERMINE.value,
         BailStatus.RESILIE.value,
     }
+    # Départs ACTÉS dont la date est passée : le locataire est parti,
+    # qu'on ait reloué ou non.
+    baux_partis: set[int] = set()
+    if baux:
+        from app.models.immobilier import LocationDossier
+        from app.services.locatif_depart import DOSSIER_STATUTS_REGLES
+
+        dossiers = (
+            await db.execute(
+                select(LocationDossier).where(
+                    LocationDossier.logement_id.in_(
+                        {b.logement_id for b in baux}
+                    )
+                )
+            )
+        ).scalars().all()
+        for d in dossiers:
+            depart = d.date_depart
+            if depart is None or depart > today:
+                continue
+            if d.statut in DOSSIER_STATUTS_REGLES and (
+                d.statut != "reloue"
+            ):
+                continue  # dossier annulé : le locataire est resté
+            for b in baux:
+                if b.logement_id == d.logement_id and (
+                    d.bail_id is None or d.bail_id == b.id
+                ):
+                    baux_partis.add(b.id)
     # Baux ACTIFS par logement — pour savoir si un logement a été REMIS
     # EN LOCATION (c'est ça, et pas la fin du bail, qui déclenche le
     # remboursement du dépôt de l'ancien locataire).
@@ -3283,13 +3322,24 @@ async def depots_overview(
         elif b.depot_rendu_le is not None:
             statut = "rendu"
             total_rendu += montant
-        elif b.status in a_rendre_status and any(
-            nb.id != b.id and nb.locataire_id != b.locataire_id
-            for nb in actifs_par_logement.get(b.logement_id, [])
+        elif b.status in a_rendre_status and (
+            any(
+                nb.id != b.id and nb.locataire_id != b.locataire_id
+                for nb in actifs_par_logement.get(b.logement_id, [])
+            )
+            or b.id in baux_partis
         ):
             # Retour Phil 2026-07-30 : la fin du bail ne suffit pas —
-            # c'est la RELOCATION du logement à quelqu'un d'autre qui
-            # veut dire que l'ancien locataire est parti.
+            # c'est le DÉPART qui veut dire que l'ancien locataire est
+            # parti. Deux façons de le savoir :
+            #   - le logement a été reloué à quelqu'un d'autre ;
+            #   - ou son départ était ACTÉ et la date est passée.
+            #
+            # Le second cas a été ajouté le 2026-08-19 : attendre la
+            # relocation retardait l'alerte de plusieurs semaines, alors
+            # que le dépôt est dû au locataire dès son départ. C'est
+            # précisément l'oubli que Phil voulait attraper — « il
+            # oublie tout le temps de venir l'enlever à la fin ».
             statut = "a_rendre"
             total_a_rendre += montant
         else:
