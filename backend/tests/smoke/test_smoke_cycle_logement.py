@@ -516,3 +516,119 @@ def test_locataire_parti_garde_son_releve_31(client, auth_headers, run):
         "il a occupé le logement"
     )
     assert ids["arrive"] in par_loc, "deux occupants = deux relevés"
+
+
+def test_renouvellements_filtrables_par_fiche(client, auth_headers, run):
+    """Même donnée, filtrée — jamais une deuxième implémentation. La
+    ligne filtrée doit avoir exactement les mêmes champs que la ligne
+    de la page complète, sinon la fiche finirait par montrer autre
+    chose (retour Phil 2026-08-19).
+    """
+    async def _seed() -> dict:
+        async with TestSessionLocal() as s:
+            imm = Immeuble(
+                name="Immeuble Renouv Miroir", address="90 rue Renouv",
+                city="Montréal", is_active=True,
+            )
+            s.add(imm)
+            await s.flush()
+            ids = {}
+            for numero in ("1", "2"):
+                lg = Logement(
+                    immeuble_id=imm.id, numero=numero,
+                    status=LogementStatus.OCCUPE.value,
+                )
+                lo = Locataire(full_name=f"Renouv {numero}")
+                s.add_all([lg, lo])
+                await s.flush()
+                s.add(
+                    Bail(
+                        logement_id=lg.id, locataire_id=lo.id,
+                        date_debut=date.today() - timedelta(days=200),
+                        date_fin=date.today() + timedelta(days=160),
+                        loyer_mensuel=1000.0,
+                        status=BailStatus.ACTIF.value,
+                    )
+                )
+                ids[numero] = {"loc": lo.id, "lg": lg.id}
+            await s.commit()
+            return ids
+
+    ids = run(_seed())
+    base = "/api/v1/immobilier/renouvellements/overview"
+    tout = client.get(base, headers=auth_headers).json()
+    assert len(tout) >= 2
+
+    par_loc = client.get(
+        f"{base}?locataire_id={ids['1']['loc']}", headers=auth_headers
+    ).json()
+    assert len(par_loc) == 1
+    assert par_loc[0]["locataire_id"] == ids["1"]["loc"]
+    assert par_loc[0].keys() == tout[0].keys()
+
+    par_log = client.get(
+        f"{base}?logement_id={ids['2']['lg']}", headers=auth_headers
+    ).json()
+    assert len(par_log) == 1
+    assert par_log[0]["logement_id"] == ids["2"]["lg"]
+
+
+def test_recalage_ne_touche_jamais_la_gestion_externe(run):
+    """⚠️ Régression du 2026-08-20, corrigée le jour même.
+
+    En gestion externe, le statut du logement est saisi À LA MAIN : les
+    baux de ces immeubles ne sont pas dans Kratos. La règle « pas de
+    bail actif → vacant » y est donc un contresens — et son application
+    par le recalage global a mis « vacant » les 19 logements de la
+    Place Sapinière, tous occupés (leurs paiements d'août le
+    prouvaient). Un locataire réel a « disparu » de la page Paiements.
+
+    Deux gardes, testées toutes les deux : le recalage UNITAIRE refuse,
+    et le recalage GLOBAL ne visite même pas ces logements.
+    """
+    from app.services.locatif_depart import (
+        recaler_statut_logement,
+        recaler_tous_les_statuts_logements,
+    )
+
+    async def _seed() -> int:
+        async with TestSessionLocal() as s:
+            imm = Immeuble(
+                name="Immeuble Externe Statut", address="100 rue Externe",
+                city="Valcourt", is_active=True, gestion_externe=True,
+            )
+            s.add(imm)
+            await s.flush()
+            # Occupé À LA MAIN, AUCUN bail — la situation normale d'un
+            # immeuble en gestion externe.
+            lg = Logement(
+                immeuble_id=imm.id, numero="957-2",
+                status=LogementStatus.OCCUPE.value,
+            )
+            s.add(lg)
+            await s.flush()
+            await s.commit()
+            return lg.id
+
+    lg_id = run(_seed())
+
+    async def _recaler_unitaire() -> str:
+        async with TestSessionLocal() as s:
+            await recaler_statut_logement(s, lg_id)
+            await s.commit()
+        async with TestSessionLocal() as s:
+            return (await s.get(Logement, lg_id)).status
+
+    assert run(_recaler_unitaire()) == LogementStatus.OCCUPE.value, (
+        "recaler_statut_logement ne doit JAMAIS toucher la gestion externe"
+    )
+
+    async def _recaler_global() -> str:
+        async with TestSessionLocal() as s:
+            await recaler_tous_les_statuts_logements(s)
+        async with TestSessionLocal() as s:
+            return (await s.get(Logement, lg_id)).status
+
+    assert run(_recaler_global()) == LogementStatus.OCCUPE.value, (
+        "le recalage global ne doit pas visiter la gestion externe"
+    )
