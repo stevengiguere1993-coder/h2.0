@@ -1028,28 +1028,205 @@ async def delete_immeuble(
 ) -> None:
     _require_volet(user)
     obj = await _get_immeuble_or_404(db, immeuble_id)
-    # Garde-fou (audit 2026-07-31) : un immeuble avec des baux ou des
-    # paiements ne se supprime pas — la cascade raserait tout
-    # l'historique financier. Désactive-le plutôt (is_active=False).
-    nb_baux = (
+    # Garde-fou (audit 2026-07-31, recentré le 2026-08-20) : ce qu'on
+    # protège, c'est l'HISTORIQUE FINANCIER — pas les baux en soi.
+    # L'ancienne garde comptait les baux : un immeuble de TEST (baux
+    # sans un seul paiement) devenait insupprimable, et le chemin
+    # manuel menait de 409 en 409 (bail actif → dossier lié → …).
+    # Retour Phil : « je peux pas supprimer un immeuble que j'avais en
+    # test ». Nouvelle règle : le moindre paiement, frais ou dépôt
+    # détenu bloque ; sinon, la suppression emporte proprement baux,
+    # dossiers et documents.
+    bail_ids = [
+        r[0]
+        for r in (
+            await db.execute(
+                select(Bail.id)
+                .join(Logement, Logement.id == Bail.logement_id)
+                .where(Logement.immeuble_id == immeuble_id)
+            )
+        ).all()
+    ]
+
+    if bail_ids:
+        nb_paiements = (
+            await db.execute(
+                select(func.count(PaiementLoyer.id)).where(
+                    PaiementLoyer.bail_id.in_(bail_ids)
+                )
+            )
+        ).scalar_one()
+        nb_frais = (
+            await db.execute(
+                select(func.count(FraisLocatif.id)).where(
+                    FraisLocatif.bail_id.in_(bail_ids)
+                )
+            )
+        ).scalar_one()
+        nb_depots = (
+            await db.execute(
+                select(func.count(Bail.id)).where(
+                    Bail.id.in_(bail_ids),
+                    Bail.depot_garantie.is_not(None),
+                    Bail.depot_garantie > 0,
+                    Bail.depot_rendu_le.is_(None),
+                )
+            )
+        ).scalar_one()
+        if nb_paiements or nb_frais or nb_depots:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Cet immeuble a un historique financier "
+                    f"({nb_paiements} paiement(s), {nb_frais} frais, "
+                    f"{nb_depots} dépôt(s) détenu(s)) — il ne se "
+                    "supprime pas. Désactive-le plutôt (is_active)."
+                ),
+            )
+
+    # Paiements de gestion externe = historique financier aussi.
+    log_ids = [
+        r[0]
+        for r in (
+            await db.execute(
+                select(Logement.id).where(
+                    Logement.immeuble_id == immeuble_id
+                )
+            )
+        ).all()
+    ]
+    if log_ids:
+        from app.models.immobilier import PaiementExterne
+
+        nb_ext = (
+            await db.execute(
+                select(func.count(PaiementExterne.id)).where(
+                    PaiementExterne.logement_id.in_(log_ids)
+                )
+            )
+        ).scalar_one()
+        if nb_ext:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Cet immeuble a {nb_ext} paiement(s) de gestion "
+                    "externe — il ne se supprime pas. Désactive-le "
+                    "plutôt (is_active)."
+                ),
+            )
+
+    # Aucun historique : on emporte les dépendances dans l'ordre. Les
+    # locataires créés pour CET immeuble partent aussi — mais jamais
+    # ceux qui ont un bail ailleurs.
+    from sqlalchemy import delete as _delete, update as _update
+
+    from app.models.immobilier import (
+        BailRenouvellement,
+        ImmCommunication,
+        ImmDocument,
+        LocataireCommunication,
+        LocationAnnonce,
+        LocationDossier,
+        LocationVisite,
+        RelanceLoyer,
+    )
+
+    loc_ids: set[int] = set()
+    if bail_ids:
+        loc_ids = {
+            r[0]
+            for r in (
+                await db.execute(
+                    select(Bail.locataire_id).where(
+                        Bail.id.in_(bail_ids),
+                        Bail.locataire_id.is_not(None),
+                    )
+                )
+            ).all()
+        }
+        ailleurs = {
+            r[0]
+            for r in (
+                await db.execute(
+                    select(Bail.locataire_id).where(
+                        Bail.locataire_id.in_(list(loc_ids)),
+                        Bail.id.notin_(bail_ids),
+                    )
+                )
+            ).all()
+        }
+        loc_ids -= ailleurs
+
         await db.execute(
-            select(func.count(Bail.id))
-            .select_from(Bail)
-            .join(Logement, Logement.id == Bail.logement_id)
-            .where(Logement.immeuble_id == immeuble_id)
+            _delete(RelanceLoyer).where(RelanceLoyer.bail_id.in_(bail_ids))
         )
-    ).scalar_one()
-    if nb_baux:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Cet immeuble a {nb_baux} bail(aux) et leur historique "
-                "de paiements — supprime d'abord les baux, ou désactive "
-                "l'immeuble au lieu de le supprimer."
-            ),
+        await db.execute(
+            _delete(BailRenouvellement).where(
+                BailRenouvellement.bail_id.in_(bail_ids)
+            )
+        )
+        await db.execute(
+            _delete(ImmDocument).where(ImmDocument.bail_id.in_(bail_ids))
+        )
+    await db.execute(
+        _delete(ImmDocument).where(ImmDocument.immeuble_id == immeuble_id)
+    )
+    if log_ids:
+        dossier_ids = [
+            r[0]
+            for r in (
+                await db.execute(
+                    select(LocationDossier.id).where(
+                        LocationDossier.logement_id.in_(log_ids)
+                    )
+                )
+            ).all()
+        ]
+        if dossier_ids:
+            await db.execute(
+                _delete(LocationVisite).where(
+                    LocationVisite.dossier_id.in_(dossier_ids)
+                )
+            )
+            await db.execute(
+                _delete(LocationAnnonce).where(
+                    LocationAnnonce.dossier_id.in_(dossier_ids)
+                )
+            )
+            await db.execute(
+                _delete(LocationDossier).where(
+                    LocationDossier.id.in_(dossier_ids)
+                )
+            )
+    if bail_ids:
+        await db.execute(_delete(Bail).where(Bail.id.in_(bail_ids)))
+    if loc_ids:
+        ids = list(loc_ids)
+        await db.execute(
+            _delete(LocataireCommunication).where(
+                LocataireCommunication.locataire_id.in_(ids)
+            )
+        )
+        await db.execute(
+            _delete(ImmDocument).where(ImmDocument.locataire_id.in_(ids))
+        )
+        # Le journal d'audit est conservé : on délie seulement.
+        await db.execute(
+            _update(ImmCommunication)
+            .where(ImmCommunication.locataire_id.in_(ids))
+            .values(locataire_id=None)
+        )
+        await db.execute(
+            _delete(Locataire).where(Locataire.id.in_(ids))
         )
     await db.delete(obj)
     await db.commit()
+    log.info(
+        "Immeuble %s supprimé par %s (%d bail/baux sans historique, "
+        "%d locataire(s) emporté(s))",
+        immeuble_id, getattr(user, "email", None), len(bail_ids),
+        len(loc_ids),
+    )
 
 
 # ── Ownership ──────────────────────────────────────────────────────────
