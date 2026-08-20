@@ -1312,11 +1312,19 @@ async def resilier_bail(
     response_model=List[RenouvellementOverview],
 )
 async def renouvellements_overview(
-    db: DBSession, user: CurrentUser
+    db: DBSession,
+    user: CurrentUser,
+    locataire_id: Optional[int] = None,
+    logement_id: Optional[int] = None,
 ) -> List[RenouvellementOverview]:
     """Liste TOUS les baux actifs avec leur statut de renouvellement
     (retour Phil 2026-07-30 : tous les locataires restent visibles —
-    un bail reconduit ou dont la fin est loin apparaît quand même)."""
+    un bail reconduit ou dont la fin est loin apparaît quand même).
+
+    ``locataire_id`` / ``logement_id`` restreignent la MÊME liste à une
+    fiche : « ça doit être exactement pareil que dans la page, mais
+    juste pour ce locataire-là » (Phil 2026-08-19). Un filtre, jamais
+    une deuxième implémentation."""
     _require_volet(user)
     from app.services.locatif_suivis import get_suivis
 
@@ -1642,6 +1650,10 @@ async def renouvellements_overview(
     if dirty:
         # Transitions « réputé accepté » + applications au bail.
         await db.commit()
+    if locataire_id is not None:
+        out = [r for r in out if r.locataire_id == locataire_id]
+    if logement_id is not None:
+        out = [r for r in out if r.logement_id == logement_id]
     return out
 
 
