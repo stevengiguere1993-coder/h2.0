@@ -208,6 +208,15 @@ async def recaler_statut_logement(
     lg = await db.get(Logement, logement_id)
     if lg is None or lg.status == LogementStatus.HORS_LOC.value:
         return
+    # ⚠️ GESTION EXTERNE : le statut est saisi À LA MAIN — les baux de
+    # ces immeubles ne sont pas dans Kratos, donc la règle « pas de bail
+    # actif → vacant » y est un contresens. L'oubli de cette garde le
+    # 2026-08-20 a mis « vacant » les 19 logements de la Place Sapinière
+    # (tous occupés, leurs paiements d'août le prouvaient) et la moitié
+    # d'Elgin. Jamais plus.
+    imm = await db.get(Immeuble, lg.immeuble_id)
+    if imm is not None and bool(getattr(imm, "gestion_externe", False)):
+        return
     today = date.today()
     baux = (
         await db.execute(
@@ -910,12 +919,18 @@ async def recaler_tous_les_statuts_logements(db: AsyncSession) -> int:
     périmé ne survit pas au prochain déploiement. Ce n'est PAS une
     excuse pour oublier l'appel au bon moment — c'est le filet.
     """
+    # La gestion externe est exclue ICI AUSSI (défense en profondeur —
+    # recaler_statut_logement la refuse déjà) : parcourir des logements
+    # qu'on refusera de toucher ne sert qu'à masquer une erreur future.
     ids = [
         r[0]
         for r in (
             await db.execute(
-                select(Logement.id).where(
-                    Logement.status != LogementStatus.HORS_LOC.value
+                select(Logement.id)
+                .join(Immeuble, Immeuble.id == Logement.immeuble_id)
+                .where(
+                    Logement.status != LogementStatus.HORS_LOC.value,
+                    Immeuble.gestion_externe.isnot(True),
                 )
             )
         ).all()

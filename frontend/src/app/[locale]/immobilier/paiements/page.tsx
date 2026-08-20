@@ -548,7 +548,9 @@ export default function PaiementsPage() {
     if (row.logement_id == null) return;
     if (
       !window.confirm(
-        `Annuler les paiements du logement ${row.logement_numero} pour ${mois} ?`
+        `SUPPRIMER les paiements saisis du logement ${row.logement_numero} pour ${mois} ?
+
+Le mois redeviendra impayé — cette action ne se défait pas.`
       )
     )
       return;
