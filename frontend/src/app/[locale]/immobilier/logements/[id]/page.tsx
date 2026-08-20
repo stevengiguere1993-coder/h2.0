@@ -19,6 +19,8 @@ import {
 import { useSearchParams } from "next/navigation";
 
 import { Link, useRouter } from "@/i18n/navigation";
+import { TableauSuiviBaux } from "@/components/immobilier/tableau-suivi-baux";
+import { type SuiviBailRow } from "@/components/immobilier/fin-bail";
 import { authedFetch } from "@/lib/auth";
 import {
   AuMoisToggle,
@@ -233,6 +235,26 @@ export default function LogementDetailPage({
     void loadDossier();
   }, [loadDossier]);
 
+  //: MÊME endpoint que la page Baux, filtré sur ce logement.
+  const [suiviBaux, setSuiviBaux] = useState<SuiviBailRow[] | null>(null);
+
+  const loadSuiviBaux = useCallback(async () => {
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/suivi-baux?logement_id=${logementId}`
+      );
+      if (r.ok) setSuiviBaux((await r.json()) as SuiviBailRow[]);
+    } catch {
+      /* la fiche reste utilisable sans le tableau */
+    }
+  }, [logementId]);
+
+  useEffect(() => {
+    void loadSuiviBaux();
+  }, [loadSuiviBaux]);
+
+
+
   useEffect(() => {
     let annule = false;
     void (async () => {
@@ -400,7 +422,6 @@ export default function LogementDetailPage({
     : null;
   // TOUS les baux, y compris l'ACTUEL (retour Phil 2026-07-31 :
   // « il faudrait qu'il y ait celui présent aussi dedans »).
-  const bauxHistorique = dossier ? dossier.baux : [];
     const maxLoyer = dossier
     ? Math.max(...dossier.historique_loyer.map((p) => p.loyer_mensuel), 1)
     : 1;
@@ -971,87 +992,26 @@ export default function LogementDetailPage({
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-accent-500">
                 Historique des locataires
               </h2>
-              {bauxHistorique.length === 0 ? (
+              {/* MIROIR : exactement le tableau de la page Baux,
+                  filtré sur ce logement. Une seule implémentation —
+                  deux versions de la même vue divergent toujours
+                  (retour Phil 2026-08-19). */}
+              {suiviBaux === null ? (
+                <p className="flex items-center gap-2 text-xs text-white/50">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+                </p>
+              ) : suiviBaux.length === 0 ? (
                 <p className="text-sm text-white/50">
                   Aucun bail pour ce logement.
                 </p>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[560px] text-left text-sm">
-                    <thead className="text-[10px] uppercase tracking-wider text-white/45">
-                      <tr>
-                        <th className="py-2 pr-3">Locataire</th>
-                        <th className="py-2 pr-3">Période</th>
-                        <th className="py-2 pr-3 text-right">Loyer</th>
-                        <th className="py-2 pr-3 text-right">Statut</th>
-                        <th className="py-2 text-right">Document</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-brand-800/70">
-                      {bauxHistorique.map((b) => (
-                        <tr key={b.id}>
-                          <td className="py-2.5 pr-3">
-                            {b.locataire ? (
-                              <Link
-                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                href={
-                                  `/immobilier/locataires/${b.locataire.id}` as any
-                                }
-                                className="font-medium text-white hover:text-accent-500"
-                              >
-                                {b.locataire.full_name}
-                              </Link>
-                            ) : (
-                              <span className="text-white/40">—</span>
-                            )}
-                          </td>
-                          <td className="py-2.5 pr-3 text-xs text-white/60">
-                            {fmtDate(b.date_debut)} → {fmtDate(b.date_fin)}
-                          </td>
-                          <td className="py-2.5 pr-3 text-right text-white/80">
-                            {money(b.loyer_mensuel)}
-                            {/* Bail TAL « Ou le ___ » : muet au 1er. */}
-                            {echeanceLabel(b.jour_echeance) ? (
-                              <div className="text-[10px] text-white/45">
-                                {echeanceLabel(b.jour_echeance)}
-                              </div>
-                            ) : null}
-                          </td>
-                          <td className="py-2.5 pr-3 text-right">
-                            {/* M1 : libellé kanban complet — le bail
-                                sortant montre aussi son cycle de
-                                départ (avis reçu, visites…). */}
-                            <span
-                              className={`badge ${
-                                b.relocation_statut === "bail_envoye"
-                                  ? "badge-violet"
-                                  : b.relocation_statut
-                                    ? "badge-amber"
-                                    : BAIL_STATUS_BADGE[b.status] ||
-                                      "badge-neutral"
-                              }`}
-                            >
-                              {b.relocation_statut
-                                ? (KANBAN_STATUTS.find(
-                                    (s) => s.id === b.relocation_statut
-                                  )?.label ?? b.relocation_statut)
-                                : (BAIL_STATUS_LABEL[b.status] ??
-                                  b.status)}
-                            </span>
-                          </td>
-                          <td className="py-2.5 text-right">
-                            <BailDocActions
-                              bailId={b.id}
-                              hasDoc={b.document_id != null}
-                              signedAt={b.signed_at}
-                              onChanged={() => void loadDossier()}
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <TableauSuiviBaux
+                  rows={suiviBaux}
+                  onChanged={() => {
+                    void loadSuiviBaux();
+                    void loadDossier();
+                  }}
+                />
               )}
             </section>
 

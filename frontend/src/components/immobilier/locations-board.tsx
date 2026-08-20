@@ -172,6 +172,10 @@ export function LocationsBoard({
   const [data, setData] = useState<Overview | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
+  //: Dossier dont la fiche doit s'ouvrir DIRECTEMENT sur la conversion
+  //: du candidat — quand on a glissé la carte vers une colonne qui
+  //: exige un bail sans qu'il existe encore.
+  const [convertirPour, setConvertirPour] = useState<number | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showPickBail, setShowPickBail] = useState(false);
   const [importBailFor, setImportBailFor] = useState<Dossier | null>(null);
@@ -381,6 +385,26 @@ export function LocationsBoard({
                     setImportBailFor(d);
                     return;
                   }
+                  // « Bail à envoyer » / « Bail envoyé » veulent dire
+                  // « locataire créé, bail en cours » : y arriver sans
+                  // bail donnerait une carte qui ment sur son état.
+                  //
+                  // Mais REFUSER était incohérent (retour Phil
+                  // 2026-08-20) : le frein doit FAIRE, pas bloquer. Si
+                  // un candidat est retenu, on ouvre la conversion —
+                  // c'est elle qui crée le bail, et la carte avance
+                  // ensuite d'elle-même. Même geste que pour « Reloué »,
+                  // qui ouvre l'import au lieu de refuser.
+                  if (
+                    (col.id === "bail_a_envoyer" ||
+                      col.id === "bail_envoye") &&
+                    d.nouveau_bail_id == null &&
+                    d.visites.some((v) => v.retenu)
+                  ) {
+                    setConvertirPour(d.id);
+                    setOpenId(d.id);
+                    return;
+                  }
                   void patchDossier(id, { statut: col.id });
                 }}
                 className={`flex w-72 min-w-[288px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 transition ${
@@ -452,7 +476,12 @@ export function LocationsBoard({
       {selected ? (
         <DossierModal
           d={selected}
-          onClose={() => setOpenId(null)}
+          convertirDemande={convertirPour === selected.id}
+          onConvertirConsomme={() => setConvertirPour(null)}
+          onClose={() => {
+            setOpenId(null);
+            setConvertirPour(null);
+          }}
           onPatch={(body) => patchDossier(selected.id, body)}
           onMutated={() => void load()}
           onError={setErr}
@@ -633,7 +662,9 @@ function DossierModal({
   onPatch,
   onMutated,
   onError,
-  onDeleted
+  onDeleted,
+  convertirDemande,
+  onConvertirConsomme
 }: {
   d: Dossier;
   onClose: () => void;
@@ -641,11 +672,25 @@ function DossierModal({
   onMutated: () => void;
   onError: (msg: string) => void;
   onDeleted: () => void;
+  /** La carte a été glissée vers une colonne qui exige un bail : on
+   *  ouvre directement la conversion du candidat retenu. */
+  convertirDemande?: boolean;
+  onConvertirConsomme?: () => void;
 }) {
   const [notesDraft, setNotesDraft] = useState(d.notes || "");
   const [savingNotes, setSavingNotes] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showConvert, setShowConvert] = useState(false);
+
+  //: Ouverture directe sur la conversion quand la carte a été glissée
+  //: vers une colonne qui exige un bail : le frein FAIT au lieu de
+  //: bloquer (retour Phil 2026-08-20).
+  useEffect(() => {
+    if (convertirDemande) {
+      setShowConvert(true);
+      onConvertirConsomme?.();
+    }
+  }, [convertirDemande, onConvertirConsomme]);
 
   const [annPlateforme, setAnnPlateforme] = useState("Marketplace");
   const [visNom, setVisNom] = useState("");
