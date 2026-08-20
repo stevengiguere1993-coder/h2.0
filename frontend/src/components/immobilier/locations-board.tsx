@@ -330,14 +330,15 @@ export function LocationsBoard({
           type="button"
           onClick={() => setShowPickBail(true)}
           className="btn-secondary btn-sm ml-auto"
-          title="Choisis une unité du kanban : sa fiche s'ouvre pour créer le locataire (le bail se fait via la CORPIQ)"
+          title="Ouvre la fiche d'un dossier dont le candidat est retenu, pour le convertir en locataire (le bail se prépare ensuite dans la CORPIQ)"
         >
-          <FileSignature className="h-3.5 w-3.5" /> Créer un nouveau bail
+          <FileSignature className="h-3.5 w-3.5" /> Convertir un candidat
         </button>
         <button
           type="button"
           onClick={() => setShowCreate(true)}
           className="btn-outline-accent btn-sm"
+          title="Ouvre un dossier de relocation sur un logement (départ à venir ou logement déjà vacant). Ne vide PAS le logement : son statut suit ses baux."
         >
           <Plus className="h-3.5 w-3.5" /> Nouvelle relocation
         </button>
@@ -2002,13 +2003,19 @@ function PickDossierPourBailModal({
 }) {
   // Unités éligibles : dossiers actifs SANS bail créé, immeubles gérés
   // par nous (pas de bail Kratos pour la gestion externe).
+  // Retour Phil 2026-08-19 : « ça me permet de sélectionner les
+  // logements qui sont juste dans des départs confirmés ». Exact — et
+  // ça menait à une fiche où il n'y avait rien à convertir. Ce raccourci
+  // n'a de sens que pour un dossier qui a DÉJÀ un candidat retenu :
+  // c'est lui qu'on transforme en locataire.
   const eligibles = rows.filter(
     (d) =>
       d.nouveau_bail_id == null &&
       !d.gestion_externe &&
       d.statut !== "bail_envoye" &&
       d.statut !== "reloue" &&
-      d.statut !== "annule"
+      d.statut !== "annule" &&
+      d.visites.some((v) => v.retenu)
   );
   return (
     <div
@@ -2021,7 +2028,7 @@ function PickDossierPourBailModal({
       >
         <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
           <h2 className="text-sm font-bold uppercase tracking-wider text-accent-500">
-            Créer un nouveau bail
+            Convertir un candidat retenu
           </h2>
           <button type="button" onClick={onClose} className="btn-ghost btn-xs">
             <X className="h-4 w-4" />
@@ -2029,14 +2036,17 @@ function PickDossierPourBailModal({
         </div>
         <div className="p-5">
           <p className="mb-3 text-xs text-white/55">
-            Choisis l&apos;unité : sa fiche de relocation s&apos;ouvre —
-            crée le locataire depuis le candidat retenu, puis le bail se
-            prépare dans le système de la CORPIQ.
+            Ce bouton ne crée pas de bail : il ouvre la fiche d&apos;un
+            dossier dont le candidat est <b>retenu</b>, pour le
+            transformer en locataire. Le bail se prépare ensuite dans la
+            CORPIQ, puis s&apos;importe en glissant la carte jusqu&apos;à
+            « Reloué ».
           </p>
           {eligibles.length === 0 ? (
             <p className="rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-xs text-white/50">
-              Aucune unité éligible — les dossiers avec un bail déjà
-              créé, reloués ou en gestion externe sont exclus.
+              Aucun candidat retenu en attente de conversion. Retiens
+              d&apos;abord un candidat sur une fiche (bouton « Retenu »
+              dans Visites &amp; candidats).
             </p>
           ) : (
             <ul className="divide-y divide-brand-800/60 overflow-hidden rounded-xl border border-brand-800">
