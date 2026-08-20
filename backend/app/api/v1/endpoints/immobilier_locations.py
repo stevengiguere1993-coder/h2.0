@@ -607,10 +607,29 @@ async def update_dossier(
                     obj.id, orphelin.id,
                 )
             else:
+                # Message ACTIONNABLE : dire ce qui manque ET où
+                # cliquer. « Trop compliqué pour rien » (Phil) vient
+                # souvent d'un refus qui ne dit pas quoi faire.
+                a_un_candidat = (
+                    await db.execute(
+                        select(LocationVisite).where(
+                            LocationVisite.dossier_id == obj.id,
+                            LocationVisite.retenu.is_(True),
+                        )
+                    )
+                ).scalars().first() is not None
                 raise HTTPException(
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    "Aucun bail créé sur ce dossier — convertis le "
-                    "candidat retenu d'abord.",
+                    (
+                        "Ce dossier n'a pas encore de bail. Ouvre la "
+                        "fiche et clique « Créer le locataire + bail » "
+                        "sur le candidat retenu."
+                        if a_un_candidat
+                        else "Ce dossier n'a pas encore de candidat "
+                        "retenu. Ouvre la fiche, retiens un candidat "
+                        "dans « Visites & candidats », puis crée le "
+                        "locataire."
+                    ),
                 )
         if obj.statut == LocationDossierStatut.RELOUE.value:
             raise HTTPException(

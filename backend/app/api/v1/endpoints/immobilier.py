@@ -4091,6 +4091,11 @@ class LoyerOverviewRow(BaseModel):
     #: gestionnaire doit voir À QUELLE adresse le rappel partira avant
     #: de l'envoyer (retour Phil 2026-08-19).
     locataire_email: Optional[str] = None
+    #: Départ ACTÉ : ce locataire part à cette date. « Les départs
+    #: confirmés devraient être un peu plus présents ailleurs » —
+    #: savoir qu'un locataire s'en va change la façon de lire son
+    #: retard de loyer.
+    libre_le: Optional[date] = None
     loyer_mensuel: float
     #: Jour d'échéance du loyer (bail TAL « Ou le ___ ») — affiché
     #: « payable le X » à côté du loyer quand ce n'est pas le 1er, et
@@ -4409,6 +4414,18 @@ async def loyers_overview(
             return 0
         return (fin.year - debut.year) * 12 + (fin.month - debut.month) + 1
 
+    # Départs ACTÉS : savoir qu'un locataire s'en va le 31 change la
+    # façon de lire son retard de loyer, et évite de le relancer pour un
+    # mois qu'il n'occupera pas (« les départs confirmés devraient être
+    # un peu plus présents ailleurs », Phil 2026-08-19).
+    from app.services.locatif_depart import libere_le as _libere_le
+
+    liberations: dict[int, date] = {}
+    for lg_id in {b.logement_id for b in baux}:
+        d = await _libere_le(db, lg_id)
+        if d is not None:
+            liberations[lg_id] = d
+
     rows: List[LoyerOverviewRow] = []
     total_attendu = 0.0
     total_recu = 0.0
@@ -4520,6 +4537,7 @@ async def loyers_overview(
                 locataire_name=loc.full_name if loc else None,
                 locataire_phone=loc.phone if loc else None,
                 locataire_email=loc.email if loc else None,
+                libre_le=liberations.get(b.logement_id),
                 loyer_mensuel=loyer,
                 jour_echeance=b.jour_echeance or 1,
                 paiement_id=dernier.id if dernier else None,

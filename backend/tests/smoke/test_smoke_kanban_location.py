@@ -159,7 +159,9 @@ def test_un_bail_revendique_par_un_autre_dossier_n_est_pas_vole(
         json={"statut": LocationDossierStatut.BAIL_A_ENVOYER.value},
     )
     assert r.status_code == 422, r.text
-    assert "candidat retenu" in r.text.lower()
+    # Le refus doit dire QUOI FAIRE, pas seulement refuser.
+    assert "candidat" in r.text.lower()
+    assert "fiche" in r.text.lower()
 
 
 def test_le_bail_herite_du_loue_en_chambres_et_l_import_ne_l_efface_pas(

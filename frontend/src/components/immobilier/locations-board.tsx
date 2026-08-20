@@ -1245,6 +1245,13 @@ function CandidatRow({
 }) {
   const cycle = (cur: boolean | null) =>
     cur === null ? true : cur === true ? false : null;
+  //: Une enquête déjà renseignée reste visible : la replier ferait
+  //: perdre une information de diligence déjà acquise.
+  const enqueteRemplie =
+    v.enquete_credit !== null ||
+    v.enquete_references !== null ||
+    v.enquete_emploi !== null;
+  const [enquetesOuvertes, setEnquetesOuvertes] = useState(false);
 
   return (
     <li
@@ -1312,36 +1319,54 @@ function CandidatRow({
         >
           Intéressé {v.interesse === true ? "✓" : v.interesse === false ? "✗" : "·"}
         </button>
-        <span className="text-[10px] uppercase tracking-wider text-white/30">
-          Enquêtes :
-        </span>
-        <TriCheck
-          label="Crédit"
-          value={v.enquete_credit}
-          onCycle={() =>
-            void onApi(`/visites/${v.id}`, "PATCH", {
-              enquete_credit: cycle(v.enquete_credit)
-            })
-          }
-        />
-        <TriCheck
-          label="Références"
-          value={v.enquete_references}
-          onCycle={() =>
-            void onApi(`/visites/${v.id}`, "PATCH", {
-              enquete_references: cycle(v.enquete_references)
-            })
-          }
-        />
-        <TriCheck
-          label="Emploi"
-          value={v.enquete_emploi}
-          onCycle={() =>
-            void onApi(`/visites/${v.id}`, "PATCH", {
-              enquete_emploi: cycle(v.enquete_emploi)
-            })
-          }
-        />
+        {/* Retour Phil 2026-08-19 : « je pense pas que j'ai besoin de
+            mettre les visites et candidats, je pourrais juste mettre
+            celui qui gagne ». Les enquêtes se replient donc derrière un
+            lien — elles restent accessibles (c'est de la diligence
+            réelle, et une enquête déjà remplie s'affiche d'office) mais
+            elles n'occupent plus la ligne de chaque candidat. */}
+        {enquetesOuvertes || enqueteRemplie ? (
+          <>
+            <span className="text-[10px] uppercase tracking-wider text-white/30">
+              Enquêtes :
+            </span>
+            <TriCheck
+              label="Crédit"
+              value={v.enquete_credit}
+              onCycle={() =>
+                void onApi(`/visites/${v.id}`, "PATCH", {
+                  enquete_credit: cycle(v.enquete_credit)
+                })
+              }
+            />
+            <TriCheck
+              label="Références"
+              value={v.enquete_references}
+              onCycle={() =>
+                void onApi(`/visites/${v.id}`, "PATCH", {
+                  enquete_references: cycle(v.enquete_references)
+                })
+              }
+            />
+            <TriCheck
+              label="Emploi"
+              value={v.enquete_emploi}
+              onCycle={() =>
+                void onApi(`/visites/${v.id}`, "PATCH", {
+                  enquete_emploi: cycle(v.enquete_emploi)
+                })
+              }
+            />
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setEnquetesOuvertes(true)}
+            className="rounded px-1.5 py-0.5 text-[10px] text-white/35 underline decoration-dotted underline-offset-2 hover:text-white/70"
+          >
+            + Enquêtes
+          </button>
+        )}
         <button
           type="button"
           disabled={!!(v.retenu && bailCree)}
