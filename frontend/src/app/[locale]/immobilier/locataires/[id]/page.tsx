@@ -5,7 +5,6 @@ import {
   AlertTriangle,
   ArrowLeft,
   Check,
-  ChevronRight,
   Download,
   FileDown,
   FileText,
@@ -28,6 +27,8 @@ import { useSearchParams } from "next/navigation";
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { ApercuEnvoiModal } from "@/components/immobilier/apercu-envoi";
+import { TableauSuiviBaux } from "@/components/immobilier/tableau-suivi-baux";
+import { type SuiviBailRow } from "@/components/immobilier/fin-bail";
 import { authedFetch } from "@/lib/auth";
 import {
   AuMoisToggle,
@@ -381,6 +382,26 @@ export default function LocataireDetailPage({
   useEffect(() => {
     void loadDossier();
   }, [loadDossier]);
+
+  //: MÊME endpoint que la page Baux, filtré sur ce locataire.
+  const [suiviBaux, setSuiviBaux] = useState<SuiviBailRow[] | null>(null);
+
+  const loadSuiviBaux = useCallback(async () => {
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/suivi-baux?locataire_id=${locataireId}`
+      );
+      if (r.ok) setSuiviBaux((await r.json()) as SuiviBailRow[]);
+    } catch {
+      /* la fiche reste utilisable sans le tableau */
+    }
+  }, [locataireId]);
+
+  useEffect(() => {
+    void loadSuiviBaux();
+  }, [loadSuiviBaux]);
+
+
 
   async function saveLoyer(bailId: number) {
     const montant = Number(loyerDraft);
@@ -1086,214 +1107,28 @@ export default function LocataireDetailPage({
                   </Link>
                 </p>
               ) : null}
-              {!dossier || dossier.baux.length === 0 ? (
+              {/* MIROIR : exactement le tableau de la page Baux,
+                  filtré sur ce locataire. Une seule implémentation —
+                  deux versions de la même vue divergent toujours, et
+                  c'est celle qu'on regarde le moins qui finit par
+                  mentir (retour Phil 2026-08-19). */}
+              {suiviBaux === null ? (
+                <p className="flex items-center gap-2 text-xs text-white/50">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />{" "}
+                  Chargement…
+                </p>
+              ) : suiviBaux.length === 0 ? (
                 <p className="text-sm text-white/50">
                   Aucun bail associé à ce locataire.
                 </p>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[560px] text-left text-sm">
-                    <thead className="text-[10px] uppercase tracking-wider text-white/45">
-                      <tr>
-                        <th className="py-2 pr-3">Immeuble · logt</th>
-                        <th className="py-2 pr-3">Période</th>
-                        <th className="py-2 pr-3 text-right">Loyer</th>
-                        <th className="py-2 pr-3 text-right">Dépôt</th>
-                        <th className="py-2 text-right">Statut</th>
-                        <th className="py-2" aria-hidden="true" />
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-brand-800/70">
-                      {dossier.baux.map((b) => (
-                        <tr
-                          key={b.id}
-                          onClick={() =>
-                            router.push(
-                              // &bail=… : la fiche immeuble SURLIGNE ce
-                              // bail dans l'onglet Baux & locataires.
-                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                              `/immobilier/immeubles/${b.immeuble_id}?tab=baux&bail=${b.id}` as any
-                            )
-                          }
-                          className="group cursor-pointer transition-colors hover:bg-brand-800/30"
-                          title="Voir le bail sur la fiche de l'immeuble (il sera surligné)"
-                        >
-                          <td className="py-2.5 pr-3">
-                            <Link
-                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                              href={
-                                `/immobilier/immeubles/${b.immeuble_id}?tab=baux&bail=${b.id}` as any
-                              }
-                              onClick={(e) => e.stopPropagation()}
-                              className="font-medium text-white group-hover:underline group-hover:text-accent-500"
-                            >
-                              {b.immeuble_name}
-                            </Link>
-                            {b.logement_numero ? (
-                              <span className="text-white/40">
-                                {" "}
-                                · {b.logement_numero}
-                              </span>
-                            ) : null}
-                          </td>
-                          <td className="py-2.5 pr-3 text-xs text-white/60">
-                            {b.date_debut} →{" "}
-                            {b.au_mois ? "au mois" : b.date_fin}
-                          </td>
-                          <td
-                            className="py-2.5 pr-3 text-right text-white/80"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            {editingBailId === b.id ? (
-                              <span className="inline-flex items-center gap-1">
-                                <input
-                                  autoFocus
-                                  inputMode="decimal"
-                                  value={loyerDraft}
-                                  onChange={(e) =>
-                                    setLoyerDraft(e.target.value)
-                                  }
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Escape")
-                                      setEditingBailId(null);
-                                    if (e.key === "Enter")
-                                      void saveLoyer(b.id);
-                                  }}
-                                  className="w-24 rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-right text-xs text-white outline-none focus:border-accent-500"
-                                />
-                                <select
-                                  value={String(jourDraft)}
-                                  title="Jour du mois où le loyer est payable (bail TAL « Ou le ___ ») — habituellement le 1er"
-                                  onChange={(e) =>
-                                    setJourDraft(Number(e.target.value))
-                                  }
-                                  className="rounded-md border border-brand-800 bg-brand-950 px-1.5 py-1 text-xs text-white outline-none focus:border-accent-500"
-                                >
-                                  {JOURS_ECHEANCE.map((j) => (
-                                    <option key={j} value={j}>
-                                      {j === 1 ? "le 1er" : `le ${j}`}
-                                    </option>
-                                  ))}
-                                </select>
-                                <button
-                                  type="button"
-                                  disabled={savingLoyer}
-                                  onClick={() => void saveLoyer(b.id)}
-                                  className="rounded-md border border-emerald-400/30 bg-emerald-500/10 p-1 text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-40"
-                                >
-                                  {savingLoyer ? (
-                                    <Loader2 className="h-3 w-3 animate-spin" />
-                                  ) : (
-                                    <Check className="h-3 w-3" />
-                                  )}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setEditingBailId(null)}
-                                  className="rounded-md border border-white/10 p-1 text-white/50 hover:text-white"
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5">
-                                <span className="inline-flex flex-col items-end">
-                                  {money(b.loyer_mensuel)}
-                                  {/* Bail TAL « Ou le ___ » : muet au 1er. */}
-                                  {echeanceLabel(b.jour_echeance) ? (
-                                    <span className="text-[10px] text-white/45">
-                                      {echeanceLabel(b.jour_echeance)}
-                                    </span>
-                                  ) : null}
-                                </span>
-                                <button
-                                  type="button"
-                                  title="Modifier le loyer et le jour d'échéance de ce bail (répercuté partout)"
-                                  onClick={() => {
-                                    setEditingBailId(b.id);
-                                    setLoyerDraft(String(b.loyer_mensuel));
-                                    setJourDraft(
-                                      b.jour_echeance || JOUR_ECHEANCE_DEFAUT
-                                    );
-                                  }}
-                                  className="rounded p-1 text-white/30 hover:bg-brand-800 hover:text-white"
-                                >
-                                  <Pencil className="h-3 w-3" />
-                                </button>
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-2.5 pr-3 text-right text-white/60">
-                            {b.depot_garantie != null
-                              ? money(b.depot_garantie)
-                              : "—"}
-                          </td>
-                          <td
-                            className="py-2.5 text-right"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <span className="inline-flex items-center gap-1.5">
-                              <span
-                                className={`badge ${
-                                  b.status === "actif"
-                                    ? "badge-emerald"
-                                    : "badge-neutral"
-                                }`}
-                              >
-                                {BAIL_STATUS_LABEL[b.status] ?? b.status}
-                              </span>
-                              {b.relocation_statut ? (
-                                // M1 (audit 2026-08-13) : pastille
-                                // kanban complète — le bail SORTANT
-                                // montre aussi son cycle de départ.
-                                <RelocationStatutPastille
-                                  statut={b.relocation_statut}
-                                  dossierId={b.relocation_dossier_id}
-                                />
-                              ) : null}
-                              {b.status === "actif" ? (
-                                <button
-                                  type="button"
-                                  title="Le locataire confirme son départ — ouvrir un dossier de relocation (page Locations)"
-                                  disabled={departBusy === b.id}
-                                  onClick={() => void confirmerDepart(b.id)}
-                                  className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
-                                >
-                                  {departBusy === b.id ? (
-                                    <Loader2 className="h-3 w-3 animate-spin" />
-                                  ) : null}
-                                  Départ
-                                </button>
-                              ) : null}
-                              <AuMoisToggle
-                                bailId={b.id}
-                                auMois={!!b.au_mois}
-                                onChanged={() => void loadDossier()}
-                              />
-                              <ResilierBailButton
-                                bailId={b.id}
-                                locataireNom={loc?.full_name}
-                                immeubleName={b.immeuble_name}
-                                logementNumero={b.logement_numero}
-                                onMessage={setDepartMsg}
-                                onChanged={() => void loadDossier()}
-                              />
-                              <BailDocActions
-                                bailId={b.id}
-                                hasDoc={b.document_id != null}
-                                signedAt={b.signed_at}
-                                onChanged={() => void loadDossier()}
-                              />
-                            </span>
-                          </td>
-                          <td className="py-2.5 pl-2 text-right">
-                            <ChevronRight className="ml-auto h-4 w-4 text-white/25 transition group-hover:translate-x-0.5 group-hover:text-accent-500" />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <TableauSuiviBaux
+                  rows={suiviBaux}
+                  onChanged={() => {
+                    void loadSuiviBaux();
+                    void loadDossier();
+                  }}
+                />
               )}
             </section>
 

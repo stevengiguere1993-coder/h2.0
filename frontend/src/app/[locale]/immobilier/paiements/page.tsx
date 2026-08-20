@@ -67,6 +67,8 @@ type Row = {
   locataire_name: string | null;
   locataire_phone: string | null;
   locataire_email: string | null;
+  /** Départ ACTÉ : ce locataire part à cette date. */
+  libre_le: string | null;
   loyer_mensuel: number;
   /** Jour du mois où le loyer est payable (bail TAL « Ou le ___ »). */
   jour_echeance?: number | null;
@@ -143,6 +145,7 @@ function externeToRow(x: RowExterne): Row {
     locataire_phone: null,
     // Gestion externe : aucun locataire chez nous, donc aucun courriel.
     locataire_email: null,
+    libre_le: null,
     loyer_mensuel: x.loyer_mensuel,
     jour_echeance: 1,
     paiement_id: null,
@@ -948,6 +951,30 @@ export default function PaiementsPage() {
                             {r.locataire_name || "—"}
                           </span>
                         )}
+                        {/* Un départ acté change la lecture du retard :
+                            inutile de relancer pour un mois qu'il
+                            n'occupera pas (retour Phil 2026-08-19). */}
+                        {r.libre_le ? (
+                          <span
+                            className="ml-2 inline-flex items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300"
+                            title={`Départ confirmé — le logement se libère le ${r.libre_le}`}
+                          >
+                            part le{" "}
+                            {(() => {
+                              const [y, m, d] = r.libre_le
+                                .split("-")
+                                .map(Number);
+                              return new Date(
+                                y,
+                                (m || 1) - 1,
+                                d || 1
+                              ).toLocaleDateString("fr-CA", {
+                                day: "numeric",
+                                month: "short"
+                              });
+                            })()}
+                          </span>
+                        ) : null}
                         {r.locataire_phone ? (
                           <a
                             href={`tel:${r.locataire_phone}`}
