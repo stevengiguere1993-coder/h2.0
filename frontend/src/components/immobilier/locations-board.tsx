@@ -930,6 +930,21 @@ function DossierModal({
           </div>
         ) : null}
 
+        {d.statut !== "reloue" ? (
+          /* Retour Phil 2026-08-19 : « j'aimerais quelque chose qui
+             informe que pour uploader un bail, c'est en faisant passer
+             la fiche à la colonne Reloué ». Le message existait, mais
+             seulement une fois arrivé à « Bail à envoyer » — donc trop
+             tard pour celui qui se demande où est le bouton d'import. */
+          <p className="mt-3 rounded-lg border border-brand-800 bg-brand-950/60 px-3 py-2 text-[11px] text-white/50">
+            📄 Le bail signé s&apos;importe en faisant passer cette fiche
+            à la colonne <b className="text-white/75">« Reloué »</b> —
+            il n&apos;y a pas de bouton d&apos;import ici. C&apos;est ce
+            passage qui exige le PDF, et c&apos;est ce qui garantit
+            qu&apos;aucun locataire n&apos;entre sans bail au dossier.
+          </p>
+        ) : null}
+
         <div className="mt-4 grid gap-4">
           {/* Annonces */}
           <div className="rounded-xl border border-brand-800 bg-brand-900 p-3.5">

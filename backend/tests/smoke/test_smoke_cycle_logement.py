@@ -450,3 +450,69 @@ def test_suivi_baux_filtre_sans_dupliquer(client, auth_headers, run):
     ).json()
     assert len(par_log) == 1
     assert par_log[0]["logement_id"] == ids["lg2"]
+
+
+def test_locataire_parti_garde_son_releve_31(client, auth_headers, run):
+    """« Aussi pour le relevé 31 évidemment » (Phil).
+
+    Un locataire parti disparaît du suivi des loyers, mais il DOIT
+    garder son relevé 31 : Revenu Québec en exige un par personne ayant
+    occupé le logement pendant l'année. Deux occupants successifs = deux
+    relevés.
+
+    Vérifié plutôt que « corrigé » : la sélection se fait déjà par
+    chevauchement de période, pas sur les baux actifs.
+    """
+    annee = date.today().year
+
+    async def _seed() -> dict:
+        async with TestSessionLocal() as s:
+            imm = Immeuble(
+                name="Immeuble Releve31", address="80 rue Releve",
+                city="Montréal", is_active=True,
+            )
+            s.add(imm)
+            await s.flush()
+            lg = Logement(
+                immeuble_id=imm.id, numero="1",
+                status=LogementStatus.OCCUPE.value,
+            )
+            parti = Locataire(full_name="Parti En Juin")
+            arrive = Locataire(full_name="Arrive En Juillet")
+            s.add_all([lg, parti, arrive])
+            await s.flush()
+            s.add(
+                Bail(
+                    logement_id=lg.id, locataire_id=parti.id,
+                    date_debut=date(annee - 1, 7, 1),
+                    date_fin=date(annee, 6, 30),
+                    loyer_mensuel=1000.0,
+                    status=BailStatus.TERMINE.value,
+                )
+            )
+            s.add(
+                Bail(
+                    logement_id=lg.id, locataire_id=arrive.id,
+                    date_debut=date(annee, 7, 1),
+                    date_fin=date(annee + 1, 6, 30),
+                    loyer_mensuel=1100.0,
+                    status=BailStatus.ACTIF.value,
+                )
+            )
+            await s.commit()
+            return {"parti": parti.id, "arrive": arrive.id}
+
+    ids = run(_seed())
+    r = client.get(
+        f"/api/v1/immobilier/releves31?annee={annee}",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    par_loc = {
+        x.get("locataire_id") for x in r.json().get("rows", [])
+    }
+    assert ids["parti"] in par_loc, (
+        "le locataire parti doit garder son relevé 31 pour l'année où "
+        "il a occupé le logement"
+    )
+    assert ids["arrive"] in par_loc, "deux occupants = deux relevés"

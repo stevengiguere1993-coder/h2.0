@@ -1042,13 +1042,37 @@ export default function LocataireDetailPage({
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                   Baux
                 </h2>
-                <AssignerBailButton
-                  mode="locataire"
-                  locataireId={locataireId}
-                  locataireNom={dossier?.locataire.full_name}
-                  onDone={() => void loadDossier()}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-2.5 py-1 text-xs font-semibold text-accent-500 transition hover:bg-accent-500/20"
-                />
+                {/* Même règle que sur la page Baux : un logement en
+                    RELOCATION se suit dans Locations. Assigner un bail
+                    ici fabriquerait un deuxième chemin qui contourne le
+                    dossier et son garde-fou d'import — c'est ce genre de
+                    porte latérale qui a produit les baux sans document
+                    (retour Phil 2026-08-19). */}
+                {(() => {
+                  const enRelocation = (dossier?.baux || []).find(
+                    (b) => b.relocation_dossier_id != null
+                  );
+                  return enRelocation ? (
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={
+                        `/immobilier/locations?focus=${enRelocation.relocation_dossier_id}` as any
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/40 bg-violet-500/10 px-2.5 py-1 text-xs font-semibold text-violet-200 transition hover:bg-violet-500/20"
+                      title="Un logement de ce locataire est en relocation — le bail se crée et s'importe depuis le dossier"
+                    >
+                      Suivre dans Locations →
+                    </Link>
+                  ) : (
+                    <AssignerBailButton
+                      mode="locataire"
+                      locataireId={locataireId}
+                      locataireNom={dossier?.locataire.full_name}
+                      onDone={() => void loadDossier()}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-2.5 py-1 text-xs font-semibold text-accent-500 transition hover:bg-accent-500/20"
+                    />
+                  );
+                })()}
               </div>
               {departMsg ? (
                 <p className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">

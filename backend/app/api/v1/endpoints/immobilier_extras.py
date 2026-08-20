@@ -622,6 +622,92 @@ async def preparer_consentement_communications(db, bail_id: int, user) -> bool:
     return True
 
 
+class EnvoyerConsentementResult(BaseModel):
+    document_id: int
+    envoye_a: str
+    deja_signe: bool = False
+
+
+@router.post(
+    "/baux/{bail_id}/consentement/envoyer",
+    response_model=EnvoyerConsentementResult,
+)
+async def envoyer_consentement(
+    bail_id: int, db: DBSession, user: CurrentUser
+) -> EnvoyerConsentementResult:
+    """Envoie au locataire le consentement aux communications
+    électroniques, en le PRÉPARANT au besoin.
+
+    Retour Phil 2026-08-19 : « je pouvais juste l'envoyer à partir de la
+    section documents de la fiche d'un locataire, ce qui est pas bon du
+    tout… là ça va tomber entre les craques ». D'où une action unique,
+    appelable depuis n'importe où : juste après l'import du bail signé
+    (le moment qu'il a nommé), depuis le suivi des consentements, ou
+    depuis la fiche.
+
+    Idempotent au sens utile : un consentement DÉJÀ SIGNÉ n'est pas
+    renvoyé — on le signale plutôt que de redemander au locataire ce
+    qu'il a déjà accordé.
+    """
+    _require_volet(user)
+    from app.api.v1.endpoints.immobilier_documents import (
+        EnvoyerSignatureRequest,
+        envoyer_signature,
+    )
+
+    bail = await db.get(Bail, bail_id)
+    if bail is None:
+        raise HTTPException(status_code=404, detail="Bail introuvable.")
+
+    doc = (
+        await db.execute(
+            select(ImmDocument)
+            .where(
+                ImmDocument.bail_id == bail_id,
+                ImmDocument.type == "consentement_communications",
+            )
+            .order_by(ImmDocument.id.desc())
+        )
+    ).scalars().first()
+
+    if doc is not None and doc.signed_at is not None:
+        return EnvoyerConsentementResult(
+            document_id=doc.id,
+            envoye_a=(doc.envoye_a or ""),
+            deja_signe=True,
+        )
+
+    if doc is None:
+        # Jamais préparé (bail ancien, import après un achat d'immeuble) :
+        # on le génère à la volée plutôt que d'exiger un détour.
+        await preparer_consentement_communications(db, bail_id, user)
+        doc = (
+            await db.execute(
+                select(ImmDocument)
+                .where(
+                    ImmDocument.bail_id == bail_id,
+                    ImmDocument.type == "consentement_communications",
+                )
+                .order_by(ImmDocument.id.desc())
+            )
+        ).scalars().first()
+    if doc is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Impossible de préparer le consentement.",
+        )
+
+    res = await envoyer_signature(
+        doc_id=doc.id,
+        payload=EnvoyerSignatureRequest(),
+        db=db,
+        user=user,
+    )
+    return EnvoyerConsentementResult(
+        document_id=res.document_id, envoye_a=res.envoye_a
+    )
+
+
 # ─── Renouvellements ──────────────────────────────────────────────────
 
 

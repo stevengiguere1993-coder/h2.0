@@ -169,20 +169,47 @@ function ConsentementsTab() {
   const [data, setData] = useState<ConsentementOverview | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
+  const [busyId, setBusyId] = useState<number | null>(null);
+  //: Ligne dont l'envoi attend confirmation (aperçu partagé).
+  const [apercu, setApercu] = useState<ConsentementRow | null>(null);
+
+  const charger = useCallback(async () => {
+    try {
+      const r = await authedFetch(
+        "/api/v1/immobilier/consentements/overview"
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setData((await r.json()) as ConsentementOverview);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }, []);
 
   useEffect(() => {
-    void (async () => {
-      try {
-        const r = await authedFetch(
-          "/api/v1/immobilier/consentements/overview"
-        );
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        setData((await r.json()) as ConsentementOverview);
-      } catch (e) {
-        setErr((e as Error).message);
-      }
-    })();
-  }, []);
+    void charger();
+  }, [charger]);
+
+  //: L'envoi se fait ICI, dans le suivi — plus seulement depuis la
+  //: section Documents d'une fiche (« ce qui est pas bon du tout »,
+  //: retour Phil 2026-08-19).
+  async function envoyer(r: ConsentementRow) {
+    if (r.bail_id == null) return;
+    setBusyId(r.locataire_id);
+    setErr(null);
+    try {
+      const rep = await authedFetch(
+        `/api/v1/immobilier/baux/${r.bail_id}/consentement/envoyer`,
+        { method: "POST" }
+      );
+      if (!rep.ok) throw new Error((await rep.text()).slice(0, 200));
+      setApercu(null);
+      await charger();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   if (err) {
     return <p className="mt-4 text-sm text-rose-300">{err}</p>;
@@ -206,6 +233,21 @@ function ConsentementsTab() {
 
   return (
     <div className="mt-4">
+      {apercu ? (
+        <ApercuEnvoiModal
+          titre="Consentement aux communications électroniques"
+          description={
+            "Le locataire recevra un lien pour signer — ou refuser. " +
+            "Sans consentement, ses avis doivent partir par la poste."
+          }
+          destinataireNom={apercu.locataire_nom}
+          destinataireEmail={apercu.locataire_email}
+          libelleEnvoi="Envoyer pour signature"
+          busy={busyId === apercu.locataire_id}
+          onAnnuler={() => setApercu(null)}
+          onConfirmer={() => void envoyer(apercu)}
+        />
+      ) : null}
       <div className="grid grid-cols-4 gap-3">
         {(
           [
@@ -242,13 +284,14 @@ function ConsentementsTab() {
               <th className="px-3 py-2.5 font-semibold">Immeuble · logt</th>
               <th className="px-3 py-2.5 font-semibold">État</th>
               <th className="px-3 py-2.5 font-semibold">Détail</th>
+              <th className="px-3 py-2.5" />
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={4}
+                  colSpan={5}
                   className="px-3 py-10 text-center text-white/50"
                 >
                   Aucun locataire.
@@ -295,7 +338,30 @@ function ConsentementsTab() {
                             ? `Ouvert le ${r.ouvert_le.slice(0, 10)}`
                             : r.envoye_le
                               ? `Envoyé le ${r.envoye_le.slice(0, 10)}`
-                              : "À envoyer depuis la fiche du locataire (section Documents)"}
+                              : "Jamais envoyé"}
+                    </td>
+                    <td className="px-3 py-2.5 text-right">
+                      {r.statut === "signe" ? null : (
+                        <button
+                          type="button"
+                          disabled={
+                            busyId === r.locataire_id ||
+                            !r.locataire_email ||
+                            r.bail_id == null
+                          }
+                          onClick={() => setApercu(r)}
+                          className="btn-secondary btn-xs disabled:opacity-40"
+                          title={
+                            r.locataire_email
+                              ? "Envoyer le consentement pour signature"
+                              : "Ajoute d'abord le courriel du locataire"
+                          }
+                        >
+                          {r.statut === "aucun" || r.statut === "pret"
+                            ? "Envoyer"
+                            : "Relancer"}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
