@@ -392,3 +392,61 @@ def test_suivi_entente_resiliation(client, auth_headers, run):
 
     vue_non_signee = par_bail[ids["2"]]
     assert vue_non_signee["resiliation_ouvert_le"] is not None
+
+
+def test_suivi_baux_filtre_sans_dupliquer(client, auth_headers, run):
+    """« La section des baux d'une fiche doit être exactement pareille
+    que dans la page Baux, mais juste pour ce locataire-là » (Phil).
+
+    Donc un FILTRE sur la même donnée, jamais une deuxième
+    implémentation : sinon les deux vues divergent, et c'est celle qu'on
+    regarde le moins qui finit par mentir.
+    """
+    async def _seed() -> dict:
+        async with TestSessionLocal() as s:
+            imm = Immeuble(
+                name="Immeuble Miroir", address="60 rue Miroir",
+                city="Montréal", is_active=True,
+            )
+            s.add(imm)
+            await s.flush()
+            ids = {"immeuble_id": imm.id}
+            for numero in ("1", "2"):
+                lg = Logement(
+                    immeuble_id=imm.id, numero=numero,
+                    status=LogementStatus.OCCUPE.value,
+                )
+                lo = Locataire(full_name=f"Miroir {numero}")
+                s.add_all([lg, lo])
+                await s.flush()
+                b = Bail(
+                    logement_id=lg.id, locataire_id=lo.id,
+                    date_debut=date.today() - timedelta(days=100),
+                    date_fin=date.today() + timedelta(days=200),
+                    loyer_mensuel=1000.0, status=BailStatus.ACTIF.value,
+                )
+                s.add(b)
+                await s.flush()
+                ids[f"loc{numero}"] = lo.id
+                ids[f"lg{numero}"] = lg.id
+            await s.commit()
+            return ids
+
+    ids = run(_seed())
+    base = f"/api/v1/immobilier/suivi-baux?immeuble_id={ids['immeuble_id']}"
+    tout = client.get(base, headers=auth_headers).json()
+    assert len(tout) == 2
+
+    par_loc = client.get(
+        f"{base}&locataire_id={ids['loc1']}", headers=auth_headers
+    ).json()
+    assert len(par_loc) == 1
+    assert par_loc[0]["locataire_id"] == ids["loc1"]
+    # MÊME forme de ligne que la page complète — c'est tout l'intérêt.
+    assert par_loc[0].keys() == tout[0].keys()
+
+    par_log = client.get(
+        f"{base}&logement_id={ids['lg2']}", headers=auth_headers
+    ).json()
+    assert len(par_log) == 1
+    assert par_log[0]["logement_id"] == ids["lg2"]

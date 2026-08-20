@@ -1206,10 +1206,19 @@ async def suivi_baux(
     db: DBSession,
     user: CurrentUser,
     immeuble_id: Optional[int] = None,
+    logement_id: Optional[int] = None,
+    locataire_id: Optional[int] = None,
 ) -> List[SuiviBailRow]:
     """Une ligne par LOGEMENT : verte quand un bail actif est au dossier,
     grise quand il n'y a aucun bail (créer / importer). Le bail se signe
-    à l'externe (CORPIQ) — le SUIVI vit ici."""
+    à l'externe (CORPIQ) — le SUIVI vit ici.
+
+    ``logement_id`` et ``locataire_id`` restreignent la MÊME donnée à une
+    fiche. Retour Phil 2026-08-19 : « la section des baux d'une fiche
+    doit être exactement pareille que dans la page Baux, mais juste pour
+    ce locataire-là ». Un filtre, pas une deuxième implémentation —
+    sinon les deux vues divergent, et c'est celle qu'on regarde le moins
+    qui ment."""
     _require_volet(user)
     today = _now().date()
     imm_q = select(Immeuble).where(
@@ -1430,6 +1439,16 @@ async def suivi_baux(
             r.logement_numero,
         )
     )
+    if logement_id is not None:
+        out = [r for r in out if r.logement_id == logement_id]
+    if locataire_id is not None:
+        # Le locataire d'AUJOURD'HUI ou celui qui arrive : les deux
+        # concernent sa fiche.
+        out = [
+            r for r in out
+            if r.locataire_id == locataire_id
+            or r.prochain_locataire_id == locataire_id
+        ]
     return out
 
 

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from sqlalchemy import select
+
 from app.models.immobilier import (
     Bail,
     BailStatus,
@@ -158,3 +160,76 @@ def test_un_bail_revendique_par_un_autre_dossier_n_est_pas_vole(
     )
     assert r.status_code == 422, r.text
     assert "candidat retenu" in r.text.lower()
+
+
+def test_le_bail_herite_du_loue_en_chambres_et_l_import_ne_l_efface_pas(
+    client, auth_headers, run
+):
+    """Question de Phil (2026-08-19) : l'import par glissé vers
+    « Reloué » ne demande PAS si le logement est loué au mois / en
+    chambres, contrairement au bouton « Importer le bail ». Est-ce un
+    problème ?
+
+    Non — et ce test le verrouille. Le bail créé à la conversion HÉRITE
+    de `au_mois` quand le logement est loué en chambres, et l'import ne
+    fournit pas le champ, donc il ne l'écrase pas. Demander l'info au
+    glissé serait redondant ; l'oublier serait grave (un bail au mois ne
+    se renouvelle pas et son loyer est figé).
+    """
+    from app.models.immobilier import Bail as _Bail
+
+    async def _seed() -> dict:
+        async with TestSessionLocal() as s:
+            imm = Immeuble(
+                name="Kanban Chambres", address="42 rue Chambre",
+                city="Montréal", is_active=True,
+            )
+            s.add(imm)
+            await s.flush()
+            lg = Logement(
+                immeuble_id=imm.id, numero="1",
+                status=LogementStatus.VACANT.value,
+                location_en_chambres=True,
+            )
+            s.add(lg)
+            await s.flush()
+            d = LocationDossier(
+                logement_id=lg.id,
+                statut=LocationDossierStatut.CANDIDAT_RETENU.value,
+            )
+            s.add(d)
+            await s.flush()
+            await s.commit()
+            return {"dossier_id": d.id, "logement_id": lg.id}
+
+    ids = run(_seed())
+    r = client.post(
+        f"/api/v1/immobilier/locations/{ids['dossier_id']}/convertir",
+        headers=auth_headers,
+        json={
+            "locataire_nom": "Chambreur Test",
+            "locataire_email": "chambre@test.local",
+            "locataire_phone": "514 555-0000",
+            "date_naissance": "1990-05-14",
+            "date_debut": str(date.today() + timedelta(days=10)),
+            "date_fin": str(date.today() + timedelta(days=375)),
+            "loyer_mensuel": 700.0,
+        },
+    )
+    assert r.status_code in (200, 201), r.text
+
+    async def _lire() -> bool:
+        async with TestSessionLocal() as s:
+            b = (
+                await s.execute(
+                    select(_Bail).where(
+                        _Bail.logement_id == ids["logement_id"]
+                    )
+                )
+            ).scalars().first()
+            return bool(b and b.au_mois)
+
+    assert run(_lire()) is True, (
+        "un logement loué en chambres doit donner un bail AU MOIS sans "
+        "qu'on ait à le redemander"
+    )

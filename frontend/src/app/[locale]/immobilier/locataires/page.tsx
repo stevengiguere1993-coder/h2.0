@@ -513,6 +513,18 @@ function CreateLocataireModal({
                 onChange={(e) => set("email", e.target.value)}
                 className="input"
               />
+              {/* On ne BLOQUE pas : après l'achat d'un immeuble, on
+                  saisit des locataires déjà en place dont on n'a pas
+                  encore le courriel. Mais la conséquence doit être
+                  visible tout de suite — sans courriel, aucun avis, aucun
+                  relevé 31, aucune relance ne pourra partir vers cette
+                  personne (2026-08-19). */}
+              {!form.email.trim() ? (
+                <p className="mt-1 text-[11px] text-amber-300/80">
+                  Sans courriel, aucune communication ne pourra lui être
+                  envoyée — ni avis, ni relevé 31, ni relance.
+                </p>
+              ) : null}
             </div>
             <div>
               <label className="label">Téléphone</label>
