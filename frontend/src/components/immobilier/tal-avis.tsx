@@ -88,11 +88,14 @@ export async function importDocument(opts: {
 export function ImportDocButton({
   label,
   onPick,
-  busy
+  busy,
+  title
 }: {
   label: string;
   onPick: (file: File) => void;
   busy?: boolean;
+  /** Infobulle : à quoi sert vraiment cet import. */
+  title?: string;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   return (
@@ -112,6 +115,7 @@ export function ImportDocButton({
         type="button"
         className="btn-secondary btn-xs"
         disabled={busy}
+        title={title}
         onClick={() => inputRef.current?.click()}
       >
         {busy ? (
@@ -1676,6 +1680,12 @@ export function BailDocActions({
       }
       notifyDocumentsChanged(bailId);
       onChanged?.();
+      // C'est ICI que Phil voulait le consentement : « faudrait que ce
+      // soit directement quand le bail est signé qu'on envoie ça ».
+      // Le bail signé vient d'arriver au dossier — c'est le seul moment
+      // où on y pense naturellement. Proposé, jamais automatique : rien
+      // ne part vers un locataire sans un clic.
+      setProposerConsentement(true);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -1683,8 +1693,73 @@ export function BailDocActions({
     }
   }
 
+  const [proposerConsentement, setProposerConsentement] = useState(false);
+  const [envoiConsent, setEnvoiConsent] = useState(false);
+
+  async function envoyerConsentement() {
+    setEnvoiConsent(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/consentement/envoyer`,
+        { method: "POST" }
+      );
+      if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+      setProposerConsentement(false);
+      onChanged?.();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setEnvoiConsent(false);
+    }
+  }
+
   return (
     <span className="inline-flex items-center gap-1.5">
+      {proposerConsentement ? (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setProposerConsentement(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-bold text-white">
+              Bail importé — et le consentement ?
+            </h3>
+            <p className="mt-1 text-xs text-white/60">
+              Sans consentement aux communications électroniques, les
+              avis doivent partir <b>par la poste</b>. C&apos;est le bon
+              moment pour le demander : le locataire vient de signer.
+            </p>
+            <p className="mt-2 text-[11px] text-white/40">
+              Il peut refuser — son refus sera enregistré et le suivi le
+              montrera.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setProposerConsentement(false)}
+                className="btn-ghost btn-xs"
+              >
+                Plus tard
+              </button>
+              <button
+                type="button"
+                disabled={envoiConsent}
+                onClick={() => void envoyerConsentement()}
+                className="btn-accent btn-sm disabled:opacity-60"
+              >
+                {envoiConsent ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : null}
+                Envoyer le consentement
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {ouvrable ? (
         <button
           type="button"
@@ -1703,9 +1778,26 @@ export function BailDocActions({
       ) : null}
       {entreBoutons ?? null}
       {hasDoc || allowImportInitial ? (
+        /* Retour Phil 2026-08-19 : « le bouton importer c'était
+           peut-être juste pour les unités déjà créées, quand par
+           exemple je crée un immeuble et je veux juste venir rattacher
+           le bail — faudrait trouver une façon que ce soit pas
+           mélangeant avec les unités vacantes ». Exactement : il sert à
+           JOINDRE le bail d'un locataire déjà en place, pas à louer.
+           Louer une unité vacante passe par Locations. Le libellé et
+           l'infobulle le disent maintenant. */
         <ImportDocButton
           label={
-            compact ? "" : hasDoc ? "Remplacer" : "Importer le bail"
+            compact
+              ? ""
+              : hasDoc
+                ? "Remplacer"
+                : "Joindre le bail signé"
+          }
+          title={
+            hasDoc
+              ? "Remplacer le PDF du bail au dossier"
+              : "Joindre le bail d'un locataire DÉJÀ en place (rachat d'immeuble, régularisation). Pour louer une unité vacante, passe par Locations."
           }
           busy={busy}
           onPick={demanderDate}

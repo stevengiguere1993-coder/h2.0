@@ -192,3 +192,87 @@ def test_un_document_sans_signature_ne_se_refuse_pas(client, run):
         f"/api/v1/public/documents/{token}/refuser", json={}
     )
     assert r.status_code == 400, r.text
+
+
+def test_envoi_depuis_le_bail_prepare_au_besoin(client, auth_headers, run):
+    """Une action UNIQUE, appelable d'où on veut : juste après l'import
+    du bail signé, depuis le suivi, ou depuis la fiche.
+
+    Retour Phil : « je pouvais juste l'envoyer à partir de la section
+    documents de la fiche d'un locataire, ce qui est pas bon du tout ».
+    Et pour un bail ancien (achat d'immeuble), le document n'existe même
+    pas : on le prépare à la volée plutôt que d'exiger un détour.
+    """
+    ids = run(_seed_bail("Consent Envoi", "56 rue Envoi")())
+
+    class _M:
+        ready = True
+        sender = "systeme@immohorizon.com"
+
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, **kw):
+            self.sent.append(kw)
+
+    fake = _M()
+    import app.integrations.email_graph as _eg
+
+    ancien = _eg.get_mailer
+    _eg.get_mailer = lambda: fake  # type: ignore[assignment]
+    try:
+        r = client.post(
+            f"/api/v1/immobilier/baux/{ids['bail_id']}/consentement/envoyer",
+            headers=auth_headers,
+        )
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["deja_signe"] is False
+        assert data["envoye_a"] == "consent@test.local"
+        assert fake.sent, "le courriel doit partir"
+    finally:
+        _eg.get_mailer = ancien  # type: ignore[assignment]
+
+    # Le document existe maintenant, avec son jeton et sa date d'envoi.
+    r2 = client.get(
+        "/api/v1/immobilier/consentements/overview", headers=auth_headers
+    )
+    ligne = next(
+        x for x in r2.json()["rows"]
+        if x["locataire_id"] == ids["locataire_id"]
+    )
+    assert ligne["statut"] == "envoye"
+
+
+def test_un_consentement_deja_signe_n_est_pas_redemande(
+    client, auth_headers, run
+):
+    """Redemander à quelqu'un ce qu'il a déjà accordé est au mieux
+    inutile, au pire inquiétant. L'action le signale au lieu de
+    renvoyer."""
+    from datetime import datetime as _dt, timezone as _tz
+
+    ids = run(_seed_bail("Consent Signe", "58 rue Signe")())
+
+    async def _doc() -> None:
+        async with TestSessionLocal() as s:
+            s.add(
+                ImmDocument(
+                    bail_id=ids["bail_id"],
+                    locataire_id=ids["locataire_id"],
+                    type="consentement_communications",
+                    titre="Consentement aux communications électroniques",
+                    envoye_le=_dt(2026, 8, 1, tzinfo=_tz.utc),
+                    signed_at=_dt(2026, 8, 2, tzinfo=_tz.utc),
+                    signed_by_name="Deja Signe",
+                )
+            )
+            await s.commit()
+
+    run(_doc())
+    r = client.post(
+        f"/api/v1/immobilier/baux/{ids['bail_id']}/consentement/envoyer",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["deja_signe"] is True
