@@ -2029,21 +2029,17 @@ async def get_gestion_immo_bon_photo(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Bon introuvable."
         )
-    # Charge les octets explicitement (la colonne `image` est deferred), en
-    # vérifiant que la photo appartient bien au chantier de CE bon.
-    row = (
-        await db.execute(
-            select(ProjectPhoto.image, ProjectPhoto.content_type).where(
-                ProjectPhoto.id == photo_id,
-                ProjectPhoto.project_id == bon.project_id,
-            )
-        )
-    ).first()
-    if row is None or not row[0]:
+    # Logique partagée avec /bons-travail/{id}/photos (2026-08-21) : la
+    # photo doit appartenir au chantier de CE bon.
+    from app.services.bon_photos import charger_photo_bon
+
+    res = await charger_photo_bon(db, bon, photo_id)
+    if res is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Photo introuvable."
         )
-    return Response(content=bytes(row[0]), media_type=row[1] or "image/jpeg")
+    content, ct = res
+    return Response(content=content, media_type=ct)
 
 
 @router.post("/bons-travail/{bon_id}/photos")
@@ -2068,48 +2064,22 @@ async def upload_gestion_immo_bon_photo(
             status_code=status.HTTP_404_NOT_FOUND, detail="Bon introuvable."
         )
 
-    ct = (file.content_type or "").lower()
-    if ct not in _PHOTO_MIME_ALLOWED and ct != "application/pdf":
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Format non supporté (JPG, PNG, WEBP, HEIC, PDF).",
-        )
+    # Logique partagée avec /bons-travail/{id}/photos (2026-08-21) :
+    # validation, mini-projet porteur créé au besoin, enregistrement.
+    from app.services.bon_photos import PhotoBonError, enregistrer_photo_bon
+
     blob = await file.read()
-    if not blob:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Fichier vide."
+    try:
+        photo = await enregistrer_photo_bon(
+            db,
+            bon,
+            content_type=file.content_type,
+            blob=blob,
+            uploaded_by_email=user.email,
         )
-    if len(blob) > _PHOTO_MAX_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Fichier trop gros (> {_PHOTO_MAX_BYTES // (1024*1024)} Mo).",
-        )
-
-    # Le bon doit avoir un projet pour porter ses photos : on le crée au
-    # besoin (mini-projet — cohérent avec « Achats, heures & facture »).
-    if bon.project_id is None:
-        proj = Project(
-            name=bon.title or f"Bon {bon.reference}",
-            client_id=bon.client_id,
-            kind="bon_travail",
-            responsible_user_id=getattr(bon, "assignee_user_id", None),
-            status="in_progress",
-            address=getattr(bon, "address", None),
-        )
-        db.add(proj)
-        await db.flush()
-        bon.project_id = proj.id
-
-    photo = ProjectPhoto(
-        project_id=bon.project_id,
-        image=blob,
-        content_type=ct,
-        caption="Problématique (avant)",
-        uploaded_by_email=user.email,
-    )
-    db.add(photo)
+    except PhotoBonError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
     await db.commit()
-    await db.refresh(photo)
     return {"photo_id": photo.id, "project_id": bon.project_id}
 
 

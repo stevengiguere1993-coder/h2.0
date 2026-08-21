@@ -250,7 +250,7 @@ export default function BonDetailPage() {
         setWorkNotes(bd.work_notes || "");
         setAddrDraft(bd.address || "");
         setDesc(bd.description || "");
-        if ((bd.kind ?? "construction") === "interne") void loadPhotos();
+        void loadPhotos();
         if (rRes.ok) setRecap((await rRes.json()) as Recap);
         setSendSubject(`Bon de travail ${bd.reference} — ${bd.title}`);
         if (bd.client_id) {
@@ -368,18 +368,22 @@ export default function BonDetailPage() {
     }
   }
 
+  // Photos : routes GÉNÉRIQUES du bon (construction OU immobilier).
+  // Avant le 2026-08-21, la page passait par /immobilier/... qui exige
+  // le volet immobilier et ne connaît que les bons gestion immo : un
+  // chargé de projet construction recevait un 403 silencieux.
   async function loadPhotos() {
     try {
-      const r = await authedFetch(`/api/v1/immobilier/bons-travail/${id}`);
+      const r = await authedFetch(`/api/v1/bons-travail/${id}/photos`);
       if (!r.ok) return;
-      const d = (await r.json()) as {
-        photos?: { id: number; caption: string | null }[];
-      };
-      const photos = d.photos || [];
+      const photos = (await r.json()) as {
+        id: number;
+        caption: string | null;
+      }[];
       setBonPhotos(photos);
       for (const ph of photos) {
         const pr = await authedFetch(
-          `/api/v1/immobilier/bons-travail/${id}/photos/${ph.id}`
+          `/api/v1/bons-travail/${id}/photos/${ph.id}`
         );
         if (pr.ok) {
           const blob = await pr.blob();
@@ -397,20 +401,55 @@ export default function BonDetailPage() {
   async function uploadPhotos(files: FileList | null) {
     if (!files || files.length === 0) return;
     setPhotoUp(true);
+    setError(null);
+    const refus: string[] = [];
     try {
       for (const f of Array.from(files)) {
         const fd = new FormData();
         fd.append("file", f);
-        await authedFetch(`/api/v1/immobilier/bons-travail/${id}/photos`, {
+        const res = await authedFetch(`/api/v1/bons-travail/${id}/photos`, {
           method: "POST",
           body: fd
         });
+        // Un refus serveur (403 volet, 413 trop gros, 415 format…) n'est
+        // PAS une exception réseau : il faut le lire et le DIRE. Avant, il
+        // passait pour un succès silencieux — « ça ne marche pas ».
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const j = (await res.json()) as { detail?: string };
+            if (j.detail) detail = j.detail;
+          } catch {
+            /* réponse non JSON */
+          }
+          refus.push(`${f.name} : ${detail}`);
+        }
       }
       await loadPhotos();
+      if (refus.length) setError(`Photo refusée — ${refus.join(" · ")}`);
     } catch {
-      setError("Ajout de photo échoué.");
+      setError("Ajout de photo échoué (réseau).");
     } finally {
       setPhotoUp(false);
+    }
+  }
+
+  async function deletePhoto(photoId: number) {
+    if (!window.confirm("Retirer cette photo du bon ?")) return;
+    try {
+      const res = await authedFetch(
+        `/api/v1/bons-travail/${id}/photos/${photoId}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      setBonPhotoUrls((m) => {
+        const n = { ...m };
+        delete n[photoId];
+        return n;
+      });
+      await loadPhotos();
+    } catch (e) {
+      setError(`Suppression de la photo échouée : ${(e as Error).message}`);
     }
   }
 
@@ -1180,7 +1219,11 @@ export default function BonDetailPage() {
               </section>
             ) : null}
 
-            {isInternal ? (
+            {/* Photos pour TOUT bon — interne, construction, gestion
+                immo. La section n'existait que pour les bons internes :
+                un chargé de projet sur un bon construction n'avait
+                simplement pas de bouton (2026-08-21). */}
+            {true ? (
               <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-brand-800 px-5 py-4">
                   <div>
@@ -1220,8 +1263,16 @@ export default function BonDetailPage() {
                     <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
                       {bonPhotos.map((ph) =>
                         bonPhotoUrls[ph.id] ? (
+                          <div key={ph.id} className="group relative">
+                            <button
+                              type="button"
+                              onClick={() => void deletePhoto(ph.id)}
+                              title="Retirer cette photo"
+                              className="absolute right-1 top-1 z-10 rounded-md bg-black/60 p-1 text-white/70 opacity-0 transition hover:text-rose-300 group-hover:opacity-100"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
                           <a
-                            key={ph.id}
                             href={bonPhotoUrls[ph.id]}
                             target="_blank"
                             rel="noopener noreferrer"
@@ -1234,6 +1285,7 @@ export default function BonDetailPage() {
                               className="h-full w-full object-cover"
                             />
                           </a>
+                          </div>
                         ) : (
                           <div
                             key={ph.id}
