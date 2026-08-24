@@ -120,15 +120,26 @@ async def push_bon_qbo_job_now(project_id: int) -> None:
             ).scalar_one_or_none()
             if client is None:
                 return
-            cust = await qbo.ensure_customer(
-                display_name=client.name,
-                email=client.email,
-                phone=client.phone,
-                billing_address=client.address,
-            )
-            parent_id = str(cust.get("Id") or "")
+            # Client mère QB : d'abord le lien mémorisé sur la fiche,
+            # sinon find-or-create (courriel en clé d'identité avant le
+            # nom — une fiche RENOMMÉE dans Kratos retrouve quand même
+            # son customer QB au lieu d'en créer un doublon).
+            cust = None
+            if client.qbo_customer_id:
+                cust = await qbo.get_customer(client.qbo_customer_id)
+            if cust is None:
+                cust = await qbo.ensure_customer(
+                    display_name=client.name,
+                    email=client.email,
+                    phone=client.phone,
+                    billing_address=client.address,
+                )
+            parent_id = str(cust.get("Id") or "") if cust else ""
             if not parent_id:
                 return
+            if client.qbo_customer_id != parent_id:
+                client.qbo_customer_id = parent_id
+                await db.flush()
             job_id = await resolve_project_customer_id(
                 qbo, db, proj, parent_id
             )
