@@ -73,6 +73,8 @@ async def push_bon_qbo_job_now(project_id: int) -> None:
     sans QBO configuré, on ne fait rien (le push de la première facture /
     du premier coût le créera de toute façon via le même resolveur)."""
     try:
+        import asyncio
+
         from app.db.session import AsyncSessionLocal
         from app.integrations.quickbooks import get_qbo
         from app.models.client import Client
@@ -85,12 +87,31 @@ async def push_bon_qbo_job_now(project_id: int) -> None:
         if not qbo.ready:
             return
         async with AsyncSessionLocal() as db:
-            proj = (
-                await db.execute(
-                    select(Project).where(Project.id == project_id)
-                )
-            ).scalar_one_or_none()
+            # La tâche est lancée PENDANT la requête qui crée le bon /
+            # associe le client : sa transaction n'est commitée qu'à la
+            # fin de la requête. Sans attente, cette session fraîche ne
+            # voyait pas encore le projet (ou son client) et abandonnait
+            # en silence → aucun sous-client QB créé (ex. BT-26-018).
+            # On ré-essaie donc quelques secondes avant de renoncer.
+            proj = None
+            for _attempt in range(6):
+                await asyncio.sleep(2)
+                proj = (
+                    await db.execute(
+                        select(Project).where(Project.id == project_id)
+                    )
+                ).scalar_one_or_none()
+                if proj is not None and proj.client_id:
+                    break
+                # Force une relecture DB au prochain tour (sinon la
+                # session ressert l'instance déjà chargée sans client).
+                db.expire_all()
             if proj is None or not proj.client_id:
+                log.warning(
+                    "push_bon_qbo_job_now projet %s : introuvable ou sans "
+                    "client après attente — sous-client QB non créé",
+                    project_id,
+                )
                 return
             client: Optional[Client] = (
                 await db.execute(
