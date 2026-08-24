@@ -260,6 +260,7 @@ export default function FactureDetailPage() {
     fournisseur_name: string | null;
     supplier_invoice_number: string | null;
     projected_billed_amount: number;
+    is_billable?: boolean;
   };
   const [billableAchats, setBillableAchats] = useState<BillableAchat[]>([]);
   const [achatSelected, setAchatSelected] = useState<Record<number, boolean>>(
@@ -270,8 +271,11 @@ export default function FactureDetailPage() {
   >({});
   const [billablesLoading, setBillablesLoading] = useState(false);
 
-  // Charge la liste « à refacturer » du projet à l'ouverture du dialogue
-  // d'import. Achats refacturables non encore facturés uniquement.
+  // Charge la liste des achats du projet à l'ouverture du dialogue
+  // d'import — TOUS les achats non encore facturés, y compris ceux non
+  // marqués refacturables (défaut des projets estimés / forfaitaires) :
+  // les sélectionner ici les facture quand même (et les marque
+  // refacturables).
   useEffect(() => {
     if (!importOpen || !f?.project_id) return;
     let cancelled = false;
@@ -279,15 +283,17 @@ export default function FactureDetailPage() {
     (async () => {
       try {
         const r = await authedFetch(
-          `/api/v1/projects/${f.project_id}/billables`
+          `/api/v1/projects/${f.project_id}/billables?include_non_billable=true`
         );
         if (!r.ok || cancelled) return;
         const data = (await r.json()) as { achats: BillableAchat[] };
         if (cancelled) return;
         setBillableAchats(data.achats || []);
-        // Coche tout par défaut.
+        // Pré-coche seulement les refacturables ; les autres restent à
+        // cocher volontairement.
         const pre: Record<number, boolean> = {};
-        for (const a of data.achats || []) pre[a.id] = true;
+        for (const a of data.achats || [])
+          pre[a.id] = a.is_billable !== false;
         setAchatSelected(pre);
       } catch {
         /* silencieux — l'utilisateur peut décocher l'import achats */
@@ -1824,9 +1830,9 @@ export default function FactureDetailPage() {
                 />
                 <div className="min-w-0 flex-1">
                   <div className="font-semibold text-white">
-                    Achats à refacturer{" "}
+                    Achats du projet{" "}
                     <span className="text-xs font-normal text-white/50">
-                      (refacturables non encore facturés)
+                      (non encore facturés — coche ceux à ajouter)
                     </span>
                   </div>
                   {importIncludeAchats ? (
@@ -1880,6 +1886,14 @@ export default function FactureDetailPage() {
                                     <span className="text-white/40">
                                       {" "}
                                       · {a.fournisseur_name}
+                                    </span>
+                                  ) : null}
+                                  {a.is_billable === false ? (
+                                    <span
+                                      className="ml-1.5 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-300"
+                                      title="Non marqué « à refacturer » — le cocher ici le facture quand même"
+                                    >
+                                      non refacturable
                                     </span>
                                   ) : null}
                                 </span>
