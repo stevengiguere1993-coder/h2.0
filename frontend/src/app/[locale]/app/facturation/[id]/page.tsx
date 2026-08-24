@@ -261,6 +261,8 @@ export default function FactureDetailPage() {
     supplier_invoice_number: string | null;
     projected_billed_amount: number;
     is_billable?: boolean;
+    invoiced_at?: string | null;
+    invoiced_facture_reference?: string | null;
   };
   const [billableAchats, setBillableAchats] = useState<BillableAchat[]>([]);
   const [achatSelected, setAchatSelected] = useState<Record<number, boolean>>(
@@ -283,17 +285,18 @@ export default function FactureDetailPage() {
     (async () => {
       try {
         const r = await authedFetch(
-          `/api/v1/projects/${f.project_id}/billables?include_non_billable=true`
+          `/api/v1/projects/${f.project_id}/billables?include_non_billable=true&include_invoiced=true`
         );
         if (!r.ok || cancelled) return;
         const data = (await r.json()) as { achats: BillableAchat[] };
         if (cancelled) return;
         setBillableAchats(data.achats || []);
-        // Pré-coche seulement les refacturables ; les autres restent à
-        // cocher volontairement.
+        // Pré-coche seulement les refacturables pas encore facturés ;
+        // les non-refacturables restent à cocher volontairement et les
+        // déjà-facturés sont affichés grisés (non sélectionnables).
         const pre: Record<number, boolean> = {};
         for (const a of data.achats || [])
-          pre[a.id] = a.is_billable !== false;
+          pre[a.id] = a.is_billable !== false && !a.invoiced_at;
         setAchatSelected(pre);
       } catch {
         /* silencieux — l'utilisateur peut décocher l'import achats */
@@ -542,7 +545,9 @@ export default function FactureDetailPage() {
       // Phase A : sélection ligne-par-ligne des achats + markup
       // overrides. Si rien n'est coché, l'API ne retourne aucun achat.
       const selectedAchatIds = importIncludeAchats
-        ? billableAchats.filter((a) => achatSelected[a.id]).map((a) => a.id)
+        ? billableAchats
+            .filter((a) => achatSelected[a.id] && !a.invoiced_at)
+            .map((a) => a.id)
         : [];
       const markupOverrides: Record<number, number> = {};
       if (importIncludeAchats) {
@@ -1863,14 +1868,18 @@ export default function FactureDetailPage() {
                                   ((a.amount ?? 0) * (1 + markupNum / 100)).toFixed(2)
                                 )
                               : a.projected_billed_amount;
+                            const alreadyInvoiced = !!a.invoiced_at;
                             return (
                               <div
                                 key={a.id}
-                                className="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2 text-xs"
+                                className={`grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2 text-xs ${
+                                  alreadyInvoiced ? "opacity-50" : ""
+                                }`}
                               >
                                 <input
                                   type="checkbox"
                                   checked={!!achatSelected[a.id]}
+                                  disabled={alreadyInvoiced}
                                   onChange={(e) =>
                                     setAchatSelected({
                                       ...achatSelected,
@@ -1888,7 +1897,17 @@ export default function FactureDetailPage() {
                                       · {a.fournisseur_name}
                                     </span>
                                   ) : null}
-                                  {a.is_billable === false ? (
+                                  {alreadyInvoiced ? (
+                                    <span
+                                      className="ml-1.5 rounded bg-white/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white/60"
+                                      title="Déjà versé sur une facture — supprimer cette facture le libère"
+                                    >
+                                      déjà facturé
+                                      {a.invoiced_facture_reference
+                                        ? ` · fact. ${a.invoiced_facture_reference}`
+                                        : ""}
+                                    </span>
+                                  ) : a.is_billable === false ? (
                                     <span
                                       className="ml-1.5 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-300"
                                       title="Non marqué « à refacturer » — le cocher ici le facture quand même"
