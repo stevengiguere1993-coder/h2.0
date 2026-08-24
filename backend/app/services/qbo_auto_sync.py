@@ -125,3 +125,82 @@ async def autopush_client(client_id: int) -> None:
                 await db.commit()
     except Exception as exc:  # noqa: BLE001
         log.warning("autopush client %s: %s", client_id, exc)
+
+
+async def push_client_update_qbo_now(client_id: int) -> None:
+    """Reflète la fiche client Kratos dans QuickBooks après une
+    MODIFICATION (nom affiché, courriel, téléphone, adresse). Action
+    délibérée de l'utilisateur → PAS conditionné à l'interrupteur
+    `qbo_auto_sync`.
+
+    Résolution du client QB, dans l'ordre : lien existant
+    (`qbo_customer_id`), sinon adoption par COURRIEL (clé d'identité —
+    couvre la fiche renommée, ex. « Zalec Bruneau » → « Zimmo
+    immobilier »), sinon par nom exact. Introuvable → on ne crée rien
+    ici (la création reste au flux bon/facture). Best-effort."""
+    try:
+        import asyncio
+
+        from app.integrations.quickbooks import get_qbo
+        from app.models.client import Client
+
+        qbo = get_qbo()
+        await qbo._load_refresh_from_db()
+        if not qbo.ready:
+            return
+        # La tâche part pendant la requête PUT : on laisse sa
+        # transaction se commiter avant de lire la fiche.
+        await asyncio.sleep(2)
+        async with AsyncSessionLocal() as db:
+            client = (
+                await db.execute(select(Client).where(Client.id == client_id))
+            ).scalar_one_or_none()
+            if client is None:
+                return
+            cust = None
+            if client.qbo_customer_id:
+                cust = await qbo.get_customer(client.qbo_customer_id)
+            if cust is None and client.email:
+                cust = await qbo.find_customer_by_email(client.email)
+            if cust is None and client.name:
+                cust = await qbo.find_customer_by_name(client.name)
+            if cust is None:
+                return
+            cid = str(cust.get("Id") or "")
+            if not cid:
+                return
+            if client.qbo_customer_id != cid:
+                client.qbo_customer_id = cid
+                await db.commit()
+            # Mise à jour sparse seulement si quelque chose diffère.
+            qb_name = (cust.get("DisplayName") or "").strip()
+            qb_email = (
+                (cust.get("PrimaryEmailAddr") or {}).get("Address") or ""
+            ).strip()
+            qb_phone = (
+                (cust.get("PrimaryPhone") or {}).get("FreeFormNumber") or ""
+            ).strip()
+            qb_addr = ((cust.get("BillAddr") or {}).get("Line1") or "").strip()
+            k_name = (client.name or "").strip()
+            k_email = (client.email or "").strip()
+            k_phone = (client.phone or "").strip()
+            k_addr = (client.address or "").strip()
+            if (
+                (k_name and k_name != qb_name)
+                or (k_email and k_email.lower() != qb_email.lower())
+                or (k_phone and k_phone != qb_phone)
+                or (k_addr and k_addr != qb_addr)
+            ):
+                await qbo.update_customer(
+                    cid,
+                    display_name=k_name or None,
+                    email=k_email or None,
+                    phone=k_phone or None,
+                    billing_address=k_addr or None,
+                )
+                log.info(
+                    "Client %s reflété dans QB (customer %s « %s »)",
+                    client_id, cid, k_name,
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("push_client_update_qbo_now %s: %s", client_id, exc)
