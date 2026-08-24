@@ -322,12 +322,18 @@ async def import_into_facture(
         stmt = (
             select(Achat)
             .where(Achat.project_id == fa.project_id)
-            .where(Achat.is_billable.is_(True))
             .where(Achat.invoiced_at.is_(None))
             .order_by(Achat.id.asc())
         )
         if data.achat_ids:
+            # Sélection EXPLICITE ligne par ligne : le choix de
+            # l'utilisateur fait autorité — un achat non marqué
+            # refacturable (défaut des projets estimés / forfaitaires)
+            # peut être facturé quand même ; il est marqué refacturable
+            # (verrou manuel) au moment de l'import, plus bas.
             stmt = stmt.where(Achat.id.in_(data.achat_ids))
+        else:
+            stmt = stmt.where(Achat.is_billable.is_(True))
         achats = (await db.execute(stmt)).scalars().all()
 
         # Pré-charge les contrats sous-traitants du projet pour les
@@ -411,6 +417,11 @@ async def import_into_facture(
         for ac, item in new_items:
             ac.invoiced_at = now
             ac.facture_item_id = item.id
+            # Sélection explicite d'un achat non refacturable → on le
+            # marque refacturable (verrou manuel contre les automatismes).
+            if not ac.is_billable:
+                ac.is_billable = True
+                ac.billable_manual = True
         # Dépense QB liée → flip CIBLÉ de la case FACTURABLE en fond
         # (NotBillable) : l'« imputation de dépense facturable » en attente
         # disparaît côté QB (la refacturation, majoration incluse, est déjà
