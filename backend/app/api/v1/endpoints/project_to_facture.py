@@ -303,12 +303,32 @@ async def convert_project_to_facture(
             ratio = (delta_amount / sm_base) if sm_base > 0 else 1.0
             pct = max(1, min(100, round(ratio * 100)))
 
-            if prefix_kind == "amount":
-                prefix = f"{int(round(prefix_value))} $ — "
-            else:
-                prefix = f"{prefix_value:g}% — " if pct != 100 else ""
             for it, delta_i in planned:
                 item_total = float(it.total or 0)
+                # Préfixe PAR LIGNE : la cible demandée (« 100% » = tout
+                # le restant) était ambiguë seule — on précise entre
+                # parenthèses la part de la TOTALITÉ du devis que CETTE
+                # facture représente pour la ligne (ex. « 100% (39 % de
+                # la totalité) — … »). Omise quand la ligne part au
+                # complet en une seule facture (100 % = 100 %).
+                line_pct = (
+                    max(1, min(100, round(delta_i / item_total * 100)))
+                    if item_total > 0
+                    else 100
+                )
+                part = (
+                    f" ({line_pct:g} % de la totalité)"
+                    if line_pct != 100
+                    else ""
+                )
+                if prefix_kind == "amount":
+                    prefix = f"{int(round(prefix_value))} ${part} — "
+                else:
+                    prefix = (
+                        f"{prefix_value:g}%{part} — "
+                        if (pct != 100 or line_pct != 100)
+                        else ""
+                    )
                 if abs(delta_i - item_total) <= 0.01 and float(it.quantity) > 0:
                     # Item chargé au complet → quantité/prix/unité d'origine.
                     qty = float(it.quantity)
