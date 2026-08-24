@@ -509,8 +509,20 @@ export default function ImmeubleDetailPage({
         `/api/v1/immobilier/immeubles/${immeubleId}`,
         { method: "DELETE" }
       );
-      if (!res.ok && res.status !== 204)
-        throw new Error(`HTTP ${res.status}`);
+      // Le serveur DIT pourquoi il refuse (« 1 dépôt détenu », « 12
+      // paiements »…) : afficher « HTTP 409 » tout court laissait Phil
+      // deviner — il a buté deux fois dessus (2026-08-21). On remonte
+      // le détail tel quel.
+      if (!res.ok && res.status !== 204) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const j = (await res.json()) as { detail?: string };
+          if (j.detail) detail = j.detail;
+        } catch {
+          /* réponse non JSON */
+        }
+        throw new Error(detail);
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       router.replace("/immobilier/immeubles" as any);
     } catch (e) {
