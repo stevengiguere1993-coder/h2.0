@@ -658,6 +658,12 @@ def make_crud_router(
         prev_project_id = (
             getattr(obj, "project_id", None) if model is Punch else None
         )
+        # Capture pre-update client_id du Bon de travail — associer ou
+        # changer le client après coup doit déclencher la même garantie
+        # QB qu'à la création (sous-client sous le client mère).
+        prev_bon_client_id = (
+            getattr(obj, "client_id", None) if model is BonTravail else None
+        )
         # Capture pre-update total Soumission — si le total change,
         # on propage au budget du projet lié pour que la kanban, le
         # header projet (« Budget » pill) et le champ « Budget (CAD) »
@@ -832,6 +838,34 @@ def make_crud_router(
                 from app.services.qbo_auto_sync import push_facture_now
 
                 asyncio.create_task(push_facture_now(int(obj.id)))
+        # Bon de travail CLIENT : associer / changer le client APRÈS la
+        # création déclenche la même garantie qu'à la création — projet
+        # lié (« <ref BT> — <titre> ») + sous-client QB sous le client
+        # mère, le client mère étant créé dans QB s'il n'existe pas.
+        # Avant, seul le flux de création le faisait : un bon créé sans
+        # client puis associé plus tard n'avait son sous-client QB qu'à
+        # la première facture.
+        if (
+            model is BonTravail
+            and getattr(obj, "kind", None) != "interne"
+            and getattr(obj, "client_id", None)
+            and obj.client_id != prev_bon_client_id
+        ):
+            import asyncio as _asyncio_bon_upd
+
+            from app.services.bon_project import (
+                ensure_bon_project as _ensure_bp_upd,
+                push_bon_qbo_job_now as _push_bp_upd,
+            )
+
+            _bproj_upd = await _ensure_bp_upd(db, obj)
+            # Projet lié créé AVANT l'association du client → il n'a pas
+            # de client_id ; on propage pour que le push QB (qui lit le
+            # client du projet) ne tourne pas à vide.
+            if not _bproj_upd.client_id:
+                _bproj_upd.client_id = obj.client_id
+                await db.flush()
+            _asyncio_bon_upd.create_task(_push_bp_upd(int(_bproj_upd.id)))
         return read_schema.model_validate(obj)
 
     @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)

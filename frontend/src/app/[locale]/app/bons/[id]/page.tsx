@@ -643,9 +643,10 @@ export default function BonDetailPage() {
       const cd = clients.find((c) => c.id === clientId) || null;
       setClient(cd);
       if (cd?.email) setSendTo(cd.email);
-      // Propage le client sur le projet lié et ses factures existantes
-      // sans client (le bon a déjà un projet dès qu'il a des coûts).
-      if (b.project_id && clientId) {
+      // Garantit le projet lié (créé au besoin), propage le client sur
+      // ce projet et ses factures sans client, et pousse le sous-client
+      // QuickBooks sous le client mère (créé dans QB s'il n'existe pas).
+      if (clientId) {
         await authedFetch(`/api/v1/bons-travail/${id}/ensure-project`, {
           method: "POST"
         }).catch(() => undefined);
