@@ -470,3 +470,54 @@ def test_budget_du_projet_pour_l_investisseur(
         headers=invest_headers,
     )
     assert r3.status_code == 404, r3.text
+
+
+def test_apercu_d_un_actionnaire_sans_compte(
+    client, auth_headers, invest_ids, run
+):
+    """« Voir comme lui » AVANT la création du compte (demande Phil
+    2026-08-25) : participation virtuelle depuis Parts & actionnaires —
+    % de la fiche, aucun flux, sa ligne marquée (vous)."""
+    eid = invest_ids["entreprise_id"]
+
+    async def _partenaire() -> int:
+        async with TestSessionLocal() as s:
+            pr = EntreprisePartner(
+                entreprise_id=eid,
+                partner_name="Partenaire Fantome",
+                ownership_pct=30.0,
+            )
+            s.add(pr)
+            await s.flush()
+            pid = pr.id
+            await s.commit()
+            return pid
+
+    pid = run(_partenaire())
+
+    r = client.get(
+        f"/api/v1/invest/admin/apercu-partenaire/{pid}/portefeuille",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert len(data["projets"]) == 1
+    assert data["projets"][0]["parts_pct"] == 30.0
+    assert data["capital_actuel"] == 0.0
+
+    r2 = client.get(
+        f"/api/v1/invest/admin/apercu-partenaire/{pid}/projets/{eid}",
+        headers=auth_headers,
+    )
+    assert r2.status_code == 200, r2.text
+    fiche = r2.json()
+    assert fiche["parts_pct"] == 30.0
+    moi = [a for a in fiche["actionnaires"] if a["is_me"]]
+    assert [a["name"] for a in moi] == ["Partenaire Fantome"]
+
+    # Ligne d'actionnaire inexistante → 404 propre.
+    r3 = client.get(
+        "/api/v1/invest/admin/apercu-partenaire/999999/portefeuille",
+        headers=auth_headers,
+    )
+    assert r3.status_code == 404, r3.text

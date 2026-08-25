@@ -26,6 +26,7 @@ import {
   HypothequesCard,
   investApiBase,
   NormalisesPanel,
+  useApercuPartenaire,
   PhaseBadge,
   ProjetDetail,
   QboReelsPanel,
@@ -44,6 +45,10 @@ export default function ProjetPage() {
   const params = useParams<{ id: string }>();
   const entrepriseId = Number(params.id);
   const apercu = useApercu();
+  const apercuP = useApercuPartenaire();
+  //: Une des deux formes d'aperçu admin (compte existant ou « compte à
+  //: créer ») — les sous-requêtes passent alors par les routes admin.
+  const enApercu = apercu !== null || apercuP !== null;
   const [data, setData] = useState<ProjetDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +64,9 @@ export default function ProjetPage() {
     setError(null);
     try {
       const res = await authedFetch(
-        `${investApiBase(apercu)}/projets/${entrepriseId}`
+        apercuP
+          ? `/api/v1/invest/admin/apercu-partenaire/${apercuP}/projets/${entrepriseId}`
+          : `${investApiBase(apercu)}/projets/${entrepriseId}`
       );
       if (!res.ok) throw new Error(`http_${res.status}`);
       setData((await res.json()) as ProjetDetail);
@@ -68,14 +75,14 @@ export default function ProjetPage() {
     } finally {
       setLoading(false);
     }
-  }, [apercu, entrepriseId]);
+  }, [apercu, apercuP, entrepriseId]);
 
   useEffect(() => {
     if (ready) void load();
   }, [ready, load]);
 
   async function openDocument(id: number, title: string) {
-    const base = apercu
+    const base = enApercu
       ? `/api/v1/invest/admin/documents/${id}/pdf`
       : `/api/v1/invest/me/documents/${id}/pdf`;
     const res = await authedFetch(base);
@@ -129,6 +136,8 @@ export default function ProjetPage() {
             label: "Mon portefeuille",
             href: apercu
               ? `/investisseur?apercu=${apercu}`
+              : apercuP
+              ? `/investisseur?apercu_p=${apercuP}`
               : "/investisseur"
           },
           { label: data.entreprise_name }
@@ -136,10 +145,12 @@ export default function ProjetPage() {
       />
 
       <div className="mx-auto w-full max-w-6xl p-4 lg:p-6">
-        {apercu ? (
+        {enApercu ? (
           <div className="mb-4 flex items-center gap-2 rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2.5 text-sm text-sky-400">
             <Eye className="h-4 w-4 shrink-0" />
-            Aperçu administrateur — vue exacte de l&apos;investisseur.
+            {apercuP
+              ? "Aperçu administrateur — vue qu'aura cet actionnaire une fois son compte créé et activé."
+              : "Aperçu administrateur — vue exacte de l'investisseur."}
           </div>
         ) : null}
 
@@ -344,7 +355,7 @@ export default function ProjetPage() {
           {data.show_cashflow ? (
             <QboReelsPanel
               fetchPath={
-                apercu
+                enApercu
                   ? `/api/v1/invest/admin/projets/${entrepriseId}/qbo-reels`
                   : `/api/v1/invest/me/projets/${entrepriseId}/qbo-reels`
               }
@@ -357,7 +368,7 @@ export default function ProjetPage() {
           <div className="mt-4">
             <BudgetOptimisationPanel
               fetchPath={
-                apercu
+                enApercu
                   ? `/api/v1/invest/admin/projets/${entrepriseId}/budget`
                   : `/api/v1/invest/me/projets/${entrepriseId}/budget`
               }
@@ -372,7 +383,7 @@ export default function ProjetPage() {
             <ParticipationHero
               data={data}
               avancesPath={
-                apercu
+                enApercu
                   ? `/api/v1/invest/admin/projets/${entrepriseId}/avances`
                   : `/api/v1/invest/me/projets/${entrepriseId}/avances`
               }
