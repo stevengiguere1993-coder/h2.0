@@ -25,7 +25,7 @@ import logging
 from datetime import date
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
@@ -608,6 +608,115 @@ async def delete_budget_ligne(
 
 
 # ── QuickBooks (lecture seule) ───────────────────────────────────
+
+
+class QboPieceMeta(BaseModel):
+    att_id: str
+    file_name: Optional[str] = None
+    content_type: Optional[str] = None
+
+
+class QboTransactionOut(BaseModel):
+    txn_type: str
+    txn_id: str
+    date: Optional[str] = None
+    fournisseur: Optional[str] = None
+    doc_number: Optional[str] = None
+    montant_impute: float
+    montant_total: float
+    description: Optional[str] = None
+    pieces: List[QboPieceMeta] = Field(default_factory=list)
+
+
+@router.get(
+    "/projets/{projet_id}/qbo-lignes/{ligne_id}/transactions",
+    response_model=List[QboTransactionOut],
+)
+async def qbo_transactions_ligne(
+    projet_id: int, ligne_id: int, db: DBSession, _: CurrentUser
+) -> List[QboTransactionOut]:
+    """DÉTAIL d'une enveloppe : les transactions QuickBooks (factures
+    fournisseurs et dépenses) derrière le total « dépensé », avec leurs
+    pièces jointes. Lecture seule — demande Phil 2026-08-22 : « avoir les
+    factures PDF reliées à ces dépenses-là dans mon portail »."""
+    from app.services.qbo_optimisation import transactions_depenses
+
+    p = await _projet_or_404(db, projet_id)
+    if not p.qbo_scope:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Aucune connexion QuickBooks choisie pour ce projet.",
+        )
+    ligne = (
+        await db.execute(
+            select(OptimisationBudgetLigne).where(
+                OptimisationBudgetLigne.id == ligne_id,
+                OptimisationBudgetLigne.projet_id == projet_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if ligne is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Ligne introuvable.")
+    try:
+        comptes = {
+            str(c.get("id"))
+            for c in json.loads(ligne.qbo_accounts_json or "[]")
+            if c.get("id") is not None
+        }
+    except Exception:  # noqa: BLE001
+        comptes = set()
+    if not comptes:
+        return []
+    try:
+        rows = await transactions_depenses(
+            p.qbo_scope,
+            comptes,
+            p.date_debut.isoformat() if p.date_debut else None,
+            date.today().isoformat(),
+        )
+    except Exception as exc:  # noqa: BLE001 — message propre à l'UI
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+    return [QboTransactionOut(**r) for r in rows]
+
+
+@router.get("/projets/{projet_id}/qbo-pieces/{att_id}")
+async def qbo_piece(
+    projet_id: int,
+    att_id: str,
+    db: DBSession,
+    _: CurrentUser,
+    ct: Optional[str] = None,
+    nom: Optional[str] = None,
+) -> Response:
+    """Sert la pièce jointe QuickBooks (PDF/image) EN DIRECT — rien n'est
+    stocké dans Kratos. Le scope vient du PROJET : impossible de viser la
+    connexion d'un autre pôle par ce chemin."""
+    from app.integrations.quickbooks import get_qbo
+
+    p = await _projet_or_404(db, projet_id)
+    if not p.qbo_scope:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Aucune connexion QuickBooks choisie pour ce projet.",
+        )
+    contenu = await get_qbo(p.qbo_scope).download_attachable(att_id)
+    if not contenu:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "Pièce introuvable dans QuickBooks (ou téléchargement échoué).",
+        )
+    # Le type vient de l'écran (métadonnées du listing) mais n'est jamais
+    # avalé tel quel : seuls image/* et PDF s'affichent inline.
+    media = (ct or "").lower()
+    if not (media.startswith("image/") or media == "application/pdf"):
+        media = "application/octet-stream"
+    entetes = {}
+    if nom:
+        propre = "".join(
+            ch for ch in nom if ch.isalnum() or ch in "._- "
+        )[:120]
+        entetes["Content-Disposition"] = f'inline; filename="{propre}"'
+    return Response(content=contenu, media_type=media, headers=entetes)
 
 
 class QboDepensesOut(BaseModel):

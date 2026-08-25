@@ -635,3 +635,110 @@ async def _ready(qbo: Any) -> bool:
         return bool(qbo.ready)
     except Exception:  # noqa: BLE001
         return False
+
+
+async def transactions_depenses(
+    scope: str,
+    account_ids: set[str],
+    date_debut: Optional[str],
+    date_fin: str,
+) -> List[Dict[str, Any]]:
+    """Transactions de dépense (Bills + Purchases) touchant les comptes
+    donnés, avec leurs pièces jointes QuickBooks.
+
+    Demande Phil 2026-08-22 : « j'aimerais avoir les factures PDF reliées
+    à ces dépenses-là dans mon portail ». La page Optimisation n'affichait
+    que des TOTAUX par enveloppe (rapport P&L) — les pièces jointes vivent
+    sur les TRANSACTIONS. On liste donc les documents (Bill = facture
+    fournisseur, Purchase = dépense cash/chèque/carte) dont au moins une
+    ligne impute un des comptes de l'enveloppe, et on y attache les
+    métadonnées d'Attachable. Lecture seule, rien n'est stocké.
+
+    Les JournalEntries sont volontairement ignorées : une écriture de
+    journal ne porte à peu près jamais de facture PDF, et c'est le
+    document qu'on cherche ici.
+    """
+    from app.integrations.quickbooks import get_qbo
+
+    qbo = get_qbo(scope)
+    if not qbo.ready:
+        raise RuntimeError(
+            f"QuickBooks n'est pas connecté pour « {scope} » "
+            "(Paramètres → Intégrations)."
+        )
+    filtre_date = f"TxnDate <= '{date_fin}'"
+    if date_debut:
+        filtre_date = f"TxnDate >= '{date_debut}' AND " + filtre_date
+
+    out: List[Dict[str, Any]] = []
+    for entity, type_key in (("Purchase", "purchase"), ("Bill", "bill")):
+        start = 1
+        # Pagination défensive : 5 pages de 200 max par type — au-delà,
+        # l'enveloppe couvre des années et le détail perd son sens.
+        for _ in range(5):
+            rows = await qbo.query(
+                f"SELECT * FROM {entity} WHERE {filtre_date} "
+                f"STARTPOSITION {start} MAXRESULTS 200"
+            )
+            for txn in rows:
+                impute = 0.0
+                for line in txn.get("Line") or []:
+                    det = line.get("AccountBasedExpenseLineDetail") or {}
+                    acc = str(
+                        (det.get("AccountRef") or {}).get("value") or ""
+                    )
+                    if acc in account_ids:
+                        try:
+                            impute += float(line.get("Amount") or 0)
+                        except (TypeError, ValueError):
+                            pass
+                if not impute:
+                    continue
+                if type_key == "purchase":
+                    four = (txn.get("EntityRef") or {}).get("name")
+                else:
+                    four = (txn.get("VendorRef") or {}).get("name")
+                out.append(
+                    {
+                        "txn_type": type_key,
+                        "txn_id": str(txn.get("Id") or ""),
+                        "date": txn.get("TxnDate"),
+                        "fournisseur": four,
+                        "doc_number": txn.get("DocNumber"),
+                        "montant_impute": round(impute, 2),
+                        "montant_total": float(txn.get("TotalAmt") or 0),
+                        "description": txn.get("PrivateNote"),
+                        "pieces": [],
+                    }
+                )
+            if len(rows) < 200:
+                break
+            start += 200
+
+    # Pièces jointes : UN listing, indexé par (type, id de txn) — même
+    # approche éprouvée que l'import des reçus construction.
+    if out:
+        index: Dict[tuple, List[Dict[str, Any]]] = {}
+        for att in await qbo.list_attachables():
+            att_id = str(att.get("Id") or "")
+            if not att_id:
+                continue
+            for ref in att.get("AttachableRef") or []:
+                ent = ref.get("EntityRef") or {}
+                key = (
+                    str(ent.get("type") or "").lower(),
+                    str(ent.get("value") or ""),
+                )
+                index.setdefault(key, []).append(
+                    {
+                        "att_id": att_id,
+                        "file_name": att.get("FileName"),
+                        "content_type": (att.get("ContentType") or "")
+                        or None,
+                    }
+                )
+        for row in out:
+            row["pieces"] = index.get((row["txn_type"], row["txn_id"]), [])
+
+    out.sort(key=lambda r: (r.get("date") or "", r["txn_id"]), reverse=True)
+    return out
