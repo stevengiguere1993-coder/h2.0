@@ -256,7 +256,11 @@ export default function PortefeuillePage() {
               </h1>
             ) : null}
 
-            {/* KPIs */}
+            {/* KPIs et courbe : vue DIRECTION seulement — un
+                investisseur arrive directement sur ses projets, sans
+                statistiques financières globales (retour Phil
+                2026-08-25). */}
+            {isGlobal ? (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
@@ -316,9 +320,10 @@ export default function PortefeuillePage() {
                 </p>
               </div>
             </div>
+            ) : null}
 
             {/* Courbe valeur totale */}
-            {data.serie_valeur.length >= 2 ? (
+            {isGlobal && data.serie_valeur.length >= 2 ? (
               <div className="mt-5 rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white">
                 <div className="mb-1 flex items-baseline justify-between gap-2">
                   <h2 className="text-sm font-semibold">
