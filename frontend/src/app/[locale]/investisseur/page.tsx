@@ -25,7 +25,6 @@ import { useCurrentUser } from "@/hooks/use-current-user";
 import { InvestisseurTopbar } from "./layout";
 import {
   fmtMoney,
-  fmtPct,
   PhaseBadge,
   Portefeuille,
   useApercu,
@@ -303,17 +302,17 @@ export default function PortefeuillePage() {
               </div>
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
-                  TRI réalisé
+                  TVPI
                 </p>
                 <p className="mt-1.5 text-2xl font-bold tabular-nums text-emerald-400">
-                  {fmtPct(data.tri_pct)}
+                  {data.tvpi !== null
+                    ? `${data.tvpi.toLocaleString("fr-CA", {
+                        maximumFractionDigits: 2
+                      })}×`
+                    : "—"}
                 </p>
                 <p className="mt-1 text-xs text-white/50">
-                  {data.tvpi !== null
-                    ? `TVPI ${data.tvpi.toLocaleString("fr-CA", {
-                        maximumFractionDigits: 2
-                      })}× · flux datés réels`
-                    : "flux datés réels"}
+                  (remboursé + distributions + valeur des parts) ÷ investi
                 </p>
               </div>
             </div>
@@ -438,16 +437,20 @@ export default function PortefeuillePage() {
                       </div>
                       <div className="border-t border-brand-800 pt-2">
                         <p className="text-[10px] uppercase tracking-wider text-white/40">
-                          TRI
+                          TVPI
                         </p>
                         <p
                           className={`text-sm font-bold ${
-                            (p.tri_pct ?? 0) >= 0
+                            (p.tvpi ?? 1) >= 1
                               ? "text-emerald-400"
                               : "text-rose-400"
                           }`}
                         >
-                          {fmtPct(p.tri_pct)}
+                          {p.tvpi !== null
+                            ? `${p.tvpi.toLocaleString("fr-CA", {
+                                maximumFractionDigits: 2
+                              })}×`
+                            : "—"}
                         </p>
                       </div>
                     </div>

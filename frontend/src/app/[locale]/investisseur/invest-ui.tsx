@@ -5,7 +5,12 @@
    sur `currentColor` pour rester lisibles dans les deux thèmes. */
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Paperclip
+} from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
 
@@ -154,7 +159,9 @@ export type ProjetDetail = {
     name: string;
     parts_pct: number | null;
     is_me: boolean;
+    capital_actuel?: number | null;
   }[];
+  apports_synchronises?: boolean;
   show_depenses: boolean;
   show_hypotheque: boolean;
   show_actionnaires: boolean;
@@ -744,11 +751,18 @@ export function NormalisesPanel({
 
 export type QboReelsRow = {
   mois: string;
+  debut?: string | null;
+  fin?: string | null;
   revenus: number;
   depenses: number;
   hypotheque?: number;
   ecart: number;
-  details?: { nom: string; type: string; montant: number }[];
+  details?: {
+    nom: string;
+    compte_id?: string | null;
+    type: string;
+    montant: number;
+  }[];
 };
 
 export type QboReels = {
@@ -769,11 +783,212 @@ export type QboReels = {
   } | null;
 };
 
+type QboTxnPiece = {
+  att_id: string;
+  file_name: string | null;
+  content_type: string | null;
+};
+
+type QboTxnRow = {
+  txn_type: string;
+  txn_id: string;
+  date: string | null;
+  fournisseur: string | null;
+  doc_number: string | null;
+  montant_impute: number;
+  montant_total: number;
+  description: string | null;
+  pieces: QboTxnPiece[];
+};
+
+/* Transactions QuickBooks d'un compte de dépense pour un mois cliqué
+   dans « Revenus et dépenses réels », avec les factures jointes servies
+   en direct — même principe que la page Optimisation. */
+function TransactionsReellesModal({
+  titre,
+  fetchUrl,
+  pieceBase,
+  onClose
+}: {
+  titre: string;
+  fetchUrl: string;
+  pieceBase: string;
+  onClose: () => void;
+}) {
+  const [rows, setRows] = useState<QboTxnRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [pieceBusy, setPieceBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch(fetchUrl);
+        if (!r.ok) {
+          const j = (await r.json().catch(() => null)) as {
+            detail?: string;
+          } | null;
+          throw new Error(j?.detail || `HTTP ${r.status}`);
+        }
+        setRows((await r.json()) as QboTxnRow[]);
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    })();
+  }, [fetchUrl]);
+
+  async function ouvrirPiece(pc: QboTxnPiece) {
+    setPieceBusy(pc.att_id);
+    try {
+      const params = new URLSearchParams();
+      if (pc.content_type) params.set("ct", pc.content_type);
+      if (pc.file_name) params.set("nom", pc.file_name);
+      const r = await authedFetch(
+        `${pieceBase}/${pc.att_id}?${params.toString()}`
+      );
+      if (!r.ok) {
+        const j = (await r.json().catch(() => null)) as {
+          detail?: string;
+        } | null;
+        throw new Error(j?.detail || `HTTP ${r.status}`);
+      }
+      const url = URL.createObjectURL(await r.blob());
+      window.open(url, "_blank");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      setErr(`Pièce : ${(e as Error).message}`);
+    } finally {
+      setPieceBusy(null);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[80vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white"
+      >
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">
+            Transactions QuickBooks — {titre}
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-brand-700 px-2.5 py-1 text-xs text-white/70 transition hover:text-white"
+          >
+            Fermer
+          </button>
+        </div>
+        {err ? (
+          <p className="mb-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-400">
+            {err}
+          </p>
+        ) : null}
+        {rows === null && !err ? (
+          <p className="py-6 text-center text-xs text-white/40">
+            Chargement depuis QuickBooks…
+          </p>
+        ) : rows !== null && rows.length === 0 ? (
+          <p className="py-6 text-center text-xs text-white/40">
+            Aucune transaction sur ce compte pour cette période.
+          </p>
+        ) : rows !== null ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[620px] text-left text-[13px]">
+              <thead className="text-[10px] uppercase tracking-wider text-white/40">
+                <tr>
+                  <th className="pb-2 pr-2">Date</th>
+                  <th className="pb-2 pr-2">Fournisseur</th>
+                  <th className="pb-2 pr-2">Description</th>
+                  <th className="pb-2 pr-2 text-right">Montant</th>
+                  <th className="pb-2 text-right">Facture</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((t) => (
+                  <tr
+                    key={`${t.txn_type}-${t.txn_id}`}
+                    className="border-t border-brand-800/60"
+                  >
+                    <td className="py-1.5 pr-2 whitespace-nowrap text-white/80">
+                      {t.date || "—"}
+                    </td>
+                    <td className="py-1.5 pr-2 text-white/80">
+                      {t.fournisseur || "—"}
+                      {t.doc_number ? (
+                        <span className="ml-1 text-[11px] text-white/40">
+                          #{t.doc_number}
+                        </span>
+                      ) : null}
+                    </td>
+                    <td
+                      className="max-w-[220px] truncate py-1.5 pr-2 text-[12px] text-white/50"
+                      title={t.description || undefined}
+                    >
+                      {t.description || "—"}
+                    </td>
+                    <td
+                      className="py-1.5 pr-2 text-right tabular-nums text-white"
+                      title={
+                        t.montant_impute !== t.montant_total
+                          ? `Part de ce compte : ${fmtMoney(t.montant_impute)} — transaction totale : ${fmtMoney(t.montant_total)}`
+                          : undefined
+                      }
+                    >
+                      {fmtMoney(t.montant_impute)}
+                    </td>
+                    <td className="py-1.5 text-right">
+                      {t.pieces.length === 0 ? (
+                        <span
+                          className="text-[11px] text-white/35"
+                          title="Aucune pièce jointe sur ce document dans QuickBooks"
+                        >
+                          —
+                        </span>
+                      ) : (
+                        t.pieces.map((pc) => (
+                          <button
+                            key={pc.att_id}
+                            type="button"
+                            disabled={pieceBusy === pc.att_id}
+                            onClick={() => void ouvrirPiece(pc)}
+                            className="ml-1 inline-flex items-center gap-1 rounded-md border border-brand-700 px-1.5 py-0.5 text-[11px] text-white/80 transition hover:text-white disabled:opacity-40"
+                            title={pc.file_name || "Ouvrir la pièce jointe"}
+                          >
+                            <Paperclip className="h-3 w-3" />
+                            {pieceBusy === pc.att_id ? "…" : "Ouvrir"}
+                          </button>
+                        ))
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+
 export function QboReelsPanel({ fetchPath }: { fetchPath: string }) {
   const [reels, setReels] = useState<QboReels | null>(null);
   const [failed, setFailed] = useState(false);
   const [periode, setPeriode] = useState("12m");
   const [ouverts, setOuverts] = useState<Set<string>>(new Set());
+  //: Compte de dépense cliqué → transactions + factures du mois.
+  const [txnCompte, setTxnCompte] = useState<{
+    titre: string;
+    url: string;
+  } | null>(null);
+  //: Les routes transactions/pièces vivent à côté de qbo-reels (même
+  //: base me/… ou admin/…).
+  const baseProjet = fetchPath.replace(/\/qbo-reels$/, "");
 
   useEffect(() => {
     let cancelled = false;
@@ -841,10 +1056,19 @@ export function QboReelsPanel({ fetchPath }: { fetchPath: string }) {
 
   function DetailsRow({
     details,
-    colSpan
+    colSpan,
+    debut,
+    fin
   }: {
-    details: { nom: string; type: string; montant: number }[];
+    details: {
+      nom: string;
+      compte_id?: string | null;
+      type: string;
+      montant: number;
+    }[];
     colSpan: number;
+    debut?: string | null;
+    fin?: string | null;
   }) {
     if (!details.length) return null;
     return (
@@ -856,7 +1080,23 @@ export function QboReelsPanel({ fetchPath }: { fetchPath: string }) {
                 key={i}
                 className="flex items-center justify-between gap-2 text-[11px]"
               >
-                <span className="text-white/50">{d.nom}</span>
+                {d.type === "depense" && d.compte_id && debut && fin ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setTxnCompte({
+                        titre: d.nom,
+                        url: `${baseProjet}/qbo-comptes/${d.compte_id}/transactions?debut=${debut}&fin=${fin}`
+                      })
+                    }
+                    className="text-left text-white/50 underline decoration-dotted underline-offset-2 transition hover:text-white/80"
+                    title="Voir les transactions de ce compte pour ce mois (et leurs factures)"
+                  >
+                    {d.nom}
+                  </button>
+                ) : (
+                  <span className="text-white/50">{d.nom}</span>
+                )}
                 <span
                   className={`tabular-nums ${
                     d.type === "revenu"
@@ -899,7 +1139,9 @@ export function QboReelsPanel({ fetchPath }: { fetchPath: string }) {
         {reels?.statut === "connecte" && reels.projet_nom
           ? ` — ${reels.projet_nom}`
           : ""}
-        {hasDetails ? " — cliquez un mois pour le détail par compte" : ""}
+        {hasDetails
+          ? " — cliquez un mois pour le détail par compte, puis un compte de dépense pour ses transactions et factures"
+          : ""}
         .
       </p>
 
@@ -1015,6 +1257,8 @@ export function QboReelsPanel({ fetchPath }: { fetchPath: string }) {
                     <DetailsRow
                       details={r.details || []}
                       colSpan={nbCols}
+                      debut={r.debut}
+                      fin={r.fin}
                     />
                   ) : null}
                 </Fragment>
@@ -1047,6 +1291,14 @@ export function QboReelsPanel({ fetchPath }: { fetchPath: string }) {
           </table>
         </div>
       )}
+      {txnCompte ? (
+        <TransactionsReellesModal
+          titre={txnCompte.titre}
+          fetchUrl={txnCompte.url}
+          pieceBase={`${baseProjet}/qbo-pieces`}
+          onClose={() => setTxnCompte(null)}
+        />
+      ) : null}
     </div>
   );
 }

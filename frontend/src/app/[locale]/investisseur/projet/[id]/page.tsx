@@ -22,7 +22,6 @@ import { InvestisseurTopbar } from "../../layout";
 import {
   fmtDate,
   fmtMoney,
-  fmtPct,
   HypothequesCard,
   investApiBase,
   NormalisesPanel,
@@ -454,8 +453,15 @@ export default function ProjetPage() {
 /* ─────────────────── Ma participation (carte héro) ─────────────────── */
 
 function ParticipationHero({ data }: { data: ProjetDetail }) {
+  //: Tant que la sync QuickBooks (avances d'actionnaires) n'a jamais
+  //: tourné, un capital à 0 veut dire « pas encore de données » ;
+  //: après, il veut dire « remboursé complètement ».
+  const synchronise = data.apports_synchronises === true;
   const enAttente =
-    data.flux.length === 0 && data.capital_investi_total === 0;
+    data.flux.length === 0 &&
+    data.capital_investi_total === 0 &&
+    !synchronise;
+  const rembourse = !enAttente && data.capital_actuel === 0;
 
   return (
     <div className="rounded-2xl border border-accent-500/40 bg-brand-900 p-5">
@@ -492,11 +498,19 @@ function ParticipationHero({ data }: { data: ProjetDetail }) {
           <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
             Capital encore investi
           </p>
-          <p className="mt-1 text-2xl font-bold tabular-nums text-white">
-            {enAttente ? "—" : fmtMoney(data.capital_actuel)}
-          </p>
+          {rembourse ? (
+            <p className="mt-1.5 text-lg font-bold leading-6 text-emerald-400">
+              Remboursé complètement&nbsp;!
+            </p>
+          ) : (
+            <p className="mt-1 text-2xl font-bold tabular-nums text-white">
+              {enAttente ? "—" : fmtMoney(data.capital_actuel)}
+            </p>
+          )}
           <p className="mt-0.5 text-[10px] text-white/35">
-            apports − remboursements
+            {rembourse
+              ? "tous les apports ont été remboursés"
+              : "apports − remboursements"}
           </p>
         </div>
       </div>
@@ -509,8 +523,8 @@ function ParticipationHero({ data }: { data: ProjetDetail }) {
           <p className="mt-0.5 text-[11px] text-white/45">
             Vos apports proviennent des avances d&apos;actionnaires du
             QuickBooks de la compagnie et se mettent à jour
-            automatiquement chaque nuit — le capital investi, le TVPI et
-            le TRI apparaîtront dès la première synchronisation.
+            automatiquement chaque nuit — le capital investi apparaîtra
+            dès la première synchronisation.
           </p>
         </div>
       ) : (
@@ -562,25 +576,51 @@ function ParticipationHero({ data }: { data: ProjetDetail }) {
                 : "—"}
             </dd>
           </div>
-          <div className="flex justify-between gap-3">
-            <dt className="text-white/60">
-              TRI réalisé
-              <span className="block text-[10px] font-normal text-white/35">
-                rendement annualisé de vos flux datés (méthode XIRR)
-              </span>
-            </dt>
-            <dd
-              className={`font-bold ${
-                (data.tri_pct ?? 0) >= 0
-                  ? "text-emerald-400"
-                  : "text-rose-400"
-              }`}
-            >
-              {fmtPct(data.tri_pct)}
-            </dd>
-          </div>
         </dl>
       )}
+
+      {/* Capital restant par actionnaire (mêmes règles de
+          transparence que la liste des actionnaires) */}
+      {data.show_actionnaires &&
+      data.actionnaires.some(
+        (a) => a.capital_actuel !== null && a.capital_actuel !== undefined
+      ) ? (
+        <div className="mt-4 border-t border-brand-800 pt-3">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+            Capital encore investi par actionnaire
+          </p>
+          <ul className="space-y-1.5">
+            {data.actionnaires.map((a, i) => (
+              <li
+                key={i}
+                className="flex items-center justify-between gap-2 text-xs"
+              >
+                <span className="min-w-0 truncate text-white/70">
+                  {a.name}
+                  {a.is_me ? (
+                    <span className="text-white/40"> (vous)</span>
+                  ) : null}
+                </span>
+                {a.capital_actuel === null ||
+                a.capital_actuel === undefined ? (
+                  <span
+                    className="shrink-0 text-white/35"
+                    title="Pas de compte investisseur lié à cet actionnaire"
+                  >
+                    —
+                  </span>
+                ) : a.capital_actuel === 0 ? (
+                  <b className="shrink-0 text-emerald-400">Remboursé</b>
+                ) : (
+                  <b className="shrink-0 tabular-nums text-white/80">
+                    {fmtMoney(a.capital_actuel)}
+                  </b>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {/* Mouvements */}
       {data.flux.length > 0 ? (
