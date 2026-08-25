@@ -25,6 +25,7 @@ import {
   X
 } from "lucide-react";
 
+import { Paperclip } from "lucide-react";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
@@ -981,6 +982,12 @@ function BudgetSection({
   const [settingsOpen, setSettingsOpen] = useState(false);
   //: Enveloppe dont on mappe les comptes de FINANCEMENT.
   const [finLigne, setFinLigne] = useState<BudgetLigne | null>(null);
+  //: Enveloppe dont on regarde le DÉTAIL des transactions QBO
+  //: (avec les factures PDF jointes — demande Phil 2026-08-22).
+  const [txnLigne, setTxnLigne] = useState<{
+    id: number;
+    nom: string;
+  } | null>(null);
 
   async function patchLigne(id: number, patch: Record<string, unknown>) {
     const r = await authedFetch(`/api/v1/optimisation/budget-lignes/${id}`, {
@@ -1203,7 +1210,22 @@ function BudgetSection({
                       className={`${GRP_BUDGET} py-2 pr-2 tabular-nums`}
                       style={{ color: "var(--qg-text)" }}
                     >
-                      {dep === null ? "—" : fmtMoney(dep)}
+                      {dep === null ? (
+                        "—"
+                      ) : l.mode === "deficit_operation" ? (
+                        fmtMoney(dep)
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setTxnLigne({ id: l.id, nom: l.nom })
+                          }
+                          className="underline decoration-dotted underline-offset-2 hover:opacity-70"
+                          title="Voir les transactions QuickBooks derrière ce montant (et leurs factures jointes)"
+                        >
+                          {fmtMoney(dep)}
+                        </button>
+                      )}
                     </td>
                     <td
                       className={`${GRP_BUDGET} py-2 pr-2 font-semibold tabular-nums ${
@@ -1333,6 +1355,13 @@ function BudgetSection({
         />
       ) : null}
 
+      {txnLigne ? (
+        <TransactionsQboModal
+          projetId={projet.id}
+          ligne={txnLigne}
+          onClose={() => setTxnLigne(null)}
+        />
+      ) : null}
       {finLigne ? (
         <FinancementModal
           projet={projet}
@@ -1349,6 +1378,226 @@ function BudgetSection({
 }
 
 // ─── Modal : comptes de FINANCEMENT d'une enveloppe ────────────
+
+type QboPiece = {
+  att_id: string;
+  file_name: string | null;
+  content_type: string | null;
+};
+
+type QboTxn = {
+  txn_type: string;
+  txn_id: string;
+  date: string | null;
+  fournisseur: string | null;
+  doc_number: string | null;
+  montant_impute: number;
+  montant_total: number;
+  description: string | null;
+  pieces: QboPiece[];
+};
+
+/**
+ * Détail d'une enveloppe : les transactions QuickBooks (factures
+ * fournisseurs + dépenses) derrière le « dépensé », avec leurs pièces
+ * jointes servies EN DIRECT depuis QuickBooks — rien n'est stocké.
+ *
+ * Demande Phil 2026-08-22 : « j'aimerais avoir les factures PDF reliées
+ * à ces dépenses-là dans mon portail ». Un trombone n'apparaît que si le
+ * document a réellement une pièce dans QuickBooks : si le comptable ne
+ * l'a pas jointe là-bas, il n'y a rien à montrer ici.
+ */
+function TransactionsQboModal({
+  projetId,
+  ligne,
+  onClose
+}: {
+  projetId: number;
+  ligne: { id: number; nom: string };
+  onClose: () => void;
+}) {
+  const [rows, setRows] = useState<QboTxn[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [pieceBusy, setPieceBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/optimisation/projets/${projetId}/qbo-lignes/${ligne.id}/transactions`
+        );
+        if (!r.ok) {
+          const j = (await r.json().catch(() => null)) as {
+            detail?: string;
+          } | null;
+          throw new Error(j?.detail || `HTTP ${r.status}`);
+        }
+        setRows((await r.json()) as QboTxn[]);
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    })();
+  }, [projetId, ligne.id]);
+
+  async function ouvrirPiece(pc: QboPiece) {
+    setPieceBusy(pc.att_id);
+    try {
+      const params = new URLSearchParams();
+      if (pc.content_type) params.set("ct", pc.content_type);
+      if (pc.file_name) params.set("nom", pc.file_name);
+      const r = await authedFetch(
+        `/api/v1/optimisation/projets/${projetId}/qbo-pieces/${pc.att_id}?${params.toString()}`
+      );
+      if (!r.ok) {
+        const j = (await r.json().catch(() => null)) as {
+          detail?: string;
+        } | null;
+        throw new Error(j?.detail || `HTTP ${r.status}`);
+      }
+      const url = URL.createObjectURL(await r.blob());
+      window.open(url, "_blank");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      setErr(`Pièce : ${(e as Error).message}`);
+    } finally {
+      setPieceBusy(null);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[80vh] w-full max-w-3xl overflow-y-auto rounded-2xl border p-4"
+        style={{
+          borderColor: "var(--qg-border)",
+          backgroundColor: "var(--qg-card-bg)"
+        }}
+      >
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h3
+            className="text-sm font-semibold"
+            style={{ color: "var(--qg-text)" }}
+          >
+            Transactions QuickBooks — {ligne.nom}
+          </h3>
+          <button type="button" onClick={onClose} className="btn-ghost btn-xs">
+            Fermer
+          </button>
+        </div>
+        {err ? (
+          <p className="mb-2 rounded-lg border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-500">
+            {err}
+          </p>
+        ) : null}
+        {rows === null && !err ? (
+          <p className="py-6 text-center text-xs" style={{ color: "var(--qg-text-muted)" }}>
+            Chargement depuis QuickBooks…
+          </p>
+        ) : rows !== null && rows.length === 0 ? (
+          <p className="py-6 text-center text-xs" style={{ color: "var(--qg-text-muted)" }}>
+            Aucune transaction sur les comptes de cette enveloppe.
+          </p>
+        ) : rows !== null ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[620px] text-left text-[13px]">
+              <thead
+                className="text-[10px] uppercase tracking-wider"
+                style={{ color: "var(--qg-text-muted)" }}
+              >
+                <tr>
+                  <th className="pb-2 pr-2">Date</th>
+                  <th className="pb-2 pr-2">Fournisseur</th>
+                  <th className="pb-2 pr-2">Description</th>
+                  <th className="pb-2 pr-2 text-right">Montant</th>
+                  <th className="pb-2 text-right">Facture</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((t) => (
+                  <tr
+                    key={`${t.txn_type}-${t.txn_id}`}
+                    className="border-t"
+                    style={{ borderColor: "var(--qg-border-soft)" }}
+                  >
+                    <td
+                      className="py-1.5 pr-2 whitespace-nowrap"
+                      style={{ color: "var(--qg-text)" }}
+                    >
+                      {t.date || "—"}
+                    </td>
+                    <td className="py-1.5 pr-2" style={{ color: "var(--qg-text)" }}>
+                      {t.fournisseur || "—"}
+                      {t.doc_number ? (
+                        <span
+                          className="ml-1 text-[11px]"
+                          style={{ color: "var(--qg-text-muted)" }}
+                        >
+                          #{t.doc_number}
+                        </span>
+                      ) : null}
+                    </td>
+                    <td
+                      className="max-w-[220px] truncate py-1.5 pr-2 text-[12px]"
+                      style={{ color: "var(--qg-text-muted)" }}
+                      title={t.description || undefined}
+                    >
+                      {t.description || "—"}
+                    </td>
+                    <td
+                      className="py-1.5 pr-2 text-right tabular-nums"
+                      style={{ color: "var(--qg-text)" }}
+                      title={
+                        t.montant_impute !== t.montant_total
+                          ? `Part de l'enveloppe : ${fmtMoney(t.montant_impute)} — transaction totale : ${fmtMoney(t.montant_total)}`
+                          : undefined
+                      }
+                    >
+                      {fmtMoney(t.montant_impute)}
+                    </td>
+                    <td className="py-1.5 text-right">
+                      {t.pieces.length === 0 ? (
+                        <span
+                          className="text-[11px]"
+                          style={{ color: "var(--qg-text-muted)" }}
+                          title="Aucune pièce jointe sur ce document dans QuickBooks"
+                        >
+                          —
+                        </span>
+                      ) : (
+                        t.pieces.map((pc) => (
+                          <button
+                            key={pc.att_id}
+                            type="button"
+                            disabled={pieceBusy === pc.att_id}
+                            onClick={() => void ouvrirPiece(pc)}
+                            className="ml-1 inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] transition hover:opacity-70 disabled:opacity-40"
+                            style={{
+                              borderColor: "var(--qg-border)",
+                              color: "var(--qg-text)"
+                            }}
+                            title={pc.file_name || "Ouvrir la pièce jointe"}
+                          >
+                            <Paperclip className="h-3 w-3" />
+                            {pieceBusy === pc.att_id ? "…" : "Ouvrir"}
+                          </button>
+                        ))
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 
 function FinancementModal({
   projet,
