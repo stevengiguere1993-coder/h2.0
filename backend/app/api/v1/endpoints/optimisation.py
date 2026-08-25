@@ -719,6 +719,52 @@ async def qbo_piece(
     return Response(content=contenu, media_type=media, headers=entetes)
 
 
+@router.get(
+    "/projets/{projet_id}/qbo-comptes/{compte_id}/transactions",
+    response_model=List[QboTransactionOut],
+)
+async def qbo_transactions_compte(
+    projet_id: int,
+    compte_id: str,
+    debut: str,
+    fin: str,
+    db: DBSession,
+    _: CurrentUser,
+) -> List[QboTransactionOut]:
+    """Transactions d'UN compte de dépense sur une période — le clic sur
+    une ligne du cashflow (« Frais de gestion » d'un mois) mène ici,
+    avec les factures jointes. Demande Phil 2026-08-22."""
+    from app.services.qbo_optimisation import transactions_depenses
+
+    p = await _projet_or_404(db, projet_id)
+    if not p.qbo_scope:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Aucune connexion QuickBooks choisie pour ce projet.",
+        )
+    # Les dates sont interpolées dans la requête QuickBooks : on ne
+    # laisse JAMAIS passer du texte libre.
+    try:
+        d1 = date.fromisoformat(debut)
+        d2 = date.fromisoformat(fin)
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Dates attendues au format AAAA-MM-JJ.",
+        )
+    if not compte_id.isdigit():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Compte invalide."
+        )
+    try:
+        rows = await transactions_depenses(
+            p.qbo_scope, {compte_id}, d1.isoformat(), d2.isoformat()
+        )
+    except Exception as exc:  # noqa: BLE001 — message propre à l'UI
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+    return [QboTransactionOut(**r) for r in rows]
+
+
 class QboDepensesOut(BaseModel):
     par_ligne: Dict[int, float] = Field(default_factory=dict)
     #: Financement encaissé par enveloppe (comptes d'entrée d'argent).

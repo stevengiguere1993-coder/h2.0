@@ -135,11 +135,14 @@ type Recherche = {
 };
 type CashflowDetail = {
   nom: string;
+  compte_id?: string | null;
   type: "revenu" | "depense";
   montant: number;
 };
 type CashflowMois = {
   mois: string;
+  debut?: string | null;
+  fin?: string | null;
   revenus: number;
   depenses: number;
   hypotheque: number;
@@ -1358,7 +1361,8 @@ function BudgetSection({
       {txnLigne ? (
         <TransactionsQboModal
           projetId={projet.id}
-          ligne={txnLigne}
+          titre={txnLigne.nom}
+          fetchUrl={`/api/v1/optimisation/projets/${projet.id}/qbo-lignes/${txnLigne.id}/transactions`}
           onClose={() => setTxnLigne(null)}
         />
       ) : null}
@@ -1409,11 +1413,13 @@ type QboTxn = {
  */
 function TransactionsQboModal({
   projetId,
-  ligne,
+  titre,
+  fetchUrl,
   onClose
 }: {
   projetId: number;
-  ligne: { id: number; nom: string };
+  titre: string;
+  fetchUrl: string;
   onClose: () => void;
 }) {
   const [rows, setRows] = useState<QboTxn[] | null>(null);
@@ -1423,9 +1429,7 @@ function TransactionsQboModal({
   useEffect(() => {
     void (async () => {
       try {
-        const r = await authedFetch(
-          `/api/v1/optimisation/projets/${projetId}/qbo-lignes/${ligne.id}/transactions`
-        );
+        const r = await authedFetch(fetchUrl);
         if (!r.ok) {
           const j = (await r.json().catch(() => null)) as {
             detail?: string;
@@ -1437,7 +1441,7 @@ function TransactionsQboModal({
         setErr((e as Error).message);
       }
     })();
-  }, [projetId, ligne.id]);
+  }, [fetchUrl]);
 
   async function ouvrirPiece(pc: QboPiece) {
     setPieceBusy(pc.att_id);
@@ -1482,7 +1486,7 @@ function TransactionsQboModal({
             className="text-sm font-semibold"
             style={{ color: "var(--qg-text)" }}
           >
-            Transactions QuickBooks — {ligne.nom}
+            Transactions QuickBooks — {titre}
           </h3>
           <button type="button" onClick={onClose} className="btn-ghost btn-xs">
             Fermer
@@ -2342,6 +2346,12 @@ function CashflowSection({
 }) {
   //: Mois dépliés (détail par compte). "total" = la ligne Total.
   const [ouverts, setOuverts] = useState<Set<string>>(new Set());
+  //: Compte de dépense dont on regarde les TRANSACTIONS d'un mois
+  //: (avec factures jointes — demande Phil 2026-08-22).
+  const [compteModal, setCompteModal] = useState<{
+    titre: string;
+    url: string;
+  } | null>(null);
 
   //: Filtre par année (retour Phil 2026-08-10). "" = toute la période.
   //: Les libellés de mois viennent de QuickBooks (« Jul 2025 ») —
@@ -2405,7 +2415,16 @@ function CashflowSection({
     });
   }
 
-  function LigneDetails({ details }: { details: CashflowDetail[] }) {
+  function LigneDetails({
+    details,
+    debut,
+    fin
+  }: {
+    details: CashflowDetail[];
+    /** Bornes du mois — sans elles (ligne Total filtrée), pas de clic. */
+    debut?: string | null;
+    fin?: string | null;
+  }) {
     if (details.length === 0) return null;
     return (
       <tr>
@@ -2419,9 +2438,26 @@ function CashflowSection({
                 key={i}
                 className="flex items-center justify-between gap-2 text-[11px]"
               >
-                <span style={{ color: "var(--qg-text-muted)" }}>
-                  {d.nom}
-                </span>
+                {d.type === "depense" && d.compte_id && debut && fin ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCompteModal({
+                        titre: d.nom,
+                        url: `/api/v1/optimisation/projets/${projet.id}/qbo-comptes/${d.compte_id}/transactions?debut=${debut}&fin=${fin}`
+                      })
+                    }
+                    className="text-left underline decoration-dotted underline-offset-2 hover:opacity-70"
+                    style={{ color: "var(--qg-text-muted)" }}
+                    title="Voir les transactions de ce compte pour ce mois (et leurs factures jointes)"
+                  >
+                    {d.nom}
+                  </button>
+                ) : (
+                  <span style={{ color: "var(--qg-text-muted)" }}>
+                    {d.nom}
+                  </span>
+                )}
                 <span
                   className={`tabular-nums ${
                     d.type === "revenu"
@@ -2566,7 +2602,11 @@ function CashflowSection({
                     </td>
                   </tr>
                   {ouverts.has(m.mois) ? (
-                    <LigneDetails details={m.details || []} />
+                    <LigneDetails
+                      details={m.details || []}
+                      debut={m.debut}
+                      fin={m.fin}
+                    />
                   ) : null}
                 </React.Fragment>
               ))}
@@ -2622,6 +2662,14 @@ function CashflowSection({
               ) : null}
             </tbody>
           </table>
+          {compteModal ? (
+            <TransactionsQboModal
+              projetId={projet.id}
+              titre={compteModal.titre}
+              fetchUrl={compteModal.url}
+              onClose={() => setCompteModal(null)}
+            />
+          ) : null}
           <p
             className="mt-2 text-[10px]"
             style={{ color: "var(--qg-text-muted)" }}

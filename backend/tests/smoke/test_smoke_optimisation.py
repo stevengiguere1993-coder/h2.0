@@ -189,13 +189,20 @@ def test_cashflow_mensuel_assemblage():
     # exactement ce que Phil veut voir en dépliant un mois.
     d0 = cf["mois"][0]["details"]
     assert d0[0] == {
-        "nom": "Revenus de loyers", "type": "revenu", "montant": 1000.0
+        "nom": "Revenus de loyers",
+        "compte_id": d0[0]["compte_id"],
+        "type": "revenu",
+        "montant": 1000.0,
     }
     assert d0[1] == {
         "nom": "Intérêts hypothécaires",
+        "compte_id": d0[1]["compte_id"],
         "type": "depense",
         "montant": 4000.0,
     }
+    # Le compte_id (id QuickBooks du compte) rend la ligne cliquable
+    # côté écran : transactions du compte pour le mois.
+    assert d0[1]["compte_id"]
     assert cf["total"]["details"][1]["montant"] == 5500.0
     # Détention v13 : dépensé = −écart total, SIGNÉ (un surplus
     # redonnerait du budget).

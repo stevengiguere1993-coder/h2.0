@@ -229,3 +229,123 @@ def test_piece_servie_en_direct_et_type_mime_encadre(
         headers=auth_headers,
     )
     assert r3.status_code == 404, r3.text
+
+
+def test_transactions_d_un_compte_sur_une_periode(
+    client, auth_headers, fake_qbo, projet_ids
+):
+    """Clic sur une ligne du cashflow (« Frais de gestion » d'un mois) :
+    transactions de CE compte sur CE mois, pièces jointes comprises."""
+    base = (
+        f"/api/v1/optimisation/projets/{projet_ids['projet_id']}"
+        "/qbo-comptes/64/transactions"
+    )
+    r = client.get(
+        f"{base}?debut=2026-08-01&fin=2026-08-31", headers=auth_headers
+    )
+    assert r.status_code == 200, r.text
+    rows = r.json()
+    assert {x["txn_id"] for x in rows} == {"201", "301"}
+    par_id = {x["txn_id"]: x for x in rows}
+    # Même règle que les enveloppes : la PART du compte, pas le total.
+    assert par_id["201"]["montant_impute"] == 100.0
+    assert par_id["301"]["pieces"][0]["att_id"] == "att-9"
+
+    # Un compte qui n'est touché par rien → liste vide, pas d'erreur.
+    r2 = client.get(
+        f"/api/v1/optimisation/projets/{projet_ids['projet_id']}"
+        "/qbo-comptes/12345/transactions?debut=2026-08-01&fin=2026-08-31",
+        headers=auth_headers,
+    )
+    assert r2.status_code == 200
+    assert r2.json() == []
+
+
+def test_transactions_compte_parametres_valides_seulement(
+    client, auth_headers, fake_qbo, projet_ids
+):
+    """Les dates sont interpolées dans la requête QuickBooks : tout ce
+    qui n'est pas une vraie date (ou un vrai id de compte) est refusé."""
+    base = (
+        f"/api/v1/optimisation/projets/{projet_ids['projet_id']}"
+        "/qbo-comptes"
+    )
+    r = client.get(
+        f"{base}/64/transactions?debut=pas-une-date&fin=2026-08-31",
+        headers=auth_headers,
+    )
+    assert r.status_code == 422, r.text
+
+    r2 = client.get(
+        f"{base}/64/transactions?debut=2026-08-01&fin=2026' OR '1'='1",
+        headers=auth_headers,
+    )
+    assert r2.status_code == 422, r2.text
+
+    r3 = client.get(
+        f"{base}/abc'/transactions?debut=2026-08-01&fin=2026-08-31",
+        headers=auth_headers,
+    )
+    assert r3.status_code == 422, r3.text
+
+
+def test_cashflow_expose_compte_id_et_bornes_de_mois(run):
+    """Le cashflow assemblé porte l'id du compte et les bornes RÉELLES de
+    chaque colonne mensuelle — c'est ce qui rend les lignes cliquables."""
+    from app.services.qbo_optimisation import (
+        _assembler_cashflow,
+        _comptes_par_colonne,
+    )
+
+    rows = [
+        {
+            "type": "Section",
+            "group": "Income",
+            "Rows": {
+                "Row": [
+                    {
+                        "type": "Data",
+                        "ColData": [
+                            {"value": "Loyers", "id": "12"},
+                            {"value": "1000.00"},
+                            {"value": "1100.00"},
+                        ],
+                    }
+                ]
+            },
+        },
+        {
+            "type": "Section",
+            "group": "Expenses",
+            "Rows": {
+                "Row": [
+                    {
+                        "type": "Data",
+                        "ColData": [
+                            {"value": "Frais de gestion", "id": "64"},
+                            {"value": "200.00"},
+                            {"value": "250.00"},
+                        ],
+                    }
+                ]
+            },
+        },
+    ]
+    comptes: list = []
+    _comptes_par_colonne(rows, comptes, None)
+    assert [c["compte_id"] for c in comptes] == ["12", "64"]
+
+    vue = _assembler_cashflow(
+        titres=["Jul 2026", "Aug 2026"],
+        groupes={
+            "Income": [1000.0, 1100.0],
+            "Expenses": [200.0, 250.0],
+        },
+        comptes=comptes,
+        bornes=[("2026-07-01", "2026-07-31"), ("2026-08-01", "2026-08-25")],
+    )
+    m = vue["mois"][0]
+    assert (m["debut"], m["fin"]) == ("2026-07-01", "2026-07-31")
+    depense = [d for d in m["details"] if d["type"] == "depense"][0]
+    assert depense["compte_id"] == "64"
+    assert depense["montant"] == 200.0

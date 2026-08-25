@@ -281,6 +281,10 @@ def _comptes_par_colonne(
                 out.append(
                     {
                         "nom": nom,
+                        # L'id du compte (attribut ``id`` de la cellule
+                        # libellé) : c'est lui qui permet de retrouver
+                        # les TRANSACTIONS derrière le montant.
+                        "compte_id": cols[0].get("id"),
                         "type": "revenu"
                         if section_ici in _SECTIONS_REVENUS
                         else "depense",
@@ -464,6 +468,7 @@ def _assembler_cashflow(
     groupes: Dict[str, List[float]],
     comptes: Optional[List[Dict[str, Any]]] = None,
     hypotheque: Optional[List[float]] = None,
+    bornes: Optional[List[tuple]] = None,
 ) -> Dict[str, Any]:
     """Combine les colonnes mensuelles du P&L en lignes de cashflow :
     ``titres`` = libellés de colonnes SANS la première (une par mois,
@@ -498,14 +503,26 @@ def _assembler_cashflow(
             v = c["vals"][i] if i < len(c["vals"]) else 0.0
             if abs(v) >= 0.005:
                 out.append(
-                    {"nom": c["nom"], "type": c["type"], "montant": round(v, 2)}
+                    {
+                        "nom": c["nom"],
+                        "compte_id": c.get("compte_id"),
+                        "type": c["type"],
+                        "montant": round(v, 2),
+                    }
                 )
         out.sort(key=lambda x: (x["type"] != "revenu", -abs(x["montant"])))
         return out
 
+    def _borne(i: int, j: int) -> Optional[str]:
+        if bornes and i < len(bornes):
+            return bornes[i][j]
+        return None
+
     mois = [
         {
             "mois": titres[i],
+            "debut": _borne(i, 0),
+            "fin": _borne(i, 1),
             "revenus": round(revenus[i], 2),
             "depenses": round(depenses[i], 2),
             "hypotheque": round(hyp[i], 2),
@@ -555,6 +572,18 @@ async def cashflow_mensuel(
         (c.get("ColTitle") or "").strip() or f"Mois {i}"
         for i, c in enumerate(colonnes[1:], start=1)  # [0] = libellés
     ]
+    # Bornes RÉELLES de chaque colonne (QBO les donne en MetaData) —
+    # indispensables pour lister les transactions d'UN mois : le libellé
+    # (« 1-25 août 2026 ») n'est pas parsable de façon fiable.
+    bornes: List[tuple] = []
+    for c in colonnes[1:]:
+        deb = fin = None
+        for md in c.get("MetaData") or []:
+            if md.get("Name") == "StartDate":
+                deb = md.get("Value")
+            elif md.get("Name") == "EndDate":
+                fin = md.get("Value")
+        bornes.append((deb, fin))
     groupes: Dict[str, List[float]] = {}
     _groupes_pnl_colonnes(report.get("Rows", {}).get("Row") or [], groupes)
     comptes: List[Dict[str, Any]] = []
@@ -583,7 +612,7 @@ async def cashflow_mensuel(
         except Exception as exc:  # noqa: BLE001 — cashflow sans hyp
             log.info("hypothèque cashflow (%s): %s", scope, exc)
             hyp = None
-    return _assembler_cashflow(titres, groupes, comptes, hyp)
+    return _assembler_cashflow(titres, groupes, comptes, hyp, bornes)
 
 
 async def rentabilite(
