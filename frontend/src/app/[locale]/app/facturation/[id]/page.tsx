@@ -69,6 +69,9 @@ type Item = {
   // Valeur au contrat (total de l'item de soumission lié) — sert à afficher
   // les colonnes Contrat / Avancement / Facturé. NULL hors soumission.
   contract_total: number | null;
+  // Cumul facturé à date pour cet item de soumission (toutes factures non
+  // annulées, celle-ci incluse). NULL hors soumission.
+  billed_to_date?: number | null;
 };
 
 const KIND_LABELS: Record<string, string> = {
@@ -2164,6 +2167,31 @@ function ItemRow({
     return +((kind === "rabais" ? -magnitude : magnitude).toFixed(2));
   }, [quantity, unitPrice, kind]);
 
+  // Total ÉDITABLE : saisir un montant ajuste la QUANTITÉ pour y
+  // correspondre (le prix unitaire du devis reste intact) — utile quand
+  // le montant importé ne colle pas au devis ajusté. Prix nul →
+  // quantité 1 et le montant devient le prix unitaire.
+  const [totalDraft, setTotalDraft] = useState<string | null>(null);
+
+  function applyTotal() {
+    const raw = totalDraft;
+    setTotalDraft(null);
+    if (raw === null) return;
+    const target = Math.abs(Number(raw));
+    if (!Number.isFinite(target)) return;
+    if (Math.abs(target - Math.abs(computedTotal)) < 0.005) return;
+    const up = Number(unitPrice);
+    if (up > 0) {
+      const q = +(target / up).toFixed(6);
+      setQuantity(String(q));
+      persist("quantity", q);
+    } else {
+      setQuantity("1");
+      setUnitPrice(String(target));
+      onPatch({ quantity: 1, unit_price: target });
+    }
+  }
+
   function persist(field: keyof Item, value: unknown) {
     onPatch({ [field]: value } as Partial<Item>);
   }
@@ -2311,13 +2339,26 @@ function ItemRow({
           className="input text-sm w-full"
         />
       </div>
-      <div className="flex items-center justify-between sm:block sm:text-right">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40 sm:hidden">
-          Total
-        </span>
-        <span className="font-semibold text-white">
-          {fmtMoney(computedTotal)}
-        </span>
+      <div>
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-white/40 sm:hidden">
+          Total ($)
+        </label>
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          value={
+            totalDraft !== null
+              ? totalDraft
+              : String(Math.abs(computedTotal))
+          }
+          onFocus={() => setTotalDraft(String(Math.abs(computedTotal)))}
+          onChange={(e) => setTotalDraft(e.target.value)}
+          onBlur={applyTotal}
+          disabled={busy}
+          title="Modifier le total ajuste la quantité (le prix unitaire du devis est conservé)"
+          className="input w-full text-sm font-semibold text-right"
+        />
       </div>
       <button
         type="button"
@@ -2365,6 +2406,32 @@ function ItemRow({
               {fmtMoney(computedTotal)}
             </span>
           </span>
+          {typeof item.billed_to_date === "number" ? (
+            <>
+              <span aria-hidden>·</span>
+              <span
+                title="Cumul de toutes les factures non annulées pour cette ligne du devis, celle-ci incluse"
+              >
+                Facturé à date{" "}
+                <span className="font-semibold text-white">
+                  {fmtMoney(
+                    +(
+                      item.billed_to_date -
+                      item.total +
+                      computedTotal
+                    ).toFixed(2)
+                  )}
+                  {" ("}
+                  {Math.round(
+                    ((item.billed_to_date - item.total + computedTotal) /
+                      item.contract_total) *
+                      100
+                  )}
+                  {" % du contrat)"}
+                </span>
+              </span>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>
