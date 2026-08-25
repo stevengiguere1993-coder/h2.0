@@ -355,7 +355,14 @@ export default function ProjetPage() {
         <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
           {/* Colonne gauche */}
           <div className="min-w-0 space-y-4">
-            <ParticipationHero data={data} />
+            <ParticipationHero
+              data={data}
+              avancesPath={
+                apercu
+                  ? `/api/v1/invest/admin/projets/${entrepriseId}/avances`
+                  : `/api/v1/invest/me/projets/${entrepriseId}/avances`
+              }
+            />
             {data.show_hypotheque ? (
               <HypothequesCard immeubles={data.immeubles} />
             ) : null}
@@ -452,7 +459,46 @@ export default function ProjetPage() {
 
 /* ─────────────────── Ma participation (carte héro) ─────────────────── */
 
-function ParticipationHero({ data }: { data: ProjetDetail }) {
+type AvancesActionnaires = {
+  statut: string;
+  erreur?: string;
+  actionnaires?: {
+    name: string;
+    solde: number | null;
+    comptes: string[];
+  }[];
+  autres_comptes?: { nom: string; solde: number }[];
+  total?: number;
+};
+
+function ParticipationHero({
+  data,
+  avancesPath
+}: {
+  data: ProjetDetail;
+  avancesPath: string;
+}) {
+  //: Soldes LIVE des comptes d'avances d'actionnaires (QuickBooks) —
+  //: la même lecture que l'encadré de la page Optimisation.
+  const [avances, setAvances] = useState<AvancesActionnaires | null>(
+    null
+  );
+  const estMoi = new Set(
+    data.actionnaires.filter((a) => a.is_me).map((a) => a.name)
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch(avancesPath)
+      .then(async (res) => {
+        if (cancelled || !res.ok) return;
+        setAvances((await res.json()) as AvancesActionnaires);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [avancesPath]);
   //: Tant que la sync QuickBooks (avances d'actionnaires) n'a jamais
   //: tourné, un capital à 0 veut dire « pas encore de données » ;
   //: après, il veut dire « remboursé complètement ».
@@ -527,98 +573,72 @@ function ParticipationHero({ data }: { data: ProjetDetail }) {
             dès la première synchronisation.
           </p>
         </div>
-      ) : (
-        <dl className="mt-4 space-y-2.5 border-t border-brand-800 pt-3 text-sm tabular-nums">
-          <div className="flex justify-between gap-3">
-            <dt className="text-white/60">
-              Capital investi (total)
-              <span className="block text-[10px] font-normal text-white/35">
-                somme de vos apports — avances d&apos;actionnaires
-                (QuickBooks)
-              </span>
-            </dt>
-            <dd className="font-bold text-white">
-              {fmtMoney(data.capital_investi_total)}
-            </dd>
-          </div>
-          <div className="flex justify-between gap-3">
-            <dt className="text-white/60">
-              Capital remboursé
-              <span className="block text-[10px] font-normal text-white/35">
-                avances remboursées par la compagnie (ex. après
-                refinancement)
-              </span>
-            </dt>
-            <dd className="font-bold text-white">
-              {fmtMoney(data.capital_rembourse)}
-            </dd>
-          </div>
-          {data.distributions_recues > 0 ? (
-            <div className="flex justify-between gap-3">
-              <dt className="text-white/60">Distributions reçues</dt>
-              <dd className="font-bold text-white">
-                {fmtMoney(data.distributions_recues)}
-              </dd>
-            </div>
-          ) : null}
-          <div className="flex justify-between gap-3 border-t border-brand-800 pt-2.5">
-            <dt className="text-white/60">
-              TVPI
-              <span className="block text-[10px] font-normal text-white/35">
-                (remboursé + distributions + valeur des parts) ÷ investi
-              </span>
-            </dt>
-            <dd className="font-bold text-white">
-              {data.tvpi !== null
-                ? `${data.tvpi.toLocaleString("fr-CA", {
-                    maximumFractionDigits: 2
-                  })}×`
-                : "—"}
-            </dd>
-          </div>
-        </dl>
-      )}
+      ) : null}
 
-      {/* Capital restant par actionnaire (mêmes règles de
-          transparence que la liste des actionnaires) */}
-      {data.show_actionnaires &&
-      data.actionnaires.some(
-        (a) => a.capital_actuel !== null && a.capital_actuel !== undefined
-      ) ? (
+      {/* Capital restant par actionnaire = soldes RÉELS des comptes
+          d'avances QuickBooks (même lecture que l'encadré de la page
+          Optimisation) — mêmes règles de transparence que la liste des
+          actionnaires (le serveur renvoie « masque » sinon). */}
+      {avances?.statut === "connecte" &&
+      (avances.actionnaires || []).length > 0 ? (
         <div className="mt-4 border-t border-brand-800 pt-3">
           <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/40">
             Capital encore investi par actionnaire
           </p>
           <ul className="space-y-1.5">
-            {data.actionnaires.map((a, i) => (
+            {(avances.actionnaires || []).map((a, i) => (
               <li
                 key={i}
                 className="flex items-center justify-between gap-2 text-xs"
               >
-                <span className="min-w-0 truncate text-white/70">
+                <span
+                  className="min-w-0 truncate text-white/70"
+                  title={
+                    a.comptes.length
+                      ? `Compte QuickBooks : ${a.comptes.join(", ")}`
+                      : undefined
+                  }
+                >
                   {a.name}
-                  {a.is_me ? (
+                  {estMoi.has(a.name) ? (
                     <span className="text-white/40"> (vous)</span>
                   ) : null}
                 </span>
-                {a.capital_actuel === null ||
-                a.capital_actuel === undefined ? (
+                {a.solde === null || a.solde === undefined ? (
                   <span
                     className="shrink-0 text-white/35"
-                    title="Pas de compte investisseur lié à cet actionnaire"
+                    title="Aucun compte d'avances trouvé à son nom dans QuickBooks"
                   >
                     —
                   </span>
-                ) : a.capital_actuel === 0 ? (
+                ) : a.solde === 0 ? (
                   <b className="shrink-0 text-emerald-400">Remboursé</b>
                 ) : (
                   <b className="shrink-0 tabular-nums text-white/80">
-                    {fmtMoney(a.capital_actuel)}
+                    {fmtMoney(a.solde)}
                   </b>
                 )}
               </li>
             ))}
+            {(avances.autres_comptes || []).map((c, i) => (
+              <li
+                key={`autre-${i}`}
+                className="flex items-center justify-between gap-2 text-xs"
+                title="Compte d'avances QuickBooks sans actionnaire reconnu dans la fiche"
+              >
+                <span className="min-w-0 truncate italic text-white/45">
+                  {c.nom}
+                </span>
+                <b className="shrink-0 tabular-nums text-white/60">
+                  {fmtMoney(c.solde)}
+                </b>
+              </li>
+            ))}
           </ul>
+          <p className="mt-2 text-[11px] text-white/35">
+            Soldes des comptes d&apos;avances d&apos;actionnaires — lus
+            en direct dans QuickBooks.
+          </p>
         </div>
       ) : null}
 

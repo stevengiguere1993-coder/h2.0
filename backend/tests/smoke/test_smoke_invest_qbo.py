@@ -32,6 +32,29 @@ class _FakeQbo:
     ready = True
 
     async def query(self, sql: str):
+        if "FROM Account" in sql:
+            # Plan comptable — l'auto-détection des avances cherche
+            # « actionnaire » dans le nom qualifié.
+            return [
+                {
+                    "Id": "900",
+                    "Name": "Avances actionnaire — Investisseur Drill",
+                    "FullyQualifiedName": (
+                        "Avances actionnaire — Investisseur Drill"
+                    ),
+                    "AccountType": "Other Current Liability",
+                    "Classification": "Liability",
+                },
+                {
+                    "Id": "901",
+                    "Name": "Avances actionnaire — Mystere Corp",
+                    "FullyQualifiedName": (
+                        "Avances actionnaire — Mystere Corp"
+                    ),
+                    "AccountType": "Other Current Liability",
+                    "Classification": "Liability",
+                },
+            ]
         if "STARTPOSITION 1" not in sql:
             return []
         if "FROM Purchase" in sql:
@@ -75,6 +98,50 @@ class _FakeQbo:
                 }
             ]
         return []
+
+    async def report(self, name: str, **params):
+        # BalanceSheet mensuel minimal : colonne de référence + juillet.
+        assert name == "BalanceSheet"
+        return {
+            "Columns": {
+                "Column": [
+                    {"ColTitle": ""},
+                    {"ColTitle": "Dec 2025"},
+                    {"ColTitle": "Jul 2026"},
+                ]
+            },
+            "Rows": {
+                "Row": [
+                    {
+                        "type": "Data",
+                        "ColData": [
+                            {
+                                "value": (
+                                    "Avances actionnaire — "
+                                    "Investisseur Drill"
+                                ),
+                                "id": "900",
+                            },
+                            {"value": "0.00"},
+                            {"value": "12500.00"},
+                        ],
+                    },
+                    {
+                        "type": "Data",
+                        "ColData": [
+                            {
+                                "value": (
+                                    "Avances actionnaire — Mystere Corp"
+                                ),
+                                "id": "901",
+                            },
+                            {"value": "0.00"},
+                            {"value": "8000.00"},
+                        ],
+                    },
+                ]
+            },
+        }
 
     async def list_attachables(self):
         return [
@@ -236,21 +303,53 @@ def test_investisseur_transactions_et_piece(
     assert r3.status_code == 404, r3.text
 
 
-def test_portail_expose_restants_et_etat_de_sync(
+def test_portail_expose_l_etat_de_sync(
     client, invest_headers, invest_ids
 ):
-    """La fiche projet porte le capital ENCORE investi par actionnaire
-    (ici remboursé au complet → 0) et l'indicateur de première sync."""
     eid = invest_ids["entreprise_id"]
     r = client.get(
         f"/api/v1/invest/me/projets/{eid}", headers=invest_headers
     )
     assert r.status_code == 200, r.text
     data = r.json()
-    assert "apports_synchronises" in data
     # Pas de profil (donc pas de qbo_sync_at) → False.
     assert data["apports_synchronises"] is False
     assert data["capital_actuel"] == 0.0
-    moi = [a for a in data["actionnaires"] if a["is_me"]]
-    assert len(moi) == 1
-    assert moi[0]["capital_actuel"] == 0.0
+
+
+def test_avances_par_actionnaire_soldes_quickbooks(
+    client, invest_headers, auth_headers, fake_qbo, invest_ids
+):
+    """La liste « Capital encore investi par actionnaire » = SOLDES des
+    comptes d'avances lus dans QuickBooks (retour Phil 2026-08-25 :
+    « c'est pas ça qui est dans quickbooks »), appariés par nom ; un
+    compte actif sans actionnaire reconnu reste visible à part."""
+    eid = invest_ids["entreprise_id"]
+    r = client.get(
+        f"/api/v1/invest/me/projets/{eid}/avances",
+        headers=invest_headers,
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["statut"] == "connecte", data
+    par_nom = {a["name"]: a for a in data["actionnaires"]}
+    # Le compte « Avances actionnaire — Investisseur Drill » est
+    # rattaché à l'actionnaire de la fiche, solde du bilan.
+    assert par_nom["Investisseur Drill"]["solde"] == 12500.0
+    assert par_nom["Investisseur Drill"]["comptes"] == [
+        "Avances actionnaire — Investisseur Drill"
+    ]
+    # Le compte de Mystere Corp ne matche personne → listé à part,
+    # jamais avalé en silence.
+    assert data["autres_comptes"] == [
+        {"nom": "Avances actionnaire — Mystere Corp", "solde": 8000.0}
+    ]
+    assert data["total"] == 20500.0
+
+    # Même liste côté console admin.
+    r2 = client.get(
+        f"/api/v1/invest/admin/projets/{eid}/avances",
+        headers=auth_headers,
+    )
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["statut"] == "connecte"

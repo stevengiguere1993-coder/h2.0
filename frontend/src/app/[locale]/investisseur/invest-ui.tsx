@@ -159,7 +159,6 @@ export type ProjetDetail = {
     name: string;
     parts_pct: number | null;
     is_me: boolean;
-    capital_actuel?: number | null;
   }[];
   apports_synchronises?: boolean;
   show_depenses: boolean;

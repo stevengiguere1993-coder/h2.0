@@ -59,6 +59,7 @@ from app.services.invest_invite import (
     send_investor_invitation,
 )
 from app.services.invest_portfolio import (
+    avances_par_actionnaire,
     effective_parts_pct,
     entreprise_snapshot,
     flux_signes,
@@ -1299,6 +1300,20 @@ async def qbo_piece_admin(
         )[:120]
         entetes["Content-Disposition"] = f'inline; filename="{propre}"'
     return Response(content=contenu, media_type=media, headers=entetes)
+
+
+@router.get(
+    "/projets/{entreprise_id}/avances",
+    summary="Capital encore investi par actionnaire (soldes "
+    "QuickBooks) — console admin",
+)
+async def projet_avances(
+    entreprise_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    """Même liste que le portail : soldes live des comptes d'avances
+    d'actionnaires, appariés aux actionnaires de la fiche."""
+    await _load_entreprise(db, entreprise_id)
+    return await avances_par_actionnaire(db, entreprise_id)
 
 
 # ───────── Synchronisation QuickBooks (avances d'actionnaires) ─────────
