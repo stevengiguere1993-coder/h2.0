@@ -107,6 +107,10 @@ class FactureItemRead(BaseModel):
     # (le prix unitaire de la soumission reste celui de l'item de
     # soumission). NULL pour les lignes hors soumission (extras, manuelles).
     contract_total: Optional[float] = None
+    # AFFICHAGE Kratos (dérivé) : cumul facturé À DATE pour l'item de
+    # soumission lié — somme des lignes de TOUTES les factures non
+    # annulées du même item (celle-ci incluse). NULL hors soumission.
+    billed_to_date: Optional[float] = None
 
 
 async def _ensure_facture(db, facture_id: int) -> Facture:
@@ -209,11 +213,36 @@ async def list_items(
         contract_by_sid = {
             int(sid): round(float(tot or 0), 2) for sid, tot in srows
         }
+    # Cumul facturé À DATE par item de soumission : somme des lignes de
+    # toutes les factures non annulées (celle-ci incluse) liées au même
+    # item — affiché sous la ligne (« Facturé à date »).
+    billed_by_sid: dict[int, float] = {}
+    if sids:
+        from sqlalchemy import func as _func
+
+        brows = (
+            await db.execute(
+                select(
+                    FactureItem.soumission_item_id,
+                    _func.coalesce(_func.sum(FactureItem.total), 0),
+                )
+                .join(Facture, Facture.id == FactureItem.facture_id)
+                .where(
+                    FactureItem.soumission_item_id.in_(sids),
+                    Facture.status != "void",
+                )
+                .group_by(FactureItem.soumission_item_id)
+            )
+        ).all()
+        billed_by_sid = {
+            int(sid): round(float(tot or 0), 2) for sid, tot in brows
+        }
     out: List[FactureItemRead] = []
     for r in rows:
         m = FactureItemRead.model_validate(r)
         if r.soumission_item_id is not None:
             m.contract_total = contract_by_sid.get(int(r.soumission_item_id))
+            m.billed_to_date = billed_by_sid.get(int(r.soumission_item_id))
         out.append(m)
     return out
 

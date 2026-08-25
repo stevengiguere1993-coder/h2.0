@@ -481,9 +481,71 @@ class QuickBooksClient:
 
     async def find_customer_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         # PrimaryEmailAddr n'est PAS un champ queryable dans QBO (« property
-        # 'PrimaryEmailAddr' is not queryable », erreur 400). On résout donc
-        # toujours par DisplayName — l'appelant retombe dessus.
+        # 'PrimaryEmailAddr' is not queryable », erreur 400). On liste donc
+        # les clients et on compare en Python, insensible à la casse. On ne
+        # regarde que les clients MÈRES (pas les sous-clients/projets) : le
+        # courriel sert de clé d'identité même quand la fiche Kratos a été
+        # renommée (ex. « Zalec Bruneau » devenu « Zimmo immobilier »).
+        target = (email or "").strip().lower()
+        if not target:
+            return None
+        try:
+            rows = await self.query("SELECT * FROM Customer MAXRESULTS 1000")
+        except Exception:  # noqa: BLE001
+            return None
+        for row in rows:
+            if (row.get("ParentRef") or {}).get("value"):
+                continue
+            addr = (
+                ((row.get("PrimaryEmailAddr") or {}).get("Address") or "")
+                .strip()
+                .lower()
+            )
+            if addr == target:
+                return row
         return None
+
+    async def get_customer(self, customer_id: str) -> Optional[Dict[str, Any]]:
+        safe = str(customer_id).replace("'", "''")
+        rows = await self.query(
+            f"SELECT * FROM Customer WHERE Id = '{safe}' MAXRESULTS 1"
+        )
+        return rows[0] if rows else None
+
+    async def update_customer(
+        self,
+        customer_id: str,
+        *,
+        display_name: Optional[str] = None,
+        email: Optional[str] = None,
+        phone: Optional[str] = None,
+        billing_address: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Mise à jour SPARSE d'un client existant (nom affiché, courriel,
+        téléphone, adresse de facturation). Ne touche que les champs
+        fournis. Retourne le client mis à jour, ou None s'il est
+        introuvable. Le SyncToken courant est relu juste avant l'update
+        (exigé par QBO)."""
+        cust = await self.get_customer(customer_id)
+        if not cust:
+            return None
+        body: Dict[str, Any] = {
+            "Id": str(cust.get("Id")),
+            "SyncToken": str(cust.get("SyncToken") or "0"),
+            "sparse": True,
+        }
+        if display_name:
+            body["DisplayName"] = display_name[:100]
+        if email:
+            body["PrimaryEmailAddr"] = {"Address": email}
+        if phone:
+            body["PrimaryPhone"] = {"FreeFormNumber": phone}
+        if billing_address:
+            body["BillAddr"] = {"Line1": billing_address}
+        data = await self._request(
+            "POST", "/customer", json_body=body, params={"minorversion": "70"}
+        )
+        return data.get("Customer") or data
 
     async def find_customer_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         safe = name.replace("'", "''")

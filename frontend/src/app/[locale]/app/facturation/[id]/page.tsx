@@ -69,6 +69,9 @@ type Item = {
   // Valeur au contrat (total de l'item de soumission lié) — sert à afficher
   // les colonnes Contrat / Avancement / Facturé. NULL hors soumission.
   contract_total: number | null;
+  // Cumul facturé à date pour cet item de soumission (toutes factures non
+  // annulées, celle-ci incluse). NULL hors soumission.
+  billed_to_date?: number | null;
 };
 
 const KIND_LABELS: Record<string, string> = {
@@ -260,6 +263,9 @@ export default function FactureDetailPage() {
     fournisseur_name: string | null;
     supplier_invoice_number: string | null;
     projected_billed_amount: number;
+    is_billable?: boolean;
+    invoiced_at?: string | null;
+    invoiced_facture_reference?: string | null;
   };
   const [billableAchats, setBillableAchats] = useState<BillableAchat[]>([]);
   const [achatSelected, setAchatSelected] = useState<Record<number, boolean>>(
@@ -270,8 +276,11 @@ export default function FactureDetailPage() {
   >({});
   const [billablesLoading, setBillablesLoading] = useState(false);
 
-  // Charge la liste « à refacturer » du projet à l'ouverture du dialogue
-  // d'import. Achats refacturables non encore facturés uniquement.
+  // Charge la liste des achats du projet à l'ouverture du dialogue
+  // d'import — TOUS les achats non encore facturés, y compris ceux non
+  // marqués refacturables (défaut des projets estimés / forfaitaires) :
+  // les sélectionner ici les facture quand même (et les marque
+  // refacturables).
   useEffect(() => {
     if (!importOpen || !f?.project_id) return;
     let cancelled = false;
@@ -279,15 +288,18 @@ export default function FactureDetailPage() {
     (async () => {
       try {
         const r = await authedFetch(
-          `/api/v1/projects/${f.project_id}/billables`
+          `/api/v1/projects/${f.project_id}/billables?include_non_billable=true&include_invoiced=true`
         );
         if (!r.ok || cancelled) return;
         const data = (await r.json()) as { achats: BillableAchat[] };
         if (cancelled) return;
         setBillableAchats(data.achats || []);
-        // Coche tout par défaut.
+        // Pré-coche seulement les refacturables pas encore facturés ;
+        // les non-refacturables restent à cocher volontairement et les
+        // déjà-facturés sont affichés grisés (non sélectionnables).
         const pre: Record<number, boolean> = {};
-        for (const a of data.achats || []) pre[a.id] = true;
+        for (const a of data.achats || [])
+          pre[a.id] = a.is_billable !== false && !a.invoiced_at;
         setAchatSelected(pre);
       } catch {
         /* silencieux — l'utilisateur peut décocher l'import achats */
@@ -536,7 +548,9 @@ export default function FactureDetailPage() {
       // Phase A : sélection ligne-par-ligne des achats + markup
       // overrides. Si rien n'est coché, l'API ne retourne aucun achat.
       const selectedAchatIds = importIncludeAchats
-        ? billableAchats.filter((a) => achatSelected[a.id]).map((a) => a.id)
+        ? billableAchats
+            .filter((a) => achatSelected[a.id] && !a.invoiced_at)
+            .map((a) => a.id)
         : [];
       const markupOverrides: Record<number, number> = {};
       if (importIncludeAchats) {
@@ -1824,9 +1838,9 @@ export default function FactureDetailPage() {
                 />
                 <div className="min-w-0 flex-1">
                   <div className="font-semibold text-white">
-                    Achats à refacturer{" "}
+                    Achats du projet{" "}
                     <span className="text-xs font-normal text-white/50">
-                      (refacturables non encore facturés)
+                      (non encore facturés — coche ceux à ajouter)
                     </span>
                   </div>
                   {importIncludeAchats ? (
@@ -1857,14 +1871,18 @@ export default function FactureDetailPage() {
                                   ((a.amount ?? 0) * (1 + markupNum / 100)).toFixed(2)
                                 )
                               : a.projected_billed_amount;
+                            const alreadyInvoiced = !!a.invoiced_at;
                             return (
                               <div
                                 key={a.id}
-                                className="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2 text-xs"
+                                className={`grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2 text-xs ${
+                                  alreadyInvoiced ? "opacity-50" : ""
+                                }`}
                               >
                                 <input
                                   type="checkbox"
                                   checked={!!achatSelected[a.id]}
+                                  disabled={alreadyInvoiced}
                                   onChange={(e) =>
                                     setAchatSelected({
                                       ...achatSelected,
@@ -1880,6 +1898,24 @@ export default function FactureDetailPage() {
                                     <span className="text-white/40">
                                       {" "}
                                       · {a.fournisseur_name}
+                                    </span>
+                                  ) : null}
+                                  {alreadyInvoiced ? (
+                                    <span
+                                      className="ml-1.5 rounded bg-white/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white/60"
+                                      title="Déjà versé sur une facture — supprimer cette facture le libère"
+                                    >
+                                      déjà facturé
+                                      {a.invoiced_facture_reference
+                                        ? ` · fact. ${a.invoiced_facture_reference}`
+                                        : ""}
+                                    </span>
+                                  ) : a.is_billable === false ? (
+                                    <span
+                                      className="ml-1.5 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-300"
+                                      title="Non marqué « à refacturer » — le cocher ici le facture quand même"
+                                    >
+                                      non refacturable
                                     </span>
                                   ) : null}
                                 </span>
@@ -2131,6 +2167,31 @@ function ItemRow({
     return +((kind === "rabais" ? -magnitude : magnitude).toFixed(2));
   }, [quantity, unitPrice, kind]);
 
+  // Total ÉDITABLE : saisir un montant ajuste la QUANTITÉ pour y
+  // correspondre (le prix unitaire du devis reste intact) — utile quand
+  // le montant importé ne colle pas au devis ajusté. Prix nul →
+  // quantité 1 et le montant devient le prix unitaire.
+  const [totalDraft, setTotalDraft] = useState<string | null>(null);
+
+  function applyTotal() {
+    const raw = totalDraft;
+    setTotalDraft(null);
+    if (raw === null) return;
+    const target = Math.abs(Number(raw));
+    if (!Number.isFinite(target)) return;
+    if (Math.abs(target - Math.abs(computedTotal)) < 0.005) return;
+    const up = Number(unitPrice);
+    if (up > 0) {
+      const q = +(target / up).toFixed(6);
+      setQuantity(String(q));
+      persist("quantity", q);
+    } else {
+      setQuantity("1");
+      setUnitPrice(String(target));
+      onPatch({ quantity: 1, unit_price: target });
+    }
+  }
+
   function persist(field: keyof Item, value: unknown) {
     onPatch({ [field]: value } as Partial<Item>);
   }
@@ -2278,13 +2339,26 @@ function ItemRow({
           className="input text-sm w-full"
         />
       </div>
-      <div className="flex items-center justify-between sm:block sm:text-right">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40 sm:hidden">
-          Total
-        </span>
-        <span className="font-semibold text-white">
-          {fmtMoney(computedTotal)}
-        </span>
+      <div>
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-white/40 sm:hidden">
+          Total ($)
+        </label>
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          value={
+            totalDraft !== null
+              ? totalDraft
+              : String(Math.abs(computedTotal))
+          }
+          onFocus={() => setTotalDraft(String(Math.abs(computedTotal)))}
+          onChange={(e) => setTotalDraft(e.target.value)}
+          onBlur={applyTotal}
+          disabled={busy}
+          title="Modifier le total ajuste la quantité (le prix unitaire du devis est conservé)"
+          className="input w-full text-sm font-semibold text-right"
+        />
       </div>
       <button
         type="button"
@@ -2332,6 +2406,32 @@ function ItemRow({
               {fmtMoney(computedTotal)}
             </span>
           </span>
+          {typeof item.billed_to_date === "number" ? (
+            <>
+              <span aria-hidden>·</span>
+              <span
+                title="Cumul de toutes les factures non annulées pour cette ligne du devis, celle-ci incluse"
+              >
+                Facturé à date{" "}
+                <span className="font-semibold text-white">
+                  {fmtMoney(
+                    +(
+                      item.billed_to_date -
+                      item.total +
+                      computedTotal
+                    ).toFixed(2)
+                  )}
+                  {" ("}
+                  {Math.round(
+                    ((item.billed_to_date - item.total + computedTotal) /
+                      item.contract_total) *
+                      100
+                  )}
+                  {" % du contrat)"}
+                </span>
+              </span>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>

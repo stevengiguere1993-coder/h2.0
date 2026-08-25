@@ -40,6 +40,15 @@ class BillableAchat(BaseModel):
     supplier_invoice_number: Optional[str] = None
     # Montant projeté qui sera facturé au client (cost × (1 + markup/100)).
     projected_billed_amount: float = 0.0
+    # False = achat non marqué refacturable (défaut des projets estimés /
+    # forfaitaires). Retourné seulement avec include_non_billable=true ;
+    # le sélectionner à l'import le marque refacturable.
+    is_billable: bool = True
+    # Renseignés seulement avec include_invoiced=true : achat DÉJÀ versé
+    # sur une facture (non sélectionnable — affiché pour que l'absence
+    # d'un achat dans le sélecteur ne soit jamais un mystère).
+    invoiced_at: Optional[str] = None
+    invoiced_facture_reference: Optional[str] = None
 
 
 class BillablePunchBucket(BaseModel):
@@ -72,23 +81,57 @@ class BillablesSummary(BaseModel):
     summary="Liste tout ce qui reste à refacturer pour le projet",
 )
 async def list_billables(
-    project_id: int, db: DBSession, _: CurrentUser
+    project_id: int,
+    db: DBSession,
+    _: CurrentUser,
+    include_non_billable: bool = False,
+    include_invoiced: bool = False,
 ) -> BillablesSummary:
+    """`include_non_billable=true` : liste AUSSI les achats non marqués
+    refacturables (défaut des projets estimés / forfaitaires) pour que le
+    sélecteur d'import de facture puisse les proposer — les sélectionner
+    à l'import les marque refacturables. `include_invoiced=true` : liste
+    aussi les achats DÉJÀ facturés (avec le numéro de leur facture) pour
+    que l'absence d'un achat ne soit jamais un mystère. Les totaux ne
+    comptent que les refacturables non facturés (l'onglet « À
+    refacturer » du projet reste inchangé)."""
     project = (
         await db.execute(select(Project).where(Project.id == project_id))
     ).scalar_one_or_none()
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
 
-    achats = (
-        await db.execute(
-            select(Achat)
-            .where(Achat.project_id == project_id)
-            .where(Achat.is_billable.is_(True))
-            .where(Achat.invoiced_at.is_(None))
-            .order_by(Achat.id.asc())
-        )
-    ).scalars().all()
+    stmt = (
+        select(Achat)
+        .where(Achat.project_id == project_id)
+        .order_by(Achat.id.asc())
+    )
+    if not include_invoiced:
+        stmt = stmt.where(Achat.invoiced_at.is_(None))
+    if not include_non_billable:
+        stmt = stmt.where(Achat.is_billable.is_(True))
+    achats = (await db.execute(stmt)).scalars().all()
+
+    # Numéro de facture des achats déjà facturés (facture_item → facture),
+    # en un seul round-trip.
+    facture_ref_by_item: dict[int, str] = {}
+    _invoiced_item_ids = {
+        a.facture_item_id
+        for a in achats
+        if a.invoiced_at is not None and a.facture_item_id
+    }
+    if _invoiced_item_ids:
+        from app.models.facture import Facture
+        from app.models.facture_item import FactureItem
+
+        rows = (
+            await db.execute(
+                select(FactureItem.id, Facture.reference)
+                .join(Facture, Facture.id == FactureItem.facture_id)
+                .where(FactureItem.id.in_(_invoiced_item_ids))
+            )
+        ).all()
+        facture_ref_by_item = {iid: ref for iid, ref in rows}
 
     # Résolution des noms de fournisseurs en un seul round-trip.
     fourn_ids = {a.fournisseur_id for a in achats if a.fournisseur_id}
@@ -113,8 +156,9 @@ async def list_billables(
             float(a.markup_percent) if a.markup_percent is not None else 10.0
         )
         projected = round(cost * (1 + markup / 100.0), 2)
-        total_cost += cost
-        total_projected += projected
+        if a.is_billable and a.invoiced_at is None:
+            total_cost += cost
+            total_projected += projected
         items.append(
             BillableAchat(
                 id=a.id,
@@ -128,6 +172,13 @@ async def list_billables(
                 fournisseur_name=fourn_names.get(a.fournisseur_id or 0),
                 supplier_invoice_number=a.supplier_invoice_number,
                 projected_billed_amount=projected,
+                is_billable=bool(a.is_billable),
+                invoiced_at=(
+                    a.invoiced_at.isoformat() if a.invoiced_at else None
+                ),
+                invoiced_facture_reference=facture_ref_by_item.get(
+                    a.facture_item_id or 0
+                ),
             )
         )
 

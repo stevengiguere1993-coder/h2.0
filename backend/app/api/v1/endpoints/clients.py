@@ -104,6 +104,14 @@ async def update_client(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Client not found",
         )
+    # Reflète la modification dans QuickBooks (nom, courriel, téléphone,
+    # adresse du customer lié) — avant, renommer une fiche Kratos
+    # laissait le client QB sous son ancien nom pour toujours.
+    import asyncio
+
+    from app.services.qbo_auto_sync import push_client_update_qbo_now
+
+    asyncio.create_task(push_client_update_qbo_now(int(client.id)))
     return ClientRead.model_validate(client)
 
 
