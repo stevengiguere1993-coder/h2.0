@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter as useNextRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Info, Loader2 } from "lucide-react";
 
+import { AddressInput } from "@/components/address-input";
 import { AppTopbar } from "@/components/app-topbar";
 import {
   TargetPicker,
@@ -281,13 +282,11 @@ export default function NewSoumissionPage() {
             <label htmlFor="property_address" className="label">
               Adresse du chantier
             </label>
-            <input
+            <AddressInput
               id="property_address"
-              type="text"
               value={propertyAddress}
-              onChange={(e) => setPropertyAddress(e.target.value)}
+              onChange={setPropertyAddress}
               placeholder="Ex. 32 Croissant d'Avaugour, Laval, QC"
-              className="input"
             />
             <p className="mt-1 text-xs text-white/50">
               Pré-remplie depuis le prospect si disponible. Street View
