@@ -805,6 +805,20 @@ async def patch_profil(
         if val is not None:
             setattr(profil, fld, bool(val))
     if "avances_actionnaires" in data.model_fields_set:
+        # Dès que la compagnie a une connexion QuickBooks, les avances
+        # viennent de la sync (écrasées chaque nuit) — la saisie
+        # manuelle n'est qu'un REPLI sans connexion (retour Phil
+        # 2026-08-25 : « le tout est supposé venir de quickbook »).
+        from app.services.invest_portfolio import optimisation_projet_qbo
+
+        p_qbo, _ = await optimisation_projet_qbo(db, entreprise_id)
+        if p_qbo is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Les avances de cette compagnie viennent de QuickBooks "
+                "(« Synchroniser QuickBooks ») — la saisie manuelle est "
+                "désactivée.",
+            )
         profil.avances_actionnaires = data.avances_actionnaires or None
     await db.flush()
     await db.commit()

@@ -353,3 +353,36 @@ def test_avances_par_actionnaire_soldes_quickbooks(
     )
     assert r2.status_code == 200, r2.text
     assert r2.json()["statut"] == "connecte"
+
+
+def test_avances_manuelles_bloquees_si_connexion_qbo(
+    client, auth_headers, invest_ids, run
+):
+    """Retour Phil 2026-08-25 : « le tout est supposé venir de
+    quickbook » — la compagnie a une connexion QBO, donc la saisie
+    manuelle des avances est refusée ; le repli manuel reste permis
+    pour une compagnie SANS connexion."""
+    eid = invest_ids["entreprise_id"]
+    r = client.patch(
+        f"/api/v1/invest/admin/projets/{eid}/profil",
+        json={"avances_actionnaires": 123456},
+        headers=auth_headers,
+    )
+    assert r.status_code == 409, r.text
+
+    async def _ent_sans_qbo() -> int:
+        async with TestSessionLocal() as s:
+            e = Entreprise(name="INC Sans QBO Drill")
+            s.add(e)
+            await s.flush()
+            eid2 = e.id
+            await s.commit()
+            return eid2
+
+    eid2 = run(_ent_sans_qbo())
+    r2 = client.patch(
+        f"/api/v1/invest/admin/projets/{eid2}/profil",
+        json={"avances_actionnaires": 123456},
+        headers=auth_headers,
+    )
+    assert r2.status_code == 200, r2.text
