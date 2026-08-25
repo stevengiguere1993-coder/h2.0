@@ -1013,6 +1013,42 @@ async def optimisation_projet_qbo(
     return avec_qbo, projets[0]
 
 
+async def qbo_txns_compte_data(
+    db: AsyncSession,
+    entreprise_id: int,
+    compte_id: str,
+    debut: str,
+    fin: str,
+) -> list:
+    """Transactions QuickBooks d'UN compte de dépense sur une période,
+    via le projet d'optimisation de la compagnie — le clic sur un compte
+    du tableau « Revenus et dépenses réels » mène ici (même principe que
+    la page Optimisation, demande Phil 2026-08-25). Lève RuntimeError si
+    la compagnie n'a pas de connexion QuickBooks."""
+    p, _ = await optimisation_projet_qbo(db, entreprise_id)
+    if p is None:
+        raise RuntimeError(
+            "Aucune connexion QuickBooks pour cette compagnie."
+        )
+    from app.services.qbo_optimisation import transactions_depenses
+
+    return await transactions_depenses(p.qbo_scope, {compte_id}, debut, fin)
+
+
+async def qbo_piece_data(
+    db: AsyncSession, entreprise_id: int, att_id: str
+) -> Optional[bytes]:
+    """Pièce jointe QuickBooks (facture PDF/image) servie EN DIRECT —
+    rien n'est stocké. Le scope vient du projet d'optimisation de la
+    compagnie : impossible de viser la connexion d'un autre pôle."""
+    p, _ = await optimisation_projet_qbo(db, entreprise_id)
+    if p is None:
+        return None
+    from app.integrations.quickbooks import get_qbo
+
+    return await get_qbo(p.qbo_scope).download_attachable(att_id)
+
+
 async def qbo_reels_data(db: AsyncSession, entreprise_id: int) -> dict:
     """Série mensuelle RÉELLE (QuickBooks) de la compagnie, via son
     projet de la section optimisation — depuis l'ouverture du projet

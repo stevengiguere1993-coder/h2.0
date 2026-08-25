@@ -39,7 +39,6 @@ import {
   DepenseCategorie,
   fmtDate,
   fmtMoney,
-  fmtPct,
   HypothequesCard,
   ImmeubleRow,
   NormalisesPanel,
@@ -1260,7 +1259,7 @@ function ParticipationCard({
               )
             </span>{" "}
             · capital actuel {fmtMoney(p.capital_actuel)} · valeur des
-            parts {fmtMoney(p.valeur_parts)} · TRI {fmtPct(p.tri_pct)}
+            parts {fmtMoney(p.valeur_parts)}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">

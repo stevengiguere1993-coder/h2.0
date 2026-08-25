@@ -38,7 +38,9 @@ from app.services.invest_portfolio import (
     kpis_participation,
     partner_directory,
     phase_projet,
+    qbo_piece_data,
     qbo_reels_data,
+    qbo_txns_compte_data,
     serie_mensuelle,
     serie_valeur_totale,
     timeline_projet,
@@ -221,12 +223,35 @@ async def build_projet(
     # compte connecté.
     actionnaires: list[dict] = []
     if show_actionnaires:
+        # Capital ENCORE investi de chaque actionnaire (apports −
+        # remboursements, plancher 0) — demande Phil 2026-08-25 : « mets
+        # les montants de restant de chacun des actionnaires ». None =
+        # pas de compte investisseur lié (rien à calculer).
+        restants: dict[int, float] = {}
+        for autre in (
+            await db.execute(
+                select(InvestParticipation).where(
+                    InvestParticipation.entreprise_id == entreprise_id
+                )
+            )
+        ).scalars():
+            f_autre = (
+                flux
+                if autre.id == part.id
+                else await _flux_of(db, autre.id)
+            )
+            restants[autre.user_id] = kpis_participation(f_autre, None)[
+                "capital_actuel"
+            ]
         for row in directory["rows"]:
             actionnaires.append(
                 {
                     "name": row["name"],
                     "parts_pct": row["ownership_pct"],
                     "is_me": row["user_id"] == user_id,
+                    "capital_actuel": restants.get(row["user_id"])
+                    if row["user_id"] is not None
+                    else None,
                 }
             )
         actionnaires.sort(
@@ -307,6 +332,12 @@ async def build_projet(
             for f in flux
         ],
         "actionnaires": actionnaires,
+        # La sync QBO (avances d'actionnaires) a-t-elle déjà tourné ?
+        # Tant que non, un capital à 0 = « pas encore de données » ;
+        # après, il veut dire « remboursé complètement ».
+        "apports_synchronises": bool(
+            profil is not None and profil.qbo_sync_at is not None
+        ),
         "show_depenses": show_depenses,
         "show_hypotheque": show_hypotheque,
         "show_actionnaires": show_actionnaires,
@@ -382,6 +413,108 @@ async def my_projet_qbo_reels(
         if isinstance(data.get("total"), dict):
             data["total"].pop("details", None)
     return data
+
+
+async def _ma_participation_ou_404(
+    db: AsyncSession, user_id: int, entreprise_id: int
+) -> None:
+    """Garde des routes de détail QBO : participation visible requise,
+    et les interrupteurs de publication du projet respectés (pas de
+    détail des dépenses si l'admin les masque)."""
+    part = (
+        await db.execute(
+            select(InvestParticipation.id).where(
+                InvestParticipation.user_id == user_id,
+                InvestParticipation.entreprise_id == entreprise_id,
+                InvestParticipation.is_visible.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if part is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Projet introuvable."
+        )
+    profil = await get_or_default_profil(db, entreprise_id)
+    if profil is not None and (
+        not profil.show_cashflow or not profil.show_depenses
+    ):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Projet introuvable."
+        )
+
+
+@router.get(
+    "/me/projets/{entreprise_id}/qbo-comptes/{compte_id}/transactions",
+    summary="Transactions d'un compte de dépense (mois cliqué) — "
+    "investisseur",
+)
+async def my_projet_qbo_txns(
+    entreprise_id: int,
+    compte_id: str,
+    debut: str,
+    fin: str,
+    db: DBSession,
+    user: CurrentUser,
+) -> list:
+    """Clic sur un compte du tableau « Revenus et dépenses réels » :
+    transactions QuickBooks de CE compte pour CE mois, avec leurs
+    factures jointes — même principe que la page Optimisation (demande
+    Phil 2026-08-25)."""
+    await _ma_participation_ou_404(db, user.id, entreprise_id)
+    # Les dates sont interpolées dans la requête QuickBooks : jamais de
+    # texte libre.
+    try:
+        d1 = date.fromisoformat(debut)
+        d2 = date.fromisoformat(fin)
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Dates attendues au format AAAA-MM-JJ.",
+        )
+    if not compte_id.isdigit():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Compte invalide."
+        )
+    try:
+        return await qbo_txns_compte_data(
+            db, entreprise_id, compte_id, d1.isoformat(), d2.isoformat()
+        )
+    except Exception as exc:  # noqa: BLE001 — message propre à l'UI
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+
+
+@router.get(
+    "/me/projets/{entreprise_id}/qbo-pieces/{att_id}",
+    summary="Pièce jointe QuickBooks (facture) — investisseur",
+)
+async def my_projet_qbo_piece(
+    entreprise_id: int,
+    att_id: str,
+    db: DBSession,
+    user: CurrentUser,
+    ct: Optional[str] = None,
+    nom: Optional[str] = None,
+) -> Response:
+    await _ma_participation_ou_404(db, user.id, entreprise_id)
+    contenu = await qbo_piece_data(db, entreprise_id, att_id)
+    if not contenu:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "Pièce introuvable dans QuickBooks (ou téléchargement "
+            "échoué).",
+        )
+    # Le type vient de l'écran mais n'est jamais avalé tel quel : seuls
+    # image/* et PDF s'affichent inline.
+    media = (ct or "").lower()
+    if not (media.startswith("image/") or media == "application/pdf"):
+        media = "application/octet-stream"
+    entetes = {}
+    if nom:
+        propre = "".join(
+            ch for ch in nom if ch.isalnum() or ch in "._- "
+        )[:120]
+        entetes["Content-Disposition"] = f'inline; filename="{propre}"'
+    return Response(content=contenu, media_type=media, headers=entetes)
 
 
 @router.get(

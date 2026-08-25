@@ -66,7 +66,9 @@ from app.services.invest_portfolio import (
     kpis_participation,
     partner_directory,
     phase_projet,
+    qbo_piece_data,
     qbo_reels_data,
+    qbo_txns_compte_data,
     serie_mensuelle,
     serie_valeur_totale,
     timeline_projet,
@@ -1228,6 +1230,75 @@ async def qbo_reels(
     année)."""
     await _load_entreprise(db, entreprise_id)
     return await qbo_reels_data(db, entreprise_id)
+
+
+@router.get(
+    "/projets/{entreprise_id}/qbo-comptes/{compte_id}/transactions",
+    summary="Transactions d'un compte de dépense (mois cliqué) — "
+    "console admin",
+)
+async def qbo_txns_compte(
+    entreprise_id: int,
+    compte_id: str,
+    debut: str,
+    fin: str,
+    db: DBSession,
+    user: CurrentUser,
+) -> list:
+    """Même drill-down que la page Optimisation : les transactions
+    QuickBooks derrière un compte d'un mois du tableau « Revenus et
+    dépenses réels », avec leurs factures jointes."""
+    await _load_entreprise(db, entreprise_id)
+    try:
+        d1 = date.fromisoformat(debut)
+        d2 = date.fromisoformat(fin)
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Dates attendues au format AAAA-MM-JJ.",
+        )
+    if not compte_id.isdigit():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Compte invalide."
+        )
+    try:
+        return await qbo_txns_compte_data(
+            db, entreprise_id, compte_id, d1.isoformat(), d2.isoformat()
+        )
+    except Exception as exc:  # noqa: BLE001 — message propre à l'UI
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+
+
+@router.get(
+    "/projets/{entreprise_id}/qbo-pieces/{att_id}",
+    summary="Pièce jointe QuickBooks (facture) — console admin",
+)
+async def qbo_piece_admin(
+    entreprise_id: int,
+    att_id: str,
+    db: DBSession,
+    user: CurrentUser,
+    ct: Optional[str] = None,
+    nom: Optional[str] = None,
+) -> Response:
+    await _load_entreprise(db, entreprise_id)
+    contenu = await qbo_piece_data(db, entreprise_id, att_id)
+    if not contenu:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "Pièce introuvable dans QuickBooks (ou téléchargement "
+            "échoué).",
+        )
+    media = (ct or "").lower()
+    if not (media.startswith("image/") or media == "application/pdf"):
+        media = "application/octet-stream"
+    entetes = {}
+    if nom:
+        propre = "".join(
+            ch for ch in nom if ch.isalnum() or ch in "._- "
+        )[:120]
+        entetes["Content-Disposition"] = f'inline; filename="{propre}"'
+    return Response(content=contenu, media_type=media, headers=entetes)
 
 
 # ───────── Synchronisation QuickBooks (avances d'actionnaires) ─────────
