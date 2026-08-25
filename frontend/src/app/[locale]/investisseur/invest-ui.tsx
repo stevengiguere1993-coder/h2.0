@@ -165,6 +165,7 @@ export type ProjetDetail = {
   show_hypotheque: boolean;
   show_actionnaires: boolean;
   show_cashflow: boolean;
+  show_budget?: boolean;
   documents: { id: number; title: string; size_bytes: number }[];
 };
 
@@ -1296,6 +1297,248 @@ export function QboReelsPanel({ fetchPath }: { fetchPath: string }) {
           fetchUrl={txnCompte.url}
           pieceBase={`${baseProjet}/qbo-pieces`}
           onClose={() => setTxnCompte(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+
+export type BudgetInvest = {
+  statut: string;
+  projet_nom?: string;
+  erreur?: string;
+  date_debut?: string | null;
+  lignes?: {
+    ligne_id: number;
+    nom: string;
+    mode?: string | null;
+    budget: number;
+    depense: number | null;
+    reste: number | null;
+  }[];
+  total?: { budget: number; depense: number; reste: number };
+};
+
+/* Budget du projet d'optimisation, vu du portail : chaque enveloppe
+   avec son budget, le dépensé réel QuickBooks et le reste — « où
+   est-ce que leur argent a été dépensé » (Phil, 2026-08-25). Le
+   montant dépensé s'ouvre sur les transactions + factures. */
+export function BudgetOptimisationPanel({
+  fetchPath
+}: {
+  fetchPath: string;
+}) {
+  const [data, setData] = useState<BudgetInvest | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [txnLigne, setTxnLigne] = useState<{
+    titre: string;
+    url: string;
+  } | null>(null);
+  //: Les routes transactions/pièces vivent à côté de /budget.
+  const baseProjet = fetchPath.replace(/\/budget$/, "");
+
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch(fetchPath)
+      .then(async (res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          setFailed(true);
+          return;
+        }
+        setData((await res.json()) as BudgetInvest);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchPath]);
+
+  if (data?.statut === "masque") return null;
+
+  const naBox = (titre: string, texte: string) => (
+    <div className="rounded-xl border border-dashed border-brand-700 bg-brand-950/40 px-4 py-6 text-center">
+      <p className="text-sm font-semibold text-white/70">{titre}</p>
+      <p className="mx-auto mt-1 max-w-sm text-xs text-white/40">
+        {texte}
+      </p>
+    </div>
+  );
+
+  const lignes = data?.lignes || [];
+
+  return (
+    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white">
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">
+          Budget d&apos;optimisation
+        </h2>
+        {data?.statut === "connecte" && data.date_debut ? (
+          <span className="text-xs text-white/40">
+            depuis le {fmtDate(data.date_debut)}
+          </span>
+        ) : null}
+      </div>
+      <p className="mb-3 text-[11px] text-white/35">
+        Où va l&apos;argent : les enveloppes de dépenses du projet
+        d&apos;optimisation
+        {data?.statut === "connecte" && data.projet_nom
+          ? ` — ${data.projet_nom}`
+          : ""}
+        , avec le dépensé réel QuickBooks. Cliquez un montant dépensé
+        pour voir les transactions et leurs factures.
+      </p>
+
+      {failed ? (
+        naBox(
+          "Chargement impossible",
+          "Le budget n'a pas pu être chargé — réessayez plus tard."
+        )
+      ) : data === null ? (
+        <div className="flex justify-center py-10">
+          <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+        </div>
+      ) : data.statut === "aucun_projet" ? (
+        naBox(
+          "Non applicable — pas encore rentré",
+          "Cette compagnie n'a aucun projet dans la section " +
+            "optimisation de gestion d'entreprise."
+        )
+      ) : data.statut === "sans_qbo" ? (
+        naBox(
+          "QuickBooks non connecté",
+          `Le projet « ${data.projet_nom} » existe dans la section ` +
+            "optimisation, mais aucune connexion QuickBooks n'est " +
+            "choisie dans ses réglages."
+        )
+      ) : data.statut === "erreur" ? (
+        naBox(
+          "Lecture QuickBooks impossible",
+          data.erreur ||
+            "Erreur de lecture — vérifiez la connexion QuickBooks."
+        )
+      ) : lignes.length === 0 ? (
+        naBox(
+          "Aucune enveloppe",
+          "Le projet d'optimisation n'a pas encore de lignes de budget."
+        )
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[420px] text-xs tabular-nums">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-wider text-white/40">
+                <th className="py-1.5 pr-2 font-medium">Enveloppe</th>
+                <th className="py-1.5 pl-2 text-right font-medium">
+                  Budget
+                </th>
+                <th className="py-1.5 pl-2 text-right font-medium">
+                  Dépensé
+                </th>
+                <th className="py-1.5 pl-2 text-right font-medium">
+                  Reste
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {lignes.map((l) => {
+                const pct =
+                  l.budget > 0 && l.depense !== null
+                    ? Math.min(
+                        100,
+                        Math.max(0, (l.depense / l.budget) * 100)
+                      )
+                    : 0;
+                const depasse = l.reste !== null && l.reste < 0;
+                return (
+                  <tr
+                    key={l.ligne_id}
+                    className="border-t border-brand-800/60"
+                  >
+                    <td className="py-2 pr-2">
+                      <p className="text-white/80">{l.nom}</p>
+                      {l.budget > 0 ? (
+                        <span className="mt-1 block h-1 w-full max-w-[140px] overflow-hidden rounded-full bg-white/10">
+                          <span
+                            className={`block h-full ${
+                              depasse ? "bg-rose-400" : "bg-accent-500"
+                            }`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="py-2 pl-2 text-right text-white/80">
+                      {fmtMoney(l.budget)}
+                    </td>
+                    <td className="py-2 pl-2 text-right">
+                      {l.depense === null ? (
+                        <span className="text-white/35">—</span>
+                      ) : l.mode === "deficit_operation" ? (
+                        <span
+                          className="text-white/80"
+                          title="Déficit d'opération couvert par cette enveloppe (calculé du cashflow — pas de factures individuelles)"
+                        >
+                          {fmtMoney(l.depense)}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setTxnLigne({
+                              titre: l.nom,
+                              url: `${baseProjet}/qbo-lignes/${l.ligne_id}/transactions`
+                            })
+                          }
+                          className="text-white/80 underline decoration-dotted underline-offset-2 transition hover:text-white"
+                          title="Voir les transactions derrière ce montant (et leurs factures)"
+                        >
+                          {fmtMoney(l.depense)}
+                        </button>
+                      )}
+                    </td>
+                    <td
+                      className={`py-2 pl-2 text-right font-semibold ${
+                        depasse ? "text-rose-400" : "text-emerald-400"
+                      }`}
+                    >
+                      {l.reste === null ? "—" : fmtMoney(l.reste)}
+                    </td>
+                  </tr>
+                );
+              })}
+              {data.total ? (
+                <tr className="border-t-2 border-brand-700 font-semibold">
+                  <td className="py-2 pr-2 text-white">TOTAL</td>
+                  <td className="py-2 pl-2 text-right text-white">
+                    {fmtMoney(data.total.budget)}
+                  </td>
+                  <td className="py-2 pl-2 text-right text-white">
+                    {fmtMoney(data.total.depense)}
+                  </td>
+                  <td
+                    className={`py-2 pl-2 text-right ${
+                      data.total.reste < 0
+                        ? "text-rose-400"
+                        : "text-emerald-400"
+                    }`}
+                  >
+                    {fmtMoney(data.total.reste)}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {txnLigne ? (
+        <TransactionsReellesModal
+          titre={txnLigne.titre}
+          fetchUrl={txnLigne.url}
+          pieceBase={`${baseProjet}/qbo-pieces`}
+          onClose={() => setTxnLigne(null)}
         />
       ) : null}
     </div>

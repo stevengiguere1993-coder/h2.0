@@ -20,6 +20,7 @@ import {
 import { authedFetch } from "@/lib/auth";
 import { InvestisseurTopbar } from "../../layout";
 import {
+  BudgetOptimisationPanel,
   fmtDate,
   fmtMoney,
   HypothequesCard,
@@ -350,6 +351,19 @@ export default function ProjetPage() {
             />
           ) : null}
         </div>
+
+        {/* Budget du projet d'optimisation — « où va l'argent » */}
+        {data.show_budget !== false ? (
+          <div className="mt-4">
+            <BudgetOptimisationPanel
+              fetchPath={
+                apercu
+                  ? `/api/v1/invest/admin/projets/${entrepriseId}/budget`
+                  : `/api/v1/invest/me/projets/${entrepriseId}/budget`
+              }
+            />
+          </div>
+        ) : null}
 
         {/* Ma participation + histoire, puis hypothèques + actionnaires */}
         <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">

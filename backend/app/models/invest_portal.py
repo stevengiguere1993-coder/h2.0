@@ -180,6 +180,12 @@ class InvestProjetProfil(Base, TimestampUpdateMixin):
     show_cashflow: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
+    #: Budget du projet d'optimisation (enveloppes, dépensé réel,
+    #: reste) — « où est-ce que leur argent a été dépensé » (Phil,
+    #: 2026-08-25). Colonne additive.
+    show_budget: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
 
 
 class InvestDocument(Base, TimestampMixin):

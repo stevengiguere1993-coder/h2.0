@@ -32,6 +32,8 @@ from app.models.invest_portal import (
 )
 from app.services.invest_portfolio import (
     avances_par_actionnaire,
+    budget_ligne_transactions,
+    budget_optimisation_data,
     effective_parts_pct,
     entreprise_snapshot,
     flux_signes,
@@ -206,6 +208,7 @@ async def build_projet(
     show_hypotheque = profil.show_hypotheque if profil else True
     show_actionnaires = profil.show_actionnaires if profil else True
     show_cashflow = profil.show_cashflow if profil else True
+    show_budget = profil.show_budget if profil else True
 
     snap = await entreprise_snapshot(db, entreprise_id)
     directory = await partner_directory(db, entreprise_id)
@@ -320,6 +323,7 @@ async def build_projet(
         "show_hypotheque": show_hypotheque,
         "show_actionnaires": show_actionnaires,
         "show_cashflow": show_cashflow,
+        "show_budget": show_budget,
         "documents": [
             {
                 "id": d.id,
@@ -524,6 +528,72 @@ async def my_projet_avances(
     if profil is not None and not profil.show_actionnaires:
         return {"statut": "masque"}
     return await avances_par_actionnaire(db, entreprise_id)
+
+
+@router.get(
+    "/me/projets/{entreprise_id}/budget",
+    summary="Budget du projet d'optimisation (enveloppes, dépensé, "
+    "reste) — investisseur",
+)
+async def my_projet_budget(
+    entreprise_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    """« Où va l'argent » : les enveloppes du projet d'optimisation
+    avec le dépensé réel QuickBooks. Respecte ``show_budget``."""
+    part = (
+        await db.execute(
+            select(InvestParticipation.id).where(
+                InvestParticipation.user_id == user.id,
+                InvestParticipation.entreprise_id == entreprise_id,
+                InvestParticipation.is_visible.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if part is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Projet introuvable."
+        )
+    profil = await get_or_default_profil(db, entreprise_id)
+    if profil is not None and not profil.show_budget:
+        return {"statut": "masque"}
+    return await budget_optimisation_data(db, entreprise_id)
+
+
+@router.get(
+    "/me/projets/{entreprise_id}/qbo-lignes/{ligne_id}/transactions",
+    summary="Transactions d'une enveloppe du budget — investisseur",
+)
+async def my_projet_budget_txns(
+    entreprise_id: int, ligne_id: int, db: DBSession, user: CurrentUser
+) -> list:
+    part = (
+        await db.execute(
+            select(InvestParticipation.id).where(
+                InvestParticipation.user_id == user.id,
+                InvestParticipation.entreprise_id == entreprise_id,
+                InvestParticipation.is_visible.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if part is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Projet introuvable."
+        )
+    profil = await get_or_default_profil(db, entreprise_id)
+    if profil is not None and not profil.show_budget:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Projet introuvable."
+        )
+    try:
+        return await budget_ligne_transactions(
+            db, entreprise_id, ligne_id
+        )
+    except LookupError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Enveloppe introuvable."
+        )
+    except Exception as exc:  # noqa: BLE001 — message propre à l'UI
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
 
 
 @router.get(
