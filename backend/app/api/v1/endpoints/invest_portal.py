@@ -91,8 +91,19 @@ async def _flux_of(
     )
 
 
-async def build_portefeuille(db: AsyncSession, user_id: int) -> dict:
-    parts = await _participations_visibles(db, user_id)
+async def build_portefeuille(
+    db: AsyncSession,
+    user_id: int,
+    parts_virtuelles: Optional[list[InvestParticipation]] = None,
+) -> dict:
+    #: ``parts_virtuelles`` : participations NON persistées (id=0, aucun
+    #: flux) — l'aperçu « avant création du compte » de la console
+    #: admin passe par ici avec le % de la fiche entreprise.
+    parts = (
+        parts_virtuelles
+        if parts_virtuelles is not None
+        else await _participations_visibles(db, user_id)
+    )
     pairs: list[tuple[InvestParticipation, list[InvestFlux]]] = []
     projets: list[dict] = []
     tot_capital_actuel = 0.0
@@ -182,17 +193,27 @@ async def build_portefeuille(db: AsyncSession, user_id: int) -> dict:
 
 
 async def build_projet(
-    db: AsyncSession, user_id: int, entreprise_id: int
+    db: AsyncSession,
+    user_id: int,
+    entreprise_id: int,
+    part_virtuelle: Optional[InvestParticipation] = None,
+    me_nom: Optional[str] = None,
 ) -> dict:
-    part = (
-        await db.execute(
-            select(InvestParticipation).where(
-                InvestParticipation.user_id == user_id,
-                InvestParticipation.entreprise_id == entreprise_id,
-                InvestParticipation.is_visible.is_(True),
+    #: ``part_virtuelle`` + ``me_nom`` : fiche telle que la VERRAIT un
+    #: actionnaire de la fiche entreprise SANS compte investisseur —
+    #: % de la fiche, aucun flux ; ``me_nom`` marque sa ligne « (vous) »
+    #: dans la liste des actionnaires.
+    part = part_virtuelle
+    if part is None:
+        part = (
+            await db.execute(
+                select(InvestParticipation).where(
+                    InvestParticipation.user_id == user_id,
+                    InvestParticipation.entreprise_id == entreprise_id,
+                    InvestParticipation.is_visible.is_(True),
+                )
             )
-        )
-    ).scalar_one_or_none()
+        ).scalar_one_or_none()
     if part is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Projet introuvable."
@@ -232,7 +253,10 @@ async def build_projet(
                 {
                     "name": row["name"],
                     "parts_pct": row["ownership_pct"],
-                    "is_me": row["user_id"] == user_id,
+                    "is_me": row["user_id"] == user_id
+                    or (
+                        me_nom is not None and row["name"] == me_nom
+                    ),
                 }
             )
         actionnaires.sort(

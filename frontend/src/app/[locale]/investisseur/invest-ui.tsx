@@ -200,6 +200,20 @@ export function useApercu(): number | null {
   return uid;
 }
 
+/* Aperçu « avant création du compte » : ?apercu_p=<partner_id>
+   (ligne Parts & actionnaires) — le portail se rend tel que cet
+   actionnaire le verra une fois son compte créé. */
+export function useApercuPartenaire(): number | null {
+  const [pid, setPid] = useState<number | null>(null);
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get(
+      "apercu_p"
+    );
+    setPid(p ? Number(p) || null : null);
+  }, []);
+  return pid;
+}
+
 export function investApiBase(apercuUserId: number | null): string {
   return apercuUserId
     ? `/api/v1/invest/admin/apercu/${apercuUserId}`

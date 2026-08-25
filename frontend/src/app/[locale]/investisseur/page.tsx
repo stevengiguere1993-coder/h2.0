@@ -31,12 +31,16 @@ import {
   ValueChart
 } from "./invest-ui";
 
-type Mode = "global" | "me" | number;
+//: `p<partner_id>` = aperçu d'un actionnaire SANS compte (fiche
+//: entreprise) — le portail tel qu'il le verra une fois activé.
+type Mode = "global" | "me" | number | `p${number}`;
 
 type InvestisseurLite = {
-  user_id: number;
+  user_id: number | null;
   name: string;
-  email: string;
+  email: string | null;
+  has_account?: boolean;
+  partner_id: number | null;
 };
 
 export default function PortefeuillePage() {
@@ -60,7 +64,14 @@ export default function PortefeuillePage() {
     if (userLoading || !user || mode !== null) return;
     // Laisse useApercu lire l'URL (1er render → null puis valeur).
     const t = setTimeout(() => {
-      setMode(apercu ?? (isAdmin ? "global" : "me"));
+      const pp = new URLSearchParams(window.location.search).get(
+        "apercu_p"
+      );
+      setMode(
+        pp && Number(pp)
+          ? (`p${Number(pp)}` as Mode)
+          : apercu ?? (isAdmin ? "global" : "me")
+      );
     }, 0);
     return () => clearTimeout(t);
   }, [userLoading, user, isAdmin, apercu, mode]);
@@ -88,11 +99,14 @@ export default function PortefeuillePage() {
           ? "/api/v1/invest/admin/portefeuille-global"
           : mode === "me"
           ? "/api/v1/invest/me/portefeuille"
-          : `/api/v1/invest/admin/apercu/${mode}/portefeuille`;
+          : typeof mode === "number"
+          ? `/api/v1/invest/admin/apercu/${mode}/portefeuille`
+          : `/api/v1/invest/admin/apercu-partenaire/${mode.slice(1)}/portefeuille`;
       const res = await authedFetch(url);
       if (!res.ok) throw new Error(`http_${res.status}`);
       setData((await res.json()) as Portefeuille);
     } catch {
+      setData(null);
       setError("Chargement du portefeuille impossible. Réessayez.");
     } finally {
       setLoading(false);
@@ -116,9 +130,15 @@ export default function PortefeuillePage() {
   }
 
   const isGlobal = mode === "global";
+  const isApercuPartenaire =
+    typeof mode === "string" && mode !== "global" && mode !== "me";
   const viewedInvestor =
     typeof mode === "number"
       ? investisseurs.find((i) => i.user_id === mode)
+      : isApercuPartenaire
+      ? investisseurs.find(
+          (i) => i.partner_id === Number(mode.slice(1))
+        )
       : null;
   const firstName = user?.first_name || "";
 
@@ -164,7 +184,11 @@ export default function PortefeuillePage() {
               onChange={(e) => {
                 const v = e.target.value;
                 setMode(
-                  v === "global" || v === "me" ? v : Number(v)
+                  v === "global" || v === "me"
+                    ? v
+                    : v.startsWith("p")
+                    ? (v as Mode)
+                    : Number(v)
                 );
               }}
               className="input min-w-0 flex-1 text-xs sm:max-w-xs"
@@ -175,13 +199,39 @@ export default function PortefeuillePage() {
               <option value="me">
                 Mes participations — mes projets activés à mon nom
               </option>
-              {investisseurs.length > 0 ? (
+              {investisseurs.some((i) => i.user_id !== null) ? (
                 <optgroup label="Voir comme un investisseur">
-                  {investisseurs.map((i) => (
-                    <option key={i.user_id} value={String(i.user_id)}>
-                      {i.name} ({i.email})
-                    </option>
-                  ))}
+                  {investisseurs
+                    .filter((i) => i.user_id !== null)
+                    .map((i) => (
+                      <option
+                        key={`u${i.user_id}`}
+                        value={String(i.user_id)}
+                      >
+                        {i.name}
+                        {i.email ? ` (${i.email})` : ""}
+                      </option>
+                    ))}
+                </optgroup>
+              ) : null}
+              {investisseurs.some(
+                (i) => i.user_id === null && i.partner_id !== null
+              ) ? (
+                <optgroup label="Aperçu — compte pas encore créé">
+                  {investisseurs
+                    .filter(
+                      (i) =>
+                        i.user_id === null && i.partner_id !== null
+                    )
+                    .map((i) => (
+                      <option
+                        key={`p${i.partner_id}`}
+                        value={`p${i.partner_id}`}
+                      >
+                        {i.name}
+                        {i.email ? ` (${i.email})` : ""}
+                      </option>
+                    ))}
                 </optgroup>
               ) : null}
             </select>
@@ -202,8 +252,9 @@ export default function PortefeuillePage() {
         {viewedInvestor ? (
           <div className="mb-4 flex items-center gap-2 rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2.5 text-sm text-sky-400">
             <Eye className="h-4 w-4 shrink-0" />
-            Vous voyez le portail exactement comme{" "}
-            {viewedInvestor.name} le voit.
+            {isApercuPartenaire
+              ? `Aperçu : le portail tel que ${viewedInvestor.name} le verra une fois son compte créé et activé.`
+              : `Vous voyez le portail exactement comme ${viewedInvestor.name} le voit.`}
           </div>
         ) : null}
 
@@ -358,6 +409,8 @@ export default function PortefeuillePage() {
                       : `/investisseur/projet/${p.entreprise_id}${
                           typeof mode === "number"
                             ? `?apercu=${mode}`
+                            : isApercuPartenaire
+                            ? `?apercu_p=${mode.slice(1)}`
                             : ""
                         }`;
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any

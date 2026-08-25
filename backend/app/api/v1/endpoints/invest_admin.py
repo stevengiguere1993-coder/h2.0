@@ -1679,6 +1679,106 @@ async def toggle_investor_active(
 # ─────────────────────── « Voir comme lui » ───────────────────────
 
 
+def _norm_ident(s: Optional[str]) -> str:
+    return " ".join((s or "").lower().split())
+
+
+async def _identite_partenaire_ou_404(
+    db, partner_id: int
+) -> tuple[str, Optional[str]]:
+    pr = await db.get(EntreprisePartner, partner_id)
+    if pr is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Actionnaire introuvable."
+        )
+    pu = await _resolve_partner_user(db, pr)
+    nom, email = _partner_identity(pr, pu)
+    return nom, (email or "").strip().lower() or None
+
+
+async def _parts_virtuelles_du_partenaire(
+    db, nom: str, email: Optional[str]
+) -> list[InvestParticipation]:
+    """Une participation VIRTUELLE (jamais persistée : id=0, aucun
+    flux) par compagnie active où cette identité figure dans « Parts &
+    actionnaires » — même courriel, sinon même nom."""
+    out: list[InvestParticipation] = []
+    vues: set[int] = set()
+    for pr in (
+        await db.execute(
+            select(EntreprisePartner).order_by(EntreprisePartner.id)
+        )
+    ).scalars():
+        if pr.entreprise_id in vues:
+            continue
+        ent = await db.get(Entreprise, pr.entreprise_id)
+        if ent is None or not ent.is_active:
+            continue
+        pu = await _resolve_partner_user(db, pr)
+        n, e = _partner_identity(pr, pu)
+        meme = (
+            email is not None
+            and (e or "").strip().lower() == email
+        ) or _norm_ident(n) == _norm_ident(nom)
+        if not meme:
+            continue
+        part = InvestParticipation(
+            user_id=0,
+            entreprise_id=pr.entreprise_id,
+            parts_pct=float(pr.ownership_pct or 0),
+        )
+        part.id = 0
+        part.statut = "actif"
+        part.is_visible = True
+        out.append(part)
+        vues.add(pr.entreprise_id)
+    return out
+
+
+@router.get(
+    "/apercu-partenaire/{partner_id}/portefeuille",
+    summary="Portefeuille tel que le VERRAIT un actionnaire sans "
+    "compte investisseur",
+)
+async def apercu_partenaire_portefeuille(
+    partner_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    """Prévisualisation AVANT la création du compte (demande Phil
+    2026-08-25) : participation virtuelle par compagnie de la fiche —
+    % de Parts & actionnaires, aucun flux (les apports arriveront avec
+    la sync QuickBooks une fois le compte créé)."""
+    nom, email = await _identite_partenaire_ou_404(db, partner_id)
+    parts = await _parts_virtuelles_du_partenaire(db, nom, email)
+    return await build_portefeuille(db, 0, parts_virtuelles=parts)
+
+
+@router.get(
+    "/apercu-partenaire/{partner_id}/projets/{entreprise_id}",
+    summary="Fiche projet telle que la VERRAIT un actionnaire sans "
+    "compte investisseur",
+)
+async def apercu_partenaire_projet(
+    partner_id: int,
+    entreprise_id: int,
+    db: DBSession,
+    user: CurrentUser,
+) -> dict:
+    nom, email = await _identite_partenaire_ou_404(db, partner_id)
+    parts = [
+        p
+        for p in await _parts_virtuelles_du_partenaire(db, nom, email)
+        if p.entreprise_id == entreprise_id
+    ]
+    if not parts:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "Cet actionnaire n'est pas au capital de cette compagnie.",
+        )
+    return await build_projet(
+        db, 0, entreprise_id, part_virtuelle=parts[0], me_nom=nom
+    )
+
+
 @router.get(
     "/apercu/{user_id}/portefeuille",
     summary="Portefeuille tel que VU par cet investisseur",
