@@ -60,6 +60,8 @@ from app.services.invest_invite import (
 )
 from app.services.invest_portfolio import (
     avances_par_actionnaire,
+    budget_ligne_transactions,
+    budget_optimisation_data,
     effective_parts_pct,
     entreprise_snapshot,
     flux_signes,
@@ -93,10 +95,8 @@ class ProfilPatch(BaseModel):
     show_depenses: Optional[bool] = None
     show_hypotheque: Optional[bool] = None
     show_actionnaires: Optional[bool] = None
+    show_budget: Optional[bool] = None
     show_cashflow: Optional[bool] = None
-    #: Avances aux actionnaires ($) — soustraites de l'équité.
-    #: 0 ou null pour retirer.
-    avances_actionnaires: Optional[float] = Field(default=None, ge=0)
 
 
 class NewInvestor(BaseModel):
@@ -730,6 +730,7 @@ async def get_projet(
                 profil.show_actionnaires if profil else True
             ),
             "show_cashflow": profil.show_cashflow if profil else True,
+            "show_budget": profil.show_budget if profil else True,
             "avances_actionnaires": (
                 float(profil.avances_actionnaires)
                 if profil is not None
@@ -800,26 +801,11 @@ async def patch_profil(
         "show_hypotheque",
         "show_actionnaires",
         "show_cashflow",
+        "show_budget",
     ):
         val = getattr(data, fld)
         if val is not None:
             setattr(profil, fld, bool(val))
-    if "avances_actionnaires" in data.model_fields_set:
-        # Dès que la compagnie a une connexion QuickBooks, les avances
-        # viennent de la sync (écrasées chaque nuit) — la saisie
-        # manuelle n'est qu'un REPLI sans connexion (retour Phil
-        # 2026-08-25 : « le tout est supposé venir de quickbook »).
-        from app.services.invest_portfolio import optimisation_projet_qbo
-
-        p_qbo, _ = await optimisation_projet_qbo(db, entreprise_id)
-        if p_qbo is not None:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "Les avances de cette compagnie viennent de QuickBooks "
-                "(« Synchroniser QuickBooks ») — la saisie manuelle est "
-                "désactivée.",
-            )
-        profil.avances_actionnaires = data.avances_actionnaires or None
     await db.flush()
     await db.commit()
     return {"ok": True}
@@ -1328,6 +1314,38 @@ async def projet_avances(
     d'actionnaires, appariés aux actionnaires de la fiche."""
     await _load_entreprise(db, entreprise_id)
     return await avances_par_actionnaire(db, entreprise_id)
+
+
+@router.get(
+    "/projets/{entreprise_id}/budget",
+    summary="Budget du projet d'optimisation (enveloppes, dépensé, "
+    "reste) — console admin",
+)
+async def projet_budget(
+    entreprise_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    await _load_entreprise(db, entreprise_id)
+    return await budget_optimisation_data(db, entreprise_id)
+
+
+@router.get(
+    "/projets/{entreprise_id}/qbo-lignes/{ligne_id}/transactions",
+    summary="Transactions d'une enveloppe du budget — console admin",
+)
+async def projet_budget_txns(
+    entreprise_id: int, ligne_id: int, db: DBSession, user: CurrentUser
+) -> list:
+    await _load_entreprise(db, entreprise_id)
+    try:
+        return await budget_ligne_transactions(
+            db, entreprise_id, ligne_id
+        )
+    except LookupError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Enveloppe introuvable."
+        )
+    except Exception as exc:  # noqa: BLE001 — message propre à l'UI
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
 
 
 # ───────── Synchronisation QuickBooks (avances d'actionnaires) ─────────

@@ -100,6 +100,24 @@ class _FakeQbo:
         return []
 
     async def report(self, name: str, **params):
+        if name == "ProfitAndLoss":
+            # Une colonne de totaux : le compte 77 a dépensé 850 $.
+            return {
+                "Rows": {
+                    "Row": [
+                        {
+                            "type": "Data",
+                            "ColData": [
+                                {
+                                    "value": "Travaux et entretien",
+                                    "id": "77",
+                                },
+                                {"value": "850.00"},
+                            ],
+                        }
+                    ]
+                }
+            }
         # BalanceSheet mensuel minimal : colonne de référence + juillet.
         assert name == "BalanceSheet"
         return {
@@ -355,34 +373,100 @@ def test_avances_par_actionnaire_soldes_quickbooks(
     assert r2.json()["statut"] == "connecte"
 
 
-def test_avances_manuelles_bloquees_si_connexion_qbo(
-    client, auth_headers, invest_ids, run
+def test_avances_jamais_saisies_a_la_main(
+    client, auth_headers, invest_ids
 ):
-    """Retour Phil 2026-08-25 : « le tout est supposé venir de
-    quickbook » — la compagnie a une connexion QBO, donc la saisie
-    manuelle des avances est refusée ; le repli manuel reste permis
-    pour une compagnie SANS connexion."""
+    """Retour Phil 2026-08-25 : « Enlève la saisie manuelle » — le champ
+    n'existe plus dans le PATCH du profil ; la valeur reste celle de la
+    synchronisation QuickBooks."""
     eid = invest_ids["entreprise_id"]
     r = client.patch(
         f"/api/v1/invest/admin/projets/{eid}/profil",
-        json={"avances_actionnaires": 123456},
+        json={"avances_actionnaires": 123456, "show_budget": True},
         headers=auth_headers,
     )
-    assert r.status_code == 409, r.text
-
-    async def _ent_sans_qbo() -> int:
-        async with TestSessionLocal() as s:
-            e = Entreprise(name="INC Sans QBO Drill")
-            s.add(e)
-            await s.flush()
-            eid2 = e.id
-            await s.commit()
-            return eid2
-
-    eid2 = run(_ent_sans_qbo())
-    r2 = client.patch(
-        f"/api/v1/invest/admin/projets/{eid2}/profil",
-        json={"avances_actionnaires": 123456},
-        headers=auth_headers,
+    assert r.status_code == 200, r.text
+    r2 = client.get(
+        f"/api/v1/invest/admin/projets/{eid}", headers=auth_headers
     )
     assert r2.status_code == 200, r2.text
+    assert r2.json()["profil"]["avances_actionnaires"] is None
+
+
+def test_budget_du_projet_pour_l_investisseur(
+    client, invest_headers, fake_qbo, invest_ids, run
+):
+    """Le portail montre les enveloppes du budget d'optimisation avec
+    le dépensé réel QuickBooks, et chaque enveloppe s'ouvre sur ses
+    transactions + factures (retour Phil 2026-08-25 : « je veux que mes
+    investisseurs puissent voir où est-ce que leur argent a été
+    dépensé »)."""
+    eid = invest_ids["entreprise_id"]
+
+    async def _lignes() -> dict:
+        from sqlalchemy import select as _select
+
+        from app.models.optimisation import (
+            OptimisationBudgetLigne,
+            OptimisationProjet,
+        )
+
+        async with TestSessionLocal() as s:
+            pid = (
+                await s.execute(
+                    _select(OptimisationProjet.id).where(
+                        OptimisationProjet.entreprise_id == eid
+                    )
+                )
+            ).scalar_one()
+            l1 = OptimisationBudgetLigne(
+                projet_id=pid,
+                nom="Travaux",
+                budget_montant=10000,
+                qbo_accounts_json='[{"id": "77", "name": "Travaux"}]',
+            )
+            l2 = OptimisationBudgetLigne(
+                projet_id=pid, nom="Divers", budget_montant=5000,
+            )
+            s.add_all([l1, l2])
+            await s.flush()
+            ids = {"l1": l1.id, "l2": l2.id}
+            await s.commit()
+            return ids
+
+    ids = run(_lignes())
+
+    r = client.get(
+        f"/api/v1/invest/me/projets/{eid}/budget",
+        headers=invest_headers,
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["statut"] == "connecte", data
+    par_nom = {l["nom"]: l for l in data["lignes"]}
+    # Dépensé réel du P&L QuickBooks (850 $ sur le compte 77).
+    assert par_nom["Travaux"]["depense"] == 850.0
+    assert par_nom["Travaux"]["reste"] == 9150.0
+    assert par_nom["Divers"]["depense"] == 0.0
+    assert data["total"]["budget"] == 15000.0
+
+    # L'enveloppe s'ouvre sur SES transactions, factures comprises.
+    r2 = client.get(
+        f"/api/v1/invest/me/projets/{eid}"
+        f"/qbo-lignes/{ids['l1']}/transactions",
+        headers=invest_headers,
+    )
+    assert r2.status_code == 200, r2.text
+    rows = r2.json()
+    assert {x["txn_id"] for x in rows} == {"501", "601"}
+    par_id = {x["txn_id"]: x for x in rows}
+    assert par_id["601"]["montant_impute"] == 600.0
+    assert par_id["601"]["pieces"][0]["att_id"] == "att-51"
+
+    # Enveloppe inexistante (ou d'un autre projet) → 404 propre.
+    r3 = client.get(
+        f"/api/v1/invest/me/projets/{eid}"
+        "/qbo-lignes/999999/transactions",
+        headers=invest_headers,
+    )
+    assert r3.status_code == 404, r3.text

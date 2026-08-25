@@ -43,6 +43,7 @@ import {
   ImmeubleRow,
   NormalisesPanel,
   PhaseBadge,
+  BudgetOptimisationPanel,
   QboReelsPanel,
   SerieMois,
   Timeline,
@@ -107,6 +108,7 @@ type AdminProjet = {
     show_hypotheque: boolean;
     show_actionnaires: boolean;
     show_cashflow: boolean;
+    show_budget: boolean;
     avances_actionnaires: number | null;
   };
   immeubles: (ImmeubleRow & {
@@ -751,6 +753,9 @@ export default function AdminProjetPage() {
           <QboReelsPanel
             fetchPath={`/api/v1/invest/admin/projets/${entrepriseId}/qbo-reels`}
           />
+          <BudgetOptimisationPanel
+            fetchPath={`/api/v1/invest/admin/projets/${entrepriseId}/budget`}
+          />
         </div>
 
         <h2 className="mb-3 mt-8 text-base font-semibold text-white">
@@ -1028,47 +1033,17 @@ export default function AdminProjetPage() {
                 <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
                   Avances aux actionnaires ($)
                 </p>
-                {data.qbo_sync ? (
-                  <>
-                    <p className="input w-full cursor-default bg-white/[0.04] text-xs tabular-nums text-white/70">
-                      {fmtMoney(data.profil.avances_actionnaires ?? 0)}
-                    </p>
-                    <p className="mt-1 text-[10px] text-white/35">
-                      Synchronisé de QuickBooks
-                      {data.qbo_sync.at
-                        ? ` (dernière sync : ${fmtDate(data.qbo_sync.at)})`
-                        : ""}{" "}
-                      — se met à jour chaque nuit et via « Synchroniser
-                      QuickBooks ». Équité = valeur − hypothèques −
-                      avances.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <input
-                      type="number"
-                      min="0"
-                      step="1000"
-                      defaultValue={data.profil.avances_actionnaires ?? ""}
-                      onBlur={(e) => {
-                        const v = e.target.value
-                          ? Number(e.target.value)
-                          : 0;
-                        if (v !== (data.profil.avances_actionnaires ?? 0)) {
-                          void patchProfil({ avances_actionnaires: v });
-                        }
-                      }}
-                      placeholder="0"
-                      className="input w-full text-xs tabular-nums"
-                    />
-                    <p className="mt-1 text-[10px] text-white/35">
-                      Équité = valeur − hypothèques − avances. Saisie de
-                      REPLI — dès que la compagnie aura sa connexion
-                      QuickBooks, la valeur viendra de la
-                      synchronisation (et ce champ se verrouillera).
-                    </p>
-                  </>
-                )}
+                <p className="input w-full cursor-default bg-white/[0.04] text-xs tabular-nums text-white/70">
+                  {fmtMoney(data.profil.avances_actionnaires ?? 0)}
+                </p>
+                <p className="mt-1 text-[10px] text-white/35">
+                  {data.qbo_sync?.at
+                    ? `Synchronisé de QuickBooks (dernière sync : ${fmtDate(
+                        data.qbo_sync.at
+                      )}) — se met à jour chaque nuit et via « Synchroniser QuickBooks ».`
+                    : "Sera rempli par « Synchroniser QuickBooks » dès que la compagnie aura sa connexion QuickBooks — aucune saisie manuelle."}{" "}
+                  Équité = valeur − hypothèques − avances.
+                </p>
               </div>
 
               <p className="mb-1 mt-4 text-[10px] font-semibold uppercase tracking-wider text-white/40">
@@ -1096,6 +1071,11 @@ export default function AdminProjetPage() {
                       "show_cashflow",
                       "Cash-flow",
                       "cash-flow moyen + tableau des réels QuickBooks"
+                    ],
+                    [
+                      "show_budget",
+                      "Budget d'optimisation",
+                      "enveloppes du projet, budget vs dépensé réel, factures"
                     ]
                   ] as const
                 ).map(([key, label, hint]) => (

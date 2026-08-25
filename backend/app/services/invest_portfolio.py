@@ -1096,6 +1096,156 @@ async def avances_par_actionnaire(
     }
 
 
+async def budget_optimisation_data(
+    db: AsyncSession, entreprise_id: int
+) -> dict:
+    """Le tableau Budget du projet d'optimisation, résumé pour le
+    portail investisseur (retour Phil 2026-08-25 : « je veux que mes
+    investisseurs puissent voir où est-ce que leur argent a été
+    dépensé ») : par enveloppe → budget, dépensé réel QuickBooks,
+    reste. MÊME calcul que la page Optimisation : somme des comptes
+    mappés (P&L + immobilisations du bilan) ; l'enveloppe « détention »
+    (deficit_operation) = déficit d'opération du cashflow. Statuts :
+    aucun_projet | sans_qbo | erreur | connecte."""
+    p, premier = await optimisation_projet_qbo(db, entreprise_id)
+    if premier is None:
+        return {"statut": "aucun_projet"}
+    if p is None:
+        return {"statut": "sans_qbo", "projet_nom": premier.name}
+
+    import json as _json
+
+    from app.models.optimisation import OptimisationBudgetLigne
+    from app.services.qbo_optimisation import (
+        cashflow_mensuel,
+        depenses_par_compte,
+    )
+
+    lignes = (
+        await db.execute(
+            select(OptimisationBudgetLigne)
+            .where(OptimisationBudgetLigne.projet_id == p.id)
+            .order_by(OptimisationBudgetLigne.id)
+        )
+    ).scalars().all()
+    debut = (p.date_debut or date(2000, 1, 1)).isoformat()
+    try:
+        totaux = await depenses_par_compte(
+            p.qbo_scope, debut, date.today().isoformat()
+        )
+    except Exception as exc:  # noqa: BLE001 — message propre à l'UI
+        log.info("invest budget entreprise #%s: %s", entreprise_id, exc)
+        return {"statut": "erreur", "erreur": str(exc)[:300]}
+
+    def _somme(raw) -> float:
+        try:
+            comptes = _json.loads(raw or "[]")
+        except Exception:  # noqa: BLE001 — mapping illisible = 0
+            return 0.0
+        return sum(
+            float(totaux.get(str(c.get("id")), 0.0)) for c in comptes
+        )
+
+    ecart_total = None
+    if any(l.mode == "deficit_operation" for l in lignes):
+        try:
+            cf = await cashflow_mensuel(
+                p.qbo_scope,
+                debut,
+                date.today().isoformat(),
+                hypotheque_account_id=p.qbo_hypotheque_account_id,
+            )
+            ecart_total = float((cf or {}).get("total", {}).get("ecart", 0))
+        except Exception as exc:  # noqa: BLE001 — jamais bloquant
+            log.info(
+                "invest budget cashflow #%s: %s", entreprise_id, exc
+            )
+
+    rows: list[dict] = []
+    total_budget = total_depense = 0.0
+    for l in lignes:
+        if l.mode == "deficit_operation":
+            dep = (
+                round(-ecart_total, 2)
+                if ecart_total is not None
+                else None
+            )
+        else:
+            dep = round(_somme(l.qbo_accounts_json), 2)
+        budget = float(l.budget_montant or 0)
+        rows.append(
+            {
+                "ligne_id": l.id,
+                "nom": l.nom,
+                "mode": l.mode,
+                "budget": round(budget, 2),
+                "depense": dep,
+                "reste": (
+                    round(budget - dep, 2) if dep is not None else None
+                ),
+            }
+        )
+        total_budget += budget
+        total_depense += dep or 0.0
+    return {
+        "statut": "connecte",
+        "projet_nom": p.name,
+        "date_debut": p.date_debut.isoformat() if p.date_debut else None,
+        "lignes": rows,
+        "total": {
+            "budget": round(total_budget, 2),
+            "depense": round(total_depense, 2),
+            "reste": round(total_budget - total_depense, 2),
+        },
+    }
+
+
+async def budget_ligne_transactions(
+    db: AsyncSession, entreprise_id: int, ligne_id: int
+) -> list:
+    """Transactions QuickBooks derrière le « dépensé » d'une enveloppe
+    du budget, factures jointes comprises. LookupError si l'enveloppe
+    n'appartient pas au projet de la compagnie ; RuntimeError sans
+    connexion QuickBooks."""
+    p, _ = await optimisation_projet_qbo(db, entreprise_id)
+    if p is None:
+        raise RuntimeError(
+            "Aucune connexion QuickBooks pour cette compagnie."
+        )
+    import json as _json
+
+    from app.models.optimisation import OptimisationBudgetLigne
+
+    ligne = (
+        await db.execute(
+            select(OptimisationBudgetLigne).where(
+                OptimisationBudgetLigne.id == ligne_id,
+                OptimisationBudgetLigne.projet_id == p.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if ligne is None:
+        raise LookupError("Enveloppe introuvable.")
+    try:
+        comptes = {
+            str(c.get("id"))
+            for c in _json.loads(ligne.qbo_accounts_json or "[]")
+            if c.get("id") is not None
+        }
+    except Exception:  # noqa: BLE001
+        comptes = set()
+    if not comptes:
+        return []
+    from app.services.qbo_optimisation import transactions_depenses
+
+    return await transactions_depenses(
+        p.qbo_scope,
+        comptes,
+        (p.date_debut or date(2000, 1, 1)).isoformat(),
+        date.today().isoformat(),
+    )
+
+
 async def qbo_txns_compte_data(
     db: AsyncSession,
     entreprise_id: int,
