@@ -31,6 +31,7 @@ from app.models.invest_portal import (
     InvestParticipation,
 )
 from app.services.invest_portfolio import (
+    avances_par_actionnaire,
     effective_parts_pct,
     entreprise_snapshot,
     flux_signes,
@@ -223,35 +224,12 @@ async def build_projet(
     # compte connecté.
     actionnaires: list[dict] = []
     if show_actionnaires:
-        # Capital ENCORE investi de chaque actionnaire (apports −
-        # remboursements, plancher 0) — demande Phil 2026-08-25 : « mets
-        # les montants de restant de chacun des actionnaires ». None =
-        # pas de compte investisseur lié (rien à calculer).
-        restants: dict[int, float] = {}
-        for autre in (
-            await db.execute(
-                select(InvestParticipation).where(
-                    InvestParticipation.entreprise_id == entreprise_id
-                )
-            )
-        ).scalars():
-            f_autre = (
-                flux
-                if autre.id == part.id
-                else await _flux_of(db, autre.id)
-            )
-            restants[autre.user_id] = kpis_participation(f_autre, None)[
-                "capital_actuel"
-            ]
         for row in directory["rows"]:
             actionnaires.append(
                 {
                     "name": row["name"],
                     "parts_pct": row["ownership_pct"],
                     "is_me": row["user_id"] == user_id,
-                    "capital_actuel": restants.get(row["user_id"])
-                    if row["user_id"] is not None
-                    else None,
                 }
             )
         actionnaires.sort(
@@ -515,6 +493,37 @@ async def my_projet_qbo_piece(
         )[:120]
         entetes["Content-Disposition"] = f'inline; filename="{propre}"'
     return Response(content=contenu, media_type=media, headers=entetes)
+
+
+@router.get(
+    "/me/projets/{entreprise_id}/avances",
+    summary="Capital encore investi par actionnaire (soldes "
+    "QuickBooks) — investisseur",
+)
+async def my_projet_avances(
+    entreprise_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    """Soldes LIVE des comptes d'avances d'actionnaires, appariés aux
+    actionnaires de la fiche — la liste « Capital encore investi par
+    actionnaire » de la carte Ma participation. Respecte
+    ``show_actionnaires``."""
+    part = (
+        await db.execute(
+            select(InvestParticipation.id).where(
+                InvestParticipation.user_id == user.id,
+                InvestParticipation.entreprise_id == entreprise_id,
+                InvestParticipation.is_visible.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if part is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Projet introuvable."
+        )
+    profil = await get_or_default_profil(db, entreprise_id)
+    if profil is not None and not profil.show_actionnaires:
+        return {"statut": "masque"}
+    return await avances_par_actionnaire(db, entreprise_id)
 
 
 @router.get(

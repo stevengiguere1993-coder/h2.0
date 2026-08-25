@@ -1013,6 +1013,89 @@ async def optimisation_projet_qbo(
     return avec_qbo, projets[0]
 
 
+async def avances_par_actionnaire(
+    db: AsyncSession, entreprise_id: int
+) -> dict:
+    """Soldes LIVE des comptes d'avances d'actionnaires — la MÊME
+    lecture QuickBooks que l'encadré « Avances des actionnaires » de la
+    page Optimisation — appariés aux actionnaires de la fiche
+    entreprise avec les mêmes règles de nom que la sync nocturne.
+
+    Le solde d'un compte d'avances = ce que la compagnie doit encore à
+    l'actionnaire = son capital encore investi. C'est la liste que Phil
+    veut voir coller à QuickBooks (retour 2026-08-25). Statuts :
+    aucun_projet | sans_qbo | erreur | connecte."""
+    p, premier = await optimisation_projet_qbo(db, entreprise_id)
+    if premier is None:
+        return {"statut": "aucun_projet"}
+    if p is None:
+        return {"statut": "sans_qbo", "projet_nom": premier.name}
+
+    from app.services.qbo_optimisation import avances_actionnaires
+
+    try:
+        av = await avances_actionnaires(
+            p.qbo_scope,
+            (p.date_debut or date(2000, 1, 1)).isoformat(),
+            date.today().isoformat(),
+            p.avances_accounts_json,
+        )
+    except Exception as exc:  # noqa: BLE001 — message propre à l'UI
+        log.info("invest avances entreprise #%s: %s", entreprise_id, exc)
+        return {"statut": "erreur", "erreur": str(exc)[:300]}
+
+    # Appariement compte ↔ actionnaire : mêmes jetons de nom que la
+    # sync (ordre des mots indifférent, mots génériques ignorés).
+    from app.models.user import User
+    from app.services.invest_qbo_sync import _match, _tokens
+
+    directory = await partner_directory(db, entreprise_id)
+    lignes: list[dict] = []
+    candidats: list[set] = []
+    for row in directory["rows"]:
+        noms = {frozenset(_tokens(row["name"]))}
+        if row["user_id"]:
+            u = await db.get(User, row["user_id"])
+            if u:
+                noms.add(
+                    frozenset(
+                        _tokens(f"{u.first_name or ''} {u.last_name or ''}")
+                    )
+                )
+                if u.last_name and len(u.last_name) > 3:
+                    noms.add(frozenset(_tokens(u.last_name)))
+        candidats.append({n for n in noms if n})
+        lignes.append({"name": row["name"], "solde": None, "comptes": []})
+
+    autres: list[dict] = []
+    for compte in av.get("comptes") or []:
+        toks = _tokens(str(compte.get("nom") or ""))
+        solde = float(compte.get("solde") or 0)
+        matches = [
+            i for i, noms in enumerate(candidats) if _match(noms, toks)
+        ]
+        if len(matches) == 1:
+            ligne = lignes[matches[0]]
+            ligne["solde"] = round((ligne["solde"] or 0.0) + solde, 2)
+            ligne["comptes"].append(str(compte.get("nom") or ""))
+        elif abs(solde) >= 0.005:
+            # Compte actif qu'on ne sait pas rattacher : montré quand
+            # même — rien ne doit disparaître de la liste.
+            autres.append(
+                {
+                    "nom": str(compte.get("nom") or "?"),
+                    "solde": round(solde, 2),
+                }
+            )
+    return {
+        "statut": "connecte",
+        "projet_nom": p.name,
+        "actionnaires": lignes,
+        "autres_comptes": autres,
+        "total": av.get("total"),
+    }
+
+
 async def qbo_txns_compte_data(
     db: AsyncSession,
     entreprise_id: int,
