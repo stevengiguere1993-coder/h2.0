@@ -36,6 +36,7 @@ import {
 type Mode = "global" | "me" | number | `p${number}`;
 
 type InvestisseurLite = {
+  key: string;
   user_id: number | null;
   name: string;
   email: string | null;
@@ -215,7 +216,7 @@ export default function PortefeuillePage() {
                     .filter((i) => i.user_id !== null)
                     .map((i) => (
                       <option
-                        key={`u${i.user_id}`}
+                        key={i.key}
                         value={String(i.user_id)}
                       >
                         {i.name}
@@ -235,7 +236,7 @@ export default function PortefeuillePage() {
                     )
                     .map((i) => (
                       <option
-                        key={`p${i.partner_id}`}
+                        key={i.key}
                         value={`p${i.partner_id}`}
                       >
                         {i.name}
