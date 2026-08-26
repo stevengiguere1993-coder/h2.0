@@ -804,7 +804,8 @@ def test_releve_en_apercu_partenaire_et_sans_tri(
         json={
             "avances_accounts_json": (
                 '[{"id": "903", "name": "Avances actionnaire — '
-                'Partenaire Fantome"}]'
+                'Partenaire Fantome"}, {"id": "900", "name": '
+                '"Avances actionnaire — Investisseur Drill"}]'
             )
         },
         headers=auth_headers,
@@ -838,7 +839,10 @@ def test_releve_en_apercu_partenaire_et_sans_tri(
     assert "TRI" not in texte
     assert "Partenaire Fantome" in texte
     # Capital actuellement investi = solde QuickBooks (4 200 $), pas 0.
-    assert "4 200" in texte.replace(chr(160), " ")
+    texte_norm = texte.replace(chr(160), " ")
+    assert "4 200" in texte_norm
+    # Les avances des AUTRES actionnaires figurent aussi au relevé.
+    assert "12 500" in texte_norm
 
 
 def test_compte_administrateur_jamais_fusionne(

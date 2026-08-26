@@ -602,8 +602,8 @@ function ParticipationHero({
         </span>
       </div>
 
-      {/* Les deux chiffres qui comptent */}
-      <div className="grid grid-cols-2 gap-3">
+      {/* Les chiffres qui comptent */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <div className="rounded-xl border border-brand-800 bg-brand-950/50 p-3">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
             Valeur de mes parts
@@ -638,6 +638,19 @@ function ParticipationHero({
               : maLigneAvances
               ? "solde de vos avances d'actionnaire (QuickBooks)"
               : "apports − remboursements"}
+          </p>
+        </div>
+        <div className="rounded-xl border border-accent-500/40 bg-brand-950/50 p-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+            Valeur totale
+          </p>
+          <p className="mt-1 font-display text-2xl font-bold tabular-nums text-accent-400">
+            {fmtMoney(
+              (capitalAffiche ?? 0) + (data.valeur_parts || 0)
+            )}
+          </p>
+          <p className="mt-0.5 text-[10px] text-white/35">
+            capital investi + valeur des parts
           </p>
         </div>
       </div>
