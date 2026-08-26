@@ -1489,12 +1489,29 @@ async def list_investisseurs(db: DBSession, user: CurrentUser) -> List[dict]:
             continue
         pu = await _resolve_partner_user(db, pr)
         name, email = _partner_identity(pr, pu)
+        # Groupement par NOM d'actionnaire : deux identités distinctes
+        # qui partagent un courriel ou un compte lié (Horizon Services
+        # Immobiliers et MGV Investissements sur le même courriel,
+        # Philippe et sa holding sur le même compte) ne doivent JAMAIS
+        # fusionner en une seule entrée — audit Phil 2026-08-26 :
+        # « Horizon Services Immobiliers n'est pas là ».
         key = (
-            f"user:{pu.id}"
-            if pu
-            else (f"email:{email}" if email else f"partner:{pr.id}")
+            f"nom:{_norm_ident(name)}"
+            if _norm_ident(name)
+            else f"partner:{pr.id}"
         )
         g = _group_for(key, name, email, pu)
+        # Une ligne suivante du même actionnaire peut apporter le
+        # compte ou le courriel qui manquait au groupe.
+        if pu and not g["has_account"]:
+            g["user_id"] = pu.id
+            g["has_account"] = True
+            g["role"] = pu.role
+            g["is_active"] = pu.is_active
+            g["must_change_password"] = pu.must_change_password
+        if not g["email"] and email:
+            g["email"] = email
+            g["missing_email"] = False
         if g["partner_id"] is None:
             g["partner_id"] = pr.id
         if all(e["id"] != ent.id for e in g["entreprises"]):
@@ -1515,8 +1532,13 @@ async def list_investisseurs(db: DBSession, user: CurrentUser) -> List[dict]:
         pu = await db.get(User, uid)
         if pu is None:
             continue
-        key = f"user:{uid}"
-        g = _group_for(key, _user_display(pu), pu.email, pu)
+        nom_u = _user_display(pu)
+        key = (
+            f"nom:{_norm_ident(nom_u)}"
+            if _norm_ident(nom_u)
+            else f"user:{uid}"
+        )
+        g = _group_for(key, nom_u, pu.email, pu)
         for p in plist:
             ent = ents.get(p.entreprise_id)
             if ent and all(e["id"] != ent.id for e in g["entreprises"]):

@@ -986,3 +986,47 @@ def test_compte_va_a_l_actionnaire_le_plus_specifique(
     assert par_nom["Rene Drill"]["solde"] == 700.0
     assert par_nom["Investisseur Drill"]["solde"] in (None, 0.0)
     assert data["autres_comptes"] == []
+
+
+def test_identites_distinctes_meme_courriel(
+    client, auth_headers, invest_ids, run
+):
+    """Audit Phil 2026-08-26 : Horizon Services Immobiliers absent de
+    la liste — deux actionnaires DIFFÉRENTS qui partagent un courriel
+    (ou un compte lié) fusionnaient en une seule entrée. Le groupement
+    se fait maintenant par NOM : chaque identité garde sa ligne et ses
+    compagnies."""
+
+    async def _seed() -> None:
+        async with TestSessionLocal() as s:
+            ent2 = Entreprise(name="INC Fusion Test")
+            s.add(ent2)
+            await s.flush()
+            s.add(
+                EntreprisePartner(
+                    entreprise_id=ent2.id,
+                    partner_name="Autre Holding",
+                    partner_email="investisseur.drill@smoke.test",
+                    ownership_pct=100.0,
+                )
+            )
+            await s.commit()
+
+    run(_seed())
+    r = client.get(
+        "/api/v1/invest/admin/investisseurs", headers=auth_headers
+    )
+    assert r.status_code == 200, r.text
+    par_nom = {g["name"]: g for g in r.json()}
+    # Les deux identités existent, chacune avec SES compagnies.
+    assert "Investisseur Drill" in par_nom
+    assert "Autre Holding" in par_nom
+    assert [e["name"] for e in par_nom["Autre Holding"]["entreprises"]] == [
+        "INC Fusion Test"
+    ]
+    # Le courriel partagé résout quand même le compte existant.
+    assert par_nom["Autre Holding"]["has_account"] is True
+    assert (
+        par_nom["Autre Holding"]["user_id"]
+        == par_nom["Investisseur Drill"]["user_id"]
+    )
