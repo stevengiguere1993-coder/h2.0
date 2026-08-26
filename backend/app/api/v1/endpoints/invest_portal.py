@@ -638,7 +638,9 @@ async def my_releve_pdf(
     portefeuille = await ajuster_capital_avec_soldes_qbo(
         db, portefeuille, user_id=user.id
     )
-    pdf = await build_releve_pdf(db, user, year, portefeuille)
+    pdf = await build_releve_pdf(
+        db, user, year, portefeuille, ident_user_id=user.id
+    )
     return Response(
         content=pdf,
         media_type="application/pdf",

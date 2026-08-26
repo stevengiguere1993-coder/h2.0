@@ -1048,9 +1048,10 @@ async def avances_par_actionnaire(
     # sync (ordre des mots indifférent, mots génériques ignorés).
     from app.models.user import User
     from app.services.invest_qbo_sync import (
-        _match,
         _tokens,
         est_compte_tiers,
+        meilleur_candidat,
+        parse_mois_qbo,
     )
 
     directory = await partner_directory(db, entreprise_id)
@@ -1069,7 +1070,14 @@ async def avances_par_actionnaire(
                 if u.last_name and len(u.last_name) > 3:
                     noms.add(frozenset(_tokens(u.last_name)))
         candidats.append({n for n in noms if n})
-        lignes.append({"name": row["name"], "solde": None, "comptes": []})
+        lignes.append(
+            {
+                "name": row["name"],
+                "solde": None,
+                "comptes": [],
+                "mouvements": [],
+            }
+        )
 
     autres: list[dict] = []
     for compte in av.get("comptes") or []:
@@ -1086,11 +1094,9 @@ async def avances_par_actionnaire(
                     }
                 )
             continue
-        matches = [
-            i for i, noms in enumerate(candidats) if _match(noms, toks)
-        ]
-        if len(matches) == 1:
-            ligne = lignes[matches[0]]
+        gagnant = meilleur_candidat(candidats, toks)
+        if gagnant is not None:
+            ligne = lignes[gagnant]
             ligne["solde"] = round((ligne["solde"] or 0.0) + solde, 2)
             # Détail PAR COMPTE : quand plusieurs comptes s'agrègent
             # sous un actionnaire (ex. l'avance de sa holding + son dû
@@ -1103,6 +1109,48 @@ async def avances_par_actionnaire(
                     "solde": round(solde, 2),
                 }
             )
+            # Mouvements = les VARIATIONS mensuelles du compte, lues de
+            # QuickBooks — visibles pour TOUS les actionnaires, compte
+            # investisseur activé ou non (retour Phil 2026-08-26 :
+            # « plein d'activités dans IM1 et rien dans 8900 » — la
+            # sync ne créait des flux que pour les participations).
+            mois_rows = compte.get("mois") or []
+            if mois_rows:
+                r0 = mois_rows[0]
+                initial = float(r0.get("solde") or 0) - float(
+                    r0.get("variation") or 0
+                )
+                d0 = parse_mois_qbo(str(r0.get("mois") or ""))
+                if abs(initial) > 0.005:
+                    ligne["mouvements"].append(
+                        {
+                            "date": d0.isoformat() if d0 else None,
+                            "libelle": str(r0.get("mois") or ""),
+                            "type": "apport"
+                            if initial > 0
+                            else "remboursement",
+                            "montant": round(abs(initial), 2),
+                            "compte": str(compte.get("nom") or ""),
+                            "initial": True,
+                        }
+                    )
+            for rm in mois_rows:
+                variation = float(rm.get("variation") or 0)
+                if abs(variation) < 0.005:
+                    continue
+                dm = parse_mois_qbo(str(rm.get("mois") or ""))
+                ligne["mouvements"].append(
+                    {
+                        "date": dm.isoformat() if dm else None,
+                        "libelle": str(rm.get("mois") or ""),
+                        "type": "apport"
+                        if variation > 0
+                        else "remboursement",
+                        "montant": round(abs(variation), 2),
+                        "compte": str(compte.get("nom") or ""),
+                        "initial": False,
+                    }
+                )
         elif abs(solde) >= 0.005:
             # Compte actif qu'on ne sait pas rattacher : montré quand
             # même — rien ne doit disparaître de la liste.
@@ -1112,6 +1160,8 @@ async def avances_par_actionnaire(
                     "solde": round(solde, 2),
                 }
             )
+    for ligne in lignes:
+        ligne["mouvements"].sort(key=lambda m: (m["date"] or "", 0))
     return {
         "statut": "connecte",
         "projet_nom": p.name,

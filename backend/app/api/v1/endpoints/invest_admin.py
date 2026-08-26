@@ -1762,7 +1762,9 @@ async def apercu_releve_pdf(
     portefeuille = await ajuster_capital_avec_soldes_qbo(
         db, portefeuille, user_id=user_id
     )
-    pdf = await build_releve_pdf(db, target, year, portefeuille)
+    pdf = await build_releve_pdf(
+        db, target, year, portefeuille, ident_user_id=user_id
+    )
     return Response(
         content=pdf,
         media_type="application/pdf",
@@ -1801,7 +1803,7 @@ async def apercu_partenaire_releve_pdf(
     )
     fantome = User(email=email or "", first_name=nom, last_name="")
     pdf = await build_releve_pdf(
-        db, fantome, year, portefeuille, sans_flux=True
+        db, fantome, year, portefeuille, sans_flux=True, ident_nom=nom
     )
     return Response(
         content=pdf,

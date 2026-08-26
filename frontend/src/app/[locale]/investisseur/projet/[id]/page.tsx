@@ -491,6 +491,14 @@ type AvancesActionnaires = {
     name: string;
     solde: number | null;
     comptes: { nom: string; solde: number }[];
+    mouvements?: {
+      date: string | null;
+      libelle: string;
+      type: string;
+      montant: number;
+      compte: string;
+      initial?: boolean;
+    }[];
   }[];
   autres_comptes?: { nom: string; solde: number }[];
   total?: number;
@@ -553,6 +561,32 @@ function ParticipationHero({
     ? null
     : data.capital_actuel;
   const rembourse = !enAttente && capitalAffiche === 0;
+  //: Mouvements affichés : les variations QuickBooks de MA ligne
+  //: quand elles existent (même source que la tuile et la liste),
+  //: sinon les flux importés — ainsi un actionnaire SANS compte voit
+  //: quand même l'activité réelle de ses avances.
+  const mouvements = maLigneAvances?.mouvements?.length
+    ? maLigneAvances.mouvements.map((m, i) => ({
+        id: `q${i}`,
+        date: m.date,
+        libelle: m.libelle,
+        label:
+          m.type === "apport"
+            ? "Apport de capital"
+            : "Remboursement de capital",
+        type: m.type,
+        montant: m.montant,
+        note: m.compte + (m.initial ? " (solde initial)" : "")
+      }))
+    : data.flux.map((f) => ({
+        id: `f${f.id}`,
+        date: f.date_flux,
+        libelle: f.date_flux,
+        label: f.label || FLUX_LABELS[f.type] || f.type,
+        type: f.type,
+        montant: f.montant,
+        note: f.note || ""
+      }));
 
   return (
     <div className="rounded-2xl border border-accent-500/40 bg-brand-900 p-5 shadow-card">
@@ -707,34 +741,33 @@ function ParticipationHero({
         </div>
       ) : null}
 
-      {/* Mouvements */}
-      {data.flux.length > 0 ? (
+      {/* Mouvements — variations QuickBooks quand disponibles */}
+      {mouvements.length > 0 ? (
         <div className="mt-4 border-t border-brand-800 pt-3">
           <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/40">
             Mouvements
           </p>
           <ul className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
-            {data.flux.map((f) => (
+            {mouvements.map((m) => (
               <li
-                key={f.id}
+                key={m.id}
                 className="flex items-center justify-between gap-2 text-xs"
               >
                 <span className="min-w-0 truncate text-white/70">
-                  {fmtDate(f.date_flux)} —{" "}
-                  {f.label || FLUX_LABELS[f.type] || f.type}
-                  {f.note ? (
-                    <span className="text-white/35"> · {f.note}</span>
+                  {m.date ? fmtDate(m.date) : m.libelle} — {m.label}
+                  {m.note ? (
+                    <span className="text-white/35"> · {m.note}</span>
                   ) : null}
                 </span>
                 <b
                   className={`shrink-0 tabular-nums ${
-                    f.type === "apport"
+                    m.type === "apport"
                       ? "text-white/80"
                       : "text-emerald-400"
                   }`}
                 >
-                  {f.type === "apport" ? "−" : "+"}
-                  {fmtMoney(f.montant)}
+                  {m.type === "apport" ? "−" : "+"}
+                  {fmtMoney(m.montant)}
                 </b>
               </li>
             ))}
