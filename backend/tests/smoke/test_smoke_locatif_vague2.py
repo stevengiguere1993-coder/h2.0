@@ -150,9 +150,12 @@ def test_bail_resilie_mi_mois_reste_dans_le_mois_avec_badge(
     assert lignes[0]["bail_termine_le"] == str(today)
     assert lignes[0]["loyer_mensuel"] == 980.0
 
-    # Le mois SUIVANT (hors période du bail) : la ligne RESTE tant que
-    # le solde n'est pas réglé — dette à percevoir, loyer du mois à 0
-    # (règle affinée 2026-08-14, retour client).
+    # Le mois SUIVANT est un mois FUTUR : la dette d'un locataire
+    # parti se réclame au présent, elle n'est PLUS projetée dans les
+    # mois à venir (règle affinée 2026-08-26, retour Phil « pourquoi
+    # ces deux éléments en rouge en septembre ? » — remplace la règle
+    # du 2026-08-14 pour les mois futurs ; la dette reste visible dans
+    # les mois couverts et le mois courant).
     prochain = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
     ov2 = client.get(
         f"/api/v1/immobilier/loyers/overview"
@@ -160,13 +163,9 @@ def test_bail_resilie_mi_mois_reste_dans_le_mois_avec_badge(
         headers=auth_headers,
     )
     assert ov2.status_code == 200, ov2.text
-    dettes = [
-        x for x in ov2.json()["rows"] if x["bail_id"] == ids["bail_id"]
-    ]
-    assert len(dettes) == 1
-    assert dettes[0]["loyer_mensuel"] == 0.0
-    assert dettes[0]["solde_total"] > 0
-    assert dettes[0]["etat"] == "retard"
+    assert all(
+        x["bail_id"] != ids["bail_id"] for x in ov2.json()["rows"]
+    )
 
     # Le dernier loyer reste encaissable (bail résilié, mois couvert).
     p = client.post(

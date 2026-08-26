@@ -183,3 +183,51 @@ def test_echeances_suivent_la_fenetre_reglable(client, auth_headers, run):
         assert _statut() == "a_envoyer"
     finally:
         _config(6)
+
+
+def test_externe_mois_futur_sans_solde(client, auth_headers, run):
+    """Retour Phil 2026-08-26 : en septembre (mois futur), les unités
+    externes payées à date affichaient un solde rouge — rien n'est
+    encore dû pour un mois à venir : solde 0, état « attente »."""
+    from datetime import date
+
+    from app.models.immobilier import Immeuble, Logement, LogementStatus
+
+    from .conftest import TestSessionLocal
+
+    async def _seed():
+        async with TestSessionLocal() as s:
+            imm = Immeuble(
+                name="Tour Future",
+                address="10 rue Externe",
+                is_active=True,
+                gestion_externe=True,
+            )
+            s.add(imm)
+            await s.flush()
+            lg = Logement(
+                immeuble_id=imm.id,
+                numero="FUT-1",
+                status=LogementStatus.OCCUPE.value,
+                loyer_demande=650.0,
+            )
+            s.add(lg)
+            await s.commit()
+            return {"immeuble": imm.id, "logement": lg.id}
+
+    ids = run(_seed())
+    today = date.today()
+    futur = (
+        f"{today.year + 1}-01"
+        if today.month == 12
+        else f"{today.year}-{today.month + 1:02d}"
+    )
+    ext = client.get(
+        f"/api/v1/immobilier/loyers/externes?mois={futur}",
+        headers=auth_headers,
+    )
+    assert ext.status_code == 200, ext.text
+    rows = {r["logement_id"]: r for r in ext.json()["rows"]}
+    ligne = rows[ids["logement"]]
+    assert ligne["etat"] == "attente"
+    assert ligne["solde_total"] == 0.0
