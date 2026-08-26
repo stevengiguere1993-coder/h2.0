@@ -76,6 +76,8 @@ type Row = {
   montant_paye: number | null;
   paye_le: string | null;
   etat: string; // "retard" | "attente" | "paye" | "partiel"
+  //: Mois affiché payé, mais un mois antérieur du bail impayé.
+  solde_anterieur?: boolean;
   /** Bail résilié/terminé en cours de mois : la ligne reste dans le
    *  mois couvert avec un badge « Bail terminé le X » (M7). */
   bail_statut?: string;
@@ -909,7 +911,10 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                           </span>
                         ) : r.etat === "partiel" ? (
                           <span className="badge badge-amber">
-                            <AlertTriangle className="h-3 w-3" /> Partiel
+                            <AlertTriangle className="h-3 w-3" />{" "}
+                            {r.solde_anterieur
+                              ? "Solde antérieur"
+                              : "Partiel"}
                           </span>
                         ) : r.etat === "retard" ? (
                           <span className="badge badge-rose">
