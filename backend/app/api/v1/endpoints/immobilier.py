@@ -4622,9 +4622,13 @@ async def loyers_overview(
             2,
         )
         solde = max(0.0, solde)
-        if apres_fin and solde <= 0:
+        mois_futur = month_start > today.replace(day=1)
+        if apres_fin and (solde <= 0 or mois_futur):
             # Dette réglée → le locataire parti disparaît des mois que
-            # son bail ne couvrait pas (il reste dans les mois couverts).
+            # son bail ne couvrait pas. Et une dette se réclame AU
+            # PRÉSENT : on ne la projette pas dans les mois à venir
+            # (retour Phil 2026-08-26 : « pourquoi ces deux éléments en
+            # rouge en septembre ? »).
             continue
 
         total_attendu += du_mois

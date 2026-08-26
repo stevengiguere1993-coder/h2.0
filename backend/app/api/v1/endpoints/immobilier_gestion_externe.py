@@ -161,6 +161,11 @@ async def _rows_externes(
     # rapporte au mois, on garde le 1er + grâce.
     today = datetime.now(timezone.utc).date()
     en_retard = today > seuil_retard(month_start, 1)
+    #: Mois strictement FUTUR : rien n'y est encore dû — le solde
+    #: reste à zéro tant qu'aucune saisie n'existe (retour Phil
+    #: 2026-08-26 : « pourquoi je vois un solde sur Elgin en
+    #: septembre quand ils ont tous payé en août ? »).
+    mois_futur = month_start > today.replace(day=1)
 
     rows: List[PaiementExterneRow] = []
     for lg in logements:
@@ -196,7 +201,9 @@ async def _rows_externes(
                 etat=etat,
                 montant=round(recu, 2) if p is not None else None,
                 paye_le=p.paye_le if p is not None else None,
-                solde_total=round(max(0.0, (attendu or 0.0) - recu), 2),
+                solde_total=0.0
+                if mois_futur and p is None
+                else round(max(0.0, (attendu or 0.0) - recu), 2),
             )
         )
     rows.sort(

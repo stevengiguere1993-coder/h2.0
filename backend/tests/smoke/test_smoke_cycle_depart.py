@@ -554,3 +554,46 @@ def test_repute_accepte_saute_les_baux_en_relocation(
     assert ligne is not None
     assert ligne["renouvellement_status"] == "propose"
     assert ligne["relocation_dossier_id"] is not None
+
+
+def test_dette_bail_termine_pas_dans_les_mois_futurs(
+    client, auth_headers, run
+):
+    """Retour Phil 2026-08-26 : deux baux « terminés (avant terme) »
+    apparaissaient en rouge dans SEPTEMBRE (mois futur). La dette d'un
+    locataire parti se réclame au présent — visible dans le mois
+    courant, jamais projetée dans les mois à venir."""
+    today = date.today()
+    debut = (today.replace(day=1) - timedelta(days=40)).replace(day=1)
+    fin_bail = today.replace(day=1) - timedelta(days=1)
+    ids = _seed(
+        run,
+        numero="FUTUR-1",
+        date_debut=debut,
+        date_fin=fin_bail,
+        loyer=400.0,
+        bail_status=BailStatus.RESILIE.value,
+        logement_status=LogementStatus.VACANT.value,
+    )
+
+    mois_courant = today.strftime("%Y-%m")
+    ov = client.get(
+        f"/api/v1/immobilier/loyers/overview?mois={mois_courant}",
+        headers=auth_headers,
+    ).json()
+    lignes = [r for r in ov["rows"] if r["bail_id"] == ids["bail_id"]]
+    # Mois courant : la dette est là, en retard.
+    assert len(lignes) == 1
+    assert lignes[0]["etat"] == "retard"
+    assert lignes[0]["solde_total"] > 0
+
+    futur = (
+        f"{today.year + 1}-01"
+        if today.month == 12
+        else f"{today.year}-{today.month + 1:02d}"
+    )
+    ov2 = client.get(
+        f"/api/v1/immobilier/loyers/overview?mois={futur}",
+        headers=auth_headers,
+    ).json()
+    assert all(r["bail_id"] != ids["bail_id"] for r in ov2["rows"])
