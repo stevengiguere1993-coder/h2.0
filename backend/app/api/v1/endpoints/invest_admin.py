@@ -1736,6 +1736,40 @@ async def _parts_virtuelles_du_partenaire(
 
 
 @router.get(
+    "/apercu/{user_id}/releve/{year}/pdf",
+    summary="Relevé annuel tel que VU par cet investisseur",
+)
+async def apercu_releve_pdf(
+    user_id: int, year: int, db: DBSession, user: CurrentUser
+) -> Response:
+    """Le même relevé PDF que le bouton « Relevé » du portail — pour
+    que l'aperçu admin montre TOUT ce que l'investisseur voit (retour
+    Phil 2026-08-25 : le bouton n'apparaissait pas en aperçu, d'où
+    l'impression qu'il n'existait pas)."""
+    if year < 2000 or year > date.today().year:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Année invalide."
+        )
+    target = await db.get(User, user_id)
+    if target is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Investisseur introuvable."
+        )
+    from app.services.invest_releve_pdf import build_releve_pdf
+
+    portefeuille = await build_portefeuille(db, user_id)
+    pdf = await build_releve_pdf(db, target, year, portefeuille)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition":
+                f'inline; filename="Releve annuel {year}.pdf"'
+        },
+    )
+
+
+@router.get(
     "/apercu-partenaire/{partner_id}/portefeuille",
     summary="Portefeuille tel que le VERRAIT un actionnaire sans "
     "compte investisseur",

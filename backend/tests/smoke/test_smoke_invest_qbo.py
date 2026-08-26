@@ -521,3 +521,25 @@ def test_apercu_d_un_actionnaire_sans_compte(
         headers=auth_headers,
     )
     assert r3.status_code == 404, r3.text
+
+
+def test_releve_annuel_en_apercu_admin(
+    client, auth_headers, invest_ids
+):
+    """L'aperçu « voir comme lui » offre le MÊME relevé annuel PDF que
+    le bouton du portail (retour Phil 2026-08-25 : le bouton semblait
+    ne pas exister parce que l'aperçu ne l'affichait pas)."""
+    uid = invest_ids["user_id"]
+    r = client.get(
+        f"/api/v1/invest/admin/apercu/{uid}/releve/2026/pdf",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/pdf")
+    assert r.content[:5] == b"%PDF-"
+
+    r2 = client.get(
+        "/api/v1/invest/admin/apercu/999999/releve/2026/pdf",
+        headers=auth_headers,
+    )
+    assert r2.status_code == 404, r2.text

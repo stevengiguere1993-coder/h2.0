@@ -1595,6 +1595,15 @@ function TransactionsQboModal({
                 ))}
               </tbody>
             </table>
+            <p
+              className="mt-2 text-[10px]"
+              style={{ color: "var(--qg-text-muted)" }}
+            >
+              Les factures ponctuelles (travaux, réparations…) sont
+              jointes à leurs transactions ; les factures récurrentes
+              (électricité, assurances, télécommunications…) ne sont
+              pas déposées systématiquement dans QuickBooks.
+            </p>
           </div>
         ) : null}
       </div>
