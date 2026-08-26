@@ -519,9 +519,32 @@ async def update_projet(
     projet_id: int, data: ProjetUpdate, db: DBSession, _: CurrentUser
 ) -> ProjetRead:
     p = await _projet_or_404(db, projet_id)
-    for k, v in data.model_dump(exclude_unset=True).items():
+    champs = data.model_dump(exclude_unset=True)
+    for k, v in champs.items():
         setattr(p, k, v)
     await db.commit()
+    # Le mapping des avances nourrit AUSSI le pôle Investisseurs
+    # (équité = valeur − hypothèques − avances ; capital encore investi
+    # par actionnaire). On resynchronise tout de suite, sans attendre
+    # le cron de nuit — retour Phil 2026-08-25 : « j'ai coché les
+    # catégories dans la section optimisation, mais elles
+    # n'apparaissent pas dans investisseur donc le montant est biaisé ».
+    if (
+        "avances_accounts_json" in champs
+        and p.entreprise_id
+        and p.qbo_scope
+    ):
+        try:
+            from app.services.invest_qbo_sync import sync_entreprise
+
+            await sync_entreprise(db, p.entreprise_id)
+            await db.commit()
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            log.info(
+                "resync invest apres mapping avances #%s: %s",
+                projet_id, exc,
+            )
+            await db.rollback()
     await db.refresh(p)
     return await _projet_read(db, p)
 
