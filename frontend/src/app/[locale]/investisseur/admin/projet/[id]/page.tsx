@@ -336,9 +336,11 @@ export default function AdminProjetPage() {
           .join(" · ");
         const rest =
           (body.non_apparies || []).length > 0
-            ? ` Comptes non appariés : ${body.non_apparies.join(", ")} — ` +
-              "renommez le compte QBO ou l'actionnaire pour que les " +
-              "noms se ressemblent."
+            ? ` Comptes sans actionnaire correspondant (comptés dans ` +
+              `le total) : ${body.non_apparies.join(", ")}. C'est ` +
+              "normal pour un dû d'administrateur ou d'une autre " +
+              "société ; si l'un appartient à un actionnaire de la " +
+              "fiche, rapprochez les noms puis resynchronisez."
             : "";
         setBanner(
           `Synchronisé depuis « ${body.projet_nom} » : avances totales ` +

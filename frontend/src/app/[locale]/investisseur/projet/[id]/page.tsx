@@ -490,7 +490,7 @@ type AvancesActionnaires = {
   actionnaires?: {
     name: string;
     solde: number | null;
-    comptes: string[];
+    comptes: { nom: string; solde: number }[];
   }[];
   autres_comptes?: { nom: string; solde: number }[];
   total?: number;
@@ -634,37 +634,55 @@ function ParticipationHero({
           </p>
           <ul className="space-y-1.5">
             {(avances.actionnaires || []).map((a, i) => (
-              <li
-                key={i}
-                className="flex items-center justify-between gap-2 text-xs"
-              >
-                <span
-                  className="min-w-0 truncate text-white/70"
-                  title={
-                    a.comptes.length
-                      ? `Compte QuickBooks : ${a.comptes.join(", ")}`
-                      : undefined
-                  }
-                >
-                  {a.name}
-                  {estMoi.has(a.name) ? (
-                    <span className="text-white/40"> (vous)</span>
-                  ) : null}
-                </span>
-                {a.solde === null || a.solde === undefined ? (
+              <li key={i} className="text-xs">
+                <div className="flex items-center justify-between gap-2">
                   <span
-                    className="shrink-0 text-white/35"
-                    title="Aucun compte d'avances trouvé à son nom dans QuickBooks"
+                    className="min-w-0 truncate text-white/70"
+                    title={
+                      a.comptes.length === 1
+                        ? `Compte QuickBooks : ${a.comptes[0].nom}`
+                        : undefined
+                    }
                   >
-                    —
+                    {a.name}
+                    {estMoi.has(a.name) ? (
+                      <span className="text-white/40"> (vous)</span>
+                    ) : null}
                   </span>
-                ) : a.solde === 0 ? (
-                  <b className="shrink-0 text-emerald-400">Remboursé</b>
-                ) : (
-                  <b className="shrink-0 tabular-nums text-white/80">
-                    {fmtMoney(a.solde)}
-                  </b>
-                )}
+                  {a.solde === null || a.solde === undefined ? (
+                    <span
+                      className="shrink-0 text-white/35"
+                      title="Aucun compte d'avances trouvé à son nom dans QuickBooks"
+                    >
+                      —
+                    </span>
+                  ) : a.solde === 0 ? (
+                    <b className="shrink-0 text-emerald-400">
+                      Remboursé
+                    </b>
+                  ) : (
+                    <b className="shrink-0 tabular-nums text-white/80">
+                      {fmtMoney(a.solde)}
+                    </b>
+                  )}
+                </div>
+                {a.comptes.length > 1 ? (
+                  <ul className="mb-0.5 mt-0.5 space-y-0.5 border-l border-brand-800 pl-2.5">
+                    {a.comptes.map((cpt, j) => (
+                      <li
+                        key={j}
+                        className="flex items-center justify-between gap-2 text-[10px]"
+                      >
+                        <span className="min-w-0 truncate text-white/40">
+                          {cpt.nom}
+                        </span>
+                        <span className="shrink-0 tabular-nums text-white/50">
+                          {fmtMoney(cpt.solde)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </li>
             ))}
             {(avances.autres_comptes || []).map((c, i) => (
