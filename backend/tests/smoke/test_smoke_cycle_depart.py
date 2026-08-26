@@ -597,3 +597,74 @@ def test_dette_bail_termine_pas_dans_les_mois_futurs(
         headers=auth_headers,
     ).json()
     assert all(r["bail_id"] != ids["bail_id"] for r in ov2["rows"])
+
+
+def test_mois_paye_avec_solde_anterieur_remonte(
+    client, auth_headers, run
+):
+    """Cas Mouad (retour Phil 2026-08-26) : juillet impayé, août payé —
+    la ligne d'août était « payée » en vert au bas de la liste et la
+    dette de juillet invisible. Un mois payé avec un solde antérieur
+    devient « partiel » (badge Solde antérieur) et remonte."""
+    today = date.today()
+    mois_courant = today.replace(day=1)
+    mois_prec = (mois_courant - timedelta(days=1)).replace(day=1)
+    ids = _seed(
+        run,
+        numero="SOLDE-1",
+        date_debut=mois_prec,
+        date_fin=(
+            mois_courant.replace(day=28) + timedelta(days=4)
+        ).replace(day=1) - timedelta(days=1),
+        loyer=500.0,
+        bail_status=BailStatus.TERMINE.value,
+        logement_status=LogementStatus.VACANT.value,
+    )
+    # Le mois COURANT est payé ; le mois précédent, non.
+    p = client.post(
+        "/api/v1/immobilier/paiements",
+        headers=auth_headers,
+        json={
+            "bail_id": ids["bail_id"],
+            "mois_couvert": str(mois_courant),
+            "montant": 500.0,
+            "paye_le": str(today),
+        },
+    )
+    assert p.status_code == 201, p.text
+
+    ov = client.get(
+        f"/api/v1/immobilier/loyers/overview"
+        f"?mois={mois_courant.strftime('%Y-%m')}",
+        headers=auth_headers,
+    ).json()
+    lignes = [r for r in ov["rows"] if r["bail_id"] == ids["bail_id"]]
+    assert len(lignes) == 1
+    # Le mois est réglé mais le compte du bail non → « partiel » avec
+    # le drapeau, jamais « paye » planqué en vert.
+    assert lignes[0]["etat"] == "partiel"
+    assert lignes[0]["solde_anterieur"] is True
+    assert lignes[0]["solde_total"] == 500.0
+
+    # Une fois le mois précédent réglé, la ligne redevient « payé ».
+    p2 = client.post(
+        "/api/v1/immobilier/paiements",
+        headers=auth_headers,
+        json={
+            "bail_id": ids["bail_id"],
+            "mois_couvert": str(mois_prec),
+            "montant": 500.0,
+            "paye_le": str(today),
+        },
+    )
+    assert p2.status_code == 201, p2.text
+    ov2 = client.get(
+        f"/api/v1/immobilier/loyers/overview"
+        f"?mois={mois_courant.strftime('%Y-%m')}",
+        headers=auth_headers,
+    ).json()
+    ligne = [
+        r for r in ov2["rows"] if r["bail_id"] == ids["bail_id"]
+    ][0]
+    assert ligne["etat"] == "paye"
+    assert ligne["solde_anterieur"] is False

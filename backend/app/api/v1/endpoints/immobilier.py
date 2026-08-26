@@ -4227,6 +4227,10 @@ class FraisRow(BaseModel):
 
 class LoyerOverviewRow(BaseModel):
     bail_id: int
+    #: Le mois affiché est réglé mais un mois ANTÉRIEUR du bail ne
+    #: l'est pas — la ligne remonte avec un badge « Solde antérieur »
+    #: au lieu de dormir en vert (retour Phil 2026-08-26).
+    solde_anterieur: bool = False
     immeuble_id: int
     immeuble_name: str
     logement_id: Optional[int] = None
@@ -4640,8 +4644,17 @@ async def loyers_overview(
             etat = "partiel" if ps else "retard"
             nb_retards += 1
         elif ps and paye_mois >= du_mois - 0.005:
-            etat = "paye"
-            nb_payes += 1
+            if solde > 0.005 and not mois_futur:
+                # Le mois affiché est payé, mais le COMPTE du bail ne
+                # l'est pas : un mois antérieur traîne. La ligne ne
+                # doit pas dormir en vert au bas de la liste (retour
+                # Phil 2026-08-26 : la dette de juillet de Mouad était
+                # invisible en août parce qu'août était « payé »).
+                etat = "partiel"
+                nb_retards += 1
+            else:
+                etat = "paye"
+                nb_payes += 1
         elif ps:
             # Payé en partie seulement — compté comme retard dans les KPI
             # (il manque de l'argent), mais badge distinct dans l'UI.
@@ -4662,6 +4675,12 @@ async def loyers_overview(
         rows.append(
             LoyerOverviewRow(
                 bail_id=b.id,
+                solde_anterieur=bool(
+                    ps
+                    and paye_mois >= du_mois - 0.005
+                    and solde > 0.005
+                    and not mois_futur
+                ),
                 bail_statut=b.status,
                 bail_termine_le=(
                     b.date_fin
