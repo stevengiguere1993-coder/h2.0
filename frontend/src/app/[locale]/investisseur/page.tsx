@@ -308,9 +308,14 @@ export default function PortefeuillePage() {
         ) : (
           <>
             {mode === "me" && firstName ? (
-              <h1 className="mb-5 text-2xl font-bold text-white">
-                Bonjour, {firstName}
-              </h1>
+              <div className="mb-6">
+                <h1 className="font-display text-3xl font-bold tracking-tight text-white">
+                  Bonjour, {firstName}
+                </h1>
+                <p className="mt-1 text-sm text-white/40">
+                  Voici où en sont vos projets.
+                </p>
+              </div>
             ) : null}
 
             {/* KPIs et courbe : vue DIRECTION seulement — un
@@ -396,7 +401,7 @@ export default function PortefeuillePage() {
 
             {/* Projets */}
             <div className="mb-3 mt-7 flex items-baseline justify-between">
-              <h2 className="text-base font-semibold text-white">
+              <h2 className="font-display text-lg font-bold tracking-tight text-white">
                 {isGlobal ? "Projets avec investisseurs" : "Mes projets"}
               </h2>
               <span className="text-xs text-white/40">
@@ -422,7 +427,7 @@ export default function PortefeuillePage() {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     router.push(href as any);
                   }}
-                  className="group overflow-hidden rounded-2xl border border-brand-800 bg-brand-900 text-left transition hover:border-accent-500/60"
+                  className="group overflow-hidden rounded-2xl border border-brand-800 bg-brand-900 text-left transition-all duration-300 hover:-translate-y-1 hover:border-accent-500/60 hover:shadow-card"
                 >
                   <div className="relative h-28 bg-brand-950">
                     {p.cover_photo_url ? (
@@ -430,19 +435,20 @@ export default function PortefeuillePage() {
                       <img
                         src={p.cover_photo_url}
                         alt=""
-                        className="h-full w-full object-cover opacity-80"
+                        className="h-full w-full object-cover opacity-80 transition-transform duration-500 group-hover:scale-[1.04]"
                       />
                     ) : (
                       <div className="flex h-full items-center justify-center">
                         <Building2 className="h-8 w-8 text-white/15" />
                       </div>
                     )}
+                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-brand-900 via-transparent to-transparent" />
                     <div className="absolute left-3 top-3">
                       <PhaseBadge phase={p.phase} />
                     </div>
                   </div>
                   <div className="p-4">
-                    <h3 className="text-base font-semibold text-white">
+                    <h3 className="font-display text-base font-bold text-white transition-colors group-hover:text-accent-300">
                       {p.entreprise_name}
                     </h3>
                     <p className="truncate text-xs text-white/50">

@@ -156,7 +156,7 @@ export default function ProjetPage() {
 
         {/* En-tête */}
         <div className="mb-1 flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-bold text-white">
+          <h1 className="font-display text-3xl font-bold tracking-tight text-white">
             {data.entreprise_name}
           </h1>
           <PhaseBadge phase={data.phase} />
@@ -177,7 +177,7 @@ export default function ProjetPage() {
             <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
               Valeur des immeubles
             </p>
-            <p className="mt-1.5 text-2xl font-bold tabular-nums text-white">
+            <p className="mt-1.5 font-display text-2xl font-bold tabular-nums text-white">
               {fmtMoney(data.valeur_totale)}
             </p>
             <p className="mt-1 text-xs text-white/50">
@@ -188,7 +188,7 @@ export default function ProjetPage() {
             <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
               Dette hypothécaire
             </p>
-            <p className="mt-1.5 text-2xl font-bold tabular-nums text-white">
+            <p className="mt-1.5 font-display text-2xl font-bold tabular-nums text-white">
               {fmtMoney(data.hypotheque_totale)}
             </p>
             <p className="mt-1 text-xs text-white/50">
@@ -199,7 +199,7 @@ export default function ProjetPage() {
             <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
               Équité de la compagnie
             </p>
-            <p className="mt-1.5 text-2xl font-bold tabular-nums text-emerald-400">
+            <p className="mt-1.5 font-display text-2xl font-bold tabular-nums text-emerald-400">
               {fmtMoney(data.equite)}
             </p>
             <p className="mt-1 text-xs text-white/50">
@@ -214,7 +214,7 @@ export default function ProjetPage() {
             <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
               Occupation
             </p>
-            <p className="mt-1.5 text-2xl font-bold tabular-nums text-white">
+            <p className="mt-1.5 font-display text-2xl font-bold tabular-nums text-white">
               {data.nb_baux_actifs} / {data.nb_logements || "—"}
             </p>
             <p className="mt-1 text-xs text-white/50">
@@ -555,7 +555,7 @@ function ParticipationHero({
   const rembourse = !enAttente && capitalAffiche === 0;
 
   return (
-    <div className="rounded-2xl border border-accent-500/40 bg-brand-900 p-5">
+    <div className="rounded-2xl border border-accent-500/40 bg-gradient-to-br from-brand-900 via-brand-900 to-accent-500/[0.07] p-5 shadow-card">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-white">
           Ma participation
@@ -574,7 +574,7 @@ function ParticipationHero({
           <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
             Valeur de mes parts
           </p>
-          <p className="mt-1 text-2xl font-bold tabular-nums text-white">
+          <p className="mt-1 font-display text-2xl font-bold tabular-nums text-white">
             {fmtMoney(data.valeur_parts)}
           </p>
           <p className="mt-0.5 text-[10px] text-white/35">
@@ -594,7 +594,7 @@ function ParticipationHero({
               Remboursé complètement&nbsp;!
             </p>
           ) : (
-            <p className="mt-1 text-2xl font-bold tabular-nums text-white">
+            <p className="mt-1 font-display text-2xl font-bold tabular-nums text-white">
               {capitalAffiche === null ? "—" : fmtMoney(capitalAffiche)}
             </p>
           )}
