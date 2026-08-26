@@ -1047,7 +1047,11 @@ async def avances_par_actionnaire(
     # Appariement compte ↔ actionnaire : mêmes jetons de nom que la
     # sync (ordre des mots indifférent, mots génériques ignorés).
     from app.models.user import User
-    from app.services.invest_qbo_sync import _match, _tokens
+    from app.services.invest_qbo_sync import (
+        _match,
+        _tokens,
+        est_compte_tiers,
+    )
 
     directory = await partner_directory(db, entreprise_id)
     lignes: list[dict] = []
@@ -1071,6 +1075,17 @@ async def avances_par_actionnaire(
     for compte in av.get("comptes") or []:
         toks = _tokens(str(compte.get("nom") or ""))
         solde = float(compte.get("solde") or 0)
+        if est_compte_tiers(str(compte.get("nom") or "")):
+            # Dû d'administrateur : toujours à part, jamais fusionné à
+            # un actionnaire (même règle que la sync).
+            if abs(solde) >= 0.005:
+                autres.append(
+                    {
+                        "nom": str(compte.get("nom") or "?"),
+                        "solde": round(solde, 2),
+                    }
+                )
+            continue
         matches = [
             i for i, noms in enumerate(candidats) if _match(noms, toks)
         ]
@@ -1254,6 +1269,41 @@ async def budget_ligne_transactions(
         (p.date_debut or date(2000, 1, 1)).isoformat(),
         date.today().isoformat(),
     )
+
+
+async def ajuster_capital_avec_soldes_qbo(
+    db: AsyncSession,
+    portefeuille: dict,
+    user_id: int = 0,
+    nom: Optional[str] = None,
+) -> dict:
+    """Aligne le « capital actuellement investi » du relevé sur les
+    SOLDES d'avances QuickBooks — la même source que le portail
+    (retour Phil 2026-08-26 : le relevé de LUM affichait 0 $ alors que
+    la compagnie lui doit 255 500 $). Les flux Kratos restent le repli
+    quand QuickBooks n'est pas lisible."""
+    total = 0.0
+    for p in portefeuille.get("projets") or []:
+        ident = nom
+        if not ident and user_id:
+            d = await partner_directory(db, p["entreprise_id"])
+            row = d["by_user"].get(user_id)
+            ident = row["name"] if row else None
+        if ident:
+            av = await avances_par_actionnaire(db, p["entreprise_id"])
+            if av.get("statut") == "connecte":
+                for a in av.get("actionnaires") or []:
+                    if (
+                        a["name"] == ident
+                        and a.get("solde") is not None
+                    ):
+                        p["capital_actuel"] = round(
+                            float(a["solde"]), 2
+                        )
+                        break
+        total += float(p.get("capital_actuel") or 0)
+    portefeuille["capital_actuel"] = round(total, 2)
+    return portefeuille
 
 
 async def qbo_txns_compte_data(

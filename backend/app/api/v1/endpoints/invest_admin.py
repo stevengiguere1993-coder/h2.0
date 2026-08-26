@@ -59,6 +59,7 @@ from app.services.invest_invite import (
     send_investor_invitation,
 )
 from app.services.invest_portfolio import (
+    ajuster_capital_avec_soldes_qbo,
     avances_par_actionnaire,
     budget_ligne_transactions,
     budget_optimisation_data,
@@ -1758,6 +1759,9 @@ async def apercu_releve_pdf(
     from app.services.invest_releve_pdf import build_releve_pdf
 
     portefeuille = await build_portefeuille(db, user_id)
+    portefeuille = await ajuster_capital_avec_soldes_qbo(
+        db, portefeuille, user_id=user_id
+    )
     pdf = await build_releve_pdf(db, target, year, portefeuille)
     return Response(
         content=pdf,
@@ -1792,8 +1796,13 @@ async def apercu_partenaire_releve_pdf(
     # User VIRTUEL (jamais persisté) : seul le nom sert au PDF ; son id
     # nul ne matche aucun flux — les mouvements arriveront quand le
     # compte sera créé et synchronisé.
+    portefeuille = await ajuster_capital_avec_soldes_qbo(
+        db, portefeuille, nom=nom
+    )
     fantome = User(email=email or "", first_name=nom, last_name="")
-    pdf = await build_releve_pdf(db, fantome, year, portefeuille)
+    pdf = await build_releve_pdf(
+        db, fantome, year, portefeuille, sans_flux=True
+    )
     return Response(
         content=pdf,
         media_type="application/pdf",

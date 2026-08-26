@@ -22,8 +22,16 @@ def _money(v: float | None) -> str:
 
 
 async def build_releve_pdf(
-    db: AsyncSession, user: User, year: int, portefeuille: dict
+    db: AsyncSession,
+    user: User,
+    year: int,
+    portefeuille: dict,
+    sans_flux: bool = False,
 ) -> bytes:
+    #: ``sans_flux`` : actionnaire sans compte investisseur (aperçu
+    #: « compte à créer ») — l'historique apports/remboursements
+    #: n'existe pas encore, on montre des tirets plutôt que de faux
+    #: zéros.
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import ParagraphStyle
@@ -95,17 +103,28 @@ async def build_releve_pdf(
         [
             Paragraph("Capital investi au total", st_cell),
             Paragraph(
-                _money(portefeuille["capital_investi_total"]), st_cell_b
+                "—"
+                if sans_flux
+                else _money(portefeuille["capital_investi_total"]),
+                st_cell_b,
             ),
         ],
         [
             Paragraph("Capital remboursé", st_cell),
-            Paragraph(_money(portefeuille["capital_rembourse"]), st_cell_b),
+            Paragraph(
+                "—"
+                if sans_flux
+                else _money(portefeuille["capital_rembourse"]),
+                st_cell_b,
+            ),
         ],
         [
             Paragraph("Distributions reçues", st_cell),
             Paragraph(
-                _money(portefeuille["distributions_recues"]), st_cell_b
+                "—"
+                if sans_flux
+                else _money(portefeuille["distributions_recues"]),
+                st_cell_b,
             ),
         ],
         [
@@ -191,7 +210,16 @@ async def build_releve_pdf(
             Paragraph(_money(float(f.montant)), st_cell),
         ])
     flow.append(Paragraph(f"Mouvements de {year}", st_h2))
-    if len(flux_rows) == 1:
+    if sans_flux:
+        flow.append(
+            Paragraph(
+                "L'historique des apports et remboursements apparaîtra "
+                "après l'activation du compte investisseur et la "
+                "première synchronisation comptable.",
+                st_meta,
+            )
+        )
+    elif len(flux_rows) == 1:
         flow.append(
             Paragraph(f"Aucun mouvement en {year}.", st_meta)
         )

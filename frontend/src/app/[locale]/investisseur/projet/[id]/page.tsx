@@ -555,7 +555,7 @@ function ParticipationHero({
   const rembourse = !enAttente && capitalAffiche === 0;
 
   return (
-    <div className="rounded-2xl border border-accent-500/40 bg-gradient-to-br from-brand-900 via-brand-900 to-accent-500/[0.07] p-5 shadow-card">
+    <div className="rounded-2xl border border-accent-500/40 bg-brand-900 p-5 shadow-card">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-white">
           Ma participation

@@ -55,6 +55,17 @@ class _FakeQbo:
                     "Classification": "Liability",
                 },
                 {
+                    "Id": "903",
+                    "Name": (
+                        "Avances actionnaire — Partenaire Fantome"
+                    ),
+                    "FullyQualifiedName": (
+                        "Avances actionnaire — Partenaire Fantome"
+                    ),
+                    "AccountType": "Other Current Liability",
+                    "Classification": "Liability",
+                },
+                {
                     # 2e compte du MÊME investisseur (cas Immo BGVM).
                     "Id": "902",
                     "Name": (
@@ -181,6 +192,34 @@ class _FakeQbo:
                             },
                             {"value": "0.00"},
                             {"value": "3000.00"},
+                        ],
+                    },
+                    {
+                        "type": "Data",
+                        "ColData": [
+                            {
+                                "value": (
+                                    "Avances actionnaire — "
+                                    "Partenaire Fantome"
+                                ),
+                                "id": "903",
+                            },
+                            {"value": "0.00"},
+                            {"value": "4200.00"},
+                        ],
+                    },
+                    {
+                        "type": "Data",
+                        "ColData": [
+                            {
+                                "value": (
+                                    "Pret/Du de/a l'administrateur - "
+                                    "Investisseur Drill"
+                                ),
+                                "id": "904",
+                            },
+                            {"value": "0.00"},
+                            {"value": "5.00"},
                         ],
                     },
                 ]
@@ -389,12 +428,16 @@ def test_avances_par_actionnaire_soldes_quickbooks(
         ("Avances actionnaire — Investisseur Drill", 12500.0),
         ("Avance actionnaire Investisseur Drill no 2", 3000.0),
     }
-    # Le compte de Mystere Corp ne matche personne → listé à part,
-    # jamais avalé en silence.
-    assert data["autres_comptes"] == [
-        {"nom": "Avances actionnaire — Mystere Corp", "solde": 8000.0}
-    ]
-    assert data["total"] == 23500.0
+    # Les comptes sans actionnaire correspondant sont listés à part,
+    # jamais avalés en silence (le partenaire Fantome n'existe pas
+    # encore dans la fiche à ce stade du module).
+    assert {
+        (c["nom"], c["solde"]) for c in data["autres_comptes"]
+    } == {
+        ("Avances actionnaire — Mystere Corp", 8000.0),
+        ("Avances actionnaire — Partenaire Fantome", 4200.0),
+    }
+    assert data["total"] == 27700.0
 
     # Même liste côté console admin.
     r2 = client.get(
@@ -687,7 +730,7 @@ def test_deux_comptes_du_meme_investisseur_gardent_tous_les_flux(
 
 
 def test_releve_en_apercu_partenaire_et_sans_tri(
-    client, auth_headers, invest_ids, run
+    client, auth_headers, fake_qbo, invest_ids, run
 ):
     """Le relevé existe aussi pour un actionnaire SANS compte (aperçu
     « compte à créer »), et il ne mentionne plus le TRI (retour Phil
@@ -709,6 +752,32 @@ def test_releve_en_apercu_partenaire_et_sans_tri(
             ).scalar_one()
 
     pid = run(_partner_id())
+
+    async def _projet_id() -> int:
+        from sqlalchemy import select as _select
+
+        async with TestSessionLocal() as s:
+            return (
+                await s.execute(
+                    _select(OptimisationProjet.id).where(
+                        OptimisationProjet.entreprise_id == eid
+                    )
+                )
+            ).scalar_one()
+
+    # Mapping déterministe : le compte d'avances du partenaire — le
+    # relevé doit montrer son SOLDE QuickBooks, pas un faux 0 $.
+    rmap = client.patch(
+        f"/api/v1/optimisation/projets/{run(_projet_id())}",
+        json={
+            "avances_accounts_json": (
+                '[{"id": "903", "name": "Avances actionnaire — '
+                'Partenaire Fantome"}]'
+            )
+        },
+        headers=auth_headers,
+    )
+    assert rmap.status_code == 200, rmap.text
     r = client.get(
         f"/api/v1/invest/admin/apercu-partenaire/{pid}/releve/2026/pdf",
         headers=auth_headers,
@@ -726,3 +795,83 @@ def test_releve_en_apercu_partenaire_et_sans_tri(
     )
     assert "TRI" not in texte
     assert "Partenaire Fantome" in texte
+    # Capital actuellement investi = solde QuickBooks (4 200 $), pas 0.
+    assert "4 200" in texte.replace(chr(160), " ")
+
+
+def test_compte_administrateur_jamais_fusionne(
+    client, auth_headers, fake_qbo, invest_ids, run
+):
+    """Retour Phil 2026-08-26 (le « 2 $ » du 8900) : un compte
+    « Prêt/Dû de/à l'administrateur - X » est une créance PERSONNELLE —
+    jamais fusionné à un actionnaire même si le nom matche, aucun flux
+    créé, listé à part et compté dans le total."""
+    eid = invest_ids["entreprise_id"]
+
+    async def _projet_id() -> int:
+        from sqlalchemy import select as _select
+
+        async with TestSessionLocal() as s:
+            return (
+                await s.execute(
+                    _select(OptimisationProjet.id).where(
+                        OptimisationProjet.entreprise_id == eid
+                    )
+                )
+            ).scalar_one()
+
+    # Mapping : l'avance de l'investisseur + le dû d'administrateur au
+    # MÊME nom → le PATCH relance la sync.
+    r = client.patch(
+        f"/api/v1/optimisation/projets/{run(_projet_id())}",
+        json={
+            "avances_accounts_json": '[{"id": "900", "name": "Avances actionnaire — Investisseur Drill"}, {"id": "904", "name": "Pret/Du de/a l\'administrateur - Investisseur Drill"}]'
+        },
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+
+    # Aucun flux créé pour le dû d'administrateur (seulement les
+    # 12 500 $ du compte d'avances).
+    async def _flux() -> list:
+        from sqlalchemy import select as _select
+
+        async with TestSessionLocal() as s:
+            part_id = (
+                await s.execute(
+                    _select(InvestParticipation.id).where(
+                        InvestParticipation.user_id
+                        == invest_ids["user_id"],
+                        InvestParticipation.entreprise_id == eid,
+                    )
+                )
+            ).scalar_one()
+            rows = (
+                await s.execute(
+                    _select(InvestFlux).where(
+                        InvestFlux.participation_id == part_id,
+                        InvestFlux.source == "qbo",
+                    )
+                )
+            ).scalars().all()
+            return sorted(float(f.montant) for f in rows)
+
+    assert run(_flux()) == [12500.0]
+
+    # Et dans la liste par actionnaire : l'investisseur = 12 500 $,
+    # le dû d'administrateur à part, total = 12 505 $.
+    jeton = create_access_token(subject=str(invest_ids["user_id"]))
+    r2 = client.get(
+        f"/api/v1/invest/me/projets/{eid}/avances",
+        headers={"Authorization": f"Bearer {jeton}"},
+    )
+    assert r2.status_code == 200, r2.text
+    data = r2.json()
+    par_nom = {a["name"]: a for a in data["actionnaires"]}
+    assert par_nom["Investisseur Drill"]["solde"] == 12500.0
+    assert {
+        (c["nom"], c["solde"]) for c in data["autres_comptes"]
+    } == {
+        ("Pret/Du de/a l'administrateur - Investisseur Drill", 5.0),
+    }
+    assert data["total"] == 12505.0

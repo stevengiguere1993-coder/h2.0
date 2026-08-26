@@ -431,7 +431,6 @@ export default function PortefeuillePage() {
                         <Building2 className="h-8 w-8 text-white/15" />
                       </div>
                     )}
-                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-brand-900 via-transparent to-transparent" />
                     <div className="absolute left-3 top-3">
                       <PhaseBadge phase={p.phase} />
                     </div>
