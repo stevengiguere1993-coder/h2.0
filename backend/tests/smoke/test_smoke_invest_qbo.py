@@ -380,9 +380,14 @@ def test_avances_par_actionnaire_soldes_quickbooks(
     # Le compte « Avances actionnaire — Investisseur Drill » est
     # rattaché à l'actionnaire de la fiche, solde du bilan.
     assert par_nom["Investisseur Drill"]["solde"] == 15500.0
-    assert set(par_nom["Investisseur Drill"]["comptes"]) == {
-        "Avances actionnaire — Investisseur Drill",
-        "Avance actionnaire Investisseur Drill no 2",
+    # Détail PAR COMPTE — l'écran montre les sous-lignes quand
+    # plusieurs comptes s'agrègent sous un actionnaire (8900).
+    assert {
+        (c["nom"], c["solde"])
+        for c in par_nom["Investisseur Drill"]["comptes"]
+    } == {
+        ("Avances actionnaire — Investisseur Drill", 12500.0),
+        ("Avance actionnaire Investisseur Drill no 2", 3000.0),
     }
     # Le compte de Mystere Corp ne matche personne → listé à part,
     # jamais avalé en silence.

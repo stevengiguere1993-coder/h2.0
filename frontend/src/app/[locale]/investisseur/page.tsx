@@ -366,21 +366,6 @@ export default function PortefeuillePage() {
                   {isGlobal ? "leurs %" : "vos %"}
                 </p>
               </div>
-              <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
-                  TVPI
-                </p>
-                <p className="mt-1.5 text-2xl font-bold tabular-nums text-emerald-400">
-                  {data.tvpi !== null
-                    ? `${data.tvpi.toLocaleString("fr-CA", {
-                        maximumFractionDigits: 2
-                      })}×`
-                    : "—"}
-                </p>
-                <p className="mt-1 text-xs text-white/50">
-                  (remboursé + distributions + valeur des parts) ÷ investi
-                </p>
-              </div>
             </div>
             ) : null}
 
@@ -502,24 +487,6 @@ export default function PortefeuillePage() {
                             ? `${
                                 p.cashflow_moyen_part >= 0 ? "+" : ""
                               }${fmtMoney(p.cashflow_moyen_part)}/mois`
-                            : "—"}
-                        </p>
-                      </div>
-                      <div className="border-t border-brand-800 pt-2">
-                        <p className="text-[10px] uppercase tracking-wider text-white/40">
-                          TVPI
-                        </p>
-                        <p
-                          className={`text-sm font-bold ${
-                            (p.tvpi ?? 1) >= 1
-                              ? "text-emerald-400"
-                              : "text-rose-400"
-                          }`}
-                        >
-                          {p.tvpi !== null
-                            ? `${p.tvpi.toLocaleString("fr-CA", {
-                                maximumFractionDigits: 2
-                              })}×`
                             : "—"}
                         </p>
                       </div>

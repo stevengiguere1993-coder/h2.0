@@ -1077,7 +1077,17 @@ async def avances_par_actionnaire(
         if len(matches) == 1:
             ligne = lignes[matches[0]]
             ligne["solde"] = round((ligne["solde"] or 0.0) + solde, 2)
-            ligne["comptes"].append(str(compte.get("nom") or ""))
+            # Détail PAR COMPTE : quand plusieurs comptes s'agrègent
+            # sous un actionnaire (ex. l'avance de sa holding + son dû
+            # d'administrateur personnel), l'écran doit pouvoir les
+            # montrer — rien ne disparaît (retour Phil 2026-08-26,
+            # 8900 St-Hubert).
+            ligne["comptes"].append(
+                {
+                    "nom": str(compte.get("nom") or ""),
+                    "solde": round(solde, 2),
+                }
+            )
         elif abs(solde) >= 0.005:
             # Compte actif qu'on ne sait pas rattacher : montré quand
             # même — rien ne doit disparaître de la liste.
