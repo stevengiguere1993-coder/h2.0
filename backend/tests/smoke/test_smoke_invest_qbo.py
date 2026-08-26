@@ -684,3 +684,45 @@ def test_deux_comptes_du_meme_investisseur_gardent_tous_les_flux(
 
     # Les apports des DEUX comptes coexistent (12 500 + 3 000).
     assert run(_flux()) == [3000.0, 12500.0]
+
+
+def test_releve_en_apercu_partenaire_et_sans_tri(
+    client, auth_headers, invest_ids, run
+):
+    """Le relevé existe aussi pour un actionnaire SANS compte (aperçu
+    « compte à créer »), et il ne mentionne plus le TRI (retour Phil
+    2026-08-26)."""
+    eid = invest_ids["entreprise_id"]
+
+    async def _partner_id() -> int:
+        from sqlalchemy import select as _select
+
+        async with TestSessionLocal() as s:
+            return (
+                await s.execute(
+                    _select(EntreprisePartner.id).where(
+                        EntreprisePartner.entreprise_id == eid,
+                        EntreprisePartner.partner_name
+                        == "Partenaire Fantome",
+                    )
+                )
+            ).scalar_one()
+
+    pid = run(_partner_id())
+    r = client.get(
+        f"/api/v1/invest/admin/apercu-partenaire/{pid}/releve/2026/pdf",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.content[:5] == b"%PDF-"
+    # Le PDF compressé ne se greppe pas ; on vérifie sur le texte
+    # extrait qu'aucune mention du TRI ne subsiste.
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
+    texte = chr(10).join(
+        page.extract_text() or "" for page in PdfReader(BytesIO(r.content)).pages
+    )
+    assert "TRI" not in texte
+    assert "Partenaire Fantome" in texte

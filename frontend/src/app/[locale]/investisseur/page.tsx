@@ -120,10 +120,13 @@ export default function PortefeuillePage() {
   async function openReleve() {
     const year = new Date().getFullYear();
     //: En aperçu « voir comme lui », le relevé est celui de
-    //: l'investisseur visé (route admin dédiée).
+    //: l'investisseur visé (routes admin dédiées — compte existant ou
+    //: actionnaire pas encore activé).
     const res = await authedFetch(
       typeof mode === "number"
         ? `/api/v1/invest/admin/apercu/${mode}/releve/${year}/pdf`
+        : typeof mode === "string" && mode !== "global" && mode !== "me"
+        ? `/api/v1/invest/admin/apercu-partenaire/${mode.slice(1)}/releve/${year}/pdf`
         : `/api/v1/invest/me/releve/${year}/pdf`
     );
     if (!res.ok) return;
@@ -157,7 +160,8 @@ export default function PortefeuillePage() {
           }
         ]}
         rightSlot={
-          (mode === "me" || typeof mode === "number") &&
+          mode !== null &&
+          mode !== "global" &&
           data &&
           data.projets.length > 0 ? (
             <button

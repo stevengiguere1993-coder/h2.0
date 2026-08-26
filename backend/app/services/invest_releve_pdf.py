@@ -112,15 +112,6 @@ async def build_releve_pdf(
             Paragraph("Valeur des parts", st_cell),
             Paragraph(_money(portefeuille["valeur_parts"]), st_cell_b),
         ],
-        [
-            Paragraph("TRI réalisé", st_cell),
-            Paragraph(
-                f"{portefeuille['tri_pct']} %"
-                if portefeuille["tri_pct"] is not None
-                else "—",
-                st_cell_b,
-            ),
-        ],
     ]
     t = Table(kpi_rows, colWidths=[95 * mm, 75 * mm])
     t.setStyle(TableStyle([
@@ -139,7 +130,6 @@ async def build_releve_pdf(
         Paragraph("Part", st_cell_b),
         Paragraph("Capital actuel", st_cell_b),
         Paragraph("Valeur des parts", st_cell_b),
-        Paragraph("TRI", st_cell_b),
     ]]
     for p in portefeuille["projets"]:
         proj_rows.append([
@@ -147,13 +137,9 @@ async def build_releve_pdf(
             Paragraph(f"{p['parts_pct']:g} %", st_cell),
             Paragraph(_money(p["capital_actuel"]), st_cell),
             Paragraph(_money(p["valeur_parts"]), st_cell),
-            Paragraph(
-                f"{p['tri_pct']} %" if p["tri_pct"] is not None else "—",
-                st_cell,
-            ),
         ])
     t = Table(
-        proj_rows, colWidths=[62 * mm, 20 * mm, 30 * mm, 32 * mm, 26 * mm]
+        proj_rows, colWidths=[74 * mm, 24 * mm, 34 * mm, 38 * mm]
     )
     t.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#d1d5db")),
@@ -228,8 +214,7 @@ async def build_releve_pdf(
         Paragraph(
             "Les valeurs de parts reposent sur l'évaluation de référence "
             "des immeubles moins la balance hypothécaire au moment de la "
-            "génération. Le TRI est calculé sur les flux datés réels "
-            "(méthode XIRR). Document informatif — ne constitue pas un "
+            "génération. Document informatif — ne constitue pas un "
             "avis fiscal.",
             st_meta,
         )
