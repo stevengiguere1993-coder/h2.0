@@ -31,6 +31,7 @@ from app.models.invest_portal import (
     InvestParticipation,
 )
 from app.services.invest_portfolio import (
+    ajuster_capital_avec_soldes_qbo,
     avances_par_actionnaire,
     budget_ligne_transactions,
     budget_optimisation_data,
@@ -634,6 +635,9 @@ async def my_releve_pdf(
     from app.services.invest_releve_pdf import build_releve_pdf
 
     portefeuille = await build_portefeuille(db, user.id)
+    portefeuille = await ajuster_capital_avec_soldes_qbo(
+        db, portefeuille, user_id=user.id
+    )
     pdf = await build_releve_pdf(db, user, year, portefeuille)
     return Response(
         content=pdf,

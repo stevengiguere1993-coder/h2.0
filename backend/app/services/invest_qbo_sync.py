@@ -109,6 +109,17 @@ def _match(candidat_noms: set[frozenset], compte_tokens: set[str]) -> bool:
     )
 
 
+def est_compte_tiers(nom: str) -> bool:
+    """Compte au nom d'un ADMINISTRATEUR (« Prêt/Dû de/à
+    l'administrateur - X ») : une créance PERSONNELLE, jamais fusionnée
+    à un actionnaire même quand le nom ressemble — compté dans le
+    total des avances et listé à part (retour Phil 2026-08-26 : les
+    trois dûs d'administrateurs du 8900 doivent être traités pareil,
+    or celui de Philippe était absorbé dans sa holding via le nom de
+    son compte utilisateur)."""
+    return "administrateur" in _norm_nom(nom)
+
+
 async def sync_entreprise(db: AsyncSession, entreprise_id: int) -> dict:
     """Synchronise UNE compagnie. Retourne un dict avec ``statut`` :
     aucun_projet | sans_qbo | erreur | ok (+ apparies / non_apparies).
@@ -200,6 +211,12 @@ async def sync_entreprise(db: AsyncSession, entreprise_id: int) -> dict:
             abs(float(r.get("variation") or 0)) < 0.005
             for r in mois_rows_c
         )
+        if est_compte_tiers(str(compte.get("nom") or "")):
+            # Créance d'un tiers (administrateur) : pas de flux, pas
+            # d'appariement — seulement comptée dans le total.
+            if not inactif:
+                non_apparies.append(str(compte.get("nom") or "?"))
+            continue
         matches = [
             part
             for part, noms in candidats
