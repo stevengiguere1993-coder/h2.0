@@ -1770,6 +1770,41 @@ async def apercu_releve_pdf(
 
 
 @router.get(
+    "/apercu-partenaire/{partner_id}/releve/{year}/pdf",
+    summary="Relevé annuel tel que le VERRAIT un actionnaire sans "
+    "compte investisseur",
+)
+async def apercu_partenaire_releve_pdf(
+    partner_id: int, year: int, db: DBSession, user: CurrentUser
+) -> Response:
+    """Même relevé que le bouton du portail, sur le portefeuille
+    VIRTUEL de l'actionnaire (fiche entreprise) — l'aperçu « compte à
+    créer » montre tout, relevé compris (retour Phil 2026-08-26)."""
+    if year < 2000 or year > date.today().year:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Année invalide."
+        )
+    nom, email = await _identite_partenaire_ou_404(db, partner_id)
+    parts = await _parts_virtuelles_du_partenaire(db, nom, email)
+    portefeuille = await build_portefeuille(db, 0, parts_virtuelles=parts)
+    from app.services.invest_releve_pdf import build_releve_pdf
+
+    # User VIRTUEL (jamais persisté) : seul le nom sert au PDF ; son id
+    # nul ne matche aucun flux — les mouvements arriveront quand le
+    # compte sera créé et synchronisé.
+    fantome = User(email=email or "", first_name=nom, last_name="")
+    pdf = await build_releve_pdf(db, fantome, year, portefeuille)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition":
+                f'inline; filename="Releve annuel {year}.pdf"'
+        },
+    )
+
+
+@router.get(
     "/apercu-partenaire/{partner_id}/portefeuille",
     summary="Portefeuille tel que le VERRAIT un actionnaire sans "
     "compte investisseur",
