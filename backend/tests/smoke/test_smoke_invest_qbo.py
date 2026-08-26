@@ -54,6 +54,18 @@ class _FakeQbo:
                     "AccountType": "Other Current Liability",
                     "Classification": "Liability",
                 },
+                {
+                    # 2e compte du MÊME investisseur (cas Immo BGVM).
+                    "Id": "902",
+                    "Name": (
+                        "Avance actionnaire Investisseur Drill no 2"
+                    ),
+                    "FullyQualifiedName": (
+                        "Avance actionnaire Investisseur Drill no 2"
+                    ),
+                    "AccountType": "Other Current Liability",
+                    "Classification": "Liability",
+                },
             ]
         if "STARTPOSITION 1" not in sql:
             return []
@@ -155,6 +167,20 @@ class _FakeQbo:
                             },
                             {"value": "0.00"},
                             {"value": "8000.00"},
+                        ],
+                    },
+                    {
+                        "type": "Data",
+                        "ColData": [
+                            {
+                                "value": (
+                                    "Avance actionnaire Investisseur "
+                                    "Drill no 2"
+                                ),
+                                "id": "902",
+                            },
+                            {"value": "0.00"},
+                            {"value": "3000.00"},
                         ],
                     },
                 ]
@@ -353,16 +379,17 @@ def test_avances_par_actionnaire_soldes_quickbooks(
     par_nom = {a["name"]: a for a in data["actionnaires"]}
     # Le compte « Avances actionnaire — Investisseur Drill » est
     # rattaché à l'actionnaire de la fiche, solde du bilan.
-    assert par_nom["Investisseur Drill"]["solde"] == 12500.0
-    assert par_nom["Investisseur Drill"]["comptes"] == [
-        "Avances actionnaire — Investisseur Drill"
-    ]
+    assert par_nom["Investisseur Drill"]["solde"] == 15500.0
+    assert set(par_nom["Investisseur Drill"]["comptes"]) == {
+        "Avances actionnaire — Investisseur Drill",
+        "Avance actionnaire Investisseur Drill no 2",
+    }
     # Le compte de Mystere Corp ne matche personne → listé à part,
     # jamais avalé en silence.
     assert data["autres_comptes"] == [
         {"nom": "Avances actionnaire — Mystere Corp", "solde": 8000.0}
     ]
-    assert data["total"] == 20500.0
+    assert data["total"] == 23500.0
 
     # Même liste côté console admin.
     r2 = client.get(
@@ -543,3 +570,112 @@ def test_releve_annuel_en_apercu_admin(
         headers=auth_headers,
     )
     assert r2.status_code == 404, r2.text
+
+
+def test_mapping_avances_resynchronise_l_equite(
+    client, auth_headers, fake_qbo, invest_ids, run
+):
+    """Cocher des comptes d'avances dans la section optimisation doit
+    se refléter TOUT DE SUITE dans le pôle Investisseurs (retour Phil
+    2026-08-25 : « les catégories n'apparaissent pas dans investisseur
+    donc le montant est biaisé ») : le PATCH du projet relance la sync
+    → le total des avances (donc l'équité) est à jour."""
+    eid = invest_ids["entreprise_id"]
+
+    async def _pid() -> int:
+        from sqlalchemy import select as _select
+
+        async with TestSessionLocal() as s:
+            return (
+                await s.execute(
+                    _select(OptimisationProjet.id).where(
+                        OptimisationProjet.entreprise_id == eid
+                    )
+                )
+            ).scalar_one()
+
+    pid = run(_pid())
+    r = client.patch(
+        f"/api/v1/optimisation/projets/{pid}",
+        json={
+            "avances_accounts_json": (
+                '[{"id": "900", "name": "Avances actionnaire — '
+                'Investisseur Drill"}, {"id": "901", "name": "Avances '
+                'actionnaire — Mystere Corp"}]'
+            )
+        },
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+
+    # La sync a tourné : le total (12 500 + 8 000) est sur le profil,
+    # donc l'équité du portail le soustrait dès maintenant.
+    r2 = client.get(
+        f"/api/v1/invest/admin/projets/{eid}", headers=auth_headers
+    )
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["avances_actionnaires"] == 20500.0
+
+
+def test_deux_comptes_du_meme_investisseur_gardent_tous_les_flux(
+    client, auth_headers, fake_qbo, invest_ids, run
+):
+    """Bug Immo BGVM (retour Phil 2026-08-25) : deux comptes d'avances
+    appariés au MÊME investisseur — le second effaçait les flux créés
+    par le premier (« (1 flux), (0 flux) »). La purge se fait
+    maintenant une seule fois par participation."""
+    eid = invest_ids["entreprise_id"]
+
+    async def _pid() -> int:
+        from sqlalchemy import select as _select
+
+        async with TestSessionLocal() as s:
+            return (
+                await s.execute(
+                    _select(OptimisationProjet.id).where(
+                        OptimisationProjet.entreprise_id == eid
+                    )
+                )
+            ).scalar_one()
+
+    pid = run(_pid())
+    # Mapping = les DEUX comptes de l'investisseur → PATCH relance la
+    # sync tout de suite.
+    r = client.patch(
+        f"/api/v1/optimisation/projets/{pid}",
+        json={
+            "avances_accounts_json": (
+                '[{"id": "900", "name": "Avances actionnaire — '
+                'Investisseur Drill"}, {"id": "902", "name": "Avance '
+                'actionnaire Investisseur Drill no 2"}]'
+            )
+        },
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+
+    async def _flux() -> list:
+        from sqlalchemy import select as _select
+
+        async with TestSessionLocal() as s:
+            part_id = (
+                await s.execute(
+                    _select(InvestParticipation.id).where(
+                        InvestParticipation.user_id
+                        == invest_ids["user_id"],
+                        InvestParticipation.entreprise_id == eid,
+                    )
+                )
+            ).scalar_one()
+            rows = (
+                await s.execute(
+                    _select(InvestFlux).where(
+                        InvestFlux.participation_id == part_id,
+                        InvestFlux.source == "qbo",
+                    )
+                )
+            ).scalars().all()
+            return sorted(float(f.montant) for f in rows)
+
+    # Les apports des DEUX comptes coexistent (12 500 + 3 000).
+    assert run(_flux()) == [3000.0, 12500.0]

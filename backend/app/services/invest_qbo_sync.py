@@ -188,6 +188,11 @@ async def sync_entreprise(db: AsyncSession, entreprise_id: int) -> dict:
     apparies: list[dict] = []
     non_apparies: list[str] = []
     sans_compte: list[dict] = []
+    #: Participations dont les flux qbo ont déjà été purgés CE tour —
+    #: quand DEUX comptes s'apparient au même investisseur, le second
+    #: ne doit pas effacer les flux du premier (bug Immo BGVM,
+    #: retour Phil 2026-08-25 : « (1 flux), (0 flux) »).
+    purgees: set[int] = set()
     for compte in comptes:
         compte_tokens = _tokens(str(compte.get("nom") or ""))
         mois_rows_c = compte.get("mois") or []
@@ -221,17 +226,22 @@ async def sync_entreprise(db: AsyncSession, entreprise_id: int) -> dict:
             continue
         part = matches[0]
 
-        # Remplace les flux qbo de cette participation (idempotent).
-        anciens = (
-            await db.execute(
-                select(InvestFlux).where(
-                    InvestFlux.participation_id == part.id,
-                    InvestFlux.source == "qbo",
+        # Remplace les flux qbo de cette participation (idempotent) —
+        # UNE seule purge par participation, même avec plusieurs
+        # comptes appariés.
+        if part.id not in purgees:
+            anciens = (
+                await db.execute(
+                    select(InvestFlux).where(
+                        InvestFlux.participation_id == part.id,
+                        InvestFlux.source == "qbo",
+                    )
                 )
-            )
-        ).scalars().all()
-        for f in anciens:
-            await db.delete(f)
+            ).scalars().all()
+            for f in anciens:
+                await db.delete(f)
+            await db.flush()
+            purgees.add(part.id)
 
         nb = 0
         mois_rows = compte.get("mois") or []
