@@ -57,8 +57,8 @@ async def send_investor_invitation(
   <p style="margin:0 0 16px 0">{salutation}</p>
   <p style="margin:0 0 16px 0">
     Votre accès au <strong>Portail investisseur Horizon</strong> est
-    prêt. Vous y retrouverez en tout temps la valeur de vos parts,
-    l'avancement de vos projets et vos documents.
+    prêt. Vous y retrouverez en tout temps la valeur de vos parts et
+    l'avancement de vos projets.
   </p>
   <p style="margin:0 0 6px 0">Vos identifiants :</p>
   <table style="margin:0 0 16px 0;border-collapse:collapse;font-size:14px">

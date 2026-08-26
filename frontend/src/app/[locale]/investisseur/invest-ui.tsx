@@ -982,6 +982,13 @@ function TransactionsReellesModal({
                 ))}
               </tbody>
             </table>
+            <p className="mt-2 text-[10px] text-white/35">
+              Les factures ponctuelles (travaux, réparations…) sont
+              jointes à leurs transactions. Les factures récurrentes
+              (électricité, assurances, télécommunications…) ne sont
+              pas déposées systématiquement — elles demeurent
+              disponibles sur demande.
+            </p>
           </div>
         ) : null}
       </div>

@@ -524,15 +524,35 @@ function ParticipationHero({
       cancelled = true;
     };
   }, [avancesPath]);
+  //: MA ligne dans les avances QuickBooks — LA source du capital
+  //: encore investi, la même que la liste par actionnaire plus bas :
+  //: la tuile et la liste racontent toujours la même histoire
+  //: (retour Phil 2026-08-25 : « ça dit qu'on leur doit 0, mais
+  //: direct en bas on voit le vrai montant »).
+  const maLigneAvances =
+    avances?.statut === "connecte"
+      ? (avances.actionnaires || []).find(
+          (a) =>
+            estMoi.has(a.name) &&
+            a.solde !== null &&
+            a.solde !== undefined
+        )
+      : undefined;
   //: Tant que la sync QuickBooks (avances d'actionnaires) n'a jamais
-  //: tourné, un capital à 0 veut dire « pas encore de données » ;
-  //: après, il veut dire « remboursé complètement ».
+  //: tourné ET qu'aucun solde live n'est lisible, un capital à 0 veut
+  //: dire « pas encore de données » ; après, « remboursé ».
   const synchronise = data.apports_synchronises === true;
   const enAttente =
     data.flux.length === 0 &&
     data.capital_investi_total === 0 &&
-    !synchronise;
-  const rembourse = !enAttente && data.capital_actuel === 0;
+    !synchronise &&
+    !maLigneAvances;
+  const capitalAffiche = maLigneAvances
+    ? (maLigneAvances.solde as number)
+    : enAttente
+    ? null
+    : data.capital_actuel;
+  const rembourse = !enAttente && capitalAffiche === 0;
 
   return (
     <div className="rounded-2xl border border-accent-500/40 bg-brand-900 p-5">
@@ -575,12 +595,14 @@ function ParticipationHero({
             </p>
           ) : (
             <p className="mt-1 text-2xl font-bold tabular-nums text-white">
-              {enAttente ? "—" : fmtMoney(data.capital_actuel)}
+              {capitalAffiche === null ? "—" : fmtMoney(capitalAffiche)}
             </p>
           )}
           <p className="mt-0.5 text-[10px] text-white/35">
             {rembourse
               ? "tous les apports ont été remboursés"
+              : maLigneAvances
+              ? "solde de vos avances d'actionnaire (QuickBooks)"
               : "apports − remboursements"}
           </p>
         </div>

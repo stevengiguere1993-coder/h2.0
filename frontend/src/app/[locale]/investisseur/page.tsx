@@ -119,8 +119,12 @@ export default function PortefeuillePage() {
 
   async function openReleve() {
     const year = new Date().getFullYear();
+    //: En aperçu « voir comme lui », le relevé est celui de
+    //: l'investisseur visé (route admin dédiée).
     const res = await authedFetch(
-      `/api/v1/invest/me/releve/${year}/pdf`
+      typeof mode === "number"
+        ? `/api/v1/invest/admin/apercu/${mode}/releve/${year}/pdf`
+        : `/api/v1/invest/me/releve/${year}/pdf`
     );
     if (!res.ok) return;
     const blob = await res.blob();
@@ -153,7 +157,9 @@ export default function PortefeuillePage() {
           }
         ]}
         rightSlot={
-          mode === "me" && data && data.projets.length > 0 ? (
+          (mode === "me" || typeof mode === "number") &&
+          data &&
+          data.projets.length > 0 ? (
             <button
               type="button"
               onClick={() => void openReleve()}
