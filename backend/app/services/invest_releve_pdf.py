@@ -313,14 +313,64 @@ async def build_releve_pdf(
                 txt(W - marge - 4, y, _money(cpt.get("solde")), 8.5,
                     _ENCRE, "Helvetica-Bold", align="right")
                 y -= 13
-            txt(marge + 10, y, "Capital encore investi", 8.5, _GRIS)
-            solde = ma_ligne.get("solde")
-            txt(W - marge - 4, y,
-                "Remboursé complètement" if solde == 0
-                else _money(solde), 8.5,
-                _VERT if solde == 0 else _ENCRE, "Helvetica-Bold",
-                align="right")
-            y -= 19
+            # La ligne totale n'apporte rien quand un SEUL compte la
+            # porte déjà (retour Phil 2026-08-26 : « pourquoi les 2
+            # sont là ? »).
+            if len(comptes) > 1:
+                txt(marge + 10, y, "Capital encore investi", 8.5,
+                    _GRIS)
+                solde = ma_ligne.get("solde")
+                txt(W - marge - 4, y,
+                    "Remboursé complètement" if solde == 0
+                    else _money(solde), 8.5,
+                    _VERT if solde == 0 else _ENCRE, "Helvetica-Bold",
+                    align="right")
+                y -= 19
+            else:
+                y -= 6
+
+        # avances des AUTRES actionnaires de la compagnie (et comptes
+        # sans actionnaire correspondant, dûs d'administrateurs
+        # compris) — retour Phil 2026-08-26.
+        autres_lignes = [
+            a
+            for a in (av.get("actionnaires") or [])
+            if a["name"] != ident and a.get("solde") is not None
+        ] if av.get("statut") == "connecte" else []
+        autres_cptes = (
+            av.get("autres_comptes") or []
+            if av.get("statut") == "connecte"
+            else []
+        )
+        if autres_lignes or autres_cptes:
+            if besoin(y, 30 + 13 * (len(autres_lignes)
+                                    + len(autres_cptes))):
+                y = nouvelle_page()
+            txt(marge + 4, y, "AVANCES DES AUTRES ACTIONNAIRES", 6.6,
+                _GRIS, "Helvetica-Bold")
+            y -= 14
+            for a in autres_lignes:
+                txt(marge + 10, y, str(a["name"])[:60], 8.5, _ENCRE)
+                txt(W - marge - 4, y,
+                    "Remboursé" if a["solde"] == 0
+                    else _money(a["solde"]), 8.5,
+                    _VERT if a["solde"] == 0 else _ENCRE,
+                    align="right")
+                y -= 13
+            for cpt in autres_cptes:
+                txt(marge + 10, y, str(cpt.get("nom") or "—")[:60],
+                    8.5, _GRIS)
+                txt(W - marge - 4, y, _money(cpt.get("solde")), 8.5,
+                    _GRIS, align="right")
+                y -= 13
+            if snap.get("avances_actionnaires") is not None:
+                txt(marge + 10, y, "Total des avances de la compagnie",
+                    8.5, _GRIS)
+                txt(W - marge - 4, y,
+                    _money(snap.get("avances_actionnaires")), 8.5,
+                    _ENCRE, "Helvetica-Bold", align="right")
+                y -= 13
+            y -= 6
 
         # mouvements de l'année (variations QuickBooks)
         mvts = [
