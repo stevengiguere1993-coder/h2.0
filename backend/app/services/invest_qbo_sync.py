@@ -109,6 +109,33 @@ def _match(candidat_noms: set[frozenset], compte_tokens: set[str]) -> bool:
     )
 
 
+def _score(candidat_noms: set[frozenset], compte_tokens: set[str]) -> int:
+    """Taille du PLUS GRAND jeu de jetons du candidat inclus dans le
+    compte — 0 si aucun."""
+    tailles = [
+        len(noms)
+        for noms in candidat_noms
+        if noms and noms <= compte_tokens
+    ]
+    return max(tailles) if tailles else 0
+
+
+def meilleur_candidat(
+    jeux: list[set[frozenset]], compte_tokens: set[str]
+) -> int | None:
+    """Indice du candidat qui matche le compte avec la PLUS GRANDE
+    spécificité — « Avance à René Meuser » va à René Meuser (2 jetons)
+    et non à Groupe Meuser Investissements (1 jeton : « meuser »).
+    None si aucun match ou égalité au sommet (ambigu). Retour Phil
+    2026-08-26."""
+    scores = [_score(noms, compte_tokens) for noms in jeux]
+    best = max(scores) if scores else 0
+    if best == 0:
+        return None
+    gagnants = [i for i, sc in enumerate(scores) if sc == best]
+    return gagnants[0] if len(gagnants) == 1 else None
+
+
 def est_compte_tiers(nom: str) -> bool:
     """Compte au nom d'un ADMINISTRATEUR (« Prêt/Dû de/à
     l'administrateur - X ») : une créance PERSONNELLE, jamais fusionnée
@@ -217,11 +244,12 @@ async def sync_entreprise(db: AsyncSession, entreprise_id: int) -> dict:
             if not inactif:
                 non_apparies.append(str(compte.get("nom") or "?"))
             continue
-        matches = [
-            part
-            for part, noms in candidats
-            if _match(noms, compte_tokens)
-        ]
+        gagnant = meilleur_candidat(
+            [noms for _, noms in candidats], compte_tokens
+        )
+        matches = (
+            [candidats[gagnant][0]] if gagnant is not None else []
+        )
         if len(matches) != 1:
             if inactif:
                 continue  # compte à zéro sans mouvement — pas de bruit

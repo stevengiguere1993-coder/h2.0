@@ -66,6 +66,17 @@ class _FakeQbo:
                     "Classification": "Liability",
                 },
                 {
+                    "Id": "905",
+                    "Name": (
+                        "Avance a un actionnaire - Rene Drill"
+                    ),
+                    "FullyQualifiedName": (
+                        "Avance a un actionnaire - Rene Drill"
+                    ),
+                    "AccountType": "Other Current Liability",
+                    "Classification": "Liability",
+                },
+                {
                     # 2e compte du MÊME investisseur (cas Immo BGVM).
                     "Id": "902",
                     "Name": (
@@ -206,6 +217,20 @@ class _FakeQbo:
                             },
                             {"value": "0.00"},
                             {"value": "4200.00"},
+                        ],
+                    },
+                    {
+                        "type": "Data",
+                        "ColData": [
+                            {
+                                "value": (
+                                    "Avance a un actionnaire - "
+                                    "Rene Drill"
+                                ),
+                                "id": "905",
+                            },
+                            {"value": "0.00"},
+                            {"value": "700.00"},
                         ],
                     },
                     {
@@ -419,6 +444,12 @@ def test_avances_par_actionnaire_soldes_quickbooks(
     # Le compte « Avances actionnaire — Investisseur Drill » est
     # rattaché à l'actionnaire de la fiche, solde du bilan.
     assert par_nom["Investisseur Drill"]["solde"] == 15500.0
+    # Les MOUVEMENTS viennent des variations QuickBooks — visibles
+    # même sans compte investisseur (retour Phil 2026-08-26).
+    assert {
+        (m["type"], m["montant"])
+        for m in par_nom["Investisseur Drill"]["mouvements"]
+    } == {("apport", 12500.0), ("apport", 3000.0)}
     # Détail PAR COMPTE — l'écran montre les sous-lignes quand
     # plusieurs comptes s'agrègent sous un actionnaire (8900).
     assert {
@@ -436,8 +467,9 @@ def test_avances_par_actionnaire_soldes_quickbooks(
     } == {
         ("Avances actionnaire — Mystere Corp", 8000.0),
         ("Avances actionnaire — Partenaire Fantome", 4200.0),
+        ("Avance a un actionnaire - Rene Drill", 700.0),
     }
-    assert data["total"] == 27700.0
+    assert data["total"] == 28400.0
 
     # Même liste côté console admin.
     r2 = client.get(
@@ -784,6 +816,16 @@ def test_releve_en_apercu_partenaire_et_sans_tri(
     )
     assert r.status_code == 200, r.text
     assert r.content[:5] == b"%PDF-"
+    import os as _os
+
+    if _os.environ.get("SMOKE_DUMP_DIR"):
+        with open(
+            _os.path.join(
+                _os.environ["SMOKE_DUMP_DIR"], "releve.pdf"
+            ),
+            "wb",
+        ) as fh:
+            fh.write(r.content)
     # Le PDF compressé ne se greppe pas ; on vérifie sur le texte
     # extrait qu'aucune mention du TRI ne subsiste.
     from io import BytesIO
@@ -875,3 +917,68 @@ def test_compte_administrateur_jamais_fusionne(
         ("Pret/Du de/a l'administrateur - Investisseur Drill", 5.0),
     }
     assert data["total"] == 12505.0
+
+
+def test_compte_va_a_l_actionnaire_le_plus_specifique(
+    client, auth_headers, fake_qbo, invest_ids, run
+):
+    """Cas « René Meuser » d'IM1 (retour Phil 2026-08-26) : « Avance à
+    un actionnaire - Rene Drill » doit aller à René Drill (2 jetons de
+    nom) et non rester ambigu avec Investisseur Drill (1 jeton via son
+    nom de famille)."""
+    eid = invest_ids["entreprise_id"]
+
+    async def _seed() -> int:
+        from sqlalchemy import select as _select, update as _update
+
+        async with TestSessionLocal() as s:
+            # Le user gagne un nom de famille « Drill » → son jeton
+            # {drill} matche aussi le compte : l'ambiguïté du cas réel.
+            await s.execute(
+                _update(User)
+                .where(User.id == invest_ids["user_id"])
+                .values(first_name="Investisseur", last_name="Drill")
+            )
+            s.add(
+                EntreprisePartner(
+                    entreprise_id=eid,
+                    partner_name="Rene Drill",
+                    ownership_pct=5.0,
+                )
+            )
+            pid = (
+                await s.execute(
+                    _select(OptimisationProjet.id).where(
+                        OptimisationProjet.entreprise_id == eid
+                    )
+                )
+            ).scalar_one()
+            await s.commit()
+            return pid
+
+    pid = run(_seed())
+    r = client.patch(
+        f"/api/v1/optimisation/projets/{pid}",
+        json={
+            "avances_accounts_json": (
+                '[{"id": "905", "name": "Avance a un actionnaire - '
+                'Rene Drill"}]'
+            )
+        },
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+
+    jeton = create_access_token(subject=str(invest_ids["user_id"]))
+    r2 = client.get(
+        f"/api/v1/invest/me/projets/{eid}/avances",
+        headers={"Authorization": f"Bearer {jeton}"},
+    )
+    assert r2.status_code == 200, r2.text
+    data = r2.json()
+    par_nom = {a["name"]: a for a in data["actionnaires"]}
+    # Le compte va au candidat le PLUS spécifique — pas d'ambiguïté,
+    # pas d'absorption par le nom de famille.
+    assert par_nom["Rene Drill"]["solde"] == 700.0
+    assert par_nom["Investisseur Drill"]["solde"] in (None, 0.0)
+    assert data["autres_comptes"] == []
