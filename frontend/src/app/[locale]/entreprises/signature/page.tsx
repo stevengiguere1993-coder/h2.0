@@ -467,7 +467,6 @@ export default function SignaturePage() {
       {uploadOpen ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => !uploadBusy && setUploadOpen(false)}
         >
           <form
             onSubmit={submitUpload}
@@ -705,7 +704,6 @@ function TemplatesModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={() => !busy && onClose()}
     >
       <div
         onClick={(e) => e.stopPropagation()}
