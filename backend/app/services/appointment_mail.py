@@ -70,7 +70,7 @@ def _body(
         ""
         if reminder
         else "<p>Une invitation calendrier (.ics) est jointe à ce courriel — "
-        "clique dessus pour ajouter le rendez-vous à ton agenda "
+        "cliquez dessus pour ajouter le rendez-vous à votre agenda "
         "(Outlook, Google, Apple).</p>"
     )
     return f"""\
@@ -83,7 +83,7 @@ def _body(
     {loc_line}
   </div>
   {ics_line}
-  <p>Si tu dois modifier ou annuler, réponds simplement à ce courriel.</p>
+  <p>Si vous devez modifier ou annuler, répondez simplement à ce courriel.</p>
   <p style="margin-top:24px;color:#555;font-size:12px">
     Horizon Services Immobiliers<br>
     RBQ 5868-5991-01 — info@immohorizon.com
