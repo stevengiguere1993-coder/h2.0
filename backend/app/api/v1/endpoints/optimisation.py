@@ -258,6 +258,41 @@ async def _revenus_historique(
     start = debut or today
     if start > today:
         return []
+    # Gestion EXTERNE : pas de baux dans Kratos — l'historique vient
+    # des paiements rapportés par le gestionnaire tiers.
+    imm = await db.get(Immeuble, immeuble_id)
+    if imm is not None and imm.gestion_externe:
+        from app.models.immobilier import PaiementExterne
+
+        rows = (
+            await db.execute(
+                select(
+                    PaiementExterne.mois_couvert,
+                    PaiementExterne.montant,
+                    PaiementExterne.loyer_attendu,
+                )
+                .join(
+                    Logement,
+                    Logement.id == PaiementExterne.logement_id,
+                )
+                .where(Logement.immeuble_id == immeuble_id)
+            )
+        ).all()
+        par_mois: Dict[str, float] = {}
+        for mois_c, montant, attendu in rows:
+            cle = mois_c.strftime("%Y-%m")
+            par_mois[cle] = par_mois.get(cle, 0.0) + float(
+                montant if montant is not None else (attendu or 0)
+            )
+        return [
+            {
+                "mois": premier.strftime("%Y-%m"),
+                "montant": round(
+                    par_mois.get(premier.strftime("%Y-%m"), 0.0), 2
+                ),
+            }
+            for premier in _mois_range(start, today)
+        ]
     baux = (
         await db.execute(
             select(Bail.loyer_mensuel, Bail.date_debut, Bail.date_fin)
@@ -286,20 +321,60 @@ async def _revenus_historique(
 
 
 async def _reels_locatifs(db, immeuble_id: int) -> tuple[float, float]:
-    """(revenus mensuels des baux ACTIFS, dépenses mensuelles courantes
-    de l'immeuble). Dépenses = mensuelles + annuelles/12 — le rythme de
-    croisière, sans les ponctuelles."""
-    baux = (
-        await db.execute(
-            select(Bail.loyer_mensuel)
-            .join(Logement, Logement.id == Bail.logement_id)
-            .where(
-                Logement.immeuble_id == immeuble_id,
-                Bail.status == BailStatus.ACTIF.value,
+    """(revenus mensuels, dépenses mensuelles courantes de l'immeuble).
+    Dépenses = mensuelles + annuelles/12 — le rythme de croisière, sans
+    les ponctuelles.
+
+    Revenus : baux ACTIFS pour la gestion interne. En gestion EXTERNE,
+    il n'y a pas de baux dans Kratos (retour Phil 2026-08-27 : « les
+    revenus mensuels ne suivent pas ») — on additionne le loyer
+    effectif des logements, comme la page Paiements."""
+    imm = await db.get(Immeuble, immeuble_id)
+    if imm is not None and imm.gestion_externe:
+        from app.services.loyer_effectif import loyer_effectif
+
+        logements = (
+            await db.execute(
+                select(Logement).where(
+                    Logement.immeuble_id == immeuble_id
+                )
             )
-        )
-    ).scalars().all()
-    revenus = float(sum(float(x or 0) for x in baux))
+        ).scalars().all()
+        bail_par_logement: dict[int, float] = {}
+        for b in (
+            await db.execute(
+                select(Bail)
+                .join(Logement, Logement.id == Bail.logement_id)
+                .where(
+                    Logement.immeuble_id == immeuble_id,
+                    Bail.status == BailStatus.ACTIF.value,
+                )
+            )
+        ).scalars().all():
+            bail_par_logement[b.logement_id] = float(
+                b.loyer_mensuel or 0
+            )
+        revenus = 0.0
+        for lg in logements:
+            loyer_bail = bail_par_logement.get(lg.id)
+            if loyer_bail is None and lg.status != "occupe":
+                continue
+            revenus += float(
+                loyer_effectif(lg, loyer_bail, gestion_externe=True)
+                or 0
+            )
+    else:
+        baux = (
+            await db.execute(
+                select(Bail.loyer_mensuel)
+                .join(Logement, Logement.id == Bail.logement_id)
+                .where(
+                    Logement.immeuble_id == immeuble_id,
+                    Bail.status == BailStatus.ACTIF.value,
+                )
+            )
+        ).scalars().all()
+        revenus = float(sum(float(x or 0) for x in baux))
 
     deps = (
         await db.execute(

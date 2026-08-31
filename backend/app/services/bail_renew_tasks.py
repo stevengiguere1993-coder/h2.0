@@ -66,7 +66,15 @@ async def scan_and_create_renew_tasks(
     db: AsyncSession, today: date | None = None
 ) -> dict:
     """Scan quotidien : crée les tâches QG pour chaque bail dont la
-    fenêtre de rappel est ouverte (et pas encore traité)."""
+    fenêtre de rappel est ouverte (et pas encore traité).
+
+    DÉSACTIVÉ (retour Phil 2026-08-27, /entreprises/taches : « les
+    tâches de renouvellement apparaissent ici non merci — si j'ai des
+    tâches à mettre je vais venir les mettre manuellement »). Le suivi
+    des renouvellements vit dans /immobilier/renouvellements ; les
+    tâches QG restent 100 % manuelles. Le cron continue d'appeler ce
+    scan sans effet — réactiver = retirer ce court-circuit."""
+    return {"created": 0, "skipped": 0, "disabled": True}
     today = today or date.today()
     now_utc = datetime.now(timezone.utc)
 

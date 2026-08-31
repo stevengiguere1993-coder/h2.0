@@ -116,6 +116,39 @@ async def _run_startup_tasks() -> None:
             "backfill dossiers unites vacantes failed: %s", exc
         )
 
+    # Purge 2026-08-27 (retour Phil) : les tâches QG de renouvellement
+    # auto-générées quittent /entreprises/taches — la génération est
+    # coupée (bail_renew_tasks) et les tâches auto NON terminées sont
+    # supprimées. Best-effort, idempotent (plus rien ne les recrée).
+    try:
+        from sqlalchemy import delete as _delete
+
+        from app.db.session import AsyncSessionLocal as _RenewSession
+        from app.models.entreprise_tache import (
+            EntrepriseTache as _ETache,
+            TacheStatus as _TStatus,
+        )
+
+        async with _RenewSession() as session:
+            res = await session.execute(
+                _delete(_ETache).where(
+                    _ETache.tags_json.like(
+                        "%auto-bail-renouvellement%"
+                    ),
+                    _ETache.status != _TStatus.DONE.value,
+                )
+            )
+            if res.rowcount:
+                await session.commit()
+                logger.info(
+                    "Startup purge: %d tache(s) de renouvellement "
+                    "auto-generees supprimees", res.rowcount,
+                )
+    except Exception as exc:
+        logger.warning(
+            "purge taches bail-renew failed: %s", exc
+        )
+
     # Backfill 2026-08-17 : baux placeholder PlexFlow « terminés » par
     # erreur à l'import du 12 août alors que le locataire est en place
     # (paie encore, aucun successeur) — réactivés. Best-effort,
