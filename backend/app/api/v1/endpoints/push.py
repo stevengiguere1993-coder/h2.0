@@ -119,6 +119,10 @@ async def unsubscribe(
     summary="Envoi de notification de test à l'user courant",
 )
 async def test_push(user: CurrentUser, db: DBSession) -> dict:
+    # ``errors`` remonte l'échec exact jusqu'à l'UI : un test qui part
+    # dans le vide sans explication n'aide personne (retour Phil
+    # 2026-08-31 — abonné, popup accepté, rien reçu, aucun indice).
+    errors: list[str] = []
     sent = await push_to_user(
         db,
         user_id=user.id,
@@ -126,5 +130,6 @@ async def test_push(user: CurrentUser, db: DBSession) -> dict:
         body="Vous recevrez désormais les alertes Horizon ici.",
         href="/telephonie",
         tag="test",
+        errors_out=errors,
     )
-    return {"sent": sent}
+    return {"sent": sent, "errors": errors}

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { MmsImages } from "@/components/mms-images";
 import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
@@ -313,6 +314,9 @@ function FeedRow({ it }: { it: FeedItem }) {
           ) : null}
           {(isEmail || isSms) && it.body ? (
             <ExpandableText text={it.body} />
+          ) : null}
+          {isSms && it.num_media > 0 ? (
+            <MmsImages smsId={it.id} count={it.num_media} />
           ) : null}
           {isVoicemail && it.voicemail_summary ? (
             <p className="mt-1 flex items-start gap-1 text-xs text-white/80">

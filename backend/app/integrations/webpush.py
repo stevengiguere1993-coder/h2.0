@@ -51,10 +51,18 @@ async def push_to_user(
     href: Optional[str] = None,
     tag: Optional[str] = None,
     icon: Optional[str] = None,
+    errors_out: Optional[list] = None,
 ) -> int:
     """Pousse une notif à toutes les subscriptions du user. Renvoie
-    le nombre de notifs effectivement envoyées."""
+    le nombre de notifs effectivement envoyées.
+
+    ``errors_out`` : liste où consigner les échecs par subscription
+    (chaînes courtes) — le /push/test s'en sert pour que l'échec soit
+    VISIBLE dans l'UI au lieu de mourir dans les logs (retour Phil
+    2026-08-31 : abonné, test jamais reçu, aucun indice)."""
     if not _vapid_configured():
+        if errors_out is not None:
+            errors_out.append("VAPID non configuré sur le serveur.")
         return 0
     subs = (
         await db.execute(
@@ -64,9 +72,12 @@ async def push_to_user(
         )
     ).scalars().all()
     if not subs:
+        if errors_out is not None:
+            errors_out.append("Aucun abonnement enregistré pour ce compte.")
         return 0
     return await _push_to_subscriptions(
-        db, subs, title=title, body=body, href=href, tag=tag, icon=icon
+        db, subs, title=title, body=body, href=href, tag=tag, icon=icon,
+        errors_out=errors_out,
     )
 
 
@@ -109,6 +120,7 @@ async def _push_to_subscriptions(
     href: Optional[str],
     tag: Optional[str],
     icon: Optional[str],
+    errors_out: Optional[list] = None,
 ) -> int:
     from datetime import datetime, timezone
 
@@ -116,6 +128,8 @@ async def _push_to_subscriptions(
         from pywebpush import WebPushException, webpush
     except ImportError:
         log.warning("pywebpush not installed — WebPush disabled")
+        if errors_out is not None:
+            errors_out.append("pywebpush absent du serveur.")
         return 0
 
     payload = json.dumps(
@@ -149,6 +163,11 @@ async def _push_to_subscriptions(
             # 404/410 = subscription expirée ou révoquée → on purge.
             if code in (404, 410):
                 to_delete.append(s.id)
+                if errors_out is not None:
+                    errors_out.append(
+                        "Abonnement expiré (purgé) — réactive les "
+                        "notifications sur l'appareil."
+                    )
             else:
                 log.warning(
                     "WebPush failed for sub %s: %s (code=%s)",
@@ -156,8 +175,23 @@ async def _push_to_subscriptions(
                     exc,
                     code,
                 )
+                if errors_out is not None:
+                    body_txt = ""
+                    if getattr(exc, "response", None) is not None:
+                        try:
+                            body_txt = (exc.response.text or "")[:200]
+                        except Exception:  # noqa: BLE001
+                            body_txt = ""
+                    errors_out.append(
+                        f"Refus du service push (code={code}) : "
+                        f"{body_txt or exc}"[:300]
+                    )
         except Exception as exc:  # noqa: BLE001
             log.warning("WebPush unexpected error for sub %s: %s", s.id, exc)
+            if errors_out is not None:
+                errors_out.append(
+                    f"Erreur d'envoi ({type(exc).__name__}) : {exc}"[:300]
+                )
     if to_delete:
         from sqlalchemy import delete as sa_delete
 

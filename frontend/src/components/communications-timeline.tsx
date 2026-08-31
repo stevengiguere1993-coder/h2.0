@@ -23,6 +23,7 @@ import {
 
 import { authedFetch } from "@/lib/auth";
 import { Link } from "@/i18n/navigation";
+import { MmsImages } from "@/components/mms-images";
 
 export type CommunicationsEntityType =
   | "client"
@@ -580,6 +581,9 @@ function EventRow({
             ) : null}
             {isSms && ev.body ? (
               <ExpandableText text={ev.body} className="text-white/80" />
+            ) : null}
+            {isSms && ev.num_media > 0 ? (
+              <MmsImages smsId={ev.id} count={ev.num_media} />
             ) : null}
             {isVoicemail && ev.voicemail_summary ? (
               <ExpandableText
