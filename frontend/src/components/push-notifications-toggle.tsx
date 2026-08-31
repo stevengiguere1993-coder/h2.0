@@ -71,11 +71,19 @@ export function PushNotificationsToggle() {
     if (r.ok) {
       setSubscribed(true);
       const t = await sendTestPush();
-      setNotice(
-        t
-          ? `Notifications activées (test envoyé à ${t.sent} appareil${t.sent > 1 ? "s" : ""}).`
-          : "Notifications activées."
-      );
+      if (t && t.sent > 0) {
+        setNotice(
+          `Notifications activées (test envoyé à ${t.sent} appareil${t.sent > 1 ? "s" : ""}).`
+        );
+      } else if (t && t.errors && t.errors.length > 0) {
+        // Abonné, mais l'envoi échoue côté serveur : le dire, sinon
+        // l'utilisateur croit que tout marche et n'attend rien.
+        setNotice(`Abonné, mais le test a échoué : ${t.errors[0]}`);
+      } else {
+        setNotice(
+          "Abonné, mais le test n'a pas pu être livré — préviens l'admin."
+        );
+      }
     } else {
       const reasons: Record<string, string> = {
         push_unsupported: "Push pas supporté.",
@@ -185,9 +193,15 @@ export function PushNotificationsSidebarItem() {
       if (r.ok) {
         setSubscribed(true);
         const t = await sendTestPush();
-        setNotice(
-          t ? "Activées — notification test envoyée." : "Notifications activées."
-        );
+        if (t && t.sent > 0) {
+          setNotice("Activées — notification test envoyée.");
+        } else if (t && t.errors && t.errors.length > 0) {
+          setNotice(`Abonné, mais le test a échoué : ${t.errors[0]}`);
+        } else {
+          setNotice(
+            "Abonné, mais le test n'a pas pu être livré — préviens l'admin."
+          );
+        }
       } else {
         const reasons: Record<string, string> = {
           push_unsupported: "Push pas supporté sur cet appareil.",

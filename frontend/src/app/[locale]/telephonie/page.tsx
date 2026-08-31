@@ -29,6 +29,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { CallButton } from "@/components/call-button";
 import { DialPad } from "@/components/dial-pad";
 import { DialPadFab } from "@/components/dial-pad-fab";
+import { MmsImages } from "@/components/mms-images";
 import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
 import { RecordingPlayer } from "@/components/recording-player";
 import { PageDriveSection } from "@/components/drive/PageDriveSection";
@@ -1542,7 +1543,10 @@ function MessagesSection({
                       ) : null}
                       <div className="truncate text-[11px] text-white/50">
                         {t.last_message.direction === "outbound" ? "→ " : ""}
-                        {t.last_message.body || "(MMS)"}
+                        {t.last_message.body ||
+                          (t.last_message.num_media > 0
+                            ? "📷 Photo"
+                            : "(MMS)")}
                       </div>
                       <div className="text-[10px] text-white/30">
                         {formatDateTime(t.last_message.received_at)}
@@ -1644,7 +1648,10 @@ function MessagesSection({
                         : "mr-auto bg-brand-800 text-white/90"
                     }`}
                   >
-                    {m.body || (m.num_media > 0 ? "(MMS)" : "")}
+                    {m.body}
+                    {m.num_media > 0 ? (
+                      <MmsImages smsId={m.id} count={m.num_media} />
+                    ) : null}
                     <div className="mt-1 text-[9px] text-white/40">
                       {formatDateTime(m.received_at)}
                     </div>

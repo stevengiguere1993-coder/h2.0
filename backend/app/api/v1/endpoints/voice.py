@@ -134,6 +134,62 @@ async def stream_call_recording(
     )
 
 
+@router.get("/sms/{sms_id}/media/{index}")
+async def stream_sms_media(
+    sms_id: int, index: int, db: DBSession, user: CurrentUser
+) -> Response:
+    """Streame une image MMS à travers Kratos. Les URLs de média Twilio
+    exigent l'auth Basic du compte — un <img> qui pointe directement sur
+    Twilio ne charge jamais, c'est pour ça que les photos des clients
+    « n'arrivaient pas » (retour Phil 2026-08-31, cliente Danii
+    Desjardins). Même pattern que l'enregistrement d'appel ci-dessus.
+    """
+    import base64
+    import json as _json
+
+    import httpx
+
+    sms = await db.get(VoiceSms, sms_id)
+    if sms is None or not sms.media_urls:
+        raise HTTPException(status_code=404, detail="Média introuvable.")
+    try:
+        urls = _json.loads(sms.media_urls)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Média introuvable.")
+    if not isinstance(urls, list) or not (0 <= index < len(urls)):
+        raise HTTPException(status_code=404, detail="Média introuvable.")
+    url = str(urls[index])
+    # Garde-fou anti-SSRF : on ne proxie QUE des médias Twilio.
+    if not url.startswith("https://api.twilio.com/"):
+        raise HTTPException(status_code=404, detail="Média introuvable.")
+
+    sid = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+    token = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+    if not sid or not token:
+        raise HTTPException(
+            status_code=503, detail="Twilio non configuré (creds manquantes)."
+        )
+
+    basic = base64.b64encode(f"{sid}:{token}".encode()).decode("ascii")
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as http:
+            r = await http.get(url, headers={"Authorization": f"Basic {basic}"})
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Échec de récupération Twilio.")
+    if r.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Twilio a répondu {r.status_code} pour le média.",
+        )
+
+    media_type = r.headers.get("content-type", "image/jpeg")
+    return Response(
+        content=r.content,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
 # ---------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------

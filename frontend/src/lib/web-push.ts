@@ -104,11 +104,14 @@ export async function unsubscribeFromPush(): Promise<boolean> {
   return true;
 }
 
-export async function sendTestPush(): Promise<{ sent: number } | null> {
+export async function sendTestPush(): Promise<{
+  sent: number;
+  errors?: string[];
+} | null> {
   try {
     const r = await authedFetch("/api/v1/push/test", { method: "POST" });
     if (!r.ok) return null;
-    return (await r.json()) as { sent: number };
+    return (await r.json()) as { sent: number; errors?: string[] };
   } catch {
     return null;
   }
