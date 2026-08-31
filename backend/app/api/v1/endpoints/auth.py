@@ -431,6 +431,160 @@ async def get_user_avatar(
     )
 
 
+class MotDePasseOublieIn(BaseModel):
+    email: str
+
+
+class ReinitialisationIn(BaseModel):
+    token: str
+    nouveau_mot_de_passe: str
+
+
+_REPONSE_GENERIQUE = {
+    "ok": True,
+    "message": "Si un compte existe pour ce courriel, un lien de "
+    "réinitialisation vient d'être envoyé (valide 60 minutes).",
+}
+
+
+@router.post(
+    "/mot-de-passe-oublie",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Réinitialisation de mot de passe en libre-service "
+    "(étape 1 : demande)",
+)
+async def mot_de_passe_oublie(body: MotDePasseOublieIn, db: DBSession) -> dict:
+    """Demande des gestionnaires (2026-08-27) : reset sans passer par
+    un admin. Sécurité : réponse IDENTIQUE que le courriel existe ou
+    non (anti-énumération) ; jeton aléatoire à usage unique, stocké
+    HACHÉ (SHA-256), valide 60 minutes ; l'envoi du courriel est
+    best-effort et ne révèle rien."""
+    import hashlib
+    import logging
+    import secrets
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import func, select
+
+    from app.models.user import User
+
+    log = logging.getLogger(__name__)
+    email = (body.email or "").strip().lower()
+    if not email:
+        return _REPONSE_GENERIQUE
+    u = (
+        await db.execute(
+            select(User).where(func.lower(User.email) == email)
+        )
+    ).scalar_one_or_none()
+    if u is None or not u.is_active:
+        return _REPONSE_GENERIQUE
+    token = secrets.token_urlsafe(32)
+    u.reset_token_hash = hashlib.sha256(token.encode()).hexdigest()
+    u.reset_token_expires_at = datetime.now(timezone.utc) + timedelta(
+        hours=1
+    )
+    await db.flush()
+    await db.commit()
+    try:
+        from app.integrations.email_graph import get_mailer
+        from app.services.public_links import public_base
+
+        mailer = get_mailer()
+        if mailer.ready:
+            lien = (
+                f"{public_base()}/reinitialiser-mot-de-passe"
+                f"?token={token}"
+            )
+            prenom = (u.first_name or "").strip()
+            salutation = f"Bonjour {prenom}," if prenom else "Bonjour,"
+            await mailer.send(
+                to=[u.email],
+                subject="Réinitialisation de votre mot de passe — "
+                "Kratos",
+                html_body=f"""\
+<div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.55;max-width:620px">
+  <p style="margin:0 0 16px 0">{salutation}</p>
+  <p style="margin:0 0 16px 0">
+    Vous avez demandé la réinitialisation de votre mot de passe.
+    Cliquez sur le bouton ci-dessous pour en choisir un nouveau —
+    le lien est valide <strong>60 minutes</strong> et ne peut servir
+    qu'une seule fois.
+  </p>
+  <p style="margin:20px 0 6px 0">
+    <a href="{lien}"
+       style="display:inline-block;background:#1d4ed8;color:#fff;
+              padding:14px 24px;border-radius:8px;font-weight:bold;
+              text-decoration:none">Choisir un nouveau mot de passe</a>
+  </p>
+  <p style="margin:8px 0 16px 0;font-size:12px;color:#555">
+    Ou copiez ce lien : {lien}
+  </p>
+  <p style="margin:0;font-size:12px;color:#555">
+    Si vous n'êtes pas à l'origine de cette demande, ignorez ce
+    courriel — votre mot de passe actuel reste valide.
+  </p>
+</div>
+""",
+            )
+    except Exception as exc:  # noqa: BLE001 — ne révèle rien au client
+        log.warning("Courriel de réinitialisation non envoyé : %s", exc)
+    return _REPONSE_GENERIQUE
+
+
+@router.post(
+    "/reinitialiser-mot-de-passe",
+    summary="Réinitialisation de mot de passe en libre-service "
+    "(étape 2 : nouveau mot de passe)",
+)
+async def reinitialiser_mot_de_passe(
+    body: ReinitialisationIn, db: DBSession
+) -> dict:
+    import hashlib
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from app.core.security import get_password_hash
+    from app.models.user import User
+
+    if len(body.nouveau_mot_de_passe or "") < 8:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Le mot de passe doit avoir au moins 8 caractères.",
+        )
+    h = hashlib.sha256((body.token or "").encode()).hexdigest()
+    u = (
+        await db.execute(
+            select(User).where(User.reset_token_hash == h)
+        )
+    ).scalar_one_or_none()
+    exp_at = u.reset_token_expires_at if u is not None else None
+    if exp_at is not None and exp_at.tzinfo is None:
+        # SQLite (tests) rend le timestamp sans fuseau — il a été
+        # écrit en UTC.
+        exp_at = exp_at.replace(tzinfo=timezone.utc)
+    expire = (
+        u is None
+        or not u.is_active
+        or exp_at is None
+        or exp_at < datetime.now(timezone.utc)
+    )
+    if expire:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Lien invalide ou expiré — refaites une demande "
+            "depuis « Mot de passe oublié ? ».",
+        )
+    u.hashed_password = get_password_hash(body.nouveau_mot_de_passe)
+    u.must_change_password = False
+    u.reset_token_hash = None
+    u.reset_token_expires_at = None
+    await db.flush()
+    await db.commit()
+    return {"ok": True}
+
+
 @router.post(
     "/change-password",
     response_model=UserRead,

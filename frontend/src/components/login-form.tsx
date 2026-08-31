@@ -16,7 +16,7 @@ import {
   TrendingUp
 } from "lucide-react";
 
-import { useRouter } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import {
   canEnterVolet,
   firstAllowedPath,
@@ -569,6 +569,13 @@ export function LoginForm() {
         />
         Rester connecté pendant 12 h
       </label>
+      {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+      <Link
+        href={"/mot-de-passe-oublie" as any}
+        className="block text-sm text-white/70 underline underline-offset-2 hover:text-white"
+      >
+        Mot de passe oublié ?
+      </Link>
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
       <button type="submit" disabled={submitting} className="btn-primary w-full">
         {submitting ? (

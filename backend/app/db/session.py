@@ -1857,6 +1857,11 @@ async def init_db() -> None:
                 "BOOLEAN NOT NULL DEFAULT FALSE",
             ),
             ("users", "agenda_invite_token", "VARCHAR(64)"),
+            # Réinitialisation de mot de passe en libre-service
+            # (2026-08-27) : jeton haché + échéance.
+            ("users", "reset_token_hash", "VARCHAR(64)"),
+            ("users", "reset_token_expires_at",
+             "TIMESTAMP WITH TIME ZONE"),
             # Préférence de thème portail. 'light' (noir sur blanc) =
             # défaut. 'dark' = blanc sur noir (legacy). N'affecte que
             # le portail interne — la landing publique reste dark.

@@ -4,9 +4,10 @@ User model for authentication and authorization.
 
 import json
 from enum import Enum
+from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, LargeBinary, String, Text
+from sqlalchemy import Boolean, DateTime, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -132,6 +133,15 @@ class User(Base, TimestampMixin):
     # Token opaque pour l'auto-confirmation des RDV agenda par email.
     # L'invité reçoit un lien /agenda/confirm/{event_id}?token=XXX qui
     # valide sans login. Régénérable par l'utilisateur.
+    #: Réinitialisation de mot de passe en libre-service : SHA-256 du
+    #: jeton envoyé par courriel (jamais le jeton en clair) + échéance.
+    #: Colonnes additives (ensure_critical_columns).
+    reset_token_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    reset_token_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     agenda_invite_token: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, index=True
     )
