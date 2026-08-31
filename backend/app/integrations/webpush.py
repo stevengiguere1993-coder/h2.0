@@ -42,6 +42,22 @@ def _vapid_configured() -> bool:
     )
 
 
+def _vapid_subject() -> str:
+    """Le claim ``sub`` VAPID DOIT être un lien ``mailto:`` (ou https).
+
+    En prod, ``VAPID_SUBJECT`` contenait l'adresse toute nue → py-vapid
+    refusait chaque envoi (« missing 'sub' from claims ») et AUCUNE
+    notification ne partait (diagnostiqué avec Phil 2026-08-31 grâce à
+    la remontée d'erreurs du /push/test). On normalise ici pour que la
+    config reste tolérante."""
+    subj = (os.getenv("VAPID_SUBJECT") or "").strip()
+    if not subj:
+        return "mailto:info@immohorizon.com"
+    if subj.startswith(("mailto:", "https://")):
+        return subj
+    return f"mailto:{subj}"
+
+
 async def push_to_user(
     db,
     *,
@@ -141,7 +157,7 @@ async def _push_to_subscriptions(
             "icon": icon or "/pwa/icon-192.png",
         }
     )
-    vapid_claims = {"sub": os.getenv("VAPID_SUBJECT", "mailto:info@horizonservicesimmobiliers.com")}
+    vapid_claims = {"sub": _vapid_subject()}
     private_key = os.getenv("VAPID_PRIVATE_KEY", "")
     sent = 0
     to_delete: list[int] = []
