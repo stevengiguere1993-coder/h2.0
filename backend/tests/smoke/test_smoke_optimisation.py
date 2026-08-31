@@ -689,3 +689,51 @@ def test_projet_complet(client, auth_headers, run):
         ).status_code
         == 404
     )
+
+
+def test_reels_locatifs_gestion_externe(run):
+    """Retour Phil 2026-08-27 : les revenus mensuels d'une compagnie en
+    gestion externe ne suivaient pas — pas de baux dans Kratos, le réel
+    vient du loyer effectif des logements (comme la page Paiements)."""
+    from app.api.v1.endpoints.optimisation import _reels_locatifs
+    from app.models.immobilier import Immeuble, Logement
+
+    from .conftest import TestSessionLocal
+
+    async def _go():
+        async with TestSessionLocal() as s:
+            imm = Immeuble(
+                name="Externe Opti", address="99 rue Opti",
+                is_active=True, gestion_externe=True,
+            )
+            s.add(imm)
+            await s.flush()
+            s.add_all([
+                Logement(
+                    immeuble_id=imm.id, numero="O-1",
+                    status="occupe", loyer_demande=700.0,
+                ),
+                Logement(
+                    immeuble_id=imm.id, numero="O-2",
+                    status="vacant",
+                ),
+            ])
+            await s.commit()
+            revenus, _dep = await _reels_locatifs(s, imm.id)
+            return revenus
+
+    assert run(_go()) == 700.0
+
+
+def test_taches_renouvellement_desactivees(run):
+    """Retour Phil 2026-08-27 : « les tâches de renouvellement
+    apparaissent ici non merci » — la génération est coupée."""
+    from app.services.bail_renew_tasks import scan_and_create_renew_tasks
+
+    from .conftest import TestSessionLocal
+
+    async def _go():
+        async with TestSessionLocal() as s:
+            return await scan_and_create_renew_tasks(s)
+
+    assert run(_go()).get("disabled") is True
