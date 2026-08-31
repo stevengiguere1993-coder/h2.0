@@ -9,7 +9,8 @@
  *   2. Paramètres        → hub unifié /parametres
  *   3. Accueil du portail → sélecteur de pôles (/connexion)
  *   4. Installer l'application (PWA — disparaît si déjà installée)
- *   5. Se déconnecter (rose)
+ *   5. Activer les notifications (push — visible sur tous les pôles)
+ *   6. Se déconnecter (rose)
  *
  * Autosuffisant : user + signOut via useCurrentUser — aucun prop à câbler
  * sauf `onNavigate` (fermer la sidebar mobile au clic).
@@ -20,6 +21,7 @@ import { LogOut, Settings } from "lucide-react";
 import { Link } from "@/i18n/navigation";
 import { AccountBadge } from "@/components/account-badge";
 import { InstallAppButton } from "@/components/install-app-button";
+import { PushNotificationsSidebarItem } from "@/components/push-notifications-toggle";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
 export function SidebarFooter({ onNavigate }: { onNavigate?: () => void }) {
@@ -51,6 +53,7 @@ export function SidebarFooter({ onNavigate }: { onNavigate?: () => void }) {
         {/* « Accueil du portail » retiré (retour Phil) : le clic sur le
             logo du pôle fait déjà ce chemin. */}
         <InstallAppButton variant="sidebar" />
+        <PushNotificationsSidebarItem />
         <button
           type="button"
           onClick={signOut}

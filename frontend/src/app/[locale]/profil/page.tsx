@@ -17,6 +17,7 @@ import { authedFetch, getToken, setToken } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { Link } from "@/i18n/navigation";
 import { KratosLogo } from "@/components/kratos-logo";
+import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
 import {
   PROFILE_COLORS,
   PROFILE_COLOR_SWATCH as PROFILE_SWATCH_CLS,
@@ -481,6 +482,26 @@ export default function ProfilePage() {
               </button>
             );
           })}
+        </div>
+      </section>
+
+      {/* Notifications push — par appareil (retour Phil 2026-08-31 :
+          le bouton doit être facile à trouver, pas juste dans
+          Téléphonie). */}
+      <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Notifications
+        </h2>
+        <p className="mt-1 text-xs text-white/50">
+          Reçois les alertes du portail directement sur cet appareil
+          (urgences, messages, rendez-vous). Sur iPhone, il faut
+          d&apos;abord installer l&apos;application (Partager → Ajouter à
+          l&apos;écran d&apos;accueil), puis activer ici depuis l&apos;app
+          installée. À refaire sur chaque appareil où tu veux les
+          recevoir.
+        </p>
+        <div className="mt-4">
+          <PushNotificationsToggle />
         </div>
       </section>
 

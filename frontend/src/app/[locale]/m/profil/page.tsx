@@ -1,11 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Calendar, Copy, ExternalLink, Loader2, RefreshCw, Wallet } from "lucide-react";
+import {
+  Bell,
+  Calendar,
+  Copy,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  Wallet
+} from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
+import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
 
 type Me = {
   user_email: string;
@@ -218,6 +227,21 @@ export default function MobileProfil() {
                 </a>
               </section>
             ) : null}
+
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+              <p className="flex items-center gap-2 text-xs uppercase tracking-wider text-white/50">
+                <Bell className="h-3.5 w-3.5" /> Notifications
+              </p>
+              <p className="mt-2 text-xs text-white/70">
+                Reçois les alertes du portail directement sur ce
+                téléphone. Sur iPhone, installe d&apos;abord l&apos;app
+                (Partager → Ajouter à l&apos;écran d&apos;accueil), puis
+                active ici depuis l&apos;app installée.
+              </p>
+              <div className="mt-3">
+                <PushNotificationsToggle />
+              </div>
+            </section>
 
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
               <p className="flex items-center gap-2 text-xs uppercase tracking-wider text-white/50">
