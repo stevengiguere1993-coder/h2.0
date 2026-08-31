@@ -889,6 +889,19 @@ class FinanceInputs:
     # selon le prêteur (peut monter à 0.35).
     mdf_preteur_b_pct: float = 0.25
 
+    # Août 2026 — Stratégie d'acquisition de la fiche. 'preteur_b'
+    # (défaut historique) ; les modes d'achat direct (conventionnel,
+    # schl_std, aph_50, aph_100) arrivent en phase 2. Le moteur
+    # l'écho dans les résultats pour que la fiche ET le PDF suivent.
+    strategie: str = "preteur_b"
+
+    # Août 2026 — Balance de vente (financement vendeur). Le montant
+    # REMPLACE une partie du prêt du prêteur B (le cash à l'achat ne
+    # change pas) ; son taux (fraction, 0.06 = 6 %) sert aux intérêts
+    # de portage pendant le projet. 0 → calcul identique à avant.
+    balance_vente_montant: float = 0.0
+    balance_vente_taux_pct: float = 0.0
+
     # Taux d'intérêt du prêteur B pendant la phase chantier
     # (8 % typique 2024-2025). Utilisé pour calculer L17 — intérêts
     # de portage pendant projet.
@@ -1007,6 +1020,14 @@ class FinanceResults:
     best_refi_amount: float
     best_refi_program: str
 
+    # Août 2026 — chantier stratégies d'acquisition : détail du prêt
+    # du prêteur B (sur le prix, portion des frais financée, total) et
+    # balance de vente retenue. Défauts 0 → rétrocompatible.
+    pret_preteur_b_sur_prix: float = 0.0
+    pret_preteur_b_frais_finances: float = 0.0
+    pret_preteur_b_total: float = 0.0
+    balance_vente_retenue: float = 0.0
+
     def to_dict(self) -> dict:
         """Pour persistance JSON dans `LeadAnalysis.analysis_results_json`."""
         mdf_pct = (
@@ -1034,6 +1055,21 @@ class FinanceResults:
             "frais_demarrage_financables": list(
                 self.inputs.frais_demarrage_financables or []
             ),
+            # Août 2026 — stratégie de la fiche + prêt du prêteur B.
+            # La fiche ET le PDF s'appuient là-dessus (jamais sur un
+            # flag frontend) pour adapter l'affichage.
+            "strategie": self.inputs.strategie or "preteur_b",
+            "pret_preteur_b": {
+                "sur_prix": self.pret_preteur_b_sur_prix,
+                "frais_finances": self.pret_preteur_b_frais_finances,
+                "total": self.pret_preteur_b_total,
+            },
+            "balance_vente": {
+                "montant": self.balance_vente_retenue,
+                "taux_pct": float(
+                    self.inputs.balance_vente_taux_pct or 0.0
+                ) * 100.0,
+            },
             "typology": {
                 "h13_loyer_pondere": self.typology.h13_loyer_pondere,
                 "nb_abordables": self.typology.nb_abordables,
@@ -1362,10 +1398,19 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
                 _frais_fin_total += float(_c.get("montant", 0) or 0)
             except (TypeError, ValueError):
                 pass
+    # Balance de vente : le vendeur finance une partie du prix → le
+    # prêt B sur le prix diminue d'autant, et la balance porte SON
+    # taux à elle pendant le projet. BV = 0 → formule identique à
+    # avant, au centime.
+    _bv = max(0.0, float(inputs.balance_vente_montant or 0.0))
+    _bv = min(_bv, (1 - _mdf_pct) * inputs.prix_achat)
+    _pret_b_sur_prix = (1 - _mdf_pct) * inputs.prix_achat - _bv
     frais.interets = (
-        (1 - _mdf_pct)
-        * (inputs.prix_achat + _frais_fin_total)
+        (_pret_b_sur_prix + (1 - _mdf_pct) * _frais_fin_total)
         * inputs.taux_interet_preteur_b_projet
+        * inputs.duree_projet_annees
+        + _bv
+        * float(inputs.balance_vente_taux_pct or 0.0)
         * inputs.duree_projet_annees
     )
 
@@ -1382,6 +1427,9 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
     )
     financables = set(inputs.frais_demarrage_financables or [])
     frais_cash_total = 0.0
+    # Portion des frais FINANCÉE par le prêteur B (complément du cash
+    # des postes finançables) — sert à afficher le prêt B total.
+    frais_finance_total = 0.0
     for k, v in frais.__dict__.items():
         # ``frais_custom`` est une LISTE (postes personnalisés), pas un
         # montant scalaire : traité séparément ci-dessous pour éviter
@@ -1391,6 +1439,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         amount = float(v or 0)
         if k in financables:
             frais_cash_total += amount * mdf_pct
+            frais_finance_total += amount * (1 - mdf_pct)
         else:
             frais_cash_total += amount
     # Postes personnalisés : même logique « finançable » que les postes
@@ -1406,9 +1455,21 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         item["financable"] = is_fin
         if is_fin:
             frais_cash_total += amount * mdf_pct
+            frais_finance_total += amount * (1 - mdf_pct)
         else:
             frais_cash_total += amount
     mdf_preteur_b = mdf_pct * inputs.prix_achat + frais_cash_total
+
+    # ── Prêt accordé par le prêteur B (retour Phil 2026-08-31 : le
+    # montant du prêt doit apparaître, en complément de la MDF).
+    # Balance de vente : finance une partie du prix à la place du
+    # prêteur B — le cash ne bouge pas, le prêt B diminue.
+    balance_vente = min(
+        max(0.0, float(inputs.balance_vente_montant or 0.0)),
+        (1 - mdf_pct) * inputs.prix_achat,
+    )
+    pret_b_sur_prix = (1 - mdf_pct) * inputs.prix_achat - balance_vente
+    pret_preteur_b_total = pret_b_sur_prix + frais_finance_total
 
     # ── Étape 5 : MDF achat / équité refi ────────────────────────
     achat.mdf_necessaire = prix_acquisition - achat.financement
@@ -1439,4 +1500,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         refi_aph_100=refi_aph_100,
         best_refi_amount=best_amount,
         best_refi_program=best_program,
+        pret_preteur_b_sur_prix=pret_b_sur_prix,
+        pret_preteur_b_frais_finances=frais_finance_total,
+        pret_preteur_b_total=pret_preteur_b_total,
+        balance_vente_retenue=balance_vente,
     )
