@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { calculateurStrategiesActif } from "@/lib/feature-flags";
 import { useConfirm } from "@/components/confirm-dialog";
 import { PillPicker } from "@/components/task-pills";
 
@@ -124,6 +125,10 @@ type LeadDetail = {
   taux_interet_preteur_b_projet_pct: number | null;
   frais_demarrage_overrides_json: string | null;
   frais_demarrage_financables_json: string | null;
+  strategie_acquisition: string | null;
+  balance_vente_montant: number | null;
+  balance_vente_taux_pct: number | null;
+  projection_horizon_annees: number | null;
   analysis_results_json: string | null;
   validation_warnings: ValidationWarning[] | null;
   attachments: Array<{
@@ -2232,6 +2237,13 @@ function ManualAnalysisSection({
   onPatch: (field: string, value: unknown) => void;
   onRefresh: () => Promise<void>;
 }) {
+  // Chantier « stratégies d'acquisition » (staging) : la porte s'ouvre
+  // sur la version dev, ou si la fiche a déjà une stratégie choisie.
+  const stratChantier =
+    calculateurStrategiesActif() || !!data.strategie_acquisition;
+  const strategie = data.strategie_acquisition ?? "preteur_b";
+  const modePreteurB = stratChantier && strategie === "preteur_b";
+
   const typology = useMemo<Record<string, number>>(() => {
     if (!data.typology_json) return {};
     try {
@@ -2431,6 +2443,45 @@ function ManualAnalysisSection({
       ) : null}
 
       <div className="space-y-3">
+        {/* Stratégie d'acquisition — chantier staging (2026-08-31).
+            Visible seulement derrière la porte (ou si déjà choisie) :
+            la prod garde l'affichage historique jusqu'au GO. */}
+        {stratChantier ? (
+          <SubCard icon={Percent} title="Stratégie d'acquisition" cols={2}>
+            <div className="space-y-1.5 sm:col-span-2">
+              <select
+                value={strategie}
+                onChange={(e) =>
+                  onPatch("strategie_acquisition", e.target.value)
+                }
+                className="w-full rounded-lg border border-brand-700 bg-brand-950 px-2.5 py-2 text-sm text-white"
+              >
+                <option value="preteur_b">
+                  Prêteur B + optimisation + refinancement (mode actuel)
+                </option>
+                <option value="conventionnel" disabled>
+                  Achat conventionnel direct — phase 2 (en construction)
+                </option>
+                <option value="schl_std" disabled>
+                  Achat SCHL standard direct — phase 2 (en construction)
+                </option>
+                <option value="aph_50" disabled>
+                  Achat APH 50 pts direct — phase 2 (en construction)
+                </option>
+                <option value="aph_100" disabled>
+                  Achat APH 100 pts direct — phase 2 (en construction)
+                </option>
+              </select>
+              <p className="text-[10px] text-white/40">
+                La stratégie pilote le financement à l&apos;achat, les
+                frais de démarrage et les colonnes affichées (PDF
+                inclus). Les achats directs avec détention 5 ans
+                arrivent en phase 2.
+              </p>
+            </div>
+          </SubCard>
+        ) : null}
+
         {/* Financement & taux */}
         <SubCard icon={Percent} title="Financement & taux" cols={3}>
           <FieldNumber
@@ -2439,12 +2490,17 @@ function ManualAnalysisSection({
             onSave={(v) => onPatch("tga_pct", v ?? 4)}
             format="percent"
           />
-          <FieldNumber
-            label="Taux intérêt achat (%)"
-            value={data.taux_interet_achat_pct ?? 4}
-            onSave={(v) => onPatch("taux_interet_achat_pct", v ?? 4)}
-            format="percent"
-          />
+          {/* En stratégie prêteur B, le taux d'achat conventionnel ne
+              sert à rien (retour Phil 2026-08-31) — masqué sur le
+              chantier, conservé ailleurs. */}
+          {!modePreteurB ? (
+            <FieldNumber
+              label="Taux intérêt achat (%)"
+              value={data.taux_interet_achat_pct ?? 4}
+              onSave={(v) => onPatch("taux_interet_achat_pct", v ?? 4)}
+              format="percent"
+            />
+          ) : null}
           <FieldNumber
             label="Taux d'intérêt refi (%)"
             value={data.taux_interet_refi_pct}
@@ -2457,6 +2513,19 @@ function ManualAnalysisSection({
             onSave={(v) => onPatch("mdf_preteur_b_pct", v ?? 25)}
             format="percent"
           />
+          {stratChantier ? (
+            <FieldNumber
+              label="Prêt prêteur B (%)"
+              value={100 - (data.mdf_preteur_b_pct ?? 25)}
+              onSave={(v) =>
+                onPatch(
+                  "mdf_preteur_b_pct",
+                  Math.min(100, Math.max(0, 100 - (v ?? 75)))
+                )
+              }
+              format="percent"
+            />
+          ) : null}
           <FieldNumber
             label="Taux d'intérêt prêteur B (%)"
             value={data.taux_interet_preteur_b_projet_pct ?? 8}
@@ -2470,6 +2539,22 @@ function ManualAnalysisSection({
             value={data.duree_projet_annees}
             onSave={(v) => onPatch("duree_projet_annees", v)}
           />
+          {stratChantier ? (
+            <>
+              <FieldNumber
+                label="Balance de vente ($)"
+                value={data.balance_vente_montant}
+                onSave={(v) => onPatch("balance_vente_montant", v)}
+                format="money"
+              />
+              <FieldNumber
+                label="Taux balance de vente (%)"
+                value={data.balance_vente_taux_pct}
+                onSave={(v) => onPatch("balance_vente_taux_pct", v)}
+                format="percent"
+              />
+            </>
+          ) : null}
         </SubCard>
 
         {/* Optimisation refi */}
@@ -2711,6 +2796,13 @@ type AnalysisResults = {
   frais_demarrage_financables?: string[];
   taux_interet_preteur_b_projet?: number;
   taux_inoccupation_pct?: number;
+  strategie?: string;
+  pret_preteur_b?: {
+    sur_prix: number;
+    frais_finances: number;
+    total: number;
+  };
+  balance_vente?: { montant: number; taux_pct: number };
   typology: {
     h13_loyer_pondere: number;
     nb_abordables: number;
@@ -2761,12 +2853,23 @@ function AnalysisResultsTable({
 
   if (!data) return null;
 
+  // Chantier stratégies (staging) : en mode prêteur B, la colonne
+  // « Achat conventionnel » ne sert à rien (retour Phil 2026-08-31) —
+  // le financement à l'achat est le prêt B, affiché dans la bande MDF.
+  const masquerAchat =
+    calculateurStrategiesActif() &&
+    (data.strategie ?? "preteur_b") === "preteur_b";
   const cols: Array<[string, ScenarioResult | null]> = [
-    ["Achat", data.scenarios.achat],
+    ...(masquerAchat
+      ? []
+      : ([["Achat", data.scenarios.achat]] as Array<
+          [string, ScenarioResult | null]
+        >)),
     ["SCHL standard", data.scenarios.refi_schl],
     ["SCHL Efficacité (50 pts)", data.scenarios.refi_aph_50],
     ["SCHL Abord+Eff (100 pts)", data.scenarios.refi_aph_100]
   ];
+  const refiStart = masquerAchat ? 0 : 1;
 
   // Identifie la colonne du scénario gagnant (= « Best refi ») pour la
   // mettre en valeur. Logique alignée sur la bande hero : on cherche
@@ -2776,7 +2879,7 @@ function AnalysisResultsTable({
   const winnerIndex = (() => {
     const bestAmount = data.best_refi.amount;
     const bestProgram = data.best_refi.program;
-    for (let i = 1; i < cols.length; i++) {
+    for (let i = refiStart; i < cols.length; i++) {
       const s = cols[i][1];
       if (
         s &&
@@ -2788,7 +2891,7 @@ function AnalysisResultsTable({
       }
     }
     if (bestProgram) {
-      for (let i = 1; i < cols.length; i++) {
+      for (let i = refiStart; i < cols.length; i++) {
         const s = cols[i][1];
         if (s && (s.label === bestProgram || s.name === bestProgram)) return i;
       }
@@ -2901,6 +3004,29 @@ function AnalysisResultsTable({
                   : liveOrJson.toFixed(0);
               return `${pctDisplay} % × prix d'achat + frais démarrage`;
             })()}
+          </p>
+        </div>
+      ) : null}
+
+      {/* Chantier stratégies (staging) — le prêt du prêteur B en
+          miroir de la MDF (retour Phil 2026-08-31 : « j'aimerais y
+          voir apparaître le prêt accordé par le prêteur B »). */}
+      {masquerAchat && data.pret_preteur_b ? (
+        <div className="mb-3 rounded-lg border border-sky-400/40 bg-sky-500/10 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wider text-sky-300">
+            Prêt accordé prêteur B
+          </p>
+          <p className="mt-0.5 text-base font-bold text-sky-200">
+            {fmtMoney(data.pret_preteur_b.total)}
+          </p>
+          <p className="text-[10px] text-white/50">
+            {fmtMoney(data.pret_preteur_b.sur_prix)} sur le prix
+            {data.pret_preteur_b.frais_finances > 0
+              ? ` + ${fmtMoney(data.pret_preteur_b.frais_finances)} de frais financés`
+              : ""}
+            {data.balance_vente && data.balance_vente.montant > 0
+              ? ` · balance de vente ${fmtMoney(data.balance_vente.montant)} à ${data.balance_vente.taux_pct.toFixed(2)} %`
+              : ""}
           </p>
         </div>
       ) : null}

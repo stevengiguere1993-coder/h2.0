@@ -468,6 +468,22 @@ def _key_results_band(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
          (cashflow is not None and float(cashflow or 0) >= 0)),
         ("ÉQUITÉ AU REFI", _money(equite), True),
     ]
+    # Chantier stratégies (fiches avec stratégie choisie seulement —
+    # PDF = reflet de la fiche) : le prêt du prêteur B en tuile, à
+    # côté de la MDF.
+    if (
+        getattr(rec, "strategie_acquisition", None) == "preteur_b"
+        and results
+        and (results.get("pret_preteur_b") or {}).get("total")
+    ):
+        tiles.insert(
+            3,
+            (
+                "PRÊT PRÊTEUR B",
+                _money(results["pret_preteur_b"]["total"]),
+                False,
+            ),
+        )
 
     cells = []
     for label, value, is_green in tiles:
@@ -595,7 +611,8 @@ _SCENARIO_SHORT = {
 
 
 def _scenarios_table(
-    rl, results: dict, *, s, winner_key: Optional[str]
+    rl, results: dict, *, s, winner_key: Optional[str],
+    masquer_achat: bool = False,
 ):
     """Tableau comparatif des 4 scénarios en colonnes (un scénario par
     colonne), métriques en lignes. La colonne du scénario gagnant (best
@@ -608,6 +625,8 @@ def _scenarios_table(
 
     scenarios = results.get("scenarios") or {}
     present = [k for k in _SCENARIO_KEYS if scenarios.get(k)]
+    if masquer_achat:
+        present = [k for k in present if k != "achat"]
     if not present:
         return Paragraph(
             "Aucun scénario calculé — lance l'analyse financière "
@@ -1616,7 +1635,14 @@ def _render_bytes(
     if results:
         winner_key = _best_refi_key(results)
         story.append(_scenarios_table(
-            rl, results, s=s, winner_key=winner_key))
+            rl, results, s=s, winner_key=winner_key,
+            # PDF = reflet de la fiche : en stratégie prêteur B (fiches
+            # du chantier staging), la colonne « Achat conventionnel »
+            # est masquée comme à l'écran.
+            masquer_achat=(
+                getattr(rec, "strategie_acquisition", None) == "preteur_b"
+            ),
+        ))
         story.append(Spacer(1, 3))
         story.append(Paragraph(
             "La colonne surlignée en vert est le scénario gagnant "

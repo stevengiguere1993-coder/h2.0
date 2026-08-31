@@ -152,6 +152,11 @@ class LeadAnalysisRead(BaseModel):
     taux_interet_preteur_b_projet_pct: Optional[float] = None
     frais_demarrage_overrides_json: Optional[str] = None
     frais_demarrage_financables_json: Optional[str] = None
+    # Stratégies d'acquisition (août 2026, chantier staging).
+    strategie_acquisition: Optional[str] = None
+    balance_vente_montant: Optional[float] = None
+    balance_vente_taux_pct: Optional[float] = None
+    projection_horizon_annees: Optional[int] = None
     notes: Optional[str] = None
     converted_to_lead_id: Optional[int] = None
     converted_to_deal_id: Optional[int] = None
@@ -253,6 +258,19 @@ class LeadAnalysisUpdate(BaseModel):
     taux_interet_preteur_b_projet_pct: Optional[float] = None
     frais_demarrage_overrides_json: Optional[str] = None
     frais_demarrage_financables_json: Optional[str] = None
+
+    # Stratégies d'acquisition (août 2026, chantier staging).
+    strategie_acquisition: Optional[str] = Field(
+        default=None,
+        pattern=r"^(preteur_b|conventionnel|schl_std|aph_50|aph_100)$",
+    )
+    balance_vente_montant: Optional[float] = Field(default=None, ge=0)
+    balance_vente_taux_pct: Optional[float] = Field(
+        default=None, ge=0, le=30
+    )
+    projection_horizon_annees: Optional[int] = Field(
+        default=None, ge=1, le=30
+    )
 
     notes: Optional[str] = None
 
@@ -1747,6 +1765,8 @@ RECALC_INPUT_FIELDS = {
     "frais_developpement", "frais_negociations", "mdf_preteur_b_pct",
     "taux_interet_preteur_b_projet_pct",
     "frais_demarrage_overrides_json", "frais_demarrage_financables_json",
+    "strategie_acquisition", "balance_vente_montant",
+    "balance_vente_taux_pct", "projection_horizon_annees",
 }
 
 
@@ -1881,6 +1901,12 @@ async def _compute_and_store(rec, db) -> dict:
             if rec.taux_interet_preteur_b_projet_pct is not None
             else 0.08
         ),
+        # Stratégies d'acquisition (août 2026) — défauts = comportement
+        # historique intégral tant que la fiche n'a rien choisi.
+        strategie=rec.strategie_acquisition or "preteur_b",
+        balance_vente_montant=float(rec.balance_vente_montant or 0),
+        balance_vente_taux_pct=float(rec.balance_vente_taux_pct or 0)
+        / 100.0,
         frais_demarrage_overrides=frais_overrides,
         frais_demarrage_financables=_parse_financables(
             rec.frais_demarrage_financables_json

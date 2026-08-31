@@ -299,6 +299,31 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
         Text, nullable=True
     )
 
+    # ── Stratégies d'acquisition (août 2026, chantier staging) ────
+    #
+    # 'preteur_b' (défaut historique : achat prêteur B + optimisation
+    # + refi rapide) | 'conventionnel' | 'schl_std' | 'aph_50' |
+    # 'aph_100' (achat direct + détention ~5 ans + refi, phase 2).
+    # NULL = comportement historique intégral (prod intouchée).
+    # Colonnes additives → ensure_critical_columns.
+    strategie_acquisition: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    # Balance de vente (financement vendeur) : réduit le prêt du
+    # prêteur B/de l'institution — PAS le cash à l'achat. Le taux
+    # (6.0 = 6 %) sert aux intérêts de portage pendant le projet.
+    balance_vente_montant: Mapped[Optional[float]] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
+    balance_vente_taux_pct: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 3), nullable=True
+    )
+    # Horizon de projection (années) des stratégies de détention —
+    # NULL → défaut 5 ans.
+    projection_horizon_annees: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+
     # ── TRI investisseur (juin 2026) ──────────────────────────────
     #
     # Les 4 intrants MANUELS du calculateur de rendement

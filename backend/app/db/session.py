@@ -2041,6 +2041,13 @@ async def init_db() -> None:
                 "taux_interet_preteur_b_projet_pct",
                 "NUMERIC(5,3) DEFAULT 8.0",
             ),
+            # Stratégies d'acquisition (août 2026, chantier staging) :
+            # sélecteur de stratégie + balance de vente + horizon de
+            # projection. NULL = comportement historique.
+            ("lead_analyses", "strategie_acquisition", "VARCHAR(32)"),
+            ("lead_analyses", "balance_vente_montant", "NUMERIC(14,2)"),
+            ("lead_analyses", "balance_vente_taux_pct", "NUMERIC(5,3)"),
+            ("lead_analyses", "projection_horizon_annees", "INTEGER"),
             # Kratos : pivot vers le modèle user-driven (problème
             # écrit/dicté par l'utilisateur, solution générée par l'IA).
             ("kratos_problems", "problem_text", "TEXT"),
