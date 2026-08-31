@@ -30,6 +30,16 @@ class SoumissionItem(Base, TimestampUpdateMixin):
     # Cost to Horizon per unit (e.g. Rona list price, subcontractor
     # rate). INTERNAL ONLY — never included in the public soumission
     # JSON / PDF sent to the client. Used to compute projected margin.
+    #: Ventilation du coûtant (retour gestionnaire de chantier,
+    #: 2026-08-27) : main-d'œuvre et matériaux. ``cost_per_unit``
+    #: reste la SOMME (source des marges et agrégats). Colonnes
+    #: additives (ensure_critical_columns).
+    cost_labor_per_unit: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    cost_material_per_unit: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
     cost_per_unit: Mapped[float] = mapped_column(
         Numeric(12, 2), nullable=False, default=0, server_default="0"
     )

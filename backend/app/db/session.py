@@ -1859,6 +1859,11 @@ async def init_db() -> None:
             ("users", "agenda_invite_token", "VARCHAR(64)"),
             # Réinitialisation de mot de passe en libre-service
             # (2026-08-27) : jeton haché + échéance.
+            # Ventilation du coûtant des lignes de soumission
+            # (2026-08-27) : main-d'œuvre / matériaux.
+            ("soumission_items", "cost_labor_per_unit", "NUMERIC(12,2)"),
+            ("soumission_items", "cost_material_per_unit",
+             "NUMERIC(12,2)"),
             ("users", "reset_token_hash", "VARCHAR(64)"),
             ("users", "reset_token_expires_at",
              "TIMESTAMP WITH TIME ZONE"),

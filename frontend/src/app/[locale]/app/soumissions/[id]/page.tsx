@@ -87,6 +87,8 @@ type Item = {
   quantity: number;
   unit_price: number;
   cost_per_unit: number;
+  cost_labor_per_unit?: number | null;
+  cost_material_per_unit?: number | null;
   total: number;
   tps_applicable: boolean;
   tvq_applicable: boolean;
@@ -1110,9 +1112,15 @@ export default function SoumissionDetailPage() {
                         <th className="px-3 py-3 text-left font-semibold">Unité</th>
                         <th
                           className="px-3 py-3 text-right font-bold text-amber-500"
-                          title="Coût interne — invisible par le client"
+                          title="Coût main-d'œuvre — interne, invisible par le client"
                         >
-                          Coût $/u 🔒
+                          Coût M.O. $/u 🔒
+                        </th>
+                        <th
+                          className="px-3 py-3 text-right font-bold text-amber-500"
+                          title="Coût matériaux — interne, invisible par le client"
+                        >
+                          Coût mat. $/u 🔒
                         </th>
                         <th className="px-3 py-3 text-right font-semibold">Prix unit.</th>
                         <th className="px-3 py-3 text-center font-semibold" title="TPS applicable">TPS</th>
@@ -1797,8 +1805,16 @@ function ItemRow({
   const [unit, setUnit] = useState(item.unit || "");
   const [quantity, setQuantity] = useState(String(item.quantity));
   const [unitPrice, setUnitPrice] = useState(String(item.unit_price));
-  const [costPerUnit, setCostPerUnit] = useState(
-    String(item.cost_per_unit ?? 0)
+  //: Ventilation du coûtant : les anciennes lignes (jamais ventilées)
+  //: affichent leur coûtant en main-d'œuvre tant que non re-saisies.
+  const heriteMo =
+    item.cost_labor_per_unit == null &&
+    item.cost_material_per_unit == null
+      ? item.cost_per_unit ?? 0
+      : item.cost_labor_per_unit ?? 0;
+  const [costLabor, setCostLabor] = useState(String(heriteMo));
+  const [costMaterial, setCostMaterial] = useState(
+    String(item.cost_material_per_unit ?? 0)
   );
   // Panneau d'édition pleine largeur (surtout utile sur mobile, où les
   // cellules du tableau sont étroites et tronquent le texte). S'ouvre au
@@ -1821,26 +1837,39 @@ function ItemRow({
     setUnit(item.unit || "");
     setQuantity(String(item.quantity));
     setUnitPrice(String(item.unit_price));
-    setCostPerUnit(String(item.cost_per_unit ?? 0));
+    setCostLabor(
+      String(
+        item.cost_labor_per_unit == null &&
+          item.cost_material_per_unit == null
+          ? item.cost_per_unit ?? 0
+          : item.cost_labor_per_unit ?? 0
+      )
+    );
+    setCostMaterial(String(item.cost_material_per_unit ?? 0));
   }, [
     item.id,
     item.description,
     item.unit,
     item.quantity,
     item.unit_price,
-    item.cost_per_unit
+    item.cost_per_unit,
+    item.cost_labor_per_unit,
+    item.cost_material_per_unit
   ]);
 
   const computedTotal = useMemo(
     () => +(Number(quantity || 0) * Number(unitPrice || 0)).toFixed(2),
     [quantity, unitPrice]
   );
+  const coutTotal = useMemo(
+    () => Number(costLabor || 0) + Number(costMaterial || 0),
+    [costLabor, costMaterial]
+  );
   const computedMargin = useMemo(() => {
     const price = Number(unitPrice || 0);
-    const cost = Number(costPerUnit || 0);
     if (price <= 0) return null;
-    return +(((price - cost) / price) * 100).toFixed(0);
-  }, [unitPrice, costPerUnit]);
+    return +(((price - coutTotal) / price) * 100).toFixed(0);
+  }, [unitPrice, coutTotal]);
 
   function commit(field: keyof Item) {
     if (field === "description" && description !== item.description) {
@@ -1852,10 +1881,20 @@ function ItemRow({
     } else if (field === "unit_price" && Number(unitPrice) !== Number(item.unit_price)) {
       onPatch({ unit_price: Number(unitPrice) || 0 });
     } else if (
-      field === "cost_per_unit" &&
-      Number(costPerUnit) !== Number(item.cost_per_unit || 0)
+      field === "cost_labor_per_unit" ||
+      field === "cost_material_per_unit"
     ) {
-      onPatch({ cost_per_unit: Number(costPerUnit) || 0 });
+      const mo = Number(costLabor) || 0;
+      const mat = Number(costMaterial) || 0;
+      if (
+        mo !== Number(item.cost_labor_per_unit ?? heriteMo) ||
+        mat !== Number(item.cost_material_per_unit ?? 0)
+      ) {
+        onPatch({
+          cost_labor_per_unit: mo,
+          cost_material_per_unit: mat
+        });
+      }
     }
   }
 
@@ -1897,17 +1936,30 @@ function ItemRow({
           className="w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-white placeholder:text-white/30 focus:border-brand-700 focus:outline-none"
         />
       </td>
-      <td className="px-3 py-3 w-28">
-        {/* Cost per unit — internal only, never sent to client. */}
+      <td className="px-3 py-3 w-24">
+        {/* Coûtant main-d'œuvre — interne, jamais envoyé au client. */}
         <input
           type="number"
           step="0.01"
-          value={costPerUnit}
-          onChange={(e) => setCostPerUnit(e.target.value)}
+          value={costLabor}
+          onChange={(e) => setCostLabor(e.target.value)}
           onFocus={openIfMobile}
-          onBlur={() => commit("cost_per_unit")}
+          onBlur={() => commit("cost_labor_per_unit")}
           className="w-full rounded-md border-2 border-amber-500/60 bg-amber-500/15 px-2 py-1.5 text-right text-sm font-semibold text-amber-500 placeholder:text-amber-500/40 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-          aria-label="Coût par unité (interne)"
+          aria-label="Coût main-d'œuvre par unité (interne)"
+        />
+      </td>
+      <td className="px-3 py-3 w-24">
+        {/* Coûtant matériaux — interne, jamais envoyé au client. */}
+        <input
+          type="number"
+          step="0.01"
+          value={costMaterial}
+          onChange={(e) => setCostMaterial(e.target.value)}
+          onFocus={openIfMobile}
+          onBlur={() => commit("cost_material_per_unit")}
+          className="w-full rounded-md border-2 border-amber-500/60 bg-amber-500/15 px-2 py-1.5 text-right text-sm font-semibold text-amber-500 placeholder:text-amber-500/40 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+          aria-label="Coût matériaux par unité (interne)"
         />
       </td>
       <td className="px-3 py-3 w-32">
@@ -1920,7 +1972,7 @@ function ItemRow({
           onBlur={() => commit("unit_price")}
           className="w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-right text-sm text-white focus:border-brand-700 focus:outline-none"
         />
-        {computedMargin !== null && Number(costPerUnit) > 0 ? (
+        {computedMargin !== null && coutTotal > 0 ? (
           <p
             className={`mt-0.5 text-right text-[10px] ${
               computedMargin >= 0 ? "text-emerald-300" : "text-rose-300"
@@ -1996,7 +2048,7 @@ function ItemRow({
     </tr>
     {expanded ? (
       <tr className="bg-brand-900/40">
-        <td colSpan={9} className="px-4 pb-5 pt-1">
+        <td colSpan={10} className="px-4 pb-5 pt-1">
           {/* Édition pleine largeur — lisible sur mobile. Mêmes états +
               commit que les cellules compactes, donc tout reste synchro. */}
           <div className="grid gap-3 sm:grid-cols-2">
@@ -2037,14 +2089,27 @@ function ItemRow({
             </div>
             <div>
               <label className="label text-amber-500">
-                Prix coûtant $/u 🔒 (interne)
+                Coût main-d&apos;œuvre $/u 🔒 (interne)
               </label>
               <input
                 type="number"
                 step="0.01"
-                value={costPerUnit}
-                onChange={(e) => setCostPerUnit(e.target.value)}
-                onBlur={() => commit("cost_per_unit")}
+                value={costLabor}
+                onChange={(e) => setCostLabor(e.target.value)}
+                onBlur={() => commit("cost_labor_per_unit")}
+                className="input w-full border-amber-500/60 bg-amber-500/10 font-semibold text-amber-500 focus:border-amber-500 focus:ring-amber-500/30"
+              />
+            </div>
+            <div>
+              <label className="label text-amber-500">
+                Coût matériaux $/u 🔒 (interne)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={costMaterial}
+                onChange={(e) => setCostMaterial(e.target.value)}
+                onBlur={() => commit("cost_material_per_unit")}
                 className="input w-full border-amber-500/60 bg-amber-500/10 font-semibold text-amber-500 focus:border-amber-500 focus:ring-amber-500/30"
               />
             </div>
@@ -2058,7 +2123,7 @@ function ItemRow({
                 onBlur={() => commit("unit_price")}
                 className="input w-full"
               />
-              {computedMargin !== null && Number(costPerUnit) > 0 ? (
+              {computedMargin !== null && coutTotal > 0 ? (
                 <p
                   className={`mt-1 text-[11px] ${
                     computedMargin >= 0 ? "text-emerald-300" : "text-rose-300"

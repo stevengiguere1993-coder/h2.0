@@ -85,6 +85,8 @@ class SoumissionItemCreate(BaseModel):
     quantity: float = Field(default=1)
     unit_price: float = Field(default=0)
     cost_per_unit: float = Field(default=0)
+    cost_labor_per_unit: Optional[float] = Field(default=None)
+    cost_material_per_unit: Optional[float] = Field(default=None)
     tps_applicable: bool = Field(default=True)
     tvq_applicable: bool = Field(default=True)
     kind: str = Field(default="service", pattern="^(service|frais|rabais)$")
@@ -97,6 +99,8 @@ class SoumissionItemUpdate(BaseModel):
     quantity: Optional[float] = Field(default=None)
     unit_price: Optional[float] = Field(default=None)
     cost_per_unit: Optional[float] = Field(default=None)
+    cost_labor_per_unit: Optional[float] = Field(default=None)
+    cost_material_per_unit: Optional[float] = Field(default=None)
     tps_applicable: Optional[bool] = Field(default=None)
     tvq_applicable: Optional[bool] = Field(default=None)
     kind: Optional[str] = Field(default=None, pattern="^(service|frais|rabais)$")
@@ -114,6 +118,8 @@ class SoumissionItemRead(BaseModel):
     unit_price: float
     total: float
     cost_per_unit: float = 0
+    cost_labor_per_unit: Optional[float] = None
+    cost_material_per_unit: Optional[float] = None
     tps_applicable: bool
     tvq_applicable: bool
     kind: str
@@ -166,8 +172,20 @@ async def create_item(
     # Garde-fou anti-perte : pour une ligne « service », si aucun prix
     # unitaire n'est saisi (laissé vide => 0) mais qu'un coûtant l'est,
     # on facture AU MOINS le coûtant. Évite de vendre à 0 un item oublié.
-    if data.kind == "service" and unit_price <= 0 and data.cost_per_unit > 0:
-        unit_price = data.cost_per_unit
+    # Coûtant total = somme main-d'œuvre + matériaux quand la
+    # ventilation est fournie ; sinon l'ancien champ direct.
+    cout_total = float(data.cost_per_unit or 0)
+    if (
+        data.cost_labor_per_unit is not None
+        or data.cost_material_per_unit is not None
+    ):
+        cout_total = round(
+            float(data.cost_labor_per_unit or 0)
+            + float(data.cost_material_per_unit or 0),
+            2,
+        )
+    if data.kind == "service" and unit_price <= 0 and cout_total > 0:
+        unit_price = cout_total
     if data.kind == "rabais" and unit_price > 0:
         unit_price = -abs(unit_price)
     total = round(qty * unit_price, 2)
@@ -178,7 +196,9 @@ async def create_item(
         unit=(data.unit or None),
         quantity=qty,
         unit_price=unit_price,
-        cost_per_unit=data.cost_per_unit,
+        cost_per_unit=cout_total,
+        cost_labor_per_unit=data.cost_labor_per_unit,
+        cost_material_per_unit=data.cost_material_per_unit,
         total=total,
         tps_applicable=(False if data.kind == "frais" else data.tps_applicable),
         tvq_applicable=(False if data.kind == "frais" else data.tvq_applicable),
@@ -216,6 +236,16 @@ async def update_item(
     update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(item, field, value)
+    # La ventilation main-d'œuvre / matériaux pilote le coûtant total.
+    if (
+        "cost_labor_per_unit" in update_data
+        or "cost_material_per_unit" in update_data
+    ):
+        item.cost_per_unit = round(
+            float(item.cost_labor_per_unit or 0)
+            + float(item.cost_material_per_unit or 0),
+            2,
+        )
     # Garde-fou anti-perte (cf. create_item) : ligne « service » sans prix
     # unitaire mais avec un coûtant => on facture au moins le coûtant.
     if (
@@ -230,6 +260,8 @@ async def update_item(
         "quantity" in update_data
         or "unit_price" in update_data
         or "cost_per_unit" in update_data
+        or "cost_labor_per_unit" in update_data
+        or "cost_material_per_unit" in update_data
     ):
         item.total = round(float(item.quantity) * float(item.unit_price), 2)
     await db.flush()
