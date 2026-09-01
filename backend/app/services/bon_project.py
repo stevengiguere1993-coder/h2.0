@@ -120,13 +120,25 @@ async def push_bon_qbo_job_now(project_id: int) -> None:
             ).scalar_one_or_none()
             if client is None:
                 return
-            # Client mère QB : d'abord le lien mémorisé sur la fiche,
-            # sinon find-or-create (courriel en clé d'identité avant le
-            # nom — une fiche RENOMMÉE dans Kratos retrouve quand même
-            # son customer QB au lieu d'en créer un doublon).
+            # Client mère QB : d'abord le lien mémorisé sur la fiche —
+            # mais si ce lien pointe un customer dont le nom ne
+            # correspond pas ALORS qu'un customer au nom exact de la
+            # fiche existe, le lien est erroné (ex. adoption par un
+            # courriel partagé entre compagnies) → on le répare. Sinon
+            # find-or-create (nom exact d'abord, courriel unique en
+            # repli).
             cust = None
             if client.qbo_customer_id:
                 cust = await qbo.get_customer(client.qbo_customer_id)
+                if cust is not None:
+                    _dn = (cust.get("DisplayName") or "").strip().lower()
+                    _kn = (client.name or "").strip().lower()
+                    if _kn and _dn != _kn:
+                        _exact = await qbo.find_customer_by_name(
+                            client.name
+                        )
+                        if _exact is not None:
+                            cust = _exact
             if cust is None:
                 cust = await qbo.ensure_customer(
                     display_name=client.name,
