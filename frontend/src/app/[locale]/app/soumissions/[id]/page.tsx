@@ -392,6 +392,27 @@ export default function SoumissionDetailPage() {
         .toFixed(2),
     [items]
   );
+  // Ventilation M.O. / matériaux du coût projeté (retour du
+  // gestionnaire de chantier 2026-09-01 : les colonnes sont séparées,
+  // le total doit l'être aussi). Même convention que les colonnes :
+  // une ligne jamais ventilée est héritée en main-d'œuvre.
+  const projectedLabor = useMemo(
+    () =>
+      +items
+        .reduce((s, it) => {
+          const qty = Number(it.quantity || 0);
+          const herite =
+            it.cost_labor_per_unit == null &&
+            it.cost_material_per_unit == null;
+          const mo = herite
+            ? Number(it.cost_per_unit || 0)
+            : Number(it.cost_labor_per_unit || 0);
+          return s + mo * qty;
+        }, 0)
+        .toFixed(2),
+    [items]
+  );
+  const projectedMaterial = +(projectedCost - projectedLabor).toFixed(2);
   const projectedProfit = +(subtotal - projectedCost).toFixed(2);
   const projectedMarginPct =
     subtotal > 0 ? +((projectedProfit / subtotal) * 100).toFixed(1) : 0;
@@ -1544,8 +1565,20 @@ export default function SoumissionDetailPage() {
                   </h2>
                   <dl className="mt-4 space-y-2 text-sm">
                     <div className="flex items-center justify-between">
-                      <dt className="text-white/60">Coût projeté</dt>
+                      <dt className="text-white/60">Coût main-d&apos;œuvre</dt>
                       <dd className="text-amber-200">
+                        {fmtMoney(projectedLabor)}
+                      </dd>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <dt className="text-white/60">Coût matériaux</dt>
+                      <dd className="text-amber-200">
+                        {fmtMoney(projectedMaterial)}
+                      </dd>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-brand-800 pt-2">
+                      <dt className="text-white/60">Coût projeté total</dt>
+                      <dd className="font-semibold text-amber-200">
                         {fmtMoney(projectedCost)}
                       </dd>
                     </div>
