@@ -224,6 +224,14 @@ async def _digest_pour(db: AsyncSession, user: User) -> str:
     return "\n".join(lignes)
 
 
+# Alias PUBLIC du digest — consommé par le serveur MCP (outil
+# ``kratos_mon_brief``) : le Claude Max de l'utilisateur reçoit le
+# digest compilé (permissions respectées) et écrit le brief LUI-MÊME,
+# sur son abonnement — zéro coût API (retour Phil 2026-09-02).
+async def digest_pour_utilisateur(db: AsyncSession, user: User) -> str:
+    return await _digest_pour(db, user)
+
+
 async def construire_brief(
     db: AsyncSession, user: User
 ) -> Optional[UserAiBrief]:
