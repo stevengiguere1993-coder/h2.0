@@ -19,7 +19,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { type UserRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
-import { useNavAccess } from "@/hooks/use-nav-access";
+import { useNavAccessEtat } from "@/hooks/use-nav-access";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { SidebarFooter } from "@/components/sidebar-footer";
 
@@ -138,11 +138,18 @@ export function ProspectionSidebar({
   const role = (user?.role as UserRole | undefined) || "employee";
   // Filtre d'accès par page (refonte permissions) — à côté du filtre de
   // rôle historique, fail-open si l'accès n'est pas chargé.
-  const canSeeHref = useNavAccess(user);
+  // Fix Olivier Terrien 2026-09-02 : le verdict backend (allow/deny)
+  // l'emporte sur le plancher de rôle ; inconnu → rôle historique.
+  const accesHref = useNavAccessEtat(user);
   const visibleSections = PROSPECTION_SECTIONS.map((s) => ({
     ...s,
     items: s.items.filter(
-      (i) => canSee(role, i.minRole) && canSeeHref(i.href)
+      (i) => {
+        const etat = accesHref(i.href);
+        if (etat === true) return true;
+        if (etat === false) return false;
+        return canSee(role, i.minRole);
+      }
     )
   })).filter((s) => s.items.length > 0);
 

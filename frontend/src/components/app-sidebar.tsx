@@ -24,7 +24,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch, type UserRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
-import { useNavAccess } from "@/hooks/use-nav-access";
+import { useNavAccessEtat } from "@/hooks/use-nav-access";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { SidebarFooter } from "@/components/sidebar-footer";
 
@@ -93,17 +93,27 @@ export function AppSidebar({
   const role = (user?.role as UserRole | undefined) || "employee";
   // Filtre d'accès par page (refonte permissions) — appliqué à côté du
   // filtre de rôle historique, fail-open si l'accès n'est pas chargé.
-  const canSeeHref = useNavAccess(user);
+  // Verdict backend TERNAIRE : un « allow » explicite de la page
+  // Permissions rend le lien visible MÊME sous le plancher de rôle
+  // (fix Olivier Terrien 2026-09-02) ; un refus explicite le cache ;
+  // inconnu → le filtre de rôle historique décide.
+  const accesHref = useNavAccessEtat(user);
+  const visible = (href: string, min?: UserRole) => {
+    const etat = accesHref(href);
+    if (etat === true) return true;
+    if (etat === false) return false;
+    return canSee(role, min);
+  };
 
   // Filter nav items based on the signed-in user's role + page access.
   const visibleConstruction = CONSTRUCTION_NAV.filter(
-    (i) => canSee(role, i.minRole) && canSeeHref(i.href)
+    (i) => visible(i.href, i.minRole)
   );
   const visibleAdministration = ADMINISTRATION_NAV.filter(
-    (i) => canSee(role, i.minRole) && canSeeHref(i.href)
+    (i) => visible(i.href, i.minRole)
   );
   const visibleResources = RESOURCES_NAV.filter(
-    (i) => canSee(role, i.minRole) && canSeeHref(i.href)
+    (i) => visible(i.href, i.minRole)
   );
 
   useEffect(() => {
