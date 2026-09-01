@@ -1239,11 +1239,19 @@ async def _find_project_for_call(db, call: "Call"):
     from app.models.project import Project
 
     if call.entity_type == "client":
+        # Chantier EN COURS d'abord (un projet livré ne prime pas sur le
+        # chantier actif quand le client a plusieurs projets), le plus
+        # récent ensuite.
+        from app.models.project import ProjectStatus as _PSt
+
         proj = (
             await db.execute(
                 select(Project)
                 .where(Project.client_id == call.entity_id)
-                .order_by(Project.id.desc())
+                .order_by(
+                    (Project.status == _PSt.DELIVERED.value).asc(),
+                    Project.id.desc(),
+                )
                 .limit(1)
             )
         ).scalar_one_or_none()
@@ -1589,6 +1597,35 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
             transcribe_callback_url=_voicemail_transcribe_url(),
         )
         return Response(content=twiml, media_type="application/xml")
+
+    # CLIENT identifié pendant les heures d'ouverture : on sonne
+    # DIRECTEMENT le responsable de son dossier / chantier (responsable
+    # désigné du projet actif, sinon assigné CRM) plutôt que de passer
+    # par la secrétaire IA — le client connu parle à SON contact.
+    # Pas de responsable joignable → flux normal (Léa / transfert).
+    if (
+        action == RoutingAction.SECRETARY
+        and identified.kind == CallerKind.CLIENT
+    ):
+        try:
+            _resp_uid, _resp_phone = await _find_responsible_for_call(
+                db, existing
+            )
+        except Exception:  # noqa: BLE001
+            _resp_uid, _resp_phone = None, None
+        if _resp_phone:
+            existing.forwarded_to_e164 = _resp_phone
+            await db.flush()
+            log.info(
+                "Client identifié %s → transfert direct au responsable %s",
+                from_e164, _resp_phone,
+            )
+            twiml = provider.build_forward_response(
+                forward_to_e164=_resp_phone,
+                timeout_sec=_DIRECT_FORWARD_TIMEOUT_SEC,
+                action_url=_dial_followup_url(existing.id),
+            )
+            return Response(content=twiml, media_type="application/xml")
 
     if action == RoutingAction.SECRETARY:
         return await _begin_secretary_greeting(
