@@ -221,6 +221,31 @@ def test_traditionnel_balance_vente_et_depenses():
     assert abs(t["mdf_cash"] - attendu) < 0.01
 
 
+def test_refi_reference_manuelle():
+    """La référence choisie (refi_retenu) pilote le verdict et la
+    carte, même si un autre programme est « meilleur »."""
+    # Mode B : forcer SCHL standard comme référence.
+    r = compute_all(
+        _inputs(chantier_actif=True, refi_retenu="refi_schl"),
+        use_aph_select=False,
+    )
+    assert r.best_refi_program == "SCHL standard"
+    assert abs(
+        (r.best_refi_amount or 0)
+        - (r.refi_schl.equite_a_la_fin or 0)
+    ) < 0.01
+
+    # Traditionnel : référence schl_std ; le meilleur automatique reste
+    # exposé séparément (étoile).
+    r2 = compute_all(
+        _inputs(strategie="traditionnel", refi_retenu="schl_std"),
+        use_aph_select=False,
+    )
+    t = r2.to_dict()["traditionnel"]
+    assert t["best_refi"]["key"] == "schl_std"
+    assert t["meilleur_refi_key"] in t["refi"]
+
+
 def test_unites_mode_traditionnel():
     """Refi an H : unité optimisée = cible dès l'an 1 puis croît ; non
     optimisée = actuel × (1+cl)^a."""

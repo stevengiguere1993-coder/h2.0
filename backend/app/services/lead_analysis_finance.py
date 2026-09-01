@@ -980,6 +980,12 @@ class FinanceInputs:
     # historique INTACT (prod, golden tests).
     chantier_actif: bool = False
 
+    # Référence de refinancement choisie MANUELLEMENT (retour Phil
+    # 2026-09-02). Mode B : refi_schl | refi_aph_50 | refi_aph_100.
+    # Mode traditionnel : conventionnel | schl_std | aph_50 | aph_100.
+    # None/invalide → le meilleur automatiquement.
+    refi_retenu: Optional[str] = None
+
     # Taux d'intérêt du prêteur B pendant la phase chantier
     # (8 % typique 2024-2025). Utilisé pour calculer L17 — intérêts
     # de portage pendant projet.
@@ -1663,10 +1669,18 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         )
 
     # ── Étape 6 : Best refi ──────────────────────────────────────
+    # Le MEILLEUR est calculé automatiquement ; l'utilisateur peut
+    # choisir une RÉFÉRENCE différente (refi_retenu) qui pilote alors
+    # le verdict, la projection et la carte kanban (retour Phil
+    # 2026-09-02).
     candidates = [refi_schl, refi_aph_50]
     if refi_aph_100 is not None:
         candidates.append(refi_aph_100)
-    best = max(candidates, key=lambda s: s.equite_a_la_fin or 0.0)
+    meilleur_b = max(candidates, key=lambda s: s.equite_a_la_fin or 0.0)
+    _refs_b = {"refi_schl": refi_schl, "refi_aph_50": refi_aph_50}
+    if refi_aph_100 is not None:
+        _refs_b["refi_aph_100"] = refi_aph_100
+    best = _refs_b.get(inputs.refi_retenu or "") or meilleur_b
     best_amount = best.equite_a_la_fin or 0.0
     best_program = best.config.label
 
@@ -1852,8 +1866,13 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             )
             refi_cols[prog] = sc_r
 
-        best_prog = max(
+        meilleur_prog = max(
             refi_cols, key=lambda k: refi_cols[k].equite_a_la_fin or 0.0
+        )
+        best_prog = (
+            inputs.refi_retenu
+            if inputs.refi_retenu in refi_cols
+            else meilleur_prog
         )
         best_dispo = refi_cols[best_prog].equite_a_la_fin or 0.0
 
@@ -1921,6 +1940,10 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
                 p: _scenario_to_dict(s) for p, s in refi_cols.items()
             },
             "projection": projection,
+            #: Le meilleur AUTOMATIQUE (étoile) — la référence
+            #: (best_refi) peut être un autre programme, choisi
+            #: manuellement (refi_retenu).
+            "meilleur_refi_key": meilleur_prog,
             "best_refi": {
                 "key": best_prog,
                 "label": _labels_prog[best_prog],
@@ -1935,10 +1958,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
     # croître — même graphique que le mode traditionnel.
     projection_preteur_b: Optional[list] = None
     if inputs.chantier_actif and not _est_trad:
-        cand = [refi_schl, refi_aph_50] + (
-            [refi_aph_100] if refi_aph_100 is not None else []
-        )
-        best_b = max(cand, key=lambda s: s.equite_a_la_fin or 0.0)
+        # Même RÉFÉRENCE que le verdict (choisie ou meilleure).
+        best_b = best
         cl_b = float(inputs.croissance_loyers or 0.0)
         cd_b = float(inputs.croissance_depenses or 0.0)
         d0 = inputs.duree_projet_annees

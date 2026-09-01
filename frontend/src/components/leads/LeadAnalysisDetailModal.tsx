@@ -134,6 +134,7 @@ type LeadDetail = {
   frais_demarrage_financables_json: string | null;
   strategie_acquisition: string | null;
   programme_achat?: string | null;
+  refi_retenu?: string | null;
   balance_vente_montant: number | null;
   balance_vente_taux_pct: number | null;
   projection_horizon_annees: number | null;
@@ -188,8 +189,17 @@ const TYPOLOGY_KEYS = ["1.5", "2.5", "3.5", "4.5", "5.5", "6.5", "7.5", "8.5"];
 
 // ─── Onglets internes de la fiche ────────────────────────────────
 
-type TabKey = "infos" | "analyse" | "resultats" | "details" | "tri";
+type TabKey =
+  | "infos"
+  | "analyse"
+  | "achat"
+  | "resultats"
+  | "details"
+  | "tri";
 
+// « Résultats » devient « Refinancement » (retour Phil 2026-09-02) ;
+// en stratégie institution traditionnelle, un onglet « Achat »
+// s'ajoute AVANT.
 const TABS: Array<{
   key: TabKey;
   label: string;
@@ -197,7 +207,8 @@ const TABS: Array<{
 }> = [
   { key: "infos", label: "Infos", icon: ClipboardList },
   { key: "analyse", label: "Analyse", icon: Calculator },
-  { key: "resultats", label: "Résultats", icon: TrendingUp },
+  { key: "achat", label: "Achat", icon: Banknote },
+  { key: "resultats", label: "Refinancement", icon: TrendingUp },
   { key: "details", label: "Détails des calculs", icon: ListChecks },
   { key: "tri", label: "TRI", icon: Percent }
 ];
@@ -483,6 +494,14 @@ export function LeadAnalysisDetailModal({
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>("infos");
   const save = useSaveFeedback();
+
+  // Stratégie « institution traditionnelle » (alias inclus) → onglet
+  // « Achat » visible ; s'il est actif quand la stratégie change, on
+  // retombe sur Refinancement.
+  const modeTradTop =
+    (data?.strategie_acquisition ?? "preteur_b") !== "preteur_b";
+  const tabEffectif: TabKey =
+    tab === "achat" && !modeTradTop ? "resultats" : tab;
 
   useEffect(() => {
     if (!open) return;
@@ -907,7 +926,9 @@ export function LeadAnalysisDetailModal({
                   />
                   <StatTile
                     icon={Wallet}
-                    label="MDF prêteur B"
+                    label={
+                      modeTradTop ? "Mise de fonds (cash)" : "MDF prêteur B"
+                    }
                     value={fmtMoney(hero.mdf)}
                     tone="amber"
                   />
@@ -938,10 +959,13 @@ export function LeadAnalysisDetailModal({
                 </div>
               ) : null}
 
-              {/* Barre d'onglets */}
+              {/* Barre d'onglets — « Achat » seulement en stratégie
+                  institution traditionnelle. */}
               <div className="mt-3 flex gap-1 overflow-x-auto">
-                {TABS.map((t) => {
-                  const active = tab === t.key;
+                {TABS.filter(
+                  (t) => t.key !== "achat" || modeTradTop
+                ).map((t) => {
+                  const active = tabEffectif === t.key;
                   const Icon = t.icon;
                   return (
                     <button
@@ -964,7 +988,7 @@ export function LeadAnalysisDetailModal({
 
             {/* ── Zone scrollable : contenu de l'onglet actif ────── */}
             <div className="flex-1 overflow-y-auto px-5 py-4">
-              {tab === "infos" ? (
+              {tabEffectif === "infos" ? (
                 <div className="space-y-5">
               <SectionCard
                 icon={Building2}
@@ -1230,7 +1254,7 @@ export function LeadAnalysisDetailModal({
                 </div>
               ) : null}
 
-              {tab === "analyse" ? (
+              {tabEffectif === "analyse" ? (
                 <div className="space-y-5">
                   {/* Section Analyse financière — inputs manuels + bouton */}
                   <ManualAnalysisSection
@@ -1247,7 +1271,37 @@ export function LeadAnalysisDetailModal({
                 </div>
               ) : null}
 
-              {tab === "resultats" ? (
+              {tabEffectif === "achat" ? (
+                <div className="space-y-5">
+                  {(() => {
+                    let trad: AnalysisResults["traditionnel"] = null;
+                    try {
+                      trad = data.analysis_results_json
+                        ? (
+                            JSON.parse(
+                              data.analysis_results_json
+                            ) as AnalysisResults
+                          ).traditionnel
+                        : null;
+                    } catch {
+                      trad = null;
+                    }
+                    return trad ? (
+                      <TraditionnelAchatPanel
+                        t={trad}
+                        onPatchField={patchField}
+                      />
+                    ) : (
+                      <EmptyTabHint
+                        icon={Banknote}
+                        message="Lance l'analyse (onglet « Analyse ») pour voir le financement à l'achat des 4 programmes."
+                      />
+                    );
+                  })()}
+                </div>
+              ) : null}
+
+              {tabEffectif === "resultats" ? (
                 <div className="space-y-5">
                   {data.analysis_results_json ? (
                     <AnalysisResultsTable
@@ -1258,6 +1312,8 @@ export function LeadAnalysisDetailModal({
                       prixAchat={data.asking_price ?? 0}
                       fraisDemarrageTotalDb={null}
                       mdfPreteurBDb={data.mdf_preteur_b ?? null}
+                      onPatchField={patchField}
+                      refiRetenu={data.refi_retenu ?? null}
                       onPatchOverrides={(j) =>
                         patchField("frais_demarrage_overrides_json", j)
                       }
@@ -1274,7 +1330,7 @@ export function LeadAnalysisDetailModal({
                 </div>
               ) : null}
 
-              {tab === "details" ? (
+              {tabEffectif === "details" ? (
                 <div className="space-y-5">
                   {data.analysis_results_json ? (
                     <CalculationDetailsSection
@@ -1291,7 +1347,7 @@ export function LeadAnalysisDetailModal({
                 </div>
               ) : null}
 
-              {tab === "tri" ? <LeadTriTab analysisId={analysisId} /> : null}
+              {tabEffectif === "tri" ? <LeadTriTab analysisId={analysisId} /> : null}
             </div>
           </>
         )}
@@ -2524,11 +2580,6 @@ function ManualAnalysisSection({
   const stratBrute = data.strategie_acquisition ?? "preteur_b";
   const strategie =
     stratBrute === "preteur_b" ? "preteur_b" : "traditionnel";
-  const programmeAchat =
-    data.programme_achat ??
-    (stratBrute !== "preteur_b" && stratBrute !== "traditionnel"
-      ? stratBrute
-      : "conventionnel");
   const modePreteurB = stratChantier && strategie === "preteur_b";
   const modeDirect = stratChantier && strategie === "traditionnel";
 
@@ -2737,54 +2788,33 @@ function ManualAnalysisSection({
         {stratChantier ? (
           <SubCard icon={Percent} title="Stratégie d'acquisition" cols={2}>
             <div className="space-y-1.5 sm:col-span-2">
-              <div className="grid gap-2 sm:grid-cols-2">
-                <select
-                  value={strategie}
-                  onChange={(e) =>
-                    onPatch("strategie_acquisition", e.target.value)
-                  }
-                  className="w-full rounded-lg border border-brand-700 bg-brand-950 px-2.5 py-2 text-sm text-white"
-                >
-                  <option value="preteur_b">
-                    Prêteur B + optimisation + refinancement rapide
-                  </option>
-                  <option value="traditionnel">
-                    Institution traditionnelle (conventionnel / SCHL /
-                    APH) + détention + refi
-                  </option>
-                </select>
-                {strategie === "traditionnel" ? (
-                  <select
-                    value={programmeAchat}
-                    onChange={(e) =>
-                      onPatch("programme_achat", e.target.value)
-                    }
-                    title="Programme RETENU pour financer l'achat — les 4 s'affichent en colonnes, celui-ci pilote la mise de fonds et le solde au refi"
-                    className="w-full rounded-lg border border-brand-700 bg-brand-950 px-2.5 py-2 text-sm text-white"
-                  >
-                    <option value="conventionnel">
-                      Achat retenu : Conventionnel
-                    </option>
-                    <option value="schl_std">
-                      Achat retenu : SCHL standard
-                    </option>
-                    <option value="aph_50">
-                      Achat retenu : APH 50 pts
-                    </option>
-                    <option value="aph_100">
-                      Achat retenu : APH 100 pts
-                    </option>
-                  </select>
-                ) : null}
-              </div>
+              {/* UN seul choix ici (retour Phil 2026-09-02) — le
+                  programme d'achat retenu se choisit dans l'onglet
+                  « Achat » (bouton Retenir), la référence de refi
+                  dans « Refinancement ». */}
+              <select
+                value={strategie}
+                onChange={(e) =>
+                  onPatch("strategie_acquisition", e.target.value)
+                }
+                className="w-full rounded-lg border border-brand-700 bg-brand-950 px-2.5 py-2 text-sm text-white"
+              >
+                <option value="preteur_b">
+                  Prêteur B + optimisation + refinancement rapide
+                </option>
+                <option value="traditionnel">
+                  Institution traditionnelle (conventionnel / SCHL /
+                  APH) + détention + refi
+                </option>
+              </select>
               <p className="text-[10px] text-white/40">
                 {strategie === "traditionnel" ? (
                   <>
-                    Les 4 programmes s&apos;affichent côte à côte
-                    (achat sur les loyers ACTUELS, refinancement à
-                    l&apos;horizon avec croissance) — le programme
-                    retenu pilote la mise de fonds et le solde au
-                    refi. PDF inclus.
+                    Les 4 programmes s&apos;affichent côte à côte dans
+                    les onglets « Achat » (loyers actuels — choisis le
+                    programme retenu là) et « Refinancement » (horizon
+                    avec croissance — choisis ta référence là). PDF
+                    inclus.
                   </>
                 ) : (
                   <>
@@ -3140,6 +3170,7 @@ type ScenarioResult = {
 type FraisDemarrageBreakdown = {
   courtier_hypothecaire_1: number;
   courtier_hypothecaire_2: number;
+  interets_balance_vente?: number;
   taxes_bienvenue: number;
   evaluateur: number;
   evaluateur_2: number;
@@ -3205,6 +3236,7 @@ type AnalysisResults = {
     mdf_par_programme: Record<string, number>;
     refi: Record<string, ScenarioResult | null>;
     projection: ProjPoint[];
+    meilleur_refi_key?: string;
     best_refi: {
       key: string;
       label: string;
@@ -3243,45 +3275,55 @@ function ProjectionChart({
   horizon?: number;
 }) {
   if (proj.length === 0) return null;
-  const W = 640;
-  const HT = 220;
-  const padL = 52;
-  const padR = 16;
-  const padT = 14;
-  const padB = 26;
+  const W = 680;
+  const HT = 240;
+  const padL = 58;
+  const padR = 14;
+  const padT = 16;
+  const padB = 28;
   const a0 = proj[0].annee;
   const a1 = proj[proj.length - 1].annee;
-  const maxY =
-    Math.max(...proj.map((p) => Math.max(p.valeur, p.solde_pret, 1))) *
-    1.06;
+  const vals = proj.flatMap((pt) => [pt.valeur, pt.solde_pret]);
+  // Domaine Y SERRÉ autour des courbes (retour Phil 2026-09-02 : plus
+  // de moitié de graphique vide), avec un peu d'air.
+  const rawMin = Math.min(...vals);
+  const rawMax = Math.max(...vals);
+  const span = Math.max(rawMax - rawMin, 1);
+  const yMin = Math.max(0, rawMin - span * 0.12);
+  const yMax = rawMax + span * 0.08;
   const x = (a: number) =>
     padL + ((a - a0) / Math.max(a1 - a0, 1)) * (W - padL - padR);
   const y = (v: number) =>
-    HT - padB - (Math.max(v, 0) / maxY) * (HT - padT - padB);
-  const line = (pick: (p: ProjPoint) => number) =>
+    padT + (1 - (v - yMin) / (yMax - yMin)) * (HT - padT - padB);
+  const line = (pick: (pt: ProjPoint) => number) =>
     proj
-      .map((p, i) => `${i === 0 ? "M" : "L"}${x(p.annee)},${y(pick(p))}`)
+      .map(
+        (pt, i) => `${i === 0 ? "M" : "L"}${x(pt.annee)},${y(pick(pt))}`
+      )
       .join(" ");
+  // Équité = aire entre valeur et solde.
   const area =
-    line((p) => p.valeur) +
-    ` L${x(a1)},${y(proj[proj.length - 1].solde_pret)} ` +
+    line((pt) => pt.valeur) +
     proj
       .slice()
       .reverse()
-      .map((p) => `L${x(p.annee)},${y(p.solde_pret)}`)
+      .map((pt) => `L${x(pt.annee)},${y(pt.solde_pret)}`)
       .join(" ") +
     " Z";
   const fmtK = (v: number) =>
     v >= 1_000_000
-      ? `${(v / 1_000_000).toFixed(1)} M$`
+      ? `${(v / 1_000_000).toFixed(2).replace(".", ",")} M$`
       : `${Math.round(v / 1000)} k$`;
-  const gridY = [0.25, 0.5, 0.75, 1].map((f) => maxY * f);
+  const gridY = [0, 0.25, 0.5, 0.75, 1].map(
+    (f) => yMin + (yMax - yMin) * f
+  );
+  const dernier = proj[proj.length - 1];
   return (
     <svg
       viewBox={`0 0 ${W} ${HT}`}
       className="w-full"
       role="img"
-      aria-label="Projection : valeur, solde du prêt et équité"
+      aria-label="Projection : valeur de l'actif, solde du prêt et équité"
     >
       {gridY.map((v) => (
         <g key={v}>
@@ -3290,7 +3332,7 @@ function ProjectionChart({
             y1={y(v)}
             x2={W - padR}
             y2={y(v)}
-            stroke="rgba(255,255,255,0.07)"
+            stroke="rgba(255,255,255,0.08)"
             strokeWidth="1"
           />
           <text
@@ -3298,28 +3340,27 @@ function ProjectionChart({
             y={y(v) + 3}
             textAnchor="end"
             fontSize="9"
-            className="fill-white/35"
+            className="fill-white/40"
           >
             {fmtK(v)}
           </text>
         </g>
       ))}
-      {/* Équité = aire entre la valeur et le solde. */}
-      <path d={area} fill="rgba(52,211,153,0.10)" />
-      {horizon != null && horizon >= a0 && horizon <= a1 ? (
+      <path d={area} fill="rgba(52,211,153,0.14)" />
+      {horizon != null && horizon > a0 && horizon < a1 ? (
         <g>
           <line
             x1={x(horizon)}
             y1={padT}
             x2={x(horizon)}
             y2={HT - padB}
-            stroke="rgba(216,155,60,0.7)"
+            stroke="rgba(216,155,60,0.8)"
             strokeWidth="1.5"
-            strokeDasharray="3 3"
+            strokeDasharray="4 3"
           />
           <text
             x={x(horizon)}
-            y={padT + 2}
+            y={padT - 4}
             textAnchor="middle"
             fontSize="9"
             className="fill-amber-300"
@@ -3329,30 +3370,65 @@ function ProjectionChart({
         </g>
       ) : null}
       <path
-        d={line((p) => p.valeur)}
+        d={line((pt) => pt.valeur)}
         fill="none"
         stroke="#34d399"
-        strokeWidth="2.2"
+        strokeWidth="2.4"
+        strokeLinecap="round"
       />
       <path
-        d={line((p) => p.solde_pret)}
+        d={line((pt) => pt.solde_pret)}
         fill="none"
-        stroke="#9ca3af"
-        strokeWidth="1.6"
-        strokeDasharray="5 4"
+        stroke="#f59e0b"
+        strokeWidth="2"
+        strokeDasharray="6 4"
+        strokeLinecap="round"
       />
       {proj.map((pt) => (
-        <text
-          key={pt.annee}
-          x={x(pt.annee)}
-          y={HT - 8}
-          textAnchor="middle"
-          fontSize="9"
-          className="fill-white/35"
-        >
-          {pt.annee}
-        </text>
+        <g key={pt.annee}>
+          <circle
+            cx={x(pt.annee)}
+            cy={y(pt.valeur)}
+            r="2.4"
+            fill="#34d399"
+          />
+          <circle
+            cx={x(pt.annee)}
+            cy={y(pt.solde_pret)}
+            r="2"
+            fill="#f59e0b"
+          />
+          <text
+            x={x(pt.annee)}
+            y={HT - 10}
+            textAnchor="middle"
+            fontSize="9"
+            className="fill-white/40"
+          >
+            {pt.annee}
+          </text>
+        </g>
       ))}
+      {/* Étiquettes de fin de courbe : lecture immédiate. */}
+      <text
+        x={x(a1) - 4}
+        y={y(dernier.valeur) - 7}
+        textAnchor="end"
+        fontSize="10"
+        fontWeight="bold"
+        className="fill-emerald-300"
+      >
+        Valeur {fmtK(dernier.valeur)}
+      </text>
+      <text
+        x={x(a1) - 4}
+        y={y(dernier.solde_pret) + 14}
+        textAnchor="end"
+        fontSize="10"
+        className="fill-amber-300"
+      >
+        Solde {fmtK(dernier.solde_pret)}
+      </text>
     </svg>
   );
 }
@@ -3374,8 +3450,10 @@ function ProjectionSection({
         </p>
         <ProjectionChart proj={proj} horizon={horizon} />
         <p className="mt-1 flex flex-wrap gap-3 text-[10px] text-white/50">
-          <span className="text-emerald-300">— Valeur (RNO ÷ TGA)</span>
-          <span className="text-white/40">- - Solde du prêt</span>
+          <span className="text-emerald-300">
+            — Valeur de l&apos;immeuble (RNO ÷ TGA)
+          </span>
+          <span className="text-amber-300">- - Solde du prêt</span>
           <span className="text-emerald-300/70">
             ▨ Équité (l&apos;écart entre les deux)
           </span>
@@ -3442,14 +3520,20 @@ function TradColonnes({
   cols,
   labels,
   surligne,
+  meilleur,
   mdfParProgramme,
-  modeRefi
+  modeRefi,
+  onRetenir
 }: {
   cols: Record<string, ScenarioResult | null>;
   labels: Record<string, string>;
   surligne: string;
+  /** Le meilleur AUTOMATIQUE (étoile) — peut différer de la référence. */
+  meilleur?: string;
   mdfParProgramme?: Record<string, number>;
   modeRefi?: boolean;
+  /** Achat : bouton « Retenir » par colonne. */
+  onRetenir?: (k: string) => void;
 }) {
   const ordre = ["conventionnel", "schl_std", "aph_50", "aph_100"];
   const keys = ordre.filter((k) => cols[k]);
@@ -3508,7 +3592,7 @@ function TradColonnes({
               >
                 {k === surligne ? (
                   <span className="mb-1 inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider text-emerald-300">
-                    ★ {modeRefi ? "Best" : "Retenu"}
+                    {modeRefi ? "Référence" : "Retenu"}
                   </span>
                 ) : null}
                 <span
@@ -3516,8 +3600,19 @@ function TradColonnes({
                     k === surligne ? "text-emerald-200" : "text-white/80"
                   }`}
                 >
+                  {meilleur === k ? "★ " : ""}
                   {labels[k] || k}
                 </span>
+                {onRetenir && k !== surligne ? (
+                  <button
+                    type="button"
+                    onClick={() => onRetenir(k)}
+                    className="mt-1 rounded-md border border-white/15 bg-white/5 px-2 py-0.5 text-[9px] font-semibold text-white/60 transition hover:bg-white/10 hover:text-white"
+                    title="Utiliser ce programme pour financer l'achat (pilote la MDF et le solde au refi)"
+                  >
+                    Retenir
+                  </button>
+                ) : null}
                 <span className="block text-[9px] font-normal text-white/40">
                   LTV {((cols[k]?.ltv ?? 0) * 100).toFixed(0)} % ·{" "}
                   {cols[k]?.amort_annees} ans · RCD{" "}
@@ -3561,32 +3656,214 @@ function TradColonnes({
   );
 }
 
-/** Résultats du mode « institution traditionnelle » — mêmes codes que
- *  le tableau prêteur B, en trois onglets : Achat, Refinancement
- *  (an H) et Projections. */
-function TraditionnelPanel({
+const REFI_LABELS_B: Array<[string, string]> = [
+  ["refi_schl", "SCHL standard"],
+  ["refi_aph_50", "SCHL Efficacité (50 pts)"],
+  ["refi_aph_100", "SCHL Abordabilité + Efficacité (100 pts)"]
+];
+
+/** Sélecteur de la RÉFÉRENCE de refinancement (retour Phil
+ *  2026-09-02 : le meilleur est proposé, mais je peux choisir). */
+function RefiReferenceSelect({
+  options,
+  value,
+  meilleurLabel,
+  onChange
+}: {
+  options: Array<[string, string]>;
+  value: string | null | undefined;
+  meilleurLabel: string;
+  onChange: (v: string | null) => void;
+}) {
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+      <span className="text-white/50">Référence des calculs :</span>
+      <select
+        value={value || ""}
+        onChange={(e) => onChange(e.target.value || null)}
+        className="rounded-lg border border-brand-700 bg-brand-950 px-2 py-1.5 text-xs text-white"
+        title="Le verdict, la projection et la carte kanban suivent cette référence"
+      >
+        <option value="">Automatique — meilleur ({meilleurLabel})</option>
+        {options.map(([k, l]) => (
+          <option key={k} value={k}>
+            {l}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+/** Composition de la mise de fonds — mode institution traditionnelle :
+ *  tous les postes (aucun finançable), balance de vente déduite. */
+function TradMdfComposition({
   t
 }: {
   t: NonNullable<AnalysisResults["traditionnel"]>;
 }) {
-  const [onglet, setOnglet] = useState<"achat" | "refi" | "proj">(
-    "achat"
+  const labels = buildFraisLabels(0.25, null);
+  const frais = t.frais_demarrage || {};
+  const pretRetenu = t.pret_retenu || 0;
+  return (
+    <section className="mt-4 rounded-xl border border-brand-800 bg-brand-950/40 p-4">
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-300">
+          <Wallet className="h-4 w-4" />
+        </span>
+        <h4 className="text-sm font-bold text-white">
+          Composition de la mise de fonds (cash)
+        </h4>
+      </div>
+      <p className="mt-2 text-[10px] leading-relaxed text-white/50">
+        Achat via une institution traditionnelle : aucun poste
+        n&apos;est finançable — tout se paie cash, sauf la balance de
+        vente qui finance une partie de la mise de fonds.
+      </p>
+      <div className="mt-3 overflow-hidden rounded-lg border border-brand-800">
+        <table className="w-full border-collapse text-[11px]">
+          <tbody className="divide-y divide-brand-800/60">
+            <tr className="border-y border-amber-400/30 bg-amber-500/10">
+              <td className="px-3 py-2 font-semibold text-amber-200">
+                Prix d&apos;achat − prêt retenu (
+                {t.labels[t.programme_retenu]})
+              </td>
+              <td className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-amber-200">
+                {fmtMoney(
+                  Math.max(0, (t.mdf_cash - t.frais_demarrage_total) + t.balance_vente)
+                )}
+              </td>
+            </tr>
+            {t.balance_vente > 0 ? (
+              <tr className="bg-emerald-500/5">
+                <td className="px-3 py-2 text-emerald-300">
+                  Balance de vente (finance la mise de fonds)
+                  {t.interets_bv_annuels > 0
+                    ? ` — intérêts ${fmtMoney(t.interets_bv_annuels)}/an dans les dépenses`
+                    : ""}
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums text-emerald-300">
+                  − {fmtMoney(t.balance_vente)}
+                </td>
+              </tr>
+            ) : null}
+            <tr>
+              <td
+                className="px-3 pb-1 pt-2.5 text-[9px] font-semibold uppercase tracking-wider text-white/40"
+                colSpan={2}
+              >
+                Frais d&apos;acquisition (tous cash)
+              </td>
+            </tr>
+            {labels
+              .filter(([k]) => (frais[k as string] ?? 0) !== 0)
+              .map(([k, lbl]) => (
+                <tr key={String(k)}>
+                  <td className="px-3 py-1.5 text-white/70">{lbl}</td>
+                  <td className="px-3 py-1.5 text-right font-mono tabular-nums text-white/80">
+                    {fmtMoney(frais[k as string] ?? 0)}
+                  </td>
+                </tr>
+              ))}
+            <tr className="border-t-2 border-amber-400/40 bg-amber-500/10">
+              <td className="px-3 py-2 font-bold text-amber-200">
+                Total — mise de fonds (cash à l&apos;achat)
+              </td>
+              <td className="px-3 py-2 text-right font-mono font-bold tabular-nums text-amber-200">
+                {fmtMoney(t.mdf_cash)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
-  const best = t.best_refi;
+}
+
+/** Onglet ACHAT — institution traditionnelle : 4 programmes sur les
+ *  loyers actuels, choix du programme retenu, composition de la MDF. */
+function TraditionnelAchatPanel({
+  t,
+  onPatchField
+}: {
+  t: NonNullable<AnalysisResults["traditionnel"]>;
+  onPatchField?: (field: string, value: unknown) => void;
+}) {
   return (
     <SectionCard
-      icon={TrendingUp}
-      title="Résultats — Institution traditionnelle"
+      icon={Banknote}
+      title="Achat — Institution traditionnelle"
       tone="emerald"
       subtitle={
         <>
-          Achat retenu : {t.labels[t.programme_retenu]} · MDF cash{" "}
-          {fmtMoney(t.mdf_cash)} · croissance{" "}
-          {(t.croissance_loyers * 100).toFixed(1)} % revenus /{" "}
-          {(t.croissance_depenses * 100).toFixed(1)} % dépenses
-          {t.balance_vente > 0
-            ? ` · balance de vente ${fmtMoney(t.balance_vente)} (déduite de la MDF)`
-            : ""}
+          Financé sur les loyers et dépenses ACTUELS (plafonné au prix
+          demandé). Le programme RETENU pilote la mise de fonds et le
+          solde du prêt au refinancement — clique « Retenir » pour en
+          changer.
+        </>
+      }
+      action={
+        <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-1.5 text-right">
+          <p className="text-[9px] uppercase tracking-wider text-amber-300/80">
+            Mise de fonds (cash)
+          </p>
+          <p className="font-mono text-sm font-bold tabular-nums text-amber-200">
+            {fmtMoney(t.mdf_cash)}
+          </p>
+          <p className="text-[10px] text-white/50">
+            {t.labels[t.programme_retenu]}
+          </p>
+        </div>
+      }
+    >
+      <TradColonnes
+        cols={t.achat}
+        labels={t.labels}
+        surligne={t.programme_retenu}
+        mdfParProgramme={t.mdf_par_programme}
+        onRetenir={
+          onPatchField
+            ? (k) => onPatchField("programme_achat", k)
+            : undefined
+        }
+      />
+      <p className="mt-2 text-[10px] text-white/40">
+        Frais d&apos;acquisition {fmtMoney(t.frais_demarrage_total)} —
+        sans double courtier/notaire ni intérêts de chantier.
+        {t.interets_bv_annuels > 0
+          ? ` Intérêts de la balance de vente ${fmtMoney(t.interets_bv_annuels)}/an inclus dans les dépenses.`
+          : ""}
+      </p>
+      <TradMdfComposition t={t} />
+    </SectionCard>
+  );
+}
+
+/** Onglet REFINANCEMENT — institution traditionnelle : référence
+ *  changeable, verdict, 4 programmes à l\'an H, projections. */
+function TraditionnelRefiPanel({
+  t,
+  refiRetenu,
+  onPatchField
+}: {
+  t: NonNullable<AnalysisResults["traditionnel"]>;
+  refiRetenu?: string | null;
+  onPatchField?: (field: string, value: unknown) => void;
+}) {
+  const best = t.best_refi;
+  const meilleurKey = t.meilleur_refi_key || best.key;
+  return (
+    <SectionCard
+      icon={TrendingUp}
+      title={`Refinancement (an ${t.horizon}) — Institution traditionnelle`}
+      tone="emerald"
+      subtitle={
+        <>
+          Revenus et dépenses projetés à l&apos;an {t.horizon} (unités
+          optimisées au loyer cible, les autres à la croissance
+          organique {(t.croissance_loyers * 100).toFixed(1)} % ;
+          dépenses réelles indexées{" "}
+          {(t.croissance_depenses * 100).toFixed(1)} %/an).
         </>
       }
       action={
@@ -3604,7 +3881,7 @@ function TraditionnelPanel({
                 : "text-rose-300/80"
             }`}
           >
-            Refi an {t.horizon}
+            Argent dégagé (référence)
           </p>
           <p
             className={`font-mono text-sm font-bold tabular-nums ${
@@ -3617,102 +3894,67 @@ function TraditionnelPanel({
         </div>
       }
     >
-      {/* Onglets */}
-      <div className="mb-3 flex gap-1 rounded-lg border border-brand-800 bg-brand-950/60 p-1">
-        {(
-          [
-            ["achat", "Achat"],
-            ["refi", `Refinancement (an ${t.horizon})`],
-            ["proj", "Projections"]
-          ] as Array<["achat" | "refi" | "proj", string]>
-        ).map(([k, l]) => (
-          <button
-            key={k}
-            type="button"
-            onClick={() => setOnglet(k)}
-            className={`flex-1 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-              onglet === k
-                ? "bg-brand-800 text-white"
-                : "text-white/50 hover:text-white/80"
-            }`}
-          >
-            {l}
-          </button>
-        ))}
+      {onPatchField ? (
+        <RefiReferenceSelect
+          options={[
+            ["conventionnel", t.labels.conventionnel],
+            ["schl_std", t.labels.schl_std],
+            ["aph_50", t.labels.aph_50],
+            ["aph_100", t.labels.aph_100]
+          ]}
+          value={refiRetenu}
+          meilleurLabel={t.labels[meilleurKey] || meilleurKey}
+          onChange={(v) => onPatchField("refi_retenu", v)}
+        />
+      ) : null}
+
+      <div
+        className={`mb-3 rounded-lg border px-3 py-2 text-xs ${
+          best.refi_possible
+            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+            : "border-rose-500/40 bg-rose-500/10 text-rose-200"
+        }`}
+      >
+        {best.refi_possible ? (
+          <>
+            ✅ À l&apos;an {t.horizon}, le refinancement{" "}
+            <strong>{best.label}</strong> dégage{" "}
+            <strong>{fmtMoney(best.argent_dispo)}</strong> (après
+            remboursement du prêt d&apos;achat
+            {t.balance_vente > 0 ? " et de la balance de vente" : ""})
+            — assez pour ressortir ta mise de fonds de{" "}
+            {fmtMoney(t.mdf_cash)}.
+          </>
+        ) : (
+          <>
+            ⚠️ À l&apos;an {t.horizon}, le refinancement de référence (
+            {best.label}) dégage {fmtMoney(best.argent_dispo)} — il
+            manque <strong>{fmtMoney(best.manque)}</strong> pour
+            ressortir ta mise de fonds de {fmtMoney(t.mdf_cash)}.
+          </>
+        )}
       </div>
+      <TradColonnes
+        cols={t.refi}
+        labels={t.labels}
+        surligne={best.key}
+        meilleur={meilleurKey}
+        modeRefi
+      />
+      <p className="mt-2 text-[10px] text-white/40">
+        Argent dégagé = prêt max − solde du prêt d&apos;achat (
+        {fmtMoney(t.solde_retenu_an_h)})
+        {t.balance_vente > 0 ? " − balance de vente" : ""}. ★ = le
+        meilleur automatique ; la colonne verte = ta référence.
+      </p>
 
-      {onglet === "achat" ? (
-        <>
-          <TradColonnes
-            cols={t.achat}
-            labels={t.labels}
-            surligne={t.programme_retenu}
-            mdfParProgramme={t.mdf_par_programme}
-          />
-          <p className="mt-2 text-[10px] text-white/40">
-            Financé sur les loyers et dépenses ACTUELS (plafonné au
-            prix demandé). Frais d&apos;acquisition{" "}
-            {fmtMoney(t.frais_demarrage_total)} — sans double
-            courtier/notaire ni intérêts de chantier.
-            {t.interets_bv_annuels > 0
-              ? ` Intérêts de la balance de vente ${fmtMoney(t.interets_bv_annuels)}/an inclus dans les dépenses.`
-              : ""}
-          </p>
-        </>
-      ) : null}
-
-      {onglet === "refi" ? (
-        <>
-          <div
-            className={`mb-3 rounded-lg border px-3 py-2 text-xs ${
-              best.refi_possible
-                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-                : "border-rose-500/40 bg-rose-500/10 text-rose-200"
-            }`}
-          >
-            {best.refi_possible ? (
-              <>
-                ✅ À l&apos;an {t.horizon}, le refinancement{" "}
-                <strong>{best.label}</strong> dégage{" "}
-                <strong>{fmtMoney(best.argent_dispo)}</strong> (après
-                remboursement du prêt d&apos;achat
-                {t.balance_vente > 0 ? " et de la balance de vente" : ""}
-                ) — assez pour ressortir ta mise de fonds de{" "}
-                {fmtMoney(t.mdf_cash)}.
-              </>
-            ) : (
-              <>
-                ⚠️ À l&apos;an {t.horizon}, le meilleur refinancement (
-                {best.label}) dégage {fmtMoney(best.argent_dispo)} — il
-                manque <strong>{fmtMoney(best.manque)}</strong> pour
-                ressortir ta mise de fonds de {fmtMoney(t.mdf_cash)}.
-              </>
-            )}
-          </div>
-          <TradColonnes
-            cols={t.refi}
-            labels={t.labels}
-            surligne={best.key}
-            modeRefi
-          />
-          <p className="mt-2 text-[10px] text-white/40">
-            Revenus et dépenses projetés à l&apos;an {t.horizon}{" "}
-            (unités optimisées au loyer cible, les autres à la
-            croissance organique ; dépenses réelles indexées). Argent
-            dégagé = prêt max − solde du prêt d&apos;achat (
-            {fmtMoney(t.solde_retenu_an_h)})
-            {t.balance_vente > 0 ? " − balance de vente" : ""}.
-          </p>
-        </>
-      ) : null}
-
-      {onglet === "proj" ? (
+      <div className="mt-4">
         <ProjectionSection
           proj={t.projection}
           horizon={t.horizon}
           titre="Détention, refinancement, puis poursuite — valeur vs solde"
         />
-      ) : null}
+      </div>
     </SectionCard>
   );
 }
@@ -3726,7 +3968,9 @@ function AnalysisResultsTable({
   fraisDemarrageTotalDb,
   mdfPreteurBDb,
   onPatchOverrides,
-  onPatchFinancables
+  onPatchFinancables,
+  onPatchField,
+  refiRetenu
 }: {
   resultsJson: string;
   overridesJson?: string | null;
@@ -3737,6 +3981,8 @@ function AnalysisResultsTable({
   mdfPreteurBDb?: number | null;
   onPatchOverrides?: (json: string) => void;
   onPatchFinancables?: (json: string) => void;
+  onPatchField?: (field: string, value: unknown) => void;
+  refiRetenu?: string | null;
 }) {
   void fraisDemarrageTotalDb;
   const data = useMemo<AnalysisResults | null>(() => {
@@ -3753,7 +3999,13 @@ function AnalysisResultsTable({
   // (colonnes prêteur B/refi) ne s'applique pas, on affiche le
   // panneau dédié (achat + projection + verdict refi an N).
   if (data.traditionnel) {
-    return <TraditionnelPanel t={data.traditionnel} />;
+    return (
+      <TraditionnelRefiPanel
+        t={data.traditionnel}
+        refiRetenu={refiRetenu}
+        onPatchField={onPatchField}
+      />
+    );
   }
 
   // Chantier stratégies (staging) : en mode prêteur B, la colonne
@@ -3890,6 +4142,32 @@ function AnalysisResultsTable({
         </div>
       ) : null}
 
+      {onPatchField && data.projection_preteur_b ? (
+        <RefiReferenceSelect
+          options={REFI_LABELS_B.filter(
+            ([k]) =>
+              (data.scenarios as Record<string, ScenarioResult | null>)[k]
+          )}
+          value={refiRetenu}
+          meilleurLabel={(() => {
+            let bk = "SCHL standard";
+            let bv = -Infinity;
+            for (const [k, l] of REFI_LABELS_B) {
+              const s = (
+                data.scenarios as Record<string, ScenarioResult | null>
+              )[k];
+              const e = s?.equite_a_la_fin;
+              if (e != null && e > bv) {
+                bv = e;
+                bk = l;
+              }
+            }
+            return bk;
+          })()}
+          onChange={(v) => onPatchField("refi_retenu", v)}
+        />
+      ) : null}
+
       {data.mdf_preteur_b != null ? (
         <div className="mb-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
           <p className="text-[10px] uppercase tracking-wider text-amber-300">
@@ -3905,7 +4183,10 @@ function AnalysisResultsTable({
                 liveOrJson < 1
                   ? (liveOrJson * 100).toFixed(0)
                   : liveOrJson.toFixed(0);
-              return `${pctDisplay} % × prix d'achat + frais démarrage`;
+              const bv = data.balance_vente?.montant ?? 0;
+              return bv > 0
+                ? `${pctDisplay} % × prix d'achat − balance de vente (${fmtMoney(bv)}) + frais démarrage`
+                : `${pctDisplay} % × prix d'achat + frais démarrage`;
             })()}
           </p>
         </div>
@@ -4129,6 +4410,9 @@ const FRAIS_KEYS: Array<keyof FraisDemarrageBreakdown> = [
   // demandé par Phil (ordre figé pour respecter sa lecture habituelle).
   "frais_dossier_preteur",
   "interets",
+  // Poste PERMANENT (retour Phil 2026-09-02) : 0 sans balance de
+  // vente, non finançable par défaut.
+  "interets_balance_vente",
   "revenus_nets_pendant_projet"
 ];
 
@@ -4166,6 +4450,8 @@ function buildFraisLabels(
     frais_travaux: "Travaux estimés",
     frais_dossier_preteur: "Frais de dossier du prêteur",
     interets: interetsLabel,
+    interets_balance_vente:
+      "Intérêts balance de vente (montant × taux BV × durée)",
     revenus_nets_pendant_projet: "Revenus nets pendant projet (négatif)"
   };
   return FRAIS_KEYS.map((k) => [k, labels[k]] as [keyof FraisDemarrageBreakdown, string]);
@@ -4402,7 +4688,8 @@ function FraisDemarrageBreakdownPanel({
       }
     }
   }
-  const totalMdfLocal = mdfPctValue + subTotalCash;
+  const bvDeduiteMdf = data.balance_vente?.montant ?? 0;
+  const totalMdfLocal = mdfPctValue - bvDeduiteMdf + subTotalCash;
 
   if (!frais) return null;
 
@@ -4467,6 +4754,21 @@ function FraisDemarrageBreakdownPanel({
                 —
               </td>
             </tr>
+            {bvDeduiteMdf > 0 ? (
+              /* Balance de vente : le vendeur FINANCE une partie de la
+                 mise de fonds (retour Phil 2026-09-02). */
+              <tr className="bg-emerald-500/5">
+                <td className="px-3 py-2 text-emerald-300" colSpan={3}>
+                  Balance de vente — financée par le vendeur
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums text-emerald-300">
+                  − {fmtMoney(bvDeduiteMdf)}
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums text-emerald-300/70">
+                  {fmtMoney(bvDeduiteMdf)}
+                </td>
+              </tr>
+            ) : null}
             <tr>
               <td
                 className="px-3 pt-2.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/40"
@@ -4865,6 +5167,7 @@ function CalculationDetailsSection({
           />
           <ScenariosDetailSubsection data={data} />
           <BestRefiSubsection data={data} />
+          <StrategieDetailSubsection data={data} lead={lead} />
         </div>
       ) : null}
     </SectionCard>
@@ -5315,6 +5618,170 @@ function BestRefiSubsection({ data }: { data: AnalysisResults }) {
           </tr>
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function _ligne2(label: string, valeur: string, bold = false) {
+  return (
+    <tr className="border-t border-brand-800/60" key={label}>
+      <td
+        className={`px-2 py-1 ${bold ? "font-semibold text-white" : "text-white/60"}`}
+      >
+        {label}
+      </td>
+      <td
+        className={`px-2 py-1 text-right font-mono tabular-nums ${
+          bold ? "font-bold text-white" : "text-white/80"
+        }`}
+      >
+        {valeur}
+      </td>
+    </tr>
+  );
+}
+
+/** F · Stratégie d'acquisition — TOUT le détail du chantier :
+ *  croissances, unités, balance de vente, MDF, colonnes achat/refi du
+ *  mode traditionnel et projections (retour Phil 2026-09-02). */
+function StrategieDetailSubsection({
+  data,
+  lead
+}: {
+  data: AnalysisResults;
+  lead: LeadDetail;
+}) {
+  const trad = data.traditionnel;
+  const unites = (() => {
+    try {
+      const j = lead.unites_json ? JSON.parse(lead.unites_json) : null;
+      return Array.isArray(j) ? (j as Array<Record<string, unknown>>) : [];
+    } catch {
+      return [];
+    }
+  })();
+  const chantier = Boolean(
+    trad || data.projection_preteur_b || unites.length > 0
+  );
+  if (!chantier) return null;
+  const cl = (lead.tri_croissance_loyers ?? 0.03) * 100;
+  const cd = (lead.tri_croissance_depenses ?? 0.03) * 100;
+  const bv = data.balance_vente?.montant ?? 0;
+  return (
+    <div className="mt-4">
+      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+        F · Stratégie d&apos;acquisition (chantier)
+      </h4>
+      <table className="mt-2 w-full text-[11px]">
+        <tbody>
+          {_ligne2(
+            "Stratégie",
+            (lead.strategie_acquisition ?? "preteur_b") === "preteur_b"
+              ? "Prêteur B + optimisation + refi"
+              : "Institution traditionnelle"
+          )}
+          {trad
+            ? _ligne2(
+                "Programme d'achat retenu",
+                trad.labels[trad.programme_retenu] || trad.programme_retenu
+              )
+            : null}
+          {trad
+            ? _ligne2("Horizon de détention", `${trad.horizon} ans`)
+            : null}
+          {_ligne2("Croissance revenus organique", `${cl.toFixed(1)} % / an`)}
+          {_ligne2("Croissance dépenses", `${cd.toFixed(1)} % / an`)}
+          {_ligne2(
+            "Référence de refinancement",
+            lead.refi_retenu || "automatique (meilleur)"
+          )}
+          {bv > 0
+            ? _ligne2(
+                "Balance de vente (déduite de la MDF)",
+                `${_fmtMoneyDetail(bv)} · taux ${(data.balance_vente?.taux_pct ?? 0).toFixed(2)} % · intérêts ${_fmtMoneyDetail(data.frais_demarrage?.interets_balance_vente ?? trad?.interets_bv_annuels ?? 0)}`
+              )
+            : _ligne2("Balance de vente", "aucune")}
+          {trad
+            ? _ligne2(
+                "MDF cash (programme retenu)",
+                _fmtMoneyDetail(trad.mdf_cash),
+                true
+              )
+            : null}
+          {trad
+            ? _ligne2(
+                `Solde du prêt d'achat à l'an ${trad.horizon}`,
+                _fmtMoneyDetail(trad.solde_retenu_an_h)
+              )
+            : null}
+        </tbody>
+      </table>
+
+      {unites.length > 0 ? (
+        <>
+          <p className="mt-3 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+            Unités ({unites.length}) — cochée = loyer cible au refi,
+            décochée = loyer actuel × croissance
+          </p>
+          <table className="mt-1 w-full text-[11px]">
+            <tbody>
+              {unites.map((u, i) => (
+                <tr key={i} className="border-t border-brand-800/60">
+                  <td className="px-2 py-1 text-white/60">
+                    {String(u.typo || "—")} · #{i + 1}
+                    {u.optimiser === false ? " (non optimisée)" : ""}
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono tabular-nums text-white/80">
+                    {_fmtMoneyDetail(Number(u.loyer_actuel) || 0)} →{" "}
+                    {u.optimiser === false
+                      ? `${_fmtMoneyDetail((Number(u.loyer_actuel) || 0))} × croissance`
+                      : _fmtMoneyDetail(Number(u.loyer_cible) || 0)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      ) : null}
+
+      {trad ? (
+        <>
+          <p className="mt-3 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+            Achat — 4 programmes (loyers/dépenses actuels)
+          </p>
+          <table className="mt-1 w-full text-[11px]">
+            <tbody>
+              {Object.entries(trad.achat).map(([k, s]) =>
+                s
+                  ? _ligne2(
+                      `${trad.labels[k] || k} — prêt / MDF / cashflow`,
+                      `${_fmtMoneyDetail(s.financement)} · ${_fmtMoneyDetail(trad.mdf_par_programme[k] ?? 0)} · ${_fmtMoneyDetail(s.cashflow_annuel ?? 0)}/an`
+                    )
+                  : null
+              )}
+            </tbody>
+          </table>
+          <p className="mt-3 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+            Refinancement an {trad.horizon} — 4 programmes (revenus{" "}
+            {_fmtMoneyDetail(
+              Object.values(trad.refi)[0]?.revenus_totaux ?? 0
+            )}
+            /an projetés)
+          </p>
+          <table className="mt-1 w-full text-[11px]">
+            <tbody>
+              {Object.entries(trad.refi).map(([k, s]) =>
+                s
+                  ? _ligne2(
+                      `${trad.labels[k] || k} — prêt max / argent dégagé`,
+                      `${_fmtMoneyDetail(s.financement)} · ${_fmtMoneyDetail(s.equite_a_la_fin ?? 0)}`
+                    )
+                  : null
+              )}
+            </tbody>
+          </table>
+        </>
+      ) : null}
     </div>
   );
 }
