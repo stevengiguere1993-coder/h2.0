@@ -493,6 +493,7 @@ class QuickBooksClient:
             rows = await self.query("SELECT * FROM Customer MAXRESULTS 1000")
         except Exception:  # noqa: BLE001
             return None
+        matches = []
         for row in rows:
             if (row.get("ParentRef") or {}).get("value"):
                 continue
@@ -502,8 +503,12 @@ class QuickBooksClient:
                 .lower()
             )
             if addr == target:
-                return row
-        return None
+                matches.append(row)
+        # UNIQUE seulement : le même courriel sert souvent à plusieurs
+        # fiches (compagnies du même proprio) — un match ambigu ferait
+        # adopter le MAUVAIS customer (deux fiches Kratos reliées au même
+        # customer QB, cas St-Thimothee/hotl).
+        return matches[0] if len(matches) == 1 else None
 
     async def get_customer(self, customer_id: str) -> Optional[Dict[str, Any]]:
         safe = str(customer_id).replace("'", "''")
@@ -582,14 +587,16 @@ class QuickBooksClient:
         phone: Optional[str] = None,
         billing_address: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Find-or-create. Prefers email match, falls back to display name."""
+        """Find-or-create. Le NOM exact prime (le courriel est souvent
+        partagé entre plusieurs fiches) ; repli sur le courriel seulement
+        s'il est unique côté QB."""
+        existing = await self.find_customer_by_name(display_name)
+        if existing:
+            return existing
         if email:
             existing = await self.find_customer_by_email(email)
             if existing:
                 return existing
-        existing = await self.find_customer_by_name(display_name)
-        if existing:
-            return existing
         return await self.create_customer(
             display_name=display_name,
             email=email,
