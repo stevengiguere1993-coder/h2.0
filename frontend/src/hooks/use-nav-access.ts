@@ -20,6 +20,21 @@ import {
 export function useNavAccess(
   user: CurrentUser | null
 ): (href: string) => boolean {
+  const etat = useNavAccessEtat(user);
+  return useCallback((href: string) => etat(href) !== false, [etat]);
+}
+
+/**
+ * Verdict TERNAIRE du backend pour un href (fix Olivier Terrien,
+ * 2026-09-02 : une exception « allow » de la page Permissions doit
+ * rendre le lien visible MÊME sous le plancher de rôle historique) :
+ *   true  → page explicitement PERMISE (l'emporte sur le rôle) ;
+ *   false → explicitement refusée (cacher) ;
+ *   null  → inconnu/non régi (le filtre de rôle historique décide).
+ */
+export function useNavAccessEtat(
+  user: CurrentUser | null
+): (href: string) => boolean | null {
   const [map, setMap] = useState<AccessMapEntry[] | null>(null);
 
   useEffect(() => {
@@ -34,11 +49,15 @@ export function useNavAccess(
 
   return useCallback(
     (href: string) => {
-      if (!user?.access || Object.keys(user.access).length === 0) return true;
-      if (!map) return true;
+      if (!user?.access || Object.keys(user.access).length === 0)
+        return null;
+      if (!map) return null;
       const key = matchPageKey(map, href);
-      if (!key) return true;
-      return user.access[`page:${key}`] !== false;
+      if (!key) return null;
+      const v = user.access[`page:${key}`];
+      if (v === true) return true;
+      if (v === false) return false;
+      return null;
     },
     [user, map]
   );
