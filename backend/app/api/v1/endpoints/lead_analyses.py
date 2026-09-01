@@ -2126,21 +2126,8 @@ def _heuristic_estimate_expenses(
     )
 
 
-async def _ai_estimate_expenses(
-    rec: LeadAnalysis,
-) -> Optional[EstimateExpensesResponse]:
-    """Demande à Gemini une estimation des dépenses manquantes en
-    fonction de l'adresse, du prix, du nombre de logements et de
-    l'évaluation municipale. Retourne None si Gemini indisponible
-    (le caller fera le fallback heuristique).
-
-    Migration Claude → Gemini : tier gratuit Google AI Studio
-    (1500 req/jour) — couvre largement les besoins d'estimation."""
-    if not settings.gemini_api_key:
-        return None
-    import google.generativeai as genai
-
-    prompt = (
+def _estimate_prompt(rec: LeadAnalysis) -> str:
+    return (
         "Tu es un expert en immobilier locatif Québec. Estime les "
         "dépenses d'opération annuelles MANQUANTES pour cet immeuble "
         "(en CAD/an). Retourne UNIQUEMENT un JSON strict avec les "
@@ -2165,25 +2152,9 @@ async def _ai_estimate_expenses(
         f"assurances={rec.assurances}"
     )
 
-    estimate_model = os.environ.get(
-        "LEAD_EXTRACTION_MODEL", "gemini-2.0-flash"
-    )
 
-    try:
-        genai.configure(api_key=settings.gemini_api_key)
-        model = genai.GenerativeModel(
-            estimate_model,
-            generation_config=genai.GenerationConfig(
-                response_mime_type="application/json",
-                max_output_tokens=500,
-            ),
-        )
-        response = await model.generate_content_async(prompt)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("AI estimate expenses failed: %s", exc)
-        return None
-
-    raw = (response.text or "").strip()
+def _parse_estimate(raw: str) -> Optional[EstimateExpensesResponse]:
+    raw = (raw or "").strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```\s*$", "", raw)
@@ -2207,6 +2178,43 @@ async def _ai_estimate_expenses(
     )
 
 
+async def _ai_estimate_expenses(
+    rec: LeadAnalysis,
+) -> Optional[EstimateExpensesResponse]:
+    """Demande à Gemini une estimation des dépenses manquantes en
+    fonction de l'adresse, du prix, du nombre de logements et de
+    l'évaluation municipale. Retourne None si Gemini indisponible
+    (le caller fera le fallback heuristique).
+
+    Migration Claude → Gemini : tier gratuit Google AI Studio
+    (1500 req/jour) — couvre largement les besoins d'estimation."""
+    if not settings.gemini_api_key:
+        return None
+    import google.generativeai as genai
+
+    prompt = _estimate_prompt(rec)
+
+    estimate_model = os.environ.get(
+        "LEAD_EXTRACTION_MODEL", "gemini-2.0-flash"
+    )
+
+    try:
+        genai.configure(api_key=settings.gemini_api_key)
+        model = genai.GenerativeModel(
+            estimate_model,
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json",
+                max_output_tokens=500,
+            ),
+        )
+        response = await model.generate_content_async(prompt)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("AI estimate expenses failed: %s", exc)
+        return None
+
+    return _parse_estimate(response.text or "")
+
+
 @router.post(
     "/{lead_id}/estimate-expenses",
     response_model=EstimateExpensesResponse,
@@ -2225,6 +2233,31 @@ async def estimate_expenses(
     ).scalar_one_or_none()
     if rec is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Lead introuvable.")
+
+    # « Chacun son IA » : si l'utilisateur a branché son IA
+    # personnelle, l'estimation passe par SA clé (peu importe le
+    # fournisseur). Sinon, comportement historique (Gemini maison puis
+    # heuristique) — le mode strict s'activera au GO de Phil.
+    try:
+        from app.services.user_ai import complete_for_user
+
+        res = await complete_for_user(
+            db,
+            user,
+            prompt=_estimate_prompt(rec),
+            max_tokens=500,
+            temperature=0.2,
+            avec_brief=False,
+        )
+        if res is not None:
+            perso = _parse_estimate(res.text)
+            if perso is not None:
+                perso.note = (
+                    f"[{res.provider}] {perso.note or ''}".strip()[:500]
+                )
+                return perso
+    except Exception as exc:  # noqa: BLE001 — IA perso en panne ≠ bloqué
+        log.warning("Estimation via IA personnelle échouée: %s", exc)
 
     ai = await _ai_estimate_expenses(rec)
     if ai is not None:

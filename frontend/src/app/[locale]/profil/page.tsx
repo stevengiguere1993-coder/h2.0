@@ -17,7 +17,9 @@ import { authedFetch, getToken, setToken } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { Link } from "@/i18n/navigation";
 import { KratosLogo } from "@/components/kratos-logo";
+import { MonIaSection } from "@/components/mon-ia-section";
 import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
+import { iaPersonnelleActive } from "@/lib/feature-flags";
 import {
   PROFILE_COLORS,
   PROFILE_COLOR_SWATCH as PROFILE_SWATCH_CLS,
@@ -504,6 +506,10 @@ export default function ProfilePage() {
           <PushNotificationsToggle />
         </div>
       </section>
+
+      {/* IA personnelle — chantier « chacun son IA » (staging
+          jusqu'au GO de Phil). */}
+      {iaPersonnelleActive() ? <MonIaSection /> : null}
 
       {/* Mot de passe */}
       <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
