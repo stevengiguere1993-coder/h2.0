@@ -183,11 +183,34 @@ async def list_billables(
         )
 
     # Phase B — heures non facturées, regroupées par employé × taux
-    # facturable (mirror du regroupement à l'import).
+    # facturable (mirror du regroupement à l'import). MÊME périmètre que
+    # l'import (facture_import) : heures du projet + heures pointées
+    # DIRECTEMENT sur un bon de travail lié à ce projet
+    # (punch.bon_travail_id sans project_id — bons pointés du mobile).
+    # Sans ça, l'aperçu disait « rien à facturer » alors que l'import
+    # les prenait.
+    from sqlalchemy import or_ as _or_punch
+
+    from app.models.bon_travail import BonTravail as _BonPunch
+
+    _bt_ids = list(
+        (
+            await db.execute(
+                select(_BonPunch.id).where(
+                    _BonPunch.project_id == project_id
+                )
+            )
+        ).scalars().all()
+    )
+    _punch_cond = Punch.project_id == project_id
+    if _bt_ids:
+        _punch_cond = _or_punch(
+            _punch_cond, Punch.bon_travail_id.in_(_bt_ids)
+        )
     punches = (
         await db.execute(
             select(Punch)
-            .where(Punch.project_id == project_id)
+            .where(_punch_cond)
             .where(Punch.hours.is_not(None))
             .where(Punch.invoiced_at.is_(None))
             .where(Punch.approved.is_(True))
