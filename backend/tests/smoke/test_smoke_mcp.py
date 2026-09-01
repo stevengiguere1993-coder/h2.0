@@ -132,6 +132,7 @@ def test_mcp_tools_list_contract(client, seeded_users):
     for expected in (
         "kratos_my_activity",
         "kratos_my_summary",
+        "kratos_mon_brief",
         "kratos_activity_range",
         "kratos_list_entities",
         "kratos_list_members",
@@ -161,6 +162,28 @@ def test_mcp_tools_call_my_activity(client, seeded_users):
     structured = result.get("structuredContent")
     assert isinstance(structured, dict)
     assert {"tasks", "audit"} <= set(structured.keys())
+
+
+def test_mcp_tools_call_mon_brief(client, seeded_users):
+    """« Chacun son IA » via l'abonnement : l'outil compile le digest
+    du jour (permissions du propriétaire de la clé) — le Claude
+    connecté écrit le brief lui-même."""
+    resp = _rpc(
+        client,
+        {
+            "jsonrpc": "2.0",
+            "id": 31,
+            "method": "tools/call",
+            "params": {"name": "kratos_mon_brief", "arguments": {}},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    result = resp.json()["result"]
+    assert not result.get("isError"), result
+    structured = result.get("structuredContent")
+    assert isinstance(structured, dict)
+    assert "digest" in structured and "instruction" in structured
+    assert "État de Kratos au" in structured["digest"]
 
 
 def test_mcp_invalid_key_401(client, seeded_users):

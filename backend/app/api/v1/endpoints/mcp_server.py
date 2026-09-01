@@ -30,6 +30,8 @@ Authentification (connecteur « authless » côté Claude) :
   cet utilisateur. Clé invalide → erreur JSON-RPC d'auth propre.
 
 Outils exposés :
+  - kratos_mon_brief     : digest « état du jour » (permissions du user) —
+    le Claude connecté écrit le brief lui-même (abonnement, zéro API).
   - kratos_my_activity   : activité d'un jour (tâches pôles autorisés + audit).
   - kratos_my_summary    : résumé en français de l'activité d'un jour.
   - kratos_activity_range: activité agrégée sur une plage from/to.
@@ -137,6 +139,23 @@ _READ_TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {"date": _DATE_PROP},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "kratos_mon_brief",
+        "description": (
+            "Compile l'ÉTAT DU JOUR de Kratos visible par l'utilisateur "
+            "(retards de loyers, analyses de leads, soumissions, tâches, "
+            "communications récentes — filtré par SES permissions). "
+            "Utilise cet outil quand on te demande « mon brief », « quoi "
+            "de neuf sur Kratos » ou un état de la situation, puis écris "
+            "un brief personnel : 5 à 10 puces en français, en tutoyant, "
+            "ce qui demande une action d'abord. Lecture seule."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
             "additionalProperties": False,
         },
     },
@@ -950,6 +969,23 @@ async def _call_tool(
     une capacité non accordée."""
     arguments = arguments or {}
     allowed = readable_poles(scopes)
+
+    if name == "kratos_mon_brief":
+        # « Chacun son IA » via l'ABONNEMENT (retour Phil 2026-09-02) :
+        # Kratos compile le digest (permissions de l'utilisateur), le
+        # Claude connecté écrit le brief lui-même — aucun coût API.
+        from app.services.user_ai import digest_pour_utilisateur
+
+        digest = await digest_pour_utilisateur(db, user)
+        return {
+            "digest": digest,
+            "instruction": (
+                "Écris le brief quotidien de cet utilisateur à partir du "
+                "digest : 5 à 10 puces en français, en le tutoyant, ce "
+                "qui demande une action d'abord, la vue d'ensemble à la "
+                "fin. Pas de préambule."
+            ),
+        }
 
     if name == "kratos_my_activity":
         return await _activity_payload(db, user, allowed, date=arguments.get("date"))
