@@ -2051,6 +2051,8 @@ async def init_db() -> None:
             ("lead_analyses", "balance_vente_montant", "NUMERIC(14,2)"),
             ("lead_analyses", "balance_vente_taux_pct", "NUMERIC(5,3)"),
             ("lead_analyses", "projection_horizon_annees", "INTEGER"),
+            # Phase 3 : optimisation par unité (liste JSON).
+            ("lead_analyses", "unites_json", "TEXT"),
             # Kratos : pivot vers le modèle user-driven (problème
             # écrit/dicté par l'utilisateur, solution générée par l'IA).
             ("kratos_problems", "problem_text", "TEXT"),

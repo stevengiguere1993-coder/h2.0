@@ -132,6 +132,8 @@ type LeadDetail = {
   /** FRACTIONS (0.03 = 3 %) — partagées avec le TRI. */
   tri_croissance_loyers?: number | null;
   tri_croissance_depenses?: number | null;
+  /** Phase 3 — unités [{typo, loyer_actuel, loyer_cible, optimiser}]. */
+  unites_json?: string | null;
   analysis_results_json: string | null;
   validation_warnings: ValidationWarning[] | null;
   attachments: Array<{
@@ -2229,6 +2231,239 @@ function TypologyEditor({
   );
 }
 
+// ─── Phase 3 — Unités & optimisation (chantier stratégies) ───────
+
+type UniteRow = {
+  typo: string;
+  loyer_actuel: string;
+  loyer_cible: string;
+  optimiser: boolean;
+};
+
+function parseUnites(raw: string | null | undefined): UniteRow[] | null {
+  if (!raw) return null;
+  try {
+    const j = JSON.parse(raw);
+    if (!Array.isArray(j)) return null;
+    return j.map((u) => ({
+      typo: String(u.typo || ""),
+      loyer_actuel:
+        u.loyer_actuel != null ? String(u.loyer_actuel) : "",
+      loyer_cible: u.loyer_cible != null ? String(u.loyer_cible) : "",
+      optimiser: u.optimiser !== false
+    }));
+  } catch {
+    return null;
+  }
+}
+
+/** Choix des unités à optimiser (retour Phil 2026-08-31 : « cocher
+ *  par unité »). Mode prêteur B : les non-cochées gardent leur loyer
+ *  ACTUEL au refi. Mode direct : les cochées passent au loyer cible
+ *  dès l'an 1, puis tout croît. */
+function UnitesOptimisationCard({
+  unitesJson,
+  typology,
+  prixLoyers,
+  revenusBruts,
+  nbLogements,
+  onSave
+}: {
+  unitesJson: string | null | undefined;
+  typology: Record<string, number>;
+  prixLoyers: Record<string, string>;
+  revenusBruts: number | null;
+  nbLogements: number | null;
+  onSave: (json: string | null) => void;
+}) {
+  const [rows, setRows] = useState<UniteRow[] | null>(() =>
+    parseUnites(unitesJson)
+  );
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    setRows(parseUnites(unitesJson));
+    setDirty(false);
+  }, [unitesJson]);
+
+  function generer() {
+    const actuelDefaut =
+      revenusBruts && nbLogements
+        ? (revenusBruts / 12 / nbLogements).toFixed(0)
+        : "";
+    const out: UniteRow[] = [];
+    for (const k of Object.keys(typology).sort()) {
+      const n = Number(typology[k]) || 0;
+      for (let i = 0; i < n; i++) {
+        out.push({
+          typo: k,
+          loyer_actuel: actuelDefaut,
+          loyer_cible: prixLoyers[k] ?? "",
+          optimiser: true
+        });
+      }
+    }
+    setRows(out);
+    setDirty(true);
+  }
+
+  function maj(i: number, patch: Partial<UniteRow>) {
+    setRows((rs) =>
+      rs ? rs.map((r, j) => (j === i ? { ...r, ...patch } : r)) : rs
+    );
+    setDirty(true);
+  }
+
+  const totalActuel = (rows ?? []).reduce(
+    (s, r) => s + (Number(r.loyer_actuel) || 0),
+    0
+  );
+  const totalEffectif = (rows ?? []).reduce(
+    (s, r) =>
+      s +
+      (r.optimiser
+        ? Number(r.loyer_cible) || 0
+        : Number(r.loyer_actuel) || 0),
+    0
+  );
+  const nbOpt = (rows ?? []).filter((r) => r.optimiser).length;
+
+  return (
+    <SubCard icon={Gauge} title="Unités & optimisation" cols={2}>
+      <div className="space-y-2 sm:col-span-2">
+        <p className="text-[10px] leading-snug text-white/40">
+          Coche les unités que tu optimises : les autres gardent leur
+          loyer ACTUEL (mode prêteur B — pas d&apos;indexation, trop
+          court) ou croissent depuis leur loyer actuel (achat direct —
+          les cochées passent au loyer cible dès l&apos;an 1). Sans
+          détail d&apos;unités, tout passe au loyer cible pondéré
+          (comportement historique).
+        </p>
+        {rows === null ? (
+          <button
+            type="button"
+            onClick={generer}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-300 transition hover:bg-accent-500/20"
+          >
+            Générer les unités depuis la typologie
+          </button>
+        ) : (
+          <>
+            <div className="overflow-x-auto rounded-lg border border-brand-800">
+              <table className="w-full border-collapse text-[11px]">
+                <thead>
+                  <tr className="bg-brand-900 text-[9px] uppercase tracking-wider text-white/40">
+                    <th className="px-2 py-1.5 text-left">Optimiser</th>
+                    <th className="px-2 py-1.5 text-left">Unité</th>
+                    <th className="px-2 py-1.5 text-right">
+                      Loyer actuel ($/mois)
+                    </th>
+                    <th className="px-2 py-1.5 text-right">
+                      Loyer cible ($/mois)
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-800">
+                  {rows.map((r, i) => (
+                    <tr
+                      key={i}
+                      className={r.optimiser ? "" : "opacity-60"}
+                    >
+                      <td className="px-2 py-1">
+                        <input
+                          type="checkbox"
+                          checked={r.optimiser}
+                          onChange={(e) =>
+                            maj(i, { optimiser: e.target.checked })
+                          }
+                          className="h-3.5 w-3.5 accent-emerald-500"
+                        />
+                      </td>
+                      <td className="px-2 py-1 text-white/70">
+                        {r.typo || "—"} · #{i + 1}
+                      </td>
+                      <td className="px-2 py-1 text-right">
+                        <input
+                          type="number"
+                          step="any"
+                          value={r.loyer_actuel}
+                          onChange={(e) =>
+                            maj(i, { loyer_actuel: e.target.value })
+                          }
+                          className="input w-24 py-0.5 text-right font-mono text-[11px]"
+                        />
+                      </td>
+                      <td className="px-2 py-1 text-right">
+                        <input
+                          type="number"
+                          step="any"
+                          value={r.loyer_cible}
+                          onChange={(e) =>
+                            maj(i, { loyer_cible: e.target.value })
+                          }
+                          disabled={!r.optimiser}
+                          className="input w-24 py-0.5 text-right font-mono text-[11px] disabled:opacity-40"
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[10px] text-white/50">
+              {nbOpt}/{rows.length} unités optimisées · actuel{" "}
+              {fmtMoney(totalActuel)}/mois → effectif au refi{" "}
+              {fmtMoney(totalEffectif)}/mois
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  onSave(
+                    JSON.stringify(
+                      rows.map((r) => ({
+                        typo: r.typo,
+                        loyer_actuel: Number(r.loyer_actuel) || 0,
+                        loyer_cible: Number(r.loyer_cible) || 0,
+                        optimiser: r.optimiser
+                      }))
+                    )
+                  )
+                }
+                disabled={!dirty}
+                className="btn-accent px-3 py-1.5 text-xs disabled:opacity-50"
+              >
+                Enregistrer les unités
+              </button>
+              <button
+                type="button"
+                onClick={generer}
+                className="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/60 transition hover:bg-white/10"
+              >
+                Régénérer depuis la typologie
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Retirer le détail des unités ? L'analyse reviendra au comportement historique (tout au loyer cible pondéré)."
+                    )
+                  )
+                    onSave(null);
+                }}
+                className="rounded-lg border border-rose-500/30 bg-rose-500/5 px-3 py-1.5 text-xs font-semibold text-rose-300/80 transition hover:bg-rose-500/10"
+              >
+                Retirer le détail
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </SubCard>
+  );
+}
+
 // ─── Section inputs analyse financière + bouton Lancer ──────────
 
 function ManualAnalysisSection({
@@ -2654,6 +2889,18 @@ function ManualAnalysisSection({
             onSave={(v) => setLoyerAbordable(v == null ? "" : String(v))}
           />
         </SubCard>
+
+        {/* Phase 3 — choix des unités à optimiser (les deux modes). */}
+        {stratChantier ? (
+          <UnitesOptimisationCard
+            unitesJson={data.unites_json}
+            typology={typology}
+            prixLoyers={prixLoyers}
+            revenusBruts={data.revenus_bruts}
+            nbLogements={data.nb_logements}
+            onSave={(json) => onPatch("unites_json", json)}
+          />
+        ) : null}
 
         {/* Loyers projetés par typologie — sans objet en achat direct
             (financé sur les loyers actuels ; phase 3 = optimisation
