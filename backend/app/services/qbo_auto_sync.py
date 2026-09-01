@@ -161,20 +161,43 @@ async def push_client_update_qbo_now(
             ).scalar_one_or_none()
             if client is None:
                 return
+            _new = (client.name or "").strip()
+            _old = (old_name or "").strip()
+
+            def _names_match(row) -> bool:
+                dn = (row.get("DisplayName") or "").strip().lower()
+                return dn in {n.lower() for n in (_new, _old) if n}
+
+            # Candidat par NOM exact (nouveau puis ancien) — plus fiable
+            # que le courriel, souvent partagé entre plusieurs fiches
+            # (compagnies du même proprio).
+            by_name = None
+            if _new:
+                by_name = await qbo.find_customer_by_name(_new)
+            if by_name is None and _old and _old.lower() != _new.lower():
+                by_name = await qbo.find_customer_by_name(_old)
+
             cust = None
             if client.qbo_customer_id:
-                cust = await qbo.get_customer(client.qbo_customer_id)
+                linked = await qbo.get_customer(client.qbo_customer_id)
+                if linked is not None and _names_match(linked):
+                    cust = linked
+                elif by_name is not None:
+                    # Lien mémorisé pointant sur le MAUVAIS customer (ex.
+                    # deux fiches adoptées sur le même customer via un
+                    # courriel partagé) alors qu'un customer au nom exact
+                    # de CETTE fiche existe → on répare le lien.
+                    cust = by_name
+                else:
+                    # Renommé côté QB sans passer par Kratos : le lien
+                    # mémorisé fait foi.
+                    cust = linked
+            if cust is None:
+                cust = by_name
             if cust is None and client.email:
+                # Dernier recours : courriel — seulement si UNIQUE côté QB
+                # (find_customer_by_email refuse les matchs ambigus).
                 cust = await qbo.find_customer_by_email(client.email)
-            if cust is None and client.name:
-                cust = await qbo.find_customer_by_name(client.name)
-            _old = (old_name or "").strip()
-            if (
-                cust is None
-                and _old
-                and _old.lower() != (client.name or "").strip().lower()
-            ):
-                cust = await qbo.find_customer_by_name(_old)
             if cust is None:
                 return
             cid = str(cust.get("Id") or "")
