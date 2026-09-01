@@ -22,6 +22,7 @@ import {
   Percent,
   Plus,
   Receipt,
+  Scale,
   Settings as SettingsIcon,
   Star,
   Trash2,
@@ -2826,7 +2827,12 @@ type LoyerRow = {
   jour_echeance?: number | null;
   montant_paye: number | null;
   paye_le: string | null;
-  etat: string; // "paye" | "partiel" | "retard" | "attente"
+  etat: string; // "paye" | "partiel" | "retard" | "attente" | "vacant"
+  /** Ligne de logement VACANT (bail_id vaut 0) : statut exact
+   *  ("vacant" ou "reserve") — même règle que la page Paiements. */
+  logement_statut?: string | null;
+  /** Dossier ouvert au TAL sur ce bail (non-paiement). */
+  tal_dossier_ouvert_le?: string | null;
   /** Bail résilié/terminé en cours de mois : la ligne reste dans le
    *  mois couvert avec un badge « Bail terminé le X » (M7). */
   bail_statut?: string;
@@ -2841,7 +2847,8 @@ const ETAT_ORDRE: Record<string, number> = {
   retard: 0,
   partiel: 1,
   attente: 2,
-  paye: 3
+  paye: 3,
+  vacant: 4
 };
 
 function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
@@ -2965,21 +2972,24 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
     await enregistrerPaiement(row, Math.round(montant * 100) / 100);
   }
 
-  // Frais ponctuel qui s'ajoute au solde (ex. 20 $ payé après le 15).
+  // Frais (positif) OU crédit (négatif) qui s'ajoute au solde — même
+  // règle que la page Paiements (retour Phil 2026-08-31).
   async function ajouterFrais(row: LoyerRow) {
     const saisie = window.prompt(
-      `Frais à facturer (mois ${mois}) ?\nMontant en $ :`,
+      `Frais ou crédit (mois ${mois}) ?\n` +
+        "Montant en $ — positif = frais (ex. 20), NÉGATIF = crédit " +
+        "qui réduit le loyer dû (ex. -50) :",
       "20"
     );
     if (saisie == null) return;
     const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
-    if (!Number.isFinite(montant) || montant <= 0) {
-      setErr("Montant invalide.");
+    if (!Number.isFinite(montant) || montant === 0) {
+      setErr("Montant invalide (positif = frais, négatif = crédit).");
       return;
     }
+    const defLibelle = montant < 0 ? "Crédit" : "Frais de retard";
     const libelle =
-      window.prompt("Libellé du frais :", "Frais de retard") ||
-      "Frais de retard";
+      window.prompt("Libellé :", defLibelle) || defLibelle;
     try {
       const r = await authedFetch(
         `/api/v1/immobilier/baux/${row.bail_id}/frais`,
@@ -2997,6 +3007,41 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
       await load();
     } catch (e) {
       setErr(`Ajout du frais échoué : ${(e as Error).message}`);
+    }
+  }
+
+  // Coche « dossier TAL ouvert » — même geste que la page Paiements.
+  async function toggleTal(row: LoyerRow) {
+    const ouvre = !row.tal_dossier_ouvert_le;
+    if (
+      !ouvre &&
+      !window.confirm(
+        "Retirer le suivi « dossier TAL ouvert » sur ce bail ?"
+      )
+    )
+      return;
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${row.bail_id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            tal_dossier_ouvert_le: ouvre
+              ? new Date().toISOString().slice(0, 10)
+              : null
+          })
+        }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      setInfo(
+        ouvre
+          ? "Dossier TAL marqué ouvert — visible par toute l'équipe."
+          : "Suivi TAL retiré."
+      );
+      await load();
+    } catch (e) {
+      setErr(`Mise à jour TAL échouée : ${(e as Error).message}`);
     }
   }
 
@@ -3134,18 +3179,22 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
     });
   })();
 
-  const totalAttendu = (rows || []).reduce(
+  // Les lignes « Vacant » sont informatives : leur loyer demandé
+  // n'entre dans aucun total d'argent (même règle que la page
+  // Paiements).
+  const rowsActifs = (rows || []).filter((r) => r.etat !== "vacant");
+  const totalAttendu = rowsActifs.reduce(
     (s, r) => s + (r.loyer_mensuel || 0),
     0
   );
-  const totalRecu = (rows || []).reduce(
+  const totalRecu = rowsActifs.reduce(
     (s, r) => s + (r.montant_paye || 0),
     0
   );
-  const nbRetards = (rows || []).filter(
+  const nbRetards = rowsActifs.filter(
     (r) => r.etat === "retard" || r.etat === "partiel"
   ).length;
-  const totalSolde = (rows || []).reduce(
+  const totalSolde = rowsActifs.reduce(
     (s, r) => s + (r.solde_total ?? 0),
     0
   );
@@ -3296,6 +3345,20 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                       <span className="badge badge-amber">Partiel</span>
                     ) : r.etat === "retard" ? (
                       <span className="badge badge-rose">Retard</span>
+                    ) : r.etat === "vacant" ? (
+                      <span
+                        className="badge badge-amber"
+                        title={
+                          r.logement_statut === "reserve"
+                            ? "Bail signé, pas encore commencé — aucun loyer ce mois-ci"
+                            : "Aucun bail ne couvre ce mois — aucun loyer à percevoir"
+                        }
+                      >
+                        <KeyRound className="h-3 w-3" />{" "}
+                        {r.logement_statut === "reserve"
+                          ? "Réservé"
+                          : "Vacant"}
+                      </span>
                     ) : (
                       <span className="badge badge-neutral">Attente</span>
                     )}
@@ -3335,7 +3398,11 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                     ) : null}
                   </td>
                   <td className="py-2 pr-3">
-                    {r.locataire_id != null ? (
+                    {r.etat === "vacant" ? (
+                      <span className="text-sm italic text-white/40">
+                        Aucun locataire
+                      </span>
+                    ) : r.locataire_id != null ? (
                       <Link
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         href={
@@ -3350,6 +3417,14 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                         {r.locataire_name || "—"}
                       </span>
                     )}
+                    {r.tal_dossier_ouvert_le ? (
+                      <span
+                        className="ml-2 inline-flex items-center gap-1 rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-violet-300"
+                        title={`Dossier ouvert au TAL le ${r.tal_dossier_ouvert_le} — décochable via le bouton TAL de la ligne`}
+                      >
+                        <Scale className="h-3 w-3" /> TAL ouvert
+                      </span>
+                    ) : null}
                   </td>
                   <td className="py-2 pr-3 font-mono text-xs">
                     {r.logement_id != null ? (
@@ -3374,36 +3449,44 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                     {/* Loyer / Reçu / Solde empilés (retour Phil
                         2026-08-13) — la balance d'un paiement partiel se
                         lit sur la ligne « Solde ». */}
-                    <CelluleLoyer
-                      loyer={r.loyer_mensuel}
-                      recu={r.montant_paye}
-                      solde={r.solde_total}
-                      fmt={fmtCurrency}
-                      echeance={echeanceLabel(r.jour_echeance)}
-                      frais={r.frais_mois}
-                      onSupprimerFrais={(id) => void supprimerFrais(id)}
-                    />
+                    {r.etat === "vacant" ? (
+                      <span
+                        className="text-sm tabular-nums text-white/40"
+                        title="Loyer demandé (fiche du logement) — rien à percevoir tant que le logement n'est pas loué"
+                      >
+                        {r.loyer_mensuel > 0
+                          ? `${fmtCurrency(r.loyer_mensuel)} demandé`
+                          : "—"}
+                      </span>
+                    ) : (
+                      <CelluleLoyer
+                        loyer={r.loyer_mensuel}
+                        recu={r.montant_paye}
+                        solde={r.solde_total}
+                        fmt={fmtCurrency}
+                        echeance={echeanceLabel(r.jour_echeance)}
+                        frais={r.frais_mois}
+                        onSupprimerFrais={(id) => void supprimerFrais(id)}
+                      />
+                    )}
                   </td>
                   <td className="py-2 pr-3 text-right text-xs text-white/60">
                     {r.paye_le || "—"}
                   </td>
                   <td className="py-2 text-right">
-                    {r.etat !== "paye" ? (
-                      <span className="inline-flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => void relancer(r)}
-                          disabled={relancingId === r.bail_id}
-                          title="Envoyer un rappel de loyer par courriel au locataire"
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
-                        >
-                          {relancingId === r.bail_id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <Mail className="h-3 w-3" />
-                          )}
-                          Relancer
-                        </button>
+                    {r.etat === "vacant" ? (
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={"/immobilier/locations" as any}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20"
+                        title="Ouvrir le pipeline de relocation (annonces, visites, candidat)"
+                      >
+                        <KeyRound className="h-3 w-3" /> Relouer
+                      </Link>
+                    ) : r.etat !== "paye" ? (
+                      <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                        {/* Même ordre que la page Paiements (règle
+                            Phil 2026-09-01 : sections identiques). */}
                         <button
                           type="button"
                           onClick={() => void marquerPaye(r)}
@@ -3429,10 +3512,41 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                         <button
                           type="button"
                           onClick={() => void ajouterFrais(r)}
-                          title="Ajouter un frais ponctuel au solde (ex. frais de retard 20 $)"
+                          title="Ajouter un frais (ex. retard 20 $) ou un crédit (montant négatif — réduit le loyer dû)"
                           className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10"
                         >
-                          + Frais
+                          ± Frais/crédit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void relancer(r)}
+                          disabled={relancingId === r.bail_id}
+                          title="Envoyer un rappel de loyer par courriel au locataire"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
+                        >
+                          {relancingId === r.bail_id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Mail className="h-3 w-3" />
+                          )}
+                          Relancer
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void toggleTal(r)}
+                          title={
+                            r.tal_dossier_ouvert_le
+                              ? `Dossier TAL ouvert le ${r.tal_dossier_ouvert_le} — cliquer pour retirer le suivi`
+                              : "Marquer qu'un dossier de non-paiement est ouvert au TAL pour ce bail"
+                          }
+                          className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition ${
+                            r.tal_dossier_ouvert_le
+                              ? "border-violet-500/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20"
+                              : "border-white/15 bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/80"
+                          }`}
+                        >
+                          <Scale className="h-3 w-3" />
+                          {r.tal_dossier_ouvert_le ? "TAL ouvert" : "TAL"}
                         </button>
                         {(r.montant_paye ?? 0) > 0 ? (
                           correctingId === r.bail_id ? (
@@ -3457,25 +3571,46 @@ function PaiementsMoisSection({ immeubleId }: { immeubleId: number }) {
                           )
                         ) : null}
                       </span>
-                    ) : correctingId === r.bail_id ? (
-                      <CorrectionOptions
-                        r={r}
-                        busy={payingId === r.bail_id}
-                        onMontant={() => void corrigerMontant(r)}
-                        onComplet={() => void payeAuComplet(r)}
-                        onRetirer={() => void retirerPaiement(r)}
-                        onClose={() => setCorrectingId(null)}
-                      />
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => setCorrectingId(r.bail_id)}
-                        disabled={payingId === r.bail_id}
-                        title="Corriger le paiement : montant, complet, ou retrait"
-                        className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
-                      >
-                        Corriger
-                      </button>
+                      <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                        {correctingId === r.bail_id ? (
+                          <CorrectionOptions
+                            r={r}
+                            busy={payingId === r.bail_id}
+                            onMontant={() => void corrigerMontant(r)}
+                            onComplet={() => void payeAuComplet(r)}
+                            onRetirer={() => void retirerPaiement(r)}
+                            onClose={() => setCorrectingId(null)}
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setCorrectingId(r.bail_id)}
+                            disabled={payingId === r.bail_id}
+                            title="Corriger le paiement : montant, complet, ou retrait"
+                            className="text-[11px] text-white/40 transition hover:text-rose-300 disabled:opacity-50"
+                          >
+                            Corriger
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void toggleTal(r)}
+                          title={
+                            r.tal_dossier_ouvert_le
+                              ? `Dossier TAL ouvert le ${r.tal_dossier_ouvert_le} — cliquer pour retirer le suivi`
+                              : "Marquer qu'un dossier de non-paiement est ouvert au TAL pour ce bail"
+                          }
+                          className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition ${
+                            r.tal_dossier_ouvert_le
+                              ? "border-violet-500/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20"
+                              : "border-white/15 bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/80"
+                          }`}
+                        >
+                          <Scale className="h-3 w-3" />
+                          {r.tal_dossier_ouvert_le ? "TAL ouvert" : "TAL"}
+                        </button>
+                      </span>
                     )}
                   </td>
                 </tr>
