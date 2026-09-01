@@ -460,7 +460,32 @@ def _key_results_band(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
         equite = best.get("equite_a_la_fin")
 
     # (label, valeur, vert?) — vert pour les métriques « positives ».
-    tiles = [
+    # Phase 2 : une fiche « achat direct » a ses propres métriques clés
+    # (reflet du panneau de la fiche).
+    _direct_band = (results or {}).get("achat_direct")
+    if _direct_band and getattr(rec, "strategie_acquisition", None) in (
+        "conventionnel", "schl_std", "aph_50", "aph_100"
+    ):
+        _bb = _direct_band.get("best_refi") or {}
+        tiles = [
+            ("PRIX DEMANDÉ", _money(prix), False),
+            (
+                f"REFI AN {_direct_band.get('horizon')} (DÉGAGÉ)",
+                _money(_bb.get("argent_dispo")),
+                bool(_bb.get("refi_possible")),
+            ),
+            ("MDF (CASH À L'ACHAT)",
+             _money(_direct_band.get("mdf_cash")), False),
+            ("PRÊT À L'ACHAT",
+             _money(_direct_band.get("pret_accorde")), False),
+            (
+                "CASHFLOW / AN",
+                _money(_direct_band.get("cashflow_annuel")),
+                float(_direct_band.get("cashflow_annuel") or 0) >= 0,
+            ),
+        ]
+    else:
+        tiles = [
         ("PRIX DEMANDÉ", _money(prix), False),
         ("BEST REFI (ÉQUITÉ)", _money(best_amount), True),
         ("MDF PRÊTEUR B", _money(mdf_b), False),
@@ -608,6 +633,121 @@ _SCENARIO_SHORT = {
     "refi_aph_50": "Refi APH 50",
     "refi_aph_100": "Refi APH 100",
 }
+
+
+def _achat_direct_section(rl, direct: dict, *, s):
+    """Phase 2 chantier stratégies — section « achat direct » du PDF
+    (reflet du panneau de la fiche) : sommaire d'achat, verdict de
+    refinancement à l'horizon et projection an 0..H."""
+    Paragraph = rl["Paragraph"]
+    Spacer = rl["Spacer"]
+
+    flow = []
+    best = direct.get("best_refi") or {}
+    h = direct.get("horizon") or 5
+
+    rows = [
+        ("Programme", str(direct.get("label") or "—")),
+        (
+            "Termes",
+            f"LTV {float(direct.get('ltv') or 0) * 100:.0f} % · "
+            f"amortissement {direct.get('amort_annees')} ans · "
+            f"RCD {float(direct.get('rcd') or 0):.2f}",
+        ),
+        ("Prêt accordé à l'achat", _money(direct.get("pret_accorde"))),
+        ("MDF (cash à l'achat)", _money(direct.get("mdf_cash"))),
+        (
+            "Frais d'acquisition",
+            _money(direct.get("frais_demarrage_total")),
+        ),
+        ("Paiement mensuel", _money(direct.get("paiement_mensuel"))),
+        ("Cashflow annuel", _money(direct.get("cashflow_annuel"))),
+        (
+            "Croissance (loyers / dépenses)",
+            f"{float(direct.get('croissance_loyers') or 0) * 100:.1f} % / "
+            f"{float(direct.get('croissance_depenses') or 0) * 100:.1f} % par an",
+        ),
+    ]
+    if float(direct.get("balance_vente") or 0) > 0:
+        rows.append(
+            ("Balance de vente", _money(direct.get("balance_vente")))
+        )
+    flow.append(_table_two_col(rl, rows, s=s))
+    flow.append(Spacer(1, 6))
+
+    # Verdict de l'an H.
+    if best.get("refi_possible"):
+        verdict = (
+            f"À l'an {h}, le refinancement {best.get('label')} dégage "
+            f"{_money(best.get('argent_dispo'))} — assez pour ressortir "
+            f"toute la mise de fonds de {_money(direct.get('mdf_cash'))}."
+        )
+    else:
+        verdict = (
+            f"À l'an {h}, le meilleur refinancement ({best.get('label')}) "
+            f"dégage {_money(best.get('argent_dispo'))} — il manque "
+            f"{_money(best.get('manque'))} pour ressortir toute la mise "
+            f"de fonds de {_money(direct.get('mdf_cash'))}."
+        )
+    flow.append(Paragraph(verdict, s["body"]))
+    flow.append(Spacer(1, 6))
+
+    refis = direct.get("refi_an_h") or {}
+    refi_rows = [
+        (
+            ("★ " if k == best.get("key") else "") + str(r.get("label")),
+            f"prêt max {_money(r.get('pret_max'))} · "
+            f"argent dégagé {_money(r.get('argent_dispo'))}",
+        )
+        for k, r in refis.items()
+    ]
+    if refi_rows:
+        flow.append(_table_two_col(rl, refi_rows, s=s))
+        flow.append(Spacer(1, 6))
+
+    # Projection an 0..H (colonnes bornées à l'horizon pour tenir en
+    # largeur — la fiche montre la série longue).
+    proj = [
+        p for p in (direct.get("projection") or [])
+        if int(p.get("annee", 0)) <= int(h)
+    ]
+    if proj:
+        Table = rl["Table"]
+        TableStyle = rl["TableStyle"]
+        mm = rl["mm"]
+        colors = rl["colors"]
+        header = ["Année"] + [str(p["annee"]) for p in proj]
+        lignes = [
+            ("Revenus", "revenus"),
+            ("Dépenses", "depenses"),
+            ("RNO", "rno"),
+            ("Valeur", "valeur"),
+            ("Solde prêt", "solde_pret"),
+            ("Équité", "equite"),
+        ]
+        data_rows = [header] + [
+            [lab] + [_money(p.get(key)) for p in proj]
+            for lab, key in lignes
+        ]
+        col_w = [26 * mm] + [
+            (144 * mm) / max(len(proj), 1) for _ in proj
+        ]
+        t = Table(data_rows, colWidths=col_w)
+        t.setStyle(
+            TableStyle([
+                ("FONTSIZE", (0, 0), (-1, -1), 6.5),
+                ("FONT", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                ("TEXTCOLOR", (0, 0), (-1, -1),
+                 colors.HexColor("#333333")),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.5,
+                 colors.HexColor(_C_LINE)),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ])
+        )
+        flow.append(t)
+    return flow
 
 
 def _scenarios_table(
@@ -1629,10 +1769,29 @@ def _render_bytes(
         ))
 
     # ── Scénarios de financement (tableau comparatif) ───────────
-    story.append(Paragraph(
-        "SCÉNARIOS DE FINANCEMENT", s["section"]
-    ))
-    if results:
+    # Phase 2 : une fiche en stratégie « achat direct » remplace le
+    # tableau classique par la section dédiée (reflet de l'écran).
+    _direct = (results or {}).get("achat_direct")
+    _mode_direct = bool(
+        results
+        and _direct
+        and getattr(rec, "strategie_acquisition", None)
+        in ("conventionnel", "schl_std", "aph_50", "aph_100")
+    )
+    if _mode_direct:
+        story.append(Paragraph(
+            "ACHAT DIRECT — DÉTENTION ET REFINANCEMENT", s["section"]
+        ))
+        story.extend(_achat_direct_section(rl, _direct, s=s))
+        story.append(Spacer(1, 3))
+        story.append(Paragraph(
+            "Financement à l'achat sur les loyers actuels ; projection "
+            "à croissance composée ; refinancement comparé aux trois "
+            "programmes SCHL à l'horizon choisi.", s["small_muted"]))
+    elif results:
+        story.append(Paragraph(
+            "SCÉNARIOS DE FINANCEMENT", s["section"]
+        ))
         winner_key = _best_refi_key(results)
         story.append(_scenarios_table(
             rl, results, s=s, winner_key=winner_key,
@@ -1655,10 +1814,13 @@ def _render_bytes(
         ))
 
     # ── Meilleur scénario refi ──────────────────────────────────
-    story.append(Paragraph(
-        "MEILLEUR SCÉNARIO REFI", s["section"]
-    ))
-    if results:
+    # (Sans objet en achat direct : le verdict de l'an H est déjà dans
+    # la section dédiée — reflet de la fiche.)
+    if not _mode_direct:
+        story.append(Paragraph(
+            "MEILLEUR SCÉNARIO REFI", s["section"]
+        ))
+    if results and not _mode_direct:
         best = results.get("best_refi") or {}
         program = best.get("program") or rec.best_refi_program
         amount = best.get("amount") or rec.best_refi_amount
@@ -1682,7 +1844,7 @@ def _render_bytes(
         t = _table_two_col(rl, best_rows, s=s)
         if t is not None:
             story.append(t)
-    else:
+    elif not _mode_direct:
         story.append(Paragraph(
             "Pas encore de meilleur scénario — lance l'analyse.",
             s["small_muted"],

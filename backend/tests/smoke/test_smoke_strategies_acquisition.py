@@ -87,3 +87,80 @@ def test_balance_vente_plafonnee_au_pret():
 def test_strategie_echo():
     r = compute_all(_inputs(strategie="conventionnel"), use_aph_select=False)
     assert r.to_dict()["strategie"] == "conventionnel"
+
+
+def test_achat_direct_absent_en_mode_preteur_b():
+    r = compute_all(_inputs(), use_aph_select=False)
+    assert r.to_dict()["achat_direct"] is None
+
+
+def test_achat_direct_conventionnel():
+    """Phase 2 : achat direct conventionnel — financement à l'achat
+    sur les loyers actuels, frais sans la phase chantier/refi,
+    projection composée et verdict refi an N cohérents."""
+    r = compute_all(
+        _inputs(
+            strategie="conventionnel",
+            projection_horizon_annees=5,
+            croissance_loyers=0.03,
+            croissance_depenses=0.03,
+        ),
+        use_aph_select=False,
+    )
+    d = r.to_dict()["achat_direct"]
+    assert d is not None
+    assert d["label"] == "Conventionnel"
+    # Prêt plafonné : jamais plus que LTV × prix demandé.
+    assert d["pret_accorde"] <= 0.75 * 1_000_000 + 0.01
+
+    # Frais : pas de 2e courtier/évaluateur/notaire, pas d'intérêts de
+    # portage ni de revenus pendant projet, pas de rapport
+    # d'efficacité en conventionnel.
+    f = d["frais_demarrage"]
+    for k in (
+        "courtier_hypothecaire_2", "evaluateur_2", "notaire_2",
+        "interets", "revenus_nets_pendant_projet", "rapport_efficacite",
+    ):
+        assert f[k] == 0.0, k
+    # Mais les frais d'achat de base restent.
+    assert f["taxes_bienvenue"] > 0
+    assert f["notaire"] > 0
+
+    # MDF cash = prix − prêt + frais (aucune balance de vente ici).
+    attendu_mdf = 1_000_000 - d["pret_accorde"] + d["frais_demarrage_total"]
+    assert abs(d["mdf_cash"] - attendu_mdf) < 0.01
+
+    # Projection : croissance composée à 3 %.
+    p0 = d["projection"][0]
+    p1 = d["projection"][1]
+    assert p0["revenus"] == 100_000.0
+    assert abs(p1["revenus"] - 103_000.0) < 0.01
+    # Le solde du prêt descend avec les années.
+    p5 = d["projection"][5]
+    assert p5["solde_pret"] < p0["solde_pret"]
+
+    # Verdict refi an 5 : argent dispo = prêt max − solde, et le best
+    # est bien le max des 3 programmes.
+    refis = d["refi_an_h"]
+    for v in refis.values():
+        assert abs(
+            (v["pret_max"] - d["solde_pret_an_h"]) - v["argent_dispo"]
+        ) < 0.01
+    best = d["best_refi"]
+    assert best["argent_dispo"] == max(
+        v["argent_dispo"] for v in refis.values()
+    )
+    assert best["refi_possible"] == (
+        best["argent_dispo"] >= d["mdf_cash"] - 0.005
+    )
+
+
+def test_achat_direct_aph_garde_rapport_efficacite():
+    r = compute_all(_inputs(strategie="aph_50"), use_aph_select=False)
+    d = r.to_dict()["achat_direct"]
+    assert d is not None
+    # Le rapport d'efficacité est requis pour les programmes APH.
+    assert d["frais_demarrage"]["rapport_efficacite"] > 0
+    # APH 50 : LTV 0,85 / amort 40 ans.
+    assert d["ltv"] == 0.85
+    assert d["amort_annees"] == 40

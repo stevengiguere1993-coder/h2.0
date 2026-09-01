@@ -129,6 +129,9 @@ type LeadDetail = {
   balance_vente_montant: number | null;
   balance_vente_taux_pct: number | null;
   projection_horizon_annees: number | null;
+  /** FRACTIONS (0.03 = 3 %) — partagées avec le TRI. */
+  tri_croissance_loyers?: number | null;
+  tri_croissance_depenses?: number | null;
   analysis_results_json: string | null;
   validation_warnings: ValidationWarning[] | null;
   attachments: Array<{
@@ -2243,6 +2246,11 @@ function ManualAnalysisSection({
     calculateurStrategiesActif() || !!data.strategie_acquisition;
   const strategie = data.strategie_acquisition ?? "preteur_b";
   const modePreteurB = stratChantier && strategie === "preteur_b";
+  // Phase 2 : achat direct (conventionnel / SCHL / APH) — détention et
+  // refi an N. Les intrants « chantier prêteur B » et l'optimisation
+  // refi ne s'appliquent pas (l'optimisation par unité arrive en
+  // phase 3).
+  const modeDirect = stratChantier && strategie !== "preteur_b";
 
   const typology = useMemo<Record<string, number>>(() => {
     if (!data.typology_json) return {};
@@ -2459,24 +2467,26 @@ function ManualAnalysisSection({
                 <option value="preteur_b">
                   Prêteur B + optimisation + refinancement (mode actuel)
                 </option>
-                <option value="conventionnel" disabled>
-                  Achat conventionnel direct — phase 2 (en construction)
+                <option value="conventionnel">
+                  Achat conventionnel direct + détention + refi
                 </option>
-                <option value="schl_std" disabled>
-                  Achat SCHL standard direct — phase 2 (en construction)
+                <option value="schl_std">
+                  Achat SCHL standard direct + détention + refi
                 </option>
-                <option value="aph_50" disabled>
-                  Achat APH 50 pts direct — phase 2 (en construction)
+                <option value="aph_50">
+                  Achat APH 50 pts direct + détention + refi
                 </option>
-                <option value="aph_100" disabled>
-                  Achat APH 100 pts direct — phase 2 (en construction)
+                <option value="aph_100">
+                  Achat APH 100 pts direct + détention + refi
                 </option>
               </select>
               <p className="text-[10px] text-white/40">
                 La stratégie pilote le financement à l&apos;achat, les
-                frais de démarrage et les colonnes affichées (PDF
-                inclus). Les achats directs avec détention 5 ans
-                arrivent en phase 2.
+                frais de démarrage, la projection et l&apos;affichage
+                (PDF inclus). Achat direct = financé sur les loyers
+                ACTUELS, détention avec croissance, verdict de
+                refinancement à l&apos;horizon choisi. (Le choix des
+                unités à optimiser arrive en phase 3.)
               </p>
             </div>
           </SubCard>
@@ -2507,13 +2517,15 @@ function ManualAnalysisSection({
             onSave={(v) => onPatch("taux_interet_refi_pct", v)}
             format="percent"
           />
-          <FieldNumber
-            label="MDF prêteur B (%)"
-            value={data.mdf_preteur_b_pct ?? 25}
-            onSave={(v) => onPatch("mdf_preteur_b_pct", v ?? 25)}
-            format="percent"
-          />
-          {stratChantier ? (
+          {!modeDirect ? (
+            <FieldNumber
+              label="MDF prêteur B (%)"
+              value={data.mdf_preteur_b_pct ?? 25}
+              onSave={(v) => onPatch("mdf_preteur_b_pct", v ?? 25)}
+              format="percent"
+            />
+          ) : null}
+          {stratChantier && !modeDirect ? (
             <FieldNumber
               label="Prêt prêteur B (%)"
               value={100 - (data.mdf_preteur_b_pct ?? 25)}
@@ -2526,19 +2538,50 @@ function ManualAnalysisSection({
               format="percent"
             />
           ) : null}
-          <FieldNumber
-            label="Taux d'intérêt prêteur B (%)"
-            value={data.taux_interet_preteur_b_projet_pct ?? 8}
-            onSave={(v) =>
-              onPatch("taux_interet_preteur_b_projet_pct", v ?? 8)
-            }
-            format="percent"
-          />
-          <FieldNumber
-            label="Durée projet (années)"
-            value={data.duree_projet_annees}
-            onSave={(v) => onPatch("duree_projet_annees", v)}
-          />
+          {!modeDirect ? (
+            <FieldNumber
+              label="Taux d'intérêt prêteur B (%)"
+              value={data.taux_interet_preteur_b_projet_pct ?? 8}
+              onSave={(v) =>
+                onPatch("taux_interet_preteur_b_projet_pct", v ?? 8)
+              }
+              format="percent"
+            />
+          ) : null}
+          {!modeDirect ? (
+            <FieldNumber
+              label="Durée projet (années)"
+              value={data.duree_projet_annees}
+              onSave={(v) => onPatch("duree_projet_annees", v)}
+            />
+          ) : null}
+          {modeDirect ? (
+            <>
+              <FieldNumber
+                label="Horizon de détention (années)"
+                value={data.projection_horizon_annees ?? 5}
+                onSave={(v) =>
+                  onPatch("projection_horizon_annees", v ?? 5)
+                }
+              />
+              <FieldNumber
+                label="Croissance loyers (%/an)"
+                value={(data.tri_croissance_loyers ?? 0.03) * 100}
+                onSave={(v) =>
+                  onPatch("tri_croissance_loyers", (v ?? 3) / 100)
+                }
+                format="percent"
+              />
+              <FieldNumber
+                label="Croissance dépenses (%/an)"
+                value={(data.tri_croissance_depenses ?? 0.03) * 100}
+                onSave={(v) =>
+                  onPatch("tri_croissance_depenses", (v ?? 3) / 100)
+                }
+                format="percent"
+              />
+            </>
+          ) : null}
           {stratChantier ? (
             <>
               <FieldNumber
@@ -2557,7 +2600,9 @@ function ManualAnalysisSection({
           ) : null}
         </SubCard>
 
-        {/* Optimisation refi */}
+        {/* Optimisation refi — sans objet en achat direct (le choix
+            des unités à optimiser arrive en phase 3). */}
+        {modeDirect ? null : (
         <SubCard icon={Gauge} title="Optimisation refi" cols={4}>
           <FieldNumber
             label="Logements ajoutés refi"
@@ -2581,6 +2626,7 @@ function ManualAnalysisSection({
             onSave={(v) => onPatch("ajout_wifi", v)}
           />
         </SubCard>
+        )}
 
         {/* Frais & projet */}
         <SubCard icon={Banknote} title="Frais & projet" cols={4}>
@@ -2609,7 +2655,10 @@ function ManualAnalysisSection({
           />
         </SubCard>
 
-        {/* Loyers projetés par typologie */}
+        {/* Loyers projetés par typologie — sans objet en achat direct
+            (financé sur les loyers actuels ; phase 3 = optimisation
+            par unité). */}
+        {modeDirect ? null : (
         <SubCard icon={Coins} title="Loyers projetés par typologie" cols={3}>
           {loyersTypoKeys.map((k) => (
             <div key={k}>
@@ -2633,6 +2682,7 @@ function ManualAnalysisSection({
             </p>
           ) : null}
         </SubCard>
+        )}
       </div>
 
       {err ? (
@@ -2803,6 +2853,45 @@ type AnalysisResults = {
     total: number;
   };
   balance_vente?: { montant: number; taux_pct: number };
+  achat_direct?: {
+    programme: string;
+    label: string;
+    ltv: number;
+    amort_annees: number;
+    rcd: number;
+    valeur_retenue: number;
+    pret_accorde: number;
+    paiement_mensuel: number;
+    cashflow_annuel: number;
+    balance_vente: number;
+    frais_demarrage: Record<string, number>;
+    frais_demarrage_total: number;
+    mdf_cash: number;
+    horizon: number;
+    croissance_loyers: number;
+    croissance_depenses: number;
+    solde_pret_an_h: number;
+    projection: Array<{
+      annee: number;
+      revenus: number;
+      depenses: number;
+      rno: number;
+      valeur: number;
+      solde_pret: number;
+      equite: number;
+    }>;
+    refi_an_h: Record<
+      string,
+      { label: string; pret_max: number; argent_dispo: number }
+    >;
+    best_refi: {
+      key: string;
+      label: string;
+      argent_dispo: number;
+      refi_possible: boolean;
+      manque: number;
+    };
+  } | null;
   typology: {
     h13_loyer_pondere: number;
     nb_abordables: number;
@@ -2820,6 +2909,289 @@ type AnalysisResults = {
     program: string;
   };
 };
+
+/** Résultats du mode « achat direct » (phase 2 chantier stratégies) :
+ *  financement à l'achat au programme choisi, projection de détention
+ *  avec croissance, et verdict de refinancement à l'horizon. */
+function AchatDirectPanel({
+  d
+}: {
+  d: NonNullable<AnalysisResults["achat_direct"]>;
+}) {
+  const best = d.best_refi;
+  // Graphe : valeur de l'actif vs solde du prêt (l'écart = équité).
+  const annees = d.projection.map((p) => p.annee);
+  const maxY = Math.max(
+    ...d.projection.map((p) => Math.max(p.valeur, p.solde_pret)),
+    1
+  );
+  const W = 560;
+  const HT = 150;
+  const x = (a: number) =>
+    (a / Math.max(annees[annees.length - 1] || 1, 1)) * (W - 40) + 30;
+  const y = (v: number) => HT - 18 - (v / maxY) * (HT - 36);
+  const path = (pick: (p: (typeof d.projection)[number]) => number) =>
+    d.projection
+      .map((p, i) => `${i === 0 ? "M" : "L"}${x(p.annee)},${y(pick(p))}`)
+      .join(" ");
+
+  return (
+    <SectionCard
+      icon={TrendingUp}
+      title={`Achat direct — ${d.label}`}
+      tone="emerald"
+      subtitle={
+        <>
+          LTV {(d.ltv * 100).toFixed(0)} % · amortissement{" "}
+          {d.amort_annees} ans · RCD {d.rcd.toFixed(2)} · financé sur
+          les loyers ACTUELS · croissance {""}
+          {(d.croissance_loyers * 100).toFixed(1)} % loyers /{" "}
+          {(d.croissance_depenses * 100).toFixed(1)} % dépenses
+        </>
+      }
+      action={
+        <div
+          className={`rounded-lg border px-3 py-1.5 text-right ${
+            best.refi_possible
+              ? "border-emerald-500/30 bg-emerald-500/10"
+              : "border-rose-500/30 bg-rose-500/10"
+          }`}
+        >
+          <p
+            className={`text-[9px] uppercase tracking-wider ${
+              best.refi_possible
+                ? "text-emerald-300/80"
+                : "text-rose-300/80"
+            }`}
+          >
+            Refi an {d.horizon}
+          </p>
+          <p
+            className={`font-mono text-sm font-bold tabular-nums ${
+              best.refi_possible ? "text-emerald-300" : "text-rose-300"
+            }`}
+          >
+            {fmtMoney(best.argent_dispo)}
+          </p>
+          <p className="text-[10px] text-white/50">{best.label}</p>
+        </div>
+      }
+    >
+      {/* Tuiles de l'achat */}
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        {[
+          ["Prêt accordé à l'achat", fmtMoney(d.pret_accorde), false],
+          ["MDF (cash à l'achat)", fmtMoney(d.mdf_cash), false],
+          ["Paiement mensuel", fmtMoney(d.paiement_mensuel), false],
+          [
+            "Cashflow annuel",
+            fmtMoney(d.cashflow_annuel),
+            d.cashflow_annuel >= 0
+          ]
+        ].map(([label, val, green]) => (
+          <div
+            key={String(label)}
+            className={`rounded-lg border px-3 py-2 ${
+              green
+                ? "border-emerald-500/30 bg-emerald-500/5"
+                : "border-brand-800 bg-brand-950/40"
+            }`}
+          >
+            <p className="text-[9px] uppercase tracking-wider text-white/40">
+              {label}
+            </p>
+            <p
+              className={`mt-0.5 font-mono text-sm font-bold tabular-nums ${
+                green ? "text-emerald-300" : "text-white/90"
+              }`}
+            >
+              {val}
+            </p>
+          </div>
+        ))}
+      </div>
+      <p className="mt-1.5 text-[10px] text-white/40">
+        Frais d&apos;acquisition : {fmtMoney(d.frais_demarrage_total)}{" "}
+        (sans double courtier/notaire ni intérêts de chantier
+        {d.programme === "aph_50" || d.programme === "aph_100"
+          ? ", rapport d'efficacité inclus"
+          : ""}
+        )
+        {d.balance_vente > 0
+          ? ` · balance de vente ${fmtMoney(d.balance_vente)}`
+          : ""}
+      </p>
+
+      {/* Verdict */}
+      <div
+        className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+          best.refi_possible
+            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+            : "border-rose-500/40 bg-rose-500/10 text-rose-200"
+        }`}
+      >
+        {best.refi_possible ? (
+          <>
+            ✅ À l&apos;an {d.horizon}, le refinancement{" "}
+            <strong>{best.label}</strong> dégage{" "}
+            <strong>{fmtMoney(best.argent_dispo)}</strong> (prêt max −
+            solde du prêt) — assez pour ressortir toute ta mise de
+            fonds de {fmtMoney(d.mdf_cash)}.
+          </>
+        ) : (
+          <>
+            ⚠️ À l&apos;an {d.horizon}, le meilleur refinancement (
+            {best.label}) dégage {fmtMoney(best.argent_dispo)} — il
+            manque <strong>{fmtMoney(best.manque)}</strong> pour
+            ressortir toute ta mise de fonds de {fmtMoney(d.mdf_cash)}.
+          </>
+        )}
+      </div>
+
+      {/* Refi an H — 3 programmes */}
+      <div className="mt-3 overflow-x-auto rounded-lg border border-brand-800">
+        <table className="w-full border-collapse text-[11px]">
+          <thead>
+            <tr className="bg-brand-900 text-white/50">
+              <th className="px-2.5 py-2 text-left text-[9px] font-semibold uppercase tracking-wider">
+                Refi à l&apos;an {d.horizon}
+              </th>
+              <th className="px-2.5 py-2 text-right">Prêt max</th>
+              <th className="px-2.5 py-2 text-right">Solde du prêt</th>
+              <th className="px-2.5 py-2 text-right">Argent dégagé</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-brand-800">
+            {Object.entries(d.refi_an_h).map(([k, r]) => (
+              <tr
+                key={k}
+                className={k === best.key ? "bg-emerald-500/10" : ""}
+              >
+                <td className="px-2.5 py-1.5 text-white/80">
+                  {k === best.key ? "★ " : ""}
+                  {r.label}
+                </td>
+                <td className="px-2.5 py-1.5 text-right font-mono tabular-nums text-white/80">
+                  {fmtMoney(r.pret_max)}
+                </td>
+                <td className="px-2.5 py-1.5 text-right font-mono tabular-nums text-white/50">
+                  − {fmtMoney(d.solde_pret_an_h)}
+                </td>
+                <td
+                  className={`px-2.5 py-1.5 text-right font-mono font-bold tabular-nums ${
+                    r.argent_dispo >= 0
+                      ? "text-emerald-300"
+                      : "text-rose-300"
+                  }`}
+                >
+                  {fmtMoney(r.argent_dispo)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Graphe valeur vs solde du prêt */}
+      <div className="mt-3 rounded-lg border border-brand-800 bg-brand-950/40 p-3">
+        <p className="text-[9px] uppercase tracking-wider text-white/40">
+          Prise de valeur vs solde du prêt ({annees.length - 1} ans)
+        </p>
+        <svg
+          viewBox={`0 0 ${W} ${HT}`}
+          className="mt-1 w-full"
+          role="img"
+          aria-label="Valeur de l'actif et solde du prêt dans le temps"
+        >
+          <path
+            d={path((p) => p.valeur)}
+            fill="none"
+            stroke="#34d399"
+            strokeWidth="2"
+          />
+          <path
+            d={path((p) => p.solde_pret)}
+            fill="none"
+            stroke="#9ca3af"
+            strokeWidth="1.5"
+            strokeDasharray="4 3"
+          />
+          {annees.map((a) => (
+            <text
+              key={a}
+              x={x(a)}
+              y={HT - 4}
+              textAnchor="middle"
+              className="fill-white/30"
+              fontSize="8"
+            >
+              {a}
+            </text>
+          ))}
+        </svg>
+        <p className="mt-1 flex gap-3 text-[10px] text-white/50">
+          <span className="text-emerald-300">— Valeur (RNO ÷ TGA)</span>
+          <span className="text-white/40">- - Solde du prêt</span>
+        </p>
+      </div>
+
+      {/* Projections détaillées */}
+      <div className="mt-3 overflow-x-auto rounded-lg border border-brand-800">
+        <table className="w-full border-collapse text-[10px]">
+          <thead>
+            <tr className="bg-brand-900 text-white/50">
+              <th className="px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider">
+                Année
+              </th>
+              {d.projection.map((p) => (
+                <th
+                  key={p.annee}
+                  className={`px-2 py-1.5 text-right ${
+                    p.annee === d.horizon ? "text-emerald-300" : ""
+                  }`}
+                >
+                  {p.annee === d.horizon ? `★ ${p.annee}` : p.annee}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-brand-800">
+            {(
+              [
+                ["Revenus", (p) => p.revenus],
+                ["Dépenses", (p) => p.depenses],
+                ["RNO", (p) => p.rno],
+                ["Valeur", (p) => p.valeur],
+                ["Solde prêt", (p) => p.solde_pret],
+                ["Équité", (p) => p.equite]
+              ] as Array<
+                [string, (p: (typeof d.projection)[number]) => number]
+              >
+            ).map(([label, pick]) => (
+              <tr key={label}>
+                <td className="whitespace-nowrap px-2 py-1 text-white/60">
+                  {label}
+                </td>
+                {d.projection.map((p) => (
+                  <td
+                    key={p.annee}
+                    className={`px-2 py-1 text-right font-mono tabular-nums ${
+                      p.annee === d.horizon
+                        ? "bg-emerald-500/5 text-white/90"
+                        : "text-white/70"
+                    }`}
+                  >
+                    {fmtMoney(pick(p))}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </SectionCard>
+  );
+}
 
 function AnalysisResultsTable({
   resultsJson,
@@ -2852,6 +3224,13 @@ function AnalysisResultsTable({
   }, [resultsJson]);
 
   if (!data) return null;
+
+  // Phase 2 — stratégie « achat direct » : le tableau classique
+  // (colonnes prêteur B/refi) ne s'applique pas, on affiche le
+  // panneau dédié (achat + projection + verdict refi an N).
+  if (data.achat_direct) {
+    return <AchatDirectPanel d={data.achat_direct} />;
+  }
 
   // Chantier stratégies (staging) : en mode prêteur B, la colonne
   // « Achat conventionnel » ne sert à rien (retour Phil 2026-08-31) —
