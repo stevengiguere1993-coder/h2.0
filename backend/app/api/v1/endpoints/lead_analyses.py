@@ -155,6 +155,7 @@ class LeadAnalysisRead(BaseModel):
     # Stratégies d'acquisition (août 2026, chantier staging).
     strategie_acquisition: Optional[str] = None
     programme_achat: Optional[str] = None
+    refi_retenu: Optional[str] = None
     balance_vente_montant: Optional[float] = None
     balance_vente_taux_pct: Optional[float] = None
     projection_horizon_annees: Optional[int] = None
@@ -278,6 +279,14 @@ class LeadAnalysisUpdate(BaseModel):
     programme_achat: Optional[str] = Field(
         default=None,
         pattern=r"^(conventionnel|schl_std|aph_50|aph_100)$",
+    )
+    # Référence de refinancement choisie manuellement (null = meilleur).
+    refi_retenu: Optional[str] = Field(
+        default=None,
+        pattern=(
+            r"^(refi_schl|refi_aph_50|refi_aph_100|"
+            r"conventionnel|schl_std|aph_50|aph_100)$"
+        ),
     )
     balance_vente_montant: Optional[float] = Field(default=None, ge=0)
     balance_vente_taux_pct: Optional[float] = Field(
@@ -1819,7 +1828,8 @@ RECALC_INPUT_FIELDS = {
     "frais_developpement", "frais_negociations", "mdf_preteur_b_pct",
     "taux_interet_preteur_b_projet_pct",
     "frais_demarrage_overrides_json", "frais_demarrage_financables_json",
-    "strategie_acquisition", "programme_achat", "balance_vente_montant",
+    "strategie_acquisition", "programme_achat", "refi_retenu",
+    "balance_vente_montant",
     "balance_vente_taux_pct", "projection_horizon_annees",
     "tri_croissance_loyers", "tri_croissance_depenses", "unites_json",
 }
@@ -1964,6 +1974,7 @@ async def _compute_and_store(rec, db) -> dict:
         # explicitement choisie (prod = NULL = calcul historique).
         strategie=rec.strategie_acquisition or "preteur_b",
         programme_achat=rec.programme_achat or "conventionnel",
+        refi_retenu=rec.refi_retenu,
         chantier_actif=rec.strategie_acquisition is not None,
         balance_vente_montant=float(rec.balance_vente_montant or 0),
         balance_vente_taux_pct=float(rec.balance_vente_taux_pct or 0)

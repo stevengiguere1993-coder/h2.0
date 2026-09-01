@@ -315,6 +315,13 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
     programme_achat: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True
     )
+    # Référence de REFINANCEMENT choisie manuellement (retour Phil
+    # 2026-09-02 : « le best est parfait, mais permets-moi de changer
+    # la référence ») — pilote le verdict, la projection et la carte
+    # kanban. NULL = le meilleur automatiquement.
+    refi_retenu: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
     # Balance de vente (financement vendeur) : réduit le prêt du
     # prêteur B/de l'institution — PAS le cash à l'achat. Le taux
     # (6.0 = 6 %) sert aux intérêts de portage pendant le projet.
