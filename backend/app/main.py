@@ -537,6 +537,17 @@ def create_application() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # ── Journal d'événements automatique (« IA au courant de tout »,
+    # GO Phil 2026-09-02) : chaque écriture API réussie → AuditLog.
+    # Montage BEST-EFFORT : un import qui casse n'empêche jamais le
+    # démarrage.
+    try:
+        from app.core.audit_middleware import AuditMiddleware
+
+        app.add_middleware(AuditMiddleware)
+    except Exception as _exc:  # noqa: BLE001
+        logger.warning("AuditMiddleware non monté : %s", _exc)
+
     app.include_router(api_router, prefix="/api/v1")
 
     # ── Serveur MCP « remote » (connecteur custom Claude) ───────────
