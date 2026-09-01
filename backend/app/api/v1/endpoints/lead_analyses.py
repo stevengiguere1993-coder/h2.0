@@ -157,6 +157,10 @@ class LeadAnalysisRead(BaseModel):
     balance_vente_montant: Optional[float] = None
     balance_vente_taux_pct: Optional[float] = None
     projection_horizon_annees: Optional[int] = None
+    # Croissances annuelles (FRACTIONS, 0.03 = 3 %) — partagées avec
+    # le TRI (source unique) et la projection des achats directs.
+    tri_croissance_loyers: Optional[float] = None
+    tri_croissance_depenses: Optional[float] = None
     notes: Optional[str] = None
     converted_to_lead_id: Optional[int] = None
     converted_to_deal_id: Optional[int] = None
@@ -270,6 +274,14 @@ class LeadAnalysisUpdate(BaseModel):
     )
     projection_horizon_annees: Optional[int] = Field(
         default=None, ge=1, le=30
+    )
+    # Croissances annuelles (FRACTIONS, 0.03 = 3 %) — partagées avec
+    # le TRI.
+    tri_croissance_loyers: Optional[float] = Field(
+        default=None, ge=0, le=0.3
+    )
+    tri_croissance_depenses: Optional[float] = Field(
+        default=None, ge=0, le=0.3
     )
 
     notes: Optional[str] = None
@@ -1767,6 +1779,7 @@ RECALC_INPUT_FIELDS = {
     "frais_demarrage_overrides_json", "frais_demarrage_financables_json",
     "strategie_acquisition", "balance_vente_montant",
     "balance_vente_taux_pct", "projection_horizon_annees",
+    "tri_croissance_loyers", "tri_croissance_depenses",
 }
 
 
@@ -1907,6 +1920,11 @@ async def _compute_and_store(rec, db) -> dict:
         balance_vente_montant=float(rec.balance_vente_montant or 0),
         balance_vente_taux_pct=float(rec.balance_vente_taux_pct or 0)
         / 100.0,
+        # Phase 2 — détention + refi an N (achats directs). Les
+        # croissances réutilisent celles du TRI (source unique).
+        projection_horizon_annees=int(rec.projection_horizon_annees or 5),
+        croissance_loyers=float(rec.tri_croissance_loyers or 0.03),
+        croissance_depenses=float(rec.tri_croissance_depenses or 0.03),
         frais_demarrage_overrides=frais_overrides,
         frais_demarrage_financables=_parse_financables(
             rec.frais_demarrage_financables_json
@@ -1972,10 +1990,20 @@ async def _compute_and_store(rec, db) -> dict:
     # Registre absent → liste vide (aucun ordre/label imposé côté front).
     results_dict["frais_registry"] = frais_registry_global
 
-    rec.analysis_results_json = json.dumps(results_dict)[:50_000]
+    rec.analysis_results_json = json.dumps(results_dict)[:80_000]
     rec.best_refi_amount = results.best_refi_amount
     rec.best_refi_program = results.best_refi_program
     rec.mdf_preteur_b = results.mdf_preteur_b
+    # Stratégie « achat direct » : la carte kanban reflète le CASH à
+    # sortir à l'achat et l'argent dégagé au refi de l'an N (au lieu
+    # des métriques prêteur B qui ne s'appliquent pas).
+    direct = results_dict.get("achat_direct")
+    if direct:
+        rec.mdf_preteur_b = direct["mdf_cash"]
+        rec.best_refi_amount = direct["best_refi"]["argent_dispo"]
+        rec.best_refi_program = (
+            f"{direct['best_refi']['label']} · refi an {direct['horizon']}"
+        )
     return results_dict
 
 

@@ -335,6 +335,30 @@ def pmt_canadian(
     return principal * rate_monthly / (1 - (1 + rate_monthly) ** (-n_months))
 
 
+def solde_pret_canadien(
+    principal: float,
+    rate_annual: float,
+    amort_annees: int,
+    apres_annees: float,
+) -> float:
+    """Solde restant d'un prêt (composition canadienne semestrielle)
+    après ``apres_annees`` années de paiements mensuels réguliers."""
+    if principal <= 0:
+        return 0.0
+    n = amort_annees * 12
+    k = min(int(round(apres_annees * 12)), n)
+    if k <= 0:
+        return principal
+    pmt = pmt_canadian(rate_annual, n, principal)
+    if rate_annual == 0:
+        return max(0.0, principal - pmt * k)
+    rm = (1 + rate_annual / 2) ** (1 / 6) - 1
+    if rm == 0:
+        return max(0.0, principal - pmt * k)
+    solde = principal * (1 + rm) ** k - pmt * (((1 + rm) ** k - 1) / rm)
+    return max(0.0, solde)
+
+
 # ─── Agrégats de typologie ─────────────────────────────────────────
 
 
@@ -902,6 +926,14 @@ class FinanceInputs:
     balance_vente_montant: float = 0.0
     balance_vente_taux_pct: float = 0.0
 
+    # Sept. 2026 — Phase 2 du chantier stratégies : achat DIRECT
+    # (conventionnel / SCHL / APH) avec détention et refinancement à
+    # l'an N. Croissances annuelles composées (fractions, 0.03 = 3 %)
+    # appliquées aux revenus et aux dépenses pendant la détention.
+    projection_horizon_annees: int = 5
+    croissance_loyers: float = 0.03
+    croissance_depenses: float = 0.03
+
     # Taux d'intérêt du prêteur B pendant la phase chantier
     # (8 % typique 2024-2025). Utilisé pour calculer L17 — intérêts
     # de portage pendant projet.
@@ -1028,6 +1060,11 @@ class FinanceResults:
     pret_preteur_b_total: float = 0.0
     balance_vente_retenue: float = 0.0
 
+    # Sept. 2026 — Phase 2 : bloc « achat direct » (financement à
+    # l'achat au programme choisi + détention + refi an N). None pour
+    # la stratégie historique prêteur B.
+    achat_direct: Optional[dict] = None
+
     def to_dict(self) -> dict:
         """Pour persistance JSON dans `LeadAnalysis.analysis_results_json`."""
         mdf_pct = (
@@ -1070,6 +1107,7 @@ class FinanceResults:
                     self.inputs.balance_vente_taux_pct or 0.0
                 ) * 100.0,
             },
+            "achat_direct": self.achat_direct,
             "typology": {
                 "h13_loyer_pondere": self.typology.h13_loyer_pondere,
                 "nb_abordables": self.typology.nb_abordables,
@@ -1488,6 +1526,161 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
     best_amount = best.equite_a_la_fin or 0.0
     best_program = best.config.label
 
+    # ── Phase 2 (sept. 2026) — Achat DIRECT + détention + refi an N ──
+    # Stratégies « j'achète au programme (conventionnel / SCHL / APH)
+    # sur les loyers ACTUELS, je détiens ~5 ans avec croissance des
+    # revenus et des dépenses, et je regarde si le refinancement me
+    # ressort tout mon cash ». Réponses Phil 2026-08-31.
+    achat_direct: Optional[dict] = None
+    _slug_direct = {
+        "conventionnel": ("achat", "Conventionnel"),
+        "schl_std": ("schl_std", "SCHL standard"),
+        "aph_50": ("aph50", "SCHL Efficacité énergétique (50 pts)"),
+        "aph_100": ("aph100", "SCHL Abordabilité + Efficacité (100 pts)"),
+    }
+    if inputs.strategie in _slug_direct:
+        slug_dir, label_dir = _slug_direct[inputs.strategie]
+        cfg_dir = resolve_scenario(slug_dir, sc_ov)
+        # Financement à l'ACHAT, au programme choisi, sur les loyers
+        # ACTUELS — plafonné à la valeur marchande (prix demandé).
+        sc_achat_dir = compute_scenario(
+            config=cfg_dir,
+            nb_log=nb_log_achat,
+            loyer_mois=loyer_mois_achat,
+            revenus_totaux=inputs.revenus_annuels,
+            depenses=depenses_achat,
+            tga=inputs.tga,
+            taux_interet=inputs.taux_interet_achat,
+            valeur_marchande=inputs.prix_achat,
+        )
+        # Frais de démarrage SANS phase chantier/refi : pas de 2e
+        # courtier/évaluateur/notaire, ni intérêts de portage, ni
+        # revenus pendant projet ; rapport d'efficacité gardé pour les
+        # programmes APH seulement. Les overrides et masques déjà
+        # appliqués à ``frais`` sont hérités tels quels.
+        f_dir = {
+            k: float(v or 0)
+            for k, v in frais.__dict__.items()
+            if k != "frais_custom"
+        }
+        for _k in (
+            "courtier_hypothecaire_2", "evaluateur_2", "notaire_2",
+            "interets", "revenus_nets_pendant_projet",
+        ):
+            f_dir[_k] = 0.0
+        if inputs.strategie not in ("aph_50", "aph_100"):
+            f_dir["rapport_efficacite"] = 0.0
+        _custom_total = sum(
+            float(c.get("montant", 0) or 0) for c in frais.frais_custom
+        )
+        frais_dir_total = round(sum(f_dir.values()) + _custom_total, 2)
+
+        pret_dir = sc_achat_dir.financement
+        bv_dir = min(
+            max(0.0, float(inputs.balance_vente_montant or 0.0)),
+            max(0.0, inputs.prix_achat - pret_dir),
+        )
+        mdf_dir = (
+            max(0.0, inputs.prix_achat - pret_dir - bv_dir)
+            + frais_dir_total
+        )
+
+        # Projection de détention (croissances composées ; la série va
+        # au-delà de l'horizon — « la prise de valeur sur plusieurs
+        # années, pas juste 5 »).
+        h_annees = max(1, int(inputs.projection_horizon_annees or 5))
+        cl = float(inputs.croissance_loyers or 0.0)
+        cd = float(inputs.croissance_depenses or 0.0)
+        dep0 = depenses_achat.total
+        projection = []
+        for a in range(0, max(h_annees, 10) + 1):
+            rev_a = inputs.revenus_annuels * (1 + cl) ** a
+            dep_a = dep0 * (1 + cd) ** a
+            rno_a = rev_a - dep_a
+            valeur_a = rno_a / inputs.tga if inputs.tga > 0 else 0.0
+            solde_a = (
+                solde_pret_canadien(
+                    pret_dir, inputs.taux_interet_achat,
+                    cfg_dir.amort_annees, a,
+                )
+                + bv_dir  # balance de vente : intérêts seulement
+            )
+            projection.append({
+                "annee": a,
+                "revenus": round(rev_a, 2),
+                "depenses": round(dep_a, 2),
+                "rno": round(rno_a, 2),
+                "valeur": round(valeur_a, 2),
+                "solde_pret": round(solde_a, 2),
+                "equite": round(valeur_a - solde_a, 2),
+            })
+
+        # Refinancement à l'an H, aux 3 programmes SCHL (mêmes règles
+        # que les colonnes classiques : min(RCD, TGA×LTV)).
+        rev_h = inputs.revenus_annuels * (1 + cl) ** h_annees
+        dep_h = dep0 * (1 + cd) ** h_annees
+        rno_h = rev_h - dep_h
+        solde_h = (
+            solde_pret_canadien(
+                pret_dir, inputs.taux_interet_achat,
+                cfg_dir.amort_annees, h_annees,
+            )
+            + bv_dir
+        )
+        refis: dict = {}
+        for key_r, cfg_r in (
+            ("refi_schl", cfg_schl),
+            ("refi_aph_50", cfg_aph50),
+            ("refi_aph_100", cfg_aph100),
+        ):
+            val_tga_h = rno_h / inputs.tga if inputs.tga > 0 else 0.0
+            paiement_max_h = rno_h / cfg_r.rcd if cfg_r.rcd > 0 else 0.0
+            hyp_rcd_h = -pv_canadian(
+                rate_annual=inputs.taux_interet_refi,
+                n_months=cfg_r.amort_annees * 12,
+                payment_monthly=paiement_max_h / 12.0,
+            )
+            pret_max_h = min(hyp_rcd_h, val_tga_h * cfg_r.ltv)
+            refis[key_r] = {
+                "label": cfg_r.label,
+                "pret_max": round(pret_max_h, 2),
+                "argent_dispo": round(pret_max_h - solde_h, 2),
+            }
+        best_key = max(refis, key=lambda k: refis[k]["argent_dispo"])
+        best_dispo = refis[best_key]["argent_dispo"]
+        achat_direct = {
+            "programme": inputs.strategie,
+            "label": label_dir,
+            "ltv": cfg_dir.ltv,
+            "amort_annees": cfg_dir.amort_annees,
+            "rcd": cfg_dir.rcd,
+            "valeur_retenue": round(sc_achat_dir.valeur_retenue, 2),
+            "pret_accorde": round(pret_dir, 2),
+            "paiement_mensuel": round(
+                sc_achat_dir.paiement_mensuel_actuel, 2
+            ),
+            "cashflow_annuel": round(sc_achat_dir.cashflow_annuel, 2),
+            "balance_vente": round(bv_dir, 2),
+            "frais_demarrage": {
+                k: round(v, 2) for k, v in f_dir.items()
+            },
+            "frais_demarrage_total": frais_dir_total,
+            "mdf_cash": round(mdf_dir, 2),
+            "horizon": h_annees,
+            "croissance_loyers": cl,
+            "croissance_depenses": cd,
+            "solde_pret_an_h": round(solde_h, 2),
+            "projection": projection,
+            "refi_an_h": refis,
+            "best_refi": {
+                "key": best_key,
+                "label": refis[best_key]["label"],
+                "argent_dispo": best_dispo,
+                "refi_possible": best_dispo >= mdf_dir - 0.005,
+                "manque": round(max(0.0, mdf_dir - best_dispo), 2),
+            },
+        }
+
     return FinanceResults(
         inputs=inputs,
         typology=typo,
@@ -1504,4 +1697,5 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         pret_preteur_b_frais_finances=frais_finance_total,
         pret_preteur_b_total=pret_preteur_b_total,
         balance_vente_retenue=balance_vente,
+        achat_direct=achat_direct,
     )
