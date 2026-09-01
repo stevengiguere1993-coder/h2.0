@@ -127,7 +127,9 @@ async def autopush_client(client_id: int) -> None:
         log.warning("autopush client %s: %s", client_id, exc)
 
 
-async def push_client_update_qbo_now(client_id: int) -> None:
+async def push_client_update_qbo_now(
+    client_id: int, old_name: str | None = None
+) -> None:
     """Reflète la fiche client Kratos dans QuickBooks après une
     MODIFICATION (nom affiché, courriel, téléphone, adresse). Action
     délibérée de l'utilisateur → PAS conditionné à l'interrupteur
@@ -136,8 +138,10 @@ async def push_client_update_qbo_now(client_id: int) -> None:
     Résolution du client QB, dans l'ordre : lien existant
     (`qbo_customer_id`), sinon adoption par COURRIEL (clé d'identité —
     couvre la fiche renommée, ex. « Zalec Bruneau » → « Zimmo
-    immobilier »), sinon par nom exact. Introuvable → on ne crée rien
-    ici (la création reste au flux bon/facture). Best-effort."""
+    immobilier »), sinon par nom exact, sinon par l'ANCIEN nom
+    (`old_name` — correction d'une faute de frappe sur une fiche sans
+    courriel ni lien). Introuvable → on ne crée rien ici (la création
+    reste au flux bon/facture). Best-effort."""
     try:
         import asyncio
 
@@ -164,6 +168,13 @@ async def push_client_update_qbo_now(client_id: int) -> None:
                 cust = await qbo.find_customer_by_email(client.email)
             if cust is None and client.name:
                 cust = await qbo.find_customer_by_name(client.name)
+            _old = (old_name or "").strip()
+            if (
+                cust is None
+                and _old
+                and _old.lower() != (client.name or "").strip().lower()
+            ):
+                cust = await qbo.find_customer_by_name(_old)
             if cust is None:
                 return
             cid = str(cust.get("Id") or "")
