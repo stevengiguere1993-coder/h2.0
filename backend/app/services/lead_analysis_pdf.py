@@ -462,11 +462,14 @@ def _key_results_band(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
     # (label, valeur, vert?) — vert pour les métriques « positives ».
     # Phase 2 : une fiche « achat direct » a ses propres métriques clés
     # (reflet du panneau de la fiche).
-    _direct_band = (results or {}).get("achat_direct")
+    _direct_band = (results or {}).get("traditionnel")
     if _direct_band and getattr(rec, "strategie_acquisition", None) in (
-        "conventionnel", "schl_std", "aph_50", "aph_100"
+        "traditionnel", "conventionnel", "schl_std", "aph_50", "aph_100"
     ):
         _bb = _direct_band.get("best_refi") or {}
+        _retenu = (_direct_band.get("achat") or {}).get(
+            _direct_band.get("programme_retenu") or ""
+        ) or {}
         tiles = [
             ("PRIX DEMANDÉ", _money(prix), False),
             (
@@ -476,12 +479,12 @@ def _key_results_band(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
             ),
             ("MDF (CASH À L'ACHAT)",
              _money(_direct_band.get("mdf_cash")), False),
-            ("PRÊT À L'ACHAT",
-             _money(_direct_band.get("pret_accorde")), False),
+            ("PRÊT À L'ACHAT (RETENU)",
+             _money(_direct_band.get("pret_retenu")), False),
             (
                 "CASHFLOW / AN",
-                _money(_direct_band.get("cashflow_annuel")),
-                float(_direct_band.get("cashflow_annuel") or 0) >= 0,
+                _money(_retenu.get("cashflow_annuel")),
+                float(_retenu.get("cashflow_annuel") or 0) >= 0,
             ),
         ]
     else:
@@ -635,80 +638,103 @@ _SCENARIO_SHORT = {
 }
 
 
-def _achat_direct_section(rl, direct: dict, *, s):
-    """Phase 2 chantier stratégies — section « achat direct » du PDF
-    (reflet du panneau de la fiche) : sommaire d'achat, verdict de
-    refinancement à l'horizon et projection an 0..H."""
+def _traditionnel_section(rl, trad: dict, *, s):
+    """Stratégie « institution traditionnelle » — reflet des onglets de
+    la fiche : sommaire d'achat (programme retenu), tableau Achat (4
+    programmes), verdict et tableau Refinancement à l'an H, projection
+    an 0..H."""
     Paragraph = rl["Paragraph"]
     Spacer = rl["Spacer"]
 
     flow = []
-    best = direct.get("best_refi") or {}
-    h = direct.get("horizon") or 5
+    best = trad.get("best_refi") or {}
+    h = trad.get("horizon") or 5
+    labels = trad.get("labels") or {}
+    retenu_key = trad.get("programme_retenu") or "conventionnel"
+    achat = trad.get("achat") or {}
+    refi = trad.get("refi") or {}
+    retenu = achat.get(retenu_key) or {}
 
     rows = [
-        ("Programme", str(direct.get("label") or "—")),
+        ("Programme retenu à l'achat",
+         str(labels.get(retenu_key, retenu_key))),
         (
-            "Termes",
-            f"LTV {float(direct.get('ltv') or 0) * 100:.0f} % · "
-            f"amortissement {direct.get('amort_annees')} ans · "
-            f"RCD {float(direct.get('rcd') or 0):.2f}",
+            "Termes du programme retenu",
+            f"LTV {float(retenu.get('ltv') or 0) * 100:.0f} % · "
+            f"amortissement {retenu.get('amort_annees')} ans · "
+            f"RCD {float(retenu.get('rcd') or 0):.2f}",
         ),
-        ("Prêt accordé à l'achat", _money(direct.get("pret_accorde"))),
-        ("MDF (cash à l'achat)", _money(direct.get("mdf_cash"))),
-        (
-            "Frais d'acquisition",
-            _money(direct.get("frais_demarrage_total")),
-        ),
-        ("Paiement mensuel", _money(direct.get("paiement_mensuel"))),
-        ("Cashflow annuel", _money(direct.get("cashflow_annuel"))),
+        ("Prêt accordé à l'achat", _money(trad.get("pret_retenu"))),
+        ("MDF (cash à l'achat)", _money(trad.get("mdf_cash"))),
+        ("Frais d'acquisition", _money(trad.get("frais_demarrage_total"))),
         (
             "Croissance (loyers / dépenses)",
-            f"{float(direct.get('croissance_loyers') or 0) * 100:.1f} % / "
-            f"{float(direct.get('croissance_depenses') or 0) * 100:.1f} % par an",
+            f"{float(trad.get('croissance_loyers') or 0) * 100:.1f} % / "
+            f"{float(trad.get('croissance_depenses') or 0) * 100:.1f} % par an",
         ),
     ]
-    if float(direct.get("balance_vente") or 0) > 0:
-        rows.append(
-            ("Balance de vente", _money(direct.get("balance_vente")))
-        )
+    if float(trad.get("balance_vente") or 0) > 0:
+        rows.append((
+            "Balance de vente (déduite de la MDF)",
+            f"{_money(trad.get('balance_vente'))} · intérêts "
+            f"{_money(trad.get('interets_bv_annuels'))}/an",
+        ))
     flow.append(_table_two_col(rl, rows, s=s))
     flow.append(Spacer(1, 6))
+
+    # Tableau ACHAT — 4 programmes sur les loyers/dépenses actuels.
+    mdf_par = trad.get("mdf_par_programme") or {}
+    achat_rows = [
+        (
+            ("★ " if k == retenu_key else "") + str(labels.get(k, k)),
+            f"prêt {_money((v or {}).get('financement'))} · "
+            f"MDF {_money(mdf_par.get(k))} · cashflow "
+            f"{_money((v or {}).get('cashflow_annuel'))}/an",
+        )
+        for k, v in achat.items()
+    ]
+    if achat_rows:
+        flow.append(Paragraph("Achat — comparatif des programmes",
+                              s["small_muted"]))
+        flow.append(_table_two_col(rl, achat_rows, s=s))
+        flow.append(Spacer(1, 6))
 
     # Verdict de l'an H.
     if best.get("refi_possible"):
         verdict = (
             f"À l'an {h}, le refinancement {best.get('label')} dégage "
-            f"{_money(best.get('argent_dispo'))} — assez pour ressortir "
-            f"toute la mise de fonds de {_money(direct.get('mdf_cash'))}."
+            f"{_money(best.get('argent_dispo'))} (après remboursement du "
+            "prêt d'achat et de la balance de vente) — assez pour "
+            f"ressortir toute la mise de fonds de {_money(trad.get('mdf_cash'))}."
         )
     else:
         verdict = (
             f"À l'an {h}, le meilleur refinancement ({best.get('label')}) "
             f"dégage {_money(best.get('argent_dispo'))} — il manque "
             f"{_money(best.get('manque'))} pour ressortir toute la mise "
-            f"de fonds de {_money(direct.get('mdf_cash'))}."
+            f"de fonds de {_money(trad.get('mdf_cash'))}."
         )
     flow.append(Paragraph(verdict, s["body"]))
     flow.append(Spacer(1, 6))
 
-    refis = direct.get("refi_an_h") or {}
     refi_rows = [
         (
-            ("★ " if k == best.get("key") else "") + str(r.get("label")),
-            f"prêt max {_money(r.get('pret_max'))} · "
-            f"argent dégagé {_money(r.get('argent_dispo'))}",
+            ("★ " if k == best.get("key") else "") + str(labels.get(k, k)),
+            f"prêt max {_money((v or {}).get('financement'))} · argent "
+            f"dégagé {_money((v or {}).get('equite_a_la_fin'))}",
         )
-        for k, r in refis.items()
+        for k, v in refi.items()
     ]
     if refi_rows:
+        flow.append(Paragraph(
+            f"Refinancement à l'an {h} — comparatif", s["small_muted"]))
         flow.append(_table_two_col(rl, refi_rows, s=s))
         flow.append(Spacer(1, 6))
 
     # Projection an 0..H (colonnes bornées à l'horizon pour tenir en
     # largeur — la fiche montre la série longue).
     proj = [
-        p for p in (direct.get("projection") or [])
+        p for p in (trad.get("projection") or [])
         if int(p.get("annee", 0)) <= int(h)
     ]
     if proj:
@@ -1771,23 +1797,28 @@ def _render_bytes(
     # ── Scénarios de financement (tableau comparatif) ───────────
     # Phase 2 : une fiche en stratégie « achat direct » remplace le
     # tableau classique par la section dédiée (reflet de l'écran).
-    _direct = (results or {}).get("achat_direct")
+    _direct = (results or {}).get("traditionnel")
     _mode_direct = bool(
         results
         and _direct
         and getattr(rec, "strategie_acquisition", None)
-        in ("conventionnel", "schl_std", "aph_50", "aph_100")
+        in (
+            "traditionnel", "conventionnel", "schl_std",
+            "aph_50", "aph_100",
+        )
     )
     if _mode_direct:
         story.append(Paragraph(
-            "ACHAT DIRECT — DÉTENTION ET REFINANCEMENT", s["section"]
+            "INSTITUTION TRADITIONNELLE — ACHAT, DÉTENTION ET "
+            "REFINANCEMENT", s["section"]
         ))
-        story.extend(_achat_direct_section(rl, _direct, s=s))
+        story.extend(_traditionnel_section(rl, _direct, s=s))
         story.append(Spacer(1, 3))
         story.append(Paragraph(
-            "Financement à l'achat sur les loyers actuels ; projection "
-            "à croissance composée ; refinancement comparé aux trois "
-            "programmes SCHL à l'horizon choisi.", s["small_muted"]))
+            "Achat financé sur les loyers actuels (4 programmes "
+            "comparés, le retenu pilote la mise de fonds) ; détention "
+            "avec croissance organique ; refinancement comparé à "
+            "l'horizon choisi.", s["small_muted"]))
         _un = results.get("unites")
         if _un:
             story.append(Paragraph(

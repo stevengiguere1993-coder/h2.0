@@ -2048,6 +2048,7 @@ async def init_db() -> None:
             # sélecteur de stratégie + balance de vente + horizon de
             # projection. NULL = comportement historique.
             ("lead_analyses", "strategie_acquisition", "VARCHAR(32)"),
+            ("lead_analyses", "programme_achat", "VARCHAR(32)"),
             ("lead_analyses", "balance_vente_montant", "NUMERIC(14,2)"),
             ("lead_analyses", "balance_vente_taux_pct", "NUMERIC(5,3)"),
             ("lead_analyses", "projection_horizon_annees", "INTEGER"),

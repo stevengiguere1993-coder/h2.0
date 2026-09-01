@@ -12,6 +12,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Bot,
   Building2,
   Calculator,
   Calendar,
@@ -44,6 +45,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { canEnterVolet } from "@/lib/access";
+import { iaPersonnelleActive } from "@/lib/feature-flags";
 import { hasMinRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
@@ -335,9 +337,23 @@ export default function ParametresHubPage() {
       SECTIONS.filter((s) => !s.volet || canEnterVolet(user, s.volet))
         .map((s) => ({
           ...s,
-          cards: s.cards.filter(
-            (c) => !c.minRole || hasMinRole(user, c.minRole)
-          )
+          cards: [
+            ...s.cards.filter(
+              (c) => !c.minRole || hasMinRole(user, c.minRole)
+            ),
+            // Chantier « chacun son IA » (staging jusqu'au GO) —
+            // ajouté au rendu pour que la porte s'évalue côté client.
+            ...(s.key === "general" && iaPersonnelleActive()
+              ? [
+                  {
+                    title: "Assistant IA",
+                    desc: "Connecte TON IA (Claude / GPT / Gemini) : tes fonctions IA passent par ta clé, avec un brief quotidien.",
+                    href: "/parametres/assistant-ia",
+                    icon: Bot
+                  } as Card
+                ]
+              : [])
+          ]
         }))
         .filter((s) => s.cards.length > 0 || s.emptyNote),
     [user]
