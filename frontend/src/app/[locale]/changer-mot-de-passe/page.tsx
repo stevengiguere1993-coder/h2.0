@@ -25,6 +25,7 @@ export default function ChangePasswordPage() {
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
   const [showNext, setShowNext] = useState(false);
+  const [showCur, setShowCur] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [me, setMe] = useState<{
@@ -149,41 +150,42 @@ export default function ChangePasswordPage() {
               <label htmlFor="cur" className="label">
                 Mot de passe actuel
               </label>
-              <input
-                id="cur"
-                type="password"
-                value={current}
-                onChange={(e) => setCurrent(e.target.value)}
-                placeholder={forced ? "Horizon" : ""}
-                autoComplete="current-password"
-                required
-                className="input"
-              />
-            </div>
-            <div>
-              <div className="flex items-center justify-between">
-                <label htmlFor="new" className="label">
-                  Nouveau mot de passe (8+ caractères)
-                </label>
+              {/* Icône œil DANS le champ (retour investisseur
+                  2026-09-02) — zone de touche généreuse pour mobile. */}
+              <div className="relative">
+                <input
+                  id="cur"
+                  type={showCur ? "text" : "password"}
+                  value={current}
+                  onChange={(e) => setCurrent(e.target.value)}
+                  placeholder={forced ? "Horizon" : ""}
+                  autoComplete="current-password"
+                  required
+                  className="input w-full pr-11"
+                />
                 <button
                   type="button"
-                  onClick={() => setShowNext((v) => !v)}
-                  className="flex items-center gap-1 text-xs text-brand-700 hover:text-brand-950"
+                  onClick={() => setShowCur((v) => !v)}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-2 text-brand-500 hover:text-brand-800"
                   aria-label={
-                    showNext ? "Masquer le mot de passe" : "Afficher le mot de passe"
+                    showCur
+                      ? "Masquer le mot de passe"
+                      : "Afficher le mot de passe"
                   }
                 >
-                  {showNext ? (
-                    <>
-                      <EyeOff className="h-3.5 w-3.5" /> Masquer
-                    </>
+                  {showCur ? (
+                    <EyeOff className="h-4 w-4" />
                   ) : (
-                    <>
-                      <Eye className="h-3.5 w-3.5" /> Afficher
-                    </>
+                    <Eye className="h-4 w-4" />
                   )}
                 </button>
               </div>
+            </div>
+            <div>
+              <label htmlFor="new" className="label">
+                Nouveau mot de passe (8+ caractères)
+              </label>
+              <div className="relative">
               <input
                 id="new"
                 type={showNext ? "text" : "password"}
@@ -199,10 +201,27 @@ export default function ChangePasswordPage() {
                 spellCheck={false}
                 required
                 minLength={8}
-                className="input"
+                className="input w-full pr-11"
               />
+              <button
+                type="button"
+                onClick={() => setShowNext((v) => !v)}
+                className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-2 text-brand-500 hover:text-brand-800"
+                aria-label={
+                  showNext
+                    ? "Masquer le mot de passe"
+                    : "Afficher le mot de passe"
+                }
+              >
+                {showNext ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </button>
+              </div>
               <p className="mt-1 text-[11px] text-brand-700">
-                Clique « Afficher » pour voir ce que tu tapes — évite d&apos;accepter
+                L&apos;œil affiche ce que tu tapes — évite d&apos;accepter
                 une suggestion de ton navigateur/iOS sans la noter.
               </p>
             </div>
@@ -210,19 +229,37 @@ export default function ChangePasswordPage() {
               <label htmlFor="conf" className="label">
                 Confirmer le nouveau mot de passe
               </label>
-              <input
-                id="conf"
-                type={showNext ? "text" : "password"}
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                autoComplete="off"
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
-                required
-                minLength={8}
-                className="input"
-              />
+              <div className="relative">
+                <input
+                  id="conf"
+                  type={showNext ? "text" : "password"}
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  required
+                  minLength={8}
+                  className="input w-full pr-11"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowNext((v) => !v)}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-2 text-brand-500 hover:text-brand-800"
+                  aria-label={
+                    showNext
+                      ? "Masquer le mot de passe"
+                      : "Afficher le mot de passe"
+                  }
+                >
+                  {showNext ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
             </div>
 
             {error ? (

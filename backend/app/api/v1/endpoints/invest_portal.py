@@ -349,6 +349,11 @@ async def build_projet(
         "show_actionnaires": show_actionnaires,
         "show_cashflow": show_cashflow,
         "show_budget": show_budget,
+        # Dossier Google Drive partagé (retour investisseur 2026-09-02)
+        # — alternative à l'hébergement des documents dans l'app.
+        "drive_folder_url": (
+            profil.drive_folder_url if profil is not None else None
+        ),
         "documents": [
             {
                 "id": d.id,

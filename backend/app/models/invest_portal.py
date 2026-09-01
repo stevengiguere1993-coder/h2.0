@@ -186,6 +186,13 @@ class InvestProjetProfil(Base, TimestampUpdateMixin):
     show_budget: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
+    #: Lien vers un dossier Google Drive PARTAGÉ (retour investisseur
+    #: 2026-09-02) — alternative à l'hébergement des documents dans
+    #: l'app : la section Documents du portail affiche ce lien.
+    #: Colonne additive (ensure_invest_portal_tables).
+    drive_folder_url: Mapped[Optional[str]] = mapped_column(
+        String(1000), nullable=True
+    )
 
 
 class InvestDocument(Base, TimestampMixin):

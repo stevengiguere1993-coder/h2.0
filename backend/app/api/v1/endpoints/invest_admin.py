@@ -98,6 +98,9 @@ class ProfilPatch(BaseModel):
     show_actionnaires: Optional[bool] = None
     show_budget: Optional[bool] = None
     show_cashflow: Optional[bool] = None
+    #: Lien d'un dossier Google Drive partagé (section Documents du
+    #: portail). Chaîne vide = retirer le lien.
+    drive_folder_url: Optional[str] = Field(default=None, max_length=1000)
 
 
 class NewInvestor(BaseModel):
@@ -732,6 +735,9 @@ async def get_projet(
             ),
             "show_cashflow": profil.show_cashflow if profil else True,
             "show_budget": profil.show_budget if profil else True,
+            "drive_folder_url": (
+                profil.drive_folder_url if profil else None
+            ),
             "avances_actionnaires": (
                 float(profil.avances_actionnaires)
                 if profil is not None
@@ -797,6 +803,14 @@ async def patch_profil(
                 "Phase invalide (optimisation | long_terme).",
             )
         profil.phase_override = v or None
+    if "drive_folder_url" in data.model_fields_set:
+        lien = (data.drive_folder_url or "").strip()
+        if lien and not lien.startswith(("https://", "http://")):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Le lien Drive doit commencer par https://",
+            )
+        profil.drive_folder_url = lien or None
     for fld in (
         "show_depenses",
         "show_hypotheque",

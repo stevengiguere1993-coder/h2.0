@@ -109,6 +109,7 @@ type AdminProjet = {
     show_actionnaires: boolean;
     show_cashflow: boolean;
     show_budget: boolean;
+    drive_folder_url?: string | null;
     avances_actionnaires: number | null;
   };
   immeubles: (ImmeubleRow & {
@@ -1076,7 +1077,7 @@ export default function AdminProjetPage() {
                     ],
                     [
                       "show_budget",
-                      "Budget d'optimisation",
+                      "Budget d'optimisation (amélioration)",
                       "enveloppes du projet, budget vs dépensé réel, factures"
                     ]
                   ] as const
@@ -1106,6 +1107,31 @@ export default function AdminProjetPage() {
 
             {/* Documents */}
             <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+              {/* Lien d'un dossier Drive PARTAGÉ (retour investisseur
+                  2026-09-02) — alternative à l'hébergement dans
+                  l'app : le portail affiche ce lien dans Documents. */}
+              <div className="mb-3 rounded-xl border border-brand-800 bg-brand-950/50 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                  Dossier Google Drive partagé (lien affiché aux
+                  investisseurs)
+                </p>
+                <input
+                  type="url"
+                  defaultValue={data.profil.drive_folder_url || ""}
+                  placeholder="https://drive.google.com/drive/folders/…"
+                  onBlur={(e) => {
+                    const v = e.target.value.trim();
+                    if (v !== (data.profil.drive_folder_url || "")) {
+                      void patchProfil({ drive_folder_url: v });
+                    }
+                  }}
+                  className="input mt-1.5 w-full text-xs"
+                />
+                <p className="mt-1 text-[10px] text-white/35">
+                  Assure-toi que le dossier est partagé avec les
+                  investisseurs (lecteur). Vide = pas de lien.
+                </p>
+              </div>
               <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-white">
                   Documents partagés
