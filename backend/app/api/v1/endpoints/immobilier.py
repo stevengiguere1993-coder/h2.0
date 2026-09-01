@@ -32,7 +32,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
@@ -4226,7 +4226,15 @@ class FraisRow(BaseModel):
 
 
 class LoyerOverviewRow(BaseModel):
+    #: 0 pour une ligne de logement VACANT (aucun bail — même
+    #: convention que les lignes de gestion externe côté frontend).
     bail_id: int
+    #: Statut du logement pour les lignes vacantes ("vacant" ou
+    #: "reserve") — étiquette exacte côté UI.
+    logement_statut: Optional[str] = None
+    #: Dossier ouvert au TAL sur ce bail (non-paiement) — badge +
+    #: coche sur la ligne, pour que l'équipe voie le recours lancé.
+    tal_dossier_ouvert_le: Optional[date] = None
     #: Le mois affiché est réglé mais un mois ANTÉRIEUR du bail ne
     #: l'est pas — la ligne remonte avec un badge « Solde antérieur »
     #: au lieu de dormir en vert (retour Phil 2026-08-26).
@@ -4291,6 +4299,9 @@ class LoyerOverview(BaseModel):
     nb_payes: int
     nb_retards: int
     nb_attente: int
+    #: Logements sans bail ce mois-ci (vacants/réservés) — lignes
+    #: informatives en bas de liste (retour Phil 2026-08-31).
+    nb_vacants: int = 0
     #: Somme des soldes dus (tuile KPI).
     total_solde_du: float = 0.0
     #: Date de démarrage du pôle : les soldes ne remontent pas avant
@@ -4578,6 +4589,9 @@ async def loyers_overview(
             liberations[lg_id] = d
 
     rows: List[LoyerOverviewRow] = []
+    # Logements avec un bail qui COUVRE le mois affiché — le reste des
+    # logements loués/louables remonte en ligne « Vacant » plus bas.
+    logements_couverts: set[int] = set()
     total_attendu = 0.0
     total_recu = 0.0
     total_solde_du = 0.0
@@ -4601,6 +4615,8 @@ async def loyers_overview(
             and b.date_fin < month_start
         )
         loyer = 0.0 if apres_fin else loyer_bail_ref
+        if not apres_fin and b.logement_id:
+            logements_couverts.add(b.logement_id)
         # DÛ du mois = loyer + frais ponctuels du mois (retour Phil
         # 2026-07-22 : « Marquer payé » doit couvrir 650 + 20 = 670, et
         # le mois n'est « payé » que si les frais sont couverts aussi).
@@ -4675,6 +4691,7 @@ async def loyers_overview(
         rows.append(
             LoyerOverviewRow(
                 bail_id=b.id,
+                tal_dossier_ouvert_le=b.tal_dossier_ouvert_le,
                 solde_anterieur=bool(
                     ps
                     and paye_mois >= du_mois - 0.005
@@ -4727,12 +4744,50 @@ async def loyers_overview(
             )
         )
 
+    # ── Logements VACANTS (retour Phil 2026-08-31 : « j'aimerais voir
+    # les vacants aussi avec la mention vacant ») : aucun bail ne
+    # couvre le mois affiché → ligne informative en bas de liste, avec
+    # le loyer demandé et le prochain locataire s'il y en a un en
+    # préparation. Les logements hors-location (réno, proprio-occupé)
+    # restent exclus. Aucun impact sur les totaux d'argent.
+    nb_vacants = 0
+    for lg in logements:
+        if lg.id in logements_couverts:
+            continue
+        if lg.status == LogementStatus.HORS_LOC.value:
+            continue
+        imm = imm_by_id.get(lg.immeuble_id)
+        if imm is None:
+            continue
+        pro = prochains.get(lg.id)
+        nb_vacants += 1
+        rows.append(
+            LoyerOverviewRow(
+                bail_id=0,
+                logement_statut=lg.status,
+                immeuble_id=imm.id,
+                immeuble_name=imm.name,
+                logement_id=lg.id,
+                logement_numero=lg.numero,
+                loyer_mensuel=float(lg.loyer_demande or 0),
+                etat="vacant",
+                prochain_nom=pro["nom"] if pro else None,
+                prochain_loyer=pro["loyer"] if pro else None,
+                prochain_debut=pro["debut"] if pro else None,
+                prochain_statut=pro["statut"] if pro else None,
+                nb_relances=0,
+                derniere_relance_le=None,
+            )
+        )
+
     # Relances de loyer envoyées ce mois (compteur + dernière) par bail.
     if rows:
         rel_rows = (
             await db.execute(
                 select(RelanceLoyer).where(
-                    RelanceLoyer.bail_id.in_([r.bail_id for r in rows]),
+                    RelanceLoyer.bail_id.in_(
+                        [r.bail_id for r in rows if r.bail_id]
+                    ),
                     RelanceLoyer.mois_couvert == month_start,
                 )
             )
@@ -4748,7 +4803,7 @@ async def loyers_overview(
 
     # Retards d'abord, puis attente, puis payés ; tri secondaire par
     # immeuble + logement pour une lecture stable.
-    order = {"retard": 0, "attente": 1, "paye": 2}
+    order = {"retard": 0, "attente": 1, "paye": 2, "vacant": 3}
     rows.sort(
         key=lambda r: (
             order.get(r.etat, 3),
@@ -4765,6 +4820,7 @@ async def loyers_overview(
         nb_payes=nb_payes,
         nb_retards=nb_retards,
         nb_attente=nb_attente,
+        nb_vacants=nb_vacants,
         total_solde_du=round(total_solde_du, 2),
         solde_depuis=solde_depuis,
     )
@@ -4775,8 +4831,20 @@ async def loyers_overview(
 
 class FraisCreate(BaseModel):
     mois_couvert: date
-    montant: float = Field(..., gt=0)
+    #: Positif = frais (retard…), NÉGATIF = crédit qui réduit le loyer
+    #: dû (retour Phil 2026-08-31 : « le + frais devrait être
+    #: frais/crédit, où je peux réduire le loyer »).
+    montant: float
     libelle: str = Field(default="Frais de retard", max_length=128)
+
+    @field_validator("montant")
+    @classmethod
+    def _montant_non_nul(cls, v: float) -> float:
+        if abs(v) < 0.01:
+            raise ValueError("Le montant ne peut pas être 0.")
+        if abs(v) > 100_000:
+            raise ValueError("Montant démesuré — vérifie la saisie.")
+        return v
 
 
 @router.post(
@@ -4790,8 +4858,10 @@ async def create_frais(
     db: DBSession,
     user: CurrentUser,
 ) -> FraisRow:
-    """Ajoute un frais ponctuel au bail (ex. 20 $ si payé après le 15) —
-    s'ajoute au solde dû (retour Steven 2026-07-20)."""
+    """Ajoute un frais ponctuel (ex. 20 $ si payé après le 15) OU un
+    crédit (montant négatif — ex. réduction de loyer entendue) au bail :
+    s'ajoute au solde dû, qui reste borné à 0 (retours Steven
+    2026-07-20 et Phil 2026-08-31)."""
     _require_volet(user)
     bail = await db.get(Bail, bail_id)
     if bail is None:
@@ -4807,7 +4877,8 @@ async def create_frais(
         bail_id=bail_id,
         mois_couvert=payload.mois_couvert.replace(day=1),
         montant=payload.montant,
-        libelle=payload.libelle.strip() or "Frais de retard",
+        libelle=payload.libelle.strip()
+        or ("Crédit" if payload.montant < 0 else "Frais de retard"),
         created_by_email=getattr(user, "email", None),
         created_at=_now(),
     )

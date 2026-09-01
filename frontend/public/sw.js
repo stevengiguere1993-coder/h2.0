@@ -10,7 +10,7 @@
  *   in the background when the network returns.
  */
 
-const VERSION = "hsi-v7";
+const VERSION = "hsi-v8";
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const SHELL_CACHE = `${VERSION}-shell`;
 
@@ -162,7 +162,10 @@ self.addEventListener("push", (event) => {
   const options = {
     body: data.body || "",
     icon: data.icon || "/pwa/icon-192.png",
-    badge: "/pwa/icon-192.png",
+    // Icône de la BARRE DE STATUT Android : silhouette monochrome sur
+    // fond transparent (Android ne garde que l'alpha — un logo plein
+    // devenait un carré blanc, retour Phil 2026-09-01).
+    badge: "/pwa/badge-96.png",
     tag: data.tag || "horizon",
     renotify: true,
     data: { href: data.href || "/" }

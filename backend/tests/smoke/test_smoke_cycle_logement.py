@@ -180,15 +180,30 @@ def test_locataire_parti_disparait_des_loyers(
                 from datetime import datetime, timezone
 
                 from app.models.immobilier import PaiementLoyer
-
-                mois = fin.replace(day=1)
-                s.add(
-                    PaiementLoyer(
-                        bail_id=b.id, mois_couvert=mois, montant=1000.0,
-                        paye_le=mois,
-                        created_at=datetime.now(timezone.utc),
-                    )
+                from app.services.locatif_demarrage import (
+                    DEFAULT_DEMARRAGE,
                 )
+
+                # « À jour » = TOUS les mois échus depuis le démarrage
+                # du pôle sont payés. (Avant, le seed ne payait que le
+                # dernier mois : dès que le démarrage avait 2+ mois
+                # d'ancienneté — p. ex. le 2026-09-01 — il restait une
+                # vraie dette et le test échouait par calendrier.)
+                mois = max(b.date_debut, DEFAULT_DEMARRAGE).replace(
+                    day=1
+                )
+                fin_mois = fin.replace(day=1)
+                while mois <= fin_mois:
+                    s.add(
+                        PaiementLoyer(
+                            bail_id=b.id, mois_couvert=mois,
+                            montant=1000.0, paye_le=mois,
+                            created_at=datetime.now(timezone.utc),
+                        )
+                    )
+                    mois = (
+                        mois.replace(day=28) + timedelta(days=4)
+                    ).replace(day=1)
             await s.commit()
             return {"immeuble_id": imm.id, "bail_id": b.id}
 

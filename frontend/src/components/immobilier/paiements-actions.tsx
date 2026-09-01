@@ -147,16 +147,22 @@ export function CelluleLoyer({
       {(frais ?? []).map((f) => (
         <div
           key={f.id}
-          className="flex items-center justify-end gap-1 text-[10px] text-amber-300"
+          // Ambre = frais qui s'ajoute au dû ; émeraude = CRÉDIT
+          // (montant négatif) qui réduit le loyer (retour Phil
+          // 2026-08-31).
+          className={`flex items-center justify-end gap-1 text-[10px] ${
+            f.montant < 0 ? "text-emerald-300" : "text-amber-300"
+          }`}
         >
           <span title={f.libelle}>
-            + {fmt(f.montant)} {f.libelle}
+            {f.montant < 0 ? "− " : "+ "}
+            {fmt(Math.abs(f.montant))} {f.libelle}
           </span>
           {onSupprimerFrais ? (
             <button
               type="button"
               onClick={() => onSupprimerFrais(f.id)}
-              title="Retirer ce frais"
+              title={f.montant < 0 ? "Retirer ce crédit" : "Retirer ce frais"}
               className="text-white/50 transition hover:text-rose-300"
             >
               ×

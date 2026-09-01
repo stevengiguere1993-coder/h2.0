@@ -728,6 +728,15 @@ class Bail(Base, TimestampUpdateMixin):
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    #: Dossier ouvert au TAL pour ce bail (non-paiement) — coché depuis
+    #: la page Paiements pour que toute l'équipe VOIE que le recours est
+    #: lancé (retour Phil 2026-08-31 : « pour pas que je relance
+    #: toujours notre gars qui s'occupe des paiements »). NULL = aucun
+    #: dossier. Colonne additive → ensure_critical_columns.
+    tal_dossier_ouvert_le: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
+
     # Signature électronique du bail (lien tokenisé envoyé au locataire).
     # Colonnes ajoutées de façon additive via init_db (cf. db/session.py).
     signature_token: Mapped[Optional[str]] = mapped_column(

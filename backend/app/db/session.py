@@ -2041,6 +2041,9 @@ async def init_db() -> None:
                 "taux_interet_preteur_b_projet_pct",
                 "NUMERIC(5,3) DEFAULT 8.0",
             ),
+            # Dossier TAL ouvert sur un bail (non-paiement) — coché
+            # depuis la page Paiements (2026-08-31).
+            ("imm_baux", "tal_dossier_ouvert_le", "DATE"),
             # Stratégies d'acquisition (août 2026, chantier staging) :
             # sélecteur de stratégie + balance de vente + horizon de
             # projection. NULL = comportement historique.
