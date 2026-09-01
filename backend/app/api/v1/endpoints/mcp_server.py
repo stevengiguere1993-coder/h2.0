@@ -48,7 +48,9 @@ Outils exposés :
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as _tz
+
+_UTC = _tz.utc
 from typing import Any, Optional
 
 from fastapi import APIRouter, Path, Request
@@ -57,6 +59,7 @@ from fastapi.responses import JSONResponse
 from app.api.api_key_deps import API_KEY_PREFIX, hash_api_key
 from app.api.v1.endpoints.activity import (
     _DETAIL_ENTITIES,
+    _audit_slug,
     _LIST_ENTITIES,
     _TASK_WRITE_ENTITIES,
     _build_summary,
@@ -73,6 +76,7 @@ from app.api.v1.endpoints.activity import (
 )
 from app.db.session import AsyncSessionLocal
 from app.models.api_key import ApiKey
+from app.models.audit_log import AuditLog
 from app.models.user import User
 from app.services.api_capabilities import (
     POLE_LABELS,
@@ -139,6 +143,36 @@ _READ_TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {"date": _DATE_PROP},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "kratos_sommaire_du_jour",
+        "description": (
+            "Le SOMMAIRE COMPLET de tout ce qui s'est passé sur Kratos "
+            "pour une période (défaut : d'hier 00:00, heure de Montréal, "
+            "à maintenant) — TOUS les utilisateurs, tous les pôles "
+            "lisibles par la clé : chaque écriture API (journal "
+            "automatique), les événements métier détaillés et les "
+            "consultations du portail investisseur. C'est l'outil de la "
+            "ROUTINE DU MATIN : appelle-le, résume par pôle et par "
+            "personne, puis approfondis avec les outils de détail. "
+            "Paginé via `offset` (le champ `restant` dit s'il y a une "
+            "suite)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "from": {
+                    "type": "string",
+                    "description": "Début YYYY-MM-DD (défaut : hier)",
+                },
+                "to": {
+                    "type": "string",
+                    "description": "Fin YYYY-MM-DD incluse (défaut : aujourd'hui)",
+                },
+                "offset": {"type": "integer", "minimum": 0},
+            },
             "additionalProperties": False,
         },
     },
@@ -957,6 +991,118 @@ def _coerce_id(arguments: dict[str, Any]) -> int:
         raise ValueError("`id` doit être un entier.")
 
 
+async def _sommaire_du_jour(
+    db, scopes: Optional[list[str]], arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """Chantier « IA au courant de tout » (GO Phil 2026-09-02) : le
+    journal COMPLET de la plateforme sur une période — écritures API
+    (journal automatique), événements métier, consultations du portail
+    investisseur — scopé aux pôles lisibles par la clé, avec synthèse
+    par pôle / action / personne et pagination."""
+    import json as _json
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("America/Toronto")
+    aujourdhui = datetime.now(tz).date()
+
+    def _parse_date(v, defaut):
+        if not v:
+            return defaut
+        try:
+            return datetime.strptime(str(v), "%Y-%m-%d").date()
+        except ValueError:
+            raise ValueError("Dates au format YYYY-MM-DD.")
+
+    d_from = _parse_date(arguments.get("from"), aujourdhui - timedelta(days=1))
+    d_to = _parse_date(arguments.get("to"), aujourdhui)
+    start = (
+        datetime.combine(d_from, datetime.min.time(), tzinfo=tz)
+        .astimezone(_UTC)
+        .replace(tzinfo=None)
+    )
+    end = (
+        datetime.combine(d_to + timedelta(days=1), datetime.min.time(), tzinfo=tz)
+        .astimezone(_UTC)
+        .replace(tzinfo=None)
+    )
+    offset = max(0, int(arguments.get("offset") or 0))
+
+    allowed = readable_poles(scopes)
+    _PLAFOND = 800
+    _PAGE = 200
+
+    from sqlalchemy import select as _select
+
+    rows = (
+        await db.execute(
+            _select(AuditLog)
+            .where(
+                AuditLog.created_at >= start,
+                AuditLog.created_at < end,
+            )
+            .order_by(AuditLog.created_at.desc())
+            .limit(_PLAFOND + 1)
+        )
+    ).scalars().all()
+    tronque_fenetre = len(rows) > _PLAFOND
+    rows = rows[:_PLAFOND]
+
+    visibles: list[AuditLog] = []
+    for e in rows:
+        slug = _audit_slug(e)
+        if (
+            allowed is not None
+            and slug is not None
+            and slug not in allowed
+        ):
+            continue
+        visibles.append(e)
+
+    # Synthèse sur TOUTES les entrées visibles de la fenêtre.
+    par_action: dict[str, int] = {}
+    par_pole: dict[str, int] = {}
+    par_personne: dict[str, int] = {}
+    for e in visibles:
+        par_action[e.action] = par_action.get(e.action, 0) + 1
+        slug = _audit_slug(e) or "autre"
+        par_pole[slug] = par_pole.get(slug, 0) + 1
+        qui = e.user_email or (f"user#{e.user_id}" if e.user_id else "système")
+        par_personne[qui] = par_personne.get(qui, 0) + 1
+
+    page = visibles[offset : offset + _PAGE]
+    evenements = []
+    for e in page:
+        details = None
+        if e.details_json:
+            try:
+                details = _json.loads(e.details_json)
+            except ValueError:
+                details = {"brut": e.details_json[:300]}
+        evenements.append({
+            "quand": e.created_at.isoformat() if e.created_at else None,
+            "qui": e.user_email or e.user_id,
+            "action": e.action,
+            "entite": e.entity_type,
+            "id": e.entity_id,
+            "details": details,
+        })
+
+    return {
+        "periode": {"du": d_from.isoformat(), "au": d_to.isoformat()},
+        "total_visibles": len(visibles),
+        "restant": max(0, len(visibles) - offset - len(page)),
+        "fenetre_tronquee": tronque_fenetre,
+        "synthese": {
+            "par_pole": par_pole,
+            "par_action": dict(
+                sorted(par_action.items(), key=lambda x: -x[1])[:40]
+            ),
+            "par_personne": par_personne,
+        },
+        "evenements": evenements,
+    }
+
+
 async def _call_tool(
     db,
     user: User,
@@ -969,6 +1115,9 @@ async def _call_tool(
     une capacité non accordée."""
     arguments = arguments or {}
     allowed = readable_poles(scopes)
+
+    if name == "kratos_sommaire_du_jour":
+        return await _sommaire_du_jour(db, scopes, arguments)
 
     if name == "kratos_mon_brief":
         # « Chacun son IA » via l'ABONNEMENT (retour Phil 2026-09-02) :

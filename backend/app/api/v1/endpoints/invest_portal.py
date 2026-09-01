@@ -25,6 +25,7 @@ from sqlalchemy.orm import undefer
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.entreprise import Entreprise
+from app.models.audit_log import AuditLog
 from app.models.invest_portal import (
     InvestDocument,
     InvestFlux,
@@ -373,12 +374,60 @@ async def build_projet(
 # ─────────────────────────────────────────────────────────────────────
 
 
+async def _log_consultation(
+    db, user, page: str, entreprise_id: int | None = None
+) -> None:
+    """Journalise « l'investisseur a consulté sa page » (chantier « IA
+    au courant de tout », GO Phil 2026-09-02) — UNE entrée par
+    utilisateur / page / entité / JOUR pour rester lisible. Best-effort
+    intégral : jamais bloquant pour la page."""
+    try:
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+
+        debut_jour = (
+            datetime.now(ZoneInfo("America/Toronto"))
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .astimezone(timezone.utc)
+            .replace(tzinfo=None)
+        )
+        action = f"invest.consultation.{page}"
+        q = select(AuditLog.id).where(
+            AuditLog.user_id == user.id,
+            AuditLog.action == action,
+            AuditLog.created_at >= debut_jour,
+        )
+        if entreprise_id is not None:
+            q = q.where(AuditLog.entity_id == entreprise_id)
+        deja = (await db.execute(q.limit(1))).scalar_one_or_none()
+        if deja is not None:
+            return
+        from app.services.audit import log_action
+
+        await log_action(
+            db,
+            user=user,
+            action=action,
+            entity_type="entreprise" if entreprise_id else "invest",
+            entity_id=entreprise_id,
+            details={"page": page},
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001 — le tracking ne casse jamais la page
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 @router.get(
     "/me/portefeuille",
     summary="Vue d'ensemble du portefeuille de l'investisseur connecté",
 )
 async def my_portefeuille(db: DBSession, user: CurrentUser) -> dict:
-    return await build_portefeuille(db, user.id)
+    out = await build_portefeuille(db, user.id)
+    await _log_consultation(db, user, "portefeuille")
+    return out
 
 
 @router.get(
@@ -388,7 +437,9 @@ async def my_portefeuille(db: DBSession, user: CurrentUser) -> dict:
 async def my_projet(
     entreprise_id: int, db: DBSession, user: CurrentUser
 ) -> dict:
-    return await build_projet(db, user.id, entreprise_id)
+    out = await build_projet(db, user.id, entreprise_id)
+    await _log_consultation(db, user, "projet", entreprise_id)
+    return out
 
 
 @router.get(
@@ -646,6 +697,7 @@ async def my_releve_pdf(
     pdf = await build_releve_pdf(
         db, user, year, portefeuille, ident_user_id=user.id
     )
+    await _log_consultation(db, user, "releve")
     return Response(
         content=pdf,
         media_type="application/pdf",
