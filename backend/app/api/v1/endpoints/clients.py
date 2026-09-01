@@ -97,6 +97,19 @@ async def update_client(
     current_user: RequireManager,
 ) -> ClientRead:
     """Modifie un client. Gestionnaire+ (même logique que la création)."""
+    # Nom AVANT modification — sert de repli de rapprochement QB quand
+    # la fiche n'a ni lien mémorisé ni courriel : corriger une faute de
+    # frappe cherche sinon le NOUVEAU nom dans QB (introuvable) et le
+    # customer QB garderait la faute pour toujours.
+    from sqlalchemy import select as _sel_prev
+
+    from app.models.client import Client as _ClientPrev
+
+    old_name = (
+        await db.execute(
+            _sel_prev(_ClientPrev.name).where(_ClientPrev.id == client_id)
+        )
+    ).scalar_one_or_none()
     service = ClientService(db)
     client = await service.update(client_id, data)
     if client is None:
@@ -111,7 +124,9 @@ async def update_client(
 
     from app.services.qbo_auto_sync import push_client_update_qbo_now
 
-    asyncio.create_task(push_client_update_qbo_now(int(client.id)))
+    asyncio.create_task(
+        push_client_update_qbo_now(int(client.id), old_name=old_name)
+    )
     return ClientRead.model_validate(client)
 
 
