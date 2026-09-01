@@ -154,6 +154,7 @@ class LeadAnalysisRead(BaseModel):
     frais_demarrage_financables_json: Optional[str] = None
     # Stratégies d'acquisition (août 2026, chantier staging).
     strategie_acquisition: Optional[str] = None
+    programme_achat: Optional[str] = None
     balance_vente_montant: Optional[float] = None
     balance_vente_taux_pct: Optional[float] = None
     projection_horizon_annees: Optional[int] = None
@@ -268,7 +269,15 @@ class LeadAnalysisUpdate(BaseModel):
     # Stratégies d'acquisition (août 2026, chantier staging).
     strategie_acquisition: Optional[str] = Field(
         default=None,
-        pattern=r"^(preteur_b|conventionnel|schl_std|aph_50|aph_100)$",
+        pattern=(
+            r"^(preteur_b|traditionnel|conventionnel|schl_std|"
+            r"aph_50|aph_100)$"
+        ),
+    )
+    # Programme retenu du mode traditionnel.
+    programme_achat: Optional[str] = Field(
+        default=None,
+        pattern=r"^(conventionnel|schl_std|aph_50|aph_100)$",
     )
     balance_vente_montant: Optional[float] = Field(default=None, ge=0)
     balance_vente_taux_pct: Optional[float] = Field(
@@ -1810,7 +1819,7 @@ RECALC_INPUT_FIELDS = {
     "frais_developpement", "frais_negociations", "mdf_preteur_b_pct",
     "taux_interet_preteur_b_projet_pct",
     "frais_demarrage_overrides_json", "frais_demarrage_financables_json",
-    "strategie_acquisition", "balance_vente_montant",
+    "strategie_acquisition", "programme_achat", "balance_vente_montant",
     "balance_vente_taux_pct", "projection_horizon_annees",
     "tri_croissance_loyers", "tri_croissance_depenses", "unites_json",
 }
@@ -1949,7 +1958,13 @@ async def _compute_and_store(rec, db) -> dict:
         ),
         # Stratégies d'acquisition (août 2026) — défauts = comportement
         # historique intégral tant que la fiche n'a rien choisi.
+        # ``chantier_actif`` (2026-09-02) active la croissance
+        # organique des loyers non optimisés et l'indexation des
+        # dépenses réelles au refi — seulement quand une stratégie est
+        # explicitement choisie (prod = NULL = calcul historique).
         strategie=rec.strategie_acquisition or "preteur_b",
+        programme_achat=rec.programme_achat or "conventionnel",
+        chantier_actif=rec.strategie_acquisition is not None,
         balance_vente_montant=float(rec.balance_vente_montant or 0),
         balance_vente_taux_pct=float(rec.balance_vente_taux_pct or 0)
         / 100.0,
@@ -2030,15 +2045,15 @@ async def _compute_and_store(rec, db) -> dict:
     rec.best_refi_amount = results.best_refi_amount
     rec.best_refi_program = results.best_refi_program
     rec.mdf_preteur_b = results.mdf_preteur_b
-    # Stratégie « achat direct » : la carte kanban reflète le CASH à
-    # sortir à l'achat et l'argent dégagé au refi de l'an N (au lieu
-    # des métriques prêteur B qui ne s'appliquent pas).
-    direct = results_dict.get("achat_direct")
-    if direct:
-        rec.mdf_preteur_b = direct["mdf_cash"]
-        rec.best_refi_amount = direct["best_refi"]["argent_dispo"]
+    # Stratégie « institution traditionnelle » : la carte kanban
+    # reflète le CASH à sortir à l'achat (programme retenu) et
+    # l'argent dégagé au refi de l'an N.
+    trad = results_dict.get("traditionnel")
+    if trad:
+        rec.mdf_preteur_b = trad["mdf_cash"]
+        rec.best_refi_amount = trad["best_refi"]["argent_dispo"]
         rec.best_refi_program = (
-            f"{direct['best_refi']['label']} · refi an {direct['horizon']}"
+            f"{trad['best_refi']['label']} · refi an {trad['horizon']}"
         )
     return results_dict
 

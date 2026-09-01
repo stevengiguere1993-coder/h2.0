@@ -309,6 +309,12 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
     strategie_acquisition: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True
     )
+    # Mode « institution traditionnelle » : programme RETENU pour
+    # financer l'achat (conventionnel|schl_std|aph_50|aph_100) — les 4
+    # colonnes s'affichent, celui-ci pilote la MDF et le solde au refi.
+    programme_achat: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
     # Balance de vente (financement vendeur) : réduit le prêt du
     # prêteur B/de l'institution — PAS le cash à l'achat. Le taux
     # (6.0 = 6 %) sert aux intérêts de portage pendant le projet.

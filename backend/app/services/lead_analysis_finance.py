@@ -466,6 +466,10 @@ class DepensesBreakdown:
     #: défaut 1 %). Champ avec défaut pour rester compatible avec
     #: tout appel existant du dataclass.
     autres_normalisations: float = 0.0
+    #: Sept. 2026 — intérêts ANNUELS de la balance de vente (mode
+    #: institution traditionnelle : la BV court pendant la détention,
+    #: c'est une dépense d'opération). 0 partout ailleurs.
+    interets_balance_vente: float = 0.0
 
     @property
     def total(self) -> float:
@@ -475,6 +479,7 @@ class DepensesBreakdown:
             + self.entretien + self.gestion + self.wifi
             + self.thermopompes + self.autres
             + self.autres_normalisations
+            + self.interets_balance_vente
         )
 
 
@@ -495,8 +500,18 @@ def compute_depenses_for_scenario(
     taux_inoccupation_pct: float,
     bareme_overrides: Optional[Dict[str, float]] = None,
     seuil_bascule_log: int = SEUIL_BASCULE_BAREME_LOG,
+    facteur_indexation: float = 1.0,
+    interets_balance_vente_annuels: float = 0.0,
 ) -> DepensesBreakdown:
     """Calcule R35..R45 pour un scénario donné.
+
+    ``facteur_indexation`` (sept. 2026, retour Phil) : multiplicateur
+    appliqué aux dépenses RÉELLES (taxes, assurances, énergie, autres)
+    — ex. (1,03)² pour un refi 2 ans plus tard à 3 %/an de croissance
+    des dépenses. 1.0 = comportement historique. Le barème normalisé
+    (concierge/entretien/gestion) reste calculé sur les revenus du
+    scénario. ``interets_balance_vente_annuels`` : dépense annuelle de
+    la balance de vente (mode institution traditionnelle).
 
     `is_refi` : True pour SCHL/APH (vs achat).
     `is_aph`  : True pour les programmes APH (Efficacité énergétique),
@@ -564,19 +579,21 @@ def compute_depenses_for_scenario(
         wifi = 0.0
         thermopompes = 0.0
 
+    f = float(facteur_indexation or 1.0)
     return DepensesBreakdown(
         inoccupation=inoccupation,
-        taxes_municipales=taxes_municipales,
-        taxes_scolaires=taxes_scolaires,
-        assurances=assurances,
-        energie=energie,
+        taxes_municipales=taxes_municipales * f,
+        taxes_scolaires=taxes_scolaires * f,
+        assurances=assurances * f,
+        energie=energie * f,
         concierge=concierge,
         entretien=entretien,
         gestion=gestion,
         wifi=wifi,
         thermopompes=thermopompes,
-        autres=depenses_autres,
+        autres=depenses_autres * f,
         autres_normalisations=autres_normalisations,
+        interets_balance_vente=float(interets_balance_vente_annuels or 0.0),
     )
 
 
@@ -713,6 +730,11 @@ class FraisDemarrage:
     frais_dossier_preteur: float
     interets: float
     revenus_nets_pendant_projet: float
+    #: Sept. 2026 — poste PERMANENT (retour Phil) : intérêts de la
+    #: balance de vente pendant la phase projet (mode prêteur B).
+    #: 0 sans balance de vente ; non finançable par défaut, gérable
+    #: dans Paramètres (registre) comme les autres postes.
+    interets_balance_vente: float = 0.0
 
     # Postes de frais de démarrage PERSONNALISÉS (dynamiques, juin
     # 2026). Liste d'items dont le montant $ est DÉJÀ calculé (cf.
@@ -751,6 +773,7 @@ class FraisDemarrage:
                     self.frais_dossier_preteur,
                     self.interets,
                     self.revenus_nets_pendant_projet,
+                    self.interets_balance_vente,
                 ]
             )
             + self.frais_custom_total
@@ -937,13 +960,25 @@ class FinanceInputs:
     # Sept. 2026 — Phase 3 : optimisation PAR UNITÉ. Liste de dicts
     # ``{typo, loyer_actuel, loyer_cible, optimiser}``. Vide →
     # comportement historique (toutes les unités au loyer cible
-    # pondéré H13). Règles Phil 2026-08-31 :
-    #  - mode prêteur B : les unités NON optimisées gardent leur loyer
-    #    ACTUEL au refi (le projet est trop court pour l'indexer) ;
-    #  - mode achat direct : dès l'an 1, les unités optimisées passent
-    #    au loyer cible puis tout croît ; les autres croissent depuis
-    #    leur loyer actuel.
+    # pondéré H13). Règle affinée (retour Phil 2026-09-02) : une unité
+    # NON optimisée = loyer actuel × (1 + croissance_loyers)^durée
+    # (croissance organique pendant le projet/la détention) ; une
+    # unité optimisée = loyer cible.
     unites: List[dict] = field(default_factory=list)
+
+    # Sept. 2026 — retour Phil : la stratégie « institution
+    # traditionnelle » regroupe les 4 programmes sur la même page ;
+    # ``programme_achat`` = celui RETENU pour financer l'achat (pilote
+    # la MDF et le solde au refi). Les anciennes valeurs de stratégie
+    # (conventionnel/schl_std/aph_50/aph_100) sont des alias de
+    # « traditionnel » + programme_achat.
+    programme_achat: str = "conventionnel"
+
+    # True quand la fiche a explicitement choisi une stratégie
+    # (chantier staging) : active l'indexation organique des loyers
+    # non optimisés et des dépenses réelles au refi. False = calcul
+    # historique INTACT (prod, golden tests).
+    chantier_actif: bool = False
 
     # Taux d'intérêt du prêteur B pendant la phase chantier
     # (8 % typique 2024-2025). Utilisé pour calculer L17 — intérêts
@@ -1071,10 +1106,13 @@ class FinanceResults:
     pret_preteur_b_total: float = 0.0
     balance_vente_retenue: float = 0.0
 
-    # Sept. 2026 — Phase 2 : bloc « achat direct » (financement à
-    # l'achat au programme choisi + détention + refi an N). None pour
-    # la stratégie historique prêteur B.
-    achat_direct: Optional[dict] = None
+    # Sept. 2026 — stratégie « institution traditionnelle » (les 4
+    # programmes sur la même page, onglets Achat / Refinancement /
+    # Projections). None pour la stratégie prêteur B.
+    traditionnel: Optional[dict] = None
+    # Projection long terme du mode prêteur B (après refi) — None hors
+    # chantier.
+    projection_preteur_b: Optional[list] = None
 
     def to_dict(self) -> dict:
         """Pour persistance JSON dans `LeadAnalysis.analysis_results_json`."""
@@ -1118,7 +1156,8 @@ class FinanceResults:
                     self.inputs.balance_vente_taux_pct or 0.0
                 ) * 100.0,
             },
-            "achat_direct": self.achat_direct,
+            "traditionnel": self.traditionnel,
+            "projection_preteur_b": self.projection_preteur_b,
             # Phase 3 — résumé de l'optimisation par unité (None si la
             # fiche n'a pas détaillé ses unités).
             "unites": (
@@ -1261,10 +1300,33 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
     # D8 OFFICIEL : loyer moyen = H13 (auto)
     nouveau_loyer_moyen = typo.h13_loyer_pondere
 
+    # Croissances organiques (retour Phil 2026-09-02) : actives
+    # seulement quand la fiche a choisi une stratégie (chantier) —
+    # le calcul historique reste intact sinon.
+    cl_organique = (
+        float(inputs.croissance_loyers or 0.0)
+        if inputs.chantier_actif
+        else 0.0
+    )
+    cd_organique = (
+        float(inputs.croissance_depenses or 0.0)
+        if inputs.chantier_actif
+        else 0.0
+    )
+    facteur_loyer_projet = (1 + cl_organique) ** max(
+        0, inputs.duree_projet_annees
+    )
+    # Dépenses réelles au refi = dépenses ACTUELLES indexées pendant la
+    # durée du projet (ex. ×1,03² pour 2 ans à 3 %).
+    facteur_dep_projet = (1 + cd_organique) ** max(
+        0, inputs.duree_projet_annees
+    )
+
     # Phase 3 — optimisation PAR UNITÉ : loyers mensuels effectifs au
-    # refi = cible pour les unités cochées, loyer ACTUEL gelé pour les
-    # autres (mode prêteur B : trop court pour indexer). Les unités
-    # AJOUTÉES au refi sont neuves → loyer cible pondéré H13.
+    # refi = cible pour les unités cochées ; une unité NON optimisée
+    # suit la croissance ORGANIQUE pendant la durée du projet
+    # (actuel × (1+cl)^durée). Les unités AJOUTÉES au refi sont
+    # neuves → loyer cible pondéré H13.
     unites_valides = [
         u for u in (inputs.unites or []) if isinstance(u, dict)
     ]
@@ -1278,6 +1340,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             else:
                 loyers_refi_unites.append(
                     float(u.get("loyer_actuel") or 0)
+                    * facteur_loyer_projet
                 )
         loyers_refi_unites.extend(
             [nouveau_loyer_moyen] * max(0, inputs.nb_logements_ajoutes)
@@ -1313,6 +1376,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         taux_inoccupation_pct=inputs.taux_inoccupation_pct,
         bareme_overrides=inputs.bareme_overrides,
         seuil_bascule_log=inputs.seuil_bascule_bareme_log,
+        facteur_indexation=facteur_dep_projet,
     )
     # Dépenses APH 50 : avec thermopompes (is_aph=True).
     depenses_aph_50 = compute_depenses_for_scenario(
@@ -1331,6 +1395,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         taux_inoccupation_pct=inputs.taux_inoccupation_pct,
         bareme_overrides=inputs.bareme_overrides,
         seuil_bascule_log=inputs.seuil_bascule_bareme_log,
+        facteur_indexation=facteur_dep_projet,
     )
     refi_schl = compute_scenario(
         config=cfg_schl,
@@ -1391,6 +1456,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             taux_inoccupation_pct=inputs.taux_inoccupation_pct,
             bareme_overrides=inputs.bareme_overrides,
             seuil_bascule_log=inputs.seuil_bascule_bareme_log,
+            facteur_indexation=facteur_dep_projet,
         )
         refi_aph_100 = compute_scenario(
             config=cfg_aph100,
@@ -1506,18 +1572,22 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
                 _frais_fin_total += float(_c.get("montant", 0) or 0)
             except (TypeError, ValueError):
                 pass
-    # Balance de vente : le vendeur finance une partie du prix → le
-    # prêt B sur le prix diminue d'autant, et la balance porte SON
-    # taux à elle pendant le projet. BV = 0 → formule identique à
-    # avant, au centime.
+    # Balance de vente (règle affinée 2026-09-02) : elle REMPLACE une
+    # partie du CASH de la mise de fonds — le prêt B, lui, ne bouge
+    # pas. Ses intérêts pendant le projet vivent dans un poste
+    # PERMANENT distinct (« Intérêts balance de vente », 0 sans BV),
+    # non finançable par défaut et gérable dans Paramètres comme les
+    # autres postes.
     _bv = max(0.0, float(inputs.balance_vente_montant or 0.0))
-    _bv = min(_bv, (1 - _mdf_pct) * inputs.prix_achat)
-    _pret_b_sur_prix = (1 - _mdf_pct) * inputs.prix_achat - _bv
+    _bv = min(_bv, _mdf_pct * inputs.prix_achat)
     frais.interets = (
-        (_pret_b_sur_prix + (1 - _mdf_pct) * _frais_fin_total)
+        (1 - _mdf_pct)
+        * (inputs.prix_achat + _frais_fin_total)
         * inputs.taux_interet_preteur_b_projet
         * inputs.duree_projet_annees
-        + _bv
+    )
+    frais.interets_balance_vente = (
+        _bv
         * float(inputs.balance_vente_taux_pct or 0.0)
         * inputs.duree_projet_annees
     )
@@ -1566,17 +1636,21 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             frais_finance_total += amount * (1 - mdf_pct)
         else:
             frais_cash_total += amount
-    mdf_preteur_b = mdf_pct * inputs.prix_achat + frais_cash_total
+
+    # Balance de vente (2026-09-02) : le vendeur finance une partie de
+    # la MISE DE FONDS — le X % × prix à sortir en cash est réduit du
+    # montant de la BV (jamais sous 0), le prêt B reste entier.
+    balance_vente = min(
+        max(0.0, float(inputs.balance_vente_montant or 0.0)),
+        mdf_pct * inputs.prix_achat,
+    )
+    mdf_preteur_b = (
+        mdf_pct * inputs.prix_achat - balance_vente + frais_cash_total
+    )
 
     # ── Prêt accordé par le prêteur B (retour Phil 2026-08-31 : le
     # montant du prêt doit apparaître, en complément de la MDF).
-    # Balance de vente : finance une partie du prix à la place du
-    # prêteur B — le cash ne bouge pas, le prêt B diminue.
-    balance_vente = min(
-        max(0.0, float(inputs.balance_vente_montant or 0.0)),
-        (1 - mdf_pct) * inputs.prix_achat,
-    )
-    pret_b_sur_prix = (1 - mdf_pct) * inputs.prix_achat - balance_vente
+    pret_b_sur_prix = (1 - mdf_pct) * inputs.prix_achat
     pret_preteur_b_total = pret_b_sur_prix + frais_finance_total
 
     # ── Étape 5 : MDF achat / équité refi ────────────────────────
@@ -1601,34 +1675,86 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
     # sur les loyers ACTUELS, je détiens ~5 ans avec croissance des
     # revenus et des dépenses, et je regarde si le refinancement me
     # ressort tout mon cash ». Réponses Phil 2026-08-31.
-    achat_direct: Optional[dict] = None
-    _slug_direct = {
-        "conventionnel": ("achat", "Conventionnel"),
-        "schl_std": ("schl_std", "SCHL standard"),
-        "aph_50": ("aph50", "SCHL Efficacité énergétique (50 pts)"),
-        "aph_100": ("aph100", "SCHL Abordabilité + Efficacité (100 pts)"),
-    }
-    if inputs.strategie in _slug_direct:
-        slug_dir, label_dir = _slug_direct[inputs.strategie]
-        cfg_dir = resolve_scenario(slug_dir, sc_ov)
-        # Financement à l'ACHAT, au programme choisi, sur les loyers
-        # ACTUELS — plafonné à la valeur marchande (prix demandé).
-        sc_achat_dir = compute_scenario(
-            config=cfg_dir,
-            nb_log=nb_log_achat,
-            loyer_mois=loyer_mois_achat,
-            revenus_totaux=inputs.revenus_annuels,
-            depenses=depenses_achat,
-            tga=inputs.tga,
-            taux_interet=inputs.taux_interet_achat,
-            valeur_marchande=inputs.prix_achat,
+    # ── Stratégie « institution traditionnelle » (2026-09-02) ────
+    # Retour Phil : les 4 programmes (conventionnel / SCHL / APH 50 /
+    # APH 100) sur la MÊME page, en deux onglets — Achat (loyers et
+    # dépenses ACTUELS) et Refinancement à l\'an H (loyers optimisés +
+    # croissance organique, dépenses réelles indexées). Le programme
+    # RETENU pilote la mise de fonds et le solde du prêt au refi. Les
+    # anciennes stratégies « achat direct » sont des alias.
+    traditionnel: Optional[dict] = None
+    _alias_trad = {"conventionnel", "schl_std", "aph_50", "aph_100"}
+    _est_trad = inputs.strategie == "traditionnel" or (
+        inputs.strategie in _alias_trad
+    )
+    if _est_trad:
+        # Une ancienne stratégie « achat direct » (alias) PORTE le
+        # programme ; « traditionnel » lit programme_achat.
+        if inputs.strategie in _alias_trad:
+            programme = inputs.strategie
+        elif inputs.programme_achat in _alias_trad:
+            programme = inputs.programme_achat
+        else:
+            programme = "conventionnel"
+        _cfg_par_prog = {
+            "conventionnel": resolve_scenario("achat", sc_ov),
+            "schl_std": cfg_schl,
+            "aph_50": cfg_aph50,
+            "aph_100": cfg_aph100,
+        }
+        _labels_prog = {
+            "conventionnel": "Conventionnel",
+            "schl_std": "SCHL standard",
+            "aph_50": "SCHL Efficacité (50 pts)",
+            "aph_100": "SCHL Abordabilité + Efficacité (100 pts)",
+        }
+        h_annees = max(1, int(inputs.projection_horizon_annees or 5))
+        cl = float(inputs.croissance_loyers or 0.0)
+        cd = float(inputs.croissance_depenses or 0.0)
+        bv_trad = max(0.0, float(inputs.balance_vente_montant or 0.0))
+        bv_interets_annuels = bv_trad * float(
+            inputs.balance_vente_taux_pct or 0.0
         )
-        # Frais de démarrage SANS phase chantier/refi : pas de 2e
-        # courtier/évaluateur/notaire, ni intérêts de portage, ni
-        # revenus pendant projet ; rapport d'efficacité gardé pour les
-        # programmes APH seulement. Les overrides et masques déjà
-        # appliqués à ``frais`` sont hérités tels quels.
-        f_dir = {
+
+        # ── Onglet ACHAT : 4 colonnes sur les loyers/dépenses ACTUELS
+        # (+ intérêts annuels de la balance de vente en dépense — la
+        # ligne est PERMANENTE : 0 sans BV).
+        dep_achat_trad = compute_depenses_for_scenario(
+            is_refi=False,
+            is_aph=False,
+            nb_log=nb_log_achat,
+            revenus_totaux=inputs.revenus_annuels,
+            taxes_municipales=inputs.taxes_municipales,
+            taxes_scolaires=inputs.taxes_scolaires,
+            assurances=inputs.assurances,
+            energie_base=inputs.energie,
+            reduction_energie_pct=inputs.reduction_energie_pct,
+            depenses_autres=inputs.depenses_autres,
+            wifi_ajoute=inputs.wifi_ajoute,
+            nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
+            taux_inoccupation_pct=inputs.taux_inoccupation_pct,
+            bareme_overrides=inputs.bareme_overrides,
+            seuil_bascule_log=inputs.seuil_bascule_bareme_log,
+            interets_balance_vente_annuels=bv_interets_annuels,
+        )
+        achat_cols: dict = {}
+        for prog, cfg_p in _cfg_par_prog.items():
+            achat_cols[prog] = compute_scenario(
+                config=cfg_p,
+                nb_log=nb_log_achat,
+                loyer_mois=loyer_mois_achat,
+                revenus_totaux=inputs.revenus_annuels,
+                depenses=dep_achat_trad,
+                tga=inputs.tga,
+                taux_interet=inputs.taux_interet_achat,
+                valeur_marchande=inputs.prix_achat,
+            )
+
+        # ── Frais d\'acquisition (pas de phase chantier) : pas de 2e
+        # courtier/évaluateur/notaire, ni portage, ni revenus pendant
+        # projet ; rapport d\'efficacité gardé si le programme RETENU
+        # est un APH ; intérêts BV = dépense annuelle, pas un frais.
+        f_trad = {
             k: float(v or 0)
             for k, v in frais.__dict__.items()
             if k != "frais_custom"
@@ -1636,46 +1762,41 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         for _k in (
             "courtier_hypothecaire_2", "evaluateur_2", "notaire_2",
             "interets", "revenus_nets_pendant_projet",
+            "interets_balance_vente",
         ):
-            f_dir[_k] = 0.0
-        if inputs.strategie not in ("aph_50", "aph_100"):
-            f_dir["rapport_efficacite"] = 0.0
+            f_trad[_k] = 0.0
+        if programme not in ("aph_50", "aph_100"):
+            f_trad["rapport_efficacite"] = 0.0
         _custom_total = sum(
             float(c.get("montant", 0) or 0) for c in frais.frais_custom
         )
-        frais_dir_total = round(sum(f_dir.values()) + _custom_total, 2)
+        frais_trad_total = round(sum(f_trad.values()) + _custom_total, 2)
 
-        pret_dir = sc_achat_dir.financement
-        bv_dir = min(
-            max(0.0, float(inputs.balance_vente_montant or 0.0)),
-            max(0.0, inputs.prix_achat - pret_dir),
-        )
-        mdf_dir = (
-            max(0.0, inputs.prix_achat - pret_dir - bv_dir)
-            + frais_dir_total
-        )
+        # MDF par colonne = prix + frais − prêt − balance de vente (la
+        # BV finance une partie de la mise de fonds).
+        def _mdf_prog(prog: str) -> float:
+            return max(
+                0.0,
+                inputs.prix_achat
+                - achat_cols[prog].financement
+                - bv_trad,
+            ) + frais_trad_total
 
-        # Projection de détention (croissances composées ; la série va
-        # au-delà de l'horizon — « la prise de valeur sur plusieurs
-        # années, pas juste 5 »).
-        h_annees = max(1, int(inputs.projection_horizon_annees or 5))
-        cl = float(inputs.croissance_loyers or 0.0)
-        cd = float(inputs.croissance_depenses or 0.0)
-        dep0 = depenses_achat.total
+        pret_retenu = achat_cols[programme].financement
+        mdf_cash = _mdf_prog(programme)
 
-        def _rev_direct(a: int) -> float:
-            """Revenus de l'an ``a`` en détention directe. Phase 3 :
-            dès l'an 1, les unités optimisées passent à leur loyer
-            CIBLE (puis croissent) ; les autres croissent depuis leur
-            loyer actuel. Sans détail d'unités : croissance simple."""
-            if a <= 0 or not unites_valides:
+        # ── Revenus/dépenses à l\'an H (refinancement) ──
+        def _rev_trad(a: int) -> float:
+            if a <= 0:
+                return inputs.revenus_annuels
+            if not unites_valides:
                 return inputs.revenus_annuels * (1 + cl) ** a
             total_mois = 0.0
             for u in unites_valides:
-                if u.get("optimiser", True):
+                if u.get("optimiser", False):
                     total_mois += (
                         float(u.get("loyer_cible") or 0)
-                        * (1 + cl) ** (a - 1)
+                        * (1 + cl) ** max(0, a - 1)
                     )
                 else:
                     total_mois += (
@@ -1683,19 +1804,88 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
                     )
             return total_mois * 12.0
 
+        rev_h = _rev_trad(h_annees)
+        facteur_dep_h = (1 + cd) ** h_annees
+        solde_retenu_h = solde_pret_canadien(
+            pret_retenu,
+            inputs.taux_interet_achat,
+            _cfg_par_prog[programme].amort_annees,
+            h_annees,
+        )
+
+        refi_cols: dict = {}
+        for prog, cfg_p in _cfg_par_prog.items():
+            dep_refi_p = compute_depenses_for_scenario(
+                is_refi=True,
+                is_aph=prog in ("aph_50", "aph_100"),
+                nb_log=nb_log_achat,
+                revenus_totaux=rev_h,
+                taxes_municipales=inputs.taxes_municipales,
+                taxes_scolaires=inputs.taxes_scolaires,
+                assurances=inputs.assurances,
+                energie_base=inputs.energie,
+                reduction_energie_pct=inputs.reduction_energie_pct,
+                depenses_autres=inputs.depenses_autres,
+                wifi_ajoute=inputs.wifi_ajoute,
+                nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
+                taux_inoccupation_pct=inputs.taux_inoccupation_pct,
+                bareme_overrides=inputs.bareme_overrides,
+                seuil_bascule_log=inputs.seuil_bascule_bareme_log,
+                facteur_indexation=facteur_dep_h,
+            )
+            sc_r = compute_scenario(
+                config=cfg_p,
+                nb_log=nb_log_achat,
+                loyer_mois=(
+                    rev_h / 12.0 / nb_log_achat if nb_log_achat else 0.0
+                ),
+                revenus_totaux=rev_h,
+                depenses=dep_refi_p,
+                tga=inputs.tga,
+                taux_interet=inputs.taux_interet_refi,
+                valeur_marchande=None,
+            )
+            # Le refi rembourse le prêt d\'achat retenu ET la balance
+            # de vente : ce qui reste = le cash dégagé.
+            sc_r.equite_a_la_fin = (
+                sc_r.financement - solde_retenu_h - bv_trad
+            )
+            refi_cols[prog] = sc_r
+
+        best_prog = max(
+            refi_cols, key=lambda k: refi_cols[k].equite_a_la_fin or 0.0
+        )
+        best_dispo = refi_cols[best_prog].equite_a_la_fin or 0.0
+
+        # ── Projection long terme : détention, refi à l\'an H (au
+        # programme gagnant), puis poursuite de la détention.
+        dep0_trad = dep_achat_trad.total - bv_interets_annuels
+        pret_best_refi = refi_cols[best_prog].financement
         projection = []
-        for a in range(0, max(h_annees, 10) + 1):
-            rev_a = _rev_direct(a)
-            dep_a = dep0 * (1 + cd) ** a
+        for a in range(0, max(h_annees, 12) + 1):
+            rev_a = _rev_trad(a)
+            dep_a = dep0_trad * (1 + cd) ** a + (
+                bv_interets_annuels if a < h_annees else 0.0
+            )
             rno_a = rev_a - dep_a
             valeur_a = rno_a / inputs.tga if inputs.tga > 0 else 0.0
-            solde_a = (
-                solde_pret_canadien(
-                    pret_dir, inputs.taux_interet_achat,
-                    cfg_dir.amort_annees, a,
+            if a <= h_annees:
+                solde_a = (
+                    solde_pret_canadien(
+                        pret_retenu,
+                        inputs.taux_interet_achat,
+                        _cfg_par_prog[programme].amort_annees,
+                        a,
+                    )
+                    + bv_trad
                 )
-                + bv_dir  # balance de vente : intérêts seulement
-            )
+            else:
+                solde_a = solde_pret_canadien(
+                    pret_best_refi,
+                    inputs.taux_interet_refi,
+                    _cfg_par_prog[best_prog].amort_annees,
+                    a - h_annees,
+                )
             projection.append({
                 "annee": a,
                 "revenus": round(rev_a, 2),
@@ -1706,71 +1896,73 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
                 "equite": round(valeur_a - solde_a, 2),
             })
 
-        # Refinancement à l'an H, aux 3 programmes SCHL (mêmes règles
-        # que les colonnes classiques : min(RCD, TGA×LTV)).
-        rev_h = _rev_direct(h_annees)
-        dep_h = dep0 * (1 + cd) ** h_annees
-        rno_h = rev_h - dep_h
-        solde_h = (
-            solde_pret_canadien(
-                pret_dir, inputs.taux_interet_achat,
-                cfg_dir.amort_annees, h_annees,
-            )
-            + bv_dir
-        )
-        refis: dict = {}
-        for key_r, cfg_r in (
-            ("refi_schl", cfg_schl),
-            ("refi_aph_50", cfg_aph50),
-            ("refi_aph_100", cfg_aph100),
-        ):
-            val_tga_h = rno_h / inputs.tga if inputs.tga > 0 else 0.0
-            paiement_max_h = rno_h / cfg_r.rcd if cfg_r.rcd > 0 else 0.0
-            hyp_rcd_h = -pv_canadian(
-                rate_annual=inputs.taux_interet_refi,
-                n_months=cfg_r.amort_annees * 12,
-                payment_monthly=paiement_max_h / 12.0,
-            )
-            pret_max_h = min(hyp_rcd_h, val_tga_h * cfg_r.ltv)
-            refis[key_r] = {
-                "label": cfg_r.label,
-                "pret_max": round(pret_max_h, 2),
-                "argent_dispo": round(pret_max_h - solde_h, 2),
-            }
-        best_key = max(refis, key=lambda k: refis[k]["argent_dispo"])
-        best_dispo = refis[best_key]["argent_dispo"]
-        achat_direct = {
-            "programme": inputs.strategie,
-            "label": label_dir,
-            "ltv": cfg_dir.ltv,
-            "amort_annees": cfg_dir.amort_annees,
-            "rcd": cfg_dir.rcd,
-            "valeur_retenue": round(sc_achat_dir.valeur_retenue, 2),
-            "pret_accorde": round(pret_dir, 2),
-            "paiement_mensuel": round(
-                sc_achat_dir.paiement_mensuel_actuel, 2
-            ),
-            "cashflow_annuel": round(sc_achat_dir.cashflow_annuel, 2),
-            "balance_vente": round(bv_dir, 2),
-            "frais_demarrage": {
-                k: round(v, 2) for k, v in f_dir.items()
-            },
-            "frais_demarrage_total": frais_dir_total,
-            "mdf_cash": round(mdf_dir, 2),
+        traditionnel = {
+            "programme_retenu": programme,
+            "labels": _labels_prog,
             "horizon": h_annees,
             "croissance_loyers": cl,
             "croissance_depenses": cd,
-            "solde_pret_an_h": round(solde_h, 2),
+            "balance_vente": round(bv_trad, 2),
+            "interets_bv_annuels": round(bv_interets_annuels, 2),
+            "frais_demarrage": {
+                k: round(v, 2) for k, v in f_trad.items()
+            },
+            "frais_demarrage_total": frais_trad_total,
+            "mdf_cash": round(mdf_cash, 2),
+            "pret_retenu": round(pret_retenu, 2),
+            "solde_retenu_an_h": round(solde_retenu_h, 2),
+            "achat": {
+                p: _scenario_to_dict(s) for p, s in achat_cols.items()
+            },
+            "mdf_par_programme": {
+                p: round(_mdf_prog(p), 2) for p in achat_cols
+            },
+            "refi": {
+                p: _scenario_to_dict(s) for p, s in refi_cols.items()
+            },
             "projection": projection,
-            "refi_an_h": refis,
             "best_refi": {
-                "key": best_key,
-                "label": refis[best_key]["label"],
-                "argent_dispo": best_dispo,
-                "refi_possible": best_dispo >= mdf_dir - 0.005,
-                "manque": round(max(0.0, mdf_dir - best_dispo), 2),
+                "key": best_prog,
+                "label": _labels_prog[best_prog],
+                "argent_dispo": round(best_dispo, 2),
+                "refi_possible": best_dispo >= mdf_cash - 0.005,
+                "manque": round(max(0.0, mdf_cash - best_dispo), 2),
             },
         }
+
+    # ── Projection long terme du mode PRÊTEUR B (2026-09-02) : après
+    # le refi (an = durée du projet), le scénario gagnant continue de
+    # croître — même graphique que le mode traditionnel.
+    projection_preteur_b: Optional[list] = None
+    if inputs.chantier_actif and not _est_trad:
+        cand = [refi_schl, refi_aph_50] + (
+            [refi_aph_100] if refi_aph_100 is not None else []
+        )
+        best_b = max(cand, key=lambda s: s.equite_a_la_fin or 0.0)
+        cl_b = float(inputs.croissance_loyers or 0.0)
+        cd_b = float(inputs.croissance_depenses or 0.0)
+        d0 = inputs.duree_projet_annees
+        projection_preteur_b = []
+        for a in range(0, 13):
+            rev_a = best_b.revenus_totaux * (1 + cl_b) ** a
+            dep_a = best_b.depenses.total * (1 + cd_b) ** a
+            rno_a = rev_a - dep_a
+            valeur_a = rno_a / inputs.tga if inputs.tga > 0 else 0.0
+            solde_a = solde_pret_canadien(
+                best_b.financement,
+                inputs.taux_interet_refi,
+                best_b.config.amort_annees,
+                a,
+            )
+            projection_preteur_b.append({
+                "annee": d0 + a,
+                "revenus": round(rev_a, 2),
+                "depenses": round(dep_a, 2),
+                "rno": round(rno_a, 2),
+                "valeur": round(valeur_a, 2),
+                "solde_pret": round(solde_a, 2),
+                "equite": round(valeur_a - solde_a, 2),
+            })
 
     return FinanceResults(
         inputs=inputs,
@@ -1788,5 +1980,6 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         pret_preteur_b_frais_finances=frais_finance_total,
         pret_preteur_b_total=pret_preteur_b_total,
         balance_vente_retenue=balance_vente,
-        achat_direct=achat_direct,
+        traditionnel=traditionnel,
+        projection_preteur_b=projection_preteur_b,
     )
