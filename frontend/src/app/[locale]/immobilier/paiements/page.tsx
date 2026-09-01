@@ -1369,10 +1369,11 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                                   Corriger
                                 </button>
                               )}
-                            </div>
                             {/* Dossier TAL : coche partagée pour que
                                 Phil n'ait plus à relancer le
-                                responsable des paiements. */}
+                                responsable des paiements — DANS le
+                                groupe pour rester sur une seule ligne
+                                (retour Phil 2026-09-01). */}
                             {!r.gestion_externe ? (
                               <button
                                 type="button"
@@ -1394,6 +1395,7 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                                   : "TAL"}
                               </button>
                             ) : null}
+                            </div>
                             {/* Page PAIEMENTS pure (split v15) : les
                                 avis et le bail vivent sur la page
                                 « Baux » du menu. */}
