@@ -9,9 +9,11 @@ import {
   ChevronRight,
   ClipboardList,
   Clock,
+  KeyRound,
   Loader2,
   Mail,
   Phone,
+  Scale,
   Search
 } from "lucide-react";
 
@@ -75,7 +77,13 @@ type Row = {
   paiement_id: number | null;
   montant_paye: number | null;
   paye_le: string | null;
-  etat: string; // "retard" | "attente" | "paye" | "partiel"
+  etat: string; // "retard" | "attente" | "paye" | "partiel" | "vacant"
+  /** Ligne de logement VACANT (bail_id vaut 0) : statut exact du
+   *  logement ("vacant" ou "reserve") pour l'étiquette. */
+  logement_statut?: string | null;
+  /** Dossier ouvert au TAL sur ce bail (non-paiement) — badge + coche
+   *  pour que l'équipe voie que le recours est lancé. */
+  tal_dossier_ouvert_le?: string | null;
   //: Mois affiché payé, mais un mois antérieur du bail impayé.
   solde_anterieur?: boolean;
   /** Bail résilié/terminé en cours de mois : la ligne reste dans le
@@ -122,8 +130,9 @@ type OverviewExterne = {
   nb_attente: number;
 };
 
-/** Clé de rendu : les lignes externes n'ont pas de bail. */
+/** Clé de rendu : les lignes externes et vacantes n'ont pas de bail. */
 function rowKey(r: Row): string {
+  if (r.etat === "vacant") return `vac-${r.logement_id}`;
   return r.gestion_externe
     ? `ext-${r.logement_id}`
     : `bail-${r.bail_id}`;
@@ -228,7 +237,7 @@ export default function PaiementsPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [etatFilter, setEtatFilter] = useState<
-    "all" | "paye" | "partiel" | "retard" | "attente"
+    "all" | "paye" | "partiel" | "retard" | "attente" | "vacant"
   >("all");
   const [immeubleFilter, setImmeubleFilter] = useState<number | "all">("all");
 
@@ -339,18 +348,20 @@ export default function PaiementsPage() {
   // Frais ponctuel qui S'AJOUTE au solde (ex. 20 $ payé après le 15).
   async function ajouterFrais(row: Row) {
     const saisie = window.prompt(
-      `Frais à facturer à ${row.locataire_name || "ce locataire"} (mois ${mois}) ?\nMontant en $ :`,
+      `Frais ou crédit pour ${row.locataire_name || "ce locataire"} (mois ${mois}) ?\n` +
+        "Montant en $ — positif = frais (ex. 20), NÉGATIF = crédit qui " +
+        "réduit le loyer dû (ex. -50) :",
       "20"
     );
     if (saisie == null) return;
     const montant = Number(saisie.replace(/\s/g, "").replace(",", "."));
-    if (!Number.isFinite(montant) || montant <= 0) {
-      setError("Montant invalide.");
+    if (!Number.isFinite(montant) || montant === 0) {
+      setError("Montant invalide (positif = frais, négatif = crédit).");
       return;
     }
+    const defLibelle = montant < 0 ? "Crédit" : "Frais de retard";
     const libelle =
-      window.prompt("Libellé du frais :", "Frais de retard") ||
-      "Frais de retard";
+      window.prompt("Libellé :", defLibelle) || defLibelle;
     try {
       const r = await authedFetch(
         `/api/v1/immobilier/baux/${row.bail_id}/frais`,
@@ -365,10 +376,48 @@ export default function PaiementsPage() {
       );
       if (!r.ok)
         throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
-      flash(`Frais ajouté au solde : ${libelle} (${fmtMoney(montant)})`);
+      flash(
+        montant < 0
+          ? `Crédit appliqué au solde : ${libelle} (${fmtMoney(montant)})`
+          : `Frais ajouté au solde : ${libelle} (${fmtMoney(montant)})`
+      );
       await load();
     } catch (e) {
       setError(`Ajout du frais échoué : ${(e as Error).message}`);
+    }
+  }
+
+  async function toggleTal(row: Row) {
+    const ouvre = !row.tal_dossier_ouvert_le;
+    if (
+      !ouvre &&
+      !window.confirm(
+        "Retirer le suivi « dossier TAL ouvert » sur ce bail ?"
+      )
+    )
+      return;
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/baux/${row.bail_id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            tal_dossier_ouvert_le: ouvre
+              ? new Date().toISOString().slice(0, 10)
+              : null
+          })
+        }
+      );
+      if (!r.ok)
+        throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`);
+      flash(
+        ouvre
+          ? "Dossier TAL marqué ouvert — visible par toute l'équipe."
+          : "Suivi TAL retiré."
+      );
+      await load();
+    } catch (e) {
+      setError(`Mise à jour TAL échouée : ${(e as Error).message}`);
     }
   }
 
@@ -601,7 +650,8 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
         total_recu: data.total_recu + (externe?.total_recu ?? 0),
         nb_retards: data.nb_retards + (externe?.nb_retards ?? 0),
         nb_attente: data.nb_attente + (externe?.nb_attente ?? 0),
-        nb_baux: allRows.length,
+        nb_vacants: allRows.filter((r) => r.etat === "vacant").length,
+        nb_baux: allRows.filter((r) => r.etat !== "vacant").length,
         total_solde_du:
           (data.total_solde_du ??
             data.rows.reduce((s, r) => s + (r.solde_total ?? 0), 0)) +
@@ -609,15 +659,19 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
       };
     }
     const rows = allRows.filter((r) => r.immeuble_id === immeubleFilter);
+    // Les lignes vacantes sont informatives : leur « loyer demandé »
+    // n'entre dans aucun total d'argent.
+    const actives = rows.filter((r) => r.etat !== "vacant");
     return {
-      total_attendu: rows.reduce((s, r) => s + r.loyer_mensuel, 0),
-      total_recu: rows.reduce((s, r) => s + (r.montant_paye ?? 0), 0),
-      nb_retards: rows.filter(
+      total_attendu: actives.reduce((s, r) => s + r.loyer_mensuel, 0),
+      total_recu: actives.reduce((s, r) => s + (r.montant_paye ?? 0), 0),
+      nb_retards: actives.filter(
         (r) => r.etat === "retard" || r.etat === "partiel"
       ).length,
-      nb_attente: rows.filter((r) => r.etat === "attente").length,
-      nb_baux: rows.length,
-      total_solde_du: rows.reduce((s, r) => s + (r.solde_total ?? 0), 0)
+      nb_attente: actives.filter((r) => r.etat === "attente").length,
+      nb_vacants: rows.filter((r) => r.etat === "vacant").length,
+      nb_baux: actives.length,
+      total_solde_du: actives.reduce((s, r) => s + (r.solde_total ?? 0), 0)
     };
   }, [data, externe, allRows, immeubleFilter]);
 
@@ -647,7 +701,9 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
           // c'est ce que la ligne affiche à sa place.
           const hay = `${r.locataire_name || ""} ${r.immeuble_name} ${
             r.logement_numero || ""
-          }${r.gestion_externe ? " gestion externe" : ""}`.toLowerCase();
+          }${r.gestion_externe ? " gestion externe" : ""}${
+            r.etat === "vacant" ? " vacant" : ""
+          }`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -726,7 +782,7 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
 
         {/* Tuiles de synthèse — suivent le filtre immeuble */}
         {kpi ? (
-          <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-6">
             <StatTile
               label="Attendu"
               value={fmtMoney(kpi.total_attendu)}
@@ -762,6 +818,16 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                   : "loyers échus + frais − reçus"
               }
               tone={kpi.total_solde_du > 0 ? "rose" : undefined}
+            />
+            <StatTile
+              label="Vacants"
+              value={String(kpi.nb_vacants)}
+              sub={
+                kpi.nb_vacants > 0
+                  ? "aucun loyer ce mois-ci"
+                  : "tout est loué"
+              }
+              tone={kpi.nb_vacants > 0 ? "amber" : undefined}
             />
           </div>
         ) : null}
@@ -838,6 +904,11 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
             label="En attente"
             active={etatFilter === "attente"}
             onClick={() => setEtatFilter("attente")}
+          />
+          <FilterPill
+            label="Vacants"
+            active={etatFilter === "vacant"}
+            onClick={() => setEtatFilter("vacant")}
           />
           {data ? (
             <span className="text-xs text-white/50">
@@ -920,6 +991,20 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                           <span className="badge badge-rose">
                             <AlertTriangle className="h-3 w-3" /> Retard
                           </span>
+                        ) : r.etat === "vacant" ? (
+                          <span
+                            className="badge badge-amber"
+                            title={
+                              r.logement_statut === "reserve"
+                                ? "Bail signé, pas encore commencé — aucun loyer ce mois-ci"
+                                : "Aucun bail ne couvre ce mois — aucun loyer à percevoir"
+                            }
+                          >
+                            <KeyRound className="h-3 w-3" />{" "}
+                            {r.logement_statut === "reserve"
+                              ? "Réservé"
+                              : "Vacant"}
+                          </span>
                         ) : (
                           <span className="badge badge-neutral">
                             <Clock className="h-3 w-3" /> Attente
@@ -940,7 +1025,11 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                         ) : null}
                       </td>
                       <td className="px-3 py-2.5">
-                        {r.gestion_externe ? (
+                        {r.etat === "vacant" ? (
+                          <span className="text-sm italic text-white/40">
+                            Aucun locataire
+                          </span>
+                        ) : r.gestion_externe ? (
                           <BadgeGestionExterne />
                         ) : r.locataire_id != null ? (
                           <Link
@@ -990,6 +1079,17 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                             <Phone className="h-3 w-3" />
                             {r.locataire_phone}
                           </a>
+                        ) : null}
+                        {/* Dossier au TAL : visible par toute l'équipe,
+                            pour que le suivi ne repose plus sur du
+                            bouche-à-oreille (retour Phil 2026-08-31). */}
+                        {r.tal_dossier_ouvert_le ? (
+                          <span
+                            className="ml-2 inline-flex items-center gap-1 rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-violet-300"
+                            title={`Dossier ouvert au TAL le ${r.tal_dossier_ouvert_le} — décochable via le bouton TAL de la ligne`}
+                          >
+                            <Scale className="h-3 w-3" /> TAL ouvert
+                          </span>
                         ) : null}
                       </td>
                       <td className="px-3 py-2.5 text-white/70">
@@ -1089,15 +1189,26 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                             2026-08-13) — la balance d'un paiement partiel
                             se lit sur la ligne « Solde », plus besoin du
                             « reste » séparé ni d'une colonne Solde dû. */}
-                        <CelluleLoyer
-                          loyer={r.loyer_mensuel}
-                          recu={r.montant_paye}
-                          solde={r.solde_total}
-                          fmt={fmtMoney}
-                          echeance={echeanceLabel(r.jour_echeance)}
-                          frais={r.frais_mois}
-                          onSupprimerFrais={(id) => void supprimerFrais(id)}
-                        />
+                        {r.etat === "vacant" ? (
+                          <span
+                            className="text-sm tabular-nums text-white/40"
+                            title="Loyer demandé (fiche du logement) — rien à percevoir tant que le logement n'est pas loué"
+                          >
+                            {r.loyer_mensuel > 0
+                              ? `${fmtMoney(r.loyer_mensuel)} demandé`
+                              : "—"}
+                          </span>
+                        ) : (
+                          <CelluleLoyer
+                            loyer={r.loyer_mensuel}
+                            recu={r.montant_paye}
+                            solde={r.solde_total}
+                            fmt={fmtMoney}
+                            echeance={echeanceLabel(r.jour_echeance)}
+                            frais={r.frais_mois}
+                            onSupprimerFrais={(id) => void supprimerFrais(id)}
+                          />
+                        )}
                       </td>
                       {/* Le montant reçu vit maintenant dans la colonne
                           Loyer — ici on ne garde que la DATE. */}
@@ -1105,9 +1216,16 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                         {r.paye_le || "—"}
                       </td>
                       <td className="px-3 py-2.5 text-right">
-                        {/* 3 groupes visuellement délimités (retour Phil v4) :
-                            Paiement | Documents | Bail. Les groupes Documents
-                            et Bail restent visibles même une fois payé. */}
+                        {r.etat === "vacant" ? (
+                          <Link
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            href={"/immobilier/locations" as any}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20"
+                            title="Ouvrir le pipeline de relocation (annonces, visites, candidat)"
+                          >
+                            <KeyRound className="h-3 w-3" /> Relouer
+                          </Link>
+                        ) : (
                         <div className="flex flex-col items-end gap-1.5">
                           <div className="flex flex-wrap items-center justify-end gap-2">
                             {/* ── Groupe 1 — Paiement ── */}
@@ -1187,10 +1305,10 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                                   <button
                                     type="button"
                                     onClick={() => void ajouterFrais(r)}
-                                    title="Ajouter un frais ponctuel au solde (ex. frais de retard 20 $)"
+                                    title="Ajouter un frais (ex. retard 20 $) ou un crédit (montant négatif — réduit le loyer dû)"
                                     className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-white/70 transition hover:bg-white/10"
                                   >
-                                    + Frais
+                                    ± Frais/crédit
                                   </button>
                                   <button
                                     type="button"
@@ -1252,6 +1370,30 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                                 </button>
                               )}
                             </div>
+                            {/* Dossier TAL : coche partagée pour que
+                                Phil n'ait plus à relancer le
+                                responsable des paiements. */}
+                            {!r.gestion_externe ? (
+                              <button
+                                type="button"
+                                onClick={() => void toggleTal(r)}
+                                title={
+                                  r.tal_dossier_ouvert_le
+                                    ? `Dossier TAL ouvert le ${r.tal_dossier_ouvert_le} — cliquer pour retirer le suivi`
+                                    : "Marquer qu'un dossier de non-paiement est ouvert au TAL pour ce bail"
+                                }
+                                className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition ${
+                                  r.tal_dossier_ouvert_le
+                                    ? "border-violet-500/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20"
+                                    : "border-white/15 bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/80"
+                                }`}
+                              >
+                                <Scale className="h-3 w-3" />
+                                {r.tal_dossier_ouvert_le
+                                  ? "TAL ouvert"
+                                  : "TAL"}
+                              </button>
+                            ) : null}
                             {/* Page PAIEMENTS pure (split v15) : les
                                 avis et le bail vivent sur la page
                                 « Baux » du menu. */}
@@ -1265,6 +1407,7 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
                             </span>
                           ) : null}
                         </div>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -1283,8 +1426,13 @@ Le mois redeviendra impayé — cette action ne se défait pas.`
           « Retard » = aucun paiement après le 5 du mois · « Partiel » = un
           montant a été reçu mais le mois n&apos;est pas couvert. « Marquer
           payé » enregistre le restant du mois en 1 clic ; « Partiel » saisit
-          un montant précis ; « + Frais » ajoute un frais ponctuel (ex. 20 $
-          de retard) au solde. La colonne « Loyer » empile le loyer du mois,
+          un montant précis ; « ± Frais/crédit » ajoute un frais ponctuel
+          (ex. 20 $ de retard) ou un crédit (montant négatif) qui réduit le
+          loyer dû. « TAL » marque qu&apos;un dossier de non-paiement est
+          ouvert au tribunal — visible par toute l&apos;équipe. Les lignes
+          « Vacant » listent les logements sans bail ce mois-ci (loyer
+          demandé à titre indicatif, exclu des totaux). La colonne
+          « Loyer » empile le loyer du mois,
           le « Reçu » et le « Solde » : ce dernier cumule tous les loyers
           échus et frais du bail, moins tout ce qui a été reçu. Les lignes
           « Gestion externe » reflètent le rapport de la compagnie de
@@ -1337,7 +1485,7 @@ function StatTile({
   label: string;
   value: string;
   sub?: string;
-  tone?: "emerald" | "rose";
+  tone?: "emerald" | "rose" | "amber";
 }) {
   return (
     <div className="kpi-card">
@@ -1348,7 +1496,9 @@ function StatTile({
         className={`mt-1 text-xl font-bold tabular-nums ${
           tone === "emerald"
             ? "text-emerald-300"
-            : tone === "rose"
+            : tone === "amber"
+              ? "text-amber-300"
+              : tone === "rose"
               ? "text-rose-300"
               : "text-white"
         }`}

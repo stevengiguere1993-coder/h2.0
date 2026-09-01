@@ -304,6 +304,9 @@ class BailUpdate(BaseModel):
     au_mois: Optional[bool] = None
     #: Jour du mois où le loyer est payable (bail TAL « Ou le ___ »).
     jour_echeance: Optional[int] = None
+    #: Dossier TAL ouvert (non-paiement) — coché depuis Paiements ;
+    #: envoyer explicitement null pour le décocher.
+    tal_dossier_ouvert_le: Optional[date] = None
 
     @field_validator("jour_echeance")
     @classmethod
@@ -315,6 +318,8 @@ class BailRead(BailBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     depot_rendu_le: Optional[date] = None
+    #: Dossier TAL ouvert (non-paiement).
+    tal_dossier_ouvert_le: Optional[date] = None
     created_at: datetime
     updated_at: datetime
     signed_at: Optional[datetime] = None
