@@ -544,6 +544,42 @@ async def pull_project_costs_from_qbo(
         proj_by_job = {
             _resolved[p.id]: p for p in _projects if _resolved.get(p.id)
         }
+    # Repli CLIENT MÈRE : une facture QB imputée au customer PARENT (pas
+    # au sous-client/projet) n'était JAMAIS importée (« sans_projet »,
+    # cas Atlant #177 imputée « 2020 St-Thimothee inc. »). Quand la fiche
+    # client Kratos est reliée à ce customer ET n'a qu'UN SEUL projet,
+    # l'imputation est sans ambiguïté → on mappe l'id du customer parent
+    # sur ce projet. Client à plusieurs projets → on ne devine pas (le
+    # repli par classe de ligne reste disponible).
+    try:
+        from app.models.client import Client as _ClientMap
+
+        _by_client: dict[int, list[Project]] = {}
+        for _p in _projects:
+            if _p.client_id:
+                _by_client.setdefault(int(_p.client_id), []).append(_p)
+        _single = {
+            cid: ps[0] for cid, ps in _by_client.items() if len(ps) == 1
+        }
+        if _single:
+            _crows = (
+                await db.execute(
+                    select(
+                        _ClientMap.id, _ClientMap.qbo_customer_id
+                    ).where(
+                        _ClientMap.id.in_(list(_single.keys())),
+                        _ClientMap.qbo_customer_id.is_not(None),
+                    )
+                )
+            ).all()
+            for _ccid, _qid in _crows:
+                _q = str(_qid or "").strip()
+                if _q and _q not in proj_by_job:
+                    proj_by_job[_q] = _single[int(_ccid)]
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "Repli client mère → projet échoué", exc_info=True
+        )
     # Repli de résolution par CLASSE de ligne (= adresse du chantier) pour
     # la ventilation multi-projets : couvre les lignes dont le CustomerRef
     # pointe le client MÈRE plutôt que le sous-client du projet (cas

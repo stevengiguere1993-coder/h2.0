@@ -166,6 +166,8 @@ export type ProjetDetail = {
   show_actionnaires: boolean;
   show_cashflow: boolean;
   show_budget?: boolean;
+  /** Dossier Google Drive partagé — affiché dans Documents. */
+  drive_folder_url?: string | null;
   documents: { id: number; title: string; size_bytes: number }[];
 };
 
@@ -496,6 +498,21 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
 
 /* ----------------- Dépenses par catégorie (12 mois) ----------------- */
 
+// Ordre LOGIQUE des catégories (retour investisseur 2026-09-02 : les
+// deux taxes en premier — municipales puis scolaires — et « Autres »
+// à la fin), plutôt qu'un tri par montant.
+const CATEGORIE_ORDRE: Record<string, number> = {
+  taxes_municipales: 0,
+  taxes_scolaires: 1,
+  assurances: 2,
+  energie: 3,
+  entretien: 4,
+  deneigement: 5,
+  conciergerie: 6,
+  gestion: 7,
+  autre: 99
+};
+
 export function DepensesParCategorie({
   items
 }: {
@@ -504,13 +521,18 @@ export function DepensesParCategorie({
   if (!items || items.length === 0) return null;
   const total = items.reduce((s, x) => s + x.total, 0);
   if (total <= 0) return null;
+  const ordonnes = [...items].sort(
+    (a, b) =>
+      (CATEGORIE_ORDRE[a.categorie] ?? 50) -
+        (CATEGORIE_ORDRE[b.categorie] ?? 50) || b.total - a.total
+  );
   return (
     <div className="mt-3 border-t border-brand-800 pt-3">
       <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-white/40">
         Dépenses par catégorie · 12 mois
       </p>
       <ul className="space-y-1.5">
-        {items.map((d) => {
+        {ordonnes.map((d) => {
           const pct = Math.max(2, Math.round((d.total / total) * 100));
           return (
             <li key={d.categorie} className="text-xs">
@@ -1395,7 +1417,7 @@ export function BudgetOptimisationPanel({
     <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 text-white">
       <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold">
-          Budget d&apos;optimisation
+          Budget d&apos;optimisation (amélioration)
         </h2>
         {data?.statut === "connecte" && data.date_debut ? (
           <span className="text-xs text-white/40">

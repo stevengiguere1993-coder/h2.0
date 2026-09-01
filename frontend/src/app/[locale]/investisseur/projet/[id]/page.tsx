@@ -13,6 +13,7 @@ import {
   Building2,
   Eye,
   FileText,
+  FolderOpen,
   Loader2,
   Users
 } from "lucide-react";
@@ -440,11 +441,31 @@ export default function ProjetPage() {
             ) : null}
 
             {/* Documents */}
-            {data.documents.length > 0 ? (
+            {data.documents.length > 0 || data.drive_folder_url ? (
               <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
                 <h2 className="mb-3 text-sm font-semibold text-white">
                   Documents
                 </h2>
+                {data.drive_folder_url ? (
+                  <a
+                    href={data.drive_folder_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="group mb-2 flex items-center gap-2.5 rounded-xl border border-accent-500/40 bg-accent-500/5 p-3 transition hover:border-accent-500"
+                  >
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-500/15 text-accent-500">
+                      <FolderOpen className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-white group-hover:text-accent-500">
+                        Dossier de documents partagé
+                      </span>
+                      <span className="text-[11px] text-white/40">
+                        Google Drive · s&apos;ouvre dans un nouvel onglet
+                      </span>
+                    </span>
+                  </a>
+                ) : null}
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {data.documents.map((d) => (
                     <button
@@ -613,10 +634,14 @@ function ParticipationHero({
           </p>
           <p className="mt-0.5 text-[10px] text-white/35">
             équité de la compagnie ×{" "}
-            {data.parts_pct.toLocaleString("fr-CA", {
-              maximumFractionDigits: 1
-            })}{" "}
-            %
+            {/* Le % de l'actionnaire en GRAS (retour investisseur
+                2026-09-02). */}
+            <b className="text-[11px] font-bold text-white/80">
+              {data.parts_pct.toLocaleString("fr-CA", {
+                maximumFractionDigits: 1
+              })}{" "}
+              %
+            </b>
           </p>
         </div>
         <div className="rounded-xl border border-brand-800 bg-brand-950/50 p-3">
