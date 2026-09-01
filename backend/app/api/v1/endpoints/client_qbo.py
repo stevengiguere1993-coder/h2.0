@@ -86,12 +86,48 @@ async def push_client_to_qbo(
     was_linked: Optional[str] = client.qbo_customer_id
 
     try:
-        customer = await qbo.ensure_customer(
-            display_name=client.name,
-            email=client.email,
-            phone=_format_phone(client.phone),
-            billing_address=client.address,
-        )
+        # Résolution AVANT toute création — « Re-synchroniser » doit
+        # REFLÉTER la fiche sur le customer existant (renommage inclus),
+        # jamais créer un doublon. Avant : ensure_customer cherchait le
+        # nom CORRIGÉ (introuvable, QB porte encore la faute) et créait
+        # un nouveau customer à côté de l'original.
+        customer = None
+        # 1. Lien mémorisé — avec garde anti-lien-erroné : s'il pointe
+        #    un customer dont le nom ne correspond pas à la fiche alors
+        #    qu'un customer au nom exact existe, on répare le lien.
+        if client.qbo_customer_id:
+            customer = await qbo.get_customer(client.qbo_customer_id)
+            if customer is not None:
+                _dn = (customer.get("DisplayName") or "").strip().lower()
+                _kn = (client.name or "").strip().lower()
+                if _kn and _dn != _kn:
+                    _exact = await qbo.find_customer_by_name(client.name)
+                    if _exact is not None:
+                        customer = _exact
+        # 2. Nom exact, sinon courriel (UNIQUE seulement — souvent
+        #    partagé entre plusieurs compagnies du même proprio).
+        if customer is None:
+            customer = await qbo.find_customer_by_name(client.name)
+        if customer is None and client.email:
+            customer = await qbo.find_customer_by_email(client.email)
+
+        if customer is not None:
+            updated = await qbo.update_customer(
+                str(customer.get("Id")),
+                display_name=client.name,
+                email=client.email,
+                phone=_format_phone(client.phone),
+                billing_address=client.address,
+            )
+            if updated is not None:
+                customer = updated
+        else:
+            customer = await qbo.create_customer(
+                display_name=client.name,
+                email=client.email,
+                phone=_format_phone(client.phone),
+                billing_address=client.address,
+            )
     except QuickBooksError as exc:
         log.warning("QBO push-to-qbo failed for client %s: %s", client_id, exc)
         raise HTTPException(
