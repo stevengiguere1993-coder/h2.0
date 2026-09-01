@@ -27,6 +27,7 @@ from app.integrations.ai._base import (
 )
 from app.integrations.ai._gemini import GeminiProvider
 from app.integrations.ai._groq import GroqProvider
+from app.integrations.ai._openai import OpenAIProvider
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +37,8 @@ _PROVIDERS = {
     "anthropic": AnthropicProvider,
     "claude": AnthropicProvider,  # alias
     "groq": GroqProvider,
+    "openai": OpenAIProvider,
+    "gpt": OpenAIProvider,  # alias
 }
 
 

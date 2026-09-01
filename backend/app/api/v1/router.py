@@ -29,6 +29,7 @@ from app.api.v1.endpoints import (
     ai,
     api_keys,
     assistant,
+    mon_ia,
     appointments,
     audit,
     auth,
@@ -217,6 +218,9 @@ api_router.include_router(activity.router)
 # est vérifiée outil par outil (catalogue filtré = exécution refusée) —
 # pas de garde de volet au niveau du routeur, l'assistant est transverse.
 api_router.include_router(assistant.router)
+# IA personnelle (« chacun son IA ») — transverse, aucune garde de
+# volet : chacun gère SA connexion.
+api_router.include_router(mon_ia.router)
 api_router.include_router(clients.router)
 # Le pôle Dev Logiciel est restreint à admin/owner (Phil + Steven).
 # La garde est appliquée à TOUS les routers internes du pôle ; seuls

@@ -276,6 +276,7 @@ from app.models.timesheet import (  # noqa: F401
     TimesheetEntry,
 )
 from app.models.user import User
+from app.models.user_ai import UserAiBrief, UserAiConfig  # noqa: F401
 from app.models.user_immeuble import UserImmeuble  # noqa: F401
 from app.models.user_business_role import (  # noqa: F401
     FunctionalRole,

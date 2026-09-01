@@ -34,6 +34,8 @@ router = APIRouter(prefix="/cron", tags=["cron"])
 class CronResult(BaseModel):
     ok: bool
     job: str
+    #: Statistiques optionnelles du job (ex. briefs IA générés).
+    details: Optional[Dict[str, Any]] = None
 
 
 def _check_secret(
@@ -180,6 +182,31 @@ async def trigger_email_inbound(
             f"Job a échoué : {exc}",
         )
     return CronResult(ok=True, job="email-inbound")
+
+
+@router.post("/run/user-ai-briefs", response_model=CronResult)
+async def trigger_user_ai_briefs(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+) -> CronResult:
+    """IA personnelle — 1×/jour : génère le brief quotidien de chaque
+    utilisateur qui a branché son IA (vision Phil 2026-09-01). Chaque
+    utilisateur est best-effort : une clé morte n'arrête pas les
+    autres."""
+    _check_secret(x_cron_secret, secret)
+    from app.db.session import AsyncSessionLocal
+    from app.services.user_ai import generer_briefs_quotidiens
+
+    try:
+        async with AsyncSessionLocal() as db:
+            stats = await generer_briefs_quotidiens(db)
+    except Exception as exc:
+        log.exception("Cron user-ai-briefs failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Job a échoué : {exc}",
+        )
+    return CronResult(ok=True, job="user-ai-briefs", details=stats)
 
 
 class QGDailyPulseResult(CronResult):
