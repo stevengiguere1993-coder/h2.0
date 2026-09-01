@@ -1788,6 +1788,12 @@ def _render_bytes(
             "Financement à l'achat sur les loyers actuels ; projection "
             "à croissance composée ; refinancement comparé aux trois "
             "programmes SCHL à l'horizon choisi.", s["small_muted"]))
+        _un = results.get("unites")
+        if _un:
+            story.append(Paragraph(
+                f"Optimisation par unité : {_un.get('optimisees')} unité(s) "
+                f"optimisée(s) sur {_un.get('total')} — les autres "
+                "croissent depuis leur loyer actuel.", s["small_muted"]))
     elif results:
         story.append(Paragraph(
             "SCÉNARIOS DE FINANCEMENT", s["section"]
@@ -1806,6 +1812,13 @@ def _render_bytes(
         story.append(Paragraph(
             "La colonne surlignée en vert est le scénario gagnant "
             "(meilleure équité au refinancement).", s["small_muted"]))
+        _un = results.get("unites")
+        if _un:
+            story.append(Paragraph(
+                f"Optimisation par unité : {_un.get('optimisees')} unité(s) "
+                f"optimisée(s) sur {_un.get('total')} — les unités non "
+                "optimisées gardent leur loyer actuel au refinancement.",
+                s["small_muted"]))
     else:
         story.append(Paragraph(
             "Aucun scénario calculé — lance l'analyse financière "

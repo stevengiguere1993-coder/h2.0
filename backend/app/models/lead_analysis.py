@@ -323,6 +323,13 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
     projection_horizon_annees: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True
     )
+    # Phase 3 (sept. 2026) — optimisation PAR UNITÉ. Liste JSON
+    # ``[{typo, loyer_actuel, loyer_cible, optimiser}, …]`` dérivée de
+    # la typologie (bouton « Générer les unités » de la fiche). NULL =
+    # comportement historique (tout au loyer cible pondéré H13).
+    unites_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
 
     # ── TRI investisseur (juin 2026) ──────────────────────────────
     #

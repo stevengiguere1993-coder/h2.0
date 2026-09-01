@@ -934,6 +934,17 @@ class FinanceInputs:
     croissance_loyers: float = 0.03
     croissance_depenses: float = 0.03
 
+    # Sept. 2026 — Phase 3 : optimisation PAR UNITÉ. Liste de dicts
+    # ``{typo, loyer_actuel, loyer_cible, optimiser}``. Vide →
+    # comportement historique (toutes les unités au loyer cible
+    # pondéré H13). Règles Phil 2026-08-31 :
+    #  - mode prêteur B : les unités NON optimisées gardent leur loyer
+    #    ACTUEL au refi (le projet est trop court pour l'indexer) ;
+    #  - mode achat direct : dès l'an 1, les unités optimisées passent
+    #    au loyer cible puis tout croît ; les autres croissent depuis
+    #    leur loyer actuel.
+    unites: List[dict] = field(default_factory=list)
+
     # Taux d'intérêt du prêteur B pendant la phase chantier
     # (8 % typique 2024-2025). Utilisé pour calculer L17 — intérêts
     # de portage pendant projet.
@@ -1108,6 +1119,21 @@ class FinanceResults:
                 ) * 100.0,
             },
             "achat_direct": self.achat_direct,
+            # Phase 3 — résumé de l'optimisation par unité (None si la
+            # fiche n'a pas détaillé ses unités).
+            "unites": (
+                {
+                    "total": len(self.inputs.unites),
+                    "optimisees": sum(
+                        1
+                        for u in self.inputs.unites
+                        if isinstance(u, dict)
+                        and u.get("optimiser", True)
+                    ),
+                }
+                if self.inputs.unites
+                else None
+            ),
             "typology": {
                 "h13_loyer_pondere": self.typology.h13_loyer_pondere,
                 "nb_abordables": self.typology.nb_abordables,
@@ -1235,9 +1261,40 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
     # D8 OFFICIEL : loyer moyen = H13 (auto)
     nouveau_loyer_moyen = typo.h13_loyer_pondere
 
-    # Revenus refi standards (SCHL et APH 50) : tous au nouveau loyer.
-    revenus_refi_std = nouveau_loyer_moyen * nb_log_refi * 12.0
-    loyer_mois_refi_std = nouveau_loyer_moyen
+    # Phase 3 — optimisation PAR UNITÉ : loyers mensuels effectifs au
+    # refi = cible pour les unités cochées, loyer ACTUEL gelé pour les
+    # autres (mode prêteur B : trop court pour indexer). Les unités
+    # AJOUTÉES au refi sont neuves → loyer cible pondéré H13.
+    unites_valides = [
+        u for u in (inputs.unites or []) if isinstance(u, dict)
+    ]
+    loyers_refi_unites: List[float] = []
+    if unites_valides:
+        for u in unites_valides:
+            if u.get("optimiser", True):
+                loyers_refi_unites.append(
+                    float(u.get("loyer_cible") or 0)
+                )
+            else:
+                loyers_refi_unites.append(
+                    float(u.get("loyer_actuel") or 0)
+                )
+        loyers_refi_unites.extend(
+            [nouveau_loyer_moyen] * max(0, inputs.nb_logements_ajoutes)
+        )
+
+    # Revenus refi standards (SCHL et APH 50) : tous au nouveau loyer —
+    # ou, si les unités sont détaillées, la somme unité par unité.
+    if loyers_refi_unites:
+        revenus_refi_std = sum(loyers_refi_unites) * 12.0
+        loyer_mois_refi_std = (
+            revenus_refi_std / 12.0 / nb_log_refi
+            if nb_log_refi > 0
+            else 0.0
+        )
+    else:
+        revenus_refi_std = nouveau_loyer_moyen * nb_log_refi * 12.0
+        loyer_mois_refi_std = nouveau_loyer_moyen
 
     # Dépenses SCHL standard : pas de thermopompes (is_aph=False).
     depenses_schl = compute_depenses_for_scenario(
@@ -1298,10 +1355,23 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
 
     # ── Étape 3 : Scénario APH 100 pts (avec abordabilité) ───────
     if use_aph_select and typo.nb_abordables > 0:
-        revenus_aph_100 = (
-            typo.nb_abordables * inputs.nouveau_loyer_abordable
-            + typo.nb_pdm * typo.nouveau_loyer_moyen_pdm
-        ) * 12.0
+        if loyers_refi_unites:
+            # Phase 3 : les nb_abordables unités les MOINS chères
+            # passent au loyer abordable ; les autres gardent leur
+            # loyer effectif (cible si optimisée, actuel sinon) —
+            # même philosophie que la sélection PDM « les plus chères
+            # d'abord » du calculateur officiel.
+            tries = sorted(loyers_refi_unites)
+            n_ab = min(typo.nb_abordables, len(tries))
+            revenus_aph_100 = (
+                n_ab * inputs.nouveau_loyer_abordable
+                + sum(tries[n_ab:])
+            ) * 12.0
+        else:
+            revenus_aph_100 = (
+                typo.nb_abordables * inputs.nouveau_loyer_abordable
+                + typo.nb_pdm * typo.nouveau_loyer_moyen_pdm
+            ) * 12.0
         loyer_mois_aph_100 = (
             revenus_aph_100 / 12.0 / nb_log_refi if nb_log_refi > 0 else 0.0
         )
@@ -1592,9 +1662,30 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         cl = float(inputs.croissance_loyers or 0.0)
         cd = float(inputs.croissance_depenses or 0.0)
         dep0 = depenses_achat.total
+
+        def _rev_direct(a: int) -> float:
+            """Revenus de l'an ``a`` en détention directe. Phase 3 :
+            dès l'an 1, les unités optimisées passent à leur loyer
+            CIBLE (puis croissent) ; les autres croissent depuis leur
+            loyer actuel. Sans détail d'unités : croissance simple."""
+            if a <= 0 or not unites_valides:
+                return inputs.revenus_annuels * (1 + cl) ** a
+            total_mois = 0.0
+            for u in unites_valides:
+                if u.get("optimiser", True):
+                    total_mois += (
+                        float(u.get("loyer_cible") or 0)
+                        * (1 + cl) ** (a - 1)
+                    )
+                else:
+                    total_mois += (
+                        float(u.get("loyer_actuel") or 0) * (1 + cl) ** a
+                    )
+            return total_mois * 12.0
+
         projection = []
         for a in range(0, max(h_annees, 10) + 1):
-            rev_a = inputs.revenus_annuels * (1 + cl) ** a
+            rev_a = _rev_direct(a)
             dep_a = dep0 * (1 + cd) ** a
             rno_a = rev_a - dep_a
             valeur_a = rno_a / inputs.tga if inputs.tga > 0 else 0.0
@@ -1617,7 +1708,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
 
         # Refinancement à l'an H, aux 3 programmes SCHL (mêmes règles
         # que les colonnes classiques : min(RCD, TGA×LTV)).
-        rev_h = inputs.revenus_annuels * (1 + cl) ** h_annees
+        rev_h = _rev_direct(h_annees)
         dep_h = dep0 * (1 + cd) ** h_annees
         rno_h = rev_h - dep_h
         solde_h = (

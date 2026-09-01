@@ -155,6 +155,64 @@ def test_achat_direct_conventionnel():
     )
 
 
+def _unites(n_opt: int, n_non: int) -> list[dict]:
+    actuel = 100_000 / 12 / 10  # loyer actuel uniforme du jeu de test
+    return (
+        [
+            {"typo": "3.5", "loyer_actuel": actuel,
+             "loyer_cible": 1_200.0, "optimiser": True}
+        ] * n_opt
+        + [
+            {"typo": "3.5", "loyer_actuel": actuel,
+             "loyer_cible": 1_200.0, "optimiser": False}
+        ] * n_non
+    )
+
+
+def test_unites_mode_preteur_b():
+    """Phase 3 — mode prêteur B : les unités NON optimisées gardent
+    leur loyer ACTUEL au refi (aucune croissance, projet trop court)."""
+    r = compute_all(_inputs(unites=_unites(6, 4)), use_aph_select=False)
+    actuel = 100_000 / 12 / 10
+    attendu = (6 * 1_200.0 + 4 * actuel) * 12.0
+    assert abs(r.refi_schl.revenus_totaux - attendu) < 0.01
+    assert abs(r.refi_aph_50.revenus_totaux - attendu) < 0.01
+
+    d = r.to_dict()
+    assert d["unites"] == {"total": 10, "optimisees": 6}
+
+    # Sans unités : tout au loyer cible pondéré (comportement
+    # historique) — les revenus refi sont plus hauts.
+    r0 = compute_all(_inputs(), use_aph_select=False)
+    assert r0.refi_schl.revenus_totaux == 1_200.0 * 10 * 12
+    assert r0.to_dict()["unites"] is None
+
+
+def test_unites_mode_direct():
+    """Phase 3 — achat direct : dès l'an 1 les unités optimisées
+    passent à leur loyer cible (puis croissent) ; les autres croissent
+    depuis leur loyer actuel. L'an 0 reste les revenus réels."""
+    r = compute_all(
+        _inputs(
+            strategie="conventionnel",
+            unites=_unites(6, 4),
+            croissance_loyers=0.03,
+            croissance_depenses=0.03,
+        ),
+        use_aph_select=False,
+    )
+    d = r.to_dict()["achat_direct"]
+    actuel = 100_000 / 12 / 10
+    p0 = d["projection"][0]
+    p1 = d["projection"][1]
+    p2 = d["projection"][2]
+    assert p0["revenus"] == 100_000.0
+    attendu_1 = (6 * 1_200.0 + 4 * actuel * 1.03) * 12.0
+    assert abs(p1["revenus"] - attendu_1) < 0.01
+    attendu_2 = (6 * 1_200.0 * 1.03 + 4 * actuel * 1.03**2) * 12.0
+    assert abs(p2["revenus"] - attendu_2) < 0.01
+
+
 def test_achat_direct_aph_garde_rapport_efficacite():
     r = compute_all(_inputs(strategie="aph_50"), use_aph_select=False)
     d = r.to_dict()["achat_direct"]

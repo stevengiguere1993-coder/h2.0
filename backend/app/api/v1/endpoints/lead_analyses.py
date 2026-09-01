@@ -161,6 +161,8 @@ class LeadAnalysisRead(BaseModel):
     # le TRI (source unique) et la projection des achats directs.
     tri_croissance_loyers: Optional[float] = None
     tri_croissance_depenses: Optional[float] = None
+    # Phase 3 — optimisation par unité (liste JSON).
+    unites_json: Optional[str] = None
     notes: Optional[str] = None
     converted_to_lead_id: Optional[int] = None
     converted_to_deal_id: Optional[int] = None
@@ -283,6 +285,9 @@ class LeadAnalysisUpdate(BaseModel):
     tri_croissance_depenses: Optional[float] = Field(
         default=None, ge=0, le=0.3
     )
+    # Phase 3 — optimisation par unité : liste JSON
+    # ``[{typo, loyer_actuel, loyer_cible, optimiser}, …]``.
+    unites_json: Optional[str] = Field(default=None, max_length=40_000)
 
     notes: Optional[str] = None
 
@@ -375,6 +380,34 @@ def _map_extracted_to_lead(data: dict) -> dict:
 # Défauts appliqués à la création d'une fiche `LeadAnalysis`
 # pour pré-remplir les champs manuels d'analyse financière.
 # Modifiables ensuite par l'utilisateur dans la fiche.
+def _parse_unites(raw: Optional[str]) -> list[dict]:
+    """Phase 3 — liste d'unités ``{typo, loyer_actuel, loyer_cible,
+    optimiser}``. Défensif : tout ce qui n'est pas une liste de dicts
+    devient une liste vide (comportement historique)."""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[dict] = []
+    for u in data[:200]:
+        if not isinstance(u, dict):
+            continue
+        try:
+            out.append({
+                "typo": str(u.get("typo") or ""),
+                "loyer_actuel": float(u.get("loyer_actuel") or 0),
+                "loyer_cible": float(u.get("loyer_cible") or 0),
+                "optimiser": bool(u.get("optimiser", True)),
+            })
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _parse_financables(raw: Optional[str]) -> list[str]:
     """Décode la liste JSON des clés finançables. Si invalide ou
     None, retourne les défauts (rapport efficacité, dev, travaux)."""
@@ -1779,7 +1812,7 @@ RECALC_INPUT_FIELDS = {
     "frais_demarrage_overrides_json", "frais_demarrage_financables_json",
     "strategie_acquisition", "balance_vente_montant",
     "balance_vente_taux_pct", "projection_horizon_annees",
-    "tri_croissance_loyers", "tri_croissance_depenses",
+    "tri_croissance_loyers", "tri_croissance_depenses", "unites_json",
 }
 
 
@@ -1925,6 +1958,9 @@ async def _compute_and_store(rec, db) -> dict:
         projection_horizon_annees=int(rec.projection_horizon_annees or 5),
         croissance_loyers=float(rec.tri_croissance_loyers or 0.03),
         croissance_depenses=float(rec.tri_croissance_depenses or 0.03),
+        # Phase 3 — optimisation par unité (liste vide = comportement
+        # historique).
+        unites=_parse_unites(rec.unites_json),
         frais_demarrage_overrides=frais_overrides,
         frais_demarrage_financables=_parse_financables(
             rec.frais_demarrage_financables_json
