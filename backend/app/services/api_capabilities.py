@@ -350,6 +350,30 @@ def _build_capabilities() -> list[dict]:
             "coming_soon": True,
         }
     )
+    # Capacité TRANSVERSE (demande Phil 2026-09-02 : « tout ce qui est
+    # actionnable doit pouvoir être fait via la clé ») : l'outil MCP
+    # ``kratos_action`` exécute n'importe quel appel de l'API REST au
+    # nom du propriétaire de la clé — mêmes permissions par utilisateur,
+    # mêmes validations, journal automatique. À activer sur la clé.
+    caps.append(
+        {
+            "id": "api:actions:executer",
+            "pole": "api",
+            "label_fr": "Exécuter toute action (API complète)",
+            "description": (
+                "Permet au Claude connecté d'exécuter N'IMPORTE QUELLE "
+                "action de la plateforme au nom du propriétaire de la "
+                "clé (créer une hypothèque, marquer un loyer payé, "
+                "modifier une tâche…). Les permissions de l'utilisateur "
+                "et les validations habituelles s'appliquent ; tout est "
+                "journalisé. Les opérations d'authentification et de "
+                "gestion des clés restent bloquées."
+            ),
+            "category": "ecriture",
+            "risk": "moyen",
+            "coming_soon": False,
+        }
+    )
     return caps
 
 
@@ -440,14 +464,24 @@ def catalog() -> dict:
     by_pole: dict[str, list[dict]] = {slug: [] for slug in POLE_SLUGS}
     for c in CAPABILITIES:
         by_pole.setdefault(c["pole"], []).append(c)
-    return {
-        "poles": [
+    groupes = [
+        {
+            "slug": p["slug"],
+            "label_fr": p["label_fr"],
+            "capabilities": by_pole.get(p["slug"], []),
+        }
+        for p in POLES
+    ]
+    # Groupe transverse « API complète » (capacité kratos_action).
+    if by_pole.get("api"):
+        groupes.append(
             {
-                "slug": p["slug"],
-                "label_fr": p["label_fr"],
-                "capabilities": by_pole.get(p["slug"], []),
+                "slug": "api",
+                "label_fr": "API complète (actions)",
+                "capabilities": by_pole["api"],
             }
-            for p in POLES
-        ],
+        )
+    return {
+        "poles": groupes,
         "legacy_global_read": LEGACY_GLOBAL_READ,
     }

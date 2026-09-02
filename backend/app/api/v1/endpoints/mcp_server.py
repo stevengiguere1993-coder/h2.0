@@ -87,6 +87,20 @@ from app.services.api_capabilities import (
 
 logger = logging.getLogger(__name__)
 
+#: Préfixes INTERDITS à l'outil d'action générique (auth, gestion des
+#: clés = auto-escalade, cron machine, MCP lui-même, liens publics).
+_ACTION_CHEMINS_INTERDITS = (
+    "/api/v1/auth",
+    "/api/v1/api-keys",
+    "/api/v1/mon-ia",
+    "/api/v1/cron",
+    "/api/v1/mcp",
+    "/api/v1/public",
+    "/api/v1/users",
+)
+
+_ACTION_SCOPE = "api:actions:executer"
+
 
 class _ScopeCtx:
     """Adaptateur minimal exposant ``has_scope`` à partir d'une liste de
@@ -130,6 +144,42 @@ _DATE_PROP = {
 }
 
 # Outils de lecture (toujours présents tant qu'au moins un pôle est lisible).
+_ACTION_TOOL: dict[str, Any] = {
+    "name": "kratos_action",
+    "description": (
+        "Exécute N'IMPORTE QUELLE action de la plateforme Kratos au nom "
+        "du propriétaire de la clé : créer une hypothèque, marquer un "
+        "loyer payé, modifier une tâche, envoyer une facture… "
+        "L'appel passe par l'API REST officielle — mêmes permissions "
+        "utilisateur, mêmes validations, tout est journalisé. Trouve "
+        "d'abord la bonne opération avec kratos_api_catalogue, puis "
+        "appelle avec `methode`, `chemin` (/api/v1/…) et `corps` (JSON). "
+        "Vérifie le `statut` retourné (2xx = succès ; 422 = corps "
+        "invalide, relis le catalogue/l'erreur et corrige). Les "
+        "opérations d'authentification et de gestion des clés sont "
+        "bloquées."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "methode": {
+                "type": "string",
+                "description": "GET | POST | PUT | PATCH | DELETE",
+            },
+            "chemin": {
+                "type": "string",
+                "description": "Chemin complet, ex. /api/v1/immobilier/baux/12/frais",
+            },
+            "corps": {
+                "type": "object",
+                "description": "Corps JSON de la requête (si applicable)",
+            },
+        },
+        "required": ["methode", "chemin"],
+        "additionalProperties": False,
+    },
+}
+
 _READ_TOOLS: list[dict[str, Any]] = [
     {
         "name": "kratos_my_activity",
@@ -143,6 +193,32 @@ _READ_TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {"date": _DATE_PROP},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "kratos_api_catalogue",
+        "description": (
+            "Le CATALOGUE de toutes les opérations de l'API Kratos "
+            "(généré automatiquement — couvre aussi les fonctionnalités "
+            "futures) : méthode, chemin, résumé. Utilise-le pour "
+            "DÉCOUVRIR quoi appeler, notamment avant kratos_action "
+            "(écriture). Filtre avec `recherche` (ex. « hypotheque », "
+            "« paiement », « tache ») ; paginé via `offset`."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "recherche": {
+                    "type": "string",
+                    "description": "Filtre plein-texte sur chemin/résumé",
+                },
+                "methode": {
+                    "type": "string",
+                    "description": "GET | POST | PUT | PATCH | DELETE",
+                },
+                "offset": {"type": "integer", "minimum": 0},
+            },
             "additionalProperties": False,
         },
     },
@@ -778,6 +854,10 @@ def _tools_for_scopes(scopes: Optional[list[str]]) -> list[dict[str, Any]]:
     lecture apparaissent si au moins un pôle est lisible ; les outils
     d'écriture apparaissent si au moins un pôle/type autorise l'action."""
     tools: list[dict[str, Any]] = []
+    # Action générique : dès que la clé porte la capacité « API
+    # complète » — indépendamment des pôles lisibles.
+    if key_has_scope(scopes, _ACTION_SCOPE):
+        tools.append(_ACTION_TOOL)
     if readable_poles(scopes):
         tools.extend(_READ_TOOLS)
         tools.extend(_get_tools_for_scopes(scopes))
@@ -991,6 +1071,109 @@ def _coerce_id(arguments: dict[str, Any]) -> int:
         raise ValueError("`id` doit être un entier.")
 
 
+def _api_catalogue(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Catalogue OpenAPI auto-généré : toute nouvelle route de Kratos y
+    apparaît sans intervention (garantie « couvert par la clé sans le
+    demander », Phil 2026-09-02)."""
+    from app.main import app as _app
+
+    recherche = str(arguments.get("recherche") or "").strip().lower()
+    methode_f = str(arguments.get("methode") or "").strip().upper()
+    offset = max(0, int(arguments.get("offset") or 0))
+
+    schema = _app.openapi()
+    entrees: list[dict[str, str]] = []
+    for chemin, ops in (schema.get("paths") or {}).items():
+        chemin_complet = (
+            chemin if chemin.startswith("/api/") else f"/api/v1{chemin}"
+        )
+        if any(
+            chemin_complet.startswith(p) for p in _ACTION_CHEMINS_INTERDITS
+        ):
+            continue
+        for methode, op in ops.items():
+            m = methode.upper()
+            if m not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                continue
+            if methode_f and m != methode_f:
+                continue
+            resume = str(op.get("summary") or op.get("operationId") or "")
+            if recherche and recherche not in (
+                chemin_complet.lower() + " " + resume.lower()
+            ):
+                continue
+            entrees.append(
+                {"methode": m, "chemin": chemin_complet, "resume": resume}
+            )
+    entrees.sort(key=lambda e: (e["chemin"], e["methode"]))
+    page = entrees[offset : offset + 100]
+    return {
+        "total": len(entrees),
+        "restant": max(0, len(entrees) - offset - len(page)),
+        "operations": page,
+    }
+
+
+async def _executer_action(user: User, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Proxy interne : exécute l'appel REST au nom du propriétaire de
+    la clé (JWT court), en passant par TOUTE la pile de l'app —
+    permissions par utilisateur, validations, journal automatique."""
+    import httpx
+
+    from app.core.security import create_access_token
+    from app.main import app as _app
+
+    methode = str(arguments.get("methode") or "").strip().upper()
+    chemin = str(arguments.get("chemin") or "").strip()
+    corps = arguments.get("corps")
+
+    if methode not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+        raise ValueError("`methode` doit être GET/POST/PUT/PATCH/DELETE.")
+    if not chemin.startswith("/api/v1/") or ".." in chemin:
+        raise ValueError("`chemin` doit commencer par /api/v1/…")
+    if any(chemin.startswith(p) for p in _ACTION_CHEMINS_INTERDITS):
+        raise ValueError(
+            "Ce chemin est bloqué pour l'outil d'action (auth / clés / "
+            "utilisateurs)."
+        )
+    if corps is not None and not isinstance(corps, dict):
+        raise ValueError("`corps` doit être un objet JSON.")
+
+    jeton = create_access_token(
+        str(user.id), expires_delta=timedelta(minutes=5)
+    )
+    transport = httpx.ASGITransport(app=_app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://kratos.interne",
+        timeout=60.0,
+    ) as client:
+        resp = await client.request(
+            methode,
+            chemin,
+            json=corps if corps is not None else None,
+            headers={"Authorization": f"Bearer {jeton}"},
+        )
+
+    try:
+        contenu: Any = resp.json()
+    except ValueError:
+        contenu = resp.text[:2000]
+    brut = contenu
+    # Tronque les grosses réponses (le détail se relit via les outils
+    # de lecture).
+    import json as _json
+
+    serialise = _json.dumps(brut, ensure_ascii=False, default=str)
+    if len(serialise) > 6000:
+        brut = {"_tronque": True, "extrait": serialise[:6000] + "…"}
+    return {
+        "statut": resp.status_code,
+        "ok": 200 <= resp.status_code < 300,
+        "reponse": brut,
+    }
+
+
 async def _sommaire_du_jour(
     db, scopes: Optional[list[str]], arguments: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1118,6 +1301,18 @@ async def _call_tool(
 
     if name == "kratos_sommaire_du_jour":
         return await _sommaire_du_jour(db, scopes, arguments)
+
+    if name == "kratos_api_catalogue":
+        return _api_catalogue(arguments)
+
+    if name == "kratos_action":
+        if not key_has_scope(scopes, _ACTION_SCOPE):
+            raise ValueError(
+                "Cette clé n'a pas la capacité « Exécuter toute action "
+                "(API complète) » — active-la dans Paramètres → Clés "
+                "API."
+            )
+        return await _executer_action(user, arguments)
 
     if name == "kratos_mon_brief":
         # « Chacun son IA » via l'ABONNEMENT (retour Phil 2026-09-02) :
