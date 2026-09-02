@@ -73,3 +73,21 @@ indique généralement dans quel volet on travaille.
 Ordre : `new` → `contacted` → `rdv_prevu` → `qualified` → `quoted` → `won` / `lost` / `spam`.
 La colonne `status` en DB est `String(32)` (varchar libre), pas un enum natif PostgreSQL —
 ajouter une valeur ne nécessite pas de migration Alembic.
+
+## Règle « IA au courant de tout » (permanente, 2026-09-02)
+
+Toute NOUVELLE fonctionnalité doit être disponible via la clé API /
+le connecteur MCP SANS que Phil ait à le demander :
+
+1. **Écritures** : couvertes automatiquement par le middleware
+   d'audit (`app/core/audit_middleware.py`) → rien à faire, mais ne
+   JAMAIS ajouter un chemin aux exclusions sans raison de sécurité.
+2. **Lecture** : brancher toute nouvelle entité aux registres MCP
+   (`_LIST_ENTITIES` / `_DETAIL_ENTITIES` d'`activity.py`) ou à un
+   outil dédié. Les routes apparaissent d'elles-mêmes dans
+   `kratos_api_catalogue` (OpenAPI) et sont actionnables via
+   `kratos_action`.
+3. **Cliquet CI** : toute nouvelle table doit être ajoutée à
+   `app/core/api_ia_couverture.py` — le test
+   `test_smoke_couverture_api_ia` ÉCHOUE sinon. C'est voulu : l'acte
+   d'ajout est la preuve que l'exposition a été considérée.

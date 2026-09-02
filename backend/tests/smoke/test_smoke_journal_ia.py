@@ -98,6 +98,111 @@ def test_middleware_masque_les_secrets_et_ignore_les_get(
     client.delete("/api/v1/mon-ia", headers=auth_headers)
 
 
+def test_mcp_catalogue_et_action(client, seeded_users, auth_headers, run):
+    """« Tout ce qui est actionnable doit pouvoir être fait via la
+    clé » (Phil 2026-09-02) : le catalogue OpenAPI liste chaque
+    opération (futures incluses, auto-généré), et kratos_action exécute
+    au nom du propriétaire — capacité api:actions:executer requise,
+    chemins d'auth/clés bloqués."""
+    from .test_smoke_mcp import _rpc
+
+    # Catalogue : dispo pour toute clé, contient la création de
+    # soumission et se filtre.
+    resp = _rpc(
+        client,
+        {
+            "jsonrpc": "2.0",
+            "id": 51,
+            "method": "tools/call",
+            "params": {
+                "name": "kratos_api_catalogue",
+                "arguments": {"recherche": "soumissions", "methode": "POST"},
+            },
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    cat = resp.json()["result"]["structuredContent"]
+    chemins = {o["chemin"] for o in cat["operations"]}
+    assert "/api/v1/soumissions" in chemins, sorted(chemins)[:10]
+
+    # La clé de test n'a pas la capacité → l'outil n'est même pas
+    # exposé (erreur JSON-RPC « outil indisponible »).
+    resp = _rpc(
+        client,
+        {
+            "jsonrpc": "2.0",
+            "id": 52,
+            "method": "tools/call",
+            "params": {
+                "name": "kratos_action",
+                "arguments": {
+                    "methode": "POST",
+                    "chemin": "/api/v1/soumissions",
+                    "corps": {"title": "Refusée"},
+                },
+            },
+        },
+    )
+    assert "error" in resp.json(), resp.json()
+
+    # Clé AVEC la capacité : création via l'admin, puis action réelle.
+    r = client.post(
+        "/api/v1/api-keys",
+        headers=auth_headers,
+        json={"name": "cle action", "scopes": ["api:actions:executer"]},
+    )
+    assert r.status_code in (200, 201), r.text
+    cle = r.json().get("api_key")
+    assert cle, r.json()
+
+    resp = _rpc(
+        client,
+        {
+            "jsonrpc": "2.0",
+            "id": 53,
+            "method": "tools/call",
+            "params": {
+                "name": "kratos_action",
+                "arguments": {
+                    "methode": "POST",
+                    "chemin": "/api/v1/soumissions",
+                    "corps": {"title": "Créée par kratos_action"},
+                },
+            },
+        },
+        key=cle,
+    )
+    assert resp.status_code == 200, resp.text
+    assert "result" in resp.json(), resp.json()
+    res = resp.json()["result"]
+    assert not res.get("isError"), res
+    s = res["structuredContent"]
+    assert s["ok"] is True and s["statut"] in (200, 201), s
+    assert "Créée par kratos_action" in json.dumps(
+        s["reponse"], ensure_ascii=False
+    )
+
+    # Chemin bloqué (gestion des clés) → refus net.
+    resp = _rpc(
+        client,
+        {
+            "jsonrpc": "2.0",
+            "id": 54,
+            "method": "tools/call",
+            "params": {
+                "name": "kratos_action",
+                "arguments": {
+                    "methode": "POST",
+                    "chemin": "/api/v1/api-keys",
+                    "corps": {"name": "escalade"},
+                },
+            },
+        },
+        key=cle,
+    )
+    assert resp.json()["result"].get("isError"), resp.json()
+
+
 def test_mcp_sommaire_du_jour(
     client, seeded_users, auth_headers, run, monkeypatch
 ):
