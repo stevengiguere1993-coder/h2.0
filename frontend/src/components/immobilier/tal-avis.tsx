@@ -1422,6 +1422,109 @@ export function DocumentsSection({
 }
 
 /**
+ * Documents de l'IMMEUBLE : règlement d'immeuble déjà signé,
+ * certificats… importés directement sur la fiche de l'immeuble
+ * (retour 2026-09-12, point 14 — « il faut un endroit pour permettre
+ * l'import du bail et du règlement déjà signés » ; le bail signé
+ * s'importe sur sa ligne de bail, le règlement ici).
+ */
+export function ImmeubleDocumentsSection({
+  immeubleId
+}: {
+  immeubleId: number;
+}) {
+  const [docs, setDocs] = useState<BailDocument[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [docType, setDocType] = useState("reglement_immeuble");
+
+  const load = useCallback(async () => {
+    try {
+      const r = await authedFetch(
+        `/api/v1/immobilier/immeubles/${immeubleId}/documents?categorie=dossier`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setDocs((await r.json()) as BailDocument[]);
+    } catch (e) {
+      setErr(`Documents : ${(e as Error).message}`);
+    }
+  }, [immeubleId]);
+
+  const doImport = useCallback(
+    async (file: File) => {
+      setImporting(true);
+      setErr(null);
+      try {
+        await importDocument({
+          file,
+          type: docType,
+          immeubleId
+        });
+        await load();
+      } catch (e) {
+        setErr(`Import : ${(e as Error).message}`);
+      } finally {
+        setImporting(false);
+      }
+    },
+    [immeubleId, docType, load]
+  );
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return (
+    <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Documents de l&apos;immeuble
+        </h2>
+        <span className="text-[11px] text-white/40">
+          {docs ? `${docs.length} document${docs.length > 1 ? "s" : ""}` : ""}
+        </span>
+        <span className="ml-auto flex flex-wrap items-center gap-2">
+          <select
+            value={docType}
+            onChange={(e) => setDocType(e.target.value)}
+            className="input w-auto text-xs"
+            title="Type du document importé"
+          >
+            <option value="reglement_immeuble">
+              Règlement d&apos;immeuble
+            </option>
+            <option value="bail">Bail signé</option>
+            <option value="autre">Autre</option>
+          </select>
+          <ImportDocButton
+            label="Importer"
+            busy={importing}
+            onPick={(f) => void doImport(f)}
+            title="Dépose un PDF déjà signé (règlement d'immeuble, bail…) au dossier de l'immeuble"
+          />
+        </span>
+      </div>
+      {err ? (
+        <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {err}
+        </p>
+      ) : null}
+      {docs === null ? (
+        <p className="flex items-center gap-2 text-xs text-white/50">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+        </p>
+      ) : (
+        <DocsList
+          docs={docs}
+          onChanged={() => void load()}
+          emptyText="Aucun document — importe le règlement d'immeuble signé ou toute pièce de l'immeuble."
+        />
+      )}
+    </section>
+  );
+}
+
+/**
  * « LE bail » d'une ligne : bouton qui OUVRE le bail courant (importé,
  * sinon signé en ligne) + bouton Importer/Remplacer. Remplacer archive
  * l'ancien dans les Documents (retour Phil 2026-07-27).

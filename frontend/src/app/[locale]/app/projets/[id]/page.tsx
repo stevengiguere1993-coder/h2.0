@@ -3392,18 +3392,53 @@ function PlanificationTab({
 
       {/* Floating bucket for tasks not tied to a phase. */}
       <section className="rounded-xl border border-brand-800 bg-brand-900/40 p-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-white/60">
             Tâches sans phase ({unplaced.length})
           </h3>
-          <button
-            type="button"
-            onClick={() => addTask(null)}
-            disabled={busyTask === "new"}
-            className="btn-secondary text-xs disabled:opacity-60"
-          >
-            <Plus className="mr-1.5 h-3.5 w-3.5" /> Ajouter
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={async () => {
+                // Chaque item de la soumission signée devient une
+                // tâche cochable (le moment du « terminé » est
+                // enregistré). Idempotent : pas de doublons.
+                setBusyTask("new");
+                try {
+                  const r = await authedFetch(
+                    `/api/v1/projects/${projectId}/tasks/import-soumission`,
+                    { method: "POST" }
+                  );
+                  if (!r.ok) {
+                    const b = (await r.json().catch(() => null)) as {
+                      detail?: string;
+                    } | null;
+                    throw new Error(b?.detail || `http_${r.status}`);
+                  }
+                  await load();
+                } catch (e) {
+                  setErr(
+                    `Import du devis échoué : ${(e as Error).message}`
+                  );
+                } finally {
+                  setBusyTask(null);
+                }
+              }}
+              disabled={busyTask === "new"}
+              className="btn-secondary text-xs disabled:opacity-60"
+              title="Crée une tâche par item de la soumission signée du projet"
+            >
+              Importer le devis
+            </button>
+            <button
+              type="button"
+              onClick={() => addTask(null)}
+              disabled={busyTask === "new"}
+              className="btn-secondary text-xs disabled:opacity-60"
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" /> Ajouter
+            </button>
+          </div>
         </div>
         {unplaced.length > 0 ? (
           <ul className="mt-3 space-y-2">

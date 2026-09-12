@@ -153,6 +153,42 @@ async def provision_project_for_soumission(
     await db.flush()
     await db.refresh(project)
 
+    # Section Tâches = le DEVIS SIGNÉ : une tâche cochable par item de
+    # la soumission — cocher enregistre le moment (done_at) où le
+    # travail est confirmé terminé (retour 2026-09-12, point 1).
+    try:
+        from app.models.project_task import ProjectTask as _PTask
+
+        _sm_items = (
+            await db.execute(
+                select(SoumissionItem)
+                .where(SoumissionItem.soumission_id == sm.id)
+                .order_by(
+                    SoumissionItem.position.asc(), SoumissionItem.id.asc()
+                )
+            )
+        ).scalars().all()
+        _seen: set[str] = set()
+        _pos = 0
+        for _it in _sm_items:
+            _title = " ".join((_it.description or "").split())[:255].strip()
+            if not _title or _title.lower() in _seen:
+                continue
+            db.add(
+                _PTask(
+                    project_id=project.id, title=_title, position=_pos
+                )
+            )
+            _seen.add(_title.lower())
+            _pos += 1
+        await db.flush()
+    except Exception:  # noqa: BLE001 — le projet prime sur ses tâches
+        import logging as _logging
+
+        _logging.getLogger(__name__).exception(
+            "Seed des tâches depuis la soumission %s échoué", sm.id
+        )
+
     # Projet RÉELLEMENT créé (pas le chemin idempotent) → alerte commis
     # comptable pour convertir le sous-client QBO en Projet. Le backfill
     # de démarrage passe notify_qbo=False : pas d'alerte rétroactive.
