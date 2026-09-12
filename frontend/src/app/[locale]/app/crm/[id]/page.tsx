@@ -70,7 +70,8 @@ type Prospect = {
 
 const STATUS_LABELS: Record<string, string> = {
   new: "Nouveau",
-  contacted: "À rappeler",
+  contacted: "Contacté",
+  a_rappeler: "À rappeler",
   rdv_prevu: "Rendez-vous prévu",
   qualified: "Soumission en préparation",
   quoted: "Soumission envoyée",
@@ -557,7 +558,8 @@ export default function ProspectDetailPage() {
                     className="input w-56"
                   >
                     <option value="new">Nouveau</option>
-                    <option value="contacted">À rappeler</option>
+                    <option value="contacted">Contacté</option>
+                    <option value="a_rappeler">À rappeler</option>
                     <option value="rdv_prevu">Rendez-vous prévu</option>
                     <option value="qualified">Soumission en préparation</option>
                     <option value="quoted">Soumission envoyée</option>
