@@ -32,7 +32,7 @@ from app.models.project import Project, ProjectStatus
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
 from app.schemas.project import ProjectRead
-from app.services.numbering import next_facture_number
+from app.services.numbering import provisional_facture_reference
 
 
 router = APIRouter(prefix="/soumissions", tags=["soumission-to-project"])
@@ -231,7 +231,11 @@ async def provision_project_for_soumission(
 
     if grand_total > 0:
         facture = Facture(
-            reference=await next_facture_number(db),
+            # Référence PROVISOIRE : le vrai numéro est attribué à
+            # l'ENVOI de la facture de dépôt — une soumission signée ne
+            # consomme plus un numéro qui resterait en trou dans QB si
+            # l'envoi tarde ou n'a jamais lieu (audit).
+            reference=provisional_facture_reference(),
             client_id=project.client_id,
             project_id=project.id,
             status=FactureStatus.DRAFT.value,

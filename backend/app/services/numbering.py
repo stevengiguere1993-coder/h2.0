@@ -80,6 +80,38 @@ async def next_facture_number(db: AsyncSession) -> str:
     return str(n)
 
 
+#: Préfixe des références PROVISOIRES de facture. Un brouillon ne
+#: consomme AUCUN numéro de la séquence : le vrai numéro n'est attribué
+#: qu'à l'ENVOI (ou à la première sortie de l'état brouillon). Sans ça,
+#: une facture de dépôt créée automatiquement puis envoyée des semaines
+#: plus tard (ou jamais) créait des trous dans la numérotation
+#: QuickBooks — mauvais en cas d'audit (retour 2026-09-12, point 9).
+PROVISIONAL_FACTURE_PREFIX = "BR-"
+
+
+def provisional_facture_reference() -> str:
+    """Référence provisoire unique pour un brouillon (ex. « BR-a1b2c3 »)."""
+    import secrets as _secrets
+
+    return f"{PROVISIONAL_FACTURE_PREFIX}{_secrets.token_hex(3)}"
+
+
+def is_provisional_facture_reference(ref: Optional[str]) -> bool:
+    return (ref or "").startswith(PROVISIONAL_FACTURE_PREFIX)
+
+
+async def ensure_facture_number(db: AsyncSession, fa) -> bool:
+    """Attribue le VRAI numéro séquentiel à une facture qui n'en a pas
+    encore (référence vide ou provisoire « BR-… »). Renvoie True si un
+    numéro a été attribué. Flush mais ne committe pas."""
+    ref = (getattr(fa, "reference", None) or "").strip()
+    if ref and not is_provisional_facture_reference(ref):
+        return False
+    fa.reference = await next_facture_number(db)
+    await db.flush()
+    return True
+
+
 async def next_soumission_number(db: AsyncSession) -> str:
     n = await _next(db, "soumission")
     return str(n)
