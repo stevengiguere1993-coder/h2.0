@@ -657,6 +657,37 @@ export default function SignatureDocPage() {
     }
   }
 
+  // Corriger le COURRIEL d'un signataire APRÈS l'envoi (tant qu'il n'a
+  // pas signé) : le backend renvoie automatiquement l'invitation à la
+  // nouvelle adresse — plus besoin de refaire tout le processus.
+  async function editSignerEmail(s: Signer) {
+    const next = (
+      prompt(
+        `Nouveau courriel pour ${s.first_name} ${s.last_name} :`,
+        s.email
+      ) || ""
+    )
+      .trim()
+      .toLowerCase();
+    if (!next || next === s.email.toLowerCase()) return;
+    if (!next.includes("@")) {
+      alert("Courriel invalide.");
+      return;
+    }
+    const res = await authedFetch(`/api/v1/esign/signers/${s.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ email: next })
+    });
+    if (res.ok) {
+      await load();
+    } else {
+      const body = (await res.json().catch(() => null)) as {
+        detail?: string;
+      } | null;
+      alert(body?.detail || `Modification échouée (${res.status}).`);
+    }
+  }
+
   async function moveSigner(s: Signer, dir: -1 | 1) {
     if (!doc) return;
     const ordered = [...doc.signers];
@@ -1018,6 +1049,11 @@ export default function SignatureDocPage() {
                         onRemove={() => void removeSigner(s)}
                         onMoveUp={() => void moveSigner(s, -1)}
                         onMoveDown={() => void moveSigner(s, 1)}
+                        onEditEmail={
+                          !isDraft && !s.signed_at
+                            ? () => void editSignerEmail(s)
+                            : undefined
+                        }
                         fieldCount={
                           fields.filter((f) => f.signer_id === s.id).length
                         }
@@ -1427,6 +1463,7 @@ function SignerRow({
   onRemove,
   onMoveUp,
   onMoveDown,
+  onEditEmail,
   fieldCount
 }: {
   s: Signer;
@@ -1438,6 +1475,7 @@ function SignerRow({
   onRemove: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  onEditEmail?: () => void;
   fieldCount: number;
 }) {
   return (
@@ -1468,6 +1506,19 @@ function SignerRow({
           </p>
           <p className="truncate text-[11px] text-[var(--qg-text-soft)]">
             {s.email}
+            {onEditEmail ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEditEmail();
+                }}
+                title="Corriger le courriel — l'invitation sera renvoyée à la nouvelle adresse"
+                className="ml-1.5 align-middle text-[10px] font-semibold text-accent-500 underline decoration-dotted hover:text-accent-400"
+              >
+                corriger
+              </button>
+            ) : null}
           </p>
         </div>
         {s.require_sms_auth ? (

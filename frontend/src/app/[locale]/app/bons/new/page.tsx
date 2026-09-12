@@ -38,6 +38,11 @@ export default function NewBonPage() {
   const [immeubleId, setImmeubleId] = useState("");
   const [logementId, setLogementId] = useState("");
   const [clientId, setClientId] = useState("");
+  // Mode compagnie : la FICHE CLIENT de la compagnie propriétaire —
+  // chaque bon doit être relié à un client, pas seulement une adresse
+  // (retour 2026-09-12, point 15). Pré-remplie par nom quand une fiche
+  // client porte le nom de la compagnie.
+  const [compagnieClientId, setCompagnieClientId] = useState("");
   const [clientAddress, setClientAddress] = useState("");
   // Exécutant.
   const [executantType, setExecutantType] = useState("nos_hommes");
@@ -196,6 +201,13 @@ export default function NewBonPage() {
         setError("Choisis l'immeuble concerné.");
         return;
       }
+      if (!compagnieClientId) {
+        setError(
+          "Choisis le client facturé (la fiche client de la compagnie) — "
+          + "chaque bon doit être relié à un client."
+        );
+        return;
+      }
     } else if (!clientId) {
       setError("Choisis le client.");
       return;
@@ -224,6 +236,9 @@ export default function NewBonPage() {
         payload.owner_entreprise_id = Number(entrepriseId);
         payload.immeuble_id = Number(immeubleId);
         if (logementId) payload.logement_id = Number(logementId);
+        // Fiche client de la compagnie — la facture du bon partira à
+        // ce client (et le sous-client QuickBooks se crée dessous).
+        payload.client_id = Number(compagnieClientId);
         const addr = buildAddress();
         if (addr) payload.address = addr;
       } else {
@@ -399,7 +414,29 @@ export default function NewBonPage() {
                 <select
                   id="entreprise"
                   value={entrepriseId}
-                  onChange={(e) => setEntrepriseId(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setEntrepriseId(v);
+                    // Pré-remplit le client facturé quand une fiche
+                    // client porte le nom de la compagnie choisie.
+                    if (!compagnieClientId && v) {
+                      const ent = entreprises.find(
+                        (x) => String(x.id) === v
+                      );
+                      const nom = (ent?.name || "").trim().toLowerCase();
+                      const hit = nom
+                        ? clients.find((c) => {
+                            const cn = c.name.trim().toLowerCase();
+                            return (
+                              cn === nom ||
+                              cn.includes(nom) ||
+                              nom.includes(cn)
+                            );
+                          })
+                        : undefined;
+                      if (hit) setCompagnieClientId(String(hit.id));
+                    }
+                  }}
                   className="input"
                 >
                   <option value="">— Choisir —</option>
@@ -409,6 +446,32 @@ export default function NewBonPage() {
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <label htmlFor="compagnie-client" className="label">
+                  Client facturé <span className="text-rose-400">*</span>
+                </label>
+                <select
+                  id="compagnie-client"
+                  value={compagnieClientId}
+                  onChange={(e) => setCompagnieClientId(e.target.value)}
+                  className="input"
+                >
+                  <option value="">
+                    {clients.length === 0 ? "Chargement…" : "— Choisir —"}
+                  </option>
+                  {clients.map((c) => (
+                    <option key={c.id} value={String(c.id)}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-white/50">
+                  La fiche client de la compagnie — la facture du bon
+                  partira à son nom. Chaque bon doit être relié à un
+                  client.
+                </p>
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">

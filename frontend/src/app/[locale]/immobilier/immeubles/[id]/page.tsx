@@ -48,7 +48,10 @@ import {
   LogementFiche
 } from "@/components/immobilier/logement-fiche";
 import { LocationsBoard } from "@/components/immobilier/locations-board";
-import { BailDocActions } from "@/components/immobilier/tal-avis";
+import {
+  BailDocActions,
+  ImmeubleDocumentsSection
+} from "@/components/immobilier/tal-avis";
 import {
   BadgeGestionExterne,
   CelluleLoyer,
@@ -958,15 +961,23 @@ export default function ImmeubleDetailPage({
 
         <div className="mt-5">
           {tab === "overview" ? (
-            <OverviewTab
-              immeuble={immeuble}
-              financials={financials}
-              logementsCount={logements?.length || 0}
-              baux={baux}
-              logements={logements}
-              hypotheques={hypotheques}
-              evaluations={evaluations}
-            />
+            <>
+              <OverviewTab
+                immeuble={immeuble}
+                financials={financials}
+                logementsCount={logements?.length || 0}
+                baux={baux}
+                logements={logements}
+                hypotheques={hypotheques}
+                evaluations={evaluations}
+              />
+              {/* Import des documents DÉJÀ SIGNÉS de l'immeuble
+                  (règlement d'immeuble, bail papier…) — retour
+                  2026-09-12, point 14. */}
+              <div className="mt-4">
+                <ImmeubleDocumentsSection immeubleId={immeubleId} />
+              </div>
+            </>
           ) : null}
           {tab === "logements" ? (
             <LogementsTab

@@ -234,6 +234,75 @@ async def create_task(
     return _task_read(task, *assignees.get(task.id, ([], [])))
 
 
+@router.post(
+    "/{project_id}/tasks/import-soumission",
+    response_model=List[TaskRead],
+    summary="Crée une tâche par item de la soumission signée du projet",
+)
+async def import_tasks_from_soumission(
+    project_id: int, db: DBSession, _: CurrentUser
+) -> List[TaskRead]:
+    """Chaque item de la soumission liée devient une tâche cochable —
+    la section Tâches reflète le devis signé, et cocher enregistre le
+    MOMENT (done_at) où le travail est confirmé terminé (retour
+    2026-09-12, point 1). Idempotent : un item dont le libellé existe
+    déjà en tâche n'est pas dupliqué."""
+    project = await _ensure_project(db, project_id)
+    if not project.soumission_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Ce projet n'est lié à aucune soumission.",
+        )
+    from app.models.soumission_item import SoumissionItem as _SmIt
+
+    items = (
+        await db.execute(
+            select(_SmIt)
+            .where(_SmIt.soumission_id == project.soumission_id)
+            .order_by(_SmIt.position.asc(), _SmIt.id.asc())
+        )
+    ).scalars().all()
+    existing_titles = {
+        (t or "").strip().lower()
+        for t in (
+            await db.execute(
+                select(ProjectTask.title).where(
+                    ProjectTask.project_id == project_id
+                )
+            )
+        ).scalars().all()
+    }
+    max_pos = max(
+        [
+            p
+            for p in (
+                await db.execute(
+                    select(ProjectTask.position).where(
+                        ProjectTask.project_id == project_id
+                    )
+                )
+            ).scalars().all()
+        ]
+        or [-1]
+    )
+    pos = max_pos + 1
+    for it in items:
+        title = " ".join((it.description or "").split())[:255].strip()
+        if not title or title.lower() in existing_titles:
+            continue
+        db.add(
+            ProjectTask(
+                project_id=project_id,
+                title=title,
+                position=pos,
+            )
+        )
+        existing_titles.add(title.lower())
+        pos += 1
+    await db.flush()
+    return await list_tasks(project_id, db, _)
+
+
 @router.patch("/{project_id}/tasks/{task_id}", response_model=TaskRead)
 async def update_task(
     project_id: int,

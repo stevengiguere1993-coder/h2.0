@@ -1598,11 +1598,7 @@ export default function FactureDetailPage() {
                   <button
                     type="button"
                     onClick={saveNotes}
-                    disabled={
-                      notesSaving ||
-                      ((f.internal_notes || "") === internalNotes &&
-                        (f.client_note || "") === clientNote)
-                    }
+                    disabled={notesSaving}
                     className="btn-accent text-sm disabled:opacity-50"
                   >
                     {notesSaving ? (

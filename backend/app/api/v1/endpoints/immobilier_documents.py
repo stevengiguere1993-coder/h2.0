@@ -212,6 +212,33 @@ async def list_logement_documents(
 
 
 @router.get(
+    "/immeubles/{immeuble_id}/documents",
+    response_model=List[DocumentRead],
+)
+async def list_immeuble_documents(
+    immeuble_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    categorie: str = "tout",
+) -> List[DocumentRead]:
+    """Documents rattachés DIRECTEMENT à l'immeuble (règlement
+    d'immeuble importé, certificats…). Les documents des baux/logements
+    restent sur leurs fiches respectives. ``categorie=dossier`` exclut
+    les simples communications."""
+    _require_volet(user)
+    rows = (
+        await db.execute(
+            select(ImmDocument)
+            .where(ImmDocument.immeuble_id == immeuble_id)
+            .order_by(ImmDocument.created_at.desc(), ImmDocument.id.desc())
+        )
+    ).scalars().all()
+    if categorie == "dossier":
+        rows = [d for d in rows if _est_dossier(d)]
+    return [_doc_read(d) for d in rows]
+
+
+@router.get(
     "/locataires/{locataire_id}/documents",
     response_model=List[DocumentRead],
 )

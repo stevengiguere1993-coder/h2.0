@@ -537,6 +537,68 @@ def make_crud_router(
 
             _bproj = await _ensure_bp(db, obj)
             _asyncio_bon.create_task(_push_bp(int(_bproj.id)))
+        # RDV créé depuis l'AGENDA (construction) : les courriels partent
+        # AUTOMATIQUEMENT — invitation .ics à l'employé assigné, et
+        # confirmation au prospect si l'événement est lié à une demande
+        # CRM. Avant, seul le endpoint /appointments (fiche CRM) le
+        # faisait : un RDV organisé depuis l'agenda devait être « poussé »
+        # à la main (retour 2026-09-12, point 6). Les congés sont exclus
+        # (courriel dédié déjà envoyé par le flux congés).
+        if (
+            model is AgendaEvent
+            and (getattr(obj, "event_type", "") or "") != "conge"
+            and (
+                getattr(obj, "assignee_id", None)
+                or getattr(obj, "contact_request_id", None)
+            )
+        ):
+            import asyncio as _asyncio_rdv
+
+            async def _rdv_mails_auto(event_id: int) -> None:
+                # La tâche part pendant la requête : on laisse sa
+                # transaction se commiter avant de relire l'événement.
+                await _asyncio_rdv.sleep(2)
+                from app.db.session import AsyncSessionLocal as _ASL
+
+                try:
+                    async with _ASL() as fdb:
+                        ev = await fdb.get(AgendaEvent, event_id)
+                        if ev is None:
+                            return
+                        from app.models.contact_request import (
+                            ContactRequest as _CRrdv,
+                        )
+                        from app.models.employe import Employe as _EmpRdv
+                        from app.services.appointment_mail import (
+                            resolve_employe_email,
+                            send_appointment_assignee_invite,
+                            send_new_appointment_emails,
+                        )
+
+                        if ev.contact_request_id:
+                            pr = await fdb.get(
+                                _CRrdv, ev.contact_request_id
+                            )
+                            if pr is not None:
+                                await send_new_appointment_emails(pr, ev)
+                        if ev.assignee_id:
+                            emp = await fdb.get(_EmpRdv, ev.assignee_id)
+                            if emp is not None:
+                                dest = await resolve_employe_email(
+                                    fdb, emp
+                                )
+                                await send_appointment_assignee_invite(
+                                    emp, ev, None, email_override=dest
+                                )
+                        await fdb.commit()
+                except Exception:  # noqa: BLE001
+                    import logging as _logging
+
+                    _logging.getLogger(__name__).exception(
+                        "Courriels RDV auto (event %s) échoués", event_id
+                    )
+
+            _asyncio_rdv.create_task(_rdv_mails_auto(int(obj.id)))
         # Bon de travail INTERNE : prévenir les gestionnaires (manager+)
         # qu'un nouveau bon d'entretien a été créé — qu'il provienne du
         # pôle Construction ou du miroir Gestion locative.
