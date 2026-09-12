@@ -935,6 +935,24 @@ async def upload_bail_document(
         "Bail %s : document courant → #%s (ancien #%s)",
         bail_id, obj.id, ancien,
     )
+    # Nouveau locataire : le consentement aux communications se signe
+    # « avec le bail » (retour 2026-09-12, point 7) — l'invitation part
+    # automatiquement à l'import du bail signé, une seule fois (jamais
+    # renvoyée si déjà envoyée, signée ou refusée). Best-effort.
+    try:
+        from app.api.v1.endpoints.immobilier_extras import (
+            envoyer_consentement_si_jamais_envoye,
+        )
+
+        if await envoyer_consentement_si_jamais_envoye(db, bail.id, user):
+            log.info(
+                "Consentement communications envoyé auto (bail %s, "
+                "import du bail signé)", bail.id,
+            )
+    except Exception:  # noqa: BLE001 — l'import du bail prime
+        log.exception(
+            "Envoi auto du consentement après import du bail %s", bail_id
+        )
     return _doc_read(obj)
 
 

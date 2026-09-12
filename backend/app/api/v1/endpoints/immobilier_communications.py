@@ -348,6 +348,11 @@ class EnvoyerOut(BaseModel):
     sans_email: List[str] = []
     #: Échecs d'envoi (nom — erreur).
     echecs: List[str] = []
+    #: Consentements aux communications envoyés dans la foulée — un
+    #: locataire qu'on courrielle pour la 1ʳᵉ fois sans consentement au
+    #: dossier reçoit AUSSI l'invitation à le signer (retour 2026-09-12,
+    #: point 7).
+    consentements_envoyes: int = 0
 
 
 async def _resoudre_destinataires(
@@ -605,6 +610,9 @@ async def envoyer(
     ignores_payes: List[str] = []
     sans_email: List[str] = []
     echecs: List[str] = []
+    #: Baux des locataires réellement courriellés — pour l'envoi auto du
+    #: consentement aux communications juste après (point 7).
+    bails_envoyes: List[int] = []
 
     for bail, loc, lg, imm in cibles:
         nom = loc.full_name or f"Locataire {loc.id}"
@@ -703,6 +711,7 @@ async def envoyer(
             )
         )
         if statut == "envoye":
+            bails_envoyes.append(bail.id)
             db.add(
                 LocataireCommunication(
                     locataire_id=loc.id,
@@ -713,11 +722,26 @@ async def envoyer(
             )
 
     await db.commit()
+
+    # 1ʳᵉ communication courriel → consentement à signer (retour
+    # 2026-09-12, point 7) : chaque locataire courriellé qui n'a encore
+    # AUCUN consentement au dossier (jamais envoyé, ni signé, ni refusé)
+    # reçoit dans la foulée l'invitation à signer le sien. Idempotent :
+    # les envois suivants ne redemandent jamais.
+    consentements = 0
+    if bails_envoyes:
+        from app.api.v1.endpoints.immobilier_extras import (
+            envoyer_consentement_si_jamais_envoye,
+        )
+
+        for bid in dict.fromkeys(bails_envoyes):
+            if await envoyer_consentement_si_jamais_envoye(db, bid, user):
+                consentements += 1
     log.info(
         "Communications %s (%s) : %d envoyés, %d payés ignorés, "
-        "%d sans courriel, %d échecs",
+        "%d sans courriel, %d échecs, %d consentements envoyés",
         group_id, payload.type, envoyes, len(ignores_payes),
-        len(sans_email), len(echecs),
+        len(sans_email), len(echecs), consentements,
     )
     return EnvoyerOut(
         group_id=group_id,
@@ -725,6 +749,7 @@ async def envoyer(
         ignores_payes=ignores_payes,
         sans_email=sans_email,
         echecs=echecs,
+        consentements_envoyes=consentements,
     )
 
 
