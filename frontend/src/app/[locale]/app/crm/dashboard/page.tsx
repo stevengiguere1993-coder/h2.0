@@ -59,6 +59,7 @@ type UserRead = {
 const STATUS_LABEL: Record<string, string> = {
   new: "Nouveau",
   contacted: "Contacté",
+  a_rappeler: "À rappeler",
   rdv_prevu: "Rendez-vous prévu",
   qualified: "Soumission en préparation",
   quoted: "Soumis",
@@ -71,6 +72,7 @@ const STATUS_LABEL: Record<string, string> = {
 const STATUS_COLOR: Record<string, string> = {
   new: "bg-blue-500",
   contacted: "bg-violet-500",
+  a_rappeler: "bg-orange-500",
   rdv_prevu: "bg-cyan-500",
   qualified: "bg-amber-500",
   quoted: "bg-pink-500",
