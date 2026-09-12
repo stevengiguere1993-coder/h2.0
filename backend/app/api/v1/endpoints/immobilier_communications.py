@@ -658,7 +658,11 @@ async def envoyer(
             corps = _remplir_libre(payload.corps or "", variables)
         else:
             sujet, corps = render_lettre_courriel(
-                payload.type, ctx, gabarit=gabarit
+                payload.type, ctx, gabarit=gabarit,
+                # « Cordialement, » signé par l'EXPÉDITEUR (ex. Kyle) —
+                # plus jamais « Horizon Services Immobiliers » par-dessus
+                # son profil.
+                signature=from_name,
             )
 
         statut, erreur = "envoye", None

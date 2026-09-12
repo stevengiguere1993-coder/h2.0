@@ -856,7 +856,9 @@ async def my_projects(
 @router.get("/work-orders")
 async def my_work_orders(db: DBSession, user: CurrentUser) -> list[dict]:
     """Bons de travail assignés à l'employé connecté, à faire « dans son
-    temps libre ». On exclut les bons signés / annulés."""
+    temps libre ». On exclut tout ce qui est TERMINÉ : signés, annulés,
+    complétés à refacturer et facturés — un bon fini n'est plus « à
+    faire » (retour Olivier 2026-09-12, point 11)."""
     from app.models.bon_travail import BonTravail
 
     rows = (
@@ -868,7 +870,10 @@ async def my_work_orders(db: DBSession, user: CurrentUser) -> list[dict]:
             )
             .where(
                 BonTravail.assignee_user_id == user.id,
-                BonTravail.status.notin_(["signed", "cancelled"]),
+                BonTravail.status.notin_(
+                    ["signed", "cancelled", "complete_a_refacturer",
+                     "facture"]
+                ),
             )
             .order_by(BonTravail.created_at.desc())
         )

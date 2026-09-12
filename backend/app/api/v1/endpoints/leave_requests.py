@@ -370,8 +370,13 @@ async def approve_leave(
     user: CurrentUser,
     bg: BackgroundTasks,
 ) -> LeaveRead:
-    if not user.is_admin:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin requis.")
+    # Gestionnaire+ : l'approbation des congés fait partie de la gestion
+    # d'équipe — exiger admin bloquait Olivier avec « Action échouée »
+    # (même retour que la création de clients, Phil 2026-07-20).
+    if user.role not in ("owner", "admin", "manager"):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Gestionnaire requis."
+        )
     lr = (
         await db.execute(select(LeaveRequest).where(LeaveRequest.id == leave_id))
     ).scalar_one_or_none()
@@ -439,8 +444,11 @@ async def reject_leave(
     user: CurrentUser,
     bg: BackgroundTasks,
 ) -> LeaveRead:
-    if not user.is_admin:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin requis.")
+    # Gestionnaire+ — même règle que l'approbation.
+    if user.role not in ("owner", "admin", "manager"):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Gestionnaire requis."
+        )
     lr = (
         await db.execute(select(LeaveRequest).where(LeaveRequest.id == leave_id))
     ).scalar_one_or_none()
