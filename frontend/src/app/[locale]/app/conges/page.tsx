@@ -133,10 +133,17 @@ export default function CongesAdminPage() {
         method: "POST",
         body: JSON.stringify({ note: note || null })
       });
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        // Affiche le VRAI motif (403 gestionnaire, 409 déjà traitée…)
+        // au lieu d'un « Action échouée » opaque.
+        const body = (await res.json().catch(() => null)) as {
+          detail?: string;
+        } | null;
+        throw new Error(body?.detail || `Erreur ${res.status}`);
+      }
       await load();
-    } catch {
-      setError("Action échouée.");
+    } catch (err) {
+      setError(`Action échouée : ${(err as Error).message}`);
     } finally {
       setBusy(null);
     }
