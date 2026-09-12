@@ -708,6 +708,87 @@ async def envoyer_consentement(
     )
 
 
+async def envoyer_consentement_si_jamais_envoye(
+    db, bail_id: int, user
+) -> bool:
+    """Envoi AUTOMATIQUE du consentement aux communications
+    électroniques, seulement s'il n'a JAMAIS été envoyé (ni signé, ni
+    refusé) pour ce bail.
+
+    Retour 2026-09-12, point 7 — deux déclencheurs automatiques :
+    1. l'import du bail signé (nouveau locataire : le consentement se
+       signe « avec les baux », la page publique enchaîne les
+       documents) ;
+    2. la PREMIÈRE communication courriel au locataire (module
+       Communications).
+    Ces deux moments priment sur la règle « aucun envoi automatique »
+    du 2026-07-10, qui reste vraie pour la simple création du bail. Un
+    consentement déjà envoyé, signé ou REFUSÉ n'est jamais renvoyé
+    d'office — le refus, en particulier, doit être respecté.
+
+    Best-effort : renvoie True si un envoi est parti, False sinon,
+    et ne lève jamais.
+    """
+    try:
+        doc = (
+            await db.execute(
+                select(ImmDocument)
+                .where(
+                    ImmDocument.bail_id == bail_id,
+                    ImmDocument.type == "consentement_communications",
+                )
+                .order_by(ImmDocument.id.desc())
+            )
+        ).scalars().first()
+        if doc is not None and (
+            doc.envoye_le is not None
+            or doc.signed_at is not None
+            or doc.refuse_le is not None
+        ):
+            return False
+
+        # Le locataire doit avoir un courriel joignable.
+        bail = await db.get(Bail, bail_id)
+        if bail is None:
+            return False
+        loc = await db.get(Locataire, bail.locataire_id)
+        if loc is None or not (loc.email or "").strip():
+            return False
+
+        if doc is None:
+            await preparer_consentement_communications(db, bail_id, user)
+            doc = (
+                await db.execute(
+                    select(ImmDocument)
+                    .where(
+                        ImmDocument.bail_id == bail_id,
+                        ImmDocument.type == "consentement_communications",
+                    )
+                    .order_by(ImmDocument.id.desc())
+                )
+            ).scalars().first()
+        if doc is None:
+            return False
+
+        from app.api.v1.endpoints.immobilier_documents import (
+            EnvoyerSignatureRequest,
+            envoyer_signature,
+        )
+
+        await envoyer_signature(
+            doc_id=doc.id,
+            payload=EnvoyerSignatureRequest(),
+            db=db,
+            user=user,
+        )
+        return True
+    except Exception:  # noqa: BLE001 — jamais bloquant pour l'appelant
+        log.exception(
+            "Envoi auto du consentement échoué (bail %s)", bail_id
+        )
+        return False
+
+
 # ─── Renouvellements ──────────────────────────────────────────────────
 
 

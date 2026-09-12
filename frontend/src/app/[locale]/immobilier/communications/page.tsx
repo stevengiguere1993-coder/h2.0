@@ -84,6 +84,9 @@ type EnvoiResultat = {
   ignores_payes: string[];
   sans_email: string[];
   echecs: string[];
+  // Consentements aux communications partis dans la foulée (locataires
+  // courriellés pour la 1ʳᵉ fois sans consentement au dossier).
+  consentements_envoyes?: number;
 };
 
 type AuditRow = {
@@ -640,6 +643,15 @@ export default function CommunicationsPage() {
             {resultat.echecs.length > 0 && (
               <span className="block text-rose-300">
                 Échecs : {resultat.echecs.join(" · ")}
+              </span>
+            )}
+            {(resultat.consentements_envoyes || 0) > 0 && (
+              <span className="block text-emerald-200/80">
+                {resultat.consentements_envoyes} consentement
+                {(resultat.consentements_envoyes || 0) > 1 ? "s" : ""} aux
+                communications envoyé
+                {(resultat.consentements_envoyes || 0) > 1 ? "s" : ""} pour
+                signature (1ʳᵉ communication sans consentement au dossier).
               </span>
             )}
           </div>
