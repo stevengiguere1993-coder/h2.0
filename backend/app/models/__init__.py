@@ -12,6 +12,7 @@ from app.models.assistant import AssistantAction  # noqa: F401
 from app.models.audit_log import AuditLog
 from app.models.automation_setting import AutomationSetting  # noqa: F401
 from app.models.bon_item import BonItem
+from app.models.bon_task import BonTask
 from app.models.bon_travail import BonTravail
 from app.models.calendar_sync import (
     AvailabilitySlot,
@@ -307,6 +308,7 @@ __all__ = [
     "ApiKey",
     "AuditLog",
     "BonItem",
+    "BonTask",
     "BonTravail",
     "AvailabilitySlot",
     "ExternalBusyBlock",
