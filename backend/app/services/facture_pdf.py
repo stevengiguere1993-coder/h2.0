@@ -358,14 +358,19 @@ async def _build_statement(
         if include_facture_id is not None and f.id == include_facture_id and raw_status == "draft":
             raw_status = FactureStatus.SENT.value
         status = status_labels.get(raw_status, raw_status.upper() or None)
+        # Référence provisoire (« BR-… ») : brouillon prévisualisé — le
+        # relevé affiche « brouillon » plutôt qu'un code interne.
+        _ref = (
+            ("draft" if is_en else "brouillon")
+            if (f.reference or "").startswith("BR-")
+            else f.reference
+        )
         lines.append(
             StatementLine(
                 kind="facture",
                 when=when,
                 label=(
-                    f"Invoice {f.reference}"
-                    if is_en
-                    else f"Facture {f.reference}"
+                    f"Invoice {_ref}" if is_en else f"Facture {_ref}"
                 ),
                 amount=float(f.total or 0),
                 detail=status,
@@ -581,9 +586,17 @@ def _render_bytes(
     if tax_qst:
         left_cell.append(Paragraph(f"TVQ : {tax_qst}", s["small"]))
 
+    # Référence provisoire (« BR-… ») = brouillon jamais envoyé : le PDF
+    # de prévisualisation affiche BROUILLON — le vrai numéro n'est
+    # attribué qu'à l'envoi.
+    _ref_display = (
+        "BROUILLON"
+        if (fa.reference or "").startswith("BR-")
+        else f"N<sup>o</sup> {fa.reference}"
+    )
     right_cell: list = [
         Paragraph("FACTURE", s["h1"]),
-        Paragraph(f"N<sup>o</sup> {fa.reference}", s["accent"]),
+        Paragraph(_ref_display, s["accent"]),
         Paragraph(f"Émise le {_date(fa.issued_at or fa.created_at)}", s["small"]),
     ]
     if fa.due_at:

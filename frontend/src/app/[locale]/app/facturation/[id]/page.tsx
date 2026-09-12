@@ -940,7 +940,16 @@ export default function FactureDetailPage() {
                   </div>
                 ) : (
                   <h1 className="flex items-center gap-2 text-2xl font-bold text-white">
-                    {f.reference}
+                    {f.reference?.startsWith("BR-") ? (
+                      <span title="Le numéro définitif sera attribué à l'envoi au client">
+                        Brouillon
+                        <span className="ml-2 align-middle text-xs font-normal text-white/50">
+                          (numéro attribué à l&apos;envoi)
+                        </span>
+                      </span>
+                    ) : (
+                      f.reference
+                    )}
                     <button
                       type="button"
                       onClick={() => {

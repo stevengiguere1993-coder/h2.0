@@ -407,7 +407,15 @@ def make_crud_router(
             if model is Soumission:
                 data.reference = await next_soumission_number(db)
             elif model is Facture:
-                data.reference = await next_facture_number(db)
+                # BROUILLON = référence PROVISOIRE (« BR-… ») : le vrai
+                # numéro n'est attribué qu'à l'envoi / première sortie du
+                # brouillon — pas de trous dans la séquence QuickBooks si
+                # la facture traîne ou est supprimée (audit).
+                from app.services.numbering import (
+                    provisional_facture_reference,
+                )
+
+                data.reference = provisional_facture_reference()
             elif model is PurchaseOrder:
                 data.reference = await next_po_number(db)
             elif model is BonTravail:
@@ -824,6 +832,19 @@ def make_crud_router(
             ):
                 obj.issued_at = datetime.now(timezone.utc)
                 await db.flush()
+            # Numéro DÉFINITIF : toute sortie de l'état brouillon (même
+            # sans passer par « Envoyer » — ex. marquée payée à la main)
+            # remplace la référence provisoire « BR-… » par le prochain
+            # numéro de la séquence.
+            if new_status not in (
+                FactureStatus.DRAFT.value,
+                FactureStatus.VOID.value,
+            ):
+                from app.services.numbering import (
+                    ensure_facture_number as _ensure_no,
+                )
+
+                await _ensure_no(db, obj)
             # Push LIVE : TOUTE modification enregistrée d'une facture
             # ÉMISE (envoyée/payée/en retard) est reflétée immédiatement
             # dans QB — montants, projet, échéance… — sans bouton. Les
@@ -917,6 +938,14 @@ def make_crud_router(
             if model is Punch
             else ""
         )
+        # Facture supprimée dans Kratos → l'Invoice QB liée est ANNULÉE
+        # (void), jamais supprimée : elle reste à 0 $ dans la piste
+        # d'audit et la numérotation QB (retour 2026-09-12, point 10).
+        _fa_qbo_invoice_id = (
+            str(getattr(obj, "qbo_invoice_id", None) or "").strip()
+            if model is Facture
+            else ""
+        )
         await crud.delete(obj)
         if _punch_ta_id:
             import asyncio as _asyncio
@@ -926,6 +955,14 @@ def make_crud_router(
             )
 
             _asyncio.create_task(delete_time_activity_now(_punch_ta_id))
+        if _fa_qbo_invoice_id:
+            import asyncio as _asyncio_void
+
+            from app.services.facture_qbo import void_qbo_invoice_now
+
+            _asyncio_void.create_task(
+                void_qbo_invoice_now(_fa_qbo_invoice_id)
+            )
         from app.services.audit import log_action as _log_action
 
         await _log_action(
