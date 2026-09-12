@@ -87,6 +87,7 @@ from app.api.v1.endpoints import (
     timesheets,
     achat_receipt,
     bon_items,
+    bon_tasks,
     bon_photos,
     bon_send,
     bons_refs,
@@ -386,6 +387,7 @@ api_router.include_router(soumission_to_project.router, dependencies=DEP_CONSTRU
 api_router.include_router(agenda_unified.router)
 api_router.include_router(agenda_router)
 api_router.include_router(bon_items.router, dependencies=DEP_CONSTRUCTION_IMMO)
+api_router.include_router(bon_tasks.router, dependencies=DEP_CONSTRUCTION_IMMO)
 # Photos d'un bon : la MEME porte que le reste du bon (construction OU
 # immobilier). Avant 2026-08-21, seules les routes /immobilier/... existaient
 # et exigeaient le volet immobilier : un charge de projet construction ne
