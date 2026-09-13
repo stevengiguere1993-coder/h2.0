@@ -201,13 +201,9 @@ export default function NewBonPage() {
         setError("Choisis l'immeuble concerné.");
         return;
       }
-      if (!compagnieClientId) {
-        setError(
-          "Choisis le client facturé (la fiche client de la compagnie) — "
-          + "chaque bon doit être relié à un client."
-        );
-        return;
-      }
+      // Le client facturé = la compagnie propriétaire (même ligne,
+      // retour 2026-09-13). Si aucune fiche client ne porte son nom,
+      // elle est créée automatiquement au submit — pas de blocage.
     } else if (!clientId) {
       setError("Choisis le client.");
       return;
@@ -238,7 +234,32 @@ export default function NewBonPage() {
         if (logementId) payload.logement_id = Number(logementId);
         // Fiche client de la compagnie — la facture du bon partira à
         // ce client (et le sous-client QuickBooks se crée dessous).
-        payload.client_id = Number(compagnieClientId);
+        // Aucune fiche à ce nom ? On la crée automatiquement : la
+        // compagnie propriétaire EST le client facturé.
+        let ccId = compagnieClientId;
+        if (!ccId) {
+          const ent = entreprises.find(
+            (x) => String(x.id) === entrepriseId
+          );
+          const cr = await authedFetch("/api/v1/clients", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: (ent?.name || "").trim() || `Compagnie ${entrepriseId}`,
+              is_company: true
+            })
+          });
+          if (!cr.ok) {
+            throw new Error(
+              "Création automatique de la fiche client de la "
+              + "compagnie échouée — réessaie ou crée-la dans Clients."
+            );
+          }
+          const cc = (await cr.json()) as { id: number };
+          ccId = String(cc.id);
+          setCompagnieClientId(ccId);
+        }
+        payload.client_id = Number(ccId);
         const addr = buildAddress();
         if (addr) payload.address = addr;
       } else {
@@ -408,7 +429,7 @@ export default function NewBonPage() {
                 <>
               <div>
                 <label htmlFor="entreprise" className="label">
-                  Compagnie propriétaire{" "}
+                  Compagnie propriétaire (client facturé){" "}
                   <span className="text-rose-400">*</span>
                 </label>
                 <select
@@ -417,25 +438,30 @@ export default function NewBonPage() {
                   onChange={(e) => {
                     const v = e.target.value;
                     setEntrepriseId(v);
-                    // Pré-remplit le client facturé quand une fiche
-                    // client porte le nom de la compagnie choisie.
-                    if (!compagnieClientId && v) {
-                      const ent = entreprises.find(
-                        (x) => String(x.id) === v
-                      );
-                      const nom = (ent?.name || "").trim().toLowerCase();
-                      const hit = nom
+                    // La compagnie propriétaire EST le client facturé
+                    // (retour 2026-09-13) : une seule ligne. On résout
+                    // sa fiche client par le nom ; à défaut elle sera
+                    // créée automatiquement à la création du bon.
+                    const ent = entreprises.find(
+                      (x) => String(x.id) === v
+                    );
+                    const nom = (ent?.name || "").trim().toLowerCase();
+                    const exact = nom
+                      ? clients.find(
+                          (c) => c.name.trim().toLowerCase() === nom
+                        )
+                      : undefined;
+                    const partiel =
+                      exact ||
+                      (nom
                         ? clients.find((c) => {
                             const cn = c.name.trim().toLowerCase();
-                            return (
-                              cn === nom ||
-                              cn.includes(nom) ||
-                              nom.includes(cn)
-                            );
+                            return cn.includes(nom) || nom.includes(cn);
                           })
-                        : undefined;
-                      if (hit) setCompagnieClientId(String(hit.id));
-                    }
+                        : undefined);
+                    setCompagnieClientId(
+                      partiel ? String(partiel.id) : ""
+                    );
                   }}
                   className="input"
                 >
@@ -446,31 +472,16 @@ export default function NewBonPage() {
                     </option>
                   ))}
                 </select>
-              </div>
-
-              <div>
-                <label htmlFor="compagnie-client" className="label">
-                  Client facturé <span className="text-rose-400">*</span>
-                </label>
-                <select
-                  id="compagnie-client"
-                  value={compagnieClientId}
-                  onChange={(e) => setCompagnieClientId(e.target.value)}
-                  className="input"
-                >
-                  <option value="">
-                    {clients.length === 0 ? "Chargement…" : "— Choisir —"}
-                  </option>
-                  {clients.map((c) => (
-                    <option key={c.id} value={String(c.id)}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
                 <p className="mt-1 text-xs text-white/50">
-                  La fiche client de la compagnie — la facture du bon
-                  partira à son nom. Chaque bon doit être relié à un
-                  client.
+                  {!entrepriseId
+                    ? "La compagnie propriétaire est aussi le client facturé — la facture du bon partira à son nom."
+                    : compagnieClientId
+                      ? `Facturé à : ${
+                          clients.find(
+                            (c) => String(c.id) === compagnieClientId
+                          )?.name || "sa fiche client"
+                        } (fiche client de la compagnie).`
+                      : "Aucune fiche client à ce nom — elle sera créée automatiquement à la création du bon."}
                 </p>
               </div>
 
