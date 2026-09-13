@@ -599,6 +599,17 @@ def make_crud_router(
                     )
 
             _asyncio_rdv.create_task(_rdv_mails_auto(int(obj.id)))
+        # Bon de travail INTERNE au même lieu qu'un bon encore ouvert :
+        # fusion AUTOMATIQUE (retour 2026-09-13, « ils auraient dû être
+        # mergés ensemble ») — l'ancien bon devient des tâches cochables
+        # du nouveau, ses lignes/punchs/photos suivent, il est annulé
+        # avec trace. Best-effort : n'empêche jamais la création.
+        if model is BonTravail and getattr(obj, "kind", None) == "interne":
+            from app.api.v1.endpoints.bon_tasks import (
+                auto_fusionner_meme_lieu,
+            )
+
+            await auto_fusionner_meme_lieu(db, obj)
         # Bon de travail INTERNE : prévenir les gestionnaires (manager+)
         # qu'un nouveau bon d'entretien a été créé — qu'il provienne du
         # pôle Construction ou du miroir Gestion locative.
