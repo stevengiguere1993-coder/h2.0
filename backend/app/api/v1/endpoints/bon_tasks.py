@@ -20,6 +20,8 @@ Routes :
     POST   /bons-travail/{bon_id}/fusionner   (manager+)
 """
 
+import logging
+import unicodedata
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -33,10 +35,24 @@ from app.models.bon_task import BonTask
 from app.models.bon_travail import BonTravail
 from app.models.punch import Punch
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/bons-travail", tags=["bon-tasks"])
 
 #: Statuts où un bon peut encore être fusionné / absorber d'autres bons.
 _STATUTS_OUVERTS = ("draft", "accepte_a_planifier", "planifie", "sent")
+
+#: Rang d'avancement du cycle interne — après une fusion, le bon cible
+#: garde le statut le PLUS AVANCÉ du groupe (un bon déjà planifié ne
+#: retombe pas en brouillon parce qu'un nouveau bon l'a absorbé).
+_RANG_INTERNE = {"draft": 0, "accepte_a_planifier": 1, "planifie": 2}
+
+
+def adresse_cle(addr: Optional[str]) -> str:
+    """Clé de comparaison d'adresses : casse, accents, espaces et
+    ponctuation ignorés — même règle que le frontend."""
+    s = unicodedata.normalize("NFD", (addr or "").lower())
+    return "".join(c for c in s if c.isalnum() and not unicodedata.combining(c))
 
 
 class BonTaskCreate(BaseModel):
@@ -246,6 +262,19 @@ async def fusionner_bons(
                 "il ne peut plus être fusionné.",
             )
 
+    return await fusionner_dans(db, target, list(sources))
+
+
+async def fusionner_dans(
+    db, target: BonTravail, sources: List[BonTravail]
+) -> dict:
+    """Cœur de la fusion : absorbe ``sources`` dans ``target``.
+
+    Appelé par l'endpoint /fusionner (fusion manuelle) ET par le hook de
+    création des bons (fusion AUTOMATIQUE des bons du même lieu, retour
+    2026-09-13 : « ils auraient dû être mergés ensemble »). L'appelant a
+    déjà validé statuts et permissions ; ici on ne lève pas.
+    """
     now = datetime.now(timezone.utc)
     next_pos = (
         await db.execute(
@@ -286,19 +315,37 @@ async def fusionner_bons(
 
     merged: list[str] = []
     for s in sources:
-        # 1. Le bon absorbé devient une tâche du bon cible.
-        titre = s.title
-        if s.description and s.description.strip():
-            titre = f"{s.title} — {s.description.strip()}"
-        db.add(
-            BonTask(
-                bon_id=target.id,
-                position=next_pos,
-                title=titre[:500],
-                source_bon_reference=s.reference,
+        # 1. Le travail du bon absorbé devient cochable sur le bon cible :
+        # ses tâches EXISTANTES sont déplacées telles quelles (état de
+        # coche conservé) ; s'il n'en avait pas, son titre devient une
+        # tâche unique.
+        s_tasks = (
+            await db.execute(
+                select(BonTask)
+                .where(BonTask.bon_id == s.id)
+                .order_by(BonTask.position.asc(), BonTask.id.asc())
             )
-        )
-        next_pos += 1
+        ).scalars().all()
+        if s_tasks:
+            for t in s_tasks:
+                t.bon_id = target.id
+                t.position = next_pos
+                if not t.source_bon_reference:
+                    t.source_bon_reference = s.reference
+                next_pos += 1
+        else:
+            titre = s.title
+            if s.description and s.description.strip():
+                titre = f"{s.title} — {s.description.strip()}"
+            db.add(
+                BonTask(
+                    bon_id=target.id,
+                    position=next_pos,
+                    title=titre[:500],
+                    source_bon_reference=s.reference,
+                )
+            )
+            next_pos += 1
 
         # 2. Ses lignes de refacturation suivent.
         items = (
@@ -380,6 +427,15 @@ async def fusionner_bons(
             f"[Fusionné dans le bon {target.reference} "
             f"le {now.date().isoformat()}]"
         )
+        # Le cycle ne recule pas : un bon absorbé déjà « planifié » tire
+        # le bon cible vers ce statut (utile en fusion AUTO où le bon
+        # cible vient d'être créé en brouillon).
+        if (
+            (target.kind or "") == "interne"
+            and _RANG_INTERNE.get(s.status, -1)
+            > _RANG_INTERNE.get(target.status, -1)
+        ):
+            target.status = s.status
         s.status = "cancelled"
         merged.append(s.reference)
 
@@ -395,3 +451,54 @@ async def fusionner_bons(
         "merged": merged,
         "tasks_total": next_pos,
     }
+
+
+async def auto_fusionner_meme_lieu(db, bon: BonTravail) -> list[str]:
+    """Fusion AUTOMATIQUE à la création (retour 2026-09-13) : les bons
+    de travail INTERNES encore ouverts au même lieu et pour le même
+    payeur sont absorbés par le bon qui vient d'être créé — le kanban ne
+    montre plus deux cartes pour le même endroit, chaque travail devient
+    une tâche cochable du bon survivant.
+
+    Prudence : mêmes kind (interne), client facturé, compagnie
+    propriétaire ET adresse (comparée sans casse/accents/ponctuation).
+    Best-effort : renvoie les références absorbées, ne lève jamais.
+    """
+    try:
+        if (bon.kind or "") != "interne":
+            return []
+        cle = adresse_cle(bon.address)
+        if not cle:
+            return []
+        candidats = (
+            await db.execute(
+                select(BonTravail).where(
+                    BonTravail.id != bon.id,
+                    BonTravail.kind == "interne",
+                    BonTravail.status.in_(
+                        ("draft", "accepte_a_planifier", "planifie")
+                    ),
+                )
+            )
+        ).scalars().all()
+        sources = [
+            c
+            for c in candidats
+            if adresse_cle(c.address) == cle
+            and (c.client_id or None) == (bon.client_id or None)
+            and (c.owner_entreprise_id or None)
+            == (bon.owner_entreprise_id or None)
+        ]
+        if not sources:
+            return []
+        out = await fusionner_dans(db, bon, sources)
+        log.info(
+            "Fusion auto : %s absorbe %s (même lieu « %s »)",
+            bon.reference, out["merged"], bon.address,
+        )
+        return list(out["merged"])
+    except Exception:  # noqa: BLE001 — la création du bon prime
+        log.exception(
+            "Fusion auto des bons du même lieu échouée (bon %s)", bon.id
+        )
+        return []
